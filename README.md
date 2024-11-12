@@ -2,8 +2,9 @@
 
 News
 ====
-Welcome, Open-Xml-PowerTools users.  As you may have learned from the repo at OfficeDev/Open-Xml-PowerTools,
-Microsoft is going to archive that repo, and will not be maintaining that repo in the future.
+Hello, Open-Xml-PowerTools users.  We're looking for a maintainer for this repo - someone to
+review PRs, respond to queries, and etc.  If you are interested in contributing to this repo
+in this fashion, please message either Thomas Barnekow or Eric White here on github.
 
 Eric White
 
