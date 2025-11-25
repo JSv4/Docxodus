@@ -231,7 +231,10 @@ namespace OpenXmlPowerTools
                 var s = dv.ToString(fc.FormatCode, CultureInfo.InvariantCulture).Trim();
                 return s;
             }
-            if ((cfc.Contains('(') && cfc.Contains(')')) || cfc.Contains('-'))
+            // For negative numbers with format codes containing parentheses or minus signs,
+            // negate the value to get absolute value (format code handles the negative indicator)
+            // For zero values, don't negate as the format code may contain literal '-'
+            if (dv < 0 && ((cfc.Contains('(') && cfc.Contains(')')) || cfc.Contains('-')))
             {
                 var s3 = (-dv).ToString(cfc, CultureInfo.InvariantCulture).Trim();
                 return s3;

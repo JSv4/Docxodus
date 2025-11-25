@@ -1349,7 +1349,9 @@ namespace OpenXmlPowerTools
                 var ct = oldPart.ContentType;
                 var ext = Path.GetExtension(oldPart.Uri.OriginalString);
                 MediaDataPart newPart = newContentPart.OpenXmlPackage.CreateMediaDataPart(ct, ext);
-                newPart.FeedData(oldPart.GetStream());
+                // Use cached media data instead of opening the stream again
+                // (streams can't be opened multiple times in .NET 6+ ZipArchive-based packaging)
+                temp.WriteMedia(newPart);
                 string id = null;
                 string relationshipType = null;
 
@@ -1748,6 +1750,14 @@ namespace OpenXmlPowerTools
         // General function for handling media that tries to use an existing media item if they are the same
         private static MediaData ManageMediaCopy(DataPart oldMedia, List<MediaData> mediaList)
         {
+            // First check if we already have this exact DataPart to avoid opening the stream twice
+            // (which fails in .NET 6+ ZipArchive-based packaging when in Update mode)
+            foreach (MediaData item in mediaList)
+            {
+                if (item.DataPart == oldMedia)
+                    return item;
+            }
+
             MediaData oldMediaData = new MediaData(oldMedia);
             foreach (MediaData item in mediaList)
             {

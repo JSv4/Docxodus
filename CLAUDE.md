@@ -120,24 +120,20 @@ Test files are in `TestFiles/` directory with prefixes indicating their purpose:
 
 ### Current Test Status
 
-- **951 passed**, 27 failed out of 979 tests (~97% pass rate)
+- **978 passed**, 0 failed, 1 skipped out of 979 tests (~99.9% pass rate)
 
-### Remaining Test Failures (27)
+### Fixed Test Failures (18 tests fixed)
 
-1. **WmlComparer footnote/endnote tests** (7 failures) - Some comparison tests return 0 revisions for documents with footnotes/endnotes/tables. May require deeper investigation into how Unid attributes are being generated/compared.
-
-2. **Cell format currency tests** (7 failures) - Currency formatting produces slightly different output (e.g., "-₩ -" instead of "₩ -"). Likely pre-existing issue.
-
-3. **DocumentBuilder relationship tests** (9 failures) - Errors like "The relationship 'rId11' referenced by attribute 'r:embed' does not exist." Likely related to SDK 3.x changes in relationship handling.
-
-4. **Other tests** (4 failures) - PowerToolsBlockExtensionsTests, PB006_VideoFormats, SW002_AllDataTypes
+1. **DocumentBuilder relationship tests** (10 tests) - Fixed bug where relationship IDs from source documents could incorrectly match existing IDs in target parts, causing "relationship not found" validation errors
+2. **SpreadsheetWriter date handling** (1 test) - Fixed date values being written as ISO 8601 strings instead of Excel serial date numbers
+3. **WmlComparer footnote/endnote tests** (6 tests: WC-1660, WC-1670, WC-1710, WC-1720, WC-1750, WC-1760) - Fixed `AssignUnidToAllElements` to assign Unid to footnote/endnote elements themselves, enabling proper reconstruction of multi-paragraph footnotes/endnotes
+4. **WmlComparer table row comparison** (1 test: WC-1500) - Added LCS-based row matching for large tables (7+ rows) when content differs significantly, preventing cascading false differences from insertions/deletions in the middle of tables
 
 ### Remaining Work
 
 1. **Phase 4**: Remove preprocessor directives (`NET35`, `ELIDE_XUNIT_TESTS`) from source and test files
 2. **Phase 5**: Update example projects (6 example projects still target old frameworks)
-3. **Phase 6**: Investigate and fix remaining 27 test failures
-4. **Phase 7**: Final cleanup and documentation
+3. **Phase 6**: Final cleanup and documentation
 
 ### Key Files Changed
 
@@ -147,5 +143,7 @@ Test files are in `TestFiles/` directory with prefixes indicating their purpose:
 - `SkiaSharpHelpers.cs` - New file with color utilities
 - `ColorParser.cs`, `HtmlToWmlCssParser.cs` - SKColor migration
 - `MetricsGetter.cs`, `WmlToHtmlConverter.cs`, `HtmlToWmlConverterCore.cs` - Font/image handling
-- `WmlComparer.cs` - Fixed null Unid handling, Package access fixes
+- `WmlComparer.cs` - Fixed null Unid handling, Package access fixes, footnote/endnote Unid assignment, LCS-based table row matching
 - `PresentationBuilder.cs` - Package access fixes
+- `DocumentBuilder.cs` - Fixed relationship copying bugs in `CopyRelatedImage`, `CopyRelatedPartsForContentParts`, and related functions
+- `SpreadsheetWriter.cs` - Fixed date cell handling to use Excel serial date format

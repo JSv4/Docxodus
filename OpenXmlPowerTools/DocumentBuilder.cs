@@ -3178,10 +3178,10 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                         }).RelationshipId;
                         return;
                     }
-                    var g = new Guid();
+                    var g = Guid.NewGuid();
                     var newId = $"R{g:N}".Substring(0, 16);
                     newContentPart.CreateRelationshipToPart(temp.ImagePart, newId);
-                    imageReference.Attribute(R.id).Value = newId;
+                    imageReference.Attribute(attributeName).Value = newId;
                 }
             }
             else

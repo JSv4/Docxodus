@@ -305,6 +305,72 @@ namespace OpenXmlPowerTools
                     }
 
                     wDocSource.MainDocumentPart.PutXDocument();
+
+                    // Process FootnotesPart for CorrelatedSHA1Hash attributes
+                    if (wDocSource.MainDocumentPart.FootnotesPart != null && wDocAfterProc.MainDocumentPart.FootnotesPart != null)
+                    {
+                        var sourceFootnotesXDoc = wDocSource.MainDocumentPart.FootnotesPart.GetXDocument();
+                        var afterProcFootnotesXDoc = wDocAfterProc.MainDocumentPart.FootnotesPart.GetXDocument();
+
+                        var sourceFootnotesUnidDict = sourceFootnotesXDoc
+                            .Root
+                            .Descendants()
+                            .Where(d => d.Name == W.p || d.Name == W.tbl || d.Name == W.tr)
+                            .Where(d => d.Attribute(PtOpenXml.Unid) != null)
+                            .ToDictionary(d => (string)d.Attribute(PtOpenXml.Unid)!);
+
+                        foreach (var blockLevelContent in afterProcFootnotesXDoc.Root.Descendants().Where(d => d.Name == W.p || d.Name == W.tbl || d.Name == W.tr))
+                        {
+                            var cloneBlockLevelContentForHashing = (XElement)CloneBlockLevelContentForHashing(wDocAfterProc.MainDocumentPart.FootnotesPart, blockLevelContent, true, settings);
+                            var shaString = cloneBlockLevelContentForHashing.ToString(SaveOptions.DisableFormatting)
+                                .Replace(" xmlns=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"", "");
+                            var sha1Hash = PtUtils.SHA1HashStringForUTF8String(shaString);
+                            var thisUnid = (string)blockLevelContent.Attribute(PtOpenXml.Unid);
+                            if (thisUnid != null)
+                            {
+                                if (sourceFootnotesUnidDict.ContainsKey(thisUnid))
+                                {
+                                    var correlatedBlockLevelContent = sourceFootnotesUnidDict[thisUnid];
+                                    correlatedBlockLevelContent.Add(new XAttribute(PtOpenXml.CorrelatedSHA1Hash, sha1Hash));
+                                }
+                            }
+                        }
+
+                        wDocSource.MainDocumentPart.FootnotesPart.PutXDocument();
+                    }
+
+                    // Process EndnotesPart for CorrelatedSHA1Hash attributes
+                    if (wDocSource.MainDocumentPart.EndnotesPart != null && wDocAfterProc.MainDocumentPart.EndnotesPart != null)
+                    {
+                        var sourceEndnotesXDoc = wDocSource.MainDocumentPart.EndnotesPart.GetXDocument();
+                        var afterProcEndnotesXDoc = wDocAfterProc.MainDocumentPart.EndnotesPart.GetXDocument();
+
+                        var sourceEndnotesUnidDict = sourceEndnotesXDoc
+                            .Root
+                            .Descendants()
+                            .Where(d => d.Name == W.p || d.Name == W.tbl || d.Name == W.tr)
+                            .Where(d => d.Attribute(PtOpenXml.Unid) != null)
+                            .ToDictionary(d => (string)d.Attribute(PtOpenXml.Unid)!);
+
+                        foreach (var blockLevelContent in afterProcEndnotesXDoc.Root.Descendants().Where(d => d.Name == W.p || d.Name == W.tbl || d.Name == W.tr))
+                        {
+                            var cloneBlockLevelContentForHashing = (XElement)CloneBlockLevelContentForHashing(wDocAfterProc.MainDocumentPart.EndnotesPart, blockLevelContent, true, settings);
+                            var shaString = cloneBlockLevelContentForHashing.ToString(SaveOptions.DisableFormatting)
+                                .Replace(" xmlns=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"", "");
+                            var sha1Hash = PtUtils.SHA1HashStringForUTF8String(shaString);
+                            var thisUnid = (string)blockLevelContent.Attribute(PtOpenXml.Unid);
+                            if (thisUnid != null)
+                            {
+                                if (sourceEndnotesUnidDict.ContainsKey(thisUnid))
+                                {
+                                    var correlatedBlockLevelContent = sourceEndnotesUnidDict[thisUnid];
+                                    correlatedBlockLevelContent.Add(new XAttribute(PtOpenXml.CorrelatedSHA1Hash, sha1Hash));
+                                }
+                            }
+                        }
+
+                        wDocSource.MainDocumentPart.EndnotesPart.PutXDocument();
+                    }
                 }
                 WmlDocument sourceWithCorrelatedSHA1Hash = new WmlDocument(source.FileName, msSource.ToArray());
                 return sourceWithCorrelatedSHA1Hash;
@@ -3571,6 +3637,13 @@ namespace OpenXmlPowerTools
                 if (element.Name.Namespace == A14.a14)
                     return null;
 
+                // Footnote/endnote references: exclude w:id attribute from hash since
+                // the IDs are renumbered to different ranges in source1 vs source2
+                if (element.Name == W.footnoteReference || element.Name == W.endnoteReference)
+                {
+                    return new XElement(element.Name);
+                }
+
                 if (element.Name == W.p)
                 {
                     var clonedPara = new XElement(element.Name,
@@ -6244,6 +6317,120 @@ namespace OpenXmlPowerTools
             return cul.Length;
         }
 
+        /// <summary>
+        /// Applies LCS algorithm to match table rows by their SHA1Hash.
+        /// This produces better diff results when rows are inserted or deleted in the middle of a table.
+        /// </summary>
+        private static List<CorrelatedSequence> ApplyLcsToTableRows(
+            ComparisonUnitGroup[] rows1,
+            ComparisonUnitGroup[] rows2,
+            WmlComparerSettings settings)
+        {
+            var result = new List<CorrelatedSequence>();
+
+            // Build LCS matrix using SHA1Hash for matching
+            int m = rows1.Length;
+            int n = rows2.Length;
+            int[,] lcsMatrix = new int[m + 1, n + 1];
+
+            for (int i = 1; i <= m; i++)
+            {
+                for (int j = 1; j <= n; j++)
+                {
+                    if (rows1[i - 1].SHA1Hash == rows2[j - 1].SHA1Hash)
+                        lcsMatrix[i, j] = lcsMatrix[i - 1, j - 1] + 1;
+                    else
+                        lcsMatrix[i, j] = Math.Max(lcsMatrix[i - 1, j], lcsMatrix[i, j - 1]);
+                }
+            }
+
+            // Backtrack to find the actual LCS and build correlated sequences
+            int ii = m, jj = n;
+            var deletedRows = new List<int>();  // indices in rows1
+            var insertedRows = new List<int>(); // indices in rows2
+            var matchedPairs = new List<(int, int)>(); // (index in rows1, index in rows2)
+
+            while (ii > 0 || jj > 0)
+            {
+                if (ii > 0 && jj > 0 && rows1[ii - 1].SHA1Hash == rows2[jj - 1].SHA1Hash)
+                {
+                    // Match - rows are equal
+                    matchedPairs.Add((ii - 1, jj - 1));
+                    ii--;
+                    jj--;
+                }
+                else if (jj > 0 && (ii == 0 || lcsMatrix[ii, jj - 1] >= lcsMatrix[ii - 1, jj]))
+                {
+                    // Insertion - row in rows2 not in rows1
+                    insertedRows.Add(jj - 1);
+                    jj--;
+                }
+                else
+                {
+                    // Deletion - row in rows1 not in rows2
+                    deletedRows.Add(ii - 1);
+                    ii--;
+                }
+            }
+
+            // Reverse the lists since we built them backwards
+            matchedPairs.Reverse();
+            deletedRows.Reverse();
+            insertedRows.Reverse();
+
+            // Now build the result by walking through both arrays in order
+            int i1 = 0, i2 = 0;
+            int matchIdx = 0, delIdx = 0, insIdx = 0;
+
+            while (i1 < m || i2 < n)
+            {
+                // Check if current row from rows1 is deleted
+                if (delIdx < deletedRows.Count && i1 == deletedRows[delIdx])
+                {
+                    var deletedSeq = new CorrelatedSequence();
+                    deletedSeq.ComparisonUnitArray1 = new[] { rows1[i1] };
+                    deletedSeq.ComparisonUnitArray2 = null;
+                    deletedSeq.CorrelationStatus = CorrelationStatus.Deleted;
+                    result.Add(deletedSeq);
+                    delIdx++;
+                    i1++;
+                    continue;
+                }
+
+                // Check if current row from rows2 is inserted
+                if (insIdx < insertedRows.Count && i2 == insertedRows[insIdx])
+                {
+                    var insertedSeq = new CorrelatedSequence();
+                    insertedSeq.ComparisonUnitArray1 = null;
+                    insertedSeq.ComparisonUnitArray2 = new[] { rows2[i2] };
+                    insertedSeq.CorrelationStatus = CorrelationStatus.Inserted;
+                    result.Add(insertedSeq);
+                    insIdx++;
+                    i2++;
+                    continue;
+                }
+
+                // This should be a matched pair
+                if (matchIdx < matchedPairs.Count && i1 == matchedPairs[matchIdx].Item1 && i2 == matchedPairs[matchIdx].Item2)
+                {
+                    var unknownSeq = new CorrelatedSequence();
+                    unknownSeq.ComparisonUnitArray1 = new[] { rows1[i1] };
+                    unknownSeq.ComparisonUnitArray2 = new[] { rows2[i2] };
+                    unknownSeq.CorrelationStatus = CorrelationStatus.Unknown;
+                    result.Add(unknownSeq);
+                    matchIdx++;
+                    i1++;
+                    i2++;
+                    continue;
+                }
+
+                // Fallback - shouldn't normally reach here
+                break;
+            }
+
+            return result;
+        }
+
         private static List<CorrelatedSequence> DoLcsAlgorithmForTable(CorrelatedSequence unknown, WmlComparerSettings settings)
         {
             List<CorrelatedSequence> newListOfCorrelatedSequence = new List<CorrelatedSequence>();
@@ -6264,6 +6451,34 @@ namespace OpenXmlPowerTools
                 var canCollapse = true;
                 if (zipped.Any(z => z.Row1.CorrelatedSHA1Hash != z.Row2.CorrelatedSHA1Hash))
                     canCollapse = false;
+
+                // Count how many rows have different actual content (SHA1Hash)
+                var hashDiffCount = zipped.Count(z => z.Row1.SHA1Hash != z.Row2.SHA1Hash);
+                var totalRows = tblGroup1.Contents.Count();
+
+                // If more than 1/3 of rows are different but not all, use LCS-based matching
+                // This handles the case where rows are inserted/deleted in the middle of a table
+                // causing a cascade of positional mismatches
+                var useContentBasedLcs = hashDiffCount > 1 && hashDiffCount < totalRows &&
+                                         hashDiffCount > totalRows / 3;
+
+                // Only apply LCS-based row matching for larger tables (7+ rows) where
+                // positional comparison would produce cascading false differences.
+                // For small tables, positional comparison is usually correct.
+                if (canCollapse && useContentBasedLcs && totalRows >= 7)
+                {
+                    // Tables have the same row count and correlate positionally (same Unids)
+                    // but content at positions differs significantly, suggesting insertion/deletion
+                    // Apply LCS-based row matching instead of positional comparison
+                    var rows1 = tblGroup1.Contents.Cast<ComparisonUnitGroup>().ToArray();
+                    var rows2 = tblGroup2.Contents.Cast<ComparisonUnitGroup>().ToArray();
+
+                    // Use LCS algorithm to match rows by their SHA1Hash
+                    var lcsResult = ApplyLcsToTableRows(rows1, rows2, settings);
+                    if (lcsResult != null && lcsResult.Count > 0)
+                        return lcsResult;
+                }
+
                 if (canCollapse)
                 {
                     newListOfCorrelatedSequence = zipped
@@ -7061,6 +7276,20 @@ namespace OpenXmlPowerTools
 
         private static void AssignUnidToAllElements(XElement contentParent)
         {
+            // For footnotes and endnotes, also assign a Unid to the contentParent itself
+            // This is needed so that multiple paragraphs in the same footnote/endnote
+            // share the same AncestorUnids[0], allowing CoalesceRecurse to properly
+            // reconstruct the footnote/endnote element
+            if (contentParent.Name == W.footnote || contentParent.Name == W.endnote)
+            {
+                if (contentParent.Attribute(PtOpenXml.Unid) == null)
+                {
+                    string unid = Guid.NewGuid().ToString().Replace("-", "");
+                    var newAtt = new XAttribute(PtOpenXml.Unid, unid);
+                    contentParent.Add(newAtt);
+                }
+            }
+
             var content = contentParent.Descendants();
             foreach (var d in content)
             {

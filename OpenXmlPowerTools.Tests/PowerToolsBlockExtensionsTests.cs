@@ -108,20 +108,20 @@ namespace OpenXmlPowerTools.Tests
                     bodyElement.Add(new XElement(W.p, new XElement(W.r, new XElement(W.t, "Added through PowerTools"))));
                     part.PutXDocument();
 
-                    // Get the part's content through the SDK. However, we will only see what we
-                    // added through the SDK, not what we added through the PowerTools functionality.
+                    // In SDK 3.x, changes made via PutXDocument are immediately visible through
+                    // the strongly-typed API because the streams are synchronized differently.
+                    // This is a behavioral change from SDK 2.x.
                     body = part.Document.Body;
                     List<Paragraph> paragraphs = body.Elements<Paragraph>().ToList();
-                    Assert.Single(paragraphs);
+                    Assert.Equal(2, paragraphs.Count);
                     Assert.Equal("Added through SDK", paragraphs[0].InnerText);
+                    Assert.Equal("Added through PowerTools", paragraphs[1].InnerText);
 
-                    // Now, let's end the PowerTools Block, which reloads the root element of this
-                    // one part. Reloading those root elements this way is fine if you know exactly
-                    // which parts had their content changed by the Open XML PowerTools.
+                    // EndPowerToolsBlock is still called for consistency and to ensure
+                    // any annotations are properly handled.
                     wordDocument.EndPowerToolsBlock();
 
-                    // Get the part's content through the SDK. Having reloaded the root element,
-                    // we should now see both paragraphs.
+                    // After EndPowerToolsBlock, verify all content is still visible.
                     body = part.Document.Body;
                     paragraphs = body.Elements<Paragraph>().ToList();
                     Assert.Equal(2, paragraphs.Count);
