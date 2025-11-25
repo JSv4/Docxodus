@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- Assembly Info -->
+    <AssemblyName>redline</AssemblyName>
+    <RootNamespace>Redline</RootNamespace>
+
+    <!-- NuGet Package Metadata -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>redline</ToolCommandName>
+    <PackageId>Redline</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>OpenXmlPowerTools Authors, JSv4</Authors>
+    <Description>Compare Word documents and generate redline diffs with tracked changes. A CLI tool powered by OpenXmlPowerTools.</Description>
+    <PackageProjectUrl>https://github.com/jmansdorff/Open-Xml-PowerTools</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/jmansdorff/Open-Xml-PowerTools</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>openxml;docx;word;diff;redline;compare;track-changes;document</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../OpenXmlPowerTools/OpenXmlPowerTools.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+</Project>

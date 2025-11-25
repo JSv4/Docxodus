@@ -85,6 +85,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		stylecop.json = stylecop.json
 	EndProjectSection
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{73FF96A1-AAAA-46B7-AAB7-6A30C7FE55EF}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "redline", "tools\redline\redline.csproj", "{F2373014-D941-42A9-8C3B-CA9392D1FA8C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -231,6 +235,10 @@ Global
 		{3D1C46E1-7A9E-4A4B-8D95-68613603DEDF}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3D1C46E1-7A9E-4A4B-8D95-68613603DEDF}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3D1C46E1-7A9E-4A4B-8D95-68613603DEDF}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F2373014-D941-42A9-8C3B-CA9392D1FA8C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F2373014-D941-42A9-8C3B-CA9392D1FA8C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F2373014-D941-42A9-8C3B-CA9392D1FA8C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F2373014-D941-42A9-8C3B-CA9392D1FA8C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -269,6 +277,7 @@ Global
 		{DCE8EC51-1E58-49A0-82CF-5BE269FA0A9D} = {A83D6B58-6D38-46AF-8C20-5CFC170A1063}
 		{C9CAA69C-575A-442E-9D8A-69C53B39D72C} = {A83D6B58-6D38-46AF-8C20-5CFC170A1063}
 		{3D1C46E1-7A9E-4A4B-8D95-68613603DEDF} = {A83D6B58-6D38-46AF-8C20-5CFC170A1063}
+		{F2373014-D941-42A9-8C3B-CA9392D1FA8C} = {73FF96A1-AAAA-46B7-AAB7-6A30C7FE55EF}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {E623EFF5-2CA4-4FA0-B3AB-53F921DA212E}

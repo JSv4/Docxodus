@@ -1,0 +1,114 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 1.0.0)'
+        required: true
+        type: string
+
+env:
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+  DOTNET_NOLOGO: true
+
+jobs:
+  build-test-publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            # Extract version from tag (e.g., v1.0.0 -> 1.0.0)
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Restore dependencies
+        run: dotnet restore OpenXmlPowerTools.sln
+
+      - name: Build
+        run: dotnet build OpenXmlPowerTools.sln -c Release --no-restore
+
+      - name: Run tests
+        run: dotnet test OpenXmlPowerTools.Tests/OpenXmlPowerTools.Tests.csproj -c Release --no-build --verbosity normal
+
+      - name: Pack Redline CLI tool
+        run: dotnet pack tools/redline/redline.csproj -c Release --no-build -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-packages
+          path: ./artifacts/*.nupkg
+
+      - name: Add GitHub Packages source
+        run: dotnet nuget add source --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
+
+      - name: Push to GitHub Packages
+        run: dotnet nuget push ./artifacts/*.nupkg --source github --skip-duplicate
+
+  # Build self-contained executables for releases
+  build-binaries:
+    needs: build-test-publish
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            artifact: redline-linux-x64
+          - os: windows-latest
+            rid: win-x64
+            artifact: redline-win-x64.exe
+          - os: macos-latest
+            rid: osx-x64
+            artifact: redline-osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+            artifact: redline-osx-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish self-contained
+        run: dotnet publish tools/redline/redline.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ./publish/redline*

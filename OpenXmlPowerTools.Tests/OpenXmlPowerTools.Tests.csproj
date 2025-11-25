@@ -5,6 +5,10 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
+
+    <!-- Disable TreatWarningsAsErrors for test project - legacy xUnit patterns -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);xUnit1012;xUnit2020</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
