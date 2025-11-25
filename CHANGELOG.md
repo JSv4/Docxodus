@@ -1,0 +1,41 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+## [Unreleased] - .NET 8 / Open XML SDK 3.x Migration
+
+### Breaking Changes
+- **Target Framework**: Changed from net45/net46/netstandard2.0 to .NET 8.0
+- **Open XML SDK**: Upgraded from 2.8.1 to 3.2.0
+- **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
+
+### Added
+- `SkiaSharpHelpers.cs` - Color utilities for SkiaSharp compatibility
+- `GetPackage()` extension method in `PtOpenXmlUtil.cs` for SDK 3.x Package access
+- `SkiaSharp.NativeAssets.Linux.NoDependencies` package for Linux runtime support
+
+### Fixed
+- **DocumentBuilder relationship copying** - Fixed bug where relationship IDs from source documents could incorrectly match existing IDs in target header/footer parts when using InsertId functionality. This caused validation errors like "The relationship 'rIdX' referenced by attribute 'r:embed' does not exist."
+  - Removed flawed early-return optimization in `CopyRelatedImage()` that skipped processing when target part had matching relationship ID
+  - Fixed diagram relationship handling (`R.dm`, `R.lo`, `R.qs`, `R.cs` attributes) to properly copy parts from source documents
+  - Fixed chart and user shape relationship handling
+  - Fixed OLE object relationship handling
+  - Fixed external relationship attribute update to use correct attribute name parameter
+
+- **SpreadsheetWriter date handling** - Fixed date cells being written with invalid ISO 8601 string format. Dates are now properly converted to Excel serial date numbers (days since December 30, 1899) which is required for transitional OOXML format.
+
+- **WmlComparer null Unid handling** - Fixed null reference exceptions when comparing documents with elements lacking Unid attributes.
+
+- **WmlComparer footnote/endnote comparison** (6 tests: WC-1660, WC-1670, WC-1710, WC-1720, WC-1750, WC-1760) - Fixed `AssignUnidToAllElements` to assign Unid to footnote/endnote elements themselves, enabling proper reconstruction of multi-paragraph footnotes/endnotes by `CoalesceRecurse`.
+
+- **WmlComparer table row comparison** (1 test: WC-1500) - Added LCS-based row matching (`ApplyLcsToTableRows`) for large tables (7+ rows) when content differs significantly, preventing cascading false differences from insertions/deletions in the middle of tables.
+
+### Changed
+- Replaced `FontPartType`/`ImagePartType` with `PartTypeInfo` pattern for SDK 3.x compatibility
+- Replaced `.Close()` calls with `Dispose()` pattern
+- Migrated all color handling from `System.Drawing.Color` to `SKColor`
+- Migrated font handling from `FontFamily`/`FontStyle` to `SKFontManager`/`SKTypeface`
+- Migrated image handling from `Bitmap`/`ImageFormat` to `SKBitmap`/`SKEncodedImageFormat`
+
+### Test Status
+- 978 passed, 0 failed, 1 skipped out of 979 tests (~99.9% pass rate)
