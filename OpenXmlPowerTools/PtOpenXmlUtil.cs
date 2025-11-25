@@ -23,42 +23,58 @@ namespace OpenXmlPowerTools
     {
         /// <summary>
         /// Gets the underlying Package from an OpenXmlPackage.
-        /// In SDK 3.x, the Package property is internal, so we use reflection.
+        /// In SDK 3.x, the Package property is internal, so we use reflection to navigate the features chain.
         /// </summary>
         public static Package GetPackage(this OpenXmlPackage package)
         {
             if (package == null) throw new ArgumentNullException(nameof(package));
 
-            // Try to get the Package through the Features API first (for forward compatibility)
-            var featuresProperty = package.GetType().GetProperty("Features", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-            if (featuresProperty != null)
+            // In SDK 3.x, we need to navigate through the Features API
+            // The chain is: Features.Get<IPackageFeature>() -> wrapper -> StreamPackageFeature -> _package
+            try
             {
-                var features = featuresProperty.GetValue(package);
+                var features = package.Features;
                 if (features != null)
                 {
-                    var getMethod = features.GetType().GetMethod("Get", BindingFlags.Instance | BindingFlags.Public);
-                    if (getMethod != null)
+                    // Find IPackageFeature type from the Framework assembly
+                    var frameworkAssembly = AppDomain.CurrentDomain.GetAssemblies()
+                        .FirstOrDefault(a => a.GetName().Name == "DocumentFormat.OpenXml.Framework");
+
+                    if (frameworkAssembly != null)
                     {
-                        var packageFeatureType = Type.GetType("DocumentFormat.OpenXml.Features.IPackageFeature, DocumentFormat.OpenXml");
+                        var packageFeatureType = frameworkAssembly.GetType("DocumentFormat.OpenXml.Features.IPackageFeature");
                         if (packageFeatureType != null)
                         {
-                            var genericMethod = getMethod.MakeGenericMethod(packageFeatureType);
-                            var packageFeature = genericMethod.Invoke(features, null);
-                            if (packageFeature != null)
+                            var getMethod = features.GetType().GetMethod("Get", Type.EmptyTypes);
+                            if (getMethod != null && getMethod.IsGenericMethodDefinition)
                             {
-                                var packageProperty = packageFeatureType.GetProperty("Package");
-                                if (packageProperty != null)
+                                var genericGet = getMethod.MakeGenericMethod(packageFeatureType);
+                                var packageFeature = genericGet.Invoke(features, null);
+
+                                if (packageFeature != null)
                                 {
-                                    var pkg = packageProperty.GetValue(packageFeature) as Package;
-                                    if (pkg != null) return pkg;
+                                    // Get the IPackage wrapper from IPackageFeature.Package
+                                    var ipackageProp = packageFeatureType.GetProperty("Package");
+                                    var ipackage = ipackageProp?.GetValue(packageFeature);
+
+                                    if (ipackage != null)
+                                    {
+                                        // Navigate through delegation chain to find the actual Package
+                                        var pkg = ExtractPackageFromFeature(ipackage);
+                                        if (pkg != null) return pkg;
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+            catch
+            {
+                // Fall through to alternative approaches
+            }
 
-            // Fall back to direct field access
+            // Fallback: Try direct field access on OpenXmlPackage (older SDK versions)
             var packageField = package.GetType().GetField("_package", BindingFlags.Instance | BindingFlags.NonPublic);
             if (packageField != null)
             {
@@ -67,6 +83,58 @@ namespace OpenXmlPowerTools
             }
 
             throw new InvalidOperationException("Unable to access the underlying Package from OpenXmlPackage");
+        }
+
+        /// <summary>
+        /// Recursively extracts the System.IO.Packaging.Package from SDK 3.x feature wrappers.
+        /// </summary>
+        private static Package? ExtractPackageFromFeature(object feature)
+        {
+            if (feature == null) return null;
+
+            // If we already have a Package, return it
+            if (feature is Package pkg) return pkg;
+
+            var featureType = feature.GetType();
+
+            // Try to get _package field directly (StreamPackageFeature, FilePackageFeature, etc.)
+            var packageField = featureType.GetField("_package", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (packageField != null)
+            {
+                var innerPkg = packageField.GetValue(feature) as Package;
+                if (innerPkg != null) return innerPkg;
+            }
+
+            // Check base types for _package field
+            var baseType = featureType.BaseType;
+            while (baseType != null && baseType != typeof(object))
+            {
+                packageField = baseType.GetField("_package", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+                if (packageField != null)
+                {
+                    var innerPkg = packageField.GetValue(feature) as Package;
+                    if (innerPkg != null) return innerPkg;
+                }
+                baseType = baseType.BaseType;
+            }
+
+            // Try to get Feature property (DelegatingPackageFeature wraps another feature)
+            var featureField = featureType.GetField("<Feature>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (featureField == null)
+            {
+                featureField = featureType.BaseType?.GetField("<Feature>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic);
+            }
+
+            if (featureField != null)
+            {
+                var innerFeature = featureField.GetValue(feature);
+                if (innerFeature != null)
+                {
+                    return ExtractPackageFromFeature(innerFeature);
+                }
+            }
+
+            return null;
         }
 
         public static XDocument GetXDocument(this OpenXmlPart part)

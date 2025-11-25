@@ -106,33 +106,46 @@ Test files are in `TestFiles/` directory with prefixes indicating their purpose:
 1. **Framework Migration**: Upgraded from net45/net46/netstandard2.0 to .NET 8.0
 2. **Open XML SDK 3.x**: Upgraded from 2.8.1 to 3.2.0
    - Replaced `.Close()` with `Dispose()` pattern
-   - Added `GetPackage()` extension in `PtOpenXmlUtil.cs` for internal Package access
-   - Changed `FontPartType`/`ImagePartType` to `PartTypeInfo`
+   - Added `GetPackage()` extension in `PtOpenXmlUtil.cs` for internal Package access (via reflection)
+   - Changed `FontPartType`/`ImagePartType` to `PartTypeInfo` pattern
 3. **SkiaSharp Migration**: Replaced System.Drawing with SkiaSharp 2.88.9
    - `SKColor` replaces `Color`
    - `SKBitmap` replaces `Bitmap`
    - `SKFontManager`/`SKTypeface` replaces `FontFamily`/`FontStyle`
    - `SKEncodedImageFormat` replaces `ImageFormat`
    - Created `SkiaSharpHelpers.cs` with `ColorHelper` class for color name mapping
+   - Added `SkiaSharp.NativeAssets.Linux.NoDependencies` for Linux runtime support
 4. **Test Project**: Updated to .NET 8.0, fixed SkiaSharp usage
+5. **WmlComparer Fixes**: Fixed null Unid attribute handling that caused "Internal error" exceptions
 
 ### Current Test Status
 
-- **643 passed**, 335 failed out of 979 tests (~66% pass rate)
-- Some failures related to relationship handling and nullability
+- **951 passed**, 27 failed out of 979 tests (~97% pass rate)
+
+### Remaining Test Failures (27)
+
+1. **WmlComparer footnote/endnote tests** (7 failures) - Some comparison tests return 0 revisions for documents with footnotes/endnotes/tables. May require deeper investigation into how Unid attributes are being generated/compared.
+
+2. **Cell format currency tests** (7 failures) - Currency formatting produces slightly different output (e.g., "-₩ -" instead of "₩ -"). Likely pre-existing issue.
+
+3. **DocumentBuilder relationship tests** (9 failures) - Errors like "The relationship 'rId11' referenced by attribute 'r:embed' does not exist." Likely related to SDK 3.x changes in relationship handling.
+
+4. **Other tests** (4 failures) - PowerToolsBlockExtensionsTests, PB006_VideoFormats, SW002_AllDataTypes
 
 ### Remaining Work
 
 1. **Phase 4**: Remove preprocessor directives (`NET35`, `ELIDE_XUNIT_TESTS`) from source and test files
-2. **Phase 5**: Test infrastructure updates (move TestUtil.cs, update paths)
-3. **Phase 6**: Update example projects (optional - 6 example projects exist)
-4. **Phase 7**: Final cleanup, investigate test failures, update documentation
+2. **Phase 5**: Update example projects (6 example projects still target old frameworks)
+3. **Phase 6**: Investigate and fix remaining 27 test failures
+4. **Phase 7**: Final cleanup and documentation
 
 ### Key Files Changed
 
 - `OpenXmlPowerTools.csproj` - Framework and dependency updates
-- `PtOpenXmlUtil.cs` - Added `GetPackage()` extension method
+- `OpenXmlPowerTools.Tests.csproj` - Test framework updates
+- `PtOpenXmlUtil.cs` - Added `GetPackage()` extension method with SDK 3.x reflection workaround
 - `SkiaSharpHelpers.cs` - New file with color utilities
 - `ColorParser.cs`, `HtmlToWmlCssParser.cs` - SKColor migration
 - `MetricsGetter.cs`, `WmlToHtmlConverter.cs`, `HtmlToWmlConverterCore.cs` - Font/image handling
-- `WmlComparer.cs`, `PresentationBuilder.cs` - Package access fixes
+- `WmlComparer.cs` - Fixed null Unid handling, Package access fixes
+- `PresentationBuilder.cs` - Package access fixes

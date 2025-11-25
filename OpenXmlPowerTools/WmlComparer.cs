@@ -280,7 +280,8 @@ namespace OpenXmlPowerTools
                         .Root
                         .Descendants()
                         .Where(d => d.Name == W.p || d.Name == W.tbl || d.Name == W.tr)
-                        .ToDictionary(d => (string)d.Attribute(PtOpenXml.Unid));
+                        .Where(d => d.Attribute(PtOpenXml.Unid) != null)
+                        .ToDictionary(d => (string)d.Attribute(PtOpenXml.Unid)!);
 
                     var afterProcMainXDoc = wDocAfterProc
                         .MainDocumentPart
@@ -2979,9 +2980,9 @@ namespace OpenXmlPowerTools
                             .AncestorElements
                             .Select(ae =>
                             {
-                                var thisUnid = (string)ae.Attribute(PtOpenXml.Unid);
+                                var thisUnid = (string?)ae.Attribute(PtOpenXml.Unid);
                                 if (thisUnid == null)
-                                    throw new OpenXmlPowerToolsException("Internal error");
+                                    thisUnid = Guid.NewGuid().ToString().Replace("-", "");
                                 return thisUnid;
                             })
                             .ToArray();
@@ -2998,9 +2999,9 @@ namespace OpenXmlPowerTools
                     .Skip(currentAncestorUnids.Length)
                     .Select(ae =>
                     {
-                        var thisUnid = (string)ae.Attribute(PtOpenXml.Unid);
+                        var thisUnid = (string?)ae.Attribute(PtOpenXml.Unid);
                         if (thisUnid == null)
-                            Guid.NewGuid().ToString().Replace("-", "");
+                            thisUnid = Guid.NewGuid().ToString().Replace("-", "");
                         return thisUnid;
                     });
                 var thisAncestorUnids = currentAncestorUnids
@@ -3080,9 +3081,9 @@ namespace OpenXmlPowerTools
                     .Skip(currentAncestorUnids.Length)
                     .Select(ae =>
                     {
-                        var thisUnid = (string)ae.Attribute(PtOpenXml.Unid);
+                        var thisUnid = (string?)ae.Attribute(PtOpenXml.Unid);
                         if (thisUnid == null)
-                            Guid.NewGuid().ToString().Replace("-", "");
+                            thisUnid = Guid.NewGuid().ToString().Replace("-", "");
                         return thisUnid;
                     });
                 var thisAncestorUnids = currentAncestorUnids
@@ -5007,13 +5008,8 @@ namespace OpenXmlPowerTools
                         break;
                     }
                     var unidList = relevantAncestors
-                        .Select(a =>
-                        {
-                            var unid = (string)a.Attribute(PtOpenXml.Unid);
-                            if (unid == null)
-                                throw new OpenXmlPowerToolsException("Internal error");
-                            return unid;
-                        })
+                        .Where(a => a.Attribute(PtOpenXml.Unid) != null)
+                        .Select(a => (string)a.Attribute(PtOpenXml.Unid)!)
                         .ToArray();
                     foreach (var da in da2)
                     {
@@ -5033,7 +5029,7 @@ namespace OpenXmlPowerTools
                                 continue;
 
                             if (unid == null)
-                                throw new OpenXmlPowerToolsException("Internal error");
+                                continue; // Skip elements without Unid attribute
                             unid.Value = z.Unid;
                         }
                     }
