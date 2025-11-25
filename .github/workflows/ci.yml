@@ -20,7 +20,10 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
-        run: dotnet restore OpenXmlPowerTools.sln
+        run: |
+          dotnet restore OpenXmlPowerTools/OpenXmlPowerTools.csproj
+          dotnet restore OpenXmlPowerTools.Tests/OpenXmlPowerTools.Tests.csproj
+          dotnet restore tools/redline/redline.csproj
 
       - name: Build library
         run: dotnet build OpenXmlPowerTools/OpenXmlPowerTools.csproj -c Release --no-restore
@@ -29,7 +32,7 @@ jobs:
         run: dotnet build tools/redline/redline.csproj -c Release --no-restore
 
       - name: Run tests
-        run: dotnet test OpenXmlPowerTools.Tests/OpenXmlPowerTools.Tests.csproj -c Release --no-build --verbosity normal --logger "trx;LogFileName=test-results.trx"
+        run: dotnet test OpenXmlPowerTools.Tests/OpenXmlPowerTools.Tests.csproj -c Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
@@ -54,7 +57,9 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore
-        run: dotnet restore OpenXmlPowerTools.sln
+        run: |
+          dotnet restore OpenXmlPowerTools/OpenXmlPowerTools.csproj
+          dotnet restore tools/redline/redline.csproj
 
       - name: Build
         run: dotnet build OpenXmlPowerTools/OpenXmlPowerTools.csproj -c Release --no-restore
