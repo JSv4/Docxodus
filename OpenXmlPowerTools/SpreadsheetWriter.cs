@@ -380,14 +380,11 @@ namespace OpenXmlPowerTools
                             xw.WriteEndAttribute();
                             break;
                         case CellDataType.Date:
-                            xw.WriteStartAttribute("t");
-                            xw.WriteValue("d");
-                            xw.WriteEndAttribute();
+                            // Dates in transitional format are stored as numeric serial values
+                            // No type attribute needed (defaults to number)
                             break;
                         case CellDataType.Number:
-                            xw.WriteStartAttribute("t");
-                            xw.WriteValue("n");
-                            xw.WriteEndAttribute();
+                            // No type attribute needed for numbers (it's the default)
                             break;
                         case CellDataType.String:
                             xw.WriteStartAttribute("t");
@@ -403,7 +400,17 @@ namespace OpenXmlPowerTools
                     if (cell.Value != null)
                     {
                         xw.WriteStartElement("v", ns);
-                        xw.WriteValue(cell.Value);
+                        if (cell.CellDataType == CellDataType.Date && cell.Value is DateTime dateValue)
+                        {
+                            // Convert DateTime to Excel serial date number
+                            // Excel's epoch is December 30, 1899 (to account for the leap year bug)
+                            double serialDate = (dateValue - new DateTime(1899, 12, 30)).TotalDays;
+                            xw.WriteValue(serialDate);
+                        }
+                        else
+                        {
+                            xw.WriteValue(cell.Value);
+                        }
                         xw.WriteEndElement();
                     }
                     xw.WriteEndElement();

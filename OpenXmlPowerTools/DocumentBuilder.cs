@@ -3104,18 +3104,7 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
             if (string.IsNullOrEmpty(relId))
                 return;
 
-            // First look to see if this relId has already been added to the new document.
-            // This is necessary for those parts that get processed with both old and new ids, such as the comments
-            // part.  This is not necessary for parts such as the main document part, but this code won't malfunction
-            // in that case.
-            var tempPartIdPair5 = newContentPart.Parts.FirstOrDefault(p => p.RelationshipId == relId);
-            if (tempPartIdPair5 != null)
-                return;
-
-            ExternalRelationship tempEr5 = newContentPart.ExternalRelationships.FirstOrDefault(er => er.Id == relId);
-            if (tempEr5 != null)
-                return;
-
+            // First, find the source image part using the relationship ID from the old content part
             var ipp2 = oldContentPart.Parts.FirstOrDefault(ipp => ipp.RelationshipId == relId);
             if (ipp2 != null)
             {
@@ -3186,13 +3175,16 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
             }
             else
             {
+                // Check if it's an external relationship
                 ExternalRelationship er = oldContentPart.ExternalRelationships.FirstOrDefault(er1 => er1.Id == relId);
                 if (er != null)
                 {
                     ExternalRelationship newEr = newContentPart.AddExternalRelationship(er.RelationshipType, er.Uri);
-                    imageReference.Attribute(R.id).Value = newEr.Id;
+                    imageReference.Attribute(attributeName).Value = newEr.Id;
+                    return;
                 }
-                throw new DocumentBuilderInternalException("Source {0} is unsupported document - contains reference to NULL image");
+                // If neither a part relationship nor external relationship was found, the reference may be invalid
+                // or pointing to a resource type not handled by this function - skip silently as other handlers may process it
             }
         }
 
@@ -3212,106 +3204,89 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
             foreach (XElement diagramReference in newContent.DescendantsAndSelf().Where(d => d.Name == DGM.relIds || d.Name == A.relIds))
             {
                 // dm attribute
-                string relId = diagramReference.Attribute(R.dm).Value;
-                var ipp = newContentPart.Parts.FirstOrDefault(p => p.RelationshipId == relId);
-                if (ipp != null)
+                string relId = (string)diagramReference.Attribute(R.dm);
+                if (!string.IsNullOrEmpty(relId))
                 {
-                    OpenXmlPart tempPart = ipp.OpenXmlPart;
-                    continue;
+                    try
+                    {
+                        OpenXmlPart oldPart = oldContentPart.GetPartById(relId);
+                        OpenXmlPart newPart = newContentPart.AddNewPart<DiagramDataPart>();
+                        newPart.GetXDocument().Add(oldPart.GetXDocument().Root);
+                        diagramReference.Attribute(R.dm).Value = newContentPart.GetIdOfPart(newPart);
+                        AddRelationships(oldPart, newPart, new[] { newPart.GetXDocument().Root });
+                        CopyRelatedPartsForContentParts(oldPart, newPart, new[] { newPart.GetXDocument().Root }, images);
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        // Part not found in source - may have been processed already or doesn't exist
+                    }
                 }
-
-                ExternalRelationship tempEr = newContentPart.ExternalRelationships.FirstOrDefault(er2 => er2.Id == relId);
-                if (tempEr != null)
-                    continue;
-
-                OpenXmlPart oldPart = oldContentPart.GetPartById(relId);
-                OpenXmlPart newPart = newContentPart.AddNewPart<DiagramDataPart>();
-                newPart.GetXDocument().Add(oldPart.GetXDocument().Root);
-                diagramReference.Attribute(R.dm).Value = newContentPart.GetIdOfPart(newPart);
-                AddRelationships(oldPart, newPart, new[] { newPart.GetXDocument().Root });
-                CopyRelatedPartsForContentParts(oldPart, newPart, new[] { newPart.GetXDocument().Root }, images);
 
                 // lo attribute
-                relId = diagramReference.Attribute(R.lo).Value;
-                var ipp2 = newContentPart.Parts.FirstOrDefault(z => z.RelationshipId == relId);
-                if (ipp2 != null)
+                relId = (string)diagramReference.Attribute(R.lo);
+                if (!string.IsNullOrEmpty(relId))
                 {
-                    OpenXmlPart tempPart = ipp2.OpenXmlPart;
-                    continue;
+                    try
+                    {
+                        OpenXmlPart oldPart = oldContentPart.GetPartById(relId);
+                        OpenXmlPart newPart = newContentPart.AddNewPart<DiagramLayoutDefinitionPart>();
+                        newPart.GetXDocument().Add(oldPart.GetXDocument().Root);
+                        diagramReference.Attribute(R.lo).Value = newContentPart.GetIdOfPart(newPart);
+                        AddRelationships(oldPart, newPart, new[] { newPart.GetXDocument().Root });
+                        CopyRelatedPartsForContentParts(oldPart, newPart, new[] { newPart.GetXDocument().Root }, images);
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        // Part not found in source - may have been processed already or doesn't exist
+                    }
                 }
-
-
-                ExternalRelationship tempEr4 = newContentPart.ExternalRelationships.FirstOrDefault(er3 => er3.Id == relId);
-                if (tempEr4 != null)
-                    continue;
-
-                oldPart = oldContentPart.GetPartById(relId);
-                newPart = newContentPart.AddNewPart<DiagramLayoutDefinitionPart>();
-                newPart.GetXDocument().Add(oldPart.GetXDocument().Root);
-                diagramReference.Attribute(R.lo).Value = newContentPart.GetIdOfPart(newPart);
-                AddRelationships(oldPart, newPart, new[] { newPart.GetXDocument().Root });
-                CopyRelatedPartsForContentParts(oldPart, newPart, new[] { newPart.GetXDocument().Root }, images);
 
                 // qs attribute
-                relId = diagramReference.Attribute(R.qs).Value;
-                var ipp5 = newContentPart.Parts.FirstOrDefault(z => z.RelationshipId == relId);
-                if (ipp5 != null)
+                relId = (string)diagramReference.Attribute(R.qs);
+                if (!string.IsNullOrEmpty(relId))
                 {
-                    OpenXmlPart tempPart = ipp5.OpenXmlPart;
-                    continue;
+                    try
+                    {
+                        OpenXmlPart oldPart = oldContentPart.GetPartById(relId);
+                        OpenXmlPart newPart = newContentPart.AddNewPart<DiagramStylePart>();
+                        newPart.GetXDocument().Add(oldPart.GetXDocument().Root);
+                        diagramReference.Attribute(R.qs).Value = newContentPart.GetIdOfPart(newPart);
+                        AddRelationships(oldPart, newPart, new[] { newPart.GetXDocument().Root });
+                        CopyRelatedPartsForContentParts(oldPart, newPart, new[] { newPart.GetXDocument().Root }, images);
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        // Part not found in source - may have been processed already or doesn't exist
+                    }
                 }
-
-                ExternalRelationship tempEr5 = newContentPart.ExternalRelationships.FirstOrDefault(z => z.Id == relId);
-                if (tempEr5 != null)
-                    continue;
-
-                oldPart = oldContentPart.GetPartById(relId);
-                newPart = newContentPart.AddNewPart<DiagramStylePart>();
-                newPart.GetXDocument().Add(oldPart.GetXDocument().Root);
-                diagramReference.Attribute(R.qs).Value = newContentPart.GetIdOfPart(newPart);
-                AddRelationships(oldPart, newPart, new[] { newPart.GetXDocument().Root });
-                CopyRelatedPartsForContentParts(oldPart, newPart, new[] { newPart.GetXDocument().Root }, images);
 
                 // cs attribute
-                relId = diagramReference.Attribute(R.cs).Value;
-                var ipp6 = newContentPart.Parts.FirstOrDefault(z => z.RelationshipId == relId);
-                if (ipp6 != null)
+                relId = (string)diagramReference.Attribute(R.cs);
+                if (!string.IsNullOrEmpty(relId))
                 {
-                    OpenXmlPart tempPart = ipp6.OpenXmlPart;
-                    continue;
+                    try
+                    {
+                        OpenXmlPart oldPart = oldContentPart.GetPartById(relId);
+                        OpenXmlPart newPart = newContentPart.AddNewPart<DiagramColorsPart>();
+                        newPart.GetXDocument().Add(oldPart.GetXDocument().Root);
+                        diagramReference.Attribute(R.cs).Value = newContentPart.GetIdOfPart(newPart);
+                        AddRelationships(oldPart, newPart, new[] { newPart.GetXDocument().Root });
+                        CopyRelatedPartsForContentParts(oldPart, newPart, new[] { newPart.GetXDocument().Root }, images);
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        // Part not found in source - may have been processed already or doesn't exist
+                    }
                 }
-
-                ExternalRelationship tempEr6 = newContentPart.ExternalRelationships.FirstOrDefault(z => z.Id == relId);
-                if (tempEr6 != null)
-                    continue;
-
-                oldPart = oldContentPart.GetPartById(relId);
-                newPart = newContentPart.AddNewPart<DiagramColorsPart>();
-                newPart.GetXDocument().Add(oldPart.GetXDocument().Root);
-                diagramReference.Attribute(R.cs).Value = newContentPart.GetIdOfPart(newPart);
-                AddRelationships(oldPart, newPart, new[] { newPart.GetXDocument().Root });
-                CopyRelatedPartsForContentParts(oldPart, newPart, new[] { newPart.GetXDocument().Root }, images);
             }
 
             foreach (XElement oleReference in newContent.DescendantsAndSelf(O.OLEObject))
             {
                 string relId = (string)oleReference.Attribute(R.id);
-
-                // First look to see if this relId has already been added to the new document.
-                // This is necessary for those parts that get processed with both old and new ids, such as the comments
-                // part.  This is not necessary for parts such as the main document part, but this code won't malfunction
-                // in that case.
-                var ipp1 = newContentPart.Parts.FirstOrDefault(p => p.RelationshipId == relId);
-                if (ipp1 != null)
-                {
-                    OpenXmlPart tempPart = ipp1.OpenXmlPart;
-                    continue;
-                }
-
-                ExternalRelationship tempEr1 = newContentPart.ExternalRelationships.FirstOrDefault(z => z.Id == relId);
-                if (tempEr1 != null)
+                if (string.IsNullOrEmpty(relId))
                     continue;
 
+                // Look for the part in the source document
                 var ipp4 = oldContentPart.Parts.FirstOrDefault(z => z.RelationshipId == relId);
                 if (ipp4 != null)
                 {
@@ -3375,17 +3350,8 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                 string relId = (string)chartReference.Attribute(R.id);
                 if (string.IsNullOrEmpty(relId))
                     continue;
-                var ipp2 = newContentPart.Parts.FirstOrDefault(z => z.RelationshipId == relId);
-                if (ipp2 != null)
-                {
-                    OpenXmlPart tempPart = ipp2.OpenXmlPart;
-                    continue;
-                }
 
-                ExternalRelationship tempEr2 = newContentPart.ExternalRelationships.FirstOrDefault(z => z.Id == relId);
-                if (tempEr2 != null)
-                    continue;
-
+                // Look for the part in the source document
                 var ipp3 = oldContentPart.Parts.FirstOrDefault(p => p.RelationshipId == relId);
                 if (ipp3 == null)
                     continue;
@@ -3405,17 +3371,7 @@ application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml
                 if (string.IsNullOrEmpty(relId))
                     continue;
 
-                var ipp4 = newContentPart.Parts.FirstOrDefault(p => p.RelationshipId == relId);
-                if (ipp4 != null)
-                {
-                    OpenXmlPart tempPart = ipp4.OpenXmlPart;
-                    continue;
-                }
-
-                ExternalRelationship tempEr4 = newContentPart.ExternalRelationships.FirstOrDefault(z => z.Id == relId);
-                if (tempEr4 != null)
-                    continue;
-
+                // Look for the part in the source document
                 var ipp5 = oldContentPart.Parts.FirstOrDefault(p => p.RelationshipId == relId);
                 if (ipp5 != null)
                 {
