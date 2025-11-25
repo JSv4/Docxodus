@@ -1,197 +1,128 @@
-﻿NuGet Feed for CI build: https://ci.appveyor.com/nuget/open-xml-powertools
+# Redline
 
-News
-====
-Hello, Open-Xml-PowerTools users.  We're looking for a maintainer for this repo - someone to
-review PRs, respond to queries, and etc.  If you are interested in contributing to this repo
-in this fashion, please message either Thomas Barnekow or Eric White here on github.
+**Compare Word documents and generate redlines with tracked changes.**
 
-Eric White
+[![CI](https://github.com/JSv4/DocxRedlines/actions/workflows/ci.yml/badge.svg)](https://github.com/JSv4/DocxRedlines/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Open-XML-PowerTools
-===================
-The Open XML PowerTools provides guidance and example code for programming with Open XML
-Documents (DOCX, XLSX, and PPTX).  It is based on, and extends the functionality
-of the [Open XML SDK](https://github.com/OfficeDev/Open-XML-SDK).
+Redline is a .NET tool for comparing two Word documents (DOCX) and producing a third document with tracked changes showing insertions, deletions, and modifications.
 
-It supports scenarios such as:
-- Splitting DOCX/PPTX files into multiple files.
-- Combining multiple DOCX/PPTX files into a single file.
-- Populating content in template DOCX files with data from XML.
-- High-fidelity conversion of DOCX to HTML/CSS.
-- High-fidelity conversion of HTML/CSS to DOCX.
-- Searching and replacing content in DOCX/PPTX using regular expressions.
-- Managing tracked-revisions, including detecting tracked revisions, and accepting tracked revisions.
-- Updating Charts in DOCX/PPTX files, including updating cached data, as well as the embedded XLSX.
-- Comparing two DOCX files, producing a DOCX with revision tracking markup, and enabling retrieving a list of revisions.
-- Retrieving metrics from DOCX files, including the hierarchy of styles used, the languages used, and the fonts used.
-- Writing XLSX files using far simpler code than directly writing the markup, including a streaming approach that
-  enables writing XLSX files with millions of rows.
-- Extracting data (along with formatting) from spreadsheets.
+## Quick Start
 
-Copyright (c) Microsoft Corporation 2012-2017
-Portions Copyright (c) Eric White Inc 2018-2019
+### Install the CLI Tool
 
-Licensed under the MIT License.
-See License in the project root for license information.
+```bash
+# Add GitHub Packages source (one-time setup)
+dotnet nuget add source https://nuget.pkg.github.com/JSv4/index.json \
+  --name github \
+  --username YOUR_GITHUB_USERNAME \
+  --password YOUR_GITHUB_PAT
 
-News
-====
-New Release!  Version 4.6.0
+# Install globally
+dotnet tool install -g Redline --source github
+```
 
-This version has a completely re-written WmlComparer.cs, which now supports nested tables and text boxes.  WmlComparer.cs is a module that compares two DOCX files and
-produces a DOCX with revision tracking markup.  It enables retrieving a list of revisions.
+### Usage
 
-Open-Xml-PowerTools Content
-===========================
+```bash
+redline original.docx modified.docx output.docx
+```
 
-There is a lot of content about Open-Xml-PowerTools at the [Open-Xml-PowerTools Resource Center at OpenXmlDeveloper.org](http://openxmldeveloper.org/wiki/w/wiki/powertools-for-open-xml.aspx)
+With a custom author tag for tracked changes:
 
-See:
-- [DocumentBuilder Resource Center](http://www.ericwhite.com/blog/documentbuilder-developer-center/)
-- [PresentationBuilder Resource Center](http://www.ericwhite.com/blog/presentationbuilder-developer-center/)
-- [WmlToHtmlConverter Resource Center](http://www.ericwhite.com/blog/wmltohtmlconverter-developer-center/)
-- [DocumentAssembler Resource Center](http://www.ericwhite.com/blog/documentassembler-developer-center/)
+```bash
+redline original.docx modified.docx output.docx --author="Legal Review"
+```
 
-Build Instructions
-==================
+### Options
 
-**Prerequisites:**
+| Option | Description |
+|--------|-------------|
+| `--author=<name>` | Author name for tracked changes (default: "Redline") |
+| `-h, --help` | Show help message |
+| `-v, --version` | Show version information |
 
-- Visual Studio 2017 Update 5 or .NET CLI toolchain
+## Using as a Library
 
-**Build**
- 
- With Visual Studio:
+Reference the OpenXmlPowerTools project directly in your solution:
 
-- Open `OpenXmlPowerTools.sln` in Visual Studio
-- Rebuild the project
-- Build the solution.  To validate the build, open the Test Explorer.  Click Run All.
-- To run an example, set the example as the startup project, and press F5.
+```csharp
+using OpenXmlPowerTools;
 
-With .NET CLI toolchain:
+// Load documents
+var original = new WmlDocument("original.docx");
+var modified = new WmlDocument("modified.docx");
 
-- Run `dotnet build OpenXmlPowerTools.sln`
+// Configure comparison
+var settings = new WmlComparerSettings
+{
+    AuthorForRevisions = "Redline",
+    DetailThreshold = 0
+};
 
-Change Log
-==========
+// Compare and get result
+var result = WmlComparer.Compare(original, modified, settings);
 
-Version 4.6 : November 16, 2020
-- Various small bug fixes
+// Get list of revisions
+var revisions = WmlComparer.GetRevisions(result, settings);
+Console.WriteLine($"Found {revisions.Count} revisions");
 
-Version 4.5 : January 21, 2020
-- Various changes and fixes to DocumentBuilder
+// Save the redlined document
+result.SaveAs("redline.docx");
+```
 
-Version 4.3 : June 13, 2016
-- New WmlComparer module
+## Download Standalone Binaries
 
-Version 4.2 : December 11, 2015
-- New SmlDataRetriever module
-- New SmlCellFormatter module
+Pre-built binaries are available on the [Releases](https://github.com/JSv4/DocxRedlines/releases) page:
 
-Version 4.1.3 : November 2, 2015
-- DocumentAssembler: Fix bug associated with duplicate bookmarks.
-- DocumentAssembler: Enable processing of content controls / metadata in footer rows.
-- DocumentAssembler: Avoid processing content controls used for purposes other than the DocumentAssembler template, including page numbers in footers, etc.
+| Platform | Download |
+|----------|----------|
+| Windows (x64) | `redline-win-x64.exe` |
+| Linux (x64) | `redline-linux-x64` |
+| macOS (x64) | `redline-osx-x64` |
+| macOS (ARM) | `redline-osx-arm64` |
 
-Version 4.1.2 : October 31, 2015
-- HtmlToWmlConverter: Handle unknown elements by recursively processing descendants
+## Build from Source
 
-Version 4.1.1 : October 21, 2015
-- Fix to AddTypes.ps1 to compile WmlToHtmlConverter.cs instead of HtmlConverter.cs
-- Fix to MettricsGetter.ps1 to correctly report whether a document contains tracked revisions
-- Added some unit tests for PresentationBuilder
+```bash
+# Clone the repository
+git clone https://github.com/JSv4/DocxRedlines.git
+cd DocxRedlines
 
-Version 4.1.0 : September 27, 2015
-- New HtmlToWmlConverter module
-- HtmlConverter generates non breaking spaces as #00a0 unicode charater, not &nbsp; entity.
+# Build
+dotnet build
 
-Version 4.0.0 : August 6, 2015
-- New DocumentAssember module
-- New SpreadsheetWriter module
-- New Cmdlet: Complete-DocxTemplateFromXml
-- Fix DocumentBuilder: deal with headers / footers more rationally
-- Enhance DocumentBuilder: add option to discard headers / footers from section (but keep layout of section)
-- Fix RevisionAccepter: deal with w:moveTo immediately before a table
-- New test document library in the TestFiles directory
-- XUnit tests
-- Cleaned up build system
-- Build using the open source Open-Xml-SDK and the new System.IO.Packaging by default
-- Back port to .NET 3.5
-- Rename the PowerShell module to Open-Xml-PowerTools
+# Run tests
+dotnet test
 
-Version 3.1.11 : June 30, 2015
-- Updated projects and solutions to build with the open source Open XML SDK and new System.IO.Packaging
+# Run the CLI
+dotnet run --project tools/redline/redline.csproj -- --help
+```
 
-Version 3.1.10 : June 14, 2015
-- Changed Out-Xlsx Cmdlet to C# implementation
-- Fix Add-DocxText
+## Project Status
 
-Version 3.1.09 : April 20, 2015
-- Fix OpenXmlRegex: PowerPoint 2007 and xml:space issues, causing 2007 to not open PPTX's
+This project is a focused fork of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools), originally developed by Eric White at Microsoft. The original project provided a broad set of utilities for working with Office Open XML documents but is no longer actively maintained.
 
-Version 3.1.08 : March 13, 2015
-- Added Out-Xlsx Cmdlet
+**Redline** narrows the focus to document comparison—the most commonly needed feature for legal, editorial, and business workflows.
 
-Version 3.1.07 : February 9, 2015
-- Added Merge-Pptx Cmdlet
-- Added New-Pptx Cmdlet
-- Added New-PmlDocument
-- Fixed help for Merge-Docx
-- Don't throw duplicate attribute exception when running FormattingAssembler.AssembleFormatting
-  twice on same document.
+### What's Included
 
-Version 3.1.06 : February 7, 2015
-- Added Expand-DocxFormatting Cmdlet
-- Cmdlets do not keep a handle to the current directory, preventing deletion of the directory.
-- Added additional tests to Test-OxPtCmdlets
+- **WmlComparer** - Compare two DOCX files and generate redlines with tracked changes
+- Supporting utilities for document manipulation
 
-Version 3.1.05 : January 29, 2015
-- Added GetListItemText_zh_CN.cs
-- Fixed GetListItemText_fr_FR.cs
-- Partially fixed GetListItemText_ru_RU.cs
-- Fixed GetListItemText_Default.cs
-- Added better support in ListItemRetriever.cs
-- Added FileUtils class in PtUtil.cs
+### What's Planned
 
-Version 3.1.04 : December 17, 2014
-- Added Get-DocxMetrics Cmdlet
-- Added New-WmlDocument Cmdlet
-- Added MetricsGetter.cs module
-- Added MettricsGetter01.cs module, along with sample documents
-- Reworked Add-DocxText, new style of using it with New-WmlDocument
+- HTML conversion utilities will be moved to a separate project
+- Additional comparison features and improvements
 
-Version 3.1.03 : December 9, 2014
-- Added ChartUpdater.cs module
-- Added ChartUpdater01.cs module, along with sample documents
-- Added Test-OxPtCmdlets Cmdlet
+## Requirements
 
-Version 3.1.02 : December 1, 2014
-- Added Add-DocxText Cmdlet
+- .NET 8.0 or later
 
-Version 3.1.01 : November 23, 2014
-- Added Convert-DocxToHtml Cmdlet
-- Added Chinese and Hebrew sample documents
-- Cmdlets in this release
-	Clear-DocxTrackedRevision
-	Convert-DocxToHtml
-	ConvertFrom-Base64
-	ConvertFrom-FlatOpc
-	ConvertTo-Base64
-	ConvertTo-FlatOpc
-	Get-OpenXmlValidationErrors
-	Merge-Docx
-	New-Docx
-	Test-OpenXmlValid
+## License
 
-Version 3.1.00 : November 13, 2014
-- Changed installation process - no longer requires compilation using Visual Studio
-- Added ConvertTo-FlatOpc Cmdlet
-- Added ConvertFrom-FlatOpc Cmdlet
-- Changed parameters for Test-OpenXmlValid, Get-OpenXmlValidationErrors
-- Removed the unnecessary 1/2 second sleep when doing Word automation in the New-Docx Cmdlet
+MIT License - see [LICENSE](LICENSE) for details.
 
-Version 3.0.00 : October 29, 2014
-- New release of cmdlets that are written as 'Advanced Functions' instead of in C#.
+---
 
-This project has adopted the [Microsoft Open Source Code of Conduct](https://opensource.microsoft.com/codeofconduct/). For more information, see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
+*Built on the shoulders of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools). Thanks to Eric White, Thomas Barnekow, and all original contributors.*

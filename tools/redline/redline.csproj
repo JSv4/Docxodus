@@ -17,8 +17,8 @@
     <Version>1.0.0</Version>
     <Authors>OpenXmlPowerTools Authors, JSv4</Authors>
     <Description>Compare Word documents and generate redline diffs with tracked changes. A CLI tool powered by OpenXmlPowerTools.</Description>
-    <PackageProjectUrl>https://github.com/jmansdorff/Open-Xml-PowerTools</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/jmansdorff/Open-Xml-PowerTools</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/JSv4/DocxRedlines</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/JSv4/DocxRedlines</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>openxml;docx;word;diff;redline;compare;track-changes;document</PackageTags>

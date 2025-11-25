@@ -1,19 +1,19 @@
 # Redline
 
-A command-line tool for comparing Word documents and generating redline diffs with tracked changes.
+A command-line tool for comparing Word documents and generating redlines with tracked changes.
 
 ## Installation
 
 ### As a .NET Global Tool
 
 ```bash
-dotnet tool install -g Redline
-```
+# Add GitHub Packages source (one-time setup)
+dotnet nuget add source https://nuget.pkg.github.com/JSv4/index.json \
+  --name github \
+  --username YOUR_GITHUB_USERNAME \
+  --password YOUR_GITHUB_PAT
 
-### From GitHub Packages
-
-```bash
-dotnet nuget add source https://nuget.pkg.github.com/jmansdorff/index.json --name github
+# Install globally
 dotnet tool install -g Redline --source github
 ```
 
@@ -60,10 +60,6 @@ The tool generates a Word document with tracked changes (revisions) showing:
 
 Open the output document in Microsoft Word or another compatible word processor to review and accept/reject changes.
 
-## Powered By
-
-This tool is built on [OpenXmlPowerTools](https://github.com/jmansdorff/Open-Xml-PowerTools), specifically the `WmlComparer` module for document comparison.
-
 ## License
 
-MIT License - see [LICENSE](https://github.com/jmansdorff/Open-Xml-PowerTools/blob/main/LICENSE) for details.
+MIT License - see [LICENSE](https://github.com/JSv4/DocxRedlines/blob/main/LICENSE) for details.
