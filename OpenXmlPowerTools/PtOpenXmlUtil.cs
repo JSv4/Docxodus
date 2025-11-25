@@ -5,6 +5,7 @@ using System;
 using System.IO;
 using System.IO.Packaging;
 using System.IO.Compression;
+using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
@@ -12,9 +13,7 @@ using System.Linq;
 using System.Xml.Linq;
 using System.Collections.Generic;
 using DocumentFormat.OpenXml.Packaging;
-using System.Drawing;
-using Font = System.Drawing.Font;
-using FontFamily = System.Drawing.FontFamily;
+using SkiaSharp;
 
 // ReSharper disable InconsistentNaming
 
@@ -22,6 +21,54 @@ namespace OpenXmlPowerTools
 {
     public static class PtOpenXmlExtensions
     {
+        /// <summary>
+        /// Gets the underlying Package from an OpenXmlPackage.
+        /// In SDK 3.x, the Package property is internal, so we use reflection.
+        /// </summary>
+        public static Package GetPackage(this OpenXmlPackage package)
+        {
+            if (package == null) throw new ArgumentNullException(nameof(package));
+
+            // Try to get the Package through the Features API first (for forward compatibility)
+            var featuresProperty = package.GetType().GetProperty("Features", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            if (featuresProperty != null)
+            {
+                var features = featuresProperty.GetValue(package);
+                if (features != null)
+                {
+                    var getMethod = features.GetType().GetMethod("Get", BindingFlags.Instance | BindingFlags.Public);
+                    if (getMethod != null)
+                    {
+                        var packageFeatureType = Type.GetType("DocumentFormat.OpenXml.Features.IPackageFeature, DocumentFormat.OpenXml");
+                        if (packageFeatureType != null)
+                        {
+                            var genericMethod = getMethod.MakeGenericMethod(packageFeatureType);
+                            var packageFeature = genericMethod.Invoke(features, null);
+                            if (packageFeature != null)
+                            {
+                                var packageProperty = packageFeatureType.GetProperty("Package");
+                                if (packageProperty != null)
+                                {
+                                    var pkg = packageProperty.GetValue(packageFeature) as Package;
+                                    if (pkg != null) return pkg;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fall back to direct field access
+            var packageField = package.GetType().GetField("_package", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (packageField != null)
+            {
+                var pkg = packageField.GetValue(package) as Package;
+                if (pkg != null) return pkg;
+            }
+
+            throw new InvalidOperationException("Unable to access the underlying Package from OpenXmlPackage");
+        }
+
         public static XDocument GetXDocument(this OpenXmlPart part)
         {
             if (part == null) throw new ArgumentNullException("part");
@@ -630,21 +677,21 @@ namespace OpenXmlPowerTools
     public static class WordprocessingMLUtil
     {
         private static HashSet<string> UnknownFonts = new HashSet<string>();
-        private static HashSet<string> KnownFamilies = null;
+        private static HashSet<string>? KnownFamilies = null;
 
         public static int CalcWidthOfRunInTwips(XElement r)
         {
             if (KnownFamilies == null)
             {
                 KnownFamilies = new HashSet<string>();
-                var families = FontFamily.Families;
+                var families = SKFontManager.Default.FontFamilies;
                 foreach (var fam in families)
-                    KnownFamilies.Add(fam.Name);
+                    KnownFamilies.Add(fam);
             }
 
-            var fontName = (string)r.Attribute(PtOpenXml.pt + "FontName");
+            var fontName = (string?)r.Attribute(PtOpenXml.pt + "FontName");
             if (fontName == null)
-                fontName = (string)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
+                fontName = (string?)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
             if (fontName == null)
                 throw new OpenXmlPowerToolsException("Internal Error, should have FontName attribute");
             if (UnknownFonts.Contains(fontName))
@@ -653,7 +700,7 @@ namespace OpenXmlPowerTools
             var rPr = r.Element(W.rPr);
             if (rPr == null)
                 throw new OpenXmlPowerToolsException("Internal Error, should have run properties");
-            var languageType = (string)r.Attribute(PtOpenXml.LanguageType);
+            var languageType = (string?)r.Attribute(PtOpenXml.LanguageType);
             decimal? szn = null;
             if (languageType == "bidi")
                 szn = (decimal?)rPr.Elements(W.szCs).Attributes(W.val).FirstOrDefault();
@@ -667,27 +714,9 @@ namespace OpenXmlPowerTools
             // unknown font families will throw ArgumentException, in which case just return 0
             if (!KnownFamilies.Contains(fontName))
                 return 0;
-            // in theory, all unknown fonts are found by the above test, but if not...
-            FontFamily ff;
-            try
-            {
-                ff = new FontFamily(fontName);
-            }
-            catch (ArgumentException)
-            {
-                UnknownFonts.Add(fontName);
 
-                return 0;
-            }
-            FontStyle fs = FontStyle.Regular;
             var bold = GetBoolProp(rPr, W.b) || GetBoolProp(rPr, W.bCs);
             var italic = GetBoolProp(rPr, W.i) || GetBoolProp(rPr, W.iCs);
-            if (bold && !italic)
-                fs = FontStyle.Bold;
-            if (italic && !bold)
-                fs = FontStyle.Italic;
-            if (bold && italic)
-                fs = FontStyle.Bold | FontStyle.Italic;
 
             var runText = r.DescendantsTrimmed(W.txbxContent)
                 .Where(e => e.Name == W.t)
@@ -721,7 +750,7 @@ namespace OpenXmlPowerTools
                 runText = sb.ToString();
             }
 
-            var w = MetricsGetter.GetTextWidth(ff, fs, sz, runText);
+            var w = MetricsGetter.GetTextWidth(fontName, bold, italic, sz, runText);
 
             return (int) (w / 96m * 1440m / multiplier + tabLength * 1440m);
         }

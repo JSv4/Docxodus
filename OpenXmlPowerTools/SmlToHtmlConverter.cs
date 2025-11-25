@@ -4,13 +4,13 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Drawing;
 using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using System.IO;
+using SkiaSharp;
 
 namespace OpenXmlPowerTools
 {
@@ -236,9 +236,9 @@ namespace OpenXmlPowerTools
                 if (_knownFamilies == null)
                 {
                     _knownFamilies = new HashSet<string>();
-                    var families = FontFamily.Families;
+                    var families = SKFontManager.Default.FontFamilies;
                     foreach (var fam in families)
-                        _knownFamilies.Add(fam.Name);
+                        _knownFamilies.Add(fam);
                 }
                 return _knownFamilies;
             }

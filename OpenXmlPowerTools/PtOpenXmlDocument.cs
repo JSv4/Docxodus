@@ -563,9 +563,8 @@ namespace OpenXmlPowerTools
                         new XAttribute(XNamespace.Xmlns + "w", W.w),
                         new XAttribute(XNamespace.Xmlns + "r", R.r),
                         new XElement(W.body))));
-                doc.Close();
-                return new OpenXmlMemoryStreamDocument(stream);
             }
+            return new OpenXmlMemoryStreamDocument(stream);
         }
         public static OpenXmlMemoryStreamDocument CreateSpreadsheetDocument()
         {
@@ -580,9 +579,8 @@ namespace OpenXmlPowerTools
                         new XAttribute("xmlns", ns),
                         new XAttribute(XNamespace.Xmlns + "r", relationshipsns),
                         new XElement(ns + "sheets"))));
-                doc.Close();
-                return new OpenXmlMemoryStreamDocument(stream);
             }
+            return new OpenXmlMemoryStreamDocument(stream);
         }
         public static OpenXmlMemoryStreamDocument CreatePresentationDocument()
         {
@@ -601,16 +599,16 @@ namespace OpenXmlPowerTools
                         new XElement(ns + "sldMasterIdLst"),
                         new XElement(ns + "sldIdLst"),
                         new XElement(ns + "notesSz", new XAttribute("cx", "6858000"), new XAttribute("cy", "9144000")))));
-                doc.Close();
-                return new OpenXmlMemoryStreamDocument(stream);
             }
+            return new OpenXmlMemoryStreamDocument(stream);
         }
 
         public static OpenXmlMemoryStreamDocument CreatePackage()
         {
             MemoryStream stream = new MemoryStream();
-            Package package = Package.Open(stream, FileMode.Create);
-            package.Close();
+            using (Package package = Package.Open(stream, FileMode.Create))
+            {
+            }
             return new OpenXmlMemoryStreamDocument(stream);
         }
 
@@ -693,28 +691,28 @@ namespace OpenXmlPowerTools
 
         public OpenXmlPowerToolsDocument GetModifiedDocument()
         {
-            DocPackage.Close();
+            ((IDisposable)DocPackage)?.Dispose();
             DocPackage = null;
             return new OpenXmlPowerToolsDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
         }
 
         public WmlDocument GetModifiedWmlDocument()
         {
-            DocPackage.Close();
+            ((IDisposable)DocPackage)?.Dispose();
             DocPackage = null;
             return new WmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
         }
 
         public SmlDocument GetModifiedSmlDocument()
         {
-            DocPackage.Close();
+            ((IDisposable)DocPackage)?.Dispose();
             DocPackage = null;
             return new SmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
         }
 
         public PmlDocument GetModifiedPmlDocument()
         {
-            DocPackage.Close();
+            ((IDisposable)DocPackage)?.Dispose();
             DocPackage = null;
             return new PmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
         }
@@ -738,14 +736,8 @@ namespace OpenXmlPowerTools
         {
             if (disposing)
             {
-                if (DocPackage != null)
-                {
-                    DocPackage.Close();
-                }
-                if (DocMemoryStream != null)
-                {
-                    DocMemoryStream.Dispose();
-                }
+                ((IDisposable)DocPackage)?.Dispose();
+                DocMemoryStream?.Dispose();
             }
             if (DocPackage == null && DocMemoryStream == null)
                 return;

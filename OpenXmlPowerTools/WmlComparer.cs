@@ -14,7 +14,7 @@ using System.IO.Packaging;
 using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
-using System.Drawing;
+using SkiaSharp;
 using System.Security.Cryptography;
 using OpenXmlPowerTools;
 
@@ -79,7 +79,7 @@ namespace OpenXmlPowerTools
     {
         public WmlDocument RevisedDocument;
         public string Revisor;
-        public Color Color;
+        public SKColor Color;
     }
 
     public static class WmlComparer
@@ -503,7 +503,7 @@ namespace OpenXmlPowerTools
         private class ConsolidationInfo
         {
             public string Revisor;
-            public Color Color;
+            public SKColor Color;
             public XElement RevisionElement;
             public bool InsertBefore = false;
             public string RevisionHash;
@@ -1338,8 +1338,8 @@ namespace OpenXmlPowerTools
             ConsolidationInfo consolidationInfo,
             WmlComparerSettings settings)
         {
-            Package packageOfDeletedContent = wDocDelta.MainDocumentPart.OpenXmlPackage.Package;
-            Package packageOfNewContent = consolidatedWDoc.MainDocumentPart.OpenXmlPackage.Package;
+            Package packageOfDeletedContent = wDocDelta.MainDocumentPart.OpenXmlPackage.GetPackage();
+            Package packageOfNewContent = consolidatedWDoc.MainDocumentPart.OpenXmlPackage.GetPackage();
             PackagePart partInDeletedDocument = packageOfDeletedContent.GetPart(wDocDelta.MainDocumentPart.Uri);
             PackagePart partInNewDocument = packageOfNewContent.GetPart(consolidatedWDoc.MainDocumentPart.Uri);
             consolidationInfo.RevisionElement = MoveRelatedPartsToDestination(partInDeletedDocument, partInNewDocument, consolidationInfo.RevisionElement);
@@ -4605,8 +4605,8 @@ namespace OpenXmlPowerTools
                                         var openXmlPartInNewDocument = part;
                                         return gc.Select(gce =>
                                         {
-                                            Package packageOfDeletedContent = openXmlPartOfDeletedContent.OpenXmlPackage.Package;
-                                            Package packageOfNewContent = openXmlPartInNewDocument.OpenXmlPackage.Package;
+                                            Package packageOfDeletedContent = openXmlPartOfDeletedContent.OpenXmlPackage.GetPackage();
+                                            Package packageOfNewContent = openXmlPartInNewDocument.OpenXmlPackage.GetPackage();
                                             PackagePart partInDeletedDocument = packageOfDeletedContent.GetPart(part.Uri);
                                             PackagePart partInNewDocument = packageOfNewContent.GetPart(part.Uri);
                                             return MoveRelatedPartsToDestination(partInDeletedDocument, partInNewDocument, newDrawing);
@@ -4624,8 +4624,8 @@ namespace OpenXmlPowerTools
                                         var openXmlPartInNewDocument = part;
                                         return gc.Select(gce =>
                                         {
-                                            Package packageOfSourceContent = openXmlPartOfInsertedContent.OpenXmlPackage.Package;
-                                            Package packageOfNewContent = openXmlPartInNewDocument.OpenXmlPackage.Package;
+                                            Package packageOfSourceContent = openXmlPartOfInsertedContent.OpenXmlPackage.GetPackage();
+                                            Package packageOfNewContent = openXmlPartInNewDocument.OpenXmlPackage.GetPackage();
                                             PackagePart partInDeletedDocument = packageOfSourceContent.GetPart(part.Uri);
                                             PackagePart partInNewDocument = packageOfNewContent.GetPart(part.Uri);
                                             return MoveRelatedPartsToDestination(partInDeletedDocument, partInNewDocument, newDrawing);

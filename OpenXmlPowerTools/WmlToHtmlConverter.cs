@@ -4,7 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
-using System.Drawing;
+using SkiaSharp;
 using System.Globalization;
 using System.Linq;
 using System.Text;
@@ -120,14 +120,35 @@ namespace OpenXmlPowerTools
     [SuppressMessage("ReSharper", "UnusedMember.Global")]
     public class ImageInfo
     {
-        public Bitmap Bitmap;
-        public XAttribute ImgStyleAttribute;
-        public string ContentType;
-        public XElement DrawingElement;
-        public string AltText;
+        public SKBitmap? Bitmap;
+        public byte[]? ImageBytes;
+        public XAttribute? ImgStyleAttribute;
+        public string? ContentType;
+        public XElement? DrawingElement;
+        public string? AltText;
 
         public const int EmusPerInch = 914400;
         public const int EmusPerCm = 360000;
+
+        /// <summary>
+        /// Saves the image to a file using the specified format.
+        /// </summary>
+        public void SaveImage(string filePath, SKEncodedImageFormat format, int quality = 100)
+        {
+            if (ImageBytes != null)
+            {
+                // If we have raw bytes, save them directly for formats that match
+                System.IO.File.WriteAllBytes(filePath, ImageBytes);
+                return;
+            }
+            if (Bitmap != null)
+            {
+                using var image = SKImage.FromBitmap(Bitmap);
+                using var data = image.Encode(format, quality);
+                using var stream = System.IO.File.OpenWrite(filePath);
+                data.SaveTo(stream);
+            }
+        }
     }
 
     public static class WmlToHtmlConverter
@@ -2248,9 +2269,9 @@ namespace OpenXmlPowerTools
                 if (_knownFamilies == null)
                 {
                     _knownFamilies = new HashSet<string>();
-                    var families = FontFamily.Families;
+                    var families = SKFontManager.Default.FontFamilies;
                     foreach (var fam in families)
-                        _knownFamilies.Add(fam.Name);
+                        _knownFamilies.Add(fam);
                 }
                 return _knownFamilies;
             }
@@ -2275,24 +2296,8 @@ namespace OpenXmlPowerTools
             if (!KnownFamilies.Contains(fontName))
                 return 0;
 
-            // in theory, all unknown fonts are found by the above test, but if not...
-            FontFamily ff;
-            try
-            {
-                ff = new FontFamily(fontName);
-            }
-            catch (ArgumentException)
-            {
-                UnknownFonts.Add(fontName);
-
-                return 0;
-            }
-
-            var fs = FontStyle.Regular;
-            if (GetBoolProp(rPr, W.b) || GetBoolProp(rPr, W.bCs))
-                fs |= FontStyle.Bold;
-            if (GetBoolProp(rPr, W.i) || GetBoolProp(rPr, W.iCs))
-                fs |= FontStyle.Italic;
+            var bold = GetBoolProp(rPr, W.b) || GetBoolProp(rPr, W.bCs);
+            var italic = GetBoolProp(rPr, W.i) || GetBoolProp(rPr, W.iCs);
 
             // Appended blank as a quick fix to accommodate &nbsp; that will get
             // appended to some layout-critical runs such as list item numbers.
@@ -2331,7 +2336,7 @@ namespace OpenXmlPowerTools
                 runText = sb.ToString();
             }
 
-            var w = MetricsGetter.GetTextWidth(ff, fs, sz, runText);
+            var w = MetricsGetter.GetTextWidth(fontName, bold, italic, sz, runText);
 
             return (int)(w / 96m * 1440m / multiplier + tabLength * 1440m);
         }
@@ -3079,13 +3084,18 @@ namespace OpenXmlPowerTools
                 return null;
 
             using (var partStream = imagePart.GetStream())
-            using (var bitmap = new Bitmap(partStream))
+            using (var memoryStream = new System.IO.MemoryStream())
             {
+                partStream.CopyTo(memoryStream);
+                var imageBytes = memoryStream.ToArray();
+                using var bitmap = SKBitmap.Decode(imageBytes);
+
                 if (extentCx != null && extentCy != null)
                 {
                     var imageInfo = new ImageInfo()
                     {
                         Bitmap = bitmap,
+                        ImageBytes = imageBytes,
                         ImgStyleAttribute = new XAttribute("style",
                             string.Format(NumberFormatInfo.InvariantInfo,
                                 "width: {0}in; height: {1}in",
@@ -3108,6 +3118,7 @@ namespace OpenXmlPowerTools
                 var imageInfo2 = new ImageInfo()
                 {
                     Bitmap = bitmap,
+                    ImageBytes = imageBytes,
                     ContentType = contentType,
                     DrawingElement = element,
                     AltText = altText,
@@ -3142,36 +3153,39 @@ namespace OpenXmlPowerTools
                     return null;
 
                 using (var partStream = imagePart.GetStream())
+                using (var memoryStream = new System.IO.MemoryStream())
                 {
                     try
                     {
-                        using (var bitmap = new Bitmap(partStream))
+                        partStream.CopyTo(memoryStream);
+                        var imageBytes = memoryStream.ToArray();
+                        using var bitmap = SKBitmap.Decode(imageBytes);
+
+                        var imageInfo = new ImageInfo()
                         {
-                            var imageInfo = new ImageInfo()
-                            {
-                                Bitmap = bitmap,
-                                ContentType = contentType,
-                                DrawingElement = element
-                            };
+                            Bitmap = bitmap,
+                            ImageBytes = imageBytes,
+                            ContentType = contentType,
+                            DrawingElement = element
+                        };
 
-                            var style = (string)element.Elements(VML.shape).Attributes("style").FirstOrDefault();
-                            if (style == null) return imageHandler(imageInfo);
+                        var style = (string?)element.Elements(VML.shape).Attributes("style").FirstOrDefault();
+                        if (style == null) return imageHandler(imageInfo);
 
-                            var tokens = style.Split(';');
-                            var widthInPoints = WidthInPoints(tokens);
-                            var heightInPoints = HeightInPoints(tokens);
-                            if (widthInPoints != null && heightInPoints != null)
-                            {
-                                imageInfo.ImgStyleAttribute = new XAttribute("style",
-                                    string.Format(NumberFormatInfo.InvariantInfo,
-                                        "width: {0}pt; height: {1}pt", widthInPoints, heightInPoints));
-                            }
-                            return imageHandler(imageInfo);
+                        var tokens = style.Split(';');
+                        var widthInPoints = WidthInPoints(tokens);
+                        var heightInPoints = HeightInPoints(tokens);
+                        if (widthInPoints != null && heightInPoints != null)
+                        {
+                            imageInfo.ImgStyleAttribute = new XAttribute("style",
+                                string.Format(NumberFormatInfo.InvariantInfo,
+                                    "width: {0}pt; height: {1}pt", widthInPoints, heightInPoints));
                         }
+                        return imageHandler(imageInfo);
                     }
                     catch (OutOfMemoryException)
                     {
-                        // the Bitmap class can throw OutOfMemoryException, which means the bitmap is messed up, so punt.
+                        // SKBitmap.Decode can throw OutOfMemoryException for corrupted images
                         return null;
                     }
                     catch (ArgumentException)

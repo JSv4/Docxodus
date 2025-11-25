@@ -3,7 +3,7 @@
 
 using System;
 using System.Collections.Generic;
-using System.Drawing;
+using SkiaSharp;
 using System.IO;
 using System.IO.Packaging;
 using System.Linq;
@@ -25,10 +25,9 @@ namespace OpenXmlPowerTools
 
     public class MetricsGetter
     {
-        private static Lazy<Graphics> Graphics { get; } = new Lazy<Graphics>(() =>
+        private static readonly Lazy<SKPaint> MeasurePaint = new Lazy<SKPaint>(() => new SKPaint
         {
-            Image image = new Bitmap(1, 1);
-            return System.Drawing.Graphics.FromImage(image);
+            IsAntialias = true,
         });
 
         public static XElement GetMetrics(string fileName, MetricsGetterSettings settings)
@@ -108,16 +107,19 @@ namespace OpenXmlPowerTools
             return metrics;
         }
 
-        private static int _getTextWidth(FontFamily ff, FontStyle fs, decimal sz, string text)
+        private static int _getTextWidth(string fontName, bool bold, bool italic, decimal sz, string text)
         {
             try
             {
-                using (var f = new Font(ff, (float)sz / 2f, fs))
-                {
-                    var proposedSize = new Size(int.MaxValue, int.MaxValue);
-                    var sf = Graphics.Value.MeasureString(text, f, proposedSize);
-                    return (int) sf.Width;
-                }
+                var weight = bold ? SKFontStyleWeight.Bold : SKFontStyleWeight.Normal;
+                var slant = italic ? SKFontStyleSlant.Italic : SKFontStyleSlant.Upright;
+                using var typeface = SKTypeface.FromFamilyName(fontName, weight, SKFontStyleWidth.Normal, slant);
+
+                var paint = MeasurePaint.Value;
+                paint.Typeface = typeface;
+                paint.TextSize = (float)sz / 2f;
+
+                return (int)paint.MeasureText(text);
             }
             catch
             {
@@ -125,32 +127,30 @@ namespace OpenXmlPowerTools
             }
         }
 
-        public static int GetTextWidth(FontFamily ff, FontStyle fs, decimal sz, string text)
+        public static int GetTextWidth(string fontName, bool bold, bool italic, decimal sz, string text)
         {
             try
             {
-                return _getTextWidth(ff, fs, sz, text);
+                return _getTextWidth(fontName, bold, italic, sz, text);
             }
             catch (ArgumentException)
             {
                 try
                 {
-                    const FontStyle fs2 = FontStyle.Regular;
-                    return _getTextWidth(ff, fs2, sz, text);
+                    // Try with regular style
+                    return _getTextWidth(fontName, false, false, sz, text);
                 }
                 catch (ArgumentException)
                 {
-                    const FontStyle fs2 = FontStyle.Bold;
                     try
                     {
-                        return _getTextWidth(ff, fs2, sz, text);
+                        // Try with bold
+                        return _getTextWidth(fontName, true, false, sz, text);
                     }
                     catch (ArgumentException)
                     {
                         // if both regular and bold fail, then get metrics for Times New Roman
-                        // use the original FontStyle (in fs)
-                        var ff2 = new FontFamily("Times New Roman");
-                        return _getTextWidth(ff2, fs, sz, text);
+                        return _getTextWidth("Times New Roman", bold, italic, sz, text);
                     }
                 }
             }
@@ -189,11 +189,10 @@ namespace OpenXmlPowerTools
 
         private static XElement RetrieveContentTypeList(OpenXmlPackage oxPkg)
         {
-            Package pkg = oxPkg.Package;
-
-            var nonRelationshipParts = pkg.GetParts().Cast<ZipPackagePart>().Where(p => p.ContentType != "application/vnd.openxmlformats-package.relationships+xml");
-            var contentTypes = nonRelationshipParts
+            var allParts = oxPkg.GetAllParts();
+            var contentTypes = allParts
                 .Select(p => p.ContentType)
+                .Where(ct => ct != "application/vnd.openxmlformats-package.relationships+xml")
                 .OrderBy(t => t)
                 .Distinct();
             var xe = new XElement(H.ContentTypes,
@@ -203,10 +202,9 @@ namespace OpenXmlPowerTools
 
         private static XElement RetrieveNamespaceList(OpenXmlPackage oxPkg)
         {
-            Package pkg = oxPkg.Package;
-
-            var nonRelationshipParts = pkg.GetParts().Cast<ZipPackagePart>().Where(p => p.ContentType != "application/vnd.openxmlformats-package.relationships+xml");
-            var xmlParts = nonRelationshipParts
+            var allParts = oxPkg.GetAllParts();
+            var xmlParts = allParts
+                .Where(p => p.ContentType != "application/vnd.openxmlformats-package.relationships+xml")
                 .Where(p => p.ContentType.ToLower().EndsWith("xml"));
 
             var uniqueNamespaces = new HashSet<string>();

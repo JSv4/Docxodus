@@ -3,8 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -13,6 +11,7 @@ using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using OpenXmlPowerTools;
+using SkiaSharp;
 using Xunit;
 using System.Diagnostics;
 
@@ -409,7 +408,7 @@ namespace OxPt
                 new WmlRevisedDocumentInfo()
                 {
                     RevisedDocument = source2Wml,
-                    Color = Color.LightBlue,
+                    Color = SKColors.LightBlue,
                     Revisor = "Revised by Eric White",
                 }
             };

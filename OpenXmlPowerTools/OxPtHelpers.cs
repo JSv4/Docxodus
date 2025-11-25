@@ -3,7 +3,7 @@
 
 using System;
 using System.Collections.Generic;
-using System.Drawing;
+using SkiaSharp;
 using System.IO;
 using System.Linq;
 using System.Xml;
@@ -14,7 +14,6 @@ using DocumentFormat.OpenXml.Validation;
 using OpenXmlPowerTools;
 using System.Text;
 using DocumentFormat.OpenXml;
-using System.Drawing.Imaging;
 
 namespace OpenXmlPowerTools
 {
@@ -373,44 +372,49 @@ AAsACwDBAgAAbCwAAAAA";
                             if (!localDirInfo.Exists)
                                 localDirInfo.Create();
                             ++imageCounter;
-                            string extension = imageInfo.ContentType.Split('/')[1].ToLower();
-                            ImageFormat imageFormat = null;
+                            string extension = imageInfo.ContentType?.Split('/')[1].ToLower() ?? "png";
+                            SKEncodedImageFormat? imageFormat = null;
                             if (extension == "png")
                             {
-                                // Convert png to jpeg.
-                                extension = "gif";
-                                imageFormat = ImageFormat.Gif;
+                                imageFormat = SKEncodedImageFormat.Png;
                             }
                             else if (extension == "gif")
-                                imageFormat = ImageFormat.Gif;
+                                imageFormat = SKEncodedImageFormat.Gif;
                             else if (extension == "bmp")
-                                imageFormat = ImageFormat.Bmp;
+                                imageFormat = SKEncodedImageFormat.Bmp;
                             else if (extension == "jpeg")
-                                imageFormat = ImageFormat.Jpeg;
+                                imageFormat = SKEncodedImageFormat.Jpeg;
                             else if (extension == "tiff")
                             {
-                                // Convert tiff to gif.
-                                extension = "gif";
-                                imageFormat = ImageFormat.Gif;
+                                // Convert tiff to png (SkiaSharp doesn't support tiff encoding)
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
                             }
                             else if (extension == "x-wmf")
                             {
-                                extension = "wmf";
-                                imageFormat = ImageFormat.Wmf;
+                                // WMF is not supported by SkiaSharp, save as PNG
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
+                            }
+                            else if (extension == "webp")
+                            {
+                                imageFormat = SKEncodedImageFormat.Webp;
                             }
 
-                            // If the image format isn't one that we expect, ignore it,
-                            // and don't return markup for the link.
+                            // If the image format isn't one that we expect, try PNG as fallback
                             if (imageFormat == null)
-                                return null;
+                            {
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
+                            }
 
                             string imageFileName = imageDirectoryName + "/image" +
                                 imageCounter.ToString() + "." + extension;
                             try
                             {
-                                imageInfo.Bitmap.Save(imageFileName, imageFormat);
+                                imageInfo.SaveImage(imageFileName, imageFormat.Value);
                             }
-                            catch (System.Runtime.InteropServices.ExternalException)
+                            catch (Exception)
                             {
                                 return null;
                             }

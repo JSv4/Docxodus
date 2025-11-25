@@ -17,7 +17,7 @@ Resource Center and Documentation: http://openxmldeveloper.org/wiki/w/wiki/power
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Drawing;
+using SkiaSharp;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -820,7 +820,7 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
             }
         }
 
-        public Color ToColor()
+        public SKColor ToColor()
         {
             string hex = "000000";
             if (m_type == CssValueType.Hex)
@@ -844,7 +844,7 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
             int r = ConvertFromHex(hex.Substring(0, 2));
             int g = ConvertFromHex(hex.Substring(2, 2));
             int b = ConvertFromHex(hex.Substring(4));
-            return Color.FromArgb(r, g, b);
+            return ColorHelper.FromArgb(r, g, b);
         }
 
         private int ConvertFromHex(string input)
@@ -1583,7 +1583,7 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
             return 0;
         }
 
-        public Color ToColor()
+        public SKColor ToColor()
         {
             string hex = "000000";
             if (m_type == CssTermType.Hex)
@@ -1606,21 +1606,21 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
                     int fr = 0, fg = 0, fb = 0;
                     for (int i = 0; i < m_function.Expression.Terms.Count; i++)
                     {
-                        if (m_function.Expression.Terms[i].Type != CssTermType.Number) 
-                        { 
-                            return Color.Black; 
+                        if (m_function.Expression.Terms[i].Type != CssTermType.Number)
+                        {
+                            return SKColors.Black;
                         }
                         switch (i)
                         {
-                            case 0: fr = GetRGBValue(m_function.Expression.Terms[i]); 
+                            case 0: fr = GetRGBValue(m_function.Expression.Terms[i]);
                                 break;
-                            case 1: fg = GetRGBValue(m_function.Expression.Terms[i]); 
+                            case 1: fg = GetRGBValue(m_function.Expression.Terms[i]);
                                 break;
-                            case 2: fb = GetRGBValue(m_function.Expression.Terms[i]); 
+                            case 2: fb = GetRGBValue(m_function.Expression.Terms[i]);
                                 break;
                         }
                     }
-                    return Color.FromArgb(fr, fg, fb);
+                    return ColorHelper.FromArgb(fr, fg, fb);
                 }
                 else if ((m_function.Name.ToLower().Equals("hsl") && m_function.Expression.Terms.Count == 3)
                   || (m_function.Name.Equals("hsla") && m_function.Expression.Terms.Count == 4)
@@ -1629,14 +1629,14 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
                     int h = 0, s = 0, v = 0;
                     for (int i = 0; i < m_function.Expression.Terms.Count; i++)
                     {
-                        if (m_function.Expression.Terms[i].Type != CssTermType.Number) { return Color.Black; }
+                        if (m_function.Expression.Terms[i].Type != CssTermType.Number) { return SKColors.Black; }
                         switch (i)
                         {
-                            case 0: h = GetHueValue(m_function.Expression.Terms[i]); 
+                            case 0: h = GetHueValue(m_function.Expression.Terms[i]);
                                 break;
-                            case 1: s = GetRGBValue(m_function.Expression.Terms[i]); 
+                            case 1: s = GetRGBValue(m_function.Expression.Terms[i]);
                                 break;
-                            case 2: v = GetRGBValue(m_function.Expression.Terms[i]); 
+                            case 2: v = GetRGBValue(m_function.Expression.Terms[i]);
                                 break;
                         }
                     }
@@ -1663,7 +1663,7 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
             int r = ConvertFromHex(hex.Substring(0, 2));
             int g = ConvertFromHex(hex.Substring(2, 2));
             int b = ConvertFromHex(hex.Substring(4));
-            return Color.FromArgb(r, g, b);
+            return ColorHelper.FromArgb(r, g, b);
         }
         private int ConvertFromHex(string input)
         {
@@ -1831,7 +1831,7 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
             m_sat = s;
             m_val = v;
         }
-        public HueSatVal(Color color)
+        public HueSatVal(SKColor color)
         {
             m_hue = 0;
             m_sat = 0;
@@ -1865,7 +1865,7 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
                 m_val = value;
             }
         }
-        public Color Color
+        public SKColor Color
         {
             get {
                 return ConvertToRGB();
@@ -1874,12 +1874,12 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
                 ConvertFromRGB(value);
             }
         }
-        private void ConvertFromRGB(Color color)
+        private void ConvertFromRGB(SKColor color)
         {
             double min; double max; double delta;
-            double r = (double)color.R / 255.0d;
-            double g = (double)color.G / 255.0d;
-            double b = (double)color.B / 255.0d;
+            double r = (double)color.Red / 255.0d;
+            double g = (double)color.Green / 255.0d;
+            double b = (double)color.Blue / 255.0d;
             double h; double s; double v;
 
             min = Math.Min(Math.Min(r, g), b);
@@ -1917,7 +1917,7 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
             Value = (int)(v * 255.0d);
         }
 
-        private Color ConvertToRGB()
+        private SKColor ConvertToRGB()
         {
             double h;
             double s;
@@ -1989,7 +1989,7 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
                         break;
                 }
             }
-            return Color.FromArgb((int)(r * 255.0d), (int)(g * 255.0d), (int)(b * 255.0d));
+            return ColorHelper.FromArgb((int)(r * 255.0d), (int)(g * 255.0d), (int)(b * 255.0d));
         }
 
         public static bool operator !=(HueSatVal left, HueSatVal right)
@@ -3607,7 +3607,7 @@ namespace OpenXmlPowerTools.HtmlToWml.CSS
         {
             if (!m_isUserStream && m_inputStream != null)
             {
-                m_inputStream.Close();
+                m_inputStream.Dispose();
                 m_inputStream = null;
             }
         }

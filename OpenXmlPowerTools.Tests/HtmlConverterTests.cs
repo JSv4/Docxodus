@@ -7,8 +7,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Imaging;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -16,6 +14,7 @@ using System.Threading.Tasks;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using OpenXmlPowerTools;
+using SkiaSharp;
 using Xunit;
 
 #if DO_CONVERSION_VIA_WORD
@@ -205,29 +204,30 @@ namespace OxPt
                                 localDirInfo.Create();
                             ++imageCounter;
                             string extension = imageInfo.ContentType.Split('/')[1].ToLower();
-                            ImageFormat imageFormat = null;
+                            SKEncodedImageFormat? imageFormat = null;
                             if (extension == "png")
                             {
-                                // Convert png to jpeg.
+                                // Convert png to gif.
                                 extension = "gif";
-                                imageFormat = ImageFormat.Gif;
+                                imageFormat = SKEncodedImageFormat.Gif;
                             }
                             else if (extension == "gif")
-                                imageFormat = ImageFormat.Gif;
+                                imageFormat = SKEncodedImageFormat.Gif;
                             else if (extension == "bmp")
-                                imageFormat = ImageFormat.Bmp;
+                                imageFormat = SKEncodedImageFormat.Bmp;
                             else if (extension == "jpeg")
-                                imageFormat = ImageFormat.Jpeg;
+                                imageFormat = SKEncodedImageFormat.Jpeg;
                             else if (extension == "tiff")
                             {
-                                // Convert tiff to gif.
-                                extension = "gif";
-                                imageFormat = ImageFormat.Gif;
+                                // Convert tiff to png (SkiaSharp doesn't support tiff output).
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
                             }
                             else if (extension == "x-wmf")
                             {
-                                extension = "wmf";
-                                imageFormat = ImageFormat.Wmf;
+                                // Convert wmf to png (SkiaSharp doesn't support wmf output).
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
                             }
 
                             // If the image format isn't one that we expect, ignore it,
@@ -239,9 +239,9 @@ namespace OxPt
                                 imageCounter.ToString() + "." + extension;
                             try
                             {
-                                imageInfo.Bitmap.Save(imageFileName, imageFormat);
+                                imageInfo.SaveImage(imageFileName, imageFormat.Value);
                             }
-                            catch (System.Runtime.InteropServices.ExternalException)
+                            catch (Exception)
                             {
                                 return null;
                             }
@@ -298,29 +298,30 @@ namespace OxPt
                                 localDirInfo.Create();
                             ++imageCounter;
                             string extension = imageInfo.ContentType.Split('/')[1].ToLower();
-                            ImageFormat imageFormat = null;
+                            SKEncodedImageFormat? imageFormat = null;
                             if (extension == "png")
                             {
-                                // Convert png to jpeg.
+                                // Convert png to gif.
                                 extension = "gif";
-                                imageFormat = ImageFormat.Gif;
+                                imageFormat = SKEncodedImageFormat.Gif;
                             }
                             else if (extension == "gif")
-                                imageFormat = ImageFormat.Gif;
+                                imageFormat = SKEncodedImageFormat.Gif;
                             else if (extension == "bmp")
-                                imageFormat = ImageFormat.Bmp;
+                                imageFormat = SKEncodedImageFormat.Bmp;
                             else if (extension == "jpeg")
-                                imageFormat = ImageFormat.Jpeg;
+                                imageFormat = SKEncodedImageFormat.Jpeg;
                             else if (extension == "tiff")
                             {
-                                // Convert tiff to gif.
-                                extension = "gif";
-                                imageFormat = ImageFormat.Gif;
+                                // Convert tiff to png (SkiaSharp doesn't support tiff output).
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
                             }
                             else if (extension == "x-wmf")
                             {
-                                extension = "wmf";
-                                imageFormat = ImageFormat.Wmf;
+                                // Convert wmf to png (SkiaSharp doesn't support wmf output).
+                                extension = "png";
+                                imageFormat = SKEncodedImageFormat.Png;
                             }
 
                             // If the image format isn't one that we expect, ignore it,
@@ -332,9 +333,9 @@ namespace OxPt
                                 imageCounter.ToString() + "." + extension;
                             try
                             {
-                                imageInfo.Bitmap.Save(imageFileName, imageFormat);
+                                imageInfo.SaveImage(imageFileName, imageFormat.Value);
                             }
-                            catch (System.Runtime.InteropServices.ExternalException)
+                            catch (Exception)
                             {
                                 return null;
                             }
