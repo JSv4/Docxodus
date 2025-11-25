@@ -64,11 +64,8 @@ jobs:
           name: nuget-packages
           path: ./artifacts/*.nupkg
 
-      - name: Add GitHub Packages source
-        run: dotnet nuget add source --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text --name github "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json"
-
       - name: Push to GitHub Packages
-        run: dotnet nuget push ./artifacts/*.nupkg --source github --skip-duplicate
+        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.GITHUB_TOKEN }} --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --skip-duplicate --timeout 600
 
   # Build self-contained executables for releases
   build-binaries:
