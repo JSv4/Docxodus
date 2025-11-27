@@ -167,3 +167,73 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ./publish/docx2html*
+
+  # Build and publish npm package
+  build-npm:
+    needs: build-test-publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install WASM workloads
+        run: |
+          dotnet workload install wasm-tools
+          dotnet workload install wasm-experimental
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Build WASM
+        run: |
+          cd wasm/DocxodusWasm
+          dotnet build -c Release
+
+      - name: Install npm dependencies
+        run: |
+          cd npm
+          npm ci
+
+      - name: Build TypeScript
+        run: |
+          cd npm
+          npm run build:ts
+
+      - name: Copy WASM to dist
+        run: |
+          mkdir -p npm/dist/wasm
+          cp -r wasm/DocxodusWasm/bin/Release/net8.0/browser-wasm/AppBundle/_framework npm/dist/wasm/
+          cp wasm/DocxodusWasm/main.js npm/dist/wasm/
+
+      - name: Update package version
+        run: |
+          cd npm
+          npm version ${{ steps.version.outputs.VERSION }} --no-git-tag-version
+
+      - name: Publish to npm
+        run: |
+          cd npm
+          npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
