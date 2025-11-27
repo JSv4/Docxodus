@@ -42,6 +42,42 @@ redline original.docx modified.docx output.docx --author="Legal Review"
 | `-h, --help` | Show help message |
 | `-v, --version` | Show version information |
 
+## DOCX to HTML Conversion
+
+### Install the docx2html CLI Tool
+
+```bash
+# Install globally (after adding GitHub Packages source)
+dotnet tool install -g Docx2Html --source github
+```
+
+### Usage
+
+```bash
+# Basic conversion
+docx2html document.docx
+
+# Specify output file
+docx2html document.docx output.html
+
+# Extract images to files instead of embedding as base64
+docx2html document.docx --extract-images
+
+# Use inline styles instead of CSS classes
+docx2html document.docx --inline-styles
+```
+
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--title=<text>` | Page title (default: document title or filename) |
+| `--css-prefix=<text>` | CSS class prefix (default: "pt-") |
+| `--inline-styles` | Use inline styles instead of CSS classes |
+| `--extract-images` | Save images to separate files instead of embedding |
+| `-h, --help` | Show help message |
+| `-v, --version` | Show version information |
+
 ## Using as a Library
 
 Reference the OpenXmlPowerTools project directly in your solution:
@@ -75,12 +111,23 @@ result.SaveAs("redline.docx");
 
 Pre-built binaries are available on the [Releases](https://github.com/JSv4/DocxRedlines/releases) page:
 
+**redline** (Document Comparison):
+
 | Platform | Download |
 |----------|----------|
 | Windows (x64) | `redline-win-x64.exe` |
 | Linux (x64) | `redline-linux-x64` |
 | macOS (x64) | `redline-osx-x64` |
 | macOS (ARM) | `redline-osx-arm64` |
+
+**docx2html** (HTML Conversion):
+
+| Platform | Download |
+|----------|----------|
+| Windows (x64) | `docx2html-win-x64.exe` |
+| Linux (x64) | `docx2html-linux-x64` |
+| macOS (x64) | `docx2html-osx-x64` |
+| macOS (ARM) | `docx2html-osx-arm64` |
 
 ## Build from Source
 
@@ -108,12 +155,10 @@ This project is a focused fork of [Open-Xml-PowerTools](https://github.com/Offic
 ### What's Included
 
 - **WmlComparer** - Compare two DOCX files and generate redlines with tracked changes
+- **WmlToHtmlConverter** - Convert DOCX files to HTML with CSS styling
+- **redline** CLI tool - Command-line interface for document comparison
+- **docx2html** CLI tool - Command-line interface for HTML conversion
 - Supporting utilities for document manipulation
-
-### What's Planned
-
-- HTML conversion utilities will be moved to a separate project
-- Additional comparison features and improvements
 
 ## Requirements
 
