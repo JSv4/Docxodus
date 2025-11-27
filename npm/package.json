@@ -1,0 +1,63 @@
+{
+  "name": "docxodus",
+  "version": "0.1.0",
+  "description": "DOCX document comparison and HTML conversion in the browser using WebAssembly",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./react": {
+      "import": "./dist/react.js",
+      "types": "./dist/react.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build:wasm": "../scripts/build-wasm.sh",
+    "build:ts": "tsc",
+    "build": "npm run build:wasm && npm run build:ts",
+    "prepublishOnly": "npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JSv4/Redlines.git"
+  },
+  "keywords": [
+    "docx",
+    "word",
+    "document",
+    "comparison",
+    "redline",
+    "track-changes",
+    "wasm",
+    "webassembly",
+    "html",
+    "converter"
+  ],
+  "author": "JSv4",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/JSv4/Redlines/issues"
+  },
+  "homepage": "https://github.com/JSv4/Redlines#readme",
+  "peerDependencies": {
+    "react": ">=16.8.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/react": "^19.2.7",
+    "typescript": "^5.3.0"
+  }
+}

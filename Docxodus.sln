@@ -13,6 +13,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "redline", "tools\redline\re
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "docx2html", "tools\docx2html\docx2html.csproj", "{15EAF76F-3C7C-4747-A686-6F9FC65D2968}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "wasm", "wasm", "{1763F37B-6FCB-4FA2-B410-4E573BDBC84F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DocxodusWasm", "wasm\DocxodusWasm\DocxodusWasm.csproj", "{A4D71AD0-DF96-4702-A2A3-10C91BBD90E3}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -38,9 +42,14 @@ Global
 		{15EAF76F-3C7C-4747-A686-6F9FC65D2968}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{15EAF76F-3C7C-4747-A686-6F9FC65D2968}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{15EAF76F-3C7C-4747-A686-6F9FC65D2968}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A4D71AD0-DF96-4702-A2A3-10C91BBD90E3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A4D71AD0-DF96-4702-A2A3-10C91BBD90E3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A4D71AD0-DF96-4702-A2A3-10C91BBD90E3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A4D71AD0-DF96-4702-A2A3-10C91BBD90E3}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{EDB9FC41-541D-41FE-A95C-4A25BF4823B6} = {3B57DC3E-0543-4470-B094-701C65C843D5}
 		{15EAF76F-3C7C-4747-A686-6F9FC65D2968} = {3B57DC3E-0543-4470-B094-701C65C843D5}
+		{A4D71AD0-DF96-4702-A2A3-10C91BBD90E3} = {1763F37B-6FCB-4FA2-B410-4E573BDBC84F}
 	EndGlobalSection
 EndGlobal

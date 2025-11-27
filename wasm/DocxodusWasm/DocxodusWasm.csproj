@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RuntimeIdentifier>browser-wasm</RuntimeIdentifier>
+    <OutputType>Exe</OutputType>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Disable StyleCop for WASM wrapper -->
+    <NoWarn>$(NoWarn);SA1633;SA1636</NoWarn>
+
+    <!-- WASM specific -->
+    <WasmMainJSPath>main.js</WasmMainJSPath>
+
+    <!-- Size optimization -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Debug settings - disable for release -->
+    <DebuggerSupport Condition="'$(Configuration)' == 'Release'">false</DebuggerSupport>
+    <EventSourceSupport Condition="'$(Configuration)' == 'Release'">false</EventSourceSupport>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Reference Docxodus library directly -->
+    <ProjectReference Include="../../Docxodus/Docxodus.csproj" />
+
+    <!-- SkiaSharp with WASM support (matching Docxodus version) -->
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.WebAssembly" Version="2.88.9" />
+  </ItemGroup>
+
+  <!-- Manually link native SkiaSharp library for browser-wasm -->
+  <!-- Uses Emscripten 3.1.34 (single-threaded, SIMD enabled) -->
+  <ItemGroup>
+    <NativeFileReference Include="$(NuGetPackageRoot)skiasharp.nativeassets.webassembly/2.88.9/build/netstandard1.0/libSkiaSharp.a/3.1.34/simd,st/libSkiaSharp.a" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <WasmExtraFilesToDeploy Include="main.js" />
+    <WasmExtraFilesToDeploy Include="index.html" />
+  </ItemGroup>
+</Project>

@@ -10,6 +10,13 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
+- **WebAssembly NPM Package** (`docxodus`) - Browser-based document comparison and HTML conversion
+  - `wasm/DocxodusWasm/` - .NET 8 WASM project with JSExport methods
+  - `npm/` - TypeScript wrapper with React hooks
+  - Full document comparison (redlining) support in the browser
+  - DOCX to HTML conversion
+  - React hooks: `useDocxodus`, `useConversion`, `useComparison`
+  - Build script: `scripts/build-wasm.sh`
 - `SkiaSharpHelpers.cs` - Color utilities for SkiaSharp compatibility
 - `GetPackage()` extension method in `PtOpenXmlUtil.cs` for SDK 3.x Package access
 - `SkiaSharp.NativeAssets.Linux.NoDependencies` package for Linux runtime support

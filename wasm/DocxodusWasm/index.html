@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Docxodus WASM Test</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        h1 { color: #333; }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .card h2 {
+            margin-top: 0;
+            color: #555;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 10px;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        #output {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            padding: 15px;
+            margin-top: 15px;
+            max-height: 500px;
+            overflow: auto;
+        }
+        #status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .loading { background: #fff3cd; color: #856404; }
+        .ready { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .file-inputs {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .file-input-group {
+            flex: 1;
+            min-width: 250px;
+        }
+        .file-input-group label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <h1>Docxodus WASM Test</h1>
+
+    <div id="status" class="loading">Loading WASM runtime...</div>
+
+    <div class="card">
+        <h2>Convert DOCX to HTML</h2>
+        <input type="file" id="convertFile" accept=".docx" disabled />
+        <button id="convertBtn" onclick="convertToHtml()" disabled>Convert to HTML</button>
+    </div>
+
+    <div class="card">
+        <h2>Compare Documents (Redline)</h2>
+        <div class="file-inputs">
+            <div class="file-input-group">
+                <label>Original Document:</label>
+                <input type="file" id="originalFile" accept=".docx" disabled />
+            </div>
+            <div class="file-input-group">
+                <label>Modified Document:</label>
+                <input type="file" id="modifiedFile" accept=".docx" disabled />
+            </div>
+        </div>
+        <div style="margin-top: 15px;">
+            <button id="compareHtmlBtn" onclick="compareToHtml()" disabled>Compare → HTML</button>
+            <button id="compareDocxBtn" onclick="compareToDocx()" disabled>Compare → Download DOCX</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Output</h2>
+        <div id="output">Results will appear here...</div>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+    <script>
+        // Wait for Docxodus to be ready
+        window.onDocxodusReady = function() {
+            document.getElementById('status').className = 'ready';
+            document.getElementById('status').textContent = 'Docxodus WASM Ready!';
+
+            // Enable all controls
+            document.querySelectorAll('input, button').forEach(el => el.disabled = false);
+        };
+
+        // Check if already ready
+        if (window.DocxodusReady) {
+            window.onDocxodusReady();
+        }
+
+        async function readFileAsBytes(file) {
+            const buffer = await file.arrayBuffer();
+            return new Uint8Array(buffer);
+        }
+
+        async function convertToHtml() {
+            const fileInput = document.getElementById('convertFile');
+            const output = document.getElementById('output');
+
+            if (!fileInput.files[0]) {
+                output.innerHTML = '<p style="color: red;">Please select a DOCX file</p>';
+                return;
+            }
+
+            output.innerHTML = '<p>Converting...</p>';
+
+            try {
+                const bytes = await readFileAsBytes(fileInput.files[0]);
+                const html = window.Docxodus.DocumentConverter.ConvertDocxToHtml(bytes);
+
+                if (html.startsWith('{') && html.includes('error')) {
+                    const error = JSON.parse(html);
+                    output.innerHTML = `<p style="color: red;">Error: ${error.error}</p>`;
+                } else {
+                    output.innerHTML = html;
+                }
+            } catch (err) {
+                output.innerHTML = `<p style="color: red;">Error: ${err.message}</p>`;
+            }
+        }
+
+        async function compareToHtml() {
+            const originalInput = document.getElementById('originalFile');
+            const modifiedInput = document.getElementById('modifiedFile');
+            const output = document.getElementById('output');
+
+            if (!originalInput.files[0] || !modifiedInput.files[0]) {
+                output.innerHTML = '<p style="color: red;">Please select both original and modified DOCX files</p>';
+                return;
+            }
+
+            output.innerHTML = '<p>Comparing documents...</p>';
+
+            try {
+                const originalBytes = await readFileAsBytes(originalInput.files[0]);
+                const modifiedBytes = await readFileAsBytes(modifiedInput.files[0]);
+
+                const html = window.Docxodus.DocumentComparer.CompareDocumentsToHtml(
+                    originalBytes,
+                    modifiedBytes,
+                    'Docxodus WASM'
+                );
+
+                if (html.startsWith('{') && html.includes('error')) {
+                    const error = JSON.parse(html);
+                    output.innerHTML = `<p style="color: red;">Error: ${error.error}</p>`;
+                } else {
+                    output.innerHTML = html;
+                }
+            } catch (err) {
+                output.innerHTML = `<p style="color: red;">Error: ${err.message}</p>`;
+            }
+        }
+
+        async function compareToDocx() {
+            const originalInput = document.getElementById('originalFile');
+            const modifiedInput = document.getElementById('modifiedFile');
+            const output = document.getElementById('output');
+
+            if (!originalInput.files[0] || !modifiedInput.files[0]) {
+                output.innerHTML = '<p style="color: red;">Please select both original and modified DOCX files</p>';
+                return;
+            }
+
+            output.innerHTML = '<p>Comparing documents...</p>';
+
+            try {
+                const originalBytes = await readFileAsBytes(originalInput.files[0]);
+                const modifiedBytes = await readFileAsBytes(modifiedInput.files[0]);
+
+                const resultBytes = window.Docxodus.DocumentComparer.CompareDocuments(
+                    originalBytes,
+                    modifiedBytes,
+                    'Docxodus WASM'
+                );
+
+                if (resultBytes.length === 0) {
+                    output.innerHTML = '<p style="color: red;">Comparison failed - check console for details</p>';
+                    return;
+                }
+
+                // Download the result
+                const blob = new Blob([resultBytes], {
+                    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'comparison-result.docx';
+                a.click();
+                URL.revokeObjectURL(url);
+
+                output.innerHTML = '<p style="color: green;">Comparison complete! Download started.</p>';
+            } catch (err) {
+                output.innerHTML = `<p style="color: red;">Error: ${err.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>
