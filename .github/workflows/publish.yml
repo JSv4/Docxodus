@@ -59,7 +59,7 @@ jobs:
         run: dotnet pack tools/redline/redline.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: nuget-packages
           path: ./artifacts/*.nupkg
@@ -110,7 +110,7 @@ jobs:
         run: dotnet publish tools/redline/redline.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact }}
           path: ./publish/redline*
