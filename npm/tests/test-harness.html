@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Docxodus WASM Test Harness</title>
+</head>
+<body>
+    <h1>Docxodus WASM Test Harness</h1>
+    <div id="status">Loading...</div>
+    <pre id="output"></pre>
+
+    <script type="module">
+        import { dotnet } from './_framework/dotnet.js';
+
+        const { getAssemblyExports, getConfig } = await dotnet
+            .withDiagnosticTracing(false)
+            .create();
+
+        const config = getConfig();
+        const exports = await getAssemblyExports(config.mainAssemblyName);
+
+        // Expose Docxodus APIs to window for testing
+        window.Docxodus = {
+            DocumentConverter: exports.DocxodusWasm.DocumentConverter,
+            DocumentComparer: exports.DocxodusWasm.DocumentComparer
+        };
+
+        // Test helper functions
+        window.DocxodusTests = {
+            // Convert DOCX to HTML
+            convertToHtml: function(bytes) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.ConvertDocxToHtml(bytes);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { html: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Compare two documents
+            compareDocuments: function(originalBytes, modifiedBytes, authorName = 'Test') {
+                try {
+                    const result = window.Docxodus.DocumentComparer.CompareDocuments(
+                        originalBytes, modifiedBytes, authorName
+                    );
+                    if (result.length === 0) {
+                        return { error: { message: 'Comparison returned empty result' } };
+                    }
+                    return { docxBytes: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Compare and get HTML
+            compareToHtml: function(originalBytes, modifiedBytes, authorName = 'Test') {
+                try {
+                    const result = window.Docxodus.DocumentComparer.CompareDocumentsToHtml(
+                        originalBytes, modifiedBytes, authorName
+                    );
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { html: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Get revisions from compared document
+            getRevisions: function(docxBytes) {
+                try {
+                    const result = window.Docxodus.DocumentComparer.GetRevisionsJson(docxBytes);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    return { revisions: parsed.Revisions || [] };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Get version info
+            getVersion: function() {
+                return JSON.parse(window.Docxodus.DocumentConverter.GetVersion());
+            }
+        };
+
+        document.getElementById('status').textContent = 'Ready';
+        window.DocxodusReady = true;
+        console.log('Docxodus WASM Test Harness Ready');
+        console.log('Version:', window.DocxodusTests.getVersion());
+    </script>
+</body>
+</html>
