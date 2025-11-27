@@ -1,9 +1,17 @@
-# Docxodus
+<p align="center">
+  <img src="docxodus-mono-final.svg" alt="Docxodus" width="400">
+</p>
 
-**A powerful .NET library for manipulating Open XML documents (DOCX, XLSX, PPTX).**
+<p align="center">
+  <strong>A powerful .NET library for manipulating Open XML documents (DOCX, XLSX, PPTX).</strong>
+</p>
 
-[![CI](https://github.com/JSv4/Redliner/actions/workflows/ci.yml/badge.svg)](https://github.com/JSv4/Redliner/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<p align="center">
+  <a href="https://github.com/JSv4/Redliner/actions/workflows/ci.yml"><img src="https://github.com/JSv4/Redliner/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+</p>
+
+---
 
 Docxodus is a fork of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools) upgraded to .NET 8.0. It provides tools for comparing Word documents, converting between DOCX and HTML, merging documents, and more.
 
