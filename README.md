@@ -1,15 +1,15 @@
-# Redline
+# Docxodus
 
-**Compare Word documents and generate redlines with tracked changes.**
+**A powerful .NET library for manipulating Open XML documents (DOCX, XLSX, PPTX).**
 
-[![CI](https://github.com/JSv4/DocxRedlines/actions/workflows/ci.yml/badge.svg)](https://github.com/JSv4/DocxRedlines/actions/workflows/ci.yml)
+[![CI](https://github.com/JSv4/Redliner/actions/workflows/ci.yml/badge.svg)](https://github.com/JSv4/Redliner/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Redline is a .NET tool for comparing two Word documents (DOCX) and producing a third document with tracked changes showing insertions, deletions, and modifications.
+Docxodus is a fork of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools) upgraded to .NET 8.0. It provides tools for comparing Word documents, converting between DOCX and HTML, merging documents, and more.
 
 ## Quick Start
 
-### Install the CLI Tool
+### Install the Library
 
 ```bash
 # Add GitHub Packages source (one-time setup)
@@ -18,23 +18,51 @@ dotnet nuget add source https://nuget.pkg.github.com/JSv4/index.json \
   --username YOUR_GITHUB_USERNAME \
   --password YOUR_GITHUB_PAT
 
+# Add to your project
+dotnet add package Docxodus --source github
+```
+
+### Using as a Library
+
+```csharp
+using Docxodus;
+
+// Compare documents
+var original = new WmlDocument("original.docx");
+var modified = new WmlDocument("modified.docx");
+
+var settings = new WmlComparerSettings
+{
+    AuthorForRevisions = "Redline",
+    DetailThreshold = 0
+};
+
+var result = WmlComparer.Compare(original, modified, settings);
+
+// Get list of revisions
+var revisions = WmlComparer.GetRevisions(result, settings);
+Console.WriteLine($"Found {revisions.Count} revisions");
+
+// Save the redlined document
+result.SaveAs("redline.docx");
+```
+
+## CLI Tools
+
+Docxodus includes two command-line tools:
+
+### Redline (Document Comparison)
+
+```bash
 # Install globally
 dotnet tool install -g Redline --source github
-```
 
-### Usage
-
-```bash
+# Usage
 redline original.docx modified.docx output.docx
-```
 
-With a custom author tag for tracked changes:
-
-```bash
+# With custom author tag
 redline original.docx modified.docx output.docx --author="Legal Review"
 ```
-
-### Options
 
 | Option | Description |
 |--------|-------------|
@@ -42,18 +70,12 @@ redline original.docx modified.docx output.docx --author="Legal Review"
 | `-h, --help` | Show help message |
 | `-v, --version` | Show version information |
 
-## DOCX to HTML Conversion
-
-### Install the docx2html CLI Tool
+### docx2html (HTML Conversion)
 
 ```bash
-# Install globally (after adding GitHub Packages source)
+# Install globally
 dotnet tool install -g Docx2Html --source github
-```
 
-### Usage
-
-```bash
 # Basic conversion
 docx2html document.docx
 
@@ -67,8 +89,6 @@ docx2html document.docx --extract-images
 docx2html document.docx --inline-styles
 ```
 
-### Options
-
 | Option | Description |
 |--------|-------------|
 | `--title=<text>` | Page title (default: document title or filename) |
@@ -78,38 +98,9 @@ docx2html document.docx --inline-styles
 | `-h, --help` | Show help message |
 | `-v, --version` | Show version information |
 
-## Using as a Library
-
-Reference the OpenXmlPowerTools project directly in your solution:
-
-```csharp
-using OpenXmlPowerTools;
-
-// Load documents
-var original = new WmlDocument("original.docx");
-var modified = new WmlDocument("modified.docx");
-
-// Configure comparison
-var settings = new WmlComparerSettings
-{
-    AuthorForRevisions = "Redline",
-    DetailThreshold = 0
-};
-
-// Compare and get result
-var result = WmlComparer.Compare(original, modified, settings);
-
-// Get list of revisions
-var revisions = WmlComparer.GetRevisions(result, settings);
-Console.WriteLine($"Found {revisions.Count} revisions");
-
-// Save the redlined document
-result.SaveAs("redline.docx");
-```
-
 ## Download Standalone Binaries
 
-Pre-built binaries are available on the [Releases](https://github.com/JSv4/DocxRedlines/releases) page:
+Pre-built binaries are available on the [Releases](https://github.com/JSv4/Redliner/releases) page:
 
 **redline** (Document Comparison):
 
@@ -133,31 +124,28 @@ Pre-built binaries are available on the [Releases](https://github.com/JSv4/DocxR
 
 ```bash
 # Clone the repository
-git clone https://github.com/JSv4/DocxRedlines.git
-cd DocxRedlines
+git clone https://github.com/JSv4/Redliner.git
+cd Redliner
 
 # Build
-dotnet build
+dotnet build Docxodus.sln
 
 # Run tests
-dotnet test
+dotnet test Docxodus.Tests/Docxodus.Tests.csproj
 
 # Run the CLI
 dotnet run --project tools/redline/redline.csproj -- --help
 ```
 
-## Project Status
-
-This project is a focused fork of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools), originally developed by Eric White at Microsoft. The original project provided a broad set of utilities for working with Office Open XML documents but is no longer actively maintained.
-
-**Redline** narrows the focus to document comparison—the most commonly needed feature for legal, editorial, and business workflows.
-
-### What's Included
+## Features
 
 - **WmlComparer** - Compare two DOCX files and generate redlines with tracked changes
-- **WmlToHtmlConverter** - Convert DOCX files to HTML with CSS styling
-- **redline** CLI tool - Command-line interface for document comparison
-- **docx2html** CLI tool - Command-line interface for HTML conversion
+- **WmlToHtmlConverter** / **HtmlToWmlConverter** - Bidirectional DOCX ↔ HTML conversion
+- **DocumentBuilder** - Merge and split DOCX files
+- **DocumentAssembler** - Template population from XML data
+- **PresentationBuilder** - Merge and split PPTX files
+- **SpreadsheetWriter** - Simplified XLSX creation API
+- **OpenXmlRegex** - Search/replace in DOCX/PPTX using regular expressions
 - Supporting utilities for document manipulation
 
 ## Requirements

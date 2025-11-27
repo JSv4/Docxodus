@@ -43,22 +43,23 @@ jobs:
 
       - name: Restore dependencies
         run: |
-          dotnet restore OpenXmlPowerTools/OpenXmlPowerTools.csproj
-          dotnet restore OpenXmlPowerTools.Tests/OpenXmlPowerTools.Tests.csproj
+          dotnet restore Docxodus/Docxodus.csproj
+          dotnet restore Docxodus.Tests/Docxodus.Tests.csproj
           dotnet restore tools/redline/redline.csproj
           dotnet restore tools/docx2html/docx2html.csproj
 
       - name: Build
         run: |
-          dotnet build OpenXmlPowerTools/OpenXmlPowerTools.csproj -c Release --no-restore
+          dotnet build Docxodus/Docxodus.csproj -c Release --no-restore
           dotnet build tools/redline/redline.csproj -c Release --no-restore
           dotnet build tools/docx2html/docx2html.csproj -c Release --no-restore
 
       - name: Run tests
-        run: dotnet test OpenXmlPowerTools.Tests/OpenXmlPowerTools.Tests.csproj -c Release --verbosity normal
+        run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --verbosity normal
 
-      - name: Pack CLI tools
+      - name: Pack library and CLI tools
         run: |
+          dotnet pack Docxodus/Docxodus.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
           dotnet pack tools/redline/redline.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
           dotnet pack tools/docx2html/docx2html.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
 

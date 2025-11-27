@@ -1,0 +1,46 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Docxodus", "Docxodus\Docxodus.csproj", "{03C2E9BF-5116-436F-972D-7CCBD39BDF93}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Docxodus.Tests", "Docxodus.Tests\Docxodus.Tests.csproj", "{A9556701-6DD6-4A3F-8A2F-A5169C0AB792}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{3B57DC3E-0543-4470-B094-701C65C843D5}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "redline", "tools\redline\redline.csproj", "{EDB9FC41-541D-41FE-A95C-4A25BF4823B6}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "docx2html", "tools\docx2html\docx2html.csproj", "{15EAF76F-3C7C-4747-A686-6F9FC65D2968}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{03C2E9BF-5116-436F-972D-7CCBD39BDF93}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{03C2E9BF-5116-436F-972D-7CCBD39BDF93}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{03C2E9BF-5116-436F-972D-7CCBD39BDF93}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{03C2E9BF-5116-436F-972D-7CCBD39BDF93}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A9556701-6DD6-4A3F-8A2F-A5169C0AB792}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A9556701-6DD6-4A3F-8A2F-A5169C0AB792}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A9556701-6DD6-4A3F-8A2F-A5169C0AB792}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A9556701-6DD6-4A3F-8A2F-A5169C0AB792}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EDB9FC41-541D-41FE-A95C-4A25BF4823B6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EDB9FC41-541D-41FE-A95C-4A25BF4823B6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EDB9FC41-541D-41FE-A95C-4A25BF4823B6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EDB9FC41-541D-41FE-A95C-4A25BF4823B6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{15EAF76F-3C7C-4747-A686-6F9FC65D2968}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{15EAF76F-3C7C-4747-A686-6F9FC65D2968}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{15EAF76F-3C7C-4747-A686-6F9FC65D2968}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{15EAF76F-3C7C-4747-A686-6F9FC65D2968}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{EDB9FC41-541D-41FE-A95C-4A25BF4823B6} = {3B57DC3E-0543-4470-B094-701C65C843D5}
+		{15EAF76F-3C7C-4747-A686-6F9FC65D2968} = {3B57DC3E-0543-4470-B094-701C65C843D5}
+	EndGlobalSection
+EndGlobal

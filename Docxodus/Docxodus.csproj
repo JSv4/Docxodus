@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+
+    <!-- Enable packaging for NuGet -->
+    <IsPackable>true</IsPackable>
+
+    <!-- NuGet Package Metadata -->
+    <PackageId>Docxodus</PackageId>
+    <Version>1.0.0</Version>
+    <Authors>OpenXmlPowerTools Authors, JSv4</Authors>
+    <Description>A powerful library for manipulating Open XML documents (DOCX, XLSX, PPTX). Fork of OpenXmlPowerTools upgraded to .NET 8.0.</Description>
+    <PackageProjectUrl>https://github.com/JSv4/Redliner</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/JSv4/Redliner</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>openxml;docx;word;xlsx;excel;pptx;powerpoint;document;compare;merge</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- Disable TreatWarningsAsErrors for legacy code - too many existing warnings -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS8073;CA2200</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="DocumentFormat.OpenXml" Version="3.2.0" />
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Linux.NoDependencies" Version="2.88.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+</Project>

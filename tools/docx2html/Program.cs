@@ -6,7 +6,7 @@ using System.IO;
 using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
-using OpenXmlPowerTools;
+using Docxodus;
 using SkiaSharp;
 
 namespace Docx2Html;

@@ -10,17 +10,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build the entire solution
-dotnet build OpenXmlPowerTools.sln
+dotnet build Docxodus.sln
 
 # Build specific project
-dotnet build OpenXmlPowerTools/OpenXmlPowerTools.csproj
+dotnet build Docxodus/Docxodus.csproj
 ```
 
 ## Test Commands
 
 ```bash
 # Run all tests
-dotnet test OpenXmlPowerTools.Tests/OpenXmlPowerTools.Tests.csproj
+dotnet test Docxodus.Tests/Docxodus.Tests.csproj
 
 # Run a specific test by name
 dotnet test --filter "FullyQualifiedName~DB001_DocumentBuilderKeepSections"
@@ -31,12 +31,12 @@ dotnet test --filter "FullyQualifiedName~DbTests"
 
 ## Architecture Overview
 
-Open-Xml-PowerTools is a library for manipulating Open XML documents (DOCX, XLSX, PPTX) built on top of the Open XML SDK. All code is in the `OpenXmlPowerTools` namespace.
+Docxodus is a library for manipulating Open XML documents (DOCX, XLSX, PPTX) built on top of the Open XML SDK. It is a fork of OpenXmlPowerTools upgraded to .NET 8.0. All code is in the `Docxodus` namespace.
 
 ### Document Wrapper Classes
 
 The library uses in-memory byte array wrappers for documents:
-- `OpenXmlPowerToolsDocument` - Base class holding `DocumentByteArray` and `FileName`
+- `DocxodusDocument` - Base class holding `DocumentByteArray` and `FileName`
 - `WmlDocument` - Word documents (.docx)
 - `SmlDocument` - Spreadsheet documents (.xlsx)
 - `PmlDocument` - Presentation documents (.pptx)
@@ -117,6 +117,11 @@ Test files are in `TestFiles/` directory with prefixes indicating their purpose:
    - Added `SkiaSharp.NativeAssets.Linux.NoDependencies` for Linux runtime support
 4. **Test Project**: Updated to .NET 8.0, fixed SkiaSharp usage
 5. **WmlComparer Fixes**: Fixed null Unid attribute handling that caused "Internal error" exceptions
+6. **Rebranding**: Renamed library from OpenXmlPowerTools to Docxodus
+   - Renamed all namespaces to `Docxodus`
+   - Renamed `OpenXmlPowerToolsDocument` to `DocxodusDocument`
+   - Renamed `OpenXmlPowerToolsException` to `DocxodusException`
+   - Archived example projects to `archived-examples/`
 
 ### Current Test Status
 
@@ -132,13 +137,12 @@ Test files are in `TestFiles/` directory with prefixes indicating their purpose:
 ### Remaining Work
 
 1. **Phase 4**: Remove preprocessor directives (`NET35`, `ELIDE_XUNIT_TESTS`) from source and test files
-2. **Phase 5**: Update example projects (6 example projects still target old frameworks)
-3. **Phase 6**: Final cleanup and documentation
+2. **Phase 6**: Final cleanup and documentation
 
 ### Key Files Changed
 
-- `OpenXmlPowerTools.csproj` - Framework and dependency updates
-- `OpenXmlPowerTools.Tests.csproj` - Test framework updates
+- `Docxodus.csproj` - Framework and dependency updates
+- `Docxodus.Tests.csproj` - Test framework updates
 - `PtOpenXmlUtil.cs` - Added `GetPackage()` extension method with SDK 3.x reflection workaround
 - `SkiaSharpHelpers.cs` - New file with color utilities
 - `ColorParser.cs`, `HtmlToWmlCssParser.cs` - SKColor migration
