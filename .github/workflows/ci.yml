@@ -21,25 +21,28 @@ jobs:
 
       - name: Restore dependencies
         run: |
-          dotnet restore OpenXmlPowerTools/OpenXmlPowerTools.csproj
-          dotnet restore OpenXmlPowerTools.Tests/OpenXmlPowerTools.Tests.csproj
+          dotnet restore Docxodus/Docxodus.csproj
+          dotnet restore Docxodus.Tests/Docxodus.Tests.csproj
           dotnet restore tools/redline/redline.csproj
+          dotnet restore tools/docx2html/docx2html.csproj
 
       - name: Build library
-        run: dotnet build OpenXmlPowerTools/OpenXmlPowerTools.csproj -c Release --no-restore
+        run: dotnet build Docxodus/Docxodus.csproj -c Release --no-restore
 
-      - name: Build CLI tool
-        run: dotnet build tools/redline/redline.csproj -c Release --no-restore
+      - name: Build CLI tools
+        run: |
+          dotnet build tools/redline/redline.csproj -c Release --no-restore
+          dotnet build tools/docx2html/docx2html.csproj -c Release --no-restore
 
       - name: Run tests
-        run: dotnet test OpenXmlPowerTools.Tests/OpenXmlPowerTools.Tests.csproj -c Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
+        run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: test-results
-          path: OpenXmlPowerTools.Tests/TestResults/*.trx
+          path: Docxodus.Tests/TestResults/*.trx
 
   build-matrix:
     runs-on: ${{ matrix.os }}
@@ -58,11 +61,14 @@ jobs:
 
       - name: Restore
         run: |
-          dotnet restore OpenXmlPowerTools/OpenXmlPowerTools.csproj
+          dotnet restore Docxodus/Docxodus.csproj
           dotnet restore tools/redline/redline.csproj
+          dotnet restore tools/docx2html/docx2html.csproj
 
       - name: Build
-        run: dotnet build OpenXmlPowerTools/OpenXmlPowerTools.csproj -c Release --no-restore
+        run: dotnet build Docxodus/Docxodus.csproj -c Release --no-restore
 
-      - name: Build CLI tool
-        run: dotnet build tools/redline/redline.csproj -c Release --no-restore
+      - name: Build CLI tools
+        run: |
+          dotnet build tools/redline/redline.csproj -c Release --no-restore
+          dotnet build tools/docx2html/docx2html.csproj -c Release --no-restore

@@ -16,7 +16,7 @@
     <PackageId>Docx2Html</PackageId>
     <Version>1.0.0</Version>
     <Authors>OpenXmlPowerTools Authors, JSv4</Authors>
-    <Description>Convert Word documents (DOCX) to HTML. A CLI tool powered by OpenXmlPowerTools.</Description>
+    <Description>Convert Word documents (DOCX) to HTML. A CLI tool powered by Docxodus.</Description>
     <PackageProjectUrl>https://github.com/JSv4/DocxRedlines</PackageProjectUrl>
     <RepositoryUrl>https://github.com/JSv4/DocxRedlines</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -27,7 +27,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../OpenXmlPowerTools/OpenXmlPowerTools.csproj" />
+    <ProjectReference Include="../../Docxodus/Docxodus.csproj" />
   </ItemGroup>
 
   <ItemGroup>
