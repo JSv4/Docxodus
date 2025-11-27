@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/JSv4/Redliner/actions/workflows/ci.yml"><img src="https://github.com/JSv4/Redliner/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/JSv4/Redlines/actions/workflows/ci.yml"><img src="https://github.com/JSv4/Redlines/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
@@ -108,7 +108,7 @@ docx2html document.docx --inline-styles
 
 ## Download Standalone Binaries
 
-Pre-built binaries are available on the [Releases](https://github.com/JSv4/Redliner/releases) page:
+Pre-built binaries are available on the [Releases](https://github.com/JSv4/Redlines/releases) page:
 
 **redline** (Document Comparison):
 
@@ -132,8 +132,8 @@ Pre-built binaries are available on the [Releases](https://github.com/JSv4/Redli
 
 ```bash
 # Clone the repository
-git clone https://github.com/JSv4/Redliner.git
-cd Redliner
+git clone https://github.com/JSv4/Redlines.git
+cd Redlines
 
 # Build
 dotnet build Docxodus.sln
