@@ -618,6 +618,68 @@ namespace OxPt
                 }
             }
         }
+
+        [Fact]
+        public void HC009_HeadersAndFooters_CssEnabled()
+        {
+            // Test that header/footer CSS is generated when RenderHeadersAndFooters is true
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Header/Footer Test",
+                        FabricateCssClasses = true,
+                        RenderHeadersAndFooters = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify header/footer CSS is generated when enabled
+                    Assert.Contains("header.document-header", htmlString);
+                    Assert.Contains("footer.document-footer", htmlString);
+                    Assert.Contains("Document Headers and Footers CSS", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC010_HeadersAndFooters_CssDisabled()
+        {
+            // Test that header/footer CSS is NOT generated when RenderHeadersAndFooters is false (default)
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Header/Footer Test - Disabled",
+                        FabricateCssClasses = true,
+                        // RenderHeadersAndFooters defaults to false
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify header/footer CSS is NOT generated when disabled
+                    Assert.DoesNotContain("header.document-header", htmlString);
+                    Assert.DoesNotContain("footer.document-footer", htmlString);
+                    Assert.DoesNotContain("Document Headers and Footers CSS", htmlString);
+                }
+            }
+        }
     }
 }
 

@@ -88,6 +88,12 @@ namespace Docxodus
         /// </summary>
         public bool RenderFootnotesAndEndnotes;
 
+        /// <summary>
+        /// If true, render headers and footers in the HTML document.
+        /// If false (default), headers and footers are not rendered.
+        /// </summary>
+        public bool RenderHeadersAndFooters;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -104,6 +110,7 @@ namespace Docxodus
             ShowDeletedContent = true;
             RenderMoveOperations = true;
             RenderFootnotesAndEndnotes = false;
+            RenderHeadersAndFooters = false;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -124,6 +131,7 @@ namespace Docxodus
             AuthorColors = htmlConverterSettings.AuthorColors;
             RenderMoveOperations = htmlConverterSettings.RenderMoveOperations;
             RenderFootnotesAndEndnotes = htmlConverterSettings.RenderFootnotesAndEndnotes;
+            RenderHeadersAndFooters = htmlConverterSettings.RenderHeadersAndFooters;
         }
     }
 
@@ -179,6 +187,12 @@ namespace Docxodus
         /// </summary>
         public bool RenderFootnotesAndEndnotes;
 
+        /// <summary>
+        /// If true, render headers and footers in the HTML document.
+        /// If false (default), headers and footers are not rendered.
+        /// </summary>
+        public bool RenderHeadersAndFooters;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -195,6 +209,7 @@ namespace Docxodus
             ShowDeletedContent = true;
             RenderMoveOperations = true;
             RenderFootnotesAndEndnotes = false;
+            RenderHeadersAndFooters = false;
         }
     }
 
@@ -445,7 +460,8 @@ namespace Docxodus
                 }
                 var revisionCss = GenerateRevisionCss(htmlConverterSettings);
                 var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
-                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + htmlConverterSettings.AdditionalCss;
+                var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
+                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + htmlConverterSettings.AdditionalCss;
 
                 SetStyleElementValue(xhtml, styleValue);
             }
@@ -455,7 +471,8 @@ namespace Docxodus
                 // at least the General CSS will contain important settings.
                 var revisionCss = GenerateRevisionCss(htmlConverterSettings);
                 var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
-                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + htmlConverterSettings.AdditionalCss);
+                var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
+                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + htmlConverterSettings.AdditionalCss);
 
                 foreach (var d in xhtml.DescendantsAndSelf())
                 {
@@ -655,6 +672,33 @@ namespace Docxodus
             return sb.ToString();
         }
 
+        private static string GenerateHeaderFooterCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderHeadersAndFooters)
+                return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Document Headers and Footers CSS */");
+
+            // Document header
+            sb.AppendLine("header.document-header {");
+            sb.AppendLine("    margin-bottom: 1.5em;");
+            sb.AppendLine("    padding-bottom: 0.5em;");
+            sb.AppendLine("    border-bottom: 1px solid #ccc;");
+            sb.AppendLine("}");
+
+            // Document footer
+            sb.AppendLine("footer.document-footer {");
+            sb.AppendLine("    margin-top: 1.5em;");
+            sb.AppendLine("    padding-top: 0.5em;");
+            sb.AppendLine("    border-top: 1px solid #ccc;");
+            sb.AppendLine("    font-size: 0.9em;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
         private static object ConvertToHtmlTransform(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
@@ -685,7 +729,18 @@ namespace Docxodus
             // Transform the w:body element to the XHTML h:body element.
             if (element.Name == W.body)
             {
-                var bodyContent = new List<object> { CreateSectionDivs(wordDoc, settings, element) };
+                var bodyContent = new List<object>();
+
+                // Add headers at the top if enabled
+                if (settings.RenderHeadersAndFooters)
+                {
+                    var headersSection = RenderHeadersSection(wordDoc, settings);
+                    if (headersSection != null)
+                        bodyContent.Add(headersSection);
+                }
+
+                // Add main document content
+                bodyContent.Add(CreateSectionDivs(wordDoc, settings, element));
 
                 // Add footnotes and endnotes sections if enabled
                 if (settings.RenderFootnotesAndEndnotes)
@@ -697,6 +752,14 @@ namespace Docxodus
                     var endnotesSection = RenderEndnotesSection(wordDoc, settings);
                     if (endnotesSection != null)
                         bodyContent.Add(endnotesSection);
+                }
+
+                // Add footers at the bottom if enabled
+                if (settings.RenderHeadersAndFooters)
+                {
+                    var footersSection = RenderFootersSection(wordDoc, settings);
+                    if (footersSection != null)
+                        bodyContent.Add(footersSection);
                 }
 
                 return new XElement(Xhtml.body, bodyContent);
@@ -1241,6 +1304,142 @@ namespace Docxodus
                     new XText("↩")));
 
             return li;
+        }
+
+        private static XElement RenderHeadersSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var headerParts = wordDoc.MainDocumentPart.HeaderParts.ToList();
+            if (!headerParts.Any())
+                return null;
+
+            // Get the section properties from the document body or last sectPr
+            var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var body = mainDoc.Root?.Element(W.body);
+            var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
+
+            // Find the default header reference
+            var defaultHeaderRef = sectPr?.Elements(W.headerReference)
+                .FirstOrDefault(hr => (string)hr.Attribute(W.type) == "default");
+
+            if (defaultHeaderRef == null)
+            {
+                // If no default header, try to get the first header
+                defaultHeaderRef = sectPr?.Elements(W.headerReference).FirstOrDefault();
+            }
+
+            if (defaultHeaderRef == null && headerParts.Any())
+            {
+                // Just use the first header part if no reference found
+                var firstHeaderPart = headerParts.First();
+                return RenderHeaderPart(wordDoc, settings, firstHeaderPart);
+            }
+
+            if (defaultHeaderRef != null)
+            {
+                var headerId = (string)defaultHeaderRef.Attribute(R.id);
+                if (headerId != null)
+                {
+                    var headerPart = wordDoc.MainDocumentPart.GetPartById(headerId) as HeaderPart;
+                    if (headerPart != null)
+                    {
+                        return RenderHeaderPart(wordDoc, settings, headerPart);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static XElement RenderHeaderPart(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, HeaderPart headerPart)
+        {
+            var headerXDoc = headerPart.GetXDocument();
+            var headerRoot = headerXDoc.Root;
+
+            if (headerRoot == null || !headerRoot.Elements().Any())
+                return null;
+
+            // Convert the content of the header
+            var content = headerRoot.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .Where(c => c != null)
+                .ToList();
+
+            if (!content.Any())
+                return null;
+
+            return new XElement(Xhtml.header,
+                new XAttribute("class", "document-header"),
+                content);
+        }
+
+        private static XElement RenderFootersSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var footerParts = wordDoc.MainDocumentPart.FooterParts.ToList();
+            if (!footerParts.Any())
+                return null;
+
+            // Get the section properties from the document body or last sectPr
+            var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var body = mainDoc.Root?.Element(W.body);
+            var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
+
+            // Find the default footer reference
+            var defaultFooterRef = sectPr?.Elements(W.footerReference)
+                .FirstOrDefault(fr => (string)fr.Attribute(W.type) == "default");
+
+            if (defaultFooterRef == null)
+            {
+                // If no default footer, try to get the first footer
+                defaultFooterRef = sectPr?.Elements(W.footerReference).FirstOrDefault();
+            }
+
+            if (defaultFooterRef == null && footerParts.Any())
+            {
+                // Just use the first footer part if no reference found
+                var firstFooterPart = footerParts.First();
+                return RenderFooterPart(wordDoc, settings, firstFooterPart);
+            }
+
+            if (defaultFooterRef != null)
+            {
+                var footerId = (string)defaultFooterRef.Attribute(R.id);
+                if (footerId != null)
+                {
+                    var footerPart = wordDoc.MainDocumentPart.GetPartById(footerId) as FooterPart;
+                    if (footerPart != null)
+                    {
+                        return RenderFooterPart(wordDoc, settings, footerPart);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static XElement RenderFooterPart(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, FooterPart footerPart)
+        {
+            var footerXDoc = footerPart.GetXDocument();
+            var footerRoot = footerXDoc.Root;
+
+            if (footerRoot == null || !footerRoot.Elements().Any())
+                return null;
+
+            // Convert the content of the footer
+            var content = footerRoot.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .Where(c => c != null)
+                .ToList();
+
+            if (!content.Any())
+                return null;
+
+            return new XElement(Xhtml.footer,
+                new XAttribute("class", "document-footer"),
+                content);
         }
 
         private static object ProcessTab(XElement element)

@@ -5995,6 +5995,8 @@ listSeparator
         public static readonly XName hr = xhtml + "hr";
         public static readonly XName html = xhtml + "html";
         public static readonly XName i = xhtml + "i";
+        public static readonly XName footer = xhtml + "footer";
+        public static readonly XName header = xhtml + "header";
         public static readonly XName img = xhtml + "img";
         public static readonly XName ins = xhtml + "ins";
         public static readonly XName li = xhtml + "li";

@@ -548,10 +548,12 @@ Create test cases for:
 - [x] Add unit tests (HC007-HC008)
 
 #### Phase 4: Polish
+- [x] Header/footer rendering (RenderHeadersAndFooters setting)
+- [x] Header/footer CSS (header.document-header, footer.document-footer)
+- [x] Add unit tests (HC009-HC010)
 - [ ] Edge cases (nested revisions, split revisions)
 - [ ] Revisions in footnotes/endnotes (requires footnote content transformation)
 - [ ] Revisions in headers/footers
-- [ ] Header/footer rendering
 - [ ] Comprehensive testing
 - [ ] Documentation updates
 
@@ -566,6 +568,7 @@ var settings = new WmlToHtmlConverterSettings
     ShowDeletedContent = true,
     RenderMoveOperations = true,
     RenderFootnotesAndEndnotes = true,
+    RenderHeadersAndFooters = true,
     AuthorColors = new Dictionary<string, string>
     {
         { "John Doe", "#0066cc" },
