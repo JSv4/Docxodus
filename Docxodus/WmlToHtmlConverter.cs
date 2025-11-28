@@ -454,9 +454,14 @@ namespace Docxodus
                         sb.Append(s);
                     }
                     sb.Append("}" + Environment.NewLine);
-                    var classAtt = new XAttribute("class", classNameToUse);
                     foreach (var gc in grp)
-                        gc.Element.Add(classAtt);
+                    {
+                        var existingClass = gc.Element.Attribute("class");
+                        if (existingClass != null)
+                            existingClass.Value = existingClass.Value + " " + classNameToUse;
+                        else
+                            gc.Element.Add(new XAttribute("class", classNameToUse));
+                    }
                 }
                 var revisionCss = GenerateRevisionCss(htmlConverterSettings);
                 var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
