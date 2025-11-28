@@ -49,6 +49,33 @@ namespace Docxodus
         public Dictionary<string, Func<string, int, string, string>> ListItemImplementations;
         public Func<ImageInfo, XElement> ImageHandler;
 
+        /// <summary>
+        /// If true, render tracked changes visually in HTML output.
+        /// If false (default), accept all revisions before conversion.
+        /// </summary>
+        public bool RenderTrackedChanges;
+
+        /// <summary>
+        /// CSS class prefix for revision elements (default: "rev-")
+        /// </summary>
+        public string RevisionCssClassPrefix;
+
+        /// <summary>
+        /// If true, include revision metadata (author, date) as data attributes
+        /// </summary>
+        public bool IncludeRevisionMetadata;
+
+        /// <summary>
+        /// If true, show deleted content with strikethrough (default: true)
+        /// If false, hide deleted content entirely
+        /// </summary>
+        public bool ShowDeletedContent;
+
+        /// <summary>
+        /// Custom colors for different authors (author name -> CSS color)
+        /// </summary>
+        public Dictionary<string, string> AuthorColors;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -59,6 +86,10 @@ namespace Docxodus
             RestrictToSupportedLanguages = false;
             RestrictToSupportedNumberingFormats = false;
             ListItemImplementations = ListItemRetrieverSettings.DefaultListItemTextImplementations;
+            RenderTrackedChanges = false;
+            RevisionCssClassPrefix = "rev-";
+            IncludeRevisionMetadata = true;
+            ShowDeletedContent = true;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -72,6 +103,11 @@ namespace Docxodus
             RestrictToSupportedNumberingFormats = htmlConverterSettings.RestrictToSupportedNumberingFormats;
             ListItemImplementations = htmlConverterSettings.ListItemImplementations;
             ImageHandler = htmlConverterSettings.ImageHandler;
+            RenderTrackedChanges = htmlConverterSettings.RenderTrackedChanges;
+            RevisionCssClassPrefix = htmlConverterSettings.RevisionCssClassPrefix;
+            IncludeRevisionMetadata = htmlConverterSettings.IncludeRevisionMetadata;
+            ShowDeletedContent = htmlConverterSettings.ShowDeletedContent;
+            AuthorColors = htmlConverterSettings.AuthorColors;
         }
     }
 
@@ -88,6 +124,33 @@ namespace Docxodus
         public Dictionary<string, Func<string, int, string, string>> ListItemImplementations;
         public Func<ImageInfo, XElement> ImageHandler;
 
+        /// <summary>
+        /// If true, render tracked changes visually in HTML output.
+        /// If false (default), accept all revisions before conversion.
+        /// </summary>
+        public bool RenderTrackedChanges;
+
+        /// <summary>
+        /// CSS class prefix for revision elements (default: "rev-")
+        /// </summary>
+        public string RevisionCssClassPrefix;
+
+        /// <summary>
+        /// If true, include revision metadata (author, date) as data attributes
+        /// </summary>
+        public bool IncludeRevisionMetadata;
+
+        /// <summary>
+        /// If true, show deleted content with strikethrough (default: true)
+        /// If false, hide deleted content entirely
+        /// </summary>
+        public bool ShowDeletedContent;
+
+        /// <summary>
+        /// Custom colors for different authors (author name -> CSS color)
+        /// </summary>
+        public Dictionary<string, string> AuthorColors;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -98,6 +161,10 @@ namespace Docxodus
             RestrictToSupportedLanguages = false;
             RestrictToSupportedNumberingFormats = false;
             ListItemImplementations = ListItemRetrieverSettings.DefaultListItemTextImplementations;
+            RenderTrackedChanges = false;
+            RevisionCssClassPrefix = "rev-";
+            IncludeRevisionMetadata = true;
+            ShowDeletedContent = true;
         }
     }
 
@@ -166,7 +233,12 @@ namespace Docxodus
 
         public static XElement ConvertToHtml(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings htmlConverterSettings)
         {
-            RevisionAccepter.AcceptRevisions(wordDoc);
+            // Only accept revisions if NOT rendering tracked changes
+            if (!htmlConverterSettings.RenderTrackedChanges)
+            {
+                RevisionAccepter.AcceptRevisions(wordDoc);
+            }
+
             SimplifyMarkupSettings simplifyMarkupSettings = new SimplifyMarkupSettings
             {
                 RemoveComments = true,
@@ -341,7 +413,8 @@ namespace Docxodus
                     foreach (var gc in grp)
                         gc.Element.Add(classAtt);
                 }
-                var styleValue = htmlConverterSettings.GeneralCss + sb + htmlConverterSettings.AdditionalCss;
+                var revisionCss = GenerateRevisionCss(htmlConverterSettings);
+                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + htmlConverterSettings.AdditionalCss;
 
                 SetStyleElementValue(xhtml, styleValue);
             }
@@ -349,7 +422,8 @@ namespace Docxodus
             {
                 // Previously, the h:style element was not added at this point. However,
                 // at least the General CSS will contain important settings.
-                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + htmlConverterSettings.AdditionalCss);
+                var revisionCss = GenerateRevisionCss(htmlConverterSettings);
+                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + htmlConverterSettings.AdditionalCss);
 
                 foreach (var d in xhtml.DescendantsAndSelf())
                 {
@@ -385,6 +459,56 @@ namespace Docxodus
                 if (head != null)
                     head.Add(styleElement);
             }
+        }
+
+        private static string GenerateRevisionCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderTrackedChanges)
+                return string.Empty;
+
+            var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Tracked Changes CSS */");
+
+            // Insertions - underlined green text
+            sb.AppendLine($"ins.{prefix}ins {{");
+            sb.AppendLine("    text-decoration: underline;");
+            sb.AppendLine("    color: #006400;");
+            sb.AppendLine("    background-color: #e6ffe6;");
+            sb.AppendLine("}");
+
+            // Deletions - strikethrough red text
+            sb.AppendLine($"del.{prefix}del {{");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("    color: #8b0000;");
+            sb.AppendLine("    background-color: #ffe6e6;");
+            sb.AppendLine("}");
+
+            // Deletion marker (when content is hidden)
+            sb.AppendLine($"span.{prefix}del-marker {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    width: 4px;");
+            sb.AppendLine("    height: 1em;");
+            sb.AppendLine("    background-color: #8b0000;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+
+            // Author-specific colors if provided
+            if (settings.AuthorColors != null)
+            {
+                foreach (var kvp in settings.AuthorColors)
+                {
+                    // Escape author name for use in CSS attribute selector
+                    var safeAuthor = kvp.Key.Replace("\"", "\\\"");
+                    sb.AppendLine($"[data-author=\"{safeAuthor}\"] {{");
+                    sb.AppendLine($"    border-left: 3px solid {kvp.Value};");
+                    sb.AppendLine($"    padding-left: 2px;");
+                    sb.AppendLine("}");
+                }
+            }
+
+            return sb.ToString();
         }
 
         private static object ConvertToHtmlTransform(WordprocessingDocument wordDoc,
@@ -541,6 +665,28 @@ namespace Docxodus
                 return CreateBorderDivs(wordDoc, settings, element.Elements());
             }
 
+            // Transform tracked changes - insertions
+            if (element.Name == W.ins)
+            {
+                return ProcessInsertion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform tracked changes - deletions
+            if (element.Name == W.del)
+            {
+                return ProcessDeletion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform deleted text (w:delText) to text node when rendering tracked changes
+            if (element.Name == W.delText)
+            {
+                if (settings.RenderTrackedChanges && settings.ShowDeletedContent)
+                {
+                    return new XText(element.Value);
+                }
+                return null;
+            }
+
             // Ignore element.
             return null;
         }
@@ -572,6 +718,98 @@ namespace Docxodus
             style.Add("text-decoration", "none");
             a.AddAnnotation(style);
             return a;
+        }
+
+        private static object ProcessInsertion(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, just process children normally
+                return element.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
+            }
+
+            var ins = new XElement(Xhtml.ins);
+
+            // Add CSS class
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "ins";
+            ins.Add(new XAttribute("class", className));
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string)element.Attribute(W.author);
+                var date = (string)element.Attribute(W.date);
+
+                if (author != null)
+                    ins.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    ins.Add(new XAttribute("data-date", date));
+            }
+
+            // Process children
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            ins.Add(content);
+
+            // Ensure the element isn't empty (browsers may ignore empty ins/del)
+            if (!ins.Nodes().Any())
+                ins.Add(new XText(""));
+
+            return ins;
+        }
+
+        private static object ProcessDeletion(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, deletions are removed entirely
+                return null;
+            }
+
+            if (!settings.ShowDeletedContent)
+            {
+                // Show marker but not content
+                var marker = new XElement(Xhtml.span,
+                    new XAttribute("class", (settings.RevisionCssClassPrefix ?? "rev-") + "del-marker"),
+                    new XAttribute("title", "Deleted content"));
+                return marker;
+            }
+
+            var del = new XElement(Xhtml.del);
+
+            // Add CSS class
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "del";
+            del.Add(new XAttribute("class", className));
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string)element.Attribute(W.author);
+                var date = (string)element.Attribute(W.date);
+
+                if (author != null)
+                    del.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    del.Add(new XAttribute("data-date", date));
+            }
+
+            // Process children - note: w:del contains w:delText instead of w:t
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            del.Add(content);
+
+            // Ensure the element isn't empty
+            if (!del.Nodes().Any())
+                del.Add(new XText(""));
+
+            return del;
         }
 
         private static object ProcessTab(XElement element)

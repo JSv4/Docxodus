@@ -382,6 +382,178 @@ namespace OxPt
             ((Microsoft.Office.Interop.Word._Application)app).Quit();
         }
 #endif
+
+        [Fact]
+        public void HC003_TrackedChanges_InsertionsAndDeletions()
+        {
+            // Use WmlComparer to create a document with tracked changes
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-InsertInMiddle.docx"));
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlComparerSettings comparerSettings = new WmlComparerSettings();
+            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+
+            // Convert to HTML with tracked changes rendering enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Tracked Changes Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify the HTML contains <ins> elements (insertions)
+                    Assert.Contains("<ins", htmlString);
+                    Assert.Contains("class=\"rev-ins\"", htmlString);
+
+                    // Verify metadata attributes are present
+                    Assert.Contains("data-author=", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TrackedChanges-Insertions.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC004_TrackedChanges_Deletions()
+        {
+            // Use WmlComparer to create a document with deletions
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-DeleteInMiddle.docx"));
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlComparerSettings comparerSettings = new WmlComparerSettings();
+            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+
+            // Convert to HTML with tracked changes rendering enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Tracked Changes Deletions Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify the HTML contains <del> elements (deletions)
+                    Assert.Contains("<del", htmlString);
+                    Assert.Contains("class=\"rev-del\"", htmlString);
+
+                    // Verify metadata attributes are present
+                    Assert.Contains("data-author=", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TrackedChanges-Deletions.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC005_TrackedChanges_CssGenerated()
+        {
+            // Use WmlComparer to create a document with tracked changes
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-InsertInMiddle.docx"));
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlComparerSettings comparerSettings = new WmlComparerSettings();
+            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "CSS Test",
+                        FabricateCssClasses = true,
+                        RenderTrackedChanges = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify the CSS for tracked changes is generated
+                    Assert.Contains("ins.rev-ins", htmlString);
+                    Assert.Contains("del.rev-del", htmlString);
+                    Assert.Contains("text-decoration: underline", htmlString);
+                    Assert.Contains("text-decoration: line-through", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC006_TrackedChanges_DisabledByDefault()
+        {
+            // When RenderTrackedChanges is false (default), revisions should be accepted
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-InsertInMiddle.docx"));
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlComparerSettings comparerSettings = new WmlComparerSettings();
+            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Default Test",
+                        FabricateCssClasses = true,
+                        // RenderTrackedChanges defaults to false
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify the HTML does NOT contain <ins> or <del> elements
+                    Assert.DoesNotContain("<ins", htmlString);
+                    Assert.DoesNotContain("<del", htmlString);
+
+                    // Verify revision CSS is not generated
+                    Assert.DoesNotContain("ins.rev-ins", htmlString);
+                    Assert.DoesNotContain("del.rev-del", htmlString);
+                }
+            }
+        }
     }
 }
 
