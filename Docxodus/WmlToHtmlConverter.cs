@@ -76,6 +76,12 @@ namespace Docxodus
         /// </summary>
         public Dictionary<string, string> AuthorColors;
 
+        /// <summary>
+        /// If true, render move operations as separate from/to (default: true)
+        /// If false, render moves as regular delete + insert
+        /// </summary>
+        public bool RenderMoveOperations;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -90,6 +96,7 @@ namespace Docxodus
             RevisionCssClassPrefix = "rev-";
             IncludeRevisionMetadata = true;
             ShowDeletedContent = true;
+            RenderMoveOperations = true;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -108,6 +115,7 @@ namespace Docxodus
             IncludeRevisionMetadata = htmlConverterSettings.IncludeRevisionMetadata;
             ShowDeletedContent = htmlConverterSettings.ShowDeletedContent;
             AuthorColors = htmlConverterSettings.AuthorColors;
+            RenderMoveOperations = htmlConverterSettings.RenderMoveOperations;
         }
     }
 
@@ -151,6 +159,12 @@ namespace Docxodus
         /// </summary>
         public Dictionary<string, string> AuthorColors;
 
+        /// <summary>
+        /// If true, render move operations as separate from/to (default: true)
+        /// If false, render moves as regular delete + insert
+        /// </summary>
+        public bool RenderMoveOperations;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -165,6 +179,7 @@ namespace Docxodus
             RevisionCssClassPrefix = "rev-";
             IncludeRevisionMetadata = true;
             ShowDeletedContent = true;
+            RenderMoveOperations = true;
         }
     }
 
@@ -494,6 +509,59 @@ namespace Docxodus
             sb.AppendLine("    vertical-align: middle;");
             sb.AppendLine("}");
 
+            // Move source - strikethrough purple text (content moved elsewhere)
+            sb.AppendLine($"del.{prefix}move-from {{");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("    color: #4b0082;");
+            sb.AppendLine("    background-color: #f0e6ff;");
+            sb.AppendLine("}");
+
+            // Move destination - underlined purple text (content moved here)
+            sb.AppendLine($"ins.{prefix}move-to {{");
+            sb.AppendLine("    text-decoration: underline;");
+            sb.AppendLine("    color: #4b0082;");
+            sb.AppendLine("    background-color: #e6f0ff;");
+            sb.AppendLine("}");
+
+            // Move from marker (when content is hidden)
+            sb.AppendLine($"span.{prefix}move-from-marker {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    width: 4px;");
+            sb.AppendLine("    height: 1em;");
+            sb.AppendLine("    background-color: #4b0082;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+
+            // Table row inserted
+            sb.AppendLine($"tr.{prefix}row-ins {{");
+            sb.AppendLine("    background-color: #e6ffe6;");
+            sb.AppendLine("}");
+
+            // Table row deleted
+            sb.AppendLine($"tr.{prefix}row-del {{");
+            sb.AppendLine("    background-color: #ffe6e6;");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("}");
+
+            // Paragraph with inserted paragraph mark (paragraph was split)
+            sb.AppendLine($".{prefix}para-ins {{");
+            sb.AppendLine("    border-left: 3px solid #006400;");
+            sb.AppendLine("    padding-left: 4px;");
+            sb.AppendLine("}");
+
+            // Paragraph with deleted paragraph mark (paragraphs were merged)
+            sb.AppendLine($".{prefix}para-del {{");
+            sb.AppendLine("    border-left: 3px solid #8b0000;");
+            sb.AppendLine("    padding-left: 4px;");
+            sb.AppendLine("}");
+
+            // Deleted paragraph mark indicator (pilcrow)
+            sb.AppendLine($"span.{prefix}para-mark-del {{");
+            sb.AppendLine("    color: #8b0000;");
+            sb.AppendLine("    font-size: 0.8em;");
+            sb.AppendLine("    vertical-align: super;");
+            sb.AppendLine("}");
+
             // Author-specific colors if provided
             if (settings.AuthorColors != null)
             {
@@ -687,6 +755,18 @@ namespace Docxodus
                 return null;
             }
 
+            // Transform tracked changes - move from (source of moved content)
+            if (element.Name == W.moveFrom)
+            {
+                return ProcessMoveFrom(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform tracked changes - move to (destination of moved content)
+            if (element.Name == W.moveTo)
+            {
+                return ProcessMoveTo(wordDoc, settings, element, currentMarginLeft);
+            }
+
             // Ignore element.
             return null;
         }
@@ -810,6 +890,116 @@ namespace Docxodus
                 del.Add(new XText(""));
 
             return del;
+        }
+
+        private static object ProcessMoveFrom(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, move sources are removed (content moved elsewhere)
+                return null;
+            }
+
+            // If not rendering move operations separately, treat as deletion
+            if (!settings.RenderMoveOperations)
+            {
+                return ProcessDeletion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            if (!settings.ShowDeletedContent)
+            {
+                // Show marker but not content
+                var marker = new XElement(Xhtml.span,
+                    new XAttribute("class", (settings.RevisionCssClassPrefix ?? "rev-") + "move-from-marker"),
+                    new XAttribute("title", "Moved content (source)"));
+                return marker;
+            }
+
+            var del = new XElement(Xhtml.del);
+
+            // Add CSS class for move source
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "move-from";
+            del.Add(new XAttribute("class", className));
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string)element.Attribute(W.author);
+                var date = (string)element.Attribute(W.date);
+                var moveId = (string)element.Attribute(W.id);
+
+                if (author != null)
+                    del.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    del.Add(new XAttribute("data-date", date));
+                if (moveId != null)
+                    del.Add(new XAttribute("data-move-id", moveId));
+            }
+
+            // Process children - move source contains delText like w:del
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            del.Add(content);
+
+            // Ensure the element isn't empty
+            if (!del.Nodes().Any())
+                del.Add(new XText(""));
+
+            return del;
+        }
+
+        private static object ProcessMoveTo(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, just process children normally
+                return element.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
+            }
+
+            // If not rendering move operations separately, treat as insertion
+            if (!settings.RenderMoveOperations)
+            {
+                return ProcessInsertion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            var ins = new XElement(Xhtml.ins);
+
+            // Add CSS class for move destination
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "move-to";
+            ins.Add(new XAttribute("class", className));
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string)element.Attribute(W.author);
+                var date = (string)element.Attribute(W.date);
+                var moveId = (string)element.Attribute(W.id);
+
+                if (author != null)
+                    ins.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    ins.Add(new XAttribute("data-date", date));
+                if (moveId != null)
+                    ins.Add(new XAttribute("data-move-id", moveId));
+            }
+
+            // Process children
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            ins.Add(content);
+
+            // Ensure the element isn't empty
+            if (!ins.Nodes().Any())
+                ins.Add(new XText(""));
+
+            return ins;
         }
 
         private static object ProcessTab(XElement element)
@@ -993,6 +1183,57 @@ namespace Docxodus
                 paragraph.Add(span);
             }
 
+            // Handle paragraph mark revisions (when paragraph was inserted/deleted)
+            if (settings.RenderTrackedChanges)
+            {
+                var pPr = element.Element(W.pPr);
+                var rPr = pPr?.Element(W.rPr);
+                var paraIns = rPr?.Element(W.ins);
+                var paraDel = rPr?.Element(W.del);
+
+                if (paraIns != null)
+                {
+                    // Paragraph mark was inserted (paragraph was split from another)
+                    var existingClass = (string)paragraph.Attribute("class");
+                    var newClass = (settings.RevisionCssClassPrefix ?? "rev-") + "para-ins";
+                    paragraph.SetAttributeValue("class", existingClass != null ? existingClass + " " + newClass : newClass);
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)paraIns.Attribute(W.author);
+                        var date = (string)paraIns.Attribute(W.date);
+                        if (author != null && paragraph.Attribute("data-author") == null)
+                            paragraph.Add(new XAttribute("data-author", author));
+                        if (date != null && paragraph.Attribute("data-date") == null)
+                            paragraph.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (paraDel != null)
+                {
+                    // Paragraph mark was deleted (paragraph was merged with next)
+                    var existingClass = (string)paragraph.Attribute("class");
+                    var newClass = (settings.RevisionCssClassPrefix ?? "rev-") + "para-del";
+                    paragraph.SetAttributeValue("class", existingClass != null ? existingClass + " " + newClass : newClass);
+
+                    // Add a pilcrow marker at the end to show the deleted paragraph mark
+                    var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    paragraph.Add(new XElement(Xhtml.span,
+                        new XAttribute("class", prefix + "para-mark-del"),
+                        new XAttribute("title", "Paragraph mark deleted"),
+                        new XText("¶")));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)paraDel.Attribute(W.author);
+                        var date = (string)paraDel.Attribute(W.date);
+                        if (author != null && paragraph.Attribute("data-author") == null)
+                            paragraph.Add(new XAttribute("data-author", author));
+                        if (date != null && paragraph.Attribute("data-date") == null)
+                            paragraph.Add(new XAttribute("data-date", date));
+                    }
+                }
+            }
+
             return paragraph;
         }
 
@@ -1164,6 +1405,46 @@ namespace Docxodus
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
             if (style.Any())
                 htmlRow.AddAnnotation(style);
+
+            // Handle table row revision tracking
+            if (settings.RenderTrackedChanges)
+            {
+                var trPr = element.Element(W.trPr);
+                var rowIns = trPr?.Element(W.ins);
+                var rowDel = trPr?.Element(W.del);
+
+                if (rowIns != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "row-ins";
+                    htmlRow.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)rowIns.Attribute(W.author);
+                        var date = (string)rowIns.Attribute(W.date);
+                        if (author != null)
+                            htmlRow.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            htmlRow.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (rowDel != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "row-del";
+                    htmlRow.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)rowDel.Attribute(W.author);
+                        var date = (string)rowDel.Attribute(W.date);
+                        if (author != null)
+                            htmlRow.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            htmlRow.Add(new XAttribute("data-date", date));
+                    }
+                }
+            }
+
             return htmlRow;
         }
 
