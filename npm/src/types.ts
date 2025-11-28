@@ -22,6 +22,12 @@ export interface CompareOptions {
   detailThreshold?: number;
   /** Whether comparison is case-insensitive (default: false) */
   caseInsensitive?: boolean;
+  /**
+   * Whether to render tracked changes visually in HTML output (default: true)
+   * If true: insertions shown with <ins>, deletions with <del>, styled with colors
+   * If false: changes are accepted, output shows final "clean" document
+   */
+  renderTrackedChanges?: boolean;
 }
 
 /**
@@ -91,6 +97,12 @@ export interface DocxodusWasmExports {
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
       authorName: string
+    ) => string;
+    CompareDocumentsToHtmlWithOptions: (
+      originalBytes: Uint8Array,
+      modifiedBytes: Uint8Array,
+      authorName: string,
+      renderTrackedChanges: boolean
     ) => string;
     CompareDocumentsWithOptions: (
       originalBytes: Uint8Array,

@@ -55,11 +55,26 @@
                 }
             },
 
-            // Compare and get HTML
+            // Compare and get HTML (with tracked changes visible by default)
             compareToHtml: function(originalBytes, modifiedBytes, authorName = 'Test') {
                 try {
                     const result = window.Docxodus.DocumentComparer.CompareDocumentsToHtml(
                         originalBytes, modifiedBytes, authorName
+                    );
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { html: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Compare and get HTML with options
+            compareToHtmlWithOptions: function(originalBytes, modifiedBytes, authorName = 'Test', renderTrackedChanges = true) {
+                try {
+                    const result = window.Docxodus.DocumentComparer.CompareDocumentsToHtmlWithOptions(
+                        originalBytes, modifiedBytes, authorName, renderTrackedChanges
                     );
                     if (result.startsWith('{') && result.includes('"Error"')) {
                         return { error: JSON.parse(result) };

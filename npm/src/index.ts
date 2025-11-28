@@ -207,10 +207,14 @@ export async function compareDocumentsToHtml(
   const originalBytes = await toBytes(original);
   const modifiedBytes = await toBytes(modified);
 
-  const result = exports.DocumentComparer.CompareDocumentsToHtml(
+  // Use the new options method if renderTrackedChanges is explicitly set
+  const renderTrackedChanges = options?.renderTrackedChanges ?? true;
+
+  const result = exports.DocumentComparer.CompareDocumentsToHtmlWithOptions(
     originalBytes,
     modifiedBytes,
-    options?.authorName ?? "Docxodus"
+    options?.authorName ?? "Docxodus",
+    renderTrackedChanges
   );
 
   if (isErrorResponse(result)) {

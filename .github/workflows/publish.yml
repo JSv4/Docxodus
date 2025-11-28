@@ -172,6 +172,7 @@ jobs:
   build-npm:
     needs: build-test-publish
     runs-on: ubuntu-latest
+    environment: Publisher
     permissions:
       contents: read
       id-token: write
@@ -235,5 +236,3 @@ jobs:
         run: |
           cd npm
           npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

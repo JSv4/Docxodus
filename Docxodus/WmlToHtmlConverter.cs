@@ -49,6 +49,51 @@ namespace Docxodus
         public Dictionary<string, Func<string, int, string, string>> ListItemImplementations;
         public Func<ImageInfo, XElement> ImageHandler;
 
+        /// <summary>
+        /// If true, render tracked changes visually in HTML output.
+        /// If false (default), accept all revisions before conversion.
+        /// </summary>
+        public bool RenderTrackedChanges;
+
+        /// <summary>
+        /// CSS class prefix for revision elements (default: "rev-")
+        /// </summary>
+        public string RevisionCssClassPrefix;
+
+        /// <summary>
+        /// If true, include revision metadata (author, date) as data attributes
+        /// </summary>
+        public bool IncludeRevisionMetadata;
+
+        /// <summary>
+        /// If true, show deleted content with strikethrough (default: true)
+        /// If false, hide deleted content entirely
+        /// </summary>
+        public bool ShowDeletedContent;
+
+        /// <summary>
+        /// Custom colors for different authors (author name -> CSS color)
+        /// </summary>
+        public Dictionary<string, string> AuthorColors;
+
+        /// <summary>
+        /// If true, render move operations as separate from/to (default: true)
+        /// If false, render moves as regular delete + insert
+        /// </summary>
+        public bool RenderMoveOperations;
+
+        /// <summary>
+        /// If true, render footnotes and endnotes at the end of the HTML document.
+        /// If false (default), footnotes and endnotes are stripped from the output.
+        /// </summary>
+        public bool RenderFootnotesAndEndnotes;
+
+        /// <summary>
+        /// If true, render headers and footers in the HTML document.
+        /// If false (default), headers and footers are not rendered.
+        /// </summary>
+        public bool RenderHeadersAndFooters;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -59,6 +104,13 @@ namespace Docxodus
             RestrictToSupportedLanguages = false;
             RestrictToSupportedNumberingFormats = false;
             ListItemImplementations = ListItemRetrieverSettings.DefaultListItemTextImplementations;
+            RenderTrackedChanges = false;
+            RevisionCssClassPrefix = "rev-";
+            IncludeRevisionMetadata = true;
+            ShowDeletedContent = true;
+            RenderMoveOperations = true;
+            RenderFootnotesAndEndnotes = false;
+            RenderHeadersAndFooters = false;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -72,6 +124,14 @@ namespace Docxodus
             RestrictToSupportedNumberingFormats = htmlConverterSettings.RestrictToSupportedNumberingFormats;
             ListItemImplementations = htmlConverterSettings.ListItemImplementations;
             ImageHandler = htmlConverterSettings.ImageHandler;
+            RenderTrackedChanges = htmlConverterSettings.RenderTrackedChanges;
+            RevisionCssClassPrefix = htmlConverterSettings.RevisionCssClassPrefix;
+            IncludeRevisionMetadata = htmlConverterSettings.IncludeRevisionMetadata;
+            ShowDeletedContent = htmlConverterSettings.ShowDeletedContent;
+            AuthorColors = htmlConverterSettings.AuthorColors;
+            RenderMoveOperations = htmlConverterSettings.RenderMoveOperations;
+            RenderFootnotesAndEndnotes = htmlConverterSettings.RenderFootnotesAndEndnotes;
+            RenderHeadersAndFooters = htmlConverterSettings.RenderHeadersAndFooters;
         }
     }
 
@@ -88,6 +148,51 @@ namespace Docxodus
         public Dictionary<string, Func<string, int, string, string>> ListItemImplementations;
         public Func<ImageInfo, XElement> ImageHandler;
 
+        /// <summary>
+        /// If true, render tracked changes visually in HTML output.
+        /// If false (default), accept all revisions before conversion.
+        /// </summary>
+        public bool RenderTrackedChanges;
+
+        /// <summary>
+        /// CSS class prefix for revision elements (default: "rev-")
+        /// </summary>
+        public string RevisionCssClassPrefix;
+
+        /// <summary>
+        /// If true, include revision metadata (author, date) as data attributes
+        /// </summary>
+        public bool IncludeRevisionMetadata;
+
+        /// <summary>
+        /// If true, show deleted content with strikethrough (default: true)
+        /// If false, hide deleted content entirely
+        /// </summary>
+        public bool ShowDeletedContent;
+
+        /// <summary>
+        /// Custom colors for different authors (author name -> CSS color)
+        /// </summary>
+        public Dictionary<string, string> AuthorColors;
+
+        /// <summary>
+        /// If true, render move operations as separate from/to (default: true)
+        /// If false, render moves as regular delete + insert
+        /// </summary>
+        public bool RenderMoveOperations;
+
+        /// <summary>
+        /// If true, render footnotes and endnotes at the end of the HTML document.
+        /// If false (default), footnotes and endnotes are stripped from the output.
+        /// </summary>
+        public bool RenderFootnotesAndEndnotes;
+
+        /// <summary>
+        /// If true, render headers and footers in the HTML document.
+        /// If false (default), headers and footers are not rendered.
+        /// </summary>
+        public bool RenderHeadersAndFooters;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -98,6 +203,13 @@ namespace Docxodus
             RestrictToSupportedLanguages = false;
             RestrictToSupportedNumberingFormats = false;
             ListItemImplementations = ListItemRetrieverSettings.DefaultListItemTextImplementations;
+            RenderTrackedChanges = false;
+            RevisionCssClassPrefix = "rev-";
+            IncludeRevisionMetadata = true;
+            ShowDeletedContent = true;
+            RenderMoveOperations = true;
+            RenderFootnotesAndEndnotes = false;
+            RenderHeadersAndFooters = false;
         }
     }
 
@@ -166,12 +278,17 @@ namespace Docxodus
 
         public static XElement ConvertToHtml(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings htmlConverterSettings)
         {
-            RevisionAccepter.AcceptRevisions(wordDoc);
+            // Only accept revisions if NOT rendering tracked changes
+            if (!htmlConverterSettings.RenderTrackedChanges)
+            {
+                RevisionAccepter.AcceptRevisions(wordDoc);
+            }
+
             SimplifyMarkupSettings simplifyMarkupSettings = new SimplifyMarkupSettings
             {
                 RemoveComments = true,
                 RemoveContentControls = true,
-                RemoveEndAndFootNotes = true,
+                RemoveEndAndFootNotes = !htmlConverterSettings.RenderFootnotesAndEndnotes,
                 RemoveFieldCodes = false,
                 RemoveLastRenderedPageBreak = true,
                 RemovePermissions = true,
@@ -341,7 +458,10 @@ namespace Docxodus
                     foreach (var gc in grp)
                         gc.Element.Add(classAtt);
                 }
-                var styleValue = htmlConverterSettings.GeneralCss + sb + htmlConverterSettings.AdditionalCss;
+                var revisionCss = GenerateRevisionCss(htmlConverterSettings);
+                var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
+                var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
+                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + htmlConverterSettings.AdditionalCss;
 
                 SetStyleElementValue(xhtml, styleValue);
             }
@@ -349,7 +469,10 @@ namespace Docxodus
             {
                 // Previously, the h:style element was not added at this point. However,
                 // at least the General CSS will contain important settings.
-                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + htmlConverterSettings.AdditionalCss);
+                var revisionCss = GenerateRevisionCss(htmlConverterSettings);
+                var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
+                var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
+                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + htmlConverterSettings.AdditionalCss);
 
                 foreach (var d in xhtml.DescendantsAndSelf())
                 {
@@ -387,6 +510,195 @@ namespace Docxodus
             }
         }
 
+        private static string GenerateRevisionCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderTrackedChanges)
+                return string.Empty;
+
+            var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Tracked Changes CSS */");
+
+            // Insertions - underlined green text
+            sb.AppendLine($"ins.{prefix}ins {{");
+            sb.AppendLine("    text-decoration: underline;");
+            sb.AppendLine("    color: #006400;");
+            sb.AppendLine("    background-color: #e6ffe6;");
+            sb.AppendLine("}");
+
+            // Deletions - strikethrough red text
+            sb.AppendLine($"del.{prefix}del {{");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("    color: #8b0000;");
+            sb.AppendLine("    background-color: #ffe6e6;");
+            sb.AppendLine("}");
+
+            // Deletion marker (when content is hidden)
+            sb.AppendLine($"span.{prefix}del-marker {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    width: 4px;");
+            sb.AppendLine("    height: 1em;");
+            sb.AppendLine("    background-color: #8b0000;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+
+            // Move source - strikethrough purple text (content moved elsewhere)
+            sb.AppendLine($"del.{prefix}move-from {{");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("    color: #4b0082;");
+            sb.AppendLine("    background-color: #f0e6ff;");
+            sb.AppendLine("}");
+
+            // Move destination - underlined purple text (content moved here)
+            sb.AppendLine($"ins.{prefix}move-to {{");
+            sb.AppendLine("    text-decoration: underline;");
+            sb.AppendLine("    color: #4b0082;");
+            sb.AppendLine("    background-color: #e6f0ff;");
+            sb.AppendLine("}");
+
+            // Move from marker (when content is hidden)
+            sb.AppendLine($"span.{prefix}move-from-marker {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    width: 4px;");
+            sb.AppendLine("    height: 1em;");
+            sb.AppendLine("    background-color: #4b0082;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+
+            // Table row inserted
+            sb.AppendLine($"tr.{prefix}row-ins {{");
+            sb.AppendLine("    background-color: #e6ffe6;");
+            sb.AppendLine("}");
+
+            // Table row deleted
+            sb.AppendLine($"tr.{prefix}row-del {{");
+            sb.AppendLine("    background-color: #ffe6e6;");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("}");
+
+            // Paragraph with inserted paragraph mark (paragraph was split)
+            sb.AppendLine($".{prefix}para-ins {{");
+            sb.AppendLine("    border-left: 3px solid #006400;");
+            sb.AppendLine("    padding-left: 4px;");
+            sb.AppendLine("}");
+
+            // Paragraph with deleted paragraph mark (paragraphs were merged)
+            sb.AppendLine($".{prefix}para-del {{");
+            sb.AppendLine("    border-left: 3px solid #8b0000;");
+            sb.AppendLine("    padding-left: 4px;");
+            sb.AppendLine("}");
+
+            // Deleted paragraph mark indicator (pilcrow)
+            sb.AppendLine($"span.{prefix}para-mark-del {{");
+            sb.AppendLine("    color: #8b0000;");
+            sb.AppendLine("    font-size: 0.8em;");
+            sb.AppendLine("    vertical-align: super;");
+            sb.AppendLine("}");
+
+            // Format changes (run property revisions)
+            sb.AppendLine($"span.{prefix}format-change {{");
+            sb.AppendLine("    border-bottom: 2px dotted #ffa500;");
+            sb.AppendLine("    cursor: help;");
+            sb.AppendLine("}");
+
+            // Table cell inserted
+            sb.AppendLine($"td.{prefix}cell-ins {{");
+            sb.AppendLine("    background-color: #e6ffe6;");
+            sb.AppendLine("}");
+
+            // Table cell deleted
+            sb.AppendLine($"td.{prefix}cell-del {{");
+            sb.AppendLine("    background-color: #ffe6e6;");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("}");
+
+            // Table cell merged
+            sb.AppendLine($"td.{prefix}cell-merge {{");
+            sb.AppendLine("    background-color: #fff0e6;");
+            sb.AppendLine("    border: 2px dashed #ff8c00;");
+            sb.AppendLine("}");
+
+            // Author-specific colors if provided
+            if (settings.AuthorColors != null)
+            {
+                foreach (var kvp in settings.AuthorColors)
+                {
+                    // Escape author name for use in CSS attribute selector
+                    var safeAuthor = kvp.Key.Replace("\"", "\\\"");
+                    sb.AppendLine($"[data-author=\"{safeAuthor}\"] {{");
+                    sb.AppendLine($"    border-left: 3px solid {kvp.Value};");
+                    sb.AppendLine($"    padding-left: 2px;");
+                    sb.AppendLine("}");
+                }
+            }
+
+            return sb.ToString();
+        }
+
+        private static string GenerateFootnoteCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderFootnotesAndEndnotes)
+                return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Footnotes and Endnotes CSS */");
+
+            // Footnote/Endnote reference links
+            sb.AppendLine("a.footnote-ref, a.endnote-ref {");
+            sb.AppendLine("    text-decoration: none;");
+            sb.AppendLine("    color: #0066cc;");
+            sb.AppendLine("}");
+
+            // Footnotes section
+            sb.AppendLine("section.footnotes, section.endnotes {");
+            sb.AppendLine("    margin-top: 2em;");
+            sb.AppendLine("    font-size: 0.9em;");
+            sb.AppendLine("}");
+
+            // Footnote/Endnote list
+            sb.AppendLine("section.footnotes ol, section.endnotes ol {");
+            sb.AppendLine("    padding-left: 1.5em;");
+            sb.AppendLine("}");
+
+            // Back reference links
+            sb.AppendLine("a.footnote-backref, a.endnote-backref {");
+            sb.AppendLine("    text-decoration: none;");
+            sb.AppendLine("    color: #0066cc;");
+            sb.AppendLine("    margin-left: 0.5em;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        private static string GenerateHeaderFooterCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderHeadersAndFooters)
+                return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Document Headers and Footers CSS */");
+
+            // Document header
+            sb.AppendLine("header.document-header {");
+            sb.AppendLine("    margin-bottom: 1.5em;");
+            sb.AppendLine("    padding-bottom: 0.5em;");
+            sb.AppendLine("    border-bottom: 1px solid #ccc;");
+            sb.AppendLine("}");
+
+            // Document footer
+            sb.AppendLine("footer.document-footer {");
+            sb.AppendLine("    margin-top: 1.5em;");
+            sb.AppendLine("    padding-top: 0.5em;");
+            sb.AppendLine("    border-top: 1px solid #ccc;");
+            sb.AppendLine("    font-size: 0.9em;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
         private static object ConvertToHtmlTransform(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
@@ -417,7 +729,40 @@ namespace Docxodus
             // Transform the w:body element to the XHTML h:body element.
             if (element.Name == W.body)
             {
-                return new XElement(Xhtml.body, CreateSectionDivs(wordDoc, settings, element));
+                var bodyContent = new List<object>();
+
+                // Add headers at the top if enabled
+                if (settings.RenderHeadersAndFooters)
+                {
+                    var headersSection = RenderHeadersSection(wordDoc, settings);
+                    if (headersSection != null)
+                        bodyContent.Add(headersSection);
+                }
+
+                // Add main document content
+                bodyContent.Add(CreateSectionDivs(wordDoc, settings, element));
+
+                // Add footnotes and endnotes sections if enabled
+                if (settings.RenderFootnotesAndEndnotes)
+                {
+                    var footnotesSection = RenderFootnotesSection(wordDoc, settings);
+                    if (footnotesSection != null)
+                        bodyContent.Add(footnotesSection);
+
+                    var endnotesSection = RenderEndnotesSection(wordDoc, settings);
+                    if (endnotesSection != null)
+                        bodyContent.Add(endnotesSection);
+                }
+
+                // Add footers at the bottom if enabled
+                if (settings.RenderHeadersAndFooters)
+                {
+                    var footersSection = RenderFootersSection(wordDoc, settings);
+                    if (footersSection != null)
+                        bodyContent.Add(footersSection);
+                }
+
+                return new XElement(Xhtml.body, bodyContent);
             }
 
             // Transform the w:p element to the XHTML h:h1-h6 or h:p element (if the previous paragraph does not
@@ -541,6 +886,52 @@ namespace Docxodus
                 return CreateBorderDivs(wordDoc, settings, element.Elements());
             }
 
+            // Transform tracked changes - insertions
+            if (element.Name == W.ins)
+            {
+                return ProcessInsertion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform tracked changes - deletions
+            if (element.Name == W.del)
+            {
+                return ProcessDeletion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform deleted text (w:delText) to text node when rendering tracked changes
+            if (element.Name == W.delText)
+            {
+                if (settings.RenderTrackedChanges && settings.ShowDeletedContent)
+                {
+                    return new XText(element.Value);
+                }
+                return null;
+            }
+
+            // Transform tracked changes - move from (source of moved content)
+            if (element.Name == W.moveFrom)
+            {
+                return ProcessMoveFrom(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Transform tracked changes - move to (destination of moved content)
+            if (element.Name == W.moveTo)
+            {
+                return ProcessMoveTo(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Handle footnote references
+            if (element.Name == W.footnoteReference)
+            {
+                return ProcessFootnoteReference(wordDoc, settings, element);
+            }
+
+            // Handle endnote references
+            if (element.Name == W.endnoteReference)
+            {
+                return ProcessEndnoteReference(wordDoc, settings, element);
+            }
+
             // Ignore element.
             return null;
         }
@@ -572,6 +963,483 @@ namespace Docxodus
             style.Add("text-decoration", "none");
             a.AddAnnotation(style);
             return a;
+        }
+
+        private static object ProcessInsertion(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, just process children normally
+                return element.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
+            }
+
+            var ins = new XElement(Xhtml.ins);
+
+            // Add CSS class
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "ins";
+            ins.Add(new XAttribute("class", className));
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string)element.Attribute(W.author);
+                var date = (string)element.Attribute(W.date);
+
+                if (author != null)
+                    ins.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    ins.Add(new XAttribute("data-date", date));
+            }
+
+            // Process children
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            ins.Add(content);
+
+            // Ensure the element isn't empty (browsers may ignore empty ins/del)
+            if (!ins.Nodes().Any())
+                ins.Add(new XText(""));
+
+            return ins;
+        }
+
+        private static object ProcessDeletion(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, deletions are removed entirely
+                return null;
+            }
+
+            if (!settings.ShowDeletedContent)
+            {
+                // Show marker but not content
+                var marker = new XElement(Xhtml.span,
+                    new XAttribute("class", (settings.RevisionCssClassPrefix ?? "rev-") + "del-marker"),
+                    new XAttribute("title", "Deleted content"));
+                return marker;
+            }
+
+            var del = new XElement(Xhtml.del);
+
+            // Add CSS class
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "del";
+            del.Add(new XAttribute("class", className));
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string)element.Attribute(W.author);
+                var date = (string)element.Attribute(W.date);
+
+                if (author != null)
+                    del.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    del.Add(new XAttribute("data-date", date));
+            }
+
+            // Process children - note: w:del contains w:delText instead of w:t
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            del.Add(content);
+
+            // Ensure the element isn't empty
+            if (!del.Nodes().Any())
+                del.Add(new XText(""));
+
+            return del;
+        }
+
+        private static object ProcessMoveFrom(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, move sources are removed (content moved elsewhere)
+                return null;
+            }
+
+            // If not rendering move operations separately, treat as deletion
+            if (!settings.RenderMoveOperations)
+            {
+                return ProcessDeletion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            if (!settings.ShowDeletedContent)
+            {
+                // Show marker but not content
+                var marker = new XElement(Xhtml.span,
+                    new XAttribute("class", (settings.RevisionCssClassPrefix ?? "rev-") + "move-from-marker"),
+                    new XAttribute("title", "Moved content (source)"));
+                return marker;
+            }
+
+            var del = new XElement(Xhtml.del);
+
+            // Add CSS class for move source
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "move-from";
+            del.Add(new XAttribute("class", className));
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string)element.Attribute(W.author);
+                var date = (string)element.Attribute(W.date);
+                var moveId = (string)element.Attribute(W.id);
+
+                if (author != null)
+                    del.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    del.Add(new XAttribute("data-date", date));
+                if (moveId != null)
+                    del.Add(new XAttribute("data-move-id", moveId));
+            }
+
+            // Process children - move source contains delText like w:del
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            del.Add(content);
+
+            // Ensure the element isn't empty
+            if (!del.Nodes().Any())
+                del.Add(new XText(""));
+
+            return del;
+        }
+
+        private static object ProcessMoveTo(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
+        {
+            if (!settings.RenderTrackedChanges)
+            {
+                // When not rendering tracked changes, just process children normally
+                return element.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft));
+            }
+
+            // If not rendering move operations separately, treat as insertion
+            if (!settings.RenderMoveOperations)
+            {
+                return ProcessInsertion(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            var ins = new XElement(Xhtml.ins);
+
+            // Add CSS class for move destination
+            var className = (settings.RevisionCssClassPrefix ?? "rev-") + "move-to";
+            ins.Add(new XAttribute("class", className));
+
+            // Add metadata if requested
+            if (settings.IncludeRevisionMetadata)
+            {
+                var author = (string)element.Attribute(W.author);
+                var date = (string)element.Attribute(W.date);
+                var moveId = (string)element.Attribute(W.id);
+
+                if (author != null)
+                    ins.Add(new XAttribute("data-author", author));
+                if (date != null)
+                    ins.Add(new XAttribute("data-date", date));
+                if (moveId != null)
+                    ins.Add(new XAttribute("data-move-id", moveId));
+            }
+
+            // Process children
+            var content = element.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft))
+                .ToList();
+
+            ins.Add(content);
+
+            // Ensure the element isn't empty
+            if (!ins.Nodes().Any())
+                ins.Add(new XText(""));
+
+            return ins;
+        }
+
+        private static object ProcessFootnoteReference(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderFootnotesAndEndnotes)
+            {
+                return null;
+            }
+
+            var footnoteId = (string)element.Attribute(W.id);
+            if (footnoteId == null)
+                return null;
+
+            var style = new Dictionary<string, string>
+            {
+                { "vertical-align", "super" },
+                { "font-size", "smaller" }
+            };
+
+            var anchor = new XElement(Xhtml.a,
+                new XAttribute("href", $"#footnote-{footnoteId}"),
+                new XAttribute("id", $"footnote-ref-{footnoteId}"),
+                new XAttribute("class", "footnote-ref"),
+                new XText($"[{footnoteId}]"));
+
+            anchor.AddAnnotation(style);
+            return anchor;
+        }
+
+        private static object ProcessEndnoteReference(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderFootnotesAndEndnotes)
+            {
+                return null;
+            }
+
+            var endnoteId = (string)element.Attribute(W.id);
+            if (endnoteId == null)
+                return null;
+
+            var style = new Dictionary<string, string>
+            {
+                { "vertical-align", "super" },
+                { "font-size", "smaller" }
+            };
+
+            var anchor = new XElement(Xhtml.a,
+                new XAttribute("href", $"#endnote-{endnoteId}"),
+                new XAttribute("id", $"endnote-ref-{endnoteId}"),
+                new XAttribute("class", "endnote-ref"),
+                new XText($"[{endnoteId}]"));
+
+            anchor.AddAnnotation(style);
+            return anchor;
+        }
+
+        private static XElement RenderFootnotesSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var footnotesPart = wordDoc.MainDocumentPart.FootnotesPart;
+            if (footnotesPart == null)
+                return null;
+
+            var footnotesXDoc = footnotesPart.GetXDocument();
+            var footnotes = footnotesXDoc.Root?.Elements(W.footnote)
+                .Where(fn =>
+                {
+                    var typeAttr = (string)fn.Attribute(W.type);
+                    // Skip separator and continuationSeparator footnotes
+                    return typeAttr != "separator" && typeAttr != "continuationSeparator";
+                })
+                .ToList();
+
+            if (footnotes == null || !footnotes.Any())
+                return null;
+
+            var footnotesSection = new XElement(Xhtml.section,
+                new XAttribute("class", "footnotes"),
+                new XElement(Xhtml.hr),
+                new XElement(Xhtml.ol,
+                    footnotes.Select(fn => RenderFootnoteItem(wordDoc, settings, fn, "footnote"))));
+
+            return footnotesSection;
+        }
+
+        private static XElement RenderEndnotesSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var endnotesPart = wordDoc.MainDocumentPart.EndnotesPart;
+            if (endnotesPart == null)
+                return null;
+
+            var endnotesXDoc = endnotesPart.GetXDocument();
+            var endnotes = endnotesXDoc.Root?.Elements(W.endnote)
+                .Where(en =>
+                {
+                    var typeAttr = (string)en.Attribute(W.type);
+                    // Skip separator and continuationSeparator endnotes
+                    return typeAttr != "separator" && typeAttr != "continuationSeparator";
+                })
+                .ToList();
+
+            if (endnotes == null || !endnotes.Any())
+                return null;
+
+            var endnotesSection = new XElement(Xhtml.section,
+                new XAttribute("class", "endnotes"),
+                new XElement(Xhtml.hr),
+                new XElement(Xhtml.ol,
+                    endnotes.Select(en => RenderFootnoteItem(wordDoc, settings, en, "endnote"))));
+
+            return endnotesSection;
+        }
+
+        private static XElement RenderFootnoteItem(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement noteElement, string noteType)
+        {
+            var noteId = (string)noteElement.Attribute(W.id);
+            if (noteId == null)
+                return null;
+
+            // Convert the content of the footnote/endnote
+            var content = noteElement.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .ToList();
+
+            var li = new XElement(Xhtml.li,
+                new XAttribute("id", $"{noteType}-{noteId}"),
+                new XAttribute("value", noteId),
+                content,
+                new XText(" "),
+                new XElement(Xhtml.a,
+                    new XAttribute("href", $"#{noteType}-ref-{noteId}"),
+                    new XAttribute("class", $"{noteType}-backref"),
+                    new XText("↩")));
+
+            return li;
+        }
+
+        private static XElement RenderHeadersSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var headerParts = wordDoc.MainDocumentPart.HeaderParts.ToList();
+            if (!headerParts.Any())
+                return null;
+
+            // Get the section properties from the document body or last sectPr
+            var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var body = mainDoc.Root?.Element(W.body);
+            var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
+
+            // Find the default header reference
+            var defaultHeaderRef = sectPr?.Elements(W.headerReference)
+                .FirstOrDefault(hr => (string)hr.Attribute(W.type) == "default");
+
+            if (defaultHeaderRef == null)
+            {
+                // If no default header, try to get the first header
+                defaultHeaderRef = sectPr?.Elements(W.headerReference).FirstOrDefault();
+            }
+
+            if (defaultHeaderRef == null && headerParts.Any())
+            {
+                // Just use the first header part if no reference found
+                var firstHeaderPart = headerParts.First();
+                return RenderHeaderPart(wordDoc, settings, firstHeaderPart);
+            }
+
+            if (defaultHeaderRef != null)
+            {
+                var headerId = (string)defaultHeaderRef.Attribute(R.id);
+                if (headerId != null)
+                {
+                    var headerPart = wordDoc.MainDocumentPart.GetPartById(headerId) as HeaderPart;
+                    if (headerPart != null)
+                    {
+                        return RenderHeaderPart(wordDoc, settings, headerPart);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static XElement RenderHeaderPart(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, HeaderPart headerPart)
+        {
+            var headerXDoc = headerPart.GetXDocument();
+            var headerRoot = headerXDoc.Root;
+
+            if (headerRoot == null || !headerRoot.Elements().Any())
+                return null;
+
+            // Convert the content of the header
+            var content = headerRoot.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .Where(c => c != null)
+                .ToList();
+
+            if (!content.Any())
+                return null;
+
+            return new XElement(Xhtml.header,
+                new XAttribute("class", "document-header"),
+                content);
+        }
+
+        private static XElement RenderFootersSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var footerParts = wordDoc.MainDocumentPart.FooterParts.ToList();
+            if (!footerParts.Any())
+                return null;
+
+            // Get the section properties from the document body or last sectPr
+            var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var body = mainDoc.Root?.Element(W.body);
+            var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
+
+            // Find the default footer reference
+            var defaultFooterRef = sectPr?.Elements(W.footerReference)
+                .FirstOrDefault(fr => (string)fr.Attribute(W.type) == "default");
+
+            if (defaultFooterRef == null)
+            {
+                // If no default footer, try to get the first footer
+                defaultFooterRef = sectPr?.Elements(W.footerReference).FirstOrDefault();
+            }
+
+            if (defaultFooterRef == null && footerParts.Any())
+            {
+                // Just use the first footer part if no reference found
+                var firstFooterPart = footerParts.First();
+                return RenderFooterPart(wordDoc, settings, firstFooterPart);
+            }
+
+            if (defaultFooterRef != null)
+            {
+                var footerId = (string)defaultFooterRef.Attribute(R.id);
+                if (footerId != null)
+                {
+                    var footerPart = wordDoc.MainDocumentPart.GetPartById(footerId) as FooterPart;
+                    if (footerPart != null)
+                    {
+                        return RenderFooterPart(wordDoc, settings, footerPart);
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        private static XElement RenderFooterPart(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, FooterPart footerPart)
+        {
+            var footerXDoc = footerPart.GetXDocument();
+            var footerRoot = footerXDoc.Root;
+
+            if (footerRoot == null || !footerRoot.Elements().Any())
+                return null;
+
+            // Convert the content of the footer
+            var content = footerRoot.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .Where(c => c != null)
+                .ToList();
+
+            if (!content.Any())
+                return null;
+
+            return new XElement(Xhtml.footer,
+                new XAttribute("class", "document-footer"),
+                content);
         }
 
         private static object ProcessTab(XElement element)
@@ -755,6 +1623,57 @@ namespace Docxodus
                 paragraph.Add(span);
             }
 
+            // Handle paragraph mark revisions (when paragraph was inserted/deleted)
+            if (settings.RenderTrackedChanges)
+            {
+                var pPr = element.Element(W.pPr);
+                var rPr = pPr?.Element(W.rPr);
+                var paraIns = rPr?.Element(W.ins);
+                var paraDel = rPr?.Element(W.del);
+
+                if (paraIns != null)
+                {
+                    // Paragraph mark was inserted (paragraph was split from another)
+                    var existingClass = (string)paragraph.Attribute("class");
+                    var newClass = (settings.RevisionCssClassPrefix ?? "rev-") + "para-ins";
+                    paragraph.SetAttributeValue("class", existingClass != null ? existingClass + " " + newClass : newClass);
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)paraIns.Attribute(W.author);
+                        var date = (string)paraIns.Attribute(W.date);
+                        if (author != null && paragraph.Attribute("data-author") == null)
+                            paragraph.Add(new XAttribute("data-author", author));
+                        if (date != null && paragraph.Attribute("data-date") == null)
+                            paragraph.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (paraDel != null)
+                {
+                    // Paragraph mark was deleted (paragraph was merged with next)
+                    var existingClass = (string)paragraph.Attribute("class");
+                    var newClass = (settings.RevisionCssClassPrefix ?? "rev-") + "para-del";
+                    paragraph.SetAttributeValue("class", existingClass != null ? existingClass + " " + newClass : newClass);
+
+                    // Add a pilcrow marker at the end to show the deleted paragraph mark
+                    var prefix = settings.RevisionCssClassPrefix ?? "rev-";
+                    paragraph.Add(new XElement(Xhtml.span,
+                        new XAttribute("class", prefix + "para-mark-del"),
+                        new XAttribute("title", "Paragraph mark deleted"),
+                        new XText("¶")));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)paraDel.Attribute(W.author);
+                        var date = (string)paraDel.Attribute(W.date);
+                        if (author != null && paragraph.Attribute("data-author") == null)
+                            paragraph.Add(new XAttribute("data-author", author));
+                        if (date != null && paragraph.Attribute("data-date") == null)
+                            paragraph.Add(new XAttribute("data-date", date));
+                    }
+                }
+            }
+
             return paragraph;
         }
 
@@ -911,6 +1830,61 @@ namespace Docxodus
                 colSpan,
                 CreateBorderDivs(wordDoc, settings, element.Elements()));
             cell.AddAnnotation(style);
+
+            // Handle table cell revisions
+            if (settings.RenderTrackedChanges && tcPr != null)
+            {
+                var cellIns = tcPr.Element(W.cellIns);
+                var cellDel = tcPr.Element(W.cellDel);
+                var cellMerge = tcPr.Element(W.cellMerge);
+
+                if (cellIns != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-ins";
+                    cell.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)cellIns.Attribute(W.author);
+                        var date = (string)cellIns.Attribute(W.date);
+                        if (author != null)
+                            cell.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            cell.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (cellDel != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-del";
+                    cell.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)cellDel.Attribute(W.author);
+                        var date = (string)cellDel.Attribute(W.date);
+                        if (author != null)
+                            cell.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            cell.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (cellMerge != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-merge";
+                    cell.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)cellMerge.Attribute(W.author);
+                        var date = (string)cellMerge.Attribute(W.date);
+                        if (author != null)
+                            cell.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            cell.Add(new XAttribute("data-date", date));
+                    }
+                }
+            }
+
             return cell;
         }
 
@@ -926,6 +1900,46 @@ namespace Docxodus
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
             if (style.Any())
                 htmlRow.AddAnnotation(style);
+
+            // Handle table row revision tracking
+            if (settings.RenderTrackedChanges)
+            {
+                var trPr = element.Element(W.trPr);
+                var rowIns = trPr?.Element(W.ins);
+                var rowDel = trPr?.Element(W.del);
+
+                if (rowIns != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "row-ins";
+                    htmlRow.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)rowIns.Attribute(W.author);
+                        var date = (string)rowIns.Attribute(W.date);
+                        if (author != null)
+                            htmlRow.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            htmlRow.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (rowDel != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "row-del";
+                    htmlRow.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)rowDel.Attribute(W.author);
+                        var date = (string)rowDel.Attribute(W.date);
+                        if (author != null)
+                            htmlRow.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            htmlRow.Add(new XAttribute("data-date", date));
+                    }
+                }
+            }
+
             return htmlRow;
         }
 
@@ -1429,7 +2443,91 @@ namespace Docxodus
                 xe.AddAnnotation(style);
                 content = xe;
             }
+
+            // Handle run property changes (formatting revisions)
+            if (settings.RenderTrackedChanges && rPr != null)
+            {
+                var rPrChange = rPr.Element(W.rPrChange);
+                if (rPrChange != null)
+                {
+                    var formatChangeSpan = new XElement(Xhtml.span);
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "format-change";
+                    formatChangeSpan.Add(new XAttribute("class", className));
+
+                    // Generate a title describing the change
+                    var changeDescription = DescribeFormatChange(rPr, rPrChange);
+                    if (!string.IsNullOrEmpty(changeDescription))
+                        formatChangeSpan.Add(new XAttribute("title", changeDescription));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)rPrChange.Attribute(W.author);
+                        var date = (string)rPrChange.Attribute(W.date);
+                        if (author != null)
+                            formatChangeSpan.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            formatChangeSpan.Add(new XAttribute("data-date", date));
+                    }
+
+                    formatChangeSpan.Add(content);
+                    content = formatChangeSpan;
+                }
+            }
+
             return content;
+        }
+
+        private static string DescribeFormatChange(XElement currentRPr, XElement rPrChange)
+        {
+            var changes = new List<string>();
+            var previousRPr = rPrChange.Element(W.rPr);
+
+            // Check for bold change
+            var currentBold = currentRPr.Element(W.b) != null;
+            var previousBold = previousRPr?.Element(W.b) != null;
+            if (currentBold != previousBold)
+                changes.Add(currentBold ? "Bold added" : "Bold removed");
+
+            // Check for italic change
+            var currentItalic = currentRPr.Element(W.i) != null;
+            var previousItalic = previousRPr?.Element(W.i) != null;
+            if (currentItalic != previousItalic)
+                changes.Add(currentItalic ? "Italic added" : "Italic removed");
+
+            // Check for underline change
+            var currentUnderline = currentRPr.Element(W.u) != null;
+            var previousUnderline = previousRPr?.Element(W.u) != null;
+            if (currentUnderline != previousUnderline)
+                changes.Add(currentUnderline ? "Underline added" : "Underline removed");
+
+            // Check for strikethrough change
+            var currentStrike = currentRPr.Element(W.strike) != null;
+            var previousStrike = previousRPr?.Element(W.strike) != null;
+            if (currentStrike != previousStrike)
+                changes.Add(currentStrike ? "Strikethrough added" : "Strikethrough removed");
+
+            // Check for font size change
+            var currentSz = (string)currentRPr.Elements(W.sz).Attributes(W.val).FirstOrDefault();
+            var previousSz = (string)previousRPr?.Elements(W.sz).Attributes(W.val).FirstOrDefault();
+            if (currentSz != previousSz)
+                changes.Add("Font size changed");
+
+            // Check for font change
+            var currentFont = (string)currentRPr.Elements(W.rFonts).Attributes(W.ascii).FirstOrDefault();
+            var previousFont = (string)previousRPr?.Elements(W.rFonts).Attributes(W.ascii).FirstOrDefault();
+            if (currentFont != previousFont)
+                changes.Add("Font changed");
+
+            // Check for color change
+            var currentColor = (string)currentRPr.Elements(W.color).Attributes(W.val).FirstOrDefault();
+            var previousColor = (string)previousRPr?.Elements(W.color).Attributes(W.val).FirstOrDefault();
+            if (currentColor != previousColor)
+                changes.Add("Color changed");
+
+            if (changes.Count == 0)
+                return "Format changed";
+
+            return string.Join(", ", changes);
         }
 
         [SuppressMessage("ReSharper", "FunctionComplexityOverflow")]

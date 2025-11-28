@@ -58,6 +58,7 @@ public partial class DocumentComparer
 
     /// <summary>
     /// Compare two DOCX documents and return the result as HTML.
+    /// Uses default settings with tracked changes visible.
     /// </summary>
     /// <param name="originalBytes">The original DOCX file as a byte array</param>
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
@@ -68,6 +69,25 @@ public partial class DocumentComparer
         byte[] originalBytes,
         byte[] modifiedBytes,
         string authorName)
+    {
+        // Default: show tracked changes visually
+        return CompareDocumentsToHtmlWithOptions(originalBytes, modifiedBytes, authorName, renderTrackedChanges: true);
+    }
+
+    /// <summary>
+    /// Compare two DOCX documents and return the result as HTML with options.
+    /// </summary>
+    /// <param name="originalBytes">The original DOCX file as a byte array</param>
+    /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
+    /// <param name="authorName">Author name for tracked changes</param>
+    /// <param name="renderTrackedChanges">If true, show insertions/deletions visually. If false, accept all changes (clean output).</param>
+    /// <returns>HTML string, or JSON error object</returns>
+    [JSExport]
+    public static string CompareDocumentsToHtmlWithOptions(
+        byte[] originalBytes,
+        byte[] modifiedBytes,
+        string authorName,
+        bool renderTrackedChanges)
     {
         if (originalBytes == null || originalBytes.Length == 0 ||
             modifiedBytes == null || modifiedBytes.Length == 0)
@@ -90,7 +110,7 @@ public partial class DocumentComparer
             var result = WmlComparer.Compare(original, modified, comparerSettings);
 
             // Convert the redlined document to HTML
-            // Must use writable stream - WmlToHtmlConverter calls RevisionAccepter internally
+            // Must use writable stream - WmlToHtmlConverter may call RevisionAccepter internally
             using var memoryStream = new MemoryStream();
             memoryStream.Write(result.DocumentByteArray, 0, result.DocumentByteArray.Length);
             memoryStream.Position = 0;
@@ -101,12 +121,20 @@ public partial class DocumentComparer
                 PageTitle = "Document Comparison",
                 CssClassPrefix = "redline-",
                 FabricateCssClasses = true,
-                AdditionalCss = @"
-                    ins { background-color: #d4edda; text-decoration: none; }
-                    del { background-color: #f8d7da; text-decoration: line-through; }
-                    .redline-revision { border-left: 3px solid #007bff; padding-left: 5px; }
-                "
+                RenderTrackedChanges = renderTrackedChanges,
+                IncludeRevisionMetadata = renderTrackedChanges,
+                ShowDeletedContent = true,
+                RenderMoveOperations = true,
             };
+
+            // Add author color if rendering tracked changes
+            if (renderTrackedChanges)
+            {
+                htmlSettings.AuthorColors = new Dictionary<string, string>
+                {
+                    { authorName ?? "Docxodus", "#007bff" }
+                };
+            }
 
             var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, htmlSettings);
             return htmlElement.ToString();

@@ -76,6 +76,26 @@ async function compareToHtml(
   );
 }
 
+// Helper to compare and get HTML with options
+async function compareToHtmlWithOptions(
+  page: Page,
+  originalBytes: Uint8Array,
+  modifiedBytes: Uint8Array,
+  renderTrackedChanges: boolean
+): Promise<{ html?: string; error?: any }> {
+  return await page.evaluate(
+    ([original, modified, renderChanges]) => {
+      return (window as any).DocxodusTests.compareToHtmlWithOptions(
+        new Uint8Array(original),
+        new Uint8Array(modified),
+        'Test',
+        renderChanges
+      );
+    },
+    [Array.from(originalBytes), Array.from(modifiedBytes), renderTrackedChanges]
+  );
+}
+
 test.describe('Docxodus WASM Tests', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/test-harness.html');
@@ -286,5 +306,89 @@ test.describe('Docxodus WASM Tests', () => {
     expect(version.Library).toBe('Docxodus WASM');
     expect(version.Platform).toBe('browser-wasm');
     expect(version.DotnetVersion).toBeDefined();
+  });
+
+  test.describe('Tracked Changes Rendering (renderTrackedChanges option)', () => {
+    // Use a simple comparison test case that will have insertions/deletions
+    const testCase = {
+      original: 'WC/WC002-Unmodified.docx',
+      modified: 'WC/WC002-DiffInMiddle.docx',
+    };
+
+    test('renderTrackedChanges=true shows <ins> and <del> elements', async ({ page }) => {
+      const originalBytes = readTestFile(testCase.original);
+      const modifiedBytes = readTestFile(testCase.modified);
+
+      const result = await compareToHtmlWithOptions(page, originalBytes, modifiedBytes, true);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+      expect(result.html!.length).toBeGreaterThan(100);
+      expect(result.html).toContain('<html');
+
+      // With tracked changes rendered, we should see ins and/or del elements
+      const hasTrackingElements = result.html!.includes('<ins') || result.html!.includes('<del');
+      expect(hasTrackingElements).toBe(true);
+
+      console.log('renderTrackedChanges=true: Contains ins/del elements:', hasTrackingElements);
+    });
+
+    test('renderTrackedChanges=false produces clean HTML without <ins>/<del>', async ({ page }) => {
+      const originalBytes = readTestFile(testCase.original);
+      const modifiedBytes = readTestFile(testCase.modified);
+
+      const result = await compareToHtmlWithOptions(page, originalBytes, modifiedBytes, false);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+      expect(result.html!.length).toBeGreaterThan(100);
+      expect(result.html).toContain('<html');
+
+      // With tracked changes NOT rendered, we should NOT see ins/del elements
+      const hasInsElement = result.html!.includes('<ins');
+      const hasDelElement = result.html!.includes('<del');
+      expect(hasInsElement).toBe(false);
+      expect(hasDelElement).toBe(false);
+
+      console.log('renderTrackedChanges=false: No ins/del elements present');
+    });
+
+    test('default compareToHtml includes tracked changes (backward compatible)', async ({ page }) => {
+      const originalBytes = readTestFile(testCase.original);
+      const modifiedBytes = readTestFile(testCase.modified);
+
+      // Default compareToHtml should show tracked changes (true by default)
+      const result = await compareToHtml(page, originalBytes, modifiedBytes);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Default should have tracking elements
+      const hasTrackingElements = result.html!.includes('<ins') || result.html!.includes('<del');
+      expect(hasTrackingElements).toBe(true);
+
+      console.log('Default compareToHtml: Contains ins/del elements (backward compatible)');
+    });
+
+    test('tracked changes rendering includes proper CSS styling', async ({ page }) => {
+      const originalBytes = readTestFile(testCase.original);
+      const modifiedBytes = readTestFile(testCase.modified);
+
+      const result = await compareToHtmlWithOptions(page, originalBytes, modifiedBytes, true);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Check for CSS styling related to tracked changes
+      // The HTML should include styles for insertions and deletions
+      const hasStyleTag = result.html!.includes('<style');
+      expect(hasStyleTag).toBe(true);
+
+      // Check for redline CSS class prefix (used by DocumentComparer)
+      const hasRedlineClass = result.html!.includes('redline-');
+      expect(hasRedlineClass).toBe(true);
+
+      console.log('Tracked changes HTML includes proper CSS styling');
+    });
   });
 });
