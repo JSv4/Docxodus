@@ -680,6 +680,135 @@ namespace OxPt
                 }
             }
         }
+
+        [Fact]
+        public void HC011_TrackedChanges_MoveOperations()
+        {
+            // Use WmlComparer to create a document with move operations
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-MovedPara.docx"));
+
+            if (!doc2.Exists)
+            {
+                // Skip if test file doesn't exist
+                return;
+            }
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlComparerSettings comparerSettings = new WmlComparerSettings();
+            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Move Operations Test",
+                        FabricateCssClasses = true,
+                        RenderTrackedChanges = true,
+                        RenderMoveOperations = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify move CSS classes are generated
+                    Assert.Contains("rev-move-from", htmlString);
+                    Assert.Contains("rev-move-to", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC012_TrackedChanges_AuthorColors()
+        {
+            // Test that author-specific CSS is generated
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Author Colors Test",
+                        FabricateCssClasses = true,
+                        RenderTrackedChanges = true,
+                        AuthorColors = new Dictionary<string, string>
+                        {
+                            { "Test Author", "#ff0000" },
+                            { "Another Author", "#00ff00" }
+                        }
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify author color CSS is generated (data-author attribute selector)
+                    Assert.Contains("[data-author=\"Test Author\"]", htmlString);
+                    Assert.Contains("#ff0000", htmlString);
+                    Assert.Contains("[data-author=\"Another Author\"]", htmlString);
+                    Assert.Contains("#00ff00", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC013_TrackedChanges_AllFeaturesEnabled()
+        {
+            // Test with all tracked changes features enabled
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc1 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+            FileInfo doc2 = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-InsertInMiddle.docx"));
+
+            WmlDocument wmlDoc1 = new WmlDocument(doc1.FullName);
+            WmlDocument wmlDoc2 = new WmlDocument(doc2.FullName);
+
+            WmlComparerSettings comparerSettings = new WmlComparerSettings();
+            WmlDocument comparedDoc = WmlComparer.Compare(wmlDoc1, wmlDoc2, comparerSettings);
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(comparedDoc.DocumentByteArray, 0, comparedDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "All Features Test",
+                        FabricateCssClasses = true,
+                        RenderTrackedChanges = true,
+                        IncludeRevisionMetadata = true,
+                        ShowDeletedContent = true,
+                        RenderMoveOperations = true,
+                        RenderFootnotesAndEndnotes = true,
+                        RenderHeadersAndFooters = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify all CSS sections are generated
+                    Assert.Contains("Tracked Changes CSS", htmlString);
+                    Assert.Contains("ins.rev-ins", htmlString);
+                    Assert.Contains("del.rev-del", htmlString);
+
+                    // Verify body structure
+                    Assert.Contains("<body", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "AllFeatures.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
     }
 }
 

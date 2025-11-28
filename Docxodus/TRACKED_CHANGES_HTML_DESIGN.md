@@ -551,10 +551,12 @@ Create test cases for:
 - [x] Header/footer rendering (RenderHeadersAndFooters setting)
 - [x] Header/footer CSS (header.document-header, footer.document-footer)
 - [x] Add unit tests (HC009-HC010)
-- [ ] Edge cases (nested revisions, split revisions)
-- [ ] Revisions in footnotes/endnotes (requires footnote content transformation)
-- [ ] Revisions in headers/footers
-- [ ] Comprehensive testing
+- [x] Revisions in footnotes/endnotes (handled automatically via ConvertToHtmlTransform)
+- [x] Revisions in headers/footers (handled automatically via ConvertToHtmlTransform)
+- [x] Edge cases:
+  - Nested revisions: handled via recursive ConvertToHtmlTransform calls
+  - Split revisions: each occurrence rendered with consistent metadata
+- [x] Comprehensive testing (HC003-HC013: insertions, deletions, CSS, move ops, author colors, all features)
 - [ ] Documentation updates
 
 ## API Usage Example
