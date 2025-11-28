@@ -562,6 +562,29 @@ namespace Docxodus
             sb.AppendLine("    vertical-align: super;");
             sb.AppendLine("}");
 
+            // Format changes (run property revisions)
+            sb.AppendLine($"span.{prefix}format-change {{");
+            sb.AppendLine("    border-bottom: 2px dotted #ffa500;");
+            sb.AppendLine("    cursor: help;");
+            sb.AppendLine("}");
+
+            // Table cell inserted
+            sb.AppendLine($"td.{prefix}cell-ins {{");
+            sb.AppendLine("    background-color: #e6ffe6;");
+            sb.AppendLine("}");
+
+            // Table cell deleted
+            sb.AppendLine($"td.{prefix}cell-del {{");
+            sb.AppendLine("    background-color: #ffe6e6;");
+            sb.AppendLine("    text-decoration: line-through;");
+            sb.AppendLine("}");
+
+            // Table cell merged
+            sb.AppendLine($"td.{prefix}cell-merge {{");
+            sb.AppendLine("    background-color: #fff0e6;");
+            sb.AppendLine("    border: 2px dashed #ff8c00;");
+            sb.AppendLine("}");
+
             // Author-specific colors if provided
             if (settings.AuthorColors != null)
             {
@@ -1390,6 +1413,61 @@ namespace Docxodus
                 colSpan,
                 CreateBorderDivs(wordDoc, settings, element.Elements()));
             cell.AddAnnotation(style);
+
+            // Handle table cell revisions
+            if (settings.RenderTrackedChanges && tcPr != null)
+            {
+                var cellIns = tcPr.Element(W.cellIns);
+                var cellDel = tcPr.Element(W.cellDel);
+                var cellMerge = tcPr.Element(W.cellMerge);
+
+                if (cellIns != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-ins";
+                    cell.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)cellIns.Attribute(W.author);
+                        var date = (string)cellIns.Attribute(W.date);
+                        if (author != null)
+                            cell.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            cell.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (cellDel != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-del";
+                    cell.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)cellDel.Attribute(W.author);
+                        var date = (string)cellDel.Attribute(W.date);
+                        if (author != null)
+                            cell.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            cell.Add(new XAttribute("data-date", date));
+                    }
+                }
+                else if (cellMerge != null)
+                {
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "cell-merge";
+                    cell.Add(new XAttribute("class", className));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)cellMerge.Attribute(W.author);
+                        var date = (string)cellMerge.Attribute(W.date);
+                        if (author != null)
+                            cell.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            cell.Add(new XAttribute("data-date", date));
+                    }
+                }
+            }
+
             return cell;
         }
 
@@ -1948,7 +2026,91 @@ namespace Docxodus
                 xe.AddAnnotation(style);
                 content = xe;
             }
+
+            // Handle run property changes (formatting revisions)
+            if (settings.RenderTrackedChanges && rPr != null)
+            {
+                var rPrChange = rPr.Element(W.rPrChange);
+                if (rPrChange != null)
+                {
+                    var formatChangeSpan = new XElement(Xhtml.span);
+                    var className = (settings.RevisionCssClassPrefix ?? "rev-") + "format-change";
+                    formatChangeSpan.Add(new XAttribute("class", className));
+
+                    // Generate a title describing the change
+                    var changeDescription = DescribeFormatChange(rPr, rPrChange);
+                    if (!string.IsNullOrEmpty(changeDescription))
+                        formatChangeSpan.Add(new XAttribute("title", changeDescription));
+
+                    if (settings.IncludeRevisionMetadata)
+                    {
+                        var author = (string)rPrChange.Attribute(W.author);
+                        var date = (string)rPrChange.Attribute(W.date);
+                        if (author != null)
+                            formatChangeSpan.Add(new XAttribute("data-author", author));
+                        if (date != null)
+                            formatChangeSpan.Add(new XAttribute("data-date", date));
+                    }
+
+                    formatChangeSpan.Add(content);
+                    content = formatChangeSpan;
+                }
+            }
+
             return content;
+        }
+
+        private static string DescribeFormatChange(XElement currentRPr, XElement rPrChange)
+        {
+            var changes = new List<string>();
+            var previousRPr = rPrChange.Element(W.rPr);
+
+            // Check for bold change
+            var currentBold = currentRPr.Element(W.b) != null;
+            var previousBold = previousRPr?.Element(W.b) != null;
+            if (currentBold != previousBold)
+                changes.Add(currentBold ? "Bold added" : "Bold removed");
+
+            // Check for italic change
+            var currentItalic = currentRPr.Element(W.i) != null;
+            var previousItalic = previousRPr?.Element(W.i) != null;
+            if (currentItalic != previousItalic)
+                changes.Add(currentItalic ? "Italic added" : "Italic removed");
+
+            // Check for underline change
+            var currentUnderline = currentRPr.Element(W.u) != null;
+            var previousUnderline = previousRPr?.Element(W.u) != null;
+            if (currentUnderline != previousUnderline)
+                changes.Add(currentUnderline ? "Underline added" : "Underline removed");
+
+            // Check for strikethrough change
+            var currentStrike = currentRPr.Element(W.strike) != null;
+            var previousStrike = previousRPr?.Element(W.strike) != null;
+            if (currentStrike != previousStrike)
+                changes.Add(currentStrike ? "Strikethrough added" : "Strikethrough removed");
+
+            // Check for font size change
+            var currentSz = (string)currentRPr.Elements(W.sz).Attributes(W.val).FirstOrDefault();
+            var previousSz = (string)previousRPr?.Elements(W.sz).Attributes(W.val).FirstOrDefault();
+            if (currentSz != previousSz)
+                changes.Add("Font size changed");
+
+            // Check for font change
+            var currentFont = (string)currentRPr.Elements(W.rFonts).Attributes(W.ascii).FirstOrDefault();
+            var previousFont = (string)previousRPr?.Elements(W.rFonts).Attributes(W.ascii).FirstOrDefault();
+            if (currentFont != previousFont)
+                changes.Add("Font changed");
+
+            // Check for color change
+            var currentColor = (string)currentRPr.Elements(W.color).Attributes(W.val).FirstOrDefault();
+            var previousColor = (string)previousRPr?.Elements(W.color).Attributes(W.val).FirstOrDefault();
+            if (currentColor != previousColor)
+                changes.Add("Color changed");
+
+            if (changes.Count == 0)
+                return "Format changed";
+
+            return string.Join(", ", changes);
         }
 
         [SuppressMessage("ReSharper", "FunctionComplexityOverflow")]
