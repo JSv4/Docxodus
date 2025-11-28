@@ -13,6 +13,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using SkiaSharp;
 using Xunit;
@@ -551,6 +552,69 @@ namespace OxPt
                     // Verify revision CSS is not generated
                     Assert.DoesNotContain("ins.rev-ins", htmlString);
                     Assert.DoesNotContain("del.rev-del", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC007_FootnotesAndEndnotes_CssEnabled()
+        {
+            // Test that footnote CSS is generated when RenderFootnotesAndEndnotes is true
+            // Use an existing test document
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Footnote Test",
+                        FabricateCssClasses = true,
+                        RenderFootnotesAndEndnotes = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify footnote CSS is generated when enabled
+                    Assert.Contains("a.footnote-ref", htmlString);
+                    Assert.Contains("section.footnotes", htmlString);
+                    Assert.Contains("Footnotes and Endnotes CSS", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008_FootnotesAndEndnotes_CssDisabled()
+        {
+            // Test that footnote CSS is NOT generated when RenderFootnotesAndEndnotes is false (default)
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Footnote Test - Disabled",
+                        FabricateCssClasses = true,
+                        // RenderFootnotesAndEndnotes defaults to false
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify footnote CSS is NOT generated when disabled
+                    Assert.DoesNotContain("a.footnote-ref", htmlString);
+                    Assert.DoesNotContain("section.footnotes", htmlString);
+                    Assert.DoesNotContain("Footnotes and Endnotes CSS", htmlString);
                 }
             }
         }

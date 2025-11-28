@@ -5992,13 +5992,17 @@ listSeparator
         public static readonly XName h8 = xhtml + "h8";
         public static readonly XName h9 = xhtml + "h9";
         public static readonly XName head = xhtml + "head";
+        public static readonly XName hr = xhtml + "hr";
         public static readonly XName html = xhtml + "html";
         public static readonly XName i = xhtml + "i";
         public static readonly XName img = xhtml + "img";
         public static readonly XName ins = xhtml + "ins";
+        public static readonly XName li = xhtml + "li";
         public static readonly XName meta = xhtml + "meta";
+        public static readonly XName ol = xhtml + "ol";
         public static readonly XName p = xhtml + "p";
         public static readonly XName s = xhtml + "s";
+        public static readonly XName section = xhtml + "section";
         public static readonly XName span = xhtml + "span";
         public static readonly XName style = xhtml + "style";
         public static readonly XName sub = xhtml + "sub";

@@ -82,6 +82,12 @@ namespace Docxodus
         /// </summary>
         public bool RenderMoveOperations;
 
+        /// <summary>
+        /// If true, render footnotes and endnotes at the end of the HTML document.
+        /// If false (default), footnotes and endnotes are stripped from the output.
+        /// </summary>
+        public bool RenderFootnotesAndEndnotes;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -97,6 +103,7 @@ namespace Docxodus
             IncludeRevisionMetadata = true;
             ShowDeletedContent = true;
             RenderMoveOperations = true;
+            RenderFootnotesAndEndnotes = false;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -116,6 +123,7 @@ namespace Docxodus
             ShowDeletedContent = htmlConverterSettings.ShowDeletedContent;
             AuthorColors = htmlConverterSettings.AuthorColors;
             RenderMoveOperations = htmlConverterSettings.RenderMoveOperations;
+            RenderFootnotesAndEndnotes = htmlConverterSettings.RenderFootnotesAndEndnotes;
         }
     }
 
@@ -165,6 +173,12 @@ namespace Docxodus
         /// </summary>
         public bool RenderMoveOperations;
 
+        /// <summary>
+        /// If true, render footnotes and endnotes at the end of the HTML document.
+        /// If false (default), footnotes and endnotes are stripped from the output.
+        /// </summary>
+        public bool RenderFootnotesAndEndnotes;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -180,6 +194,7 @@ namespace Docxodus
             IncludeRevisionMetadata = true;
             ShowDeletedContent = true;
             RenderMoveOperations = true;
+            RenderFootnotesAndEndnotes = false;
         }
     }
 
@@ -258,7 +273,7 @@ namespace Docxodus
             {
                 RemoveComments = true,
                 RemoveContentControls = true,
-                RemoveEndAndFootNotes = true,
+                RemoveEndAndFootNotes = !htmlConverterSettings.RenderFootnotesAndEndnotes,
                 RemoveFieldCodes = false,
                 RemoveLastRenderedPageBreak = true,
                 RemovePermissions = true,
@@ -429,7 +444,8 @@ namespace Docxodus
                         gc.Element.Add(classAtt);
                 }
                 var revisionCss = GenerateRevisionCss(htmlConverterSettings);
-                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + htmlConverterSettings.AdditionalCss;
+                var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
+                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + htmlConverterSettings.AdditionalCss;
 
                 SetStyleElementValue(xhtml, styleValue);
             }
@@ -438,7 +454,8 @@ namespace Docxodus
                 // Previously, the h:style element was not added at this point. However,
                 // at least the General CSS will contain important settings.
                 var revisionCss = GenerateRevisionCss(htmlConverterSettings);
-                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + htmlConverterSettings.AdditionalCss);
+                var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
+                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + htmlConverterSettings.AdditionalCss);
 
                 foreach (var d in xhtml.DescendantsAndSelf())
                 {
@@ -602,6 +619,42 @@ namespace Docxodus
             return sb.ToString();
         }
 
+        private static string GenerateFootnoteCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderFootnotesAndEndnotes)
+                return string.Empty;
+
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Footnotes and Endnotes CSS */");
+
+            // Footnote/Endnote reference links
+            sb.AppendLine("a.footnote-ref, a.endnote-ref {");
+            sb.AppendLine("    text-decoration: none;");
+            sb.AppendLine("    color: #0066cc;");
+            sb.AppendLine("}");
+
+            // Footnotes section
+            sb.AppendLine("section.footnotes, section.endnotes {");
+            sb.AppendLine("    margin-top: 2em;");
+            sb.AppendLine("    font-size: 0.9em;");
+            sb.AppendLine("}");
+
+            // Footnote/Endnote list
+            sb.AppendLine("section.footnotes ol, section.endnotes ol {");
+            sb.AppendLine("    padding-left: 1.5em;");
+            sb.AppendLine("}");
+
+            // Back reference links
+            sb.AppendLine("a.footnote-backref, a.endnote-backref {");
+            sb.AppendLine("    text-decoration: none;");
+            sb.AppendLine("    color: #0066cc;");
+            sb.AppendLine("    margin-left: 0.5em;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
         private static object ConvertToHtmlTransform(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
@@ -632,7 +685,21 @@ namespace Docxodus
             // Transform the w:body element to the XHTML h:body element.
             if (element.Name == W.body)
             {
-                return new XElement(Xhtml.body, CreateSectionDivs(wordDoc, settings, element));
+                var bodyContent = new List<object> { CreateSectionDivs(wordDoc, settings, element) };
+
+                // Add footnotes and endnotes sections if enabled
+                if (settings.RenderFootnotesAndEndnotes)
+                {
+                    var footnotesSection = RenderFootnotesSection(wordDoc, settings);
+                    if (footnotesSection != null)
+                        bodyContent.Add(footnotesSection);
+
+                    var endnotesSection = RenderEndnotesSection(wordDoc, settings);
+                    if (endnotesSection != null)
+                        bodyContent.Add(endnotesSection);
+                }
+
+                return new XElement(Xhtml.body, bodyContent);
             }
 
             // Transform the w:p element to the XHTML h:h1-h6 or h:p element (if the previous paragraph does not
@@ -788,6 +855,18 @@ namespace Docxodus
             if (element.Name == W.moveTo)
             {
                 return ProcessMoveTo(wordDoc, settings, element, currentMarginLeft);
+            }
+
+            // Handle footnote references
+            if (element.Name == W.footnoteReference)
+            {
+                return ProcessFootnoteReference(wordDoc, settings, element);
+            }
+
+            // Handle endnote references
+            if (element.Name == W.endnoteReference)
+            {
+                return ProcessEndnoteReference(wordDoc, settings, element);
             }
 
             // Ignore element.
@@ -1023,6 +1102,145 @@ namespace Docxodus
                 ins.Add(new XText(""));
 
             return ins;
+        }
+
+        private static object ProcessFootnoteReference(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderFootnotesAndEndnotes)
+            {
+                return null;
+            }
+
+            var footnoteId = (string)element.Attribute(W.id);
+            if (footnoteId == null)
+                return null;
+
+            var style = new Dictionary<string, string>
+            {
+                { "vertical-align", "super" },
+                { "font-size", "smaller" }
+            };
+
+            var anchor = new XElement(Xhtml.a,
+                new XAttribute("href", $"#footnote-{footnoteId}"),
+                new XAttribute("id", $"footnote-ref-{footnoteId}"),
+                new XAttribute("class", "footnote-ref"),
+                new XText($"[{footnoteId}]"));
+
+            anchor.AddAnnotation(style);
+            return anchor;
+        }
+
+        private static object ProcessEndnoteReference(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderFootnotesAndEndnotes)
+            {
+                return null;
+            }
+
+            var endnoteId = (string)element.Attribute(W.id);
+            if (endnoteId == null)
+                return null;
+
+            var style = new Dictionary<string, string>
+            {
+                { "vertical-align", "super" },
+                { "font-size", "smaller" }
+            };
+
+            var anchor = new XElement(Xhtml.a,
+                new XAttribute("href", $"#endnote-{endnoteId}"),
+                new XAttribute("id", $"endnote-ref-{endnoteId}"),
+                new XAttribute("class", "endnote-ref"),
+                new XText($"[{endnoteId}]"));
+
+            anchor.AddAnnotation(style);
+            return anchor;
+        }
+
+        private static XElement RenderFootnotesSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var footnotesPart = wordDoc.MainDocumentPart.FootnotesPart;
+            if (footnotesPart == null)
+                return null;
+
+            var footnotesXDoc = footnotesPart.GetXDocument();
+            var footnotes = footnotesXDoc.Root?.Elements(W.footnote)
+                .Where(fn =>
+                {
+                    var typeAttr = (string)fn.Attribute(W.type);
+                    // Skip separator and continuationSeparator footnotes
+                    return typeAttr != "separator" && typeAttr != "continuationSeparator";
+                })
+                .ToList();
+
+            if (footnotes == null || !footnotes.Any())
+                return null;
+
+            var footnotesSection = new XElement(Xhtml.section,
+                new XAttribute("class", "footnotes"),
+                new XElement(Xhtml.hr),
+                new XElement(Xhtml.ol,
+                    footnotes.Select(fn => RenderFootnoteItem(wordDoc, settings, fn, "footnote"))));
+
+            return footnotesSection;
+        }
+
+        private static XElement RenderEndnotesSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var endnotesPart = wordDoc.MainDocumentPart.EndnotesPart;
+            if (endnotesPart == null)
+                return null;
+
+            var endnotesXDoc = endnotesPart.GetXDocument();
+            var endnotes = endnotesXDoc.Root?.Elements(W.endnote)
+                .Where(en =>
+                {
+                    var typeAttr = (string)en.Attribute(W.type);
+                    // Skip separator and continuationSeparator endnotes
+                    return typeAttr != "separator" && typeAttr != "continuationSeparator";
+                })
+                .ToList();
+
+            if (endnotes == null || !endnotes.Any())
+                return null;
+
+            var endnotesSection = new XElement(Xhtml.section,
+                new XAttribute("class", "endnotes"),
+                new XElement(Xhtml.hr),
+                new XElement(Xhtml.ol,
+                    endnotes.Select(en => RenderFootnoteItem(wordDoc, settings, en, "endnote"))));
+
+            return endnotesSection;
+        }
+
+        private static XElement RenderFootnoteItem(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement noteElement, string noteType)
+        {
+            var noteId = (string)noteElement.Attribute(W.id);
+            if (noteId == null)
+                return null;
+
+            // Convert the content of the footnote/endnote
+            var content = noteElement.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .ToList();
+
+            var li = new XElement(Xhtml.li,
+                new XAttribute("id", $"{noteType}-{noteId}"),
+                new XAttribute("value", noteId),
+                content,
+                new XText(" "),
+                new XElement(Xhtml.a,
+                    new XAttribute("href", $"#{noteType}-ref-{noteId}"),
+                    new XAttribute("class", $"{noteType}-backref"),
+                    new XText("↩")));
+
+            return li;
         }
 
         private static object ProcessTab(XElement element)
