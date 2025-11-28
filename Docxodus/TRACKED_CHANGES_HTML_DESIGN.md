@@ -539,15 +539,19 @@ Create test cases for:
 - [x] Table row revisions (`w:trPr/w:ins` and `w:del`)
 - [x] CSS for moves, paragraph marks, table rows
 
-#### Phase 3: Advanced Features 🔄 IN PROGRESS
-- [ ] Property change revisions (`w:rPrChange`, `w:pPrChange`)
-- [ ] Table cell revisions (`w:cellIns`, `w:cellDel`, `w:cellMerge`)
-- [ ] Author coloring (AuthorColors dictionary - CSS already implemented)
+#### Phase 3: Advanced Features ✅ COMPLETE
+- [x] Property change revisions (`w:rPrChange`) with DescribeFormatChange helper
+- [x] Table cell revisions (`w:cellIns`, `w:cellDel`, `w:cellMerge`)
+- [x] Author coloring (AuthorColors dictionary - CSS already implemented)
+- [x] Footnote/endnote rendering (RenderFootnotesAndEndnotes setting)
+- [x] Footnote/endnote CSS (section.footnotes, a.footnote-ref, etc.)
+- [x] Add unit tests (HC007-HC008)
 
 #### Phase 4: Polish
 - [ ] Edge cases (nested revisions, split revisions)
-- [ ] Revisions in footnotes/endnotes
+- [ ] Revisions in footnotes/endnotes (requires footnote content transformation)
 - [ ] Revisions in headers/footers
+- [ ] Header/footer rendering
 - [ ] Comprehensive testing
 - [ ] Documentation updates
 
@@ -561,6 +565,7 @@ var settings = new WmlToHtmlConverterSettings
     IncludeRevisionMetadata = true,
     ShowDeletedContent = true,
     RenderMoveOperations = true,
+    RenderFootnotesAndEndnotes = true,
     AuthorColors = new Dictionary<string, string>
     {
         { "John Doe", "#0066cc" },
