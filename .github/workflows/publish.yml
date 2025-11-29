@@ -238,4 +238,4 @@ jobs:
       - name: Publish to npm
         run: |
           cd npm
-          npm publish --provenance --access public
+          npm publish --access public
