@@ -1,4 +1,15 @@
 /**
+ * Revision type enum matching the .NET WmlComparerRevisionType
+ * These are the only two revision types returned by the comparison engine
+ */
+export enum RevisionType {
+  /** Text or content that was added/inserted */
+  Inserted = "Inserted",
+  /** Text or content that was removed/deleted */
+  Deleted = "Deleted",
+}
+
+/**
  * Comment render mode
  * Use -1 (Disabled) to not render comments, or a positive value to enable with that mode
  */
@@ -50,17 +61,74 @@ export interface CompareOptions {
 }
 
 /**
- * Information about a document revision
+ * Information about a document revision extracted from a compared document.
+ *
+ * @example
+ * ```typescript
+ * const revisions = await getRevisions(comparedDoc);
+ * for (const rev of revisions) {
+ *   if (rev.revisionType === RevisionType.Inserted) {
+ *     console.log(`${rev.author} added: "${rev.text}"`);
+ *   } else if (rev.revisionType === RevisionType.Deleted) {
+ *     console.log(`${rev.author} removed: "${rev.text}"`);
+ *   }
+ * }
+ * ```
  */
 export interface Revision {
-  /** Author who made the revision */
+  /**
+   * Author who made the revision.
+   * This comes from the Word document's tracked changes author attribute.
+   * May be empty string if the document doesn't specify an author.
+   */
   author: string;
-  /** ISO date string of the revision */
+  /**
+   * ISO 8601 date string when the revision was made.
+   * Format: "YYYY-MM-DDTHH:mm:ssZ" (e.g., "2024-01-15T10:30:00Z")
+   * May be empty string if the document doesn't specify a date.
+   */
   date: string;
-  /** Type of revision: "Insertion", "Deletion", etc. */
-  revisionType: string;
-  /** Text content of the revision */
+  /**
+   * Type of revision - either "Inserted" or "Deleted".
+   * Use the RevisionType enum for type-safe comparisons.
+   */
+  revisionType: RevisionType | string;
+  /**
+   * Text content of the revision.
+   * For paragraph breaks, this will be a newline character.
+   * May be empty string for non-text elements (e.g., images, math equations).
+   */
   text: string;
+}
+
+/**
+ * Type guard to check if a revision is an insertion.
+ * @param revision - The revision to check
+ * @returns true if the revision is an insertion
+ *
+ * @example
+ * ```typescript
+ * const revisions = await getRevisions(doc);
+ * const insertions = revisions.filter(isInsertion);
+ * ```
+ */
+export function isInsertion(revision: Revision): boolean {
+  return revision.revisionType === RevisionType.Inserted;
+}
+
+/**
+ * Type guard to check if a revision is a deletion.
+ * @param revision - The revision to check
+ * @returns true if the revision is a deletion
+ *
+ * @example
+ * ```typescript
+ * const revisions = await getRevisions(doc);
+ * const deletions = revisions.filter(isDeletion);
+ * ```
+ */
+export function isDeletion(revision: Revision): boolean {
+  return revision.revisionType === RevisionType.Deleted;
 }
 
 /**

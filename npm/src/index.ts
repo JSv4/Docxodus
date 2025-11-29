@@ -8,7 +8,12 @@ import type {
   DocxodusWasmExports,
 } from "./types.js";
 
-import { CommentRenderMode } from "./types.js";
+import {
+  CommentRenderMode,
+  RevisionType,
+  isInsertion,
+  isDeletion,
+} from "./types.js";
 
 export type {
   ConversionOptions,
@@ -19,7 +24,7 @@ export type {
   CompareResult,
 };
 
-export { CommentRenderMode };
+export { CommentRenderMode, RevisionType, isInsertion, isDeletion };
 
 let wasmExports: DocxodusWasmExports | null = null;
 let initPromise: Promise<void> | null = null;
