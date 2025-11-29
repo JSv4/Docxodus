@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef, createElement } from "react";
+import type { CSSProperties, ReactElement } from "react";
 import {
   initialize,
   convertDocxToHtml,
@@ -12,8 +13,13 @@ import type {
   CompareOptions,
   Revision,
 } from "./types.js";
+import {
+  PaginationEngine,
+  type PaginationOptions,
+  type PaginationResult,
+} from "./pagination.js";
 
-export type { ConversionOptions, CompareOptions, Revision };
+export type { ConversionOptions, CompareOptions, Revision, PaginationOptions, PaginationResult };
 
 export interface UseDocxodusResult {
   /** Whether the WASM runtime is loaded and ready */
@@ -410,4 +416,235 @@ export function useComparison(wasmBasePath?: string): UseComparisonResult {
     clear,
     downloadResult,
   };
+}
+
+/**
+ * Props for the PaginatedDocument component.
+ */
+export interface PaginatedDocumentProps {
+  /** HTML string with pagination metadata (from convertDocxToHtml with PaginationMode.Paginated) */
+  html: string;
+  /** Scale factor for page rendering (1.0 = 100%). Default: 1 */
+  scale?: number;
+  /** Whether to show page numbers. Default: true */
+  showPageNumbers?: boolean;
+  /** Gap between pages in pixels. Default: 20 */
+  pageGap?: number;
+  /** Background color for the viewer. Default: "#525659" */
+  backgroundColor?: string;
+  /** CSS class prefix used in the HTML. Default: "page-" */
+  cssPrefix?: string;
+  /** Callback when pagination completes */
+  onPaginationComplete?: (result: PaginationResult) => void;
+  /** Callback when a page becomes visible (for tracking current page) */
+  onPageVisible?: (pageNumber: number) => void;
+  /** Additional CSS class for the container */
+  className?: string;
+  /** Additional inline styles for the container */
+  style?: CSSProperties;
+}
+
+/**
+ * Result of the usePagination hook.
+ */
+export interface UsePaginationResult {
+  /** Pagination result after processing */
+  result: PaginationResult | null;
+  /** Whether pagination is in progress */
+  isPaginating: boolean;
+  /** Error that occurred during pagination */
+  error: Error | null;
+  /** Manually trigger pagination */
+  paginate: () => void;
+}
+
+/**
+ * React hook for pagination state management.
+ *
+ * @param html - HTML string with pagination metadata
+ * @param containerRef - Ref to the container element
+ * @param options - Pagination options
+ * @returns Pagination state and controls
+ *
+ * @example
+ * ```tsx
+ * function Viewer({ html }: { html: string }) {
+ *   const containerRef = useRef<HTMLDivElement>(null);
+ *   const { result, isPaginating, error, paginate } = usePagination(html, containerRef);
+ *
+ *   return (
+ *     <div ref={containerRef} style={{ minHeight: '100vh' }}>
+ *       {isPaginating && <div>Paginating...</div>}
+ *       {result && <div>Total pages: {result.totalPages}</div>}
+ *     </div>
+ *   );
+ * }
+ * ```
+ */
+export function usePagination(
+  html: string,
+  containerRef: React.RefObject<HTMLElement | null>,
+  options: PaginationOptions = {}
+): UsePaginationResult {
+  const [result, setResult] = useState<PaginationResult | null>(null);
+  const [isPaginating, setIsPaginating] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  const paginate = useCallback(() => {
+    if (!containerRef.current || !html) {
+      return;
+    }
+
+    setIsPaginating(true);
+    setError(null);
+
+    try {
+      const container = containerRef.current;
+
+      // Insert HTML into container
+      container.innerHTML = html;
+
+      // Find staging and page container
+      const cssPrefix = options.cssPrefix ?? "page-";
+      const staging =
+        container.querySelector<HTMLElement>("#pagination-staging") ||
+        container.querySelector<HTMLElement>(`.${cssPrefix}staging`);
+      const pageContainer =
+        container.querySelector<HTMLElement>("#pagination-container") ||
+        container.querySelector<HTMLElement>(`.${cssPrefix}container`);
+
+      if (!staging || !pageContainer) {
+        throw new Error(
+          "Pagination elements not found. Ensure HTML was generated with PaginationMode.Paginated"
+        );
+      }
+
+      const engine = new PaginationEngine(staging, pageContainer, options);
+      const paginationResult = engine.paginate();
+      setResult(paginationResult);
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      setIsPaginating(false);
+    }
+  }, [html, containerRef, options]);
+
+  // Auto-paginate when HTML changes
+  useEffect(() => {
+    if (html && containerRef.current) {
+      paginate();
+    }
+  }, [html, paginate]);
+
+  return { result, isPaginating, error, paginate };
+}
+
+/**
+ * React component for displaying a paginated document view (PDF.js style).
+ *
+ * @example
+ * ```tsx
+ * import { useState, useEffect } from 'react';
+ * import { useDocxodus, PaginatedDocument, PaginationMode } from 'docxodus/react';
+ *
+ * function DocumentViewer() {
+ *   const { isReady, convertToHtml } = useDocxodus();
+ *   const [html, setHtml] = useState<string | null>(null);
+ *
+ *   const handleFile = async (file: File) => {
+ *     const result = await convertToHtml(file, {
+ *       paginationMode: PaginationMode.Paginated,
+ *       paginationScale: 0.8
+ *     });
+ *     setHtml(result);
+ *   };
+ *
+ *   return (
+ *     <div>
+ *       <input type="file" accept=".docx" onChange={e => e.target.files?.[0] && handleFile(e.target.files[0])} />
+ *       {html && (
+ *         <PaginatedDocument
+ *           html={html}
+ *           scale={0.8}
+ *           onPaginationComplete={result => console.log(`${result.totalPages} pages`)}
+ *         />
+ *       )}
+ *     </div>
+ *   );
+ * }
+ * ```
+ */
+export function PaginatedDocument({
+  html,
+  scale = 1,
+  showPageNumbers = true,
+  pageGap = 20,
+  backgroundColor = "#525659",
+  cssPrefix = "page-",
+  onPaginationComplete,
+  onPageVisible,
+  className,
+  style,
+}: PaginatedDocumentProps): ReactElement {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const { result, isPaginating, error } = usePagination(html, containerRef, {
+    scale,
+    showPageNumbers,
+    pageGap,
+    cssPrefix,
+  });
+
+  // Notify when pagination completes
+  useEffect(() => {
+    if (result && onPaginationComplete) {
+      onPaginationComplete(result);
+    }
+  }, [result, onPaginationComplete]);
+
+  // Set up intersection observer for page visibility tracking
+  useEffect(() => {
+    if (!result || !onPageVisible || !containerRef.current) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            const pageNum = parseInt(
+              (entry.target as HTMLElement).dataset.pageNumber || "1",
+              10
+            );
+            onPageVisible(pageNum);
+          }
+        });
+      },
+      { threshold: 0.5 }
+    );
+
+    const pages = containerRef.current.querySelectorAll(`.${cssPrefix}box`);
+    pages.forEach((page) => observer.observe(page));
+
+    return () => observer.disconnect();
+  }, [result, cssPrefix, onPageVisible]);
+
+  // Use createElement to avoid TSX dependency
+  const containerStyle: CSSProperties = {
+    backgroundColor,
+    minHeight: "100vh",
+    overflow: "auto",
+    ...style,
+  };
+
+  if (error) {
+    return createElement("div", {
+      style: { color: "red", padding: "20px", backgroundColor },
+    }, `Pagination error: ${error.message}`);
+  }
+
+  return createElement("div", {
+    ref: containerRef,
+    className,
+    style: containerStyle,
+  }, isPaginating ? "Loading..." : null);
 }

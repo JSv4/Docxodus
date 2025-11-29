@@ -54,6 +54,48 @@ public partial class DocumentConverter
         int commentRenderMode,
         string commentCssClassPrefix)
     {
+        // Delegate to the pagination-aware version with pagination disabled
+        return ConvertDocxToHtmlWithPagination(
+            docxBytes,
+            pageTitle,
+            cssPrefix,
+            fabricateClasses,
+            additionalCss,
+            commentRenderMode,
+            commentCssClassPrefix,
+            paginationMode: 0,  // None
+            paginationScale: 1.0,
+            paginationCssClassPrefix: "page-"
+        );
+    }
+
+    /// <summary>
+    /// Convert a DOCX file to HTML with pagination support.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="pageTitle">Title for the HTML document</param>
+    /// <param name="cssPrefix">Prefix for generated CSS class names</param>
+    /// <param name="fabricateClasses">Whether to generate CSS classes</param>
+    /// <param name="additionalCss">Additional CSS to include</param>
+    /// <param name="commentRenderMode">Comment render mode: -1=disabled, 0=EndnoteStyle, 1=Inline, 2=Margin</param>
+    /// <param name="commentCssClassPrefix">CSS class prefix for comments (default: "comment-")</param>
+    /// <param name="paginationMode">Pagination mode: 0=None, 1=Paginated</param>
+    /// <param name="paginationScale">Scale factor for page rendering (1.0 = 100%)</param>
+    /// <param name="paginationCssClassPrefix">CSS class prefix for pagination elements (default: "page-")</param>
+    /// <returns>HTML string or JSON error object</returns>
+    [JSExport]
+    public static string ConvertDocxToHtmlWithPagination(
+        byte[] docxBytes,
+        string pageTitle,
+        string cssPrefix,
+        bool fabricateClasses,
+        string additionalCss,
+        int commentRenderMode,
+        string commentCssClassPrefix,
+        int paginationMode,
+        double paginationScale,
+        string paginationCssClassPrefix)
+    {
         if (docxBytes == null || docxBytes.Length == 0)
         {
             return SerializeError("No document data provided");
@@ -80,7 +122,10 @@ public partial class DocumentConverter
                 RenderComments = renderComments,
                 CommentRenderMode = renderComments ? (CommentRenderMode)commentRenderMode : CommentRenderMode.EndnoteStyle,
                 CommentCssClassPrefix = commentCssClassPrefix ?? "comment-",
-                IncludeCommentMetadata = true
+                IncludeCommentMetadata = true,
+                RenderPagination = (PaginationMode)paginationMode,
+                PaginationScale = paginationScale > 0 ? paginationScale : 1.0,
+                PaginationCssClassPrefix = paginationCssClassPrefix ?? "page-"
             };
 
             var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, settings);
