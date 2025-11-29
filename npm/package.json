@@ -30,7 +30,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/JSv4/Redlines.git"
+    "url": "git+https://github.com/JSv4/Docxodus.git"
   },
   "keywords": [
     "docx",
@@ -47,9 +47,9 @@
   "author": "JSv4",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/JSv4/Redlines/issues"
+    "url": "https://github.com/JSv4/Docxodus/issues"
   },
-  "homepage": "https://github.com/JSv4/Redlines#readme",
+  "homepage": "https://github.com/JSv4/Docxodus#readme",
   "peerDependencies": {
     "react": ">=16.8.0"
   },
