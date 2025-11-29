@@ -26,7 +26,9 @@ public partial class DocumentConverter
             pageTitle: "Document",
             cssPrefix: "docx-",
             fabricateClasses: true,
-            additionalCss: ""
+            additionalCss: "",
+            commentRenderMode: -1,  // -1 = don't render comments
+            commentCssClassPrefix: "comment-"
         );
     }
 
@@ -38,6 +40,8 @@ public partial class DocumentConverter
     /// <param name="cssPrefix">Prefix for generated CSS class names</param>
     /// <param name="fabricateClasses">Whether to generate CSS classes</param>
     /// <param name="additionalCss">Additional CSS to include</param>
+    /// <param name="commentRenderMode">Comment render mode: -1=disabled, 0=EndnoteStyle, 1=Inline, 2=Margin</param>
+    /// <param name="commentCssClassPrefix">CSS class prefix for comments (default: "comment-")</param>
     /// <returns>HTML string or JSON error object</returns>
     [JSExport]
     public static string ConvertDocxToHtmlWithOptions(
@@ -45,38 +49,9 @@ public partial class DocumentConverter
         string pageTitle,
         string cssPrefix,
         bool fabricateClasses,
-        string additionalCss)
-    {
-        return ConvertDocxToHtmlAdvanced(
-            docxBytes, pageTitle, cssPrefix, fabricateClasses, additionalCss,
-            renderComments: false, commentRenderMode: 0, commentCssClassPrefix: "comment-", includeCommentMetadata: true
-        );
-    }
-
-    /// <summary>
-    /// Convert a DOCX file to HTML with advanced settings including comment rendering.
-    /// </summary>
-    /// <param name="docxBytes">The DOCX file as a byte array</param>
-    /// <param name="pageTitle">Title for the HTML document</param>
-    /// <param name="cssPrefix">Prefix for generated CSS class names</param>
-    /// <param name="fabricateClasses">Whether to generate CSS classes</param>
-    /// <param name="additionalCss">Additional CSS to include</param>
-    /// <param name="renderComments">Whether to render document comments</param>
-    /// <param name="commentRenderMode">Comment render mode: 0=EndnoteStyle, 1=Inline, 2=Margin</param>
-    /// <param name="commentCssClassPrefix">CSS class prefix for comments (default: "comment-")</param>
-    /// <param name="includeCommentMetadata">Include author/date metadata in comment HTML</param>
-    /// <returns>HTML string or JSON error object</returns>
-    [JSExport]
-    public static string ConvertDocxToHtmlAdvanced(
-        byte[] docxBytes,
-        string pageTitle,
-        string cssPrefix,
-        bool fabricateClasses,
         string additionalCss,
-        bool renderComments,
         int commentRenderMode,
-        string commentCssClassPrefix,
-        bool includeCommentMetadata)
+        string commentCssClassPrefix)
     {
         if (docxBytes == null || docxBytes.Length == 0)
         {
@@ -91,6 +66,8 @@ public partial class DocumentConverter
             memoryStream.Position = 0;
             using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
 
+            var renderComments = commentRenderMode >= 0;
+
             var settings = new WmlToHtmlConverterSettings
             {
                 PageTitle = pageTitle ?? "Document",
@@ -100,9 +77,9 @@ public partial class DocumentConverter
                 GeneralCss = "body { font-family: Arial, sans-serif; margin: 20px; } " +
                              "span { white-space: pre-wrap; }",
                 RenderComments = renderComments,
-                CommentRenderMode = (CommentRenderMode)commentRenderMode,
+                CommentRenderMode = renderComments ? (CommentRenderMode)commentRenderMode : CommentRenderMode.EndnoteStyle,
                 CommentCssClassPrefix = commentCssClassPrefix ?? "comment-",
-                IncludeCommentMetadata = includeCommentMetadata
+                IncludeCommentMetadata = true
             };
 
             var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, settings);

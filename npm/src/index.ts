@@ -185,38 +185,17 @@ export async function convertDocxToHtml(
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
 
-  let result: string;
-
-  // Use advanced method if any comment options are specified
-  const hasCommentOptions =
-    options?.renderComments !== undefined ||
-    options?.commentRenderMode !== undefined ||
-    options?.commentCssClassPrefix !== undefined ||
-    options?.includeCommentMetadata !== undefined;
-
-  if (hasCommentOptions) {
-    result = exports.DocumentConverter.ConvertDocxToHtmlAdvanced(
-      bytes,
-      options?.pageTitle ?? "Document",
-      options?.cssPrefix ?? "docx-",
-      options?.fabricateClasses ?? true,
-      options?.additionalCss ?? "",
-      options?.renderComments ?? false,
-      options?.commentRenderMode ?? CommentRenderMode.EndnoteStyle,
-      options?.commentCssClassPrefix ?? "comment-",
-      options?.includeCommentMetadata ?? true
-    );
-  } else if (options) {
-    result = exports.DocumentConverter.ConvertDocxToHtmlWithOptions(
-      bytes,
-      options.pageTitle ?? "Document",
-      options.cssPrefix ?? "docx-",
-      options.fabricateClasses ?? true,
-      options.additionalCss ?? ""
-    );
-  } else {
-    result = exports.DocumentConverter.ConvertDocxToHtml(bytes);
-  }
+  const result = options
+    ? exports.DocumentConverter.ConvertDocxToHtmlWithOptions(
+        bytes,
+        options.pageTitle ?? "Document",
+        options.cssPrefix ?? "docx-",
+        options.fabricateClasses ?? true,
+        options.additionalCss ?? "",
+        options.commentRenderMode ?? CommentRenderMode.Disabled,
+        options.commentCssClassPrefix ?? "comment-"
+      )
+    : exports.DocumentConverter.ConvertDocxToHtml(bytes);
 
   if (isErrorResponse(result)) {
     const error = parseError(result);
