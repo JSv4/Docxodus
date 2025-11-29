@@ -8,6 +8,8 @@ export enum RevisionType {
   Deleted = "Deleted",
   /** Text or content that was relocated within the document */
   Moved = "Moved",
+  /** Text content unchanged but formatting (bold, italic, etc.) changed */
+  FormatChanged = "FormatChanged",
 }
 
 /**
@@ -112,6 +114,30 @@ export interface Revision {
    * Undefined for non-move revisions.
    */
   isMoveSource?: boolean;
+  /**
+   * For FormatChanged revisions: details about what formatting changed.
+   * Undefined for non-format-change revisions.
+   */
+  formatChange?: FormatChangeDetails;
+}
+
+/**
+ * Details about formatting changes for FormatChanged revisions.
+ */
+export interface FormatChangeDetails {
+  /**
+   * Dictionary of old property names and values.
+   * Keys are friendly property names like "bold", "italic", "fontSize".
+   */
+  oldProperties?: Record<string, string>;
+  /**
+   * Dictionary of new property names and values.
+   */
+  newProperties?: Record<string, string>;
+  /**
+   * List of property names that changed (e.g., "bold", "italic", "fontSize").
+   */
+  changedPropertyNames?: string[];
 }
 
 /**
@@ -157,6 +183,24 @@ export function isDeletion(revision: Revision): boolean {
  */
 export function isMove(revision: Revision): boolean {
   return revision.revisionType === RevisionType.Moved;
+}
+
+/**
+ * Type guard to check if a revision is a format change.
+ * @param revision - The revision to check
+ * @returns true if the revision is a format change
+ *
+ * @example
+ * ```typescript
+ * const revisions = await getRevisions(doc);
+ * const formatChanges = revisions.filter(isFormatChange);
+ * for (const rev of formatChanges) {
+ *   console.log(`Format changed: ${rev.formatChange?.changedPropertyNames?.join(", ")}`);
+ * }
+ * ```
+ */
+export function isFormatChange(revision: Revision): boolean {
+  return revision.revisionType === RevisionType.FormatChanged;
 }
 
 /**

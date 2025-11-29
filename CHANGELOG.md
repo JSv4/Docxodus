@@ -49,6 +49,21 @@ All notable changes to this project will be documented in this file.
     - `isMove()`, `isMoveSource()`, `isMoveDestination()` type guards
     - `findMovePair()` function to find linked move revisions
     - `moveGroupId` and `isMoveSource` properties on `Revision` interface
+- **Format Change Detection in WmlComparer** - Detects and tracks formatting-only changes (`w:rPrChange`)
+  - When text content is identical but formatting changes (bold, italic, font size, etc.), produces native Word format change markup
+  - Compared documents now contain `w:rPrChange` elements that Microsoft Word recognizes in Track Changes
+  - New `FormatChanged` value in `WmlComparerRevisionType` enum
+  - New `FormatChange` property on `WmlComparerRevision` with:
+    - `OldProperties`: Dictionary of original formatting properties
+    - `NewProperties`: Dictionary of new formatting properties
+    - `ChangedPropertyNames`: List of what changed (e.g., "bold", "italic", "fontSize")
+  - New setting in `WmlComparerSettings`:
+    - `DetectFormatChanges`: Enable/disable format change detection (default: true)
+  - Full WASM/npm support with new TypeScript helpers:
+    - `RevisionType.FormatChanged` enum value
+    - `isFormatChange()` type guard
+    - `FormatChangeDetails` interface with `oldProperties`, `newProperties`, `changedPropertyNames`
+    - `formatChange` property on `Revision` interface
 - **Improved Revision API** - Better TypeScript support for the `getRevisions()` API
   - `RevisionType` enum with `Inserted`, `Deleted`, and `Moved` values for type-safe comparisons
   - `isInsertion()`, `isDeletion()`, `isMove()`, `isMoveSource()`, `isMoveDestination()` helper functions

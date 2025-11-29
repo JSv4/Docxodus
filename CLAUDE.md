@@ -112,6 +112,7 @@ DocumentBuilder.BuildDocument(sources, outputPath);
 - `DetectMoves` - Enable move detection in `GetRevisions()` (default: true)
 - `MoveSimilarityThreshold` - Jaccard similarity threshold for moves (default: 0.8)
 - `MoveMinimumWordCount` - Minimum words for move detection (default: 3)
+- `DetectFormatChanges` - Enable format change detection (default: true)
 
 Move detection produces **native Word move markup** (`w:moveFrom`/`w:moveTo`) when `DetectMoves` is enabled:
 - The comparer analyzes deleted/inserted content blocks for similarity after LCS comparison
@@ -121,6 +122,13 @@ Move detection produces **native Word move markup** (`w:moveFrom`/`w:moveTo`) wh
 - `GetRevisions()` recognizes this native markup and returns `WmlComparerRevisionType.Moved` revisions
 - `WmlComparerRevision.MoveGroupId` links source and destination revisions
 - `WmlComparerRevision.IsMoveSource` - true = moved FROM here, false = moved TO here
+
+Format change detection produces **native Word format change markup** (`w:rPrChange`) when `DetectFormatChanges` is enabled:
+- The comparer analyzes Equal atoms (same text content) for run property differences after LCS comparison
+- When text is identical but formatting differs (bold, italic, font size, etc.), atoms are marked as FormatChanged
+- The output document contains `w:rPrChange` elements inside `w:rPr` with the old formatting properties
+- `GetRevisions()` recognizes this native markup and returns `WmlComparerRevisionType.FormatChanged` revisions
+- `WmlComparerRevision.FormatChange` contains details about what changed (old/new properties, changed property names)
 
 **WmlToHtmlConverter.cs / HtmlToWmlConverter.cs** - Bidirectional DOCX ↔ HTML conversion. Key settings in `WmlToHtmlConverterSettings`:
 - `RenderTrackedChanges` - Render insertions/deletions as `<ins>`/`<del>` instead of accepting them

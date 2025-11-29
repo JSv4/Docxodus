@@ -200,7 +200,13 @@ public partial class DocumentComparer
                     RevisionType = r.RevisionType.ToString(),
                     Text = r.Text ?? "",
                     MoveGroupId = r.MoveGroupId,
-                    IsMoveSource = r.IsMoveSource
+                    IsMoveSource = r.IsMoveSource,
+                    FormatChange = r.FormatChange != null ? new FormatChangeInfo
+                    {
+                        OldProperties = r.FormatChange.OldProperties,
+                        NewProperties = r.FormatChange.NewProperties,
+                        ChangedPropertyNames = r.FormatChange.ChangedPropertyNames
+                    } : null
                 }).ToArray()
             };
 
