@@ -247,7 +247,7 @@ export async function convertDocxToHtml(
   let result: string;
 
   // Use pagination-aware method when pagination is requested
-  if (options?.paginationMode && options.paginationMode !== PaginationMode.None) {
+  if (options?.paginationMode !== undefined && options.paginationMode !== PaginationMode.None) {
     result = exports.DocumentConverter.ConvertDocxToHtmlWithPagination(
       bytes,
       options.pageTitle ?? "Document",
