@@ -1,6 +1,6 @@
 {
   "name": "docxodus",
-  "version": "3.0.1",
+  "version": "0.0.0",
   "description": "DOCX document comparison and HTML conversion in the browser using WebAssembly",
   "type": "module",
   "main": "./dist/index.js",

@@ -23,7 +23,7 @@ let initPromise: Promise<void> | null = null;
 /**
  * Package version - used for CDN URL
  */
-const PACKAGE_VERSION = "3.0.1";
+const PACKAGE_VERSION = "0.0.0";
 
 /**
  * CDN base URLs for WASM files (in order of preference)
