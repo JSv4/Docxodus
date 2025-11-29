@@ -28,6 +28,20 @@ export enum CommentRenderMode {
 }
 
 /**
+ * Pagination mode for HTML output
+ */
+export enum PaginationMode {
+  /** No pagination - content flows continuously (default) */
+  None = 0,
+  /**
+   * Paginated view - outputs page containers with document dimensions
+   * and content with data attributes for client-side pagination.
+   * Creates a PDF.js-style page preview experience.
+   */
+  Paginated = 1,
+}
+
+/**
  * Options for DOCX to HTML conversion
  */
 export interface ConversionOptions {
@@ -43,6 +57,12 @@ export interface ConversionOptions {
   commentRenderMode?: CommentRenderMode;
   /** CSS class prefix for comment elements (default: "comment-") */
   commentCssClassPrefix?: string;
+  /** Pagination mode: None (0) or Paginated (1). Default: None */
+  paginationMode?: PaginationMode;
+  /** Scale factor for page rendering in paginated mode (1.0 = 100%). Default: 1.0 */
+  paginationScale?: number;
+  /** CSS class prefix for pagination elements. Default: "page-" */
+  paginationCssClassPrefix?: string;
 }
 
 /**
@@ -304,6 +324,18 @@ export interface DocxodusWasmExports {
       additionalCss: string,
       commentRenderMode: number,
       commentCssClassPrefix: string
+    ) => string;
+    ConvertDocxToHtmlWithPagination: (
+      bytes: Uint8Array,
+      pageTitle: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      additionalCss: string,
+      commentRenderMode: number,
+      commentCssClassPrefix: string,
+      paginationMode: number,
+      paginationScale: number,
+      paginationCssClassPrefix: string
     ) => string;
     GetVersion: () => string;
   };

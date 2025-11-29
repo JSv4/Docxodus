@@ -12,6 +12,7 @@ import type {
 
 import {
   CommentRenderMode,
+  PaginationMode,
   RevisionType,
   isInsertion,
   isDeletion,
@@ -21,6 +22,17 @@ import {
   findMovePair,
   isFormatChange,
 } from "./types.js";
+
+// Re-export pagination types and engine
+export type {
+  PageDimensions,
+  MeasuredBlock,
+  PageInfo,
+  PaginationResult,
+  PaginationOptions,
+} from "./pagination.js";
+
+export { PaginationEngine, paginateHtml } from "./pagination.js";
 
 export type {
   ConversionOptions,
@@ -35,6 +47,7 @@ export type {
 
 export {
   CommentRenderMode,
+  PaginationMode,
   RevisionType,
   isInsertion,
   isDeletion,
@@ -211,6 +224,18 @@ async function toBytes(input: File | Uint8Array): Promise<Uint8Array> {
  * @param options - Conversion options
  * @returns HTML string
  * @throws Error if conversion fails
+ *
+ * @example
+ * ```typescript
+ * // Basic conversion
+ * const html = await convertDocxToHtml(docxFile);
+ *
+ * // With pagination (PDF.js-style page view)
+ * const html = await convertDocxToHtml(docxFile, {
+ *   paginationMode: PaginationMode.Paginated,
+ *   paginationScale: 0.8
+ * });
+ * ```
  */
 export async function convertDocxToHtml(
   document: File | Uint8Array,
@@ -219,17 +244,35 @@ export async function convertDocxToHtml(
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
 
-  const result = options
-    ? exports.DocumentConverter.ConvertDocxToHtmlWithOptions(
-        bytes,
-        options.pageTitle ?? "Document",
-        options.cssPrefix ?? "docx-",
-        options.fabricateClasses ?? true,
-        options.additionalCss ?? "",
-        options.commentRenderMode ?? CommentRenderMode.Disabled,
-        options.commentCssClassPrefix ?? "comment-"
-      )
-    : exports.DocumentConverter.ConvertDocxToHtml(bytes);
+  let result: string;
+
+  // Use pagination-aware method when pagination is requested
+  if (options?.paginationMode && options.paginationMode !== PaginationMode.None) {
+    result = exports.DocumentConverter.ConvertDocxToHtmlWithPagination(
+      bytes,
+      options.pageTitle ?? "Document",
+      options.cssPrefix ?? "docx-",
+      options.fabricateClasses ?? true,
+      options.additionalCss ?? "",
+      options.commentRenderMode ?? CommentRenderMode.Disabled,
+      options.commentCssClassPrefix ?? "comment-",
+      options.paginationMode,
+      options.paginationScale ?? 1.0,
+      options.paginationCssClassPrefix ?? "page-"
+    );
+  } else if (options) {
+    result = exports.DocumentConverter.ConvertDocxToHtmlWithOptions(
+      bytes,
+      options.pageTitle ?? "Document",
+      options.cssPrefix ?? "docx-",
+      options.fabricateClasses ?? true,
+      options.additionalCss ?? "",
+      options.commentRenderMode ?? CommentRenderMode.Disabled,
+      options.commentCssClassPrefix ?? "comment-"
+    );
+  } else {
+    result = exports.DocumentConverter.ConvertDocxToHtml(bytes);
+  }
 
   if (isErrorResponse(result)) {
     const error = parseError(result);

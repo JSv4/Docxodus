@@ -44,6 +44,24 @@ namespace Docxodus
         Margin
     }
 
+    /// <summary>
+    /// Specifies how pagination is rendered in the HTML output.
+    /// </summary>
+    public enum PaginationMode
+    {
+        /// <summary>
+        /// No pagination - content flows continuously (default, current behavior).
+        /// </summary>
+        None,
+
+        /// <summary>
+        /// Paginated view - outputs page containers with document dimensions
+        /// and content with data attributes for client-side pagination.
+        /// Creates a PDF.js-style page preview experience.
+        /// </summary>
+        Paginated
+    }
+
     public partial class WmlDocument
     {
         [SuppressMessage("ReSharper", "UnusedMember.Global")]
@@ -139,6 +157,24 @@ namespace Docxodus
         /// </summary>
         public bool IncludeCommentMetadata;
 
+        /// <summary>
+        /// If not None, render document with page containers in PDF.js style.
+        /// Default: None (continuous scrolling layout).
+        /// </summary>
+        public PaginationMode RenderPagination;
+
+        /// <summary>
+        /// Scale factor for page rendering in paginated mode (1.0 = 100%).
+        /// Default: 1.0
+        /// </summary>
+        public double PaginationScale;
+
+        /// <summary>
+        /// CSS class prefix for pagination elements.
+        /// Default: "page-"
+        /// </summary>
+        public string PaginationCssClassPrefix;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -160,6 +196,9 @@ namespace Docxodus
             CommentRenderMode = CommentRenderMode.EndnoteStyle;
             CommentCssClassPrefix = "comment-";
             IncludeCommentMetadata = true;
+            RenderPagination = PaginationMode.None;
+            PaginationScale = 1.0;
+            PaginationCssClassPrefix = "page-";
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -185,6 +224,9 @@ namespace Docxodus
             CommentRenderMode = htmlConverterSettings.CommentRenderMode;
             CommentCssClassPrefix = htmlConverterSettings.CommentCssClassPrefix;
             IncludeCommentMetadata = htmlConverterSettings.IncludeCommentMetadata;
+            RenderPagination = htmlConverterSettings.RenderPagination;
+            PaginationScale = htmlConverterSettings.PaginationScale;
+            PaginationCssClassPrefix = htmlConverterSettings.PaginationCssClassPrefix;
         }
     }
 
@@ -267,6 +309,24 @@ namespace Docxodus
         /// </summary>
         public bool IncludeCommentMetadata;
 
+        /// <summary>
+        /// If not None, render document with page containers in PDF.js style.
+        /// Default: None (continuous scrolling layout).
+        /// </summary>
+        public PaginationMode RenderPagination;
+
+        /// <summary>
+        /// Scale factor for page rendering in paginated mode (1.0 = 100%).
+        /// Default: 1.0
+        /// </summary>
+        public double PaginationScale;
+
+        /// <summary>
+        /// CSS class prefix for pagination elements.
+        /// Default: "page-"
+        /// </summary>
+        public string PaginationCssClassPrefix;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -288,6 +348,9 @@ namespace Docxodus
             CommentRenderMode = CommentRenderMode.EndnoteStyle;
             CommentCssClassPrefix = "comment-";
             IncludeCommentMetadata = true;
+            RenderPagination = PaginationMode.None;
+            PaginationScale = 1.0;
+            PaginationCssClassPrefix = "page-";
         }
     }
 
@@ -587,7 +650,8 @@ namespace Docxodus
                 var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
                 var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
                 var commentCss = GenerateCommentCss(htmlConverterSettings);
-                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + htmlConverterSettings.AdditionalCss;
+                var paginationCss = GeneratePaginationCss(htmlConverterSettings);
+                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + htmlConverterSettings.AdditionalCss;
 
                 SetStyleElementValue(xhtml, styleValue);
             }
@@ -599,7 +663,8 @@ namespace Docxodus
                 var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
                 var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
                 var commentCss = GenerateCommentCss(htmlConverterSettings);
-                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + htmlConverterSettings.AdditionalCss);
+                var paginationCss = GeneratePaginationCss(htmlConverterSettings);
+                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + htmlConverterSettings.AdditionalCss);
 
                 foreach (var d in xhtml.DescendantsAndSelf())
                 {
@@ -1010,6 +1075,81 @@ namespace Docxodus
             return sb.ToString();
         }
 
+        private static string GeneratePaginationCss(WmlToHtmlConverterSettings settings)
+        {
+            if (settings.RenderPagination != PaginationMode.Paginated)
+                return string.Empty;
+
+            var prefix = settings.PaginationCssClassPrefix ?? "page-";
+            var scale = settings.PaginationScale > 0 ? settings.PaginationScale : 1.0;
+            var sb = new StringBuilder();
+
+            sb.AppendLine();
+            sb.AppendLine("/* Pagination CSS */");
+
+            // CSS variable for scale
+            sb.AppendLine(":root {");
+            sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo, "    --{0}scale: {1:F2};", prefix, scale));
+            sb.AppendLine("}");
+
+            // Staging area - hidden for measurement by client-side JavaScript
+            sb.AppendLine($".{prefix}staging {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    left: -9999px;");
+            sb.AppendLine("    visibility: hidden;");
+            sb.AppendLine("}");
+
+            // Main container with dark background (PDF.js style)
+            sb.AppendLine($".{prefix}container {{");
+            sb.AppendLine("    display: flex;");
+            sb.AppendLine("    flex-direction: column;");
+            sb.AppendLine("    align-items: center;");
+            sb.AppendLine("    gap: 20px;");
+            sb.AppendLine("    padding: 20px;");
+            sb.AppendLine("    background: #525659;");
+            sb.AppendLine("    min-height: 100vh;");
+            sb.AppendLine("}");
+
+            // Page box with shadow
+            sb.AppendLine($".{prefix}box {{");
+            sb.AppendLine("    background: white;");
+            sb.AppendLine("    box-shadow: 0 2px 8px rgba(0,0,0,0.3);");
+            sb.AppendLine("    position: relative;");
+            sb.AppendLine("    overflow: hidden;");
+            sb.AppendLine("    box-sizing: border-box;");
+            sb.AppendLine("}");
+
+            // Content area within page
+            sb.AppendLine($".{prefix}content {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    overflow: hidden;");
+            sb.AppendLine("    transform-origin: top left;");
+            sb.AppendLine("}");
+
+            // Page number indicator
+            sb.AppendLine($".{prefix}number {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    bottom: 8px;");
+            sb.AppendLine("    width: 100%;");
+            sb.AppendLine("    text-align: center;");
+            sb.AppendLine("    font-size: 11px;");
+            sb.AppendLine("    color: #666;");
+            sb.AppendLine("    pointer-events: none;");
+            sb.AppendLine("}");
+
+            // Page break marker (rendered by client-side as separator)
+            sb.AppendLine($".{prefix}break {{");
+            sb.AppendLine("    display: none;"); // Hidden in staging; processed by pagination engine
+            sb.AppendLine("}");
+
+            // Column break marker
+            sb.AppendLine($".{prefix}column-break {{");
+            sb.AppendLine("    display: none;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
         private static object ConvertToHtmlTransform(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
@@ -1181,10 +1321,10 @@ namespace Docxodus
                 return ProcessTab(element);
             }
 
-            // Transform w:br to h:br.
+            // Transform w:br to h:br (or page break div in pagination mode).
             if (element.Name == W.br || element.Name == W.cr)
             {
-                return ProcessBreak(element);
+                return ProcessBreak(element, settings);
             }
 
             // Transform w:noBreakHyphen to '-'
@@ -2226,8 +2366,29 @@ namespace Docxodus
             return span;
         }
 
-        private static object ProcessBreak(XElement element)
+        private static object ProcessBreak(XElement element, WmlToHtmlConverterSettings settings)
         {
+            // Check for page break (w:br with w:type="page")
+            var breakType = (string)element.Attribute(W.type);
+
+            // In pagination mode, emit a page break marker div for page breaks
+            if (settings.RenderPagination == PaginationMode.Paginated && breakType == "page")
+            {
+                var prefix = settings.PaginationCssClassPrefix ?? "page-";
+                return new XElement(Xhtml.div,
+                    new XAttribute("class", prefix + "break"),
+                    new XAttribute("data-page-break", "true"));
+            }
+
+            // Column breaks - also mark for pagination but render as line break normally
+            if (settings.RenderPagination == PaginationMode.Paginated && breakType == "column")
+            {
+                var prefix = settings.PaginationCssClassPrefix ?? "page-";
+                return new XElement(Xhtml.div,
+                    new XAttribute("class", prefix + "column-break"),
+                    new XAttribute("data-column-break", "true"));
+            }
+
             XElement span = null;
             var tabWidth = (decimal?) element.Attribute(PtOpenXml.TabWidth);
             if (tabWidth != null)
@@ -2364,7 +2525,54 @@ namespace Docxodus
                 }
             }
 
+            // Add pagination-related data attributes when pagination is enabled
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                AddPaginationDataAttributes(element, paragraph);
+            }
+
             return paragraph;
+        }
+
+        /// <summary>
+        /// Adds pagination-related data attributes to the HTML paragraph element.
+        /// These attributes help the client-side pagination engine make better decisions.
+        /// </summary>
+        private static void AddPaginationDataAttributes(XElement wordParagraph, XElement htmlParagraph)
+        {
+            var pPr = wordParagraph.Element(W.pPr);
+            if (pPr == null) return;
+
+            // w:keepNext - keep this paragraph with the next one on the same page
+            var keepNext = pPr.Element(W.keepNext);
+            if (keepNext != null && ((string)keepNext.Attribute(W.val) == null || keepNext.Attribute(W.val).ToBoolean() == true))
+            {
+                htmlParagraph.Add(new XAttribute("data-keep-with-next", "true"));
+            }
+
+            // w:keepLines - keep all lines of this paragraph together on one page
+            var keepLines = pPr.Element(W.keepLines);
+            if (keepLines != null && ((string)keepLines.Attribute(W.val) == null || keepLines.Attribute(W.val).ToBoolean() == true))
+            {
+                htmlParagraph.Add(new XAttribute("data-keep-lines", "true"));
+            }
+
+            // w:pageBreakBefore - force a page break before this paragraph
+            var pageBreakBefore = pPr.Element(W.pageBreakBefore);
+            if (pageBreakBefore != null && ((string)pageBreakBefore.Attribute(W.val) == null || pageBreakBefore.Attribute(W.val).ToBoolean() == true))
+            {
+                htmlParagraph.Add(new XAttribute("data-page-break-before", "true"));
+            }
+
+            // w:widowControl - control widow/orphan lines
+            var widowControl = pPr.Element(W.widowControl);
+            if (widowControl != null)
+            {
+                var val = widowControl.Attribute(W.val);
+                // If val is null or true, widow control is enabled
+                bool isEnabled = val == null || val.ToBoolean() == true;
+                htmlParagraph.Add(new XAttribute("data-widow-control", isEnabled ? "true" : "false"));
+            }
         }
 
         private static object ProcessTable(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
@@ -2679,9 +2887,8 @@ namespace Docxodus
 
         private static object CreateSectionDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
         {
-            // note: when building a paging html converter, need to attend to new sections with page breaks here.
-            // This code conflates adjacent sections if they have identical formatting, which is not an issue
-            // for the non-paging transform.
+            // Group elements by section. In pagination mode, we preserve section boundaries.
+            // Without pagination, adjacent sections with identical formatting are conflated.
             var groupedIntoDivs = element
                 .Elements()
                 .GroupAdjacent(e => {
@@ -2689,32 +2896,73 @@ namespace Docxodus
                     return sectAnnotation != null ? sectAnnotation.SectionElement.ToString() : "";
                 });
 
-            // note: when creating a paging html converter, need to pay attention to w:rtlGutter element.
+            int sectionIndex = 0;
             var divList = groupedIntoDivs
                 .Select(g =>
                 {
-                    var sectPr = g.First().Annotation<SectionAnnotation>();
+                    var sectAnnotation = g.First().Annotation<SectionAnnotation>();
                     XElement bidi = null;
-                    if (sectPr != null)
+                    PageDimensions dims = null;
+
+                    if (sectAnnotation != null)
                     {
-                        bidi = sectPr
+                        bidi = sectAnnotation
                             .SectionElement
                             .Elements(W.bidi)
                             .FirstOrDefault(b => b.Attribute(W.val) == null || b.Attribute(W.val).ToBoolean() == true);
+
+                        // Parse page dimensions for pagination mode
+                        if (settings.RenderPagination == PaginationMode.Paginated)
+                        {
+                            dims = PageDimensions.FromSectionProperties(sectAnnotation.SectionElement);
+                        }
                     }
-                    if (sectPr == null || bidi == null)
+
+                    var div = new XElement(Xhtml.div,
+                        bidi != null ? new XAttribute("dir", "rtl") : null,
+                        CreateBorderDivs(wordDoc, settings, g));
+
+                    // Add pagination data attributes when enabled
+                    if (settings.RenderPagination == PaginationMode.Paginated)
                     {
-                        var div = new XElement(Xhtml.div, CreateBorderDivs(wordDoc, settings, g));
-                        return div;
+                        div.Add(new XAttribute("data-section-index", sectionIndex));
+
+                        if (dims != null)
+                        {
+                            div.Add(new XAttribute("data-page-width", dims.PageWidthPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                            div.Add(new XAttribute("data-page-height", dims.PageHeightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                            div.Add(new XAttribute("data-content-width", dims.ContentWidthPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                            div.Add(new XAttribute("data-content-height", dims.ContentHeightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                            div.Add(new XAttribute("data-margin-top", dims.MarginTopPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                            div.Add(new XAttribute("data-margin-right", dims.MarginRightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                            div.Add(new XAttribute("data-margin-bottom", dims.MarginBottomPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                            div.Add(new XAttribute("data-margin-left", dims.MarginLeftPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                        }
                     }
-                    else
-                    {
-                        var div = new XElement(Xhtml.div,
-                            new XAttribute("dir", "rtl"),
-                            CreateBorderDivs(wordDoc, settings, g));
-                        return div;
-                    }
-                });
+
+                    sectionIndex++;
+                    return div;
+                })
+                .ToList();
+
+            // In pagination mode, wrap content in staging structure for client-side processing
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                var prefix = settings.PaginationCssClassPrefix ?? "page-";
+                return new object[]
+                {
+                    // Staging area containing the content (hidden by CSS for client-side measurement)
+                    new XElement(Xhtml.div,
+                        new XAttribute("id", "pagination-staging"),
+                        new XAttribute("class", prefix + "staging"),
+                        divList),
+                    // Container where paginated content will be rendered by client-side JavaScript
+                    new XElement(Xhtml.div,
+                        new XAttribute("id", "pagination-container"),
+                        new XAttribute("class", prefix + "container"))
+                };
+            }
+
             return divList;
         }
 
@@ -4271,6 +4519,96 @@ namespace Docxodus
         private class SectionAnnotation
         {
             public XElement SectionElement;
+        }
+
+        /// <summary>
+        /// Represents page dimensions extracted from w:sectPr.
+        /// All values are in points (1/72 inch) for CSS compatibility.
+        /// </summary>
+        private class PageDimensions
+        {
+            /// <summary>Page width in points (from w:pgSz w:w)</summary>
+            public double PageWidthPt { get; set; }
+
+            /// <summary>Page height in points (from w:pgSz w:h)</summary>
+            public double PageHeightPt { get; set; }
+
+            /// <summary>Top margin in points (from w:pgMar w:top)</summary>
+            public double MarginTopPt { get; set; }
+
+            /// <summary>Right margin in points (from w:pgMar w:right)</summary>
+            public double MarginRightPt { get; set; }
+
+            /// <summary>Bottom margin in points (from w:pgMar w:bottom)</summary>
+            public double MarginBottomPt { get; set; }
+
+            /// <summary>Left margin in points (from w:pgMar w:left)</summary>
+            public double MarginLeftPt { get; set; }
+
+            /// <summary>Header distance in points (from w:pgMar w:header)</summary>
+            public double HeaderPt { get; set; }
+
+            /// <summary>Footer distance in points (from w:pgMar w:footer)</summary>
+            public double FooterPt { get; set; }
+
+            /// <summary>Content width (page width minus left and right margins)</summary>
+            public double ContentWidthPt => PageWidthPt - MarginLeftPt - MarginRightPt;
+
+            /// <summary>Content height (page height minus top and bottom margins)</summary>
+            public double ContentHeightPt => PageHeightPt - MarginTopPt - MarginBottomPt;
+
+            /// <summary>
+            /// Creates PageDimensions from a w:sectPr element.
+            /// Returns US Letter defaults (8.5"x11" with 1" margins) if sectPr is null.
+            /// </summary>
+            public static PageDimensions FromSectionProperties(XElement sectPr)
+            {
+                // Default to US Letter: 8.5" x 11" (612pt x 792pt) with 1" margins (72pt)
+                var dims = new PageDimensions
+                {
+                    PageWidthPt = 612,   // 8.5 inches
+                    PageHeightPt = 792,  // 11 inches
+                    MarginTopPt = 72,    // 1 inch
+                    MarginRightPt = 72,
+                    MarginBottomPt = 72,
+                    MarginLeftPt = 72,
+                    HeaderPt = 36,       // 0.5 inch
+                    FooterPt = 36
+                };
+
+                if (sectPr == null) return dims;
+
+                // Parse page size (w:pgSz)
+                // w:w and w:h are in twips (1/20 of a point, or 1/1440 of an inch)
+                var pgSz = sectPr.Element(W.pgSz);
+                if (pgSz != null)
+                {
+                    if (int.TryParse((string)pgSz.Attribute(W._w), out int w))
+                        dims.PageWidthPt = w / 20.0;
+                    if (int.TryParse((string)pgSz.Attribute(W.h), out int h))
+                        dims.PageHeightPt = h / 20.0;
+                }
+
+                // Parse page margins (w:pgMar)
+                var pgMar = sectPr.Element(W.pgMar);
+                if (pgMar != null)
+                {
+                    if (int.TryParse((string)pgMar.Attribute(W.top), out int top))
+                        dims.MarginTopPt = top / 20.0;
+                    if (int.TryParse((string)pgMar.Attribute(W.right), out int right))
+                        dims.MarginRightPt = right / 20.0;
+                    if (int.TryParse((string)pgMar.Attribute(W.bottom), out int bottom))
+                        dims.MarginBottomPt = bottom / 20.0;
+                    if (int.TryParse((string)pgMar.Attribute(W.left), out int left))
+                        dims.MarginLeftPt = left / 20.0;
+                    if (int.TryParse((string)pgMar.Attribute(W.header), out int header))
+                        dims.HeaderPt = header / 20.0;
+                    if (int.TryParse((string)pgMar.Attribute(W.footer), out int footer))
+                        dims.FooterPt = footer / 20.0;
+                }
+
+                return dims;
+            }
         }
 
         private static void AnnotateForSections(WordprocessingDocument wordDoc)
