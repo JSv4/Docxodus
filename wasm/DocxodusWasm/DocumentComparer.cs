@@ -147,11 +147,32 @@ public partial class DocumentComparer
 
     /// <summary>
     /// Get revisions from a compared document as JSON.
+    /// Uses default move detection settings.
     /// </summary>
     /// <param name="comparedDocBytes">A document that has been through comparison (has tracked changes)</param>
     /// <returns>JSON array of revisions, or JSON error object</returns>
     [JSExport]
     public static string GetRevisionsJson(byte[] comparedDocBytes)
+    {
+        return GetRevisionsJsonWithOptions(comparedDocBytes, true, 0.8, 3, false);
+    }
+
+    /// <summary>
+    /// Get revisions from a compared document as JSON with configurable move detection.
+    /// </summary>
+    /// <param name="comparedDocBytes">A document that has been through comparison (has tracked changes)</param>
+    /// <param name="detectMoves">Whether to detect and mark moved content (default: true)</param>
+    /// <param name="moveSimilarityThreshold">Jaccard similarity threshold 0.0-1.0 (default: 0.8)</param>
+    /// <param name="moveMinimumWordCount">Minimum word count for move detection (default: 3)</param>
+    /// <param name="caseInsensitive">Whether similarity matching ignores case (default: false)</param>
+    /// <returns>JSON array of revisions, or JSON error object</returns>
+    [JSExport]
+    public static string GetRevisionsJsonWithOptions(
+        byte[] comparedDocBytes,
+        bool detectMoves,
+        double moveSimilarityThreshold,
+        int moveMinimumWordCount,
+        bool caseInsensitive)
     {
         if (comparedDocBytes == null || comparedDocBytes.Length == 0)
         {
@@ -161,7 +182,14 @@ public partial class DocumentComparer
         try
         {
             var doc = new WmlDocument("compared.docx", comparedDocBytes);
-            var revisions = WmlComparer.GetRevisions(doc, new WmlComparerSettings());
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = detectMoves,
+                MoveSimilarityThreshold = moveSimilarityThreshold,
+                MoveMinimumWordCount = moveMinimumWordCount,
+                CaseInsensitive = caseInsensitive
+            };
+            var revisions = WmlComparer.GetRevisions(doc, settings);
 
             var response = new RevisionsResponse
             {
@@ -170,7 +198,9 @@ public partial class DocumentComparer
                     Author = r.Author ?? "",
                     Date = r.Date ?? "",
                     RevisionType = r.RevisionType.ToString(),
-                    Text = r.Text ?? ""
+                    Text = r.Text ?? "",
+                    MoveGroupId = r.MoveGroupId,
+                    IsMoveSource = r.IsMoveSource
                 }).ToArray()
             };
 

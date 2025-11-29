@@ -6,6 +6,7 @@ import type {
   ErrorResponse,
   CompareResult,
   DocxodusWasmExports,
+  GetRevisionsOptions,
 } from "./types.js";
 
 import {
@@ -13,6 +14,10 @@ import {
   RevisionType,
   isInsertion,
   isDeletion,
+  isMove,
+  isMoveSource,
+  isMoveDestination,
+  findMovePair,
 } from "./types.js";
 
 export type {
@@ -22,9 +27,19 @@ export type {
   VersionInfo,
   ErrorResponse,
   CompareResult,
+  GetRevisionsOptions,
 };
 
-export { CommentRenderMode, RevisionType, isInsertion, isDeletion };
+export {
+  CommentRenderMode,
+  RevisionType,
+  isInsertion,
+  isDeletion,
+  isMove,
+  isMoveSource,
+  isMoveDestination,
+  findMovePair,
+};
 
 let wasmExports: DocxodusWasmExports | null = null;
 let initPromise: Promise<void> | null = null;
@@ -303,16 +318,47 @@ export async function compareDocumentsToHtml(
  * Get revisions from a compared document.
  *
  * @param document - A document that has been through comparison (has tracked changes)
+ * @param options - Optional move detection configuration
  * @returns Array of revisions
  * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * // Default settings (move detection enabled, 80% threshold)
+ * const revisions = await getRevisions(comparedDoc);
+ *
+ * // Custom move detection settings
+ * const revisions = await getRevisions(comparedDoc, {
+ *   detectMoves: true,
+ *   moveSimilarityThreshold: 0.9,  // Require 90% word overlap
+ *   moveMinimumWordCount: 5,       // Only consider phrases of 5+ words
+ *   caseInsensitive: true          // Ignore case when matching
+ * });
+ *
+ * // Disable move detection entirely
+ * const revisions = await getRevisions(comparedDoc, { detectMoves: false });
+ * ```
  */
 export async function getRevisions(
-  document: File | Uint8Array
+  document: File | Uint8Array,
+  options?: GetRevisionsOptions
 ): Promise<Revision[]> {
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
 
-  const result = exports.DocumentComparer.GetRevisionsJson(bytes);
+  // Apply defaults for move detection options
+  const detectMoves = options?.detectMoves ?? true;
+  const moveSimilarityThreshold = options?.moveSimilarityThreshold ?? 0.8;
+  const moveMinimumWordCount = options?.moveMinimumWordCount ?? 3;
+  const caseInsensitive = options?.caseInsensitive ?? false;
+
+  const result = exports.DocumentComparer.GetRevisionsJsonWithOptions(
+    bytes,
+    detectMoves,
+    moveSimilarityThreshold,
+    moveMinimumWordCount,
+    caseInsensitive
+  );
 
   if (isErrorResponse(result)) {
     const error = parseError(result);
@@ -325,6 +371,8 @@ export async function getRevisions(
     date: r.Date || r.date,
     revisionType: r.RevisionType || r.revisionType,
     text: r.Text || r.text,
+    moveGroupId: r.MoveGroupId ?? r.moveGroupId,
+    isMoveSource: r.IsMoveSource ?? r.isMoveSource,
   }));
 }
 

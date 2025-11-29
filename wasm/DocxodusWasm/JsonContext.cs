@@ -40,4 +40,18 @@ public class RevisionInfo
     public string Date { get; set; } = "";
     public string RevisionType { get; set; } = "";
     public string Text { get; set; } = "";
+
+    /// <summary>
+    /// For Moved revisions, this ID links the source and destination.
+    /// Both the "from" and "to" revisions share the same MoveGroupId.
+    /// Null for non-move revisions.
+    /// </summary>
+    public int? MoveGroupId { get; set; }
+
+    /// <summary>
+    /// For Moved revisions: true = source (moved FROM here),
+    /// false = destination (moved TO here).
+    /// Null for non-move revisions.
+    /// </summary>
+    public bool? IsMoveSource { get; set; }
 }

@@ -31,11 +31,26 @@ All notable changes to this project will be documented in this file.
   - DOCX to HTML conversion
   - React hooks: `useDocxodus`, `useConversion`, `useComparison`
   - Build script: `scripts/build-wasm.sh`
+- **Move Detection in WmlComparer** - Detect relocated content as moves instead of separate deletion/insertion pairs
+  - New `Moved` value in `WmlComparerRevisionType` enum
+  - New properties on `WmlComparerRevision`: `MoveGroupId` (links source/destination), `IsMoveSource` (true=from, false=to)
+  - New settings in `WmlComparerSettings`:
+    - `DetectMoves`: Enable/disable move detection (default: true)
+    - `MoveSimilarityThreshold`: Jaccard similarity threshold 0.0-1.0 (default: 0.8)
+    - `MoveMinimumWordCount`: Minimum words to consider for move (default: 3)
+  - Uses word-level Jaccard similarity for accurate matching
+  - Respects `CaseInsensitive` setting for similarity comparison
+  - Full WASM/npm support with new TypeScript helpers:
+    - `RevisionType.Moved` enum value
+    - `isMove()`, `isMoveSource()`, `isMoveDestination()` type guards
+    - `findMovePair()` function to find linked move revisions
+    - `moveGroupId` and `isMoveSource` properties on `Revision` interface
 - **Improved Revision API** - Better TypeScript support for the `getRevisions()` API
-  - `RevisionType` enum with `Inserted` and `Deleted` values for type-safe comparisons
-  - `isInsertion()` and `isDeletion()` helper functions for filtering revisions
+  - `RevisionType` enum with `Inserted`, `Deleted`, and `Moved` values for type-safe comparisons
+  - `isInsertion()`, `isDeletion()`, `isMove()`, `isMoveSource()`, `isMoveDestination()` helper functions
+  - `findMovePair()` function to find the matching revision for a move
   - Comprehensive JSDoc documentation on the `Revision` interface
-  - All types are properly exported from the package (`import { RevisionType, isInsertion, isDeletion } from 'docxodus'`)
+  - All types are properly exported from the package
 - `SkiaSharpHelpers.cs` - Color utilities for SkiaSharp compatibility
 - `GetPackage()` extension method in `PtOpenXmlUtil.cs` for SDK 3.x Package access
 - `SkiaSharp.NativeAssets.Linux.NoDependencies` package for Linux runtime support

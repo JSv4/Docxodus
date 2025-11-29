@@ -63,6 +63,25 @@ namespace Docxodus
 
         public DirectoryInfo DebugTempFileDi;
 
+        /// <summary>
+        /// Whether to detect and mark moved content in GetRevisions(). Default: true.
+        /// When enabled, deletion/insertion pairs with similar text are marked as moves.
+        /// </summary>
+        public bool DetectMoves = true;
+
+        /// <summary>
+        /// Minimum Jaccard similarity (0.0 to 1.0) to consider content as moved.
+        /// Default: 0.8 (80% word overlap required).
+        /// </summary>
+        public double MoveSimilarityThreshold = 0.8;
+
+        /// <summary>
+        /// Minimum word count for content to be considered for move detection.
+        /// Very short text is excluded to avoid false positives.
+        /// Default: 3.
+        /// </summary>
+        public int MoveMinimumWordCount = 3;
+
         public WmlComparerSettings()
         {
             // note that , and . are processed explicitly to handle cases where they are in a number or word
@@ -3318,6 +3337,7 @@ namespace Docxodus
         {
             Inserted,
             Deleted,
+            Moved,
         }
 
         public class WmlComparerRevision
@@ -3330,6 +3350,20 @@ namespace Docxodus
             public XElement RevisionXElement;
             public Uri PartUri;
             public string PartContentType;
+
+            /// <summary>
+            /// For Moved revisions, this ID links the source and destination.
+            /// Both the "from" and "to" revisions share the same MoveGroupId.
+            /// Null for non-move revisions.
+            /// </summary>
+            public int? MoveGroupId;
+
+            /// <summary>
+            /// For Moved revisions: true = this is the source (content moved FROM here),
+            /// false = this is the destination (content moved TO here).
+            /// Null for non-move revisions.
+            /// </summary>
+            public bool? IsMoveSource;
         }
 
         private static XName[] RevElementsWithNoText = new XName[] {
@@ -3421,6 +3455,10 @@ namespace Docxodus
                     var footnotesRevisionList = GetFootnoteEndnoteRevisionList(wDoc.MainDocumentPart.FootnotesPart, W.footnote, settings);
                     var endnotesRevisionList = GetFootnoteEndnoteRevisionList(wDoc.MainDocumentPart.EndnotesPart, W.endnote, settings);
                     var finalRevisionList = mainDocPartRevisionList.Concat(footnotesRevisionList).Concat(endnotesRevisionList).ToList();
+
+                    // Post-process to detect and mark moved content
+                    DetectMoves(finalRevisionList, settings);
+
                     return finalRevisionList;
                 }
             }
@@ -3501,6 +3539,118 @@ namespace Docxodus
                     revisionsForPart.Add(item);
             }
             return revisionsForPart;
+        }
+
+        /// <summary>
+        /// Post-process revisions to detect and mark moved content.
+        /// Matches deletions with insertions by text similarity using Jaccard coefficient.
+        /// </summary>
+        private static void DetectMoves(List<WmlComparerRevision> revisions, WmlComparerSettings settings)
+        {
+            if (!settings.DetectMoves)
+                return;
+
+            // Separate deletions and insertions that meet minimum word count
+            var deletions = revisions
+                .Where(r => r.RevisionType == WmlComparerRevisionType.Deleted)
+                .Where(r => !string.IsNullOrWhiteSpace(r.Text))
+                .Where(r => CountWords(r.Text, settings) >= settings.MoveMinimumWordCount)
+                .ToList();
+
+            var insertions = revisions
+                .Where(r => r.RevisionType == WmlComparerRevisionType.Inserted)
+                .Where(r => !string.IsNullOrWhiteSpace(r.Text))
+                .Where(r => CountWords(r.Text, settings) >= settings.MoveMinimumWordCount)
+                .ToList();
+
+            if (deletions.Count == 0 || insertions.Count == 0)
+                return;
+
+            int nextMoveGroupId = 1;
+            var matchedInsertions = new HashSet<WmlComparerRevision>();
+
+            // For each deletion, find the best matching insertion
+            foreach (var deletion in deletions)
+            {
+                WmlComparerRevision bestMatch = null;
+                double bestSimilarity = 0;
+
+                foreach (var insertion in insertions)
+                {
+                    if (matchedInsertions.Contains(insertion))
+                        continue;
+
+                    var similarity = CalculateJaccardSimilarity(deletion.Text, insertion.Text, settings);
+
+                    if (similarity >= settings.MoveSimilarityThreshold && similarity > bestSimilarity)
+                    {
+                        bestSimilarity = similarity;
+                        bestMatch = insertion;
+                    }
+                }
+
+                if (bestMatch != null)
+                {
+                    // Mark as move pair
+                    deletion.RevisionType = WmlComparerRevisionType.Moved;
+                    deletion.MoveGroupId = nextMoveGroupId;
+                    deletion.IsMoveSource = true;
+
+                    bestMatch.RevisionType = WmlComparerRevisionType.Moved;
+                    bestMatch.MoveGroupId = nextMoveGroupId;
+                    bestMatch.IsMoveSource = false;
+
+                    matchedInsertions.Add(bestMatch);
+                    nextMoveGroupId++;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Calculate Jaccard similarity between two strings at word level.
+        /// Returns value between 0.0 (no overlap) and 1.0 (identical word sets).
+        /// </summary>
+        private static double CalculateJaccardSimilarity(string text1, string text2, WmlComparerSettings settings)
+        {
+            if (string.IsNullOrWhiteSpace(text1) || string.IsNullOrWhiteSpace(text2))
+                return 0.0;
+
+            var words1 = TokenizeForComparison(text1, settings);
+            var words2 = TokenizeForComparison(text2, settings);
+
+            if (words1.Count == 0 || words2.Count == 0)
+                return 0.0;
+
+            var intersection = words1.Intersect(words2).Count();
+            var union = words1.Union(words2).Count();
+
+            return union == 0 ? 0.0 : (double)intersection / union;
+        }
+
+        /// <summary>
+        /// Tokenize text into words for comparison, applying normalization settings.
+        /// </summary>
+        private static HashSet<string> TokenizeForComparison(string text, WmlComparerSettings settings)
+        {
+            var separators = settings.WordSeparators ?? new[] { ' ', '-', ')', '(', ';', ',' };
+            var words = text.Split(separators, StringSplitOptions.RemoveEmptyEntries);
+
+            if (settings.CaseInsensitive)
+                words = words.Select(w => w.ToUpperInvariant()).ToArray();
+
+            return new HashSet<string>(words);
+        }
+
+        /// <summary>
+        /// Count words in text using the configured word separators.
+        /// </summary>
+        private static int CountWords(string text, WmlComparerSettings settings)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+                return 0;
+
+            var separators = settings.WordSeparators ?? new[] { ' ', '-', ')', '(', ';', ',' };
+            return text.Split(separators, StringSplitOptions.RemoveEmptyEntries).Length;
         }
 
         // prohibit

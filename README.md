@@ -47,9 +47,15 @@ var settings = new WmlComparerSettings
 
 var result = WmlComparer.Compare(original, modified, settings);
 
-// Get list of revisions
+// Get list of revisions (with move detection)
 var revisions = WmlComparer.GetRevisions(result, settings);
-Console.WriteLine($"Found {revisions.Count} revisions");
+foreach (var rev in revisions)
+{
+    if (rev.RevisionType == WmlComparer.WmlComparerRevisionType.Moved)
+        Console.WriteLine($"Moved (group {rev.MoveGroupId}): {rev.Text}");
+    else
+        Console.WriteLine($"{rev.RevisionType}: {rev.Text}");
+}
 
 // Save the redlined document
 result.SaveAs("redline.docx");
@@ -148,6 +154,9 @@ dotnet run --project tools/redline/redline.csproj -- --help
 ## Features
 
 - **WmlComparer** - Compare two DOCX files and generate redlines with tracked changes
+  - **Move Detection** - Automatically detects when content is relocated (not just deleted and re-inserted)
+  - Configurable similarity threshold and minimum word count
+  - Links move pairs via `MoveGroupId` for easy tracking
 - **WmlToHtmlConverter** / **HtmlToWmlConverter** - Bidirectional DOCX ↔ HTML conversion
 - **DocumentBuilder** - Merge and split DOCX files
 - **DocumentAssembler** - Template population from XML data
@@ -165,7 +174,16 @@ npm install docxodus
 ```
 
 ```javascript
-import { initialize, convertDocxToHtml, compareDocuments, CommentRenderMode } from 'docxodus';
+import {
+  initialize,
+  convertDocxToHtml,
+  compareDocuments,
+  getRevisions,
+  isMove,
+  isMoveSource,
+  findMovePair,
+  CommentRenderMode
+} from 'docxodus';
 
 await initialize();
 
@@ -176,6 +194,15 @@ const html = await convertDocxToHtml(docxFile, {
 
 // Compare two documents
 const redlinedDocx = await compareDocuments(originalFile, modifiedFile);
+
+// Get revisions with move detection
+const revisions = await getRevisions(redlinedDocx);
+for (const rev of revisions.filter(isMove)) {
+  const pair = findMovePair(rev, revisions);
+  if (isMoveSource(rev)) {
+    console.log(`Content moved from: "${rev.text}" to: "${pair?.text}"`);
+  }
+}
 ```
 
 See the [npm package documentation](docs/npm-package.md) for full API reference, React hooks, and usage examples.
