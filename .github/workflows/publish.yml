@@ -209,34 +209,20 @@ jobs:
             echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build WASM
-        run: |
-          cd wasm/DocxodusWasm
-          dotnet publish -c Release
-
       - name: Install npm dependencies
         run: |
           cd npm
           npm ci
 
-      - name: Build TypeScript
-        run: |
-          cd npm
-          npm run build:ts
-
-      - name: Copy WASM to dist
-        run: |
-          mkdir -p npm/dist/wasm
-          cp -r wasm/DocxodusWasm/bin/Release/net8.0/browser-wasm/AppBundle/_framework npm/dist/wasm/
-          cp wasm/DocxodusWasm/main.js npm/dist/wasm/
-
       - name: Update package version
         run: |
           cd npm
           npm version ${{ steps.version.outputs.VERSION }} --no-git-tag-version
-          # Update CDN version in index.ts to match
-          sed -i "s/const PACKAGE_VERSION = \".*\"/const PACKAGE_VERSION = \"${{ steps.version.outputs.VERSION }}\"/" src/index.ts
-          npm run build:ts
+
+      - name: Build npm package (WASM + TypeScript)
+        run: |
+          cd npm
+          npm run build
 
       - name: Publish to npm
         run: |

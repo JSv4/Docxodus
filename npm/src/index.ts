@@ -25,29 +25,38 @@ let wasmExports: DocxodusWasmExports | null = null;
 let initPromise: Promise<void> | null = null;
 
 /**
- * Package version - used for CDN URL
+ * Derive the WASM base path from this module's URL.
+ * Works whether loaded from node_modules, CDN, or bundled.
  */
-const PACKAGE_VERSION = "0.0.0";
+function getDefaultWasmBasePath(): string {
+  try {
+    // import.meta.url gives us the URL of this module
+    // e.g., "https://cdn.jsdelivr.net/npm/docxodus@3.1.1/dist/index.js"
+    // or "file:///path/to/node_modules/docxodus/dist/index.js"
+    const moduleUrl = import.meta.url;
 
-/**
- * CDN base URLs for WASM files (in order of preference)
- */
-const CDN_URLS = [
-  `https://cdn.jsdelivr.net/npm/docxodus@${PACKAGE_VERSION}/dist/wasm/`,
-  `https://unpkg.com/docxodus@${PACKAGE_VERSION}/dist/wasm/`,
-];
+    // Remove the filename to get the directory
+    const baseDir = moduleUrl.substring(0, moduleUrl.lastIndexOf('/') + 1);
+
+    // WASM files are in ./wasm/ relative to dist/
+    return baseDir + "wasm/";
+  } catch {
+    // Fallback if import.meta.url is not available
+    return "";
+  }
+}
 
 /**
  * Current base path for WASM files.
- * Empty string means use CDN (default).
+ * Empty string means auto-detect from module URL.
  */
 export let wasmBasePath = "";
 
 /**
  * Set custom base path for WASM files.
- * Pass empty string or don't call this to use CDN (recommended).
+ * Pass empty string or don't call this to auto-detect from module location.
  *
- * @param path - Custom path to WASM files, or empty string for CDN
+ * @param path - Custom path to WASM files, or empty string for auto-detection
  */
 export function setWasmBasePath(path: string): void {
   wasmBasePath = path && !path.endsWith("/") ? path + "/" : path;
@@ -58,10 +67,11 @@ export function setWasmBasePath(path: string): void {
  * Must be called before using any conversion/comparison functions.
  * Safe to call multiple times - will only initialize once.
  *
- * By default, WASM files are loaded from CDN (jsDelivr/unpkg).
+ * By default, WASM files are auto-detected from the module's location
+ * (works with CDN, npm, or local hosting).
  * Pass a basePath to load from a custom location instead.
  *
- * @param basePath - Optional custom path to WASM files. Leave empty for CDN.
+ * @param basePath - Optional custom path to WASM files. Leave empty for auto-detection.
  */
 export async function initialize(basePath?: string): Promise<void> {
   if (wasmExports) return;
@@ -114,21 +124,21 @@ async function loadWasm(): Promise<void> {
     );
   }
 
-  // Try CDN URLs in order
-  const errors: string[] = [];
-  for (const cdnUrl of CDN_URLS) {
-    const success = await tryLoadFromPath(cdnUrl);
+  // Try to auto-detect from module URL (works for CDN and local imports)
+  const autoDetectedPath = getDefaultWasmBasePath();
+  if (autoDetectedPath) {
+    const success = await tryLoadFromPath(autoDetectedPath);
     if (success) {
-      wasmBasePath = cdnUrl; // Store the successful path
+      wasmBasePath = autoDetectedPath;
       return;
     }
-    errors.push(cdnUrl);
   }
 
-  // All CDN attempts failed
+  // Auto-detection failed
   throw new Error(
-    `Failed to load WASM from CDN. Tried: ${errors.join(", ")}. ` +
-    `You can host the WASM files locally and call initialize("/path/to/wasm/").`
+    `Failed to load WASM files. ` +
+    `Auto-detected path: ${autoDetectedPath || "(none)"}. ` +
+    `You can specify a custom path by calling initialize("/path/to/wasm/").`
   );
 }
 
