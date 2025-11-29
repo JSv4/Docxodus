@@ -3090,11 +3090,15 @@ namespace Docxodus
             if (txElementsPrecedingTab.Count > 1)
             {
                 var span = new XElement(Xhtml.span, txElementsPrecedingTab);
+                // Use min-width instead of width so the container expands to fit content
+                // when text is wider than the calculated tab position. This fixes issues
+                // where list numbers (e.g., "2.3") overlap with heading text because the
+                // TabWidth for text elements is 0 (due to font measurement limitations).
                 var spanStyle = new Dictionary<string, string>
                 {
                     { "display", "inline-block" },
                     { "text-indent", "0" },
-                    { "width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
+                    { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
                 };
                 span.AddAnnotation(spanStyle);
             }
@@ -3106,7 +3110,8 @@ namespace Docxodus
                     var spanStyle = element.Annotation<Dictionary<string, string>>();
                     spanStyle.AddIfMissing("display", "inline-block");
                     spanStyle.AddIfMissing("text-indent", "0");
-                    spanStyle.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth));
+                    // Use min-width instead of width to allow content to expand naturally
+                    spanStyle.AddIfMissing("min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth));
                 }
             }
             return txElementsPrecedingTab;
