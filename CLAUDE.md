@@ -113,9 +113,13 @@ DocumentBuilder.BuildDocument(sources, outputPath);
 - `MoveSimilarityThreshold` - Jaccard similarity threshold for moves (default: 0.8)
 - `MoveMinimumWordCount` - Minimum words for move detection (default: 3)
 
-Move detection in `GetRevisions()` identifies when content is relocated vs. deleted+inserted:
-- `WmlComparerRevisionType.Moved` - Revision type for moved content
-- `WmlComparerRevision.MoveGroupId` - Links source and destination revisions
+Move detection produces **native Word move markup** (`w:moveFrom`/`w:moveTo`) when `DetectMoves` is enabled:
+- The comparer analyzes deleted/inserted content blocks for similarity after LCS comparison
+- Matching pairs (≥80% Jaccard similarity by default) are converted to move markup
+- The output document contains `w:moveFromRangeStart`/`w:moveFromRangeEnd` and `w:moveToRangeStart`/`w:moveToRangeEnd` elements
+- Move pairs are linked via the `w:name` attribute (e.g., "move1")
+- `GetRevisions()` recognizes this native markup and returns `WmlComparerRevisionType.Moved` revisions
+- `WmlComparerRevision.MoveGroupId` links source and destination revisions
 - `WmlComparerRevision.IsMoveSource` - true = moved FROM here, false = moved TO here
 
 **WmlToHtmlConverter.cs / HtmlToWmlConverter.cs** - Bidirectional DOCX ↔ HTML conversion. Key settings in `WmlToHtmlConverterSettings`:
