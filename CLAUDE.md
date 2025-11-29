@@ -63,12 +63,16 @@ DocumentBuilder.BuildDocument(sources, outputPath);
 
 **WmlComparer.cs** - Compare two DOCX files, producing a document with tracked revisions. Supports nested tables and text boxes. Key settings in `WmlComparerSettings`.
 
-**WmlToHtmlConverter.cs / HtmlToWmlConverter.cs** - Bidirectional DOCX ↔ HTML conversion. Supports tracked changes rendering via `WmlToHtmlConverterSettings`:
+**WmlToHtmlConverter.cs / HtmlToWmlConverter.cs** - Bidirectional DOCX ↔ HTML conversion. Key settings in `WmlToHtmlConverterSettings`:
 - `RenderTrackedChanges` - Render insertions/deletions as `<ins>`/`<del>` instead of accepting them
 - `RenderMoveOperations` - Distinguish move operations from regular insert/delete
 - `RenderFootnotesAndEndnotes` - Include footnotes/endnotes sections in HTML output
 - `RenderHeadersAndFooters` - Include document headers/footers in HTML output
+- `RenderComments` - Render document comments in HTML output
+- `CommentRenderMode` - How to render comments: `EndnoteStyle` (default), `Inline`, or `Margin`
 - `AuthorColors` - Dictionary mapping author names to CSS colors for styling
+
+See `docs/architecture/comment_rendering.md` for detailed comment rendering documentation.
 
 **DocumentAssembler.cs** - Template population from XML data using content controls.
 
@@ -130,7 +134,7 @@ Test files are in `TestFiles/` directory with prefixes indicating their purpose:
 
 ### Current Test Status
 
-- **989 passed**, 0 failed, 1 skipped out of 990 tests (~99.9% pass rate)
+- **995 passed**, 0 failed, 1 skipped out of 996 tests (~99.9% pass rate)
 
 ### Fixed Test Failures (18 tests fixed)
 
