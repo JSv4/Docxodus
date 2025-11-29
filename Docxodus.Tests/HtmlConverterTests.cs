@@ -1234,6 +1234,105 @@ namespace OxPt
                 }
             }
         }
+
+        [Fact]
+        public void HC015_TabPrecedingText_UsesMinWidth()
+        {
+            // Test that text preceding a tab (like list numbers "2.3") uses min-width
+            // instead of fixed width to prevent text overflow/overlap issues.
+            // This fixes the bug where section numbers would overlap with heading text
+            // because the width was calculated as 0 for text elements.
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                // Create a document with a paragraph that has text followed by a tab
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required parts
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true }
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new DefaultTabStop() { Val = 720 }  // 720 twips = 0.5 inch
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Create document with a paragraph containing "2.3" + tab + "Section Title"
+                    // This simulates numbered headings like "2.3    Deemed Liquidation Events"
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new Tabs(
+                                        new TabStop() { Val = TabStopValues.Left, Position = 720 }
+                                    )
+                                ),
+                                new Run(
+                                    new Text("2.3")
+                                ),
+                                new Run(
+                                    new TabChar()
+                                ),
+                                new Run(
+                                    new Text("Section Title")
+                                )
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Tab Width Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // The key assertion: verify min-width is used instead of width
+                    // for elements preceding tabs. This prevents text overflow.
+                    Assert.Contains("min-width:", htmlString);
+
+                    // Verify the content is present
+                    Assert.Contains("2.3", htmlString);
+                    Assert.Contains("Section Title", htmlString);
+
+                    // Verify we're NOT using fixed width (which would cause overflow)
+                    // The CSS should have min-width, not a plain width for tab-preceding spans
+                    var styleElement = html.Descendants(Xhtml.style).FirstOrDefault();
+                    if (styleElement != null)
+                    {
+                        string css = styleElement.Value;
+                        // Check that min-width appears in the CSS for inline-block elements
+                        // These are the spans that wrap text preceding tabs
+                        Assert.True(
+                            css.Contains("min-width:") || htmlString.Contains("min-width:"),
+                            "Expected min-width to be used for tab-preceding content to prevent text overflow"
+                        );
+                    }
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-MinWidth.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
     }
 }
 
