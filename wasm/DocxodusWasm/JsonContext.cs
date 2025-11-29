@@ -11,6 +11,7 @@ namespace DocxodusWasm;
 [JsonSerializable(typeof(RevisionsResponse))]
 [JsonSerializable(typeof(RevisionInfo))]
 [JsonSerializable(typeof(RevisionInfo[]))]
+[JsonSerializable(typeof(FormatChangeInfo))]
 internal partial class DocxodusJsonContext : JsonSerializerContext
 {
 }
@@ -54,4 +55,31 @@ public class RevisionInfo
     /// Null for non-move revisions.
     /// </summary>
     public bool? IsMoveSource { get; set; }
+
+    /// <summary>
+    /// For FormatChanged revisions: details about what formatting changed.
+    /// Null for non-format-change revisions.
+    /// </summary>
+    public FormatChangeInfo? FormatChange { get; set; }
+}
+
+/// <summary>
+/// Details about formatting changes for FormatChanged revisions.
+/// </summary>
+public class FormatChangeInfo
+{
+    /// <summary>
+    /// Dictionary of old property names and values.
+    /// </summary>
+    public Dictionary<string, string>? OldProperties { get; set; }
+
+    /// <summary>
+    /// Dictionary of new property names and values.
+    /// </summary>
+    public Dictionary<string, string>? NewProperties { get; set; }
+
+    /// <summary>
+    /// List of property names that changed (e.g., "bold", "italic", "fontSize").
+    /// </summary>
+    public List<string>? ChangedPropertyNames { get; set; }
 }

@@ -7,6 +7,7 @@ import type {
   CompareResult,
   DocxodusWasmExports,
   GetRevisionsOptions,
+  FormatChangeDetails,
 } from "./types.js";
 
 import {
@@ -18,6 +19,7 @@ import {
   isMoveSource,
   isMoveDestination,
   findMovePair,
+  isFormatChange,
 } from "./types.js";
 
 export type {
@@ -28,6 +30,7 @@ export type {
   ErrorResponse,
   CompareResult,
   GetRevisionsOptions,
+  FormatChangeDetails,
 };
 
 export {
@@ -39,6 +42,7 @@ export {
   isMoveSource,
   isMoveDestination,
   findMovePair,
+  isFormatChange,
 };
 
 let wasmExports: DocxodusWasmExports | null = null;
@@ -373,6 +377,11 @@ export async function getRevisions(
     text: r.Text || r.text,
     moveGroupId: r.MoveGroupId ?? r.moveGroupId,
     isMoveSource: r.IsMoveSource ?? r.isMoveSource,
+    formatChange: (r.FormatChange || r.formatChange) ? {
+      oldProperties: r.FormatChange?.OldProperties || r.formatChange?.oldProperties,
+      newProperties: r.FormatChange?.NewProperties || r.formatChange?.newProperties,
+      changedPropertyNames: r.FormatChange?.ChangedPropertyNames || r.formatChange?.changedPropertyNames,
+    } : undefined,
   }));
 }
 

@@ -82,6 +82,14 @@ namespace Docxodus
         /// </summary>
         public int MoveMinimumWordCount = 3;
 
+        /// <summary>
+        /// Enable detection of formatting-only changes (bold, italic, font size, etc.).
+        /// When enabled, Equal atoms with different run properties (w:rPr) will be marked
+        /// as FormatChanged and emit native w:rPrChange markup.
+        /// Default: true.
+        /// </summary>
+        public bool DetectFormatChanges = true;
+
         public WmlComparerSettings()
         {
             // note that , and . are processed explicitly to handle cases where they are in a number or word
@@ -1739,8 +1747,12 @@ namespace Docxodus
             // instead of regular w:del/w:ins. This runs after LCS but before XML reconstruction.
             DetectMovesInAtomList(listOfComparisonUnitAtoms, settings);
 
+            // Detect format changes in Equal atoms - converts atoms with different rPr to FormatChanged status.
+            // This enables emission of native w:rPrChange markup for formatting-only changes.
+            DetectFormatChangesInAtomList(listOfComparisonUnitAtoms, settings);
+
             // note - we don't want to do the hack until after flattening all of the groups.  At the end of the flattening, we should simply
-            // have a list of ComparisonUnitAtoms, appropriately marked as equal, inserted, deleted, or moved.
+            // have a list of ComparisonUnitAtoms, appropriately marked as equal, inserted, deleted, moved, or format-changed.
 
             // the table id will be hacked in the normal course of events.
             // in the case where a row is deleted, not necessary to hack - the deleted row ID will do.
@@ -2356,6 +2368,54 @@ namespace Docxodus
                                 new XAttribute(W.id, rangeId))
                         };
                     }
+                    else if (status == "FormatChanged")
+                    {
+                        // Get the old rPr from the descendant element
+                        var oldRPrAttr = element
+                            .DescendantsTrimmed(W.txbxContent)
+                            .Where(d => d.Name == W.t || AllowableRunChildren.Contains(d.Name))
+                            .Attributes(PtOpenXml.pt + "OldRPr")
+                            .FirstOrDefault();
+
+                        // Get or create rPr for the run
+                        var newRun = new XElement(W.r,
+                            element.Attributes().Where(a => a.Name.Namespace != PtOpenXml.pt),
+                            element.Nodes().Select(n => MarkContentAsDeletedOrInsertedTransform(n, settings)));
+
+                        // Find or create the rPr element
+                        var rPr = newRun.Element(W.rPr);
+                        if (rPr == null)
+                        {
+                            rPr = new XElement(W.rPr);
+                            newRun.AddFirst(rPr);
+                        }
+
+                        // Add w:rPrChange with the old properties
+                        XElement oldRPr = null;
+                        if (oldRPrAttr != null)
+                        {
+                            try
+                            {
+                                oldRPr = XElement.Parse((string)oldRPrAttr);
+                            }
+                            catch
+                            {
+                                oldRPr = new XElement(W.rPr);
+                            }
+                        }
+                        else
+                        {
+                            oldRPr = new XElement(W.rPr);
+                        }
+
+                        rPr.Add(new XElement(W.rPrChange,
+                            new XAttribute(W.id, s_MaxId++),
+                            new XAttribute(W.author, settings.AuthorForRevisions),
+                            new XAttribute(W.date, settings.DateTimeForRevisions),
+                            oldRPr));
+
+                        return newRun;
+                    }
                 }
 
                 if (element.Name == W.pPr)
@@ -2411,9 +2471,10 @@ namespace Docxodus
 
         private static void FixUpRevisionIds(WordprocessingDocument wDocWithRevisions, XDocument newXDoc)
         {
-            // Include move elements in revision ID tracking
+            // Include move elements and format change elements in revision ID tracking
             var revisionElements = new[] { W.ins, W.del, W.moveFrom, W.moveTo,
-                W.moveFromRangeStart, W.moveFromRangeEnd, W.moveToRangeStart, W.moveToRangeEnd };
+                W.moveFromRangeStart, W.moveFromRangeEnd, W.moveToRangeStart, W.moveToRangeEnd,
+                W.rPrChange };
 
             IEnumerable<XElement> footnoteRevisions = Enumerable.Empty<XElement>();
             if (wDocWithRevisions.MainDocumentPart.FootnotesPart != null)
@@ -3445,6 +3506,38 @@ namespace Docxodus
             Inserted,
             Deleted,
             Moved,
+            FormatChanged,
+        }
+
+        /// <summary>
+        /// Stores information about formatting changes between original and modified content.
+        /// </summary>
+        public class FormatChangeInfo
+        {
+            /// <summary>
+            /// Run properties from the original document (before changes).
+            /// </summary>
+            public XElement OldRunProperties { get; set; }
+
+            /// <summary>
+            /// Run properties from the modified document (after changes).
+            /// </summary>
+            public XElement NewRunProperties { get; set; }
+
+            /// <summary>
+            /// List of property names that changed (e.g., "bold", "italic", "fontSize").
+            /// </summary>
+            public List<string> ChangedProperties { get; set; } = new List<string>();
+        }
+
+        /// <summary>
+        /// Details about what formatting changed, for FormatChanged revisions.
+        /// </summary>
+        public class FormatChangeDetails
+        {
+            public Dictionary<string, string> OldProperties { get; set; }
+            public Dictionary<string, string> NewProperties { get; set; }
+            public List<string> ChangedPropertyNames { get; set; }
         }
 
         public class WmlComparerRevision
@@ -3471,6 +3564,12 @@ namespace Docxodus
             /// Null for non-move revisions.
             /// </summary>
             public bool? IsMoveSource;
+
+            /// <summary>
+            /// For FormatChanged revisions: details about what formatting changed.
+            /// Null for non-format-change revisions.
+            /// </summary>
+            public FormatChangeDetails FormatChange;
         }
 
         private static XName[] RevElementsWithNoText = new XName[] {
@@ -3593,7 +3692,15 @@ namespace Docxodus
 
                     var footnotesRevisionList = GetFootnoteEndnoteRevisionList(wDoc.MainDocumentPart.FootnotesPart, W.footnote, settings);
                     var endnotesRevisionList = GetFootnoteEndnoteRevisionList(wDoc.MainDocumentPart.EndnotesPart, W.endnote, settings);
-                    var finalRevisionList = mainDocPartRevisionList.Concat(footnotesRevisionList).Concat(endnotesRevisionList).ToList();
+
+                    // Get format change revisions from rPrChange elements
+                    var formatChangeRevisions = GetFormatChangeRevisions(wDoc);
+
+                    var finalRevisionList = mainDocPartRevisionList
+                        .Concat(footnotesRevisionList)
+                        .Concat(endnotesRevisionList)
+                        .Concat(formatChangeRevisions)
+                        .ToList();
 
                     // Post-process to detect and mark moved content
                     DetectMoves(finalRevisionList, settings);
@@ -3678,6 +3785,166 @@ namespace Docxodus
                     revisionsForPart.Add(item);
             }
             return revisionsForPart;
+        }
+
+        /// <summary>
+        /// Extracts format change revisions from w:rPrChange elements in the document.
+        /// </summary>
+        private static IEnumerable<WmlComparerRevision> GetFormatChangeRevisions(WordprocessingDocument wDoc)
+        {
+            var revisions = new List<WmlComparerRevision>();
+
+            // Get all rPrChange elements from the main document part
+            var mainXDoc = wDoc.MainDocumentPart.GetXDocument();
+            var rPrChanges = mainXDoc.Descendants(W.rPrChange);
+
+            foreach (var rPrChange in rPrChanges)
+            {
+                var revision = new WmlComparerRevision
+                {
+                    RevisionType = WmlComparerRevisionType.FormatChanged,
+                    Author = (string)rPrChange.Attribute(W.author) ?? "",
+                    Date = (string)rPrChange.Attribute(W.date) ?? "",
+                    RevisionXElement = rPrChange,
+                    PartUri = wDoc.MainDocumentPart.Uri,
+                    PartContentType = wDoc.MainDocumentPart.ContentType,
+                    Text = GetTextFromAncestorRun(rPrChange),
+                    FormatChange = ExtractFormatChangeDetails(rPrChange)
+                };
+                revisions.Add(revision);
+            }
+
+            // Get rPrChange elements from footnotes
+            if (wDoc.MainDocumentPart.FootnotesPart != null)
+            {
+                var fnXDoc = wDoc.MainDocumentPart.FootnotesPart.GetXDocument();
+                var fnRPrChanges = fnXDoc.Descendants(W.rPrChange);
+                foreach (var rPrChange in fnRPrChanges)
+                {
+                    var revision = new WmlComparerRevision
+                    {
+                        RevisionType = WmlComparerRevisionType.FormatChanged,
+                        Author = (string)rPrChange.Attribute(W.author) ?? "",
+                        Date = (string)rPrChange.Attribute(W.date) ?? "",
+                        RevisionXElement = rPrChange,
+                        PartUri = wDoc.MainDocumentPart.FootnotesPart.Uri,
+                        PartContentType = wDoc.MainDocumentPart.FootnotesPart.ContentType,
+                        Text = GetTextFromAncestorRun(rPrChange),
+                        FormatChange = ExtractFormatChangeDetails(rPrChange)
+                    };
+                    revisions.Add(revision);
+                }
+            }
+
+            // Get rPrChange elements from endnotes
+            if (wDoc.MainDocumentPart.EndnotesPart != null)
+            {
+                var enXDoc = wDoc.MainDocumentPart.EndnotesPart.GetXDocument();
+                var enRPrChanges = enXDoc.Descendants(W.rPrChange);
+                foreach (var rPrChange in enRPrChanges)
+                {
+                    var revision = new WmlComparerRevision
+                    {
+                        RevisionType = WmlComparerRevisionType.FormatChanged,
+                        Author = (string)rPrChange.Attribute(W.author) ?? "",
+                        Date = (string)rPrChange.Attribute(W.date) ?? "",
+                        RevisionXElement = rPrChange,
+                        PartUri = wDoc.MainDocumentPart.EndnotesPart.Uri,
+                        PartContentType = wDoc.MainDocumentPart.EndnotesPart.ContentType,
+                        Text = GetTextFromAncestorRun(rPrChange),
+                        FormatChange = ExtractFormatChangeDetails(rPrChange)
+                    };
+                    revisions.Add(revision);
+                }
+            }
+
+            return revisions;
+        }
+
+        /// <summary>
+        /// Gets the text content from the ancestor run of an rPrChange element.
+        /// </summary>
+        private static string GetTextFromAncestorRun(XElement rPrChange)
+        {
+            var run = rPrChange.Ancestors(W.r).FirstOrDefault();
+            if (run == null)
+                return "";
+
+            return run.Elements(W.t)
+                .Select(t => t.Value)
+                .StringConcatenate();
+        }
+
+        /// <summary>
+        /// Extracts format change details from an rPrChange element.
+        /// </summary>
+        private static FormatChangeDetails ExtractFormatChangeDetails(XElement rPrChange)
+        {
+            var oldRPr = rPrChange.Element(W.rPr);
+            var newRPr = rPrChange.Parent; // The parent is w:rPr which contains the new properties
+
+            var details = new FormatChangeDetails
+            {
+                OldProperties = ExtractPropertyDictionary(oldRPr),
+                NewProperties = ExtractPropertyDictionary(newRPr),
+                ChangedPropertyNames = new List<string>()
+            };
+
+            // Determine what changed
+            var allPropertyNames = details.OldProperties.Keys.Union(details.NewProperties.Keys);
+            foreach (var propName in allPropertyNames)
+            {
+                var hasOld = details.OldProperties.TryGetValue(propName, out var oldValue);
+                var hasNew = details.NewProperties.TryGetValue(propName, out var newValue);
+
+                if (hasOld != hasNew || (hasOld && hasNew && oldValue != newValue))
+                {
+                    details.ChangedPropertyNames.Add(propName);
+                }
+            }
+
+            return details;
+        }
+
+        /// <summary>
+        /// Extracts a dictionary of property names and values from an rPr element.
+        /// </summary>
+        private static Dictionary<string, string> ExtractPropertyDictionary(XElement rPr)
+        {
+            var dict = new Dictionary<string, string>();
+            if (rPr == null)
+                return dict;
+
+            foreach (var elem in rPr.Elements())
+            {
+                // Skip the rPrChange element itself
+                if (elem.Name == W.rPrChange)
+                    continue;
+
+                var propName = GetFriendlyPropertyName(elem.Name);
+                var propValue = GetPropertyValue(elem);
+                dict[propName] = propValue;
+            }
+
+            return dict;
+        }
+
+        /// <summary>
+        /// Gets a string representation of a property element's value.
+        /// </summary>
+        private static string GetPropertyValue(XElement prop)
+        {
+            // Check for w:val attribute
+            var val = prop.Attribute(W.val);
+            if (val != null)
+                return val.Value;
+
+            // Check for boolean properties (presence means true)
+            if (!prop.HasElements && !prop.HasAttributes)
+                return "true";
+
+            // For complex properties, return a summary
+            return prop.ToString(SaveOptions.DisableFormatting);
         }
 
         /// <summary>
@@ -3927,6 +4194,180 @@ namespace Docxodus
                         return Environment.NewLine;
                     return a.ContentElement.Value ?? "";
                 }));
+        }
+
+        #endregion
+
+        #region Format Change Detection
+
+        /// <summary>
+        /// Analyzes Equal atoms for formatting differences.
+        /// Converts atoms with different rPr to FormatChanged status.
+        /// Called after move detection but before markup emission.
+        /// </summary>
+        private static void DetectFormatChangesInAtomList(List<ComparisonUnitAtom> atoms, WmlComparerSettings settings)
+        {
+            if (!settings.DetectFormatChanges)
+                return;
+
+            foreach (var atom in atoms)
+            {
+                // Only check Equal atoms that have a "before" reference
+                if (atom.CorrelationStatus != CorrelationStatus.Equal)
+                    continue;
+                if (atom.ComparisonUnitAtomBefore == null)
+                    continue;
+
+                // Extract rPr from both documents
+                var oldRPr = GetRunPropertiesFromAtom(atom.ComparisonUnitAtomBefore);
+                var newRPr = GetRunPropertiesFromAtom(atom);
+
+                // Compare run properties
+                if (!AreRunPropertiesEqual(oldRPr, newRPr))
+                {
+                    atom.CorrelationStatus = CorrelationStatus.FormatChanged;
+                    atom.FormatChange = new FormatChangeInfo
+                    {
+                        OldRunProperties = oldRPr,
+                        NewRunProperties = newRPr,
+                        ChangedProperties = GetChangedPropertyNames(oldRPr, newRPr)
+                    };
+                }
+            }
+        }
+
+        /// <summary>
+        /// Extracts the w:rPr element from an atom's ancestor w:r element.
+        /// </summary>
+        private static XElement GetRunPropertiesFromAtom(ComparisonUnitAtom atom)
+        {
+            if (atom?.AncestorElements == null)
+                return null;
+
+            // Find the w:r ancestor element (search from leaf to root)
+            var runElement = atom.AncestorElements.FirstOrDefault(a => a.Name == W.r);
+            if (runElement == null)
+                return null;
+
+            // Get the rPr child element
+            return runElement.Element(W.rPr);
+        }
+
+        /// <summary>
+        /// Compares two rPr elements for equality, ignoring revision tracking elements.
+        /// </summary>
+        private static bool AreRunPropertiesEqual(XElement rPr1, XElement rPr2)
+        {
+            // Normalize: treat null as empty rPr
+            var normalized1 = NormalizeRunProperties(rPr1);
+            var normalized2 = NormalizeRunProperties(rPr2);
+
+            // Compare the normalized XML
+            return XNode.DeepEquals(normalized1, normalized2);
+        }
+
+        /// <summary>
+        /// Normalizes rPr for comparison by removing revision tracking elements
+        /// and sorting children consistently.
+        /// </summary>
+        private static XElement NormalizeRunProperties(XElement rPr)
+        {
+            if (rPr == null)
+                return new XElement(W.rPr);
+
+            // Clone and remove revision tracking elements (rPrChange, etc.)
+            // Also remove elements we don't want to compare (like rsid attributes, PtOpenXml attributes)
+            var normalized = new XElement(W.rPr,
+                rPr.Elements()
+                   .Where(e => e.Name != W.rPrChange && e.Name.Namespace != PtOpenXml.pt)
+                   .OrderBy(e => e.Name.LocalName)
+                   .Select(e => new XElement(e.Name,
+                       e.Attributes()
+                        .Where(a => !a.Name.LocalName.StartsWith("rsid", StringComparison.OrdinalIgnoreCase)
+                                 && a.Name.Namespace != PtOpenXml.pt)
+                        .OrderBy(a => a.Name.LocalName))));
+
+            return normalized;
+        }
+
+        /// <summary>
+        /// Returns a list of property names that differ between two rPr elements.
+        /// </summary>
+        private static List<string> GetChangedPropertyNames(XElement oldRPr, XElement newRPr)
+        {
+            var changed = new List<string>();
+
+            var oldProps = (oldRPr?.Elements() ?? Enumerable.Empty<XElement>())
+                .Where(e => e.Name != W.rPrChange)
+                .ToDictionary(e => e.Name, e => e);
+            var newProps = (newRPr?.Elements() ?? Enumerable.Empty<XElement>())
+                .Where(e => e.Name != W.rPrChange)
+                .ToDictionary(e => e.Name, e => e);
+
+            // Find properties that were added, removed, or changed
+            var allPropertyNames = oldProps.Keys.Union(newProps.Keys);
+
+            foreach (var propName in allPropertyNames)
+            {
+                var hasOld = oldProps.TryGetValue(propName, out var oldProp);
+                var hasNew = newProps.TryGetValue(propName, out var newProp);
+
+                if (hasOld != hasNew || (hasOld && hasNew && !XNode.DeepEquals(
+                    NormalizePropertyElement(oldProp),
+                    NormalizePropertyElement(newProp))))
+                {
+                    changed.Add(GetFriendlyPropertyName(propName));
+                }
+            }
+
+            return changed;
+        }
+
+        /// <summary>
+        /// Normalizes a single property element for comparison.
+        /// </summary>
+        private static XElement NormalizePropertyElement(XElement prop)
+        {
+            return new XElement(prop.Name,
+                prop.Attributes()
+                    .Where(a => !a.Name.LocalName.StartsWith("rsid", StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(a => a.Name.LocalName));
+        }
+
+        /// <summary>
+        /// Converts OpenXML property names to friendly display names.
+        /// </summary>
+        private static string GetFriendlyPropertyName(XName propName)
+        {
+            return propName.LocalName switch
+            {
+                "b" => "bold",
+                "bCs" => "boldComplex",
+                "i" => "italic",
+                "iCs" => "italicComplex",
+                "u" => "underline",
+                "strike" => "strikethrough",
+                "dstrike" => "doubleStrikethrough",
+                "sz" => "fontSize",
+                "szCs" => "fontSizeComplex",
+                "rFonts" => "font",
+                "color" => "color",
+                "highlight" => "highlight",
+                "shd" => "shading",
+                "vertAlign" => "verticalAlign",
+                "caps" => "allCaps",
+                "smallCaps" => "smallCaps",
+                "outline" => "outline",
+                "shadow" => "shadow",
+                "emboss" => "emboss",
+                "imprint" => "imprint",
+                "vanish" => "hidden",
+                "spacing" => "characterSpacing",
+                "w" => "characterWidth",
+                "kern" => "kerning",
+                "position" => "position",
+                _ => propName.LocalName
+            };
         }
 
         #endregion
@@ -5032,6 +5473,15 @@ namespace Docxodus
                                                 dup.Add(new XAttribute(PtOpenXml.pt + "MoveName", gcc.MoveName ?? ""));
                                             }
                                         }
+                                        else if (spl[1] == "FormatChanged")
+                                        {
+                                            dup.Add(new XAttribute(PtOpenXml.Status, "FormatChanged"));
+                                            if (gcc.FormatChange?.OldRunProperties != null)
+                                            {
+                                                dup.Add(new XAttribute(PtOpenXml.pt + "OldRPr",
+                                                    gcc.FormatChange.OldRunProperties.ToString(SaveOptions.DisableFormatting)));
+                                            }
+                                        }
                                         return dup;
                                     });
                                 else
@@ -5079,6 +5529,15 @@ namespace Docxodus
                                             {
                                                 dup.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", gcc.MoveGroupId.Value));
                                                 dup.Add(new XAttribute(PtOpenXml.pt + "MoveName", gcc.MoveName ?? ""));
+                                            }
+                                        }
+                                        else if (spl[1] == "FormatChanged")
+                                        {
+                                            dup.Add(new XAttribute(PtOpenXml.Status, "FormatChanged"));
+                                            if (gcc.FormatChange?.OldRunProperties != null)
+                                            {
+                                                dup.Add(new XAttribute(PtOpenXml.pt + "OldRPr",
+                                                    gcc.FormatChange.OldRunProperties.ToString(SaveOptions.DisableFormatting)));
                                             }
                                         }
                                         return dup;
@@ -5142,6 +5601,19 @@ namespace Docxodus
                                     {
                                         elem.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", firstAtom.MoveGroupId.Value));
                                         elem.Add(new XAttribute(PtOpenXml.pt + "MoveName", firstAtom.MoveName ?? ""));
+                                    }
+                                    return (object)elem;
+                                }
+                                else if (firstAtom.CorrelationStatus == CorrelationStatus.FormatChanged)
+                                {
+                                    var elem = new XElement(W.t,
+                                        new XAttribute(PtOpenXml.Status, "FormatChanged"),
+                                        GetXmlSpaceAttribute(textOfTextElement),
+                                        textOfTextElement);
+                                    if (firstAtom.FormatChange?.OldRunProperties != null)
+                                    {
+                                        elem.Add(new XAttribute(PtOpenXml.pt + "OldRPr",
+                                            firstAtom.FormatChange.OldRunProperties.ToString(SaveOptions.DisableFormatting)));
                                     }
                                     return (object)elem;
                                 }
@@ -8033,6 +8505,11 @@ namespace Docxodus
         /// </summary>
         public string MoveName;
 
+        /// <summary>
+        /// For format-changed content: stores old and new formatting properties.
+        /// </summary>
+        public WmlComparer.FormatChangeInfo FormatChange;
+
         public ComparisonUnitAtom(XElement contentElement, XElement[] ancestorElements, OpenXmlPart part, WmlComparerSettings settings)
         {
             ContentElement = contentElement;
@@ -8288,6 +8765,10 @@ namespace Docxodus
         /// Content that was moved TO this location (appears as insertion with move markup)
         /// </summary>
         MovedDestination,
+        /// <summary>
+        /// Content where text is equal but run formatting (bold, italic, etc.) differs
+        /// </summary>
+        FormatChanged,
     }
 
     class PartSHA1HashAnnotation
