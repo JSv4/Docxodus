@@ -47,6 +47,37 @@ public partial class DocumentConverter
         bool fabricateClasses,
         string additionalCss)
     {
+        return ConvertDocxToHtmlAdvanced(
+            docxBytes, pageTitle, cssPrefix, fabricateClasses, additionalCss,
+            renderComments: false, commentRenderMode: 0, commentCssClassPrefix: "comment-", includeCommentMetadata: true
+        );
+    }
+
+    /// <summary>
+    /// Convert a DOCX file to HTML with advanced settings including comment rendering.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="pageTitle">Title for the HTML document</param>
+    /// <param name="cssPrefix">Prefix for generated CSS class names</param>
+    /// <param name="fabricateClasses">Whether to generate CSS classes</param>
+    /// <param name="additionalCss">Additional CSS to include</param>
+    /// <param name="renderComments">Whether to render document comments</param>
+    /// <param name="commentRenderMode">Comment render mode: 0=EndnoteStyle, 1=Inline, 2=Margin</param>
+    /// <param name="commentCssClassPrefix">CSS class prefix for comments (default: "comment-")</param>
+    /// <param name="includeCommentMetadata">Include author/date metadata in comment HTML</param>
+    /// <returns>HTML string or JSON error object</returns>
+    [JSExport]
+    public static string ConvertDocxToHtmlAdvanced(
+        byte[] docxBytes,
+        string pageTitle,
+        string cssPrefix,
+        bool fabricateClasses,
+        string additionalCss,
+        bool renderComments,
+        int commentRenderMode,
+        string commentCssClassPrefix,
+        bool includeCommentMetadata)
+    {
         if (docxBytes == null || docxBytes.Length == 0)
         {
             return SerializeError("No document data provided");
@@ -67,7 +98,11 @@ public partial class DocumentConverter
                 FabricateCssClasses = fabricateClasses,
                 AdditionalCss = additionalCss ?? "",
                 GeneralCss = "body { font-family: Arial, sans-serif; margin: 20px; } " +
-                             "span { white-space: pre-wrap; }"
+                             "span { white-space: pre-wrap; }",
+                RenderComments = renderComments,
+                CommentRenderMode = (CommentRenderMode)commentRenderMode,
+                CommentCssClassPrefix = commentCssClassPrefix ?? "comment-",
+                IncludeCommentMetadata = includeCommentMetadata
             };
 
             var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, settings);

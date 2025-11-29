@@ -5977,6 +5977,7 @@ listSeparator
     {
         public static readonly XNamespace xhtml = "http://www.w3.org/1999/xhtml";
         public static readonly XName a = xhtml + "a";
+        public static readonly XName aside = xhtml + "aside";
         public static readonly XName b = xhtml + "b";
         public static readonly XName body = xhtml + "body";
         public static readonly XName br = xhtml + "br";
