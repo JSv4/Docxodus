@@ -31,7 +31,11 @@ All notable changes to this project will be documented in this file.
   - DOCX to HTML conversion
   - React hooks: `useDocxodus`, `useConversion`, `useComparison`
   - Build script: `scripts/build-wasm.sh`
-- **Move Detection in WmlComparer** - Detect relocated content as moves instead of separate deletion/insertion pairs
+- **Native Move Markup in WmlComparer** - Produces Word-native move tracking markup (`w:moveFrom`/`w:moveTo`)
+  - Compared documents now contain proper OpenXML move elements, not just `w:del`/`w:ins`
+  - Move pairs linked via `w:name` attribute for Word compatibility
+  - Range markers (`w:moveFromRangeStart`/`w:moveFromRangeEnd`, `w:moveToRangeStart`/`w:moveToRangeEnd`) properly paired
+  - Microsoft Word shows moves in "Track Changes" panel as relocated content
   - New `Moved` value in `WmlComparerRevisionType` enum
   - New properties on `WmlComparerRevision`: `MoveGroupId` (links source/destination), `IsMoveSource` (true=from, false=to)
   - New settings in `WmlComparerSettings`:

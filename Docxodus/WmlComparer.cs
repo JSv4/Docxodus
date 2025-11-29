@@ -1735,8 +1735,12 @@ namespace Docxodus
                 DocxComparerUtil.NotePad(sbs);
             }
 
+            // Detect moves BEFORE markup is written - this allows us to emit native w:moveFrom/w:moveTo elements
+            // instead of regular w:del/w:ins. This runs after LCS but before XML reconstruction.
+            DetectMovesInAtomList(listOfComparisonUnitAtoms, settings);
+
             // note - we don't want to do the hack until after flattening all of the groups.  At the end of the flattening, we should simply
-            // have a list of ComparisonUnitAtoms, appropriately marked as equal, inserted, or deleted.
+            // have a list of ComparisonUnitAtoms, appropriately marked as equal, inserted, deleted, or moved.
 
             // the table id will be hacked in the normal course of events.
             // in the case where a row is deleted, not necessary to hack - the deleted row ID will do.
@@ -2272,7 +2276,9 @@ namespace Docxodus
                         return new XElement(W.r,
                             element.Attributes(),
                             element.Nodes().Select(n => MarkContentAsDeletedOrInsertedTransform(n, settings)));
-                    if (statusList.First() == "Deleted")
+
+                    var status = statusList.First();
+                    if (status == "Deleted")
                     {
                         return new XElement(W.del,
                             new XAttribute(W.author, settings.AuthorForRevisions),
@@ -2282,7 +2288,7 @@ namespace Docxodus
                             element.Attributes(),
                             element.Nodes().Select(n => MarkContentAsDeletedOrInsertedTransform(n, settings))));
                     }
-                    else if (statusList.First() == "Inserted")
+                    else if (status == "Inserted")
                     {
                         return new XElement(W.ins,
                             new XAttribute(W.author, settings.AuthorForRevisions),
@@ -2291,6 +2297,64 @@ namespace Docxodus
                             new XElement(W.r,
                             element.Attributes(),
                             element.Nodes().Select(n => MarkContentAsDeletedOrInsertedTransform(n, settings))));
+                    }
+                    else if (status == "MovedSource")
+                    {
+                        // Get move name from the descendant element
+                        var moveNameAttr = element
+                            .DescendantsTrimmed(W.txbxContent)
+                            .Where(d => d.Name == W.t || d.Name == W.delText || AllowableRunChildren.Contains(d.Name))
+                            .Attributes(PtOpenXml.pt + "MoveName")
+                            .FirstOrDefault();
+                        var moveName = moveNameAttr != null ? (string)moveNameAttr : "move1";
+
+                        var rangeId = s_MaxId++;
+                        var moveFromId = s_MaxId++;
+                        return new object[] {
+                            new XElement(W.moveFromRangeStart,
+                                new XAttribute(W.id, rangeId),
+                                new XAttribute(W.name, moveName),
+                                new XAttribute(W.author, settings.AuthorForRevisions),
+                                new XAttribute(W.date, settings.DateTimeForRevisions)),
+                            new XElement(W.moveFrom,
+                                new XAttribute(W.author, settings.AuthorForRevisions),
+                                new XAttribute(W.id, moveFromId),
+                                new XAttribute(W.date, settings.DateTimeForRevisions),
+                                new XElement(W.r,
+                                    element.Attributes(),
+                                    element.Nodes().Select(n => MarkContentAsDeletedOrInsertedTransform(n, settings)))),
+                            new XElement(W.moveFromRangeEnd,
+                                new XAttribute(W.id, rangeId))
+                        };
+                    }
+                    else if (status == "MovedDestination")
+                    {
+                        // Get move name from the descendant element
+                        var moveNameAttr = element
+                            .DescendantsTrimmed(W.txbxContent)
+                            .Where(d => d.Name == W.t || d.Name == W.delText || AllowableRunChildren.Contains(d.Name))
+                            .Attributes(PtOpenXml.pt + "MoveName")
+                            .FirstOrDefault();
+                        var moveName = moveNameAttr != null ? (string)moveNameAttr : "move1";
+
+                        var rangeId = s_MaxId++;
+                        var moveToId = s_MaxId++;
+                        return new object[] {
+                            new XElement(W.moveToRangeStart,
+                                new XAttribute(W.id, rangeId),
+                                new XAttribute(W.name, moveName),
+                                new XAttribute(W.author, settings.AuthorForRevisions),
+                                new XAttribute(W.date, settings.DateTimeForRevisions)),
+                            new XElement(W.moveTo,
+                                new XAttribute(W.author, settings.AuthorForRevisions),
+                                new XAttribute(W.id, moveToId),
+                                new XAttribute(W.date, settings.DateTimeForRevisions),
+                                new XElement(W.r,
+                                    element.Attributes(),
+                                    element.Nodes().Select(n => MarkContentAsDeletedOrInsertedTransform(n, settings)))),
+                            new XElement(W.moveToRangeEnd,
+                                new XAttribute(W.id, rangeId))
+                        };
                     }
                 }
 
@@ -2302,11 +2366,13 @@ namespace Docxodus
                             element.Attributes(),
                             element.Nodes().Select(n => MarkContentAsDeletedOrInsertedTransform(n, settings)));
                     var pPr = new XElement(element);
-                    if (status == "Deleted")
+                    if (status == "Deleted" || status == "MovedSource")
                     {
                         XElement rPr = pPr.Element(W.rPr);
                         if (rPr == null)
                             rPr = new XElement(W.rPr);
+                        // For moved paragraph marks, we still use w:del in pPr/rPr
+                        // The move markup is at the run level
                         rPr.Add(new XElement(W.del,
                             new XAttribute(W.author, settings.AuthorForRevisions),
                             new XAttribute(W.id, s_MaxId++),
@@ -2316,11 +2382,12 @@ namespace Docxodus
                         else
                             pPr.AddFirst(rPr);
                     }
-                    else if (status == "Inserted")
+                    else if (status == "Inserted" || status == "MovedDestination")
                     {
                         XElement rPr = pPr.Element(W.rPr);
                         if (rPr == null)
                             rPr = new XElement(W.rPr);
+                        // For moved paragraph marks, we still use w:ins in pPr/rPr
                         rPr.Add(new XElement(W.ins,
                             new XAttribute(W.author, settings.AuthorForRevisions),
                             new XAttribute(W.id, s_MaxId++),
@@ -2331,7 +2398,7 @@ namespace Docxodus
                             pPr.AddFirst(rPr);
                     }
                     else
-                        throw new DocxodusException("Internal error");
+                        throw new DocxodusException("Internal error - unknown status: " + status);
                     return pPr;
                 }
 
@@ -2344,13 +2411,17 @@ namespace Docxodus
 
         private static void FixUpRevisionIds(WordprocessingDocument wDocWithRevisions, XDocument newXDoc)
         {
+            // Include move elements in revision ID tracking
+            var revisionElements = new[] { W.ins, W.del, W.moveFrom, W.moveTo,
+                W.moveFromRangeStart, W.moveFromRangeEnd, W.moveToRangeStart, W.moveToRangeEnd };
+
             IEnumerable<XElement> footnoteRevisions = Enumerable.Empty<XElement>();
             if (wDocWithRevisions.MainDocumentPart.FootnotesPart != null)
             {
                 var fnxd = wDocWithRevisions.MainDocumentPart.FootnotesPart.GetXDocument();
                 footnoteRevisions = fnxd
                     .Descendants()
-                    .Where(d => d.Name == W.ins || d.Name == W.del);
+                    .Where(d => revisionElements.Contains(d.Name));
             }
             IEnumerable<XElement> endnoteRevisions = Enumerable.Empty<XElement>();
             if (wDocWithRevisions.MainDocumentPart.EndnotesPart != null)
@@ -2358,24 +2429,60 @@ namespace Docxodus
                 var fnxd = wDocWithRevisions.MainDocumentPart.EndnotesPart.GetXDocument();
                 endnoteRevisions = fnxd
                     .Descendants()
-                    .Where(d => d.Name == W.ins || d.Name == W.del);
+                    .Where(d => revisionElements.Contains(d.Name));
             }
             var mainRevisions = newXDoc
                 .Descendants()
-                .Where(d => d.Name == W.ins || d.Name == W.del);
+                .Where(d => revisionElements.Contains(d.Name))
+                .ToList();
             var allRevisions = mainRevisions
                 .Concat(footnoteRevisions)
                 .Concat(endnoteRevisions)
-                .Select((r, i) =>
+                .ToList();
+
+            // Build a mapping from old IDs to new IDs for range elements
+            // Range start/end pairs must share the same ID
+            var oldIdToNewId = new Dictionary<string, int>();
+            int nextId = 1;
+
+            foreach (var rev in allRevisions)
+            {
+                var idAttr = rev.Attribute(W.id);
+                if (idAttr == null)
+                    continue;
+
+                var oldId = idAttr.Value;
+
+                // Range end elements reference the ID of their corresponding start element
+                if (rev.Name == W.moveFromRangeEnd || rev.Name == W.moveToRangeEnd)
                 {
-                    return new
+                    // Use the same ID that was assigned to the corresponding start element
+                    if (oldIdToNewId.TryGetValue(oldId, out var existingNewId))
                     {
-                        Rev = r,
-                        Idx = i + 1,
-                    };
-                });
-            foreach (var item in allRevisions)
-                item.Rev.Attribute(W.id).Value = item.Idx.ToString();
+                        idAttr.Value = existingNewId.ToString();
+                    }
+                    else
+                    {
+                        // If we haven't seen the start yet (shouldn't happen), assign a new ID
+                        var newId = nextId++;
+                        oldIdToNewId[oldId] = newId;
+                        idAttr.Value = newId.ToString();
+                    }
+                }
+                else if (rev.Name == W.moveFromRangeStart || rev.Name == W.moveToRangeStart)
+                {
+                    // Assign a new ID and remember the mapping
+                    var newId = nextId++;
+                    oldIdToNewId[oldId] = newId;
+                    idAttr.Value = newId.ToString();
+                }
+                else
+                {
+                    // Regular revision elements (ins, del, moveFrom, moveTo) - just assign sequentially
+                    idAttr.Value = nextId++.ToString();
+                }
+            }
+
             if (wDocWithRevisions.MainDocumentPart.FootnotesPart != null)
                 wDocWithRevisions.MainDocumentPart.FootnotesPart.PutXDocument();
             if (wDocWithRevisions.MainDocumentPart.EndnotesPart != null)
@@ -3426,17 +3533,49 @@ namespace Docxodus
                         .Select(rg =>
                         {
                             var rev = new WmlComparerRevision();
+                            var firstAtom = rg.First();
+
+                            // Determine revision type from correlation status
                             if (rg.Key.StartsWith("Inserted"))
                                 rev.RevisionType = WmlComparerRevisionType.Inserted;
                             else if (rg.Key.StartsWith("Deleted"))
                                 rev.RevisionType = WmlComparerRevisionType.Deleted;
-                            var revTrackElement = rg.First().RevTrackElement;
+                            else if (rg.Key.StartsWith("MovedSource"))
+                            {
+                                rev.RevisionType = WmlComparerRevisionType.Moved;
+                                rev.IsMoveSource = true;
+                            }
+                            else if (rg.Key.StartsWith("MovedDestination"))
+                            {
+                                rev.RevisionType = WmlComparerRevisionType.Moved;
+                                rev.IsMoveSource = false;
+                            }
+
+                            var revTrackElement = firstAtom.RevTrackElement;
                             rev.RevisionXElement = revTrackElement;
                             rev.Author = (string)revTrackElement.Attribute(W.author);
-                            rev.ContentXElement = rg.First().ContentElement;
+                            rev.ContentXElement = firstAtom.ContentElement;
                             rev.Date = (string)revTrackElement.Attribute(W.date);
                             rev.PartUri = wDoc.MainDocumentPart.Uri;
                             rev.PartContentType = wDoc.MainDocumentPart.ContentType;
+
+                            // For native move markup, extract the move name and create group ID
+                            if (rev.RevisionType == WmlComparerRevisionType.Moved)
+                            {
+                                // Get the move name from the nearest moveFromRangeStart or moveToRangeStart
+                                var moveRangeStart = revTrackElement.ElementsBeforeSelf()
+                                    .LastOrDefault(e => e.Name == W.moveFromRangeStart || e.Name == W.moveToRangeStart);
+                                if (moveRangeStart != null)
+                                {
+                                    var moveName = (string)moveRangeStart.Attribute(W.name);
+                                    if (!string.IsNullOrEmpty(moveName))
+                                    {
+                                        // Create a consistent group ID from the move name
+                                        rev.MoveGroupId = moveName.GetHashCode() & 0x7FFFFFFF;
+                                    }
+                                }
+                            }
+
                             if (!RevElementsWithNoText.Contains(rev.ContentXElement.Name))
                             {
                                 rev.Text = rg
@@ -3652,6 +3791,145 @@ namespace Docxodus
             var separators = settings.WordSeparators ?? new[] { ' ', '-', ')', '(', ';', ',' };
             return text.Split(separators, StringSplitOptions.RemoveEmptyEntries).Length;
         }
+
+        #region Native Move Detection (pre-markup)
+
+        /// <summary>
+        /// Helper class to group consecutive atoms by status for move detection.
+        /// </summary>
+        private class AtomBlock
+        {
+            public List<ComparisonUnitAtom> Atoms { get; set; }
+            public int StartIndex { get; set; }
+        }
+
+        /// <summary>
+        /// Detect moves in the flattened atom list BEFORE markup is written.
+        /// Converts matching Deleted/Inserted pairs to MovedSource/MovedDestination status.
+        /// This allows the subsequent markup generation to emit native w:moveFrom/w:moveTo elements.
+        /// </summary>
+        private static void DetectMovesInAtomList(List<ComparisonUnitAtom> atoms, WmlComparerSettings settings)
+        {
+            if (!settings.DetectMoves)
+                return;
+
+            // Group consecutive atoms by status to form content blocks
+            var deletedBlocks = GroupConsecutiveAtomsByStatus(atoms, CorrelationStatus.Deleted);
+            var insertedBlocks = GroupConsecutiveAtomsByStatus(atoms, CorrelationStatus.Inserted);
+
+            if (deletedBlocks.Count == 0 || insertedBlocks.Count == 0)
+                return;
+
+            int nextMoveGroupId = 1;
+            var matchedInsertions = new HashSet<AtomBlock>();
+
+            foreach (var deletedBlock in deletedBlocks)
+            {
+                string deletedText = ExtractTextFromAtomBlock(deletedBlock);
+                if (CountWords(deletedText, settings) < settings.MoveMinimumWordCount)
+                    continue;
+
+                AtomBlock bestMatch = null;
+                double bestSimilarity = 0;
+
+                foreach (var insertedBlock in insertedBlocks)
+                {
+                    if (matchedInsertions.Contains(insertedBlock))
+                        continue;
+
+                    string insertedText = ExtractTextFromAtomBlock(insertedBlock);
+                    if (CountWords(insertedText, settings) < settings.MoveMinimumWordCount)
+                        continue;
+
+                    double similarity = CalculateJaccardSimilarity(deletedText, insertedText, settings);
+
+                    if (similarity >= settings.MoveSimilarityThreshold && similarity > bestSimilarity)
+                    {
+                        bestSimilarity = similarity;
+                        bestMatch = insertedBlock;
+                    }
+                }
+
+                if (bestMatch != null)
+                {
+                    string moveName = $"move{nextMoveGroupId}";
+
+                    // Convert deleted block atoms to MovedSource
+                    foreach (var atom in deletedBlock.Atoms)
+                    {
+                        atom.CorrelationStatus = CorrelationStatus.MovedSource;
+                        atom.MoveGroupId = nextMoveGroupId;
+                        atom.MoveName = moveName;
+                    }
+
+                    // Convert inserted block atoms to MovedDestination
+                    foreach (var atom in bestMatch.Atoms)
+                    {
+                        atom.CorrelationStatus = CorrelationStatus.MovedDestination;
+                        atom.MoveGroupId = nextMoveGroupId;
+                        atom.MoveName = moveName;
+                    }
+
+                    matchedInsertions.Add(bestMatch);
+                    nextMoveGroupId++;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Group consecutive atoms that have the same correlation status.
+        /// </summary>
+        private static List<AtomBlock> GroupConsecutiveAtomsByStatus(
+            List<ComparisonUnitAtom> atoms,
+            CorrelationStatus status)
+        {
+            var blocks = new List<AtomBlock>();
+            AtomBlock currentBlock = null;
+
+            for (int i = 0; i < atoms.Count; i++)
+            {
+                if (atoms[i].CorrelationStatus == status)
+                {
+                    if (currentBlock == null)
+                    {
+                        currentBlock = new AtomBlock
+                        {
+                            Atoms = new List<ComparisonUnitAtom>(),
+                            StartIndex = i
+                        };
+                    }
+                    currentBlock.Atoms.Add(atoms[i]);
+                }
+                else if (currentBlock != null)
+                {
+                    blocks.Add(currentBlock);
+                    currentBlock = null;
+                }
+            }
+
+            if (currentBlock != null)
+                blocks.Add(currentBlock);
+
+            return blocks;
+        }
+
+        /// <summary>
+        /// Extract text content from a block of atoms for similarity comparison.
+        /// </summary>
+        private static string ExtractTextFromAtomBlock(AtomBlock block)
+        {
+            return string.Join("", block.Atoms
+                .Where(a => a.ContentElement != null)
+                .Select(a =>
+                {
+                    // Handle paragraph marks as newlines
+                    if (a.ContentElement.Name == W.pPr)
+                        return Environment.NewLine;
+                    return a.ContentElement.Value ?? "";
+                }));
+        }
+
+        #endregion
 
         // prohibit
         // - altChunk
@@ -4736,6 +5014,24 @@ namespace Docxodus
                                             dup.Add(new XAttribute(PtOpenXml.Status, "Deleted"));
                                         else if (spl[1] == "Inserted")
                                             dup.Add(new XAttribute(PtOpenXml.Status, "Inserted"));
+                                        else if (spl[1] == "MovedSource")
+                                        {
+                                            dup.Add(new XAttribute(PtOpenXml.Status, "MovedSource"));
+                                            if (gcc.MoveGroupId.HasValue)
+                                            {
+                                                dup.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", gcc.MoveGroupId.Value));
+                                                dup.Add(new XAttribute(PtOpenXml.pt + "MoveName", gcc.MoveName ?? ""));
+                                            }
+                                        }
+                                        else if (spl[1] == "MovedDestination")
+                                        {
+                                            dup.Add(new XAttribute(PtOpenXml.Status, "MovedDestination"));
+                                            if (gcc.MoveGroupId.HasValue)
+                                            {
+                                                dup.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", gcc.MoveGroupId.Value));
+                                                dup.Add(new XAttribute(PtOpenXml.pt + "MoveName", gcc.MoveName ?? ""));
+                                            }
+                                        }
                                         return dup;
                                     });
                                 else
@@ -4767,6 +5063,24 @@ namespace Docxodus
                                             dup.Add(new XAttribute(PtOpenXml.Status, "Deleted"));
                                         else if (spl[1] == "Inserted")
                                             dup.Add(new XAttribute(PtOpenXml.Status, "Inserted"));
+                                        else if (spl[1] == "MovedSource")
+                                        {
+                                            dup.Add(new XAttribute(PtOpenXml.Status, "MovedSource"));
+                                            if (gcc.MoveGroupId.HasValue)
+                                            {
+                                                dup.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", gcc.MoveGroupId.Value));
+                                                dup.Add(new XAttribute(PtOpenXml.pt + "MoveName", gcc.MoveName ?? ""));
+                                            }
+                                        }
+                                        else if (spl[1] == "MovedDestination")
+                                        {
+                                            dup.Add(new XAttribute(PtOpenXml.Status, "MovedDestination"));
+                                            if (gcc.MoveGroupId.HasValue)
+                                            {
+                                                dup.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", gcc.MoveGroupId.Value));
+                                                dup.Add(new XAttribute(PtOpenXml.pt + "MoveName", gcc.MoveName ?? ""));
+                                            }
+                                        }
                                         return dup;
                                     });
                                 else
@@ -4790,18 +5104,47 @@ namespace Docxodus
                             .Select(gc =>
                             {
                                 var textOfTextElement = gc.Select(gce => gce.ContentElement.Value).StringConcatenate();
-                                var del = gc.First().CorrelationStatus == CorrelationStatus.Deleted;
-                                var ins = gc.First().CorrelationStatus == CorrelationStatus.Inserted;
+                                var firstAtom = gc.First();
+                                var del = firstAtom.CorrelationStatus == CorrelationStatus.Deleted;
+                                var ins = firstAtom.CorrelationStatus == CorrelationStatus.Inserted;
+                                var movedSource = firstAtom.CorrelationStatus == CorrelationStatus.MovedSource;
+                                var movedDest = firstAtom.CorrelationStatus == CorrelationStatus.MovedDestination;
                                 if (del)
                                     return (object)(new XElement(W.delText,
                                         new XAttribute(PtOpenXml.Status, "Deleted"),
                                         GetXmlSpaceAttribute(textOfTextElement),
                                         textOfTextElement));
+                                else if (movedSource)
+                                {
+                                    var elem = new XElement(W.delText,
+                                        new XAttribute(PtOpenXml.Status, "MovedSource"),
+                                        GetXmlSpaceAttribute(textOfTextElement),
+                                        textOfTextElement);
+                                    if (firstAtom.MoveGroupId.HasValue)
+                                    {
+                                        elem.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", firstAtom.MoveGroupId.Value));
+                                        elem.Add(new XAttribute(PtOpenXml.pt + "MoveName", firstAtom.MoveName ?? ""));
+                                    }
+                                    return (object)elem;
+                                }
                                 else if (ins)
                                     return (object)(new XElement(W.t,
                                         new XAttribute(PtOpenXml.Status, "Inserted"),
                                         GetXmlSpaceAttribute(textOfTextElement),
                                         textOfTextElement));
+                                else if (movedDest)
+                                {
+                                    var elem = new XElement(W.t,
+                                        new XAttribute(PtOpenXml.Status, "MovedDestination"),
+                                        GetXmlSpaceAttribute(textOfTextElement),
+                                        textOfTextElement);
+                                    if (firstAtom.MoveGroupId.HasValue)
+                                    {
+                                        elem.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", firstAtom.MoveGroupId.Value));
+                                        elem.Add(new XAttribute(PtOpenXml.pt + "MoveName", firstAtom.MoveName ?? ""));
+                                    }
+                                    return (object)elem;
+                                }
                                 else
                                     return (object)(new XElement(W.t,
                                         GetXmlSpaceAttribute(textOfTextElement),
@@ -4816,14 +5159,22 @@ namespace Docxodus
                         var newChildElements = groupedChildren
                             .Select(gc =>
                             {
-                                var del = gc.First().CorrelationStatus == CorrelationStatus.Deleted;
-                                var ins = gc.First().CorrelationStatus == CorrelationStatus.Inserted;
-                                if (del)
+                                var firstAtom = gc.First();
+                                var del = firstAtom.CorrelationStatus == CorrelationStatus.Deleted;
+                                var ins = firstAtom.CorrelationStatus == CorrelationStatus.Inserted;
+                                var movedSource = firstAtom.CorrelationStatus == CorrelationStatus.MovedSource;
+                                var movedDest = firstAtom.CorrelationStatus == CorrelationStatus.MovedDestination;
+                                if (del || movedSource)
                                 {
                                     return (object)gc.Select(gcc =>
                                     {
                                         var newDrawing = new XElement(gcc.ContentElement);
-                                        newDrawing.Add(new XAttribute(PtOpenXml.Status, "Deleted"));
+                                        newDrawing.Add(new XAttribute(PtOpenXml.Status, movedSource ? "MovedSource" : "Deleted"));
+                                        if (movedSource && gcc.MoveGroupId.HasValue)
+                                        {
+                                            newDrawing.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", gcc.MoveGroupId.Value));
+                                            newDrawing.Add(new XAttribute(PtOpenXml.pt + "MoveName", gcc.MoveName ?? ""));
+                                        }
 
                                         var openXmlPartOfDeletedContent = gc.First().Part;
                                         var openXmlPartInNewDocument = part;
@@ -4837,12 +5188,17 @@ namespace Docxodus
                                         });
                                     });
                                 }
-                                else if (ins)
+                                else if (ins || movedDest)
                                 {
                                     return gc.Select(gcc =>
                                     {
                                         var newDrawing = new XElement(gcc.ContentElement);
-                                        newDrawing.Add(new XAttribute(PtOpenXml.Status, "Inserted"));
+                                        newDrawing.Add(new XAttribute(PtOpenXml.Status, movedDest ? "MovedDestination" : "Inserted"));
+                                        if (movedDest && gcc.MoveGroupId.HasValue)
+                                        {
+                                            newDrawing.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", gcc.MoveGroupId.Value));
+                                            newDrawing.Add(new XAttribute(PtOpenXml.pt + "MoveName", gcc.MoveName ?? ""));
+                                        }
 
                                         var openXmlPartOfInsertedContent = gc.First().Part;
                                         var openXmlPartInNewDocument = part;
@@ -4873,11 +5229,14 @@ namespace Docxodus
                         var newChildElements = groupedChildren
                             .Select(gc =>
                             {
-                                var del = gc.First().CorrelationStatus == CorrelationStatus.Deleted;
-                                var ins = gc.First().CorrelationStatus == CorrelationStatus.Inserted;
+                                var firstAtom = gc.First();
+                                var del = firstAtom.CorrelationStatus == CorrelationStatus.Deleted;
+                                var ins = firstAtom.CorrelationStatus == CorrelationStatus.Inserted;
+                                var movedSource = firstAtom.CorrelationStatus == CorrelationStatus.MovedSource;
+                                var movedDest = firstAtom.CorrelationStatus == CorrelationStatus.MovedDestination;
                                 if (del)
                                 {
-                                    return gc.Select(gcc =>
+                                    return (object)gc.Select(gcc =>
                                     {
                                         return new XElement(W.del,
                                             new XAttribute(W.author, settings.AuthorForRevisions),
@@ -4886,9 +5245,21 @@ namespace Docxodus
                                             gcc.ContentElement);
                                     });
                                 }
+                                else if (movedSource)
+                                {
+                                    // For math, emit moveFrom (simplified - without range markers for oMath)
+                                    return (object)gc.Select(gcc =>
+                                    {
+                                        return new XElement(W.moveFrom,
+                                            new XAttribute(W.author, settings.AuthorForRevisions),
+                                            new XAttribute(W.id, s_MaxId++),
+                                            new XAttribute(W.date, settings.DateTimeForRevisions),
+                                            gcc.ContentElement);
+                                    });
+                                }
                                 else if (ins)
                                 {
-                                    return gc.Select(gcc =>
+                                    return (object)gc.Select(gcc =>
                                     {
                                         return new XElement(W.ins,
                                             new XAttribute(W.author, settings.AuthorForRevisions),
@@ -4897,9 +5268,21 @@ namespace Docxodus
                                             gcc.ContentElement);
                                     });
                                 }
+                                else if (movedDest)
+                                {
+                                    // For math, emit moveTo (simplified - without range markers for oMath)
+                                    return (object)gc.Select(gcc =>
+                                    {
+                                        return new XElement(W.moveTo,
+                                            new XAttribute(W.author, settings.AuthorForRevisions),
+                                            new XAttribute(W.id, s_MaxId++),
+                                            new XAttribute(W.date, settings.DateTimeForRevisions),
+                                            gcc.ContentElement);
+                                    });
+                                }
                                 else
                                 {
-                                    return gc.Select(gcc => gcc.ContentElement);
+                                    return (object)gc.Select(gcc => gcc.ContentElement);
                                 }
                             })
                             .ToList();
@@ -4911,8 +5294,11 @@ namespace Docxodus
                         var newChildElements = groupedChildren
                             .Select(gc =>
                             {
-                                var del = gc.First().CorrelationStatus == CorrelationStatus.Deleted;
-                                var ins = gc.First().CorrelationStatus == CorrelationStatus.Inserted;
+                                var firstAtom = gc.First();
+                                var del = firstAtom.CorrelationStatus == CorrelationStatus.Deleted;
+                                var ins = firstAtom.CorrelationStatus == CorrelationStatus.Inserted;
+                                var movedSource = firstAtom.CorrelationStatus == CorrelationStatus.MovedSource;
+                                var movedDest = firstAtom.CorrelationStatus == CorrelationStatus.MovedDestination;
                                 if (del)
                                 {
                                     return gc.Select(gcc =>
@@ -4923,6 +5309,21 @@ namespace Docxodus
                                         return dup;
                                     });
                                 }
+                                else if (movedSource)
+                                {
+                                    return gc.Select(gcc =>
+                                    {
+                                        var dup = new XElement(ancestorBeingConstructed.Name,
+                                            ancestorBeingConstructed.Attributes().Where(a => a.Name.Namespace != PtOpenXml.pt),
+                                            new XAttribute(PtOpenXml.Status, "MovedSource"));
+                                        if (gcc.MoveGroupId.HasValue)
+                                        {
+                                            dup.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", gcc.MoveGroupId.Value));
+                                            dup.Add(new XAttribute(PtOpenXml.pt + "MoveName", gcc.MoveName ?? ""));
+                                        }
+                                        return dup;
+                                    });
+                                }
                                 else if (ins)
                                 {
                                     return gc.Select(gcc =>
@@ -4930,6 +5331,21 @@ namespace Docxodus
                                         var dup = new XElement(ancestorBeingConstructed.Name,
                                             ancestorBeingConstructed.Attributes().Where(a => a.Name.Namespace != PtOpenXml.pt),
                                             new XAttribute(PtOpenXml.Status, "Inserted"));
+                                        return dup;
+                                    });
+                                }
+                                else if (movedDest)
+                                {
+                                    return gc.Select(gcc =>
+                                    {
+                                        var dup = new XElement(ancestorBeingConstructed.Name,
+                                            ancestorBeingConstructed.Attributes().Where(a => a.Name.Namespace != PtOpenXml.pt),
+                                            new XAttribute(PtOpenXml.Status, "MovedDestination"));
+                                        if (gcc.MoveGroupId.HasValue)
+                                        {
+                                            dup.Add(new XAttribute(PtOpenXml.pt + "MoveGroupId", gcc.MoveGroupId.Value));
+                                            dup.Add(new XAttribute(PtOpenXml.pt + "MoveName", gcc.MoveName ?? ""));
+                                        }
                                         return dup;
                                     });
                                 }
@@ -6985,6 +7401,11 @@ namespace Docxodus
             W.endnoteRef,
             W.separator,
             W.continuationSeparator,
+            // Move range markers don't contain content, skip during atom creation
+            W.moveFromRangeStart,
+            W.moveFromRangeEnd,
+            W.moveToRangeStart,
+            W.moveToRangeEnd,
         };
 
         private static XName[] ElementsToHaveSha1Hash = new XName[]
@@ -7010,12 +7431,8 @@ namespace Docxodus
             W.customXmlMoveFromRangeStart,
             W.customXmlMoveToRangeEnd,
             W.customXmlMoveToRangeStart,
-            W.moveFrom,
-            W.moveFromRangeStart,
-            W.moveFromRangeEnd,
-            W.moveTo,
-            W.moveToRangeStart,
-            W.moveToRangeEnd,
+            // Note: w:moveFrom/moveTo are now allowed since we produce native move markup
+            // They are handled in GetRevisions() and CreateComparisonUnitAtomList()
             W.subDoc,
         };
 
@@ -7035,6 +7452,16 @@ namespace Docxodus
             new RecursionInfo()
             {
                 ElementName = W.ins,
+                ChildElementPropertyNames = null,
+            },
+            new RecursionInfo()
+            {
+                ElementName = W.moveFrom,
+                ChildElementPropertyNames = null,
+            },
+            new RecursionInfo()
+            {
+                ElementName = W.moveTo,
                 ChildElementPropertyNames = null,
             },
             new RecursionInfo()
@@ -7594,6 +8021,18 @@ namespace Docxodus
         public OpenXmlPart Part;
         public XElement RevTrackElement;
 
+        /// <summary>
+        /// For moved content: unique ID linking source and destination atoms.
+        /// Both the "from" and "to" atoms share the same MoveGroupId.
+        /// </summary>
+        public int? MoveGroupId;
+
+        /// <summary>
+        /// For moved content: the w:name attribute value linking source and destination in OpenXML.
+        /// Used for w:moveFromRangeStart and w:moveToRangeStart elements.
+        /// </summary>
+        public string MoveName;
+
         public ComparisonUnitAtom(XElement contentElement, XElement[] ancestorElements, OpenXmlPart part, WmlComparerSettings settings)
         {
             ContentElement = contentElement;
@@ -7610,6 +8049,10 @@ namespace Docxodus
                     CorrelationStatus = CorrelationStatus.Deleted;
                 else if (RevTrackElement.Name == W.ins)
                     CorrelationStatus = CorrelationStatus.Inserted;
+                else if (RevTrackElement.Name == W.moveFrom)
+                    CorrelationStatus = CorrelationStatus.MovedSource;
+                else if (RevTrackElement.Name == W.moveTo)
+                    CorrelationStatus = CorrelationStatus.MovedDestination;
             }
             string sha1Hash = (string)contentElement.Attribute(PtOpenXml.SHA1Hash);
             if (sha1Hash != null)
@@ -7646,7 +8089,10 @@ namespace Docxodus
                 return revTrackElement;
             }
 
-            revTrackElement = ancestors.FirstOrDefault(a => a.Name == W.del || a.Name == W.ins);
+            // Check for ins, del, moveFrom, or moveTo in ancestors
+            revTrackElement = ancestors.FirstOrDefault(a =>
+                a.Name == W.del || a.Name == W.ins ||
+                a.Name == W.moveFrom || a.Name == W.moveTo);
             return revTrackElement;
         }
 
@@ -7834,6 +8280,14 @@ namespace Docxodus
         Deleted,
         Equal,
         Group,
+        /// <summary>
+        /// Content that was moved FROM this location (appears as deletion with move markup)
+        /// </summary>
+        MovedSource,
+        /// <summary>
+        /// Content that was moved TO this location (appears as insertion with move markup)
+        /// </summary>
+        MovedDestination,
     }
 
     class PartSHA1HashAnnotation
