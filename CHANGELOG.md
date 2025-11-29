@@ -50,6 +50,10 @@ All notable changes to this project will be documented in this file.
 
 - **WmlComparer table row comparison** (1 test: WC-1500) - Added LCS-based row matching (`ApplyLcsToTableRows`) for large tables (7+ rows) when content differs significantly, preventing cascading false differences from insertions/deletions in the middle of tables.
 
+- **WASM CDN loading CORS issue** - Fixed cross-origin loading failures when WASM files are served from CDNs (jsDelivr, unpkg). The .NET WASM runtime uses `credentials:"same-origin"` for fetch requests, which conflicts with CDN's `Access-Control-Allow-Origin: *` wildcard header. Build script now patches `dotnet.js` to use `credentials:"omit"` for CDN compatibility.
+
+- **Vite bundler compatibility** - Added `@vite-ignore` comment to dynamic import in `npm/src/index.ts` to prevent Vite from trying to analyze/resolve the WASM loader path during development builds.
+
 ### Changed
 - Replaced `FontPartType`/`ImagePartType` with `PartTypeInfo` pattern for SDK 3.x compatibility
 - Replaced `.Close()` calls with `Dispose()` pattern

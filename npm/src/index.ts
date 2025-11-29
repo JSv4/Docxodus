@@ -84,7 +84,7 @@ export async function initialize(basePath?: string): Promise<void> {
 async function tryLoadFromPath(basePath: string): Promise<boolean> {
   try {
     const dotnetPath = basePath + "_framework/dotnet.js";
-    const { dotnet } = await import(/* webpackIgnore: true */ dotnetPath);
+    const { dotnet } = await import(/* webpackIgnore: true */ /* @vite-ignore */ dotnetPath);
 
     const { getAssemblyExports, getConfig } = await dotnet
       .withDiagnosticTracing(false)

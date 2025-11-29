@@ -51,6 +51,17 @@ cp "$WASM_PROJECT/main.js" "$WASM_DIST/"
 # Copy index.html for testing
 cp "$WASM_PROJECT/index.html" "$WASM_DIST/"
 
+# Patch dotnet.js for cross-origin CDN compatibility
+# The .NET WASM runtime uses credentials:"same-origin" which conflicts with CDN's CORS wildcard
+# (Access-Control-Allow-Origin: * cannot be used with credentials)
+echo "Patching dotnet.js for CDN compatibility..."
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS sed requires empty string for -i
+    sed -i '' 's/credentials:"same-origin"/credentials:"omit"/g' "$WASM_DIST/_framework/dotnet.js"
+else
+    sed -i 's/credentials:"same-origin"/credentials:"omit"/g' "$WASM_DIST/_framework/dotnet.js"
+fi
+
 # Report sizes
 echo ""
 echo "Build complete! File sizes:"
