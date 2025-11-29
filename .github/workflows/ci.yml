@@ -44,6 +44,35 @@ jobs:
           name: test-results
           path: Docxodus.Tests/TestResults/*.trx
 
+  build-npm:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install wasm-tools workload
+        run: dotnet workload install wasm-tools
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install npm dependencies
+        run: cd npm && npm ci
+
+      - name: Build npm package (WASM + TypeScript)
+        run: cd npm && npm run build
+
+      - name: TypeScript type check
+        run: cd npm && npx tsc --noEmit
+
   build-matrix:
     runs-on: ${{ matrix.os }}
     strategy:
