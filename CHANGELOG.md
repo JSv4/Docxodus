@@ -22,7 +22,7 @@ All notable changes to this project will be documented in this file.
     - `IncludeCommentMetadata`: Include author/date in HTML output
   - Comment highlighting with configurable CSS classes
   - Full comment metadata support (author, date, initials)
-  - WASM/npm support via `ConvertDocxToHtmlAdvanced` method and TypeScript types
+  - WASM/npm support via `commentRenderMode` parameter and TypeScript `CommentRenderMode` enum
 - **WebAssembly NPM Package** (`docxodus`) - Browser-based document comparison and HTML conversion
   - `wasm/DocxodusWasm/` - .NET 8 WASM project with JSExport methods
   - `npm/` - TypeScript wrapper with React hooks

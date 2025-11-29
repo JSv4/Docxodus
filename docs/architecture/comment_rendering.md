@@ -429,13 +429,28 @@ The npm package exposes comment options via `ConversionOptions`:
 ```typescript
 import { convertDocxToHtml, CommentRenderMode } from 'docxodus';
 
+// Render comments in endnote style
 const html = await convertDocxToHtml(docxFile, {
-  renderComments: true,
   commentRenderMode: CommentRenderMode.EndnoteStyle,
   commentCssClassPrefix: 'note-',
-  includeCommentMetadata: true
+});
+
+// Render comments as inline tooltips
+const htmlInline = await convertDocxToHtml(docxFile, {
+  commentRenderMode: CommentRenderMode.Inline,
+});
+
+// Disable comment rendering (default)
+const htmlNoComments = await convertDocxToHtml(docxFile, {
+  commentRenderMode: CommentRenderMode.Disabled,
 });
 ```
+
+The `CommentRenderMode` enum values:
+- `Disabled` (-1): Do not render comments (default)
+- `EndnoteStyle` (0): Comments at end with bidirectional links
+- `Inline` (1): Comments as tooltips with data attributes
+- `Margin` (2): CSS-positioned margin comments
 
 ## Limitations
 
