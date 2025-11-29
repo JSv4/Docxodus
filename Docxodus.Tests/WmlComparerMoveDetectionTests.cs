@@ -1,0 +1,587 @@
+// Copyright (c) Microsoft. All rights reserved.
+// Licensed under the MIT license. See LICENSE file in the project root for full license information.
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using Docxodus;
+using Xunit;
+using static Docxodus.WmlComparer;
+
+namespace OxPt
+{
+    /// <summary>
+    /// Tests for move detection in WmlComparer.GetRevisions().
+    /// </summary>
+    public class WmlComparerMoveDetectionTests
+    {
+        #region Helper Methods
+
+        /// <summary>
+        /// Creates a minimal valid DOCX document with the specified paragraphs.
+        /// </summary>
+        private static WmlDocument CreateDocumentWithParagraphs(params string[] paragraphs)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                mainPart.Document = new Document(
+                    new Body(
+                        paragraphs.Select(text =>
+                            new Paragraph(
+                                new Run(
+                                    new Text(text)
+                                )
+                            )
+                        )
+                    )
+                );
+
+                // Add required styles part
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new Styles(
+                    new DocDefaults(
+                        new RunPropertiesDefault(
+                            new RunPropertiesBaseStyle(
+                                new RunFonts { Ascii = "Calibri" },
+                                new FontSize { Val = "22" }
+                            )
+                        ),
+                        new ParagraphPropertiesDefault()
+                    )
+                );
+
+                // Add required settings part
+                var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                settingsPart.Settings = new Settings();
+
+                doc.Save();
+            }
+
+            stream.Position = 0;
+            return new WmlDocument("test.docx", stream.ToArray());
+        }
+
+        #endregion
+
+        #region Basic Move Detection Tests
+
+        [Fact]
+        public void MoveDetection_IdenticalText_ShouldMarkAsMove()
+        {
+            // Arrange: Create two documents where a paragraph is moved
+            // Doc1: A, B, C
+            // Doc2: B, A, C  (A moved after B)
+            var doc1 = CreateDocumentWithParagraphs(
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph C with more words added."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph C with more words added."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert
+            var movedRevisions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).ToList();
+            Assert.True(movedRevisions.Count >= 2, $"Expected at least 2 moved revisions, got {movedRevisions.Count}");
+
+            // Verify move pairs are properly linked
+            var moveGroups = movedRevisions.GroupBy(r => r.MoveGroupId).ToList();
+            foreach (var group in moveGroups)
+            {
+                Assert.NotNull(group.Key);
+                var items = group.ToList();
+                Assert.Equal(2, items.Count);
+                Assert.True(items.Any(r => r.IsMoveSource == true), "Should have a move source");
+                Assert.True(items.Any(r => r.IsMoveSource == false), "Should have a move destination");
+            }
+        }
+
+        [Fact]
+        public void MoveDetection_SimilarText_AboveThreshold_ShouldMarkAsMove()
+        {
+            // Arrange: Text is 90% similar (above 80% threshold)
+            var doc1 = CreateDocumentWithParagraphs(
+                "The quick brown fox jumps over the lazy dog today.",
+                "Another paragraph here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "Another paragraph here.",
+                "The quick brown fox jumps over the lazy dog now."  // "today" -> "now" (90% similar)
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert
+            var movedRevisions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).ToList();
+            Assert.True(movedRevisions.Count >= 2, $"Expected at least 2 moved revisions for similar text, got {movedRevisions.Count}");
+        }
+
+        [Fact]
+        public void MoveDetection_DissimilarText_BelowThreshold_ShouldRemainInsertedDeleted()
+        {
+            // Arrange: Text is very different (below 80% threshold)
+            var doc1 = CreateDocumentWithParagraphs(
+                "The quick brown fox jumps over the lazy dog.",
+                "Another paragraph here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "Another paragraph here.",
+                "A completely different sentence with new words entirely."  // Very different
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert
+            var movedRevisions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).ToList();
+            Assert.Empty(movedRevisions);
+
+            // Should have separate deletions and insertions
+            var deletions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Deleted).ToList();
+            var insertions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Inserted).ToList();
+            Assert.True(deletions.Count > 0 || insertions.Count > 0, "Should have deletions or insertions");
+        }
+
+        [Fact]
+        public void MoveDetection_ShortText_BelowMinimum_ShouldRemainInsertedDeleted()
+        {
+            // Arrange: Very short text (below 3 word minimum)
+            var doc1 = CreateDocumentWithParagraphs(
+                "Hello world",  // Only 2 words
+                "Another paragraph here with more content."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "Another paragraph here with more content.",
+                "Hello world"  // Moved but too short
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert: Short text should not be detected as a move
+            var movedRevisions = revisions
+                .Where(r => r.RevisionType == WmlComparerRevisionType.Moved)
+                .Where(r => r.Text?.Contains("Hello") == true || r.Text?.Contains("world") == true)
+                .ToList();
+            Assert.Empty(movedRevisions);
+        }
+
+        #endregion
+
+        #region Settings Tests
+
+        [Fact]
+        public void MoveDetection_Disabled_ShouldNotDetectMoves()
+        {
+            // Arrange
+            var doc1 = CreateDocumentWithParagraphs(
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph B with sufficient content here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph A with enough words for move detection."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = false  // Disabled
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert
+            var movedRevisions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).ToList();
+            Assert.Empty(movedRevisions);
+        }
+
+        [Fact]
+        public void MoveDetection_CustomThreshold_ShouldRespectSetting()
+        {
+            // Arrange: Text is 70% similar
+            var doc1 = CreateDocumentWithParagraphs(
+                "The quick brown fox jumps over the lazy dog in the park.",
+                "Another paragraph here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "Another paragraph here.",
+                "The quick brown cat runs under the sleepy dog in the yard."  // ~60% similar
+            );
+
+            // With low threshold, should detect as move
+            var lowThresholdSettings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.5,  // 50% threshold
+                MoveMinimumWordCount = 3
+            };
+
+            // With high threshold, should not detect as move
+            var highThresholdSettings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.9,  // 90% threshold
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var comparedLow = WmlComparer.Compare(doc1, doc2, lowThresholdSettings);
+            var revisionsLow = WmlComparer.GetRevisions(comparedLow, lowThresholdSettings);
+
+            var comparedHigh = WmlComparer.Compare(doc1, doc2, highThresholdSettings);
+            var revisionsHigh = WmlComparer.GetRevisions(comparedHigh, highThresholdSettings);
+
+            // Assert
+            var movesLow = revisionsLow.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).Count();
+            var movesHigh = revisionsHigh.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).Count();
+
+            Assert.True(movesLow >= movesHigh,
+                $"Lower threshold should detect more or equal moves: low={movesLow}, high={movesHigh}");
+        }
+
+        [Fact]
+        public void MoveDetection_CustomMinWordCount_ShouldRespectSetting()
+        {
+            // Arrange: 4-word sentence
+            var doc1 = CreateDocumentWithParagraphs(
+                "Four word sentence here.",
+                "Another paragraph with more content for testing purposes."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "Another paragraph with more content for testing purposes.",
+                "Four word sentence here."
+            );
+
+            // With min 3 words, should detect
+            var minThreeSettings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // With min 5 words, should not detect (sentence is only 4 words)
+            var minFiveSettings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 5
+            };
+
+            // Act
+            var comparedThree = WmlComparer.Compare(doc1, doc2, minThreeSettings);
+            var revisionsThree = WmlComparer.GetRevisions(comparedThree, minThreeSettings);
+
+            var comparedFive = WmlComparer.Compare(doc1, doc2, minFiveSettings);
+            var revisionsFive = WmlComparer.GetRevisions(comparedFive, minFiveSettings);
+
+            // Assert
+            var movesWithMinThree = revisionsThree
+                .Where(r => r.RevisionType == WmlComparerRevisionType.Moved)
+                .Where(r => r.Text?.Contains("Four") == true)
+                .Count();
+
+            var movesWithMinFive = revisionsFive
+                .Where(r => r.RevisionType == WmlComparerRevisionType.Moved)
+                .Where(r => r.Text?.Contains("Four") == true)
+                .Count();
+
+            Assert.True(movesWithMinThree >= movesWithMinFive,
+                $"Lower min word count should detect more moves: min3={movesWithMinThree}, min5={movesWithMinFive}");
+        }
+
+        [Fact]
+        public void MoveDetection_CaseInsensitive_ShouldMatchIgnoringCase()
+        {
+            // Arrange: Same text with different case
+            var doc1 = CreateDocumentWithParagraphs(
+                "THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG.",
+                "Another paragraph here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "Another paragraph here.",
+                "the quick brown fox jumps over the lazy dog."  // Same words, different case
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3,
+                CaseInsensitive = true
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert: Should detect as move when case-insensitive
+            var movedRevisions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).ToList();
+            Assert.True(movedRevisions.Count >= 2,
+                $"Case-insensitive should detect moves: got {movedRevisions.Count}");
+        }
+
+        #endregion
+
+        #region Multiple Moves Tests
+
+        [Fact]
+        public void MoveDetection_MultipleMoves_ShouldMatchCorrectly()
+        {
+            // Arrange: Multiple paragraphs swapped
+            // Doc1: A, B, C, D
+            // Doc2: C, D, A, B  (A,B moved to end; C,D moved to start)
+            var doc1 = CreateDocumentWithParagraphs(
+                "First paragraph with content alpha beta gamma.",
+                "Second paragraph with content delta epsilon zeta.",
+                "Third paragraph with content eta theta iota.",
+                "Fourth paragraph with content kappa lambda mu."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "Third paragraph with content eta theta iota.",
+                "Fourth paragraph with content kappa lambda mu.",
+                "First paragraph with content alpha beta gamma.",
+                "Second paragraph with content delta epsilon zeta."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert
+            var movedRevisions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).ToList();
+
+            // Each move pair should have unique MoveGroupId
+            var moveGroupIds = movedRevisions
+                .Where(r => r.MoveGroupId.HasValue)
+                .Select(r => r.MoveGroupId.Value)
+                .Distinct()
+                .ToList();
+
+            // Verify each group has exactly one source and one destination
+            foreach (var groupId in moveGroupIds)
+            {
+                var groupRevisions = movedRevisions.Where(r => r.MoveGroupId == groupId).ToList();
+                Assert.Equal(2, groupRevisions.Count);
+                Assert.Single(groupRevisions.Where(r => r.IsMoveSource == true));
+                Assert.Single(groupRevisions.Where(r => r.IsMoveSource == false));
+            }
+        }
+
+        #endregion
+
+        #region Edge Cases
+
+        [Fact]
+        public void MoveDetection_EmptyDocument_ShouldNotThrow()
+        {
+            // Arrange
+            var doc1 = CreateDocumentWithParagraphs();
+            var doc2 = CreateDocumentWithParagraphs("New content added here with several words.");
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true
+            };
+
+            // Act & Assert: Should not throw
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // No moves expected (nothing to move from empty doc)
+            var moves = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).ToList();
+            Assert.Empty(moves);
+        }
+
+        [Fact]
+        public void MoveDetection_IdenticalDocuments_ShouldHaveNoRevisions()
+        {
+            // Arrange
+            var doc1 = CreateDocumentWithParagraphs(
+                "Same content in both documents with enough words."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "Same content in both documents with enough words."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert
+            Assert.Empty(revisions);
+        }
+
+        [Fact]
+        public void MoveDetection_OnlyDeletions_ShouldNotCreateMoves()
+        {
+            // Arrange: Content removed, nothing added
+            var doc1 = CreateDocumentWithParagraphs(
+                "First paragraph that will be deleted.",
+                "Second paragraph that stays here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "Second paragraph that stays here."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert: Should be deletion, not move
+            var moves = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).ToList();
+            Assert.Empty(moves);
+
+            var deletions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Deleted).ToList();
+            Assert.True(deletions.Count > 0, "Should have deletions");
+        }
+
+        [Fact]
+        public void MoveDetection_OnlyInsertions_ShouldNotCreateMoves()
+        {
+            // Arrange: Content added, nothing removed
+            var doc1 = CreateDocumentWithParagraphs(
+                "First paragraph that stays here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "First paragraph that stays here.",
+                "Second paragraph that is newly added."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert: Should be insertion, not move
+            var moves = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).ToList();
+            Assert.Empty(moves);
+
+            var insertions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Inserted).ToList();
+            Assert.True(insertions.Count > 0, "Should have insertions");
+        }
+
+        #endregion
+
+        #region Revision Properties Tests
+
+        [Fact]
+        public void MoveDetection_RevisionProperties_ShouldBeCorrect()
+        {
+            // Arrange
+            var doc1 = CreateDocumentWithParagraphs(
+                "Paragraph to be moved with enough words for detection.",
+                "Static paragraph that does not change here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "Static paragraph that does not change here.",
+                "Paragraph to be moved with enough words for detection."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+            var revisions = WmlComparer.GetRevisions(compared, settings);
+
+            // Assert
+            var movedRevisions = revisions.Where(r => r.RevisionType == WmlComparerRevisionType.Moved).ToList();
+
+            foreach (var rev in movedRevisions)
+            {
+                // All moved revisions should have MoveGroupId
+                Assert.NotNull(rev.MoveGroupId);
+                Assert.True(rev.MoveGroupId > 0);
+
+                // All moved revisions should have IsMoveSource set
+                Assert.NotNull(rev.IsMoveSource);
+            }
+
+            // Find a pair and verify they reference each other
+            if (movedRevisions.Count >= 2)
+            {
+                var source = movedRevisions.FirstOrDefault(r => r.IsMoveSource == true);
+                var dest = movedRevisions.FirstOrDefault(r => r.IsMoveSource == false && r.MoveGroupId == source?.MoveGroupId);
+
+                Assert.NotNull(source);
+                Assert.NotNull(dest);
+                Assert.Equal(source.MoveGroupId, dest.MoveGroupId);
+            }
+        }
+
+        #endregion
+    }
+}

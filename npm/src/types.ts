@@ -1,12 +1,13 @@
 /**
  * Revision type enum matching the .NET WmlComparerRevisionType
- * These are the only two revision types returned by the comparison engine
  */
 export enum RevisionType {
   /** Text or content that was added/inserted */
   Inserted = "Inserted",
   /** Text or content that was removed/deleted */
   Deleted = "Deleted",
+  /** Text or content that was relocated within the document */
+  Moved = "Moved",
 }
 
 /**
@@ -89,7 +90,7 @@ export interface Revision {
    */
   date: string;
   /**
-   * Type of revision - either "Inserted" or "Deleted".
+   * Type of revision - "Inserted", "Deleted", or "Moved".
    * Use the RevisionType enum for type-safe comparisons.
    */
   revisionType: RevisionType | string;
@@ -99,6 +100,18 @@ export interface Revision {
    * May be empty string for non-text elements (e.g., images, math equations).
    */
   text: string;
+  /**
+   * For Moved revisions, this ID links the source and destination.
+   * Both the "from" and "to" revisions share the same moveGroupId.
+   * Undefined for non-move revisions.
+   */
+  moveGroupId?: number;
+  /**
+   * For Moved revisions: true = source (content moved FROM here),
+   * false = destination (content moved TO here).
+   * Undefined for non-move revisions.
+   */
+  isMoveSource?: boolean;
 }
 
 /**
@@ -129,6 +142,80 @@ export function isInsertion(revision: Revision): boolean {
  */
 export function isDeletion(revision: Revision): boolean {
   return revision.revisionType === RevisionType.Deleted;
+}
+
+/**
+ * Type guard to check if a revision is a move operation.
+ * @param revision - The revision to check
+ * @returns true if the revision is part of a move
+ *
+ * @example
+ * ```typescript
+ * const revisions = await getRevisions(doc);
+ * const moves = revisions.filter(isMove);
+ * ```
+ */
+export function isMove(revision: Revision): boolean {
+  return revision.revisionType === RevisionType.Moved;
+}
+
+/**
+ * Type guard to check if a revision is a move source (content moved FROM here).
+ * @param revision - The revision to check
+ * @returns true if the revision is the source of a move
+ *
+ * @example
+ * ```typescript
+ * const revisions = await getRevisions(doc);
+ * const moveSources = revisions.filter(isMoveSource);
+ * ```
+ */
+export function isMoveSource(revision: Revision): boolean {
+  return isMove(revision) && revision.isMoveSource === true;
+}
+
+/**
+ * Type guard to check if a revision is a move destination (content moved TO here).
+ * @param revision - The revision to check
+ * @returns true if the revision is the destination of a move
+ *
+ * @example
+ * ```typescript
+ * const revisions = await getRevisions(doc);
+ * const moveDestinations = revisions.filter(isMoveDestination);
+ * ```
+ */
+export function isMoveDestination(revision: Revision): boolean {
+  return isMove(revision) && revision.isMoveSource === false;
+}
+
+/**
+ * Find the matching pair for a move revision.
+ * @param revision - A move revision
+ * @param allRevisions - All revisions from the document
+ * @returns The matching move revision, or undefined if not found
+ *
+ * @example
+ * ```typescript
+ * const revisions = await getRevisions(doc);
+ * for (const rev of revisions.filter(isMoveSource)) {
+ *   const destination = findMovePair(rev, revisions);
+ *   console.log(`"${rev.text}" moved to become "${destination?.text}"`);
+ * }
+ * ```
+ */
+export function findMovePair(
+  revision: Revision,
+  allRevisions: Revision[]
+): Revision | undefined {
+  if (!isMove(revision) || revision.moveGroupId === undefined) {
+    return undefined;
+  }
+  return allRevisions.find(
+    (r) =>
+      r.moveGroupId === revision.moveGroupId &&
+      r.isMoveSource !== revision.isMoveSource
+  );
 }
 
 /**
@@ -201,5 +288,44 @@ export interface DocxodusWasmExports {
       caseInsensitive: boolean
     ) => Uint8Array;
     GetRevisionsJson: (comparedDocBytes: Uint8Array) => string;
+    GetRevisionsJsonWithOptions: (
+      comparedDocBytes: Uint8Array,
+      detectMoves: boolean,
+      moveSimilarityThreshold: number,
+      moveMinimumWordCount: number,
+      caseInsensitive: boolean
+    ) => string;
   };
+}
+
+/**
+ * Options for revision extraction with move detection configuration.
+ */
+export interface GetRevisionsOptions {
+  /**
+   * Whether to detect and mark moved content.
+   * When enabled, deletions and insertions with similar text are linked as move pairs.
+   * @default true
+   */
+  detectMoves?: boolean;
+
+  /**
+   * Jaccard similarity threshold for move detection (0.0 to 1.0).
+   * Higher values require more exact word overlap between deletion and insertion.
+   * @default 0.8
+   */
+  moveSimilarityThreshold?: number;
+
+  /**
+   * Minimum word count for content to be considered for move detection.
+   * Short phrases below this threshold are excluded to avoid false positives.
+   * @default 3
+   */
+  moveMinimumWordCount?: number;
+
+  /**
+   * Whether similarity matching ignores case differences.
+   * @default false
+   */
+  caseInsensitive?: boolean;
 }

@@ -105,7 +105,18 @@ var sources = new List<Source> { new Source(wmlDoc, keepSections: true) };
 DocumentBuilder.BuildDocument(sources, outputPath);
 ```
 
-**WmlComparer.cs** - Compare two DOCX files, producing a document with tracked revisions. Supports nested tables and text boxes. Key settings in `WmlComparerSettings`.
+**WmlComparer.cs** - Compare two DOCX files, producing a document with tracked revisions. Supports nested tables and text boxes. Key settings in `WmlComparerSettings`:
+- `AuthorForRevisions` - Author name for tracked changes
+- `DetailThreshold` - 0.0-1.0, lower = more detailed comparison (default: 0.15)
+- `CaseInsensitive` - Case-insensitive comparison
+- `DetectMoves` - Enable move detection in `GetRevisions()` (default: true)
+- `MoveSimilarityThreshold` - Jaccard similarity threshold for moves (default: 0.8)
+- `MoveMinimumWordCount` - Minimum words for move detection (default: 3)
+
+Move detection in `GetRevisions()` identifies when content is relocated vs. deleted+inserted:
+- `WmlComparerRevisionType.Moved` - Revision type for moved content
+- `WmlComparerRevision.MoveGroupId` - Links source and destination revisions
+- `WmlComparerRevision.IsMoveSource` - true = moved FROM here, false = moved TO here
 
 **WmlToHtmlConverter.cs / HtmlToWmlConverter.cs** - Bidirectional DOCX ↔ HTML conversion. Key settings in `WmlToHtmlConverterSettings`:
 - `RenderTrackedChanges` - Render insertions/deletions as `<ins>`/`<del>` instead of accepting them

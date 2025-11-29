@@ -11,6 +11,7 @@ npm install docxodus
 ## Features
 
 - **Document Comparison**: Compare two DOCX files and generate a redlined document with tracked changes
+- **Move Detection**: Automatically identify when content is relocated (not just deleted/inserted)
 - **HTML Conversion**: Convert DOCX documents to HTML for display in the browser
 - **Comment Rendering**: Render Word document comments in three different styles
 - **Revision Extraction**: Get structured data about all revisions in a compared document
@@ -139,14 +140,50 @@ const html = await compareDocumentsToHtml(originalFile, modifiedFile, {
 });
 ```
 
-#### `getRevisions(document): Promise<Revision[]>`
+#### `getRevisions(document, options?): Promise<Revision[]>`
 
-Extract revision information from a compared document.
+Extract revision information from a compared document. Revisions include insertions, deletions, and **moves** (relocated content).
 
 ```typescript
+import { getRevisions, isMove, isMoveSource, findMovePair, RevisionType } from 'docxodus';
+
 const revisions = await getRevisions(comparedDocx);
-// [{ author: "John", date: "2024-01-15", revisionType: "Insertion", text: "new text" }, ...]
+
+// Filter by type
+const insertions = revisions.filter(r => r.revisionType === RevisionType.Inserted);
+const deletions = revisions.filter(r => r.revisionType === RevisionType.Deleted);
+const moves = revisions.filter(isMove);
+
+// Work with move pairs
+for (const rev of revisions.filter(isMoveSource)) {
+  const destination = findMovePair(rev, revisions);
+  console.log(`"${rev.text}" moved to "${destination?.text}"`);
+}
 ```
+
+**Revision Interface:**
+
+```typescript
+interface Revision {
+  author: string;           // Author who made the change
+  date: string;             // ISO 8601 date string
+  revisionType: RevisionType | string;  // "Inserted", "Deleted", or "Moved"
+  text: string;             // The revised text content
+  moveGroupId?: number;     // For moves: links source and destination
+  isMoveSource?: boolean;   // For moves: true = moved FROM, false = moved TO
+}
+```
+
+**Helper Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `isInsertion(rev)` | Returns true if revision is an insertion |
+| `isDeletion(rev)` | Returns true if revision is a deletion |
+| `isMove(rev)` | Returns true if revision is a move |
+| `isMoveSource(rev)` | Returns true if this is the source of a move (content moved FROM here) |
+| `isMoveDestination(rev)` | Returns true if this is the destination of a move (content moved TO here) |
+| `findMovePair(rev, allRevisions)` | Find the matching source/destination for a move revision |
 
 ### Comment Render Modes
 
@@ -185,6 +222,51 @@ const html = await convertDocxToHtml(docxFile, {
   commentRenderMode: CommentRenderMode.Margin
 });
 // Produces: flexbox layout with main content on left, comments in right column
+```
+
+### Move Detection
+
+Move detection is **enabled by default** in `getRevisions()`. When content is relocated within a document, it's marked as `Moved` instead of appearing as separate deletion and insertion.
+
+**How it works:**
+- After comparison, deletions and insertions are analyzed for text similarity
+- If a deletion closely matches an insertion (≥80% word overlap by default), they're linked as a move pair
+- Both revisions get the same `moveGroupId` to link them together
+- `isMoveSource` indicates direction: `true` = content moved FROM here, `false` = content moved TO here
+
+**Configuration:**
+
+Move detection can be configured via the `options` parameter to `getRevisions()`:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `detectMoves` | `boolean` | `true` | Enable/disable move detection |
+| `moveSimilarityThreshold` | `number` | `0.8` | Jaccard similarity threshold (0.0-1.0). Higher values require more exact matches. |
+| `moveMinimumWordCount` | `number` | `3` | Minimum word count for move detection. Short phrases are excluded to avoid false positives. |
+| `caseInsensitive` | `boolean` | `false` | When true, similarity matching ignores case differences |
+
+**Example (detecting near-exact moves):**
+```typescript
+const revisions = await getRevisions(comparedDoc, {
+  detectMoves: true,
+  moveSimilarityThreshold: 0.95,  // Require 95% word overlap
+  moveMinimumWordCount: 5         // Only consider phrases of 5+ words
+});
+```
+
+**Example (detecting loose moves):**
+```typescript
+const revisions = await getRevisions(comparedDoc, {
+  detectMoves: true,
+  moveSimilarityThreshold: 0.6,   // Accept 60% word overlap
+  moveMinimumWordCount: 3,
+  caseInsensitive: true           // Ignore case differences
+});
+```
+
+**Example (disable move detection):**
+```typescript
+const revisions = await getRevisions(comparedDoc, { detectMoves: false });
 ```
 
 ### React Hooks

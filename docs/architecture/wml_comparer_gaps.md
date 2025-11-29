@@ -41,22 +41,23 @@ Extend `WmlComparerRevisionType` to include:
 
 This would bring the comparison API in line with what the HTML renderer already supports for documents with existing tracked changes.
 
-## 2. Move Detection Not Implemented
+## 2. Move Detection ✅ IMPLEMENTED
 
-**Status:** Gap
+**Status:** Implemented (Issue #20)
 
-The comparison algorithm does not attempt to detect when content has been moved from one location to another. Instead, moved content appears as:
-1. A deletion at the original location
-2. An insertion at the new location
+Move detection has been implemented in `GetRevisions()` using post-processing with Jaccard similarity:
 
-Word's native comparison feature can detect moves and mark them with `w:moveFrom` / `w:moveTo` elements, which the HTML renderer can then display distinctly from regular insertions/deletions.
+- **`WmlComparerRevisionType.Moved`** - New enum value for moved content
+- **`WmlComparerRevision.MoveGroupId`** - Links source and destination revisions
+- **`WmlComparerRevision.IsMoveSource`** - true=moved FROM here, false=moved TO here
+- **Settings**:
+  - `DetectMoves` (default: true)
+  - `MoveSimilarityThreshold` (default: 0.8 = 80% word overlap)
+  - `MoveMinimumWordCount` (default: 3 words minimum)
 
-### Recommendation
+The implementation uses word-level Jaccard similarity to match deletions with insertions. When similarity exceeds the threshold and the text meets minimum word count, the pair is marked as a move.
 
-Implement move detection by:
-1. After identifying deletions and insertions, compare their text content
-2. If a deletion's text closely matches an insertion's text (above a similarity threshold), mark them as a move pair
-3. Add `Moved` to `WmlComparerRevisionType` and track source/destination locations
+**Note:** This implementation does NOT generate Word-native `w:moveFrom`/`w:moveTo` markup in the document. It only affects the `GetRevisions()` API. Generating native move markup would require deeper integration into the comparison algorithm and is a potential future enhancement.
 
 ## 3. Format Change Detection Not Exposed
 
@@ -120,17 +121,21 @@ When the .NET comparison engine is enhanced, the TypeScript types should be upda
 
 ## Summary of Priority Improvements
 
+### Completed ✅
+
+1. ~~**Add move detection**~~ - ✅ Implemented: `Moved` revision type with `MoveGroupId` and `IsMoveSource` properties
+2. ~~**Link related revisions**~~ - ✅ Move pairs are now linked via `MoveGroupId`
+
 ### High Priority
 
-1. **Add move detection** - Distinguish moved content from delete+insert pairs
-2. **Expose format changes** - Add `FormatChange` revision type for formatting-only modifications
+1. **Expose format changes** - Add `FormatChange` revision type for formatting-only modifications
 
 ### Medium Priority
 
-3. **Add revision context** - Include paragraph number or surrounding text for better UX
-4. **Link related revisions** - Connect move pairs and other related changes
+2. **Add revision context** - Include paragraph number or surrounding text for better UX
+3. **Generate native move markup** - Produce `w:moveFrom`/`w:moveTo` elements in comparison output
 
 ### Low Priority
 
-5. **Position information** - Add character/word offsets for precise location
-6. **Granular format change details** - Specify exactly which properties changed
+4. **Position information** - Add character/word offsets for precise location
+5. **Granular format change details** - Specify exactly which properties changed
