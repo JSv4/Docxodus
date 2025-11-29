@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
 using System.Text.Json;
+using System.Xml.Linq;
 using Docxodus;
 using DocumentFormat.OpenXml.Packaging;
 
@@ -83,7 +84,7 @@ public partial class DocumentConverter
             };
 
             var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, settings);
-            return htmlElement.ToString();
+            return htmlElement.ToString(SaveOptions.DisableFormatting);
         }
         catch (Exception ex)
         {

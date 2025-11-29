@@ -109,13 +109,52 @@ Initialize the WASM runtime. Must be called before using any other functions.
 Convert a DOCX document to HTML.
 
 ```typescript
+import { CommentRenderMode } from 'docxodus';
+
 interface ConversionOptions {
-  pageTitle?: string;      // HTML document title
-  cssPrefix?: string;      // CSS class prefix (default: "docx-")
-  fabricateClasses?: boolean; // Generate CSS classes (default: true)
-  additionalCss?: string;  // Extra CSS to include
+  pageTitle?: string;           // HTML document title
+  cssPrefix?: string;           // CSS class prefix (default: "docx-")
+  fabricateClasses?: boolean;   // Generate CSS classes (default: true)
+  additionalCss?: string;       // Extra CSS to include
+  commentRenderMode?: CommentRenderMode;  // How to render comments (default: Disabled)
+  commentCssClassPrefix?: string;         // CSS prefix for comments (default: "comment-")
 }
 ```
+
+##### Comment Render Modes
+
+Control how Word document comments are rendered in HTML output:
+
+```typescript
+import { convertDocxToHtml, CommentRenderMode } from 'docxodus';
+
+// Don't render comments (default)
+const html = await convertDocxToHtml(docxFile, {
+  commentRenderMode: CommentRenderMode.Disabled
+});
+
+// Render as footnotes with bidirectional links
+const htmlEndnote = await convertDocxToHtml(docxFile, {
+  commentRenderMode: CommentRenderMode.EndnoteStyle
+});
+
+// Render as inline tooltips (title attribute + data attributes)
+const htmlInline = await convertDocxToHtml(docxFile, {
+  commentRenderMode: CommentRenderMode.Inline
+});
+
+// Render in a side margin column (CSS flexbox layout)
+const htmlMargin = await convertDocxToHtml(docxFile, {
+  commentRenderMode: CommentRenderMode.Margin
+});
+```
+
+| Mode | Value | Description |
+|------|-------|-------------|
+| `Disabled` | -1 | Don't render comments (default) |
+| `EndnoteStyle` | 0 | Comments at document end with `[1]` style links |
+| `Inline` | 1 | Tooltips via `title` and `data-comment` attributes |
+| `Margin` | 2 | Side column using CSS flexbox |
 
 #### `compareDocuments(original, modified, options?): Promise<Uint8Array>`
 Compare two DOCX documents and return a redlined DOCX with tracked changes.
