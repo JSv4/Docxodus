@@ -47,13 +47,17 @@ export interface UseDocxodusResult {
  * React hook for using Docxodus WASM functionality.
  * Automatically initializes the WASM runtime on mount.
  *
- * @param wasmBasePath - Optional base path to WASM files
+ * By default, WASM files are loaded from CDN (jsDelivr/unpkg).
+ * Pass a custom path only if you need to host files locally.
+ *
+ * @param wasmBasePath - Optional custom path to WASM files. Leave empty for CDN (recommended).
  * @returns Object with ready state and document functions
  *
  * @example
  * ```tsx
  * function App() {
- *   const { isReady, isLoading, error, convertToHtml } = useDocxodus('/wasm/');
+ *   // Uses CDN by default - no configuration needed!
+ *   const { isReady, isLoading, error, convertToHtml } = useDocxodus();
  *
  *   const handleFile = async (file: File) => {
  *     if (!isReady) return;
@@ -182,13 +186,15 @@ export interface UseConversionResult {
 
 /**
  * React hook for DOCX to HTML conversion with state management.
+ * WASM files are loaded from CDN by default.
  *
- * @param wasmBasePath - Optional base path to WASM files
+ * @param wasmBasePath - Optional custom path to WASM files. Leave empty for CDN (recommended).
  *
  * @example
  * ```tsx
  * function Converter() {
- *   const { html, isConverting, error, convert } = useConversion('/wasm/');
+ *   // Uses CDN by default - no configuration needed!
+ *   const { html, isConverting, error, convert } = useConversion();
  *
  *   return (
  *     <div>
@@ -273,13 +279,15 @@ export interface UseComparisonResult {
 
 /**
  * React hook for document comparison with state management.
+ * WASM files are loaded from CDN by default.
  *
- * @param wasmBasePath - Optional base path to WASM files
+ * @param wasmBasePath - Optional custom path to WASM files. Leave empty for CDN (recommended).
  *
  * @example
  * ```tsx
  * function Comparer() {
- *   const { html, isComparing, error, compareToHtml, downloadResult } = useComparison('/wasm/');
+ *   // Uses CDN by default - no configuration needed!
+ *   const { html, isComparing, error, compareToHtml, downloadResult } = useComparison();
  *   const [original, setOriginal] = useState<File | null>(null);
  *   const [modified, setModified] = useState<File | null>(null);
  *

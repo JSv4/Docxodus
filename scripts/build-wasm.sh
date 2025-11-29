@@ -11,17 +11,22 @@ echo "Building Docxodus WASM..."
 echo "Project: $WASM_PROJECT"
 echo "Output: $WASM_DIST"
 
-# Build in Release mode for smaller size
+# Publish in Release mode for trimming and smaller size
 cd "$WASM_PROJECT"
-dotnet build -c Release
+dotnet publish -c Release
 
-# Source AppBundle location
+# Source AppBundle location (publish output differs from build)
 APPBUNDLE="$WASM_PROJECT/bin/Release/net8.0/browser-wasm/AppBundle"
 
 if [ ! -d "$APPBUNDLE" ]; then
     echo "Error: AppBundle not found at $APPBUNDLE"
-    echo "Trying Debug build..."
-    APPBUNDLE="$WASM_PROJECT/bin/Debug/net8.0/browser-wasm/AppBundle"
+    echo "Checking publish output location..."
+    APPBUNDLE="$WASM_PROJECT/bin/Release/net8.0/browser-wasm/publish/wwwroot"
+fi
+
+if [ ! -d "$APPBUNDLE" ]; then
+    echo "Trying alternative publish location..."
+    APPBUNDLE="$WASM_PROJECT/bin/Release/net8.0/browser-wasm/native"
 fi
 
 if [ ! -d "$APPBUNDLE" ]; then
@@ -50,7 +55,31 @@ cp "$WASM_PROJECT/index.html" "$WASM_DIST/"
 echo ""
 echo "Build complete! File sizes:"
 echo "----------------------------"
-du -sh "$WASM_DIST/_framework/"*.wasm 2>/dev/null | head -10
+
+# Check for webcil files first (trimmed output uses .wasm extension but may be smaller)
+if ls "$WASM_DIST/_framework/"*.wasm 1>/dev/null 2>&1; then
+    echo "Largest WASM files:"
+    du -h "$WASM_DIST/_framework/"*.wasm 2>/dev/null | sort -rh | head -10
+fi
+
+# Check for Brotli compressed files
+if ls "$WASM_DIST/_framework/"*.br 1>/dev/null 2>&1; then
+    echo ""
+    echo "Brotli compressed files available (.br):"
+    du -sh "$WASM_DIST/_framework/"*.br 2>/dev/null | head -5
+fi
+
+# Check for gzip compressed files
+if ls "$WASM_DIST/_framework/"*.gz 1>/dev/null 2>&1; then
+    echo ""
+    echo "Gzip compressed files available (.gz):"
+    du -sh "$WASM_DIST/_framework/"*.gz 2>/dev/null | head -5
+fi
+
+echo ""
+echo "Total file count:"
+find "$WASM_DIST/_framework" -type f | wc -l
+
 echo ""
 echo "Total WASM directory size:"
 du -sh "$WASM_DIST"

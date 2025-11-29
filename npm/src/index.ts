@@ -21,22 +21,43 @@ let wasmExports: DocxodusWasmExports | null = null;
 let initPromise: Promise<void> | null = null;
 
 /**
- * Get the path to the WASM files directory.
- * Override this if you're hosting WASM files at a custom location.
+ * Package version - used for CDN URL
+ */
+const PACKAGE_VERSION = "3.0.1";
+
+/**
+ * CDN base URLs for WASM files (in order of preference)
+ */
+const CDN_URLS = [
+  `https://cdn.jsdelivr.net/npm/docxodus@${PACKAGE_VERSION}/dist/wasm/`,
+  `https://unpkg.com/docxodus@${PACKAGE_VERSION}/dist/wasm/`,
+];
+
+/**
+ * Current base path for WASM files.
+ * Empty string means use CDN (default).
  */
 export let wasmBasePath = "";
 
 /**
- * Set custom base path for WASM files
+ * Set custom base path for WASM files.
+ * Pass empty string or don't call this to use CDN (recommended).
+ *
+ * @param path - Custom path to WASM files, or empty string for CDN
  */
 export function setWasmBasePath(path: string): void {
-  wasmBasePath = path.endsWith("/") ? path : path + "/";
+  wasmBasePath = path && !path.endsWith("/") ? path + "/" : path;
 }
 
 /**
  * Initialize the Docxodus WASM runtime.
  * Must be called before using any conversion/comparison functions.
  * Safe to call multiple times - will only initialize once.
+ *
+ * By default, WASM files are loaded from CDN (jsDelivr/unpkg).
+ * Pass a basePath to load from a custom location instead.
+ *
+ * @param basePath - Optional custom path to WASM files. Leave empty for CDN.
  */
 export async function initialize(basePath?: string): Promise<void> {
   if (wasmExports) return;
@@ -45,7 +66,7 @@ export async function initialize(basePath?: string): Promise<void> {
     return initPromise;
   }
 
-  if (basePath) {
+  if (basePath !== undefined) {
     setWasmBasePath(basePath);
   }
 
@@ -53,22 +74,58 @@ export async function initialize(basePath?: string): Promise<void> {
   return initPromise;
 }
 
+/**
+ * Try to load WASM from a specific base path
+ */
+async function tryLoadFromPath(basePath: string): Promise<boolean> {
+  try {
+    const dotnetPath = basePath + "_framework/dotnet.js";
+    const { dotnet } = await import(/* webpackIgnore: true */ dotnetPath);
+
+    const { getAssemblyExports, getConfig } = await dotnet
+      .withDiagnosticTracing(false)
+      .create();
+
+    const config = getConfig();
+    const exports = await getAssemblyExports(config.mainAssemblyName);
+
+    wasmExports = {
+      DocumentConverter: exports.DocxodusWasm.DocumentConverter,
+      DocumentComparer: exports.DocxodusWasm.DocumentComparer,
+    };
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function loadWasm(): Promise<void> {
-  const dotnetPath = wasmBasePath + "_framework/dotnet.js";
+  // If a custom path is set, use it directly
+  if (wasmBasePath) {
+    const success = await tryLoadFromPath(wasmBasePath);
+    if (success) return;
+    throw new Error(
+      `Failed to load WASM from custom path: ${wasmBasePath}. ` +
+      `Ensure the WASM files are served at this location.`
+    );
+  }
 
-  const { dotnet } = await import(/* webpackIgnore: true */ dotnetPath);
+  // Try CDN URLs in order
+  const errors: string[] = [];
+  for (const cdnUrl of CDN_URLS) {
+    const success = await tryLoadFromPath(cdnUrl);
+    if (success) {
+      wasmBasePath = cdnUrl; // Store the successful path
+      return;
+    }
+    errors.push(cdnUrl);
+  }
 
-  const { getAssemblyExports, getConfig } = await dotnet
-    .withDiagnosticTracing(false)
-    .create();
-
-  const config = getConfig();
-  const exports = await getAssemblyExports(config.mainAssemblyName);
-
-  wasmExports = {
-    DocumentConverter: exports.DocxodusWasm.DocumentConverter,
-    DocumentComparer: exports.DocxodusWasm.DocumentComparer,
-  };
+  // All CDN attempts failed
+  throw new Error(
+    `Failed to load WASM from CDN. Tried: ${errors.join(", ")}. ` +
+    `You can host the WASM files locally and call initialize("/path/to/wasm/").`
+  );
 }
 
 function ensureInitialized(): DocxodusWasmExports {
