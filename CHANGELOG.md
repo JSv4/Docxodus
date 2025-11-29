@@ -10,6 +10,19 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
+- **Comment Rendering in HTML Converter** - Full support for rendering Word document comments in HTML output
+  - `CommentRenderMode` enum with three rendering modes:
+    - `EndnoteStyle` (default): Comments rendered at end of document with bidirectional anchor links
+    - `Inline`: Comments rendered as tooltips with `title` and `data-comment` attributes
+    - `Margin`: Comments positioned in margin column via CSS
+  - New settings in `WmlToHtmlConverterSettings`:
+    - `RenderComments`: Enable/disable comment rendering
+    - `CommentRenderMode`: Select rendering mode
+    - `CommentCssClassPrefix`: Customize CSS class names (default: "comment-")
+    - `IncludeCommentMetadata`: Include author/date in HTML output
+  - Comment highlighting with configurable CSS classes
+  - Full comment metadata support (author, date, initials)
+  - WASM/npm support via `commentRenderMode` parameter and TypeScript `CommentRenderMode` enum
 - **WebAssembly NPM Package** (`docxodus`) - Browser-based document comparison and HTML conversion
   - `wasm/DocxodusWasm/` - .NET 8 WASM project with JSExport methods
   - `npm/` - TypeScript wrapper with React hooks
@@ -45,4 +58,4 @@ All notable changes to this project will be documented in this file.
 - Migrated image handling from `Bitmap`/`ImageFormat` to `SKBitmap`/`SKEncodedImageFormat`
 
 ### Test Status
-- 978 passed, 0 failed, 1 skipped out of 979 tests (~99.9% pass rate)
+- 995 passed, 0 failed, 1 skipped out of 996 tests (~99.9% pass rate)

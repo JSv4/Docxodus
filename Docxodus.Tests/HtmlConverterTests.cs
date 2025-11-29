@@ -809,6 +809,285 @@ namespace OxPt
                 }
             }
         }
+
+        [Fact]
+        public void HC014_Comments_CssGeneratedWhenEnabled()
+        {
+            // Test that comment CSS is generated when RenderComments is true
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Comment CSS Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify comment CSS is generated when enabled
+                    Assert.Contains("Comments CSS", htmlString);
+                    Assert.Contains("span.comment-highlight", htmlString);
+                    Assert.Contains("a.comment-marker", htmlString);
+                    Assert.Contains("aside.comments-section", htmlString);
+                    Assert.Contains("li.comment", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC015_Comments_CssNotGeneratedWhenDisabled()
+        {
+            // Test that comment CSS is NOT generated when RenderComments is false (default)
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC002-Unmodified.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Comment CSS Test - Disabled",
+                        FabricateCssClasses = true,
+                        // RenderComments defaults to false
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify comment CSS is NOT generated when disabled
+                    Assert.DoesNotContain("Comments CSS", htmlString);
+                    Assert.DoesNotContain("span.comment-highlight", htmlString);
+                    Assert.DoesNotContain("a.comment-marker", htmlString);
+                    Assert.DoesNotContain("aside.comments-section", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC016_Comments_WithCommentContent()
+        {
+            // Use HC031 which has a real comment (id=10 by "Eric White")
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC031-Complicated-Document.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Comment Content Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                        IncludeCommentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify comment highlighting is present
+                    Assert.Contains("comment-highlight", htmlString);
+                    Assert.Contains("data-comment-id=\"10\"", htmlString);
+
+                    // Verify comment marker is present
+                    Assert.Contains("comment-marker", htmlString);
+                    Assert.Contains("href=\"#comment-10\"", htmlString);
+
+                    // Verify comments section is present
+                    Assert.Contains("comments-section", htmlString);
+                    Assert.Contains("id=\"comment-10\"", htmlString);
+
+                    // Verify author metadata
+                    Assert.Contains("data-author=\"Eric White\"", htmlString);
+                    Assert.Contains("Eric White", htmlString);
+
+                    // Verify comment text
+                    Assert.Contains("This is a comment.", htmlString);
+
+                    // Verify back reference link
+                    Assert.Contains("href=\"#comment-ref-10\"", htmlString);
+                    Assert.Contains("comment-backref", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-Test.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC017_Comments_InlineMode()
+        {
+            // Use HC031 which has a real comment and test inline mode
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC031-Complicated-Document.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Inline Comment Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                        CommentRenderMode = CommentRenderMode.Inline,
+                        IncludeCommentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify inline mode attributes
+                    Assert.Contains("title=\"Eric White: This is a comment.\"", htmlString);
+                    Assert.Contains("data-comment=\"This is a comment.\"", htmlString);
+
+                    // In inline mode, there should NOT be a comments section element (but CSS is fine)
+                    Assert.DoesNotContain("<aside class=\"comments-section\"", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-Inline.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC018_Comments_MultipleComments()
+        {
+            // Copy an existing document and add multiple comments programmatically
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC006-Test-01.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var mainPart = wDoc.MainDocumentPart;
+                    var body = mainPart.Document.Body;
+                    var firstPara = body.Elements<Paragraph>().FirstOrDefault();
+
+                    if (firstPara != null)
+                    {
+                        // Add comment markers to first paragraph
+                        var firstRun = firstPara.Elements<Run>().FirstOrDefault();
+                        if (firstRun != null)
+                        {
+                            firstRun.InsertBeforeSelf(new CommentRangeStart() { Id = "100" });
+                            firstRun.InsertAfterSelf(new CommentRangeEnd() { Id = "100" });
+                            firstRun.InsertAfterSelf(new Run(new CommentReference() { Id = "100" }));
+                        }
+                    }
+
+                    var secondPara = body.Elements<Paragraph>().Skip(1).FirstOrDefault();
+                    if (secondPara != null)
+                    {
+                        var secondRun = secondPara.Elements<Run>().FirstOrDefault();
+                        if (secondRun != null)
+                        {
+                            secondRun.InsertBeforeSelf(new CommentRangeStart() { Id = "101" });
+                            secondRun.InsertAfterSelf(new CommentRangeEnd() { Id = "101" });
+                            secondRun.InsertAfterSelf(new Run(new CommentReference() { Id = "101" }));
+                        }
+                    }
+
+                    // Add comments part with multiple comments
+                    var commentsPart = mainPart.AddNewPart<WordprocessingCommentsPart>();
+                    commentsPart.Comments = new Comments(
+                        new Comment(
+                            new Paragraph(new Run(new Text("Comment one text.")))
+                        )
+                        { Id = "100", Author = "Author One" },
+                        new Comment(
+                            new Paragraph(new Run(new Text("Comment two text.")))
+                        )
+                        { Id = "101", Author = "Author Two" }
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Multiple Comments Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify both comments are rendered
+                    Assert.Contains("id=\"comment-100\"", htmlString);
+                    Assert.Contains("id=\"comment-101\"", htmlString);
+                    Assert.Contains("Comment one text.", htmlString);
+                    Assert.Contains("Comment two text.", htmlString);
+                    Assert.Contains("Author One", htmlString);
+                    Assert.Contains("Author Two", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-Multiple.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC019_Comments_CustomCssPrefix()
+        {
+            // Use HC031 which has a real comment and test custom CSS prefix
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC031-Complicated-Document.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Custom Prefix Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                        CommentCssClassPrefix = "note-",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify custom prefix is used
+                    Assert.Contains("note-highlight", htmlString);
+                    Assert.Contains("note-marker", htmlString);
+                    Assert.Contains("notes-section", htmlString);
+
+                    // Verify default prefix is NOT used
+                    Assert.DoesNotContain("comment-highlight", htmlString);
+                    Assert.DoesNotContain("comments-section", htmlString);
+                }
+            }
+        }
     }
 }
 

@@ -1,4 +1,19 @@
 /**
+ * Comment render mode
+ * Use -1 (Disabled) to not render comments, or a positive value to enable with that mode
+ */
+export enum CommentRenderMode {
+  /** Do not render comments (default) */
+  Disabled = -1,
+  /** Render comments at the end of the document with bidirectional links (like footnotes) */
+  EndnoteStyle = 0,
+  /** Render comments as inline tooltips with data attributes */
+  Inline = 1,
+  /** Render comments in a margin column (CSS-positioned) */
+  Margin = 2,
+}
+
+/**
  * Options for DOCX to HTML conversion
  */
 export interface ConversionOptions {
@@ -10,6 +25,10 @@ export interface ConversionOptions {
   fabricateClasses?: boolean;
   /** Additional CSS to include in the output */
   additionalCss?: string;
+  /** Comment rendering mode: Disabled (-1), EndnoteStyle (0), Inline (1), or Margin (2). Default: Disabled */
+  commentRenderMode?: CommentRenderMode;
+  /** CSS class prefix for comment elements (default: "comment-") */
+  commentCssClassPrefix?: string;
 }
 
 /**
@@ -83,7 +102,9 @@ export interface DocxodusWasmExports {
       pageTitle: string,
       cssPrefix: string,
       fabricateClasses: boolean,
-      additionalCss: string
+      additionalCss: string,
+      commentRenderMode: number,
+      commentCssClassPrefix: string
     ) => string;
     GetVersion: () => string;
   };

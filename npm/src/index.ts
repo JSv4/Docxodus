@@ -8,6 +8,8 @@ import type {
   DocxodusWasmExports,
 } from "./types.js";
 
+import { CommentRenderMode } from "./types.js";
+
 export type {
   ConversionOptions,
   CompareOptions,
@@ -16,6 +18,8 @@ export type {
   ErrorResponse,
   CompareResult,
 };
+
+export { CommentRenderMode };
 
 let wasmExports: DocxodusWasmExports | null = null;
 let initPromise: Promise<void> | null = null;
@@ -181,19 +185,17 @@ export async function convertDocxToHtml(
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
 
-  let result: string;
-
-  if (options) {
-    result = exports.DocumentConverter.ConvertDocxToHtmlWithOptions(
-      bytes,
-      options.pageTitle ?? "Document",
-      options.cssPrefix ?? "docx-",
-      options.fabricateClasses ?? true,
-      options.additionalCss ?? ""
-    );
-  } else {
-    result = exports.DocumentConverter.ConvertDocxToHtml(bytes);
-  }
+  const result = options
+    ? exports.DocumentConverter.ConvertDocxToHtmlWithOptions(
+        bytes,
+        options.pageTitle ?? "Document",
+        options.cssPrefix ?? "docx-",
+        options.fabricateClasses ?? true,
+        options.additionalCss ?? "",
+        options.commentRenderMode ?? CommentRenderMode.Disabled,
+        options.commentCssClassPrefix ?? "comment-"
+      )
+    : exports.DocumentConverter.ConvertDocxToHtml(bytes);
 
   if (isErrorResponse(result)) {
     const error = parseError(result);

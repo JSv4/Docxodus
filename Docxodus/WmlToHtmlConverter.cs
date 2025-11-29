@@ -20,6 +20,30 @@ using DocumentFormat.OpenXml.Packaging;
 
 namespace Docxodus
 {
+    /// <summary>
+    /// Specifies how comments are rendered in the HTML output.
+    /// </summary>
+    public enum CommentRenderMode
+    {
+        /// <summary>
+        /// Comments are rendered as a section at the end of the document
+        /// with bidirectional links to/from commented text (default).
+        /// </summary>
+        EndnoteStyle,
+
+        /// <summary>
+        /// Comments are rendered inline as data attributes on the highlighted text.
+        /// Uses title attribute for tooltip display.
+        /// </summary>
+        Inline,
+
+        /// <summary>
+        /// Comments are rendered in a margin area using CSS positioning.
+        /// Best for print-style layouts.
+        /// </summary>
+        Margin
+    }
+
     public partial class WmlDocument
     {
         [SuppressMessage("ReSharper", "UnusedMember.Global")]
@@ -94,6 +118,27 @@ namespace Docxodus
         /// </summary>
         public bool RenderHeadersAndFooters;
 
+        /// <summary>
+        /// If true, render comments in HTML output.
+        /// If false (default), comments are stripped from the output.
+        /// </summary>
+        public bool RenderComments;
+
+        /// <summary>
+        /// How to render comments in the HTML output (default: EndnoteStyle).
+        /// </summary>
+        public CommentRenderMode CommentRenderMode;
+
+        /// <summary>
+        /// CSS class prefix for comment elements (default: "comment-")
+        /// </summary>
+        public string CommentCssClassPrefix;
+
+        /// <summary>
+        /// If true, include comment metadata (author, date) as data attributes
+        /// </summary>
+        public bool IncludeCommentMetadata;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -111,6 +156,10 @@ namespace Docxodus
             RenderMoveOperations = true;
             RenderFootnotesAndEndnotes = false;
             RenderHeadersAndFooters = false;
+            RenderComments = false;
+            CommentRenderMode = CommentRenderMode.EndnoteStyle;
+            CommentCssClassPrefix = "comment-";
+            IncludeCommentMetadata = true;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -132,6 +181,10 @@ namespace Docxodus
             RenderMoveOperations = htmlConverterSettings.RenderMoveOperations;
             RenderFootnotesAndEndnotes = htmlConverterSettings.RenderFootnotesAndEndnotes;
             RenderHeadersAndFooters = htmlConverterSettings.RenderHeadersAndFooters;
+            RenderComments = htmlConverterSettings.RenderComments;
+            CommentRenderMode = htmlConverterSettings.CommentRenderMode;
+            CommentCssClassPrefix = htmlConverterSettings.CommentCssClassPrefix;
+            IncludeCommentMetadata = htmlConverterSettings.IncludeCommentMetadata;
         }
     }
 
@@ -193,6 +246,27 @@ namespace Docxodus
         /// </summary>
         public bool RenderHeadersAndFooters;
 
+        /// <summary>
+        /// If true, render comments in HTML output.
+        /// If false (default), comments are stripped from the output.
+        /// </summary>
+        public bool RenderComments;
+
+        /// <summary>
+        /// How to render comments in the HTML output (default: EndnoteStyle).
+        /// </summary>
+        public CommentRenderMode CommentRenderMode;
+
+        /// <summary>
+        /// CSS class prefix for comment elements (default: "comment-")
+        /// </summary>
+        public string CommentCssClassPrefix;
+
+        /// <summary>
+        /// If true, include comment metadata (author, date) as data attributes
+        /// </summary>
+        public bool IncludeCommentMetadata;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -210,6 +284,10 @@ namespace Docxodus
             RenderMoveOperations = true;
             RenderFootnotesAndEndnotes = false;
             RenderHeadersAndFooters = false;
+            RenderComments = false;
+            CommentRenderMode = CommentRenderMode.EndnoteStyle;
+            CommentCssClassPrefix = "comment-";
+            IncludeCommentMetadata = true;
         }
     }
 
@@ -263,6 +341,39 @@ namespace Docxodus
         }
     }
 
+    /// <summary>
+    /// Information about a single comment in the document.
+    /// </summary>
+    public class CommentInfo
+    {
+        public int Id { get; set; }
+        public string Author { get; set; }
+        public string Date { get; set; }
+        public string Initials { get; set; }
+        public List<XElement> ContentParagraphs { get; set; } = new List<XElement>();
+    }
+
+    /// <summary>
+    /// Tracks comment state during HTML transformation.
+    /// </summary>
+    internal class CommentTracker
+    {
+        /// <summary>
+        /// All comments loaded from the document, keyed by ID.
+        /// </summary>
+        public Dictionary<int, CommentInfo> Comments { get; } = new Dictionary<int, CommentInfo>();
+
+        /// <summary>
+        /// IDs of comment ranges that are currently open (between start and end markers).
+        /// </summary>
+        public HashSet<int> OpenRanges { get; } = new HashSet<int>();
+
+        /// <summary>
+        /// IDs of comments that have been referenced in the document (for rendering order).
+        /// </summary>
+        public List<int> ReferencedCommentIds { get; } = new List<int>();
+    }
+
     public static class WmlToHtmlConverter
     {
         public static XElement ConvertToHtml(WmlDocument doc, WmlToHtmlConverterSettings htmlConverterSettings)
@@ -286,7 +397,7 @@ namespace Docxodus
 
             SimplifyMarkupSettings simplifyMarkupSettings = new SimplifyMarkupSettings
             {
-                RemoveComments = true,
+                RemoveComments = !htmlConverterSettings.RenderComments,
                 RemoveContentControls = true,
                 RemoveEndAndFootNotes = !htmlConverterSettings.RenderFootnotesAndEndnotes,
                 RemoveFieldCodes = false,
@@ -330,6 +441,15 @@ namespace Docxodus
             XElement rootElement = wordDoc.MainDocumentPart.GetXDocument().Root;
             FieldRetriever.AnnotateWithFieldInfo(wordDoc.MainDocumentPart);
             AnnotateForSections(wordDoc);
+
+            // Load comments if rendering is enabled and store as annotation
+            var commentTracker = new CommentTracker();
+            if (htmlConverterSettings.RenderComments)
+            {
+                LoadComments(wordDoc, commentTracker);
+            }
+            // Store tracker as annotation on the root element for access during transform
+            rootElement.AddAnnotation(commentTracker);
 
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
                 rootElement, false, 0m);
@@ -466,7 +586,8 @@ namespace Docxodus
                 var revisionCss = GenerateRevisionCss(htmlConverterSettings);
                 var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
                 var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
-                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + htmlConverterSettings.AdditionalCss;
+                var commentCss = GenerateCommentCss(htmlConverterSettings);
+                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + htmlConverterSettings.AdditionalCss;
 
                 SetStyleElementValue(xhtml, styleValue);
             }
@@ -477,7 +598,8 @@ namespace Docxodus
                 var revisionCss = GenerateRevisionCss(htmlConverterSettings);
                 var footnoteCss = GenerateFootnoteCss(htmlConverterSettings);
                 var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
-                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + htmlConverterSettings.AdditionalCss);
+                var commentCss = GenerateCommentCss(htmlConverterSettings);
+                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + htmlConverterSettings.AdditionalCss);
 
                 foreach (var d in xhtml.DescendantsAndSelf())
                 {
@@ -704,6 +826,96 @@ namespace Docxodus
             return sb.ToString();
         }
 
+        private static string GenerateCommentCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderComments)
+                return string.Empty;
+
+            var prefix = settings.CommentCssClassPrefix ?? "comment-";
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Comments CSS */");
+
+            // Comment highlights (the highlighted text in the document)
+            sb.AppendLine($"span.{prefix}highlight {{");
+            sb.AppendLine("    background-color: #fff9c4;");
+            sb.AppendLine("    border-bottom: 2px solid #fbc02d;");
+            sb.AppendLine("}");
+
+            // Comment marker (the [1] reference link)
+            sb.AppendLine($"a.{prefix}marker {{");
+            sb.AppendLine("    color: #1976d2;");
+            sb.AppendLine("    text-decoration: none;");
+            sb.AppendLine("    margin-left: 2px;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"a.{prefix}marker:hover {{");
+            sb.AppendLine("    text-decoration: underline;");
+            sb.AppendLine("}");
+
+            // Comments section (EndnoteStyle mode)
+            sb.AppendLine($"aside.{prefix.TrimEnd('-')}s-section {{");
+            sb.AppendLine("    margin-top: 2em;");
+            sb.AppendLine("    padding-top: 1em;");
+            sb.AppendLine("    border-top: 2px solid #ccc;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"aside.{prefix.TrimEnd('-')}s-section h2 {{");
+            sb.AppendLine("    font-size: 1.2em;");
+            sb.AppendLine("    margin-bottom: 0.5em;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"ol.{prefix.TrimEnd('-')}s-list {{");
+            sb.AppendLine("    list-style: none;");
+            sb.AppendLine("    padding: 0;");
+            sb.AppendLine("}");
+
+            // Individual comment item
+            sb.AppendLine($"li.{prefix.TrimEnd('-')} {{");
+            sb.AppendLine("    margin-bottom: 1em;");
+            sb.AppendLine("    padding: 0.75em;");
+            sb.AppendLine("    background-color: #f5f5f5;");
+            sb.AppendLine("    border-left: 3px solid #1976d2;");
+            sb.AppendLine("    border-radius: 0 4px 4px 0;");
+            sb.AppendLine("}");
+
+            // Comment header
+            sb.AppendLine($"div.{prefix}header {{");
+            sb.AppendLine("    display: flex;");
+            sb.AppendLine("    align-items: center;");
+            sb.AppendLine("    gap: 0.5em;");
+            sb.AppendLine("    margin-bottom: 0.5em;");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"span.{prefix}author {{");
+            sb.AppendLine("    font-weight: bold;");
+            sb.AppendLine("    color: #1976d2;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"span.{prefix}date {{");
+            sb.AppendLine("    color: #666;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($"a.{prefix}backref {{");
+            sb.AppendLine("    margin-left: auto;");
+            sb.AppendLine("    text-decoration: none;");
+            sb.AppendLine("    color: #1976d2;");
+            sb.AppendLine("}");
+
+            // Comment body
+            sb.AppendLine($"div.{prefix}body p {{");
+            sb.AppendLine("    margin: 0;");
+            sb.AppendLine("}");
+
+            // Inline mode - tooltip on hover
+            sb.AppendLine($"span.{prefix}highlight[title] {{");
+            sb.AppendLine("    cursor: help;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
         private static object ConvertToHtmlTransform(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
@@ -765,6 +977,18 @@ namespace Docxodus
                     var footersSection = RenderFootersSection(wordDoc, settings);
                     if (footersSection != null)
                         bodyContent.Add(footersSection);
+                }
+
+                // Add comments section if enabled (EndnoteStyle mode)
+                if (settings.RenderComments && settings.CommentRenderMode == CommentRenderMode.EndnoteStyle)
+                {
+                    var tracker = GetCommentTracker(element);
+                    if (tracker != null)
+                    {
+                        var commentsSection = RenderCommentsSection(wordDoc, settings, tracker);
+                        if (commentsSection != null)
+                            bodyContent.Add(commentsSection);
+                    }
                 }
 
                 return new XElement(Xhtml.body, bodyContent);
@@ -935,6 +1159,24 @@ namespace Docxodus
             if (element.Name == W.endnoteReference)
             {
                 return ProcessEndnoteReference(wordDoc, settings, element);
+            }
+
+            // Handle comment range start
+            if (element.Name == W.commentRangeStart)
+            {
+                return ProcessCommentRangeStart(settings, element);
+            }
+
+            // Handle comment range end
+            if (element.Name == W.commentRangeEnd)
+            {
+                return ProcessCommentRangeEnd(settings, element);
+            }
+
+            // Handle comment reference (the marker in the text)
+            if (element.Name == W.commentReference)
+            {
+                return ProcessCommentReference(settings, element);
             }
 
             // Ignore element.
@@ -1445,6 +1687,230 @@ namespace Docxodus
             return new XElement(Xhtml.footer,
                 new XAttribute("class", "document-footer"),
                 content);
+        }
+
+        private static void LoadComments(WordprocessingDocument wordDoc, CommentTracker tracker)
+        {
+            var commentsPart = wordDoc.MainDocumentPart.WordprocessingCommentsPart;
+            if (commentsPart == null)
+                return;
+
+            var commentsXDoc = commentsPart.GetXDocument();
+            if (commentsXDoc.Root == null)
+                return;
+
+            foreach (var comment in commentsXDoc.Root.Elements(W.comment))
+            {
+                var id = (int?)comment.Attribute(W.id);
+                if (id == null)
+                    continue;
+
+                tracker.Comments[id.Value] = new CommentInfo
+                {
+                    Id = id.Value,
+                    Author = (string)comment.Attribute(W.author),
+                    Date = (string)comment.Attribute(W.date),
+                    Initials = (string)comment.Attribute(W.initials),
+                    ContentParagraphs = comment.Elements(W.p).ToList()
+                };
+            }
+        }
+
+        private static CommentTracker GetCommentTracker(XElement element)
+        {
+            // Walk up to the document root to find the annotation
+            var root = element.AncestorsAndSelf().LastOrDefault();
+            return root?.Annotation<CommentTracker>();
+        }
+
+        private static object ProcessCommentRangeStart(WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderComments)
+                return null;
+
+            var tracker = GetCommentTracker(element);
+            if (tracker == null)
+                return null;
+
+            var id = (int?)element.Attribute(W.id);
+            if (id != null)
+            {
+                tracker.OpenRanges.Add(id.Value);
+            }
+
+            // Don't emit anything - we'll wrap content in ConvertRun
+            return null;
+        }
+
+        private static object ProcessCommentRangeEnd(WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderComments)
+                return null;
+
+            var tracker = GetCommentTracker(element);
+            if (tracker == null)
+                return null;
+
+            var id = (int?)element.Attribute(W.id);
+            if (id != null)
+            {
+                tracker.OpenRanges.Remove(id.Value);
+            }
+
+            return null;
+        }
+
+        private static object ProcessCommentReference(WmlToHtmlConverterSettings settings, XElement element)
+        {
+            if (!settings.RenderComments)
+                return null;
+
+            var tracker = GetCommentTracker(element);
+            if (tracker == null)
+                return null;
+
+            var id = (int?)element.Attribute(W.id);
+            if (id == null)
+                return null;
+
+            // Track that this comment was referenced (for rendering order)
+            if (!tracker.ReferencedCommentIds.Contains(id.Value))
+            {
+                tracker.ReferencedCommentIds.Add(id.Value);
+            }
+
+            var prefix = settings.CommentCssClassPrefix ?? "comment-";
+            tracker.Comments.TryGetValue(id.Value, out var comment);
+
+            var marker = new XElement(Xhtml.a,
+                new XAttribute("href", $"#comment-{id}"),
+                new XAttribute("id", $"comment-ref-{id}"),
+                new XAttribute("class", prefix + "marker"));
+
+            if (comment != null && settings.IncludeCommentMetadata && comment.Author != null)
+            {
+                marker.Add(new XAttribute("title", $"Comment by {comment.Author}"));
+            }
+
+            marker.Add(new XText($"[{id}]"));
+
+            var style = new Dictionary<string, string>
+            {
+                { "vertical-align", "super" },
+                { "font-size", "smaller" }
+            };
+            marker.AddAnnotation(style);
+
+            return marker;
+        }
+
+        private static XElement RenderCommentsSection(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, CommentTracker tracker)
+        {
+            if (!settings.RenderComments || !tracker.Comments.Any())
+                return null;
+
+            var prefix = settings.CommentCssClassPrefix ?? "comment-";
+
+            // Use referenced order if available, otherwise use comment ID order
+            var orderedComments = tracker.ReferencedCommentIds.Any()
+                ? tracker.ReferencedCommentIds
+                    .Where(id => tracker.Comments.ContainsKey(id))
+                    .Select(id => tracker.Comments[id])
+                : tracker.Comments.Values.OrderBy(c => c.Id);
+
+            var commentItems = orderedComments
+                .Select(c => RenderCommentItem(wordDoc, settings, c, prefix))
+                .Where(item => item != null)
+                .ToList();
+
+            if (!commentItems.Any())
+                return null;
+
+            return new XElement(Xhtml.aside,
+                new XAttribute("class", prefix.TrimEnd('-') + "s-section"),
+                new XElement(Xhtml.h2, "Comments"),
+                new XElement(Xhtml.ol,
+                    new XAttribute("class", prefix.TrimEnd('-') + "s-list"),
+                    commentItems));
+        }
+
+        private static XElement RenderCommentItem(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, CommentInfo comment, string prefix)
+        {
+            var li = new XElement(Xhtml.li,
+                new XAttribute("id", $"comment-{comment.Id}"),
+                new XAttribute("class", prefix.TrimEnd('-')));
+
+            if (settings.IncludeCommentMetadata)
+            {
+                if (comment.Author != null)
+                    li.Add(new XAttribute("data-author", comment.Author));
+                if (comment.Date != null)
+                    li.Add(new XAttribute("data-date", comment.Date));
+            }
+
+            // Header with author, date, and back link
+            var header = new XElement(Xhtml.div,
+                new XAttribute("class", prefix + "header"));
+
+            if (comment.Author != null)
+            {
+                header.Add(new XElement(Xhtml.span,
+                    new XAttribute("class", prefix + "author"),
+                    comment.Author));
+            }
+
+            if (comment.Date != null)
+            {
+                // Format date nicely
+                if (DateTime.TryParse(comment.Date, out var dt))
+                {
+                    header.Add(new XElement(Xhtml.span,
+                        new XAttribute("class", prefix + "date"),
+                        dt.ToString("MMM d, yyyy")));
+                }
+            }
+
+            header.Add(new XElement(Xhtml.a,
+                new XAttribute("href", $"#comment-ref-{comment.Id}"),
+                new XAttribute("class", prefix + "backref"),
+                "↩"));
+
+            li.Add(header);
+
+            // Comment body - extract text content from paragraphs
+            var body = new XElement(Xhtml.div,
+                new XAttribute("class", prefix + "body"));
+
+            foreach (var para in comment.ContentParagraphs)
+            {
+                // Skip the annotation reference run and get text content
+                var textContent = para.Descendants(W.t)
+                    .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any()))
+                    .Select(t => t.Value)
+                    .StringConcatenate();
+
+                if (!string.IsNullOrWhiteSpace(textContent))
+                {
+                    body.Add(new XElement(Xhtml.p, textContent));
+                }
+            }
+
+            // Only add if body has content
+            if (body.HasElements)
+            {
+                li.Add(body);
+            }
+            else
+            {
+                // Add empty paragraph to avoid empty li
+                li.Add(new XElement(Xhtml.div,
+                    new XAttribute("class", prefix + "body"),
+                    new XElement(Xhtml.p, "(empty comment)")));
+            }
+
+            return li;
         }
 
         private static object ProcessTab(XElement element)
@@ -2476,6 +2942,58 @@ namespace Docxodus
 
                     formatChangeSpan.Add(content);
                     content = formatChangeSpan;
+                }
+            }
+
+            // Wrap content in comment highlight spans if inside an open comment range
+            if (settings.RenderComments)
+            {
+                var tracker = GetCommentTracker(run);
+                if (tracker != null && tracker.OpenRanges.Any())
+                {
+                    var prefix = settings.CommentCssClassPrefix ?? "comment-";
+
+                    // For each open comment range, wrap the content
+                    foreach (var commentId in tracker.OpenRanges.OrderBy(id => id))
+                    {
+                        var highlightSpan = new XElement(Xhtml.span,
+                            new XAttribute("class", prefix + "highlight"),
+                            new XAttribute("data-comment-id", commentId.ToString()));
+
+                        // Add tooltip in inline mode
+                        if (settings.CommentRenderMode == CommentRenderMode.Inline)
+                        {
+                            if (tracker.Comments.TryGetValue(commentId, out var comment))
+                            {
+                                // Build inline tooltip
+                                var tooltipText = comment.ContentParagraphs
+                                    .SelectMany(p => p.Descendants(W.t)
+                                        .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any())))
+                                    .Select(t => t.Value)
+                                    .StringConcatenate();
+
+                                if (!string.IsNullOrEmpty(tooltipText))
+                                {
+                                    var tooltip = comment.Author != null
+                                        ? $"{comment.Author}: {tooltipText}"
+                                        : tooltipText;
+                                    highlightSpan.Add(new XAttribute("title", tooltip));
+                                }
+
+                                if (settings.IncludeCommentMetadata)
+                                {
+                                    highlightSpan.Add(new XAttribute("data-comment", tooltipText ?? ""));
+                                    if (comment.Author != null)
+                                        highlightSpan.Add(new XAttribute("data-author", comment.Author));
+                                    if (comment.Date != null)
+                                        highlightSpan.Add(new XAttribute("data-date", comment.Date));
+                                }
+                            }
+                        }
+
+                        highlightSpan.Add(content);
+                        content = highlightSpan;
+                    }
                 }
             }
 
