@@ -1088,6 +1088,152 @@ namespace OxPt
                 }
             }
         }
+
+        [Fact]
+        public void HC020_Comments_MarginMode()
+        {
+            // Use HC031 which has a real comment and test margin mode rendering
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC031-Complicated-Document.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Margin Mode Comments Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                        CommentRenderMode = CommentRenderMode.Margin,
+                        IncludeCommentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify margin mode layout structure
+                    Assert.Contains("comment-margin-container", htmlString);
+                    Assert.Contains("comment-margin-content", htmlString);
+                    Assert.Contains("comment-margin-column", htmlString);
+                    Assert.Contains("comment-margin-note", htmlString);
+
+                    // Verify margin note elements
+                    Assert.Contains("comment-margin-note-header", htmlString);
+                    Assert.Contains("comment-margin-author", htmlString);
+                    Assert.Contains("comment-margin-note-body", htmlString);
+                    Assert.Contains("comment-margin-backref", htmlString);
+
+                    // Verify margin mode CSS is generated
+                    Assert.Contains("/* Margin Mode Comments */", htmlString);
+                    Assert.Contains("display: flex", htmlString);
+                    Assert.Contains("flex-direction: row", htmlString);
+                    Assert.Contains("width: 250px", htmlString);
+
+                    // Verify print media query is included
+                    Assert.Contains("@media print", htmlString);
+
+                    // Verify there is NO endnote-style comments section element in HTML (CSS is fine)
+                    // The CSS for comments-section is generated for all modes, but the actual <aside> element should not be present
+                    Assert.DoesNotContain("<aside class=\"comments-section\"", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-Margin.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC021_Comments_MarginMode_MultipleComments()
+        {
+            // Test margin mode with multiple comments to verify ordering
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceDocx = new FileInfo(Path.Combine(sourceDir.FullName, "HC006-Test-01.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(sourceDocx.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var mainPart = wDoc.MainDocumentPart;
+                    var body = mainPart.Document.Body;
+                    var firstPara = body.Elements<Paragraph>().FirstOrDefault();
+
+                    if (firstPara != null)
+                    {
+                        var firstRun = firstPara.Elements<Run>().FirstOrDefault();
+                        if (firstRun != null)
+                        {
+                            firstRun.InsertBeforeSelf(new CommentRangeStart() { Id = "200" });
+                            firstRun.InsertAfterSelf(new CommentRangeEnd() { Id = "200" });
+                            firstRun.InsertAfterSelf(new Run(new CommentReference() { Id = "200" }));
+                        }
+                    }
+
+                    var secondPara = body.Elements<Paragraph>().Skip(1).FirstOrDefault();
+                    if (secondPara != null)
+                    {
+                        var secondRun = secondPara.Elements<Run>().FirstOrDefault();
+                        if (secondRun != null)
+                        {
+                            secondRun.InsertBeforeSelf(new CommentRangeStart() { Id = "201" });
+                            secondRun.InsertAfterSelf(new CommentRangeEnd() { Id = "201" });
+                            secondRun.InsertAfterSelf(new Run(new CommentReference() { Id = "201" }));
+                        }
+                    }
+
+                    // Add comments part
+                    var commentsPart = mainPart.AddNewPart<WordprocessingCommentsPart>();
+                    commentsPart.Comments = new Comments(
+                        new Comment(
+                            new Paragraph(new Run(new Text("First margin comment.")))
+                        )
+                        { Id = "200", Author = "Reviewer A", Date = new DateTime(2024, 1, 15, 10, 30, 0) },
+                        new Comment(
+                            new Paragraph(new Run(new Text("Second margin comment.")))
+                        )
+                        { Id = "201", Author = "Reviewer B", Date = new DateTime(2024, 1, 16, 14, 0, 0) }
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Multiple Margin Comments Test",
+                        FabricateCssClasses = true,
+                        RenderComments = true,
+                        CommentRenderMode = CommentRenderMode.Margin,
+                        IncludeCommentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify both comments are in margin column
+                    Assert.Contains("id=\"comment-200\"", htmlString);
+                    Assert.Contains("id=\"comment-201\"", htmlString);
+                    Assert.Contains("First margin comment.", htmlString);
+                    Assert.Contains("Second margin comment.", htmlString);
+                    Assert.Contains("Reviewer A", htmlString);
+                    Assert.Contains("Reviewer B", htmlString);
+
+                    // Verify margin structure
+                    Assert.Contains("comment-margin-column", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "Comments-Margin-Multiple.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
     }
 }
 

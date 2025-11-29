@@ -10,7 +10,7 @@ Word documents store comments as annotations linked to text ranges. The converte
 
 1. **EndnoteStyle** (default): Comments appear at the end of the document with bidirectional anchor links, similar to footnotes
 2. **Inline**: Comments are embedded as `title` attributes and `data-*` attributes for tooltip display
-3. **Margin**: Comments are positioned in a side margin using CSS (requires additional styling)
+3. **Margin**: Comments are positioned in a side column using CSS flexbox layout
 
 ## OOXML Comment Structure
 
@@ -369,56 +369,177 @@ Each comment item includes:
 
 ### Margin Mode
 
+In margin mode, the entire document body is wrapped in a flexbox container with the main content on the left and a comment column on the right:
+
 ```html
-<span class="comment-highlight comment-margin-anchor" data-comment-id="0">
-  <span>This text has a comment</span>
-</span>
-<aside class="comment-margin" data-for="0">
-  <span class="comment-author">John Doe</span>
-  <p>This is the comment text.</p>
-</aside>
+<div class="comment-margin-container">
+  <!-- Main content area -->
+  <div class="comment-margin-content">
+    <p>
+      <span class="comment-highlight" data-comment-id="0">
+        This text has a comment
+      </span>
+      <sup><a href="#comment-0" class="comment-marker" id="comment-ref-0">[0]</a></sup>
+    </p>
+  </div>
+
+  <!-- Margin column with comments -->
+  <aside class="comment-margin-column">
+    <div class="comment-margin-note" id="comment-0" data-comment-id="0">
+      <div class="comment-margin-note-header">
+        <span class="comment-margin-author">John Doe</span>
+        <span class="comment-margin-date">Jan 15</span>
+        <a href="#comment-ref-0" class="comment-margin-backref">↩</a>
+      </div>
+      <div class="comment-margin-note-body">
+        <p>This is the comment text.</p>
+      </div>
+    </div>
+  </aside>
+</div>
 ```
 
 ## Generated CSS
 
-When comments are enabled, the following CSS is generated:
+When comments are enabled, base CSS is generated for all modes. Additional CSS is generated for margin mode.
+
+### Base CSS (All Modes)
 
 ```css
-/* Comment CSS */
+/* Comments CSS */
 span.comment-highlight {
-  background-color: #fff8dc;
-  border-bottom: 1px dotted #daa520;
+  background-color: #fff9c4;
+  border-bottom: 2px solid #fbc02d;
 }
-sup.comment-marker a {
-  color: #0066cc;
+a.comment-marker {
+  color: #1976d2;
   text-decoration: none;
-  font-size: 0.75em;
+  margin-left: 2px;
 }
+a.comment-marker:hover {
+  text-decoration: underline;
+}
+```
+
+### EndnoteStyle Mode CSS
+
+```css
 aside.comments-section {
   margin-top: 2em;
   padding-top: 1em;
-  border-top: 1px solid #ccc;
+  border-top: 2px solid #ccc;
 }
-.comment-item {
+aside.comments-section h2 {
+  font-size: 1.2em;
+  margin-bottom: 0.5em;
+}
+ol.comments-list {
+  list-style: none;
+  padding: 0;
+}
+li.comment {
   margin-bottom: 1em;
-  padding: 0.5em;
-  background-color: #f9f9f9;
-  border-left: 3px solid #daa520;
+  padding: 0.75em;
+  background-color: #f5f5f5;
+  border-left: 3px solid #1976d2;
+  border-radius: 0 4px 4px 0;
 }
-.comment-author {
+div.comment-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  margin-bottom: 0.5em;
+  font-size: 0.85em;
+}
+span.comment-author {
   font-weight: bold;
-  margin-right: 0.5em;
+  color: #1976d2;
 }
-.comment-date {
+span.comment-date {
   color: #666;
+}
+a.comment-backref {
+  margin-left: auto;
+  text-decoration: none;
+  color: #1976d2;
+}
+div.comment-body p {
+  margin: 0;
+}
+```
+
+### Margin Mode CSS
+
+When `CommentRenderMode.Margin` is selected, additional flexbox layout CSS is generated:
+
+```css
+/* Margin Mode Comments */
+div.comment-margin-container {
+  display: flex;
+  flex-direction: row;
+  gap: 1em;
+}
+div.comment-margin-content {
+  flex: 1;
+  min-width: 0;
+}
+aside.comment-margin-column {
+  width: 250px;
+  flex-shrink: 0;
+  position: relative;
+}
+div.comment-margin-note {
+  position: relative;
+  margin-bottom: 0.5em;
+  padding: 0.5em;
+  background-color: #fff9c4;
+  border-left: 3px solid #fbc02d;
+  border-radius: 0 4px 4px 0;
+  font-size: 0.85em;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+div.comment-margin-note-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25em;
   font-size: 0.9em;
 }
-.comment-content {
-  margin-top: 0.25em;
+span.comment-margin-author {
+  font-weight: bold;
+  color: #f57f17;
 }
-.comment-backref {
-  float: right;
+span.comment-margin-date {
+  color: #666;
+  font-size: 0.85em;
+}
+div.comment-margin-note-body {
+  color: #333;
+}
+div.comment-margin-note-body p {
+  margin: 0;
+}
+a.comment-margin-backref {
+  color: #1976d2;
   text-decoration: none;
+  font-size: 0.85em;
+}
+a.comment-margin-backref:hover {
+  text-decoration: underline;
+}
+span.comment-highlight[data-comment-id] {
+  cursor: pointer;
+}
+
+/* Print styles for margin mode */
+@media print {
+  div.comment-margin-container {
+    display: block;
+  }
+  aside.comment-margin-column {
+    width: auto;
+    page-break-inside: avoid;
+  }
 }
 ```
 
@@ -457,12 +578,12 @@ The `CommentRenderMode` enum values:
 1. **Reply threads**: Word supports threaded comment replies, but these are flattened in the current implementation
 2. **Resolved comments**: The resolved/done state of comments is not currently rendered
 3. **Comment highlighting colors**: Word allows different highlight colors per comment; currently all use the same CSS
-4. **Overlapping comments**: When multiple comments cover the same text, only the first comment's metadata is shown on the highlight span
-5. **Margin mode**: Requires custom CSS for proper positioning; no default layout provided
+4. **Overlapping comments**: When multiple comments cover the same text, they are nested; only the innermost comment's metadata is most visible
+5. **Margin mode positioning**: Comments in margin mode are rendered in document order, not positioned adjacent to their anchor text (would require JavaScript for dynamic positioning)
 
 ## Future Enhancements
 
 - Support for comment reply threads
 - Per-author highlight colors (similar to revision author colors)
 - Resolved/active comment state indication
-- Improved margin mode with automatic positioning
+- JavaScript-based dynamic positioning for margin mode comments
