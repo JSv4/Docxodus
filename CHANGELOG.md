@@ -14,7 +14,7 @@ All notable changes to this project will be documented in this file.
   - `CommentRenderMode` enum with three rendering modes:
     - `EndnoteStyle` (default): Comments rendered at end of document with bidirectional anchor links
     - `Inline`: Comments rendered as tooltips with `title` and `data-comment` attributes
-    - `Margin`: Comments positioned in margin column via CSS
+    - `Margin`: Comments positioned in a flexbox-based margin column alongside content, with author/date headers and back-reference links
   - New settings in `WmlToHtmlConverterSettings`:
     - `RenderComments`: Enable/disable comment rendering
     - `CommentRenderMode`: Select rendering mode
@@ -22,6 +22,7 @@ All notable changes to this project will be documented in this file.
     - `IncludeCommentMetadata`: Include author/date in HTML output
   - Comment highlighting with configurable CSS classes
   - Full comment metadata support (author, date, initials)
+  - Margin mode includes print-friendly CSS media queries
   - WASM/npm support via `commentRenderMode` parameter and TypeScript `CommentRenderMode` enum
 - **WebAssembly NPM Package** (`docxodus`) - Browser-based document comparison and HTML conversion
   - `wasm/DocxodusWasm/` - .NET 8 WASM project with JSExport methods

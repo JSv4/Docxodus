@@ -913,6 +913,100 @@ namespace Docxodus
             sb.AppendLine("    cursor: help;");
             sb.AppendLine("}");
 
+            // Margin mode styles
+            if (settings.CommentRenderMode == CommentRenderMode.Margin)
+            {
+                sb.AppendLine();
+                sb.AppendLine("/* Margin Mode Comments */");
+
+                // Container that holds both content and margin
+                sb.AppendLine($"div.{prefix}margin-container {{");
+                sb.AppendLine("    display: flex;");
+                sb.AppendLine("    flex-direction: row;");
+                sb.AppendLine("    gap: 1em;");
+                sb.AppendLine("}");
+
+                // Main content area
+                sb.AppendLine($"div.{prefix}margin-content {{");
+                sb.AppendLine("    flex: 1;");
+                sb.AppendLine("    min-width: 0;");
+                sb.AppendLine("}");
+
+                // Margin column for comments
+                sb.AppendLine($"aside.{prefix}margin-column {{");
+                sb.AppendLine("    width: 250px;");
+                sb.AppendLine("    flex-shrink: 0;");
+                sb.AppendLine("    position: relative;");
+                sb.AppendLine("}");
+
+                // Individual margin comment
+                sb.AppendLine($"div.{prefix}margin-note {{");
+                sb.AppendLine("    position: relative;");
+                sb.AppendLine("    margin-bottom: 0.5em;");
+                sb.AppendLine("    padding: 0.5em;");
+                sb.AppendLine("    background-color: #fff9c4;");
+                sb.AppendLine("    border-left: 3px solid #fbc02d;");
+                sb.AppendLine("    border-radius: 0 4px 4px 0;");
+                sb.AppendLine("    font-size: 0.85em;");
+                sb.AppendLine("    box-shadow: 0 1px 3px rgba(0,0,0,0.1);");
+                sb.AppendLine("}");
+
+                // Margin comment header
+                sb.AppendLine($"div.{prefix}margin-note-header {{");
+                sb.AppendLine("    display: flex;");
+                sb.AppendLine("    justify-content: space-between;");
+                sb.AppendLine("    align-items: center;");
+                sb.AppendLine("    margin-bottom: 0.25em;");
+                sb.AppendLine("    font-size: 0.9em;");
+                sb.AppendLine("}");
+
+                sb.AppendLine($"span.{prefix}margin-author {{");
+                sb.AppendLine("    font-weight: bold;");
+                sb.AppendLine("    color: #f57f17;");
+                sb.AppendLine("}");
+
+                sb.AppendLine($"span.{prefix}margin-date {{");
+                sb.AppendLine("    color: #666;");
+                sb.AppendLine("    font-size: 0.85em;");
+                sb.AppendLine("}");
+
+                // Margin comment body
+                sb.AppendLine($"div.{prefix}margin-note-body {{");
+                sb.AppendLine("    color: #333;");
+                sb.AppendLine("}");
+
+                sb.AppendLine($"div.{prefix}margin-note-body p {{");
+                sb.AppendLine("    margin: 0;");
+                sb.AppendLine("}");
+
+                // Back reference link
+                sb.AppendLine($"a.{prefix}margin-backref {{");
+                sb.AppendLine("    color: #1976d2;");
+                sb.AppendLine("    text-decoration: none;");
+                sb.AppendLine("    font-size: 0.85em;");
+                sb.AppendLine("}");
+
+                sb.AppendLine($"a.{prefix}margin-backref:hover {{");
+                sb.AppendLine("    text-decoration: underline;");
+                sb.AppendLine("}");
+
+                // Highlighted text in margin mode - add anchor styling
+                sb.AppendLine($"span.{prefix}highlight[data-comment-id] {{");
+                sb.AppendLine("    cursor: pointer;");
+                sb.AppendLine("}");
+
+                // Print styles for margin mode
+                sb.AppendLine("@media print {");
+                sb.AppendLine($"    div.{prefix}margin-container {{");
+                sb.AppendLine("        display: block;");
+                sb.AppendLine("    }");
+                sb.AppendLine($"    aside.{prefix}margin-column {{");
+                sb.AppendLine("        width: auto;");
+                sb.AppendLine("        page-break-inside: avoid;");
+                sb.AppendLine("    }");
+                sb.AppendLine("}");
+            }
+
             return sb.ToString();
         }
 
@@ -956,8 +1050,28 @@ namespace Docxodus
                         bodyContent.Add(headersSection);
                 }
 
-                // Add main document content
-                bodyContent.Add(CreateSectionDivs(wordDoc, settings, element));
+                // Get main document content
+                var mainContent = CreateSectionDivs(wordDoc, settings, element);
+
+                // For margin mode, wrap content in a flex container with margin column
+                if (settings.RenderComments && settings.CommentRenderMode == CommentRenderMode.Margin)
+                {
+                    var prefix = settings.CommentCssClassPrefix ?? "comment-";
+                    var tracker = GetCommentTracker(element);
+
+                    var marginContainer = new XElement(Xhtml.div,
+                        new XAttribute("class", prefix + "margin-container"),
+                        new XElement(Xhtml.div,
+                            new XAttribute("class", prefix + "margin-content"),
+                            mainContent),
+                        RenderMarginCommentsColumn(wordDoc, settings, tracker, prefix));
+
+                    bodyContent.Add(marginContainer);
+                }
+                else
+                {
+                    bodyContent.Add(mainContent);
+                }
 
                 // Add footnotes and endnotes sections if enabled
                 if (settings.RenderFootnotesAndEndnotes)
@@ -1911,6 +2025,111 @@ namespace Docxodus
             }
 
             return li;
+        }
+
+        private static XElement RenderMarginCommentsColumn(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, CommentTracker tracker, string prefix)
+        {
+            var marginColumn = new XElement(Xhtml.aside,
+                new XAttribute("class", prefix + "margin-column"));
+
+            if (tracker == null || !tracker.Comments.Any())
+                return marginColumn;
+
+            // Use referenced order if available, otherwise use comment ID order
+            var orderedComments = tracker.ReferencedCommentIds.Any()
+                ? tracker.ReferencedCommentIds
+                    .Where(id => tracker.Comments.ContainsKey(id))
+                    .Select(id => tracker.Comments[id])
+                : tracker.Comments.Values.OrderBy(c => c.Id);
+
+            foreach (var comment in orderedComments)
+            {
+                var marginNote = RenderMarginCommentNote(settings, comment, prefix);
+                if (marginNote != null)
+                    marginColumn.Add(marginNote);
+            }
+
+            return marginColumn;
+        }
+
+        private static XElement RenderMarginCommentNote(WmlToHtmlConverterSettings settings,
+            CommentInfo comment, string prefix)
+        {
+            var note = new XElement(Xhtml.div,
+                new XAttribute("id", $"comment-{comment.Id}"),
+                new XAttribute("class", prefix + "margin-note"),
+                new XAttribute("data-comment-id", comment.Id.ToString()));
+
+            if (settings.IncludeCommentMetadata)
+            {
+                if (comment.Author != null)
+                    note.Add(new XAttribute("data-author", comment.Author));
+                if (comment.Date != null)
+                    note.Add(new XAttribute("data-date", comment.Date));
+            }
+
+            // Header with author, date, and back link
+            var header = new XElement(Xhtml.div,
+                new XAttribute("class", prefix + "margin-note-header"));
+
+            if (comment.Author != null)
+            {
+                header.Add(new XElement(Xhtml.span,
+                    new XAttribute("class", prefix + "margin-author"),
+                    comment.Author));
+            }
+
+            if (comment.Date != null)
+            {
+                // Format date nicely
+                if (DateTime.TryParse(comment.Date, out var dt))
+                {
+                    header.Add(new XElement(Xhtml.span,
+                        new XAttribute("class", prefix + "margin-date"),
+                        dt.ToString("MMM d")));
+                }
+            }
+
+            header.Add(new XElement(Xhtml.a,
+                new XAttribute("href", $"#comment-ref-{comment.Id}"),
+                new XAttribute("class", prefix + "margin-backref"),
+                "↩"));
+
+            note.Add(header);
+
+            // Comment body - extract text content from paragraphs
+            var body = new XElement(Xhtml.div,
+                new XAttribute("class", prefix + "margin-note-body"));
+
+            foreach (var para in comment.ContentParagraphs)
+            {
+                // Skip the annotation reference run and get text content
+                var textContent = para.Descendants(W.t)
+                    .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any()))
+                    .Select(t => t.Value)
+                    .StringConcatenate();
+
+                if (!string.IsNullOrWhiteSpace(textContent))
+                {
+                    body.Add(new XElement(Xhtml.p, textContent));
+                }
+            }
+
+            // Only add if body has content
+            if (body.HasElements)
+            {
+                note.Add(body);
+            }
+            else
+            {
+                // Add empty paragraph to avoid empty note
+                note.Add(new XElement(Xhtml.div,
+                    new XAttribute("class", prefix + "margin-note-body"),
+                    new XElement(Xhtml.p, "(empty comment)")));
+            }
+
+            return note;
         }
 
         private static object ProcessTab(XElement element)
