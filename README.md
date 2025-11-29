@@ -156,6 +156,30 @@ dotnet run --project tools/redline/redline.csproj -- --help
 - **OpenXmlRegex** - Search/replace in DOCX/PPTX using regular expressions
 - Supporting utilities for document manipulation
 
+## Browser/JavaScript Usage (npm)
+
+Docxodus is also available as an npm package for client-side usage via WebAssembly:
+
+```bash
+npm install docxodus
+```
+
+```javascript
+import { initialize, convertDocxToHtml, compareDocuments, CommentRenderMode } from 'docxodus';
+
+await initialize();
+
+// Convert DOCX to HTML with comments
+const html = await convertDocxToHtml(docxFile, {
+  commentRenderMode: CommentRenderMode.EndnoteStyle
+});
+
+// Compare two documents
+const redlinedDocx = await compareDocuments(originalFile, modifiedFile);
+```
+
+See the [npm package documentation](docs/npm-package.md) for full API reference, React hooks, and usage examples.
+
 ## Requirements
 
 - .NET 8.0 or later
