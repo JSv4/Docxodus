@@ -6,6 +6,50 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Never credit yourself in commits.** Do not add "Generated with Claude Code" or "Co-Authored-By: Claude" to commit messages.
 
+## Feature Development Workflow
+
+When implementing new features or significant changes, follow this workflow:
+
+### 1. Documentation Updates
+
+- **CHANGELOG.md** - Add entry under `[Unreleased]` section describing the feature/fix
+- **CLAUDE.md** - Update if the feature adds new settings, modules, or changes architecture
+- **docs/architecture/** - Create or update architecture docs for significant features (e.g., `comment_rendering.md`, `comparison_engine.md`)
+
+### 2. Test Updates
+
+- Add tests to the appropriate test file in `Docxodus.Tests/`:
+  - `HtmlConverterTests.cs` - WmlToHtmlConverter features
+  - `WmlComparerTests.cs` - Document comparison features
+  - `DocumentBuilderTests.cs` - Document merging/splitting
+  - Use existing test files from `TestFiles/` when possible
+  - When creating programmatic test documents, ensure all required parts exist (StyleDefinitionsPart, DocumentSettingsPart, etc.)
+
+### 3. WASM/npm Wrapper Updates
+
+Update these when adding new settings or methods to the .NET API:
+
+- **wasm/DocxodusWasm/DocumentConverter.cs** - Add new JSExport methods or parameters
+- **wasm/DocxodusWasm/DocumentComparer.cs** - For comparison-related changes
+- **npm/src/types.ts** - Add TypeScript types, enums, and update `DocxodusWasmExports` interface
+- **npm/src/index.ts** - Update wrapper functions to use new WASM methods
+
+Build and verify with:
+```bash
+npm run build          # Builds WASM and TypeScript
+dotnet test            # Run .NET tests
+```
+
+### 4. When to Update Each Layer
+
+| Change Type | .NET | Tests | WASM | npm/TS | Docs |
+|-------------|------|-------|------|--------|------|
+| New converter setting | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Bug fix | ✓ | ✓ | - | - | CHANGELOG |
+| New public enum | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Internal refactor | ✓ | ✓ | - | - | - |
+| New module | ✓ | ✓ | ✓ | ✓ | ✓ |
+
 ## Build Commands
 
 ```bash
