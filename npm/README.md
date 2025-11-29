@@ -174,12 +174,40 @@ Compare documents and return the result as HTML.
 Extract revision information from a compared document.
 
 ```typescript
+import { getRevisions, RevisionType, isInsertion, isDeletion } from 'docxodus';
+import type { Revision } from 'docxodus';
+
+// RevisionType enum - the only two types returned by the comparison engine
+enum RevisionType {
+  Inserted = "Inserted",  // Text or content that was added
+  Deleted = "Deleted",    // Text or content that was removed
+}
+
+// Revision interface with full documentation
 interface Revision {
+  /** Author who made the revision (may be empty string if not specified) */
   author: string;
+  /** ISO 8601 date string (e.g., "2024-01-15T10:30:00Z"), may be empty */
   date: string;
-  revisionType: string; // "Insertion", "Deletion", etc.
+  /** Type of revision - "Inserted" or "Deleted" */
+  revisionType: RevisionType | string;
+  /** Text content (newline for paragraph breaks, empty for images/equations) */
   text: string;
 }
+
+// Helper functions for type-safe filtering
+const revisions = await getRevisions(comparedDoc);
+const insertions = revisions.filter(isInsertion);
+const deletions = revisions.filter(isDeletion);
+
+// Or use the enum directly
+revisions.forEach(rev => {
+  if (rev.revisionType === RevisionType.Inserted) {
+    console.log(`${rev.author} added: "${rev.text}"`);
+  } else if (rev.revisionType === RevisionType.Deleted) {
+    console.log(`${rev.author} removed: "${rev.text}"`);
+  }
+});
 ```
 
 ### React Hooks

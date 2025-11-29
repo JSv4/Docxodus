@@ -31,6 +31,11 @@ All notable changes to this project will be documented in this file.
   - DOCX to HTML conversion
   - React hooks: `useDocxodus`, `useConversion`, `useComparison`
   - Build script: `scripts/build-wasm.sh`
+- **Improved Revision API** - Better TypeScript support for the `getRevisions()` API
+  - `RevisionType` enum with `Inserted` and `Deleted` values for type-safe comparisons
+  - `isInsertion()` and `isDeletion()` helper functions for filtering revisions
+  - Comprehensive JSDoc documentation on the `Revision` interface
+  - All types are properly exported from the package (`import { RevisionType, isInsertion, isDeletion } from 'docxodus'`)
 - `SkiaSharpHelpers.cs` - Color utilities for SkiaSharp compatibility
 - `GetPackage()` extension method in `PtOpenXmlUtil.cs` for SDK 3.x Package access
 - `SkiaSharp.NativeAssets.Linux.NoDependencies` package for Linux runtime support
