@@ -47,16 +47,16 @@ export interface UseDocxodusResult {
  * React hook for using Docxodus WASM functionality.
  * Automatically initializes the WASM runtime on mount.
  *
- * By default, WASM files are loaded from CDN (jsDelivr/unpkg).
- * Pass a custom path only if you need to host files locally.
+ * WASM files are auto-detected from the module's location (works with CDN, npm, or local hosting).
+ * Pass a custom path only if you need to host files at a different location.
  *
- * @param wasmBasePath - Optional custom path to WASM files. Leave empty for CDN (recommended).
+ * @param wasmBasePath - Optional custom path to WASM files. Leave empty for auto-detection.
  * @returns Object with ready state and document functions
  *
  * @example
  * ```tsx
  * function App() {
- *   // Uses CDN by default - no configuration needed!
+ *   // Auto-detects WASM location - no configuration needed!
  *   const { isReady, isLoading, error, convertToHtml } = useDocxodus();
  *
  *   const handleFile = async (file: File) => {
@@ -186,14 +186,14 @@ export interface UseConversionResult {
 
 /**
  * React hook for DOCX to HTML conversion with state management.
- * WASM files are loaded from CDN by default.
+ * WASM files are auto-detected from the module's location.
  *
- * @param wasmBasePath - Optional custom path to WASM files. Leave empty for CDN (recommended).
+ * @param wasmBasePath - Optional custom path to WASM files. Leave empty for auto-detection.
  *
  * @example
  * ```tsx
  * function Converter() {
- *   // Uses CDN by default - no configuration needed!
+ *   // Auto-detects WASM location - no configuration needed!
  *   const { html, isConverting, error, convert } = useConversion();
  *
  *   return (
@@ -279,14 +279,14 @@ export interface UseComparisonResult {
 
 /**
  * React hook for document comparison with state management.
- * WASM files are loaded from CDN by default.
+ * WASM files are auto-detected from the module's location.
  *
- * @param wasmBasePath - Optional custom path to WASM files. Leave empty for CDN (recommended).
+ * @param wasmBasePath - Optional custom path to WASM files. Leave empty for auto-detection.
  *
  * @example
  * ```tsx
  * function Comparer() {
- *   // Uses CDN by default - no configuration needed!
+ *   // Auto-detects WASM location - no configuration needed!
  *   const { html, isComparing, error, compareToHtml, downloadResult } = useComparison();
  *   const [original, setOriginal] = useState<File | null>(null);
  *   const [modified, setModified] = useState<File | null>(null);

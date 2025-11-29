@@ -51,15 +51,27 @@ cp "$WASM_PROJECT/main.js" "$WASM_DIST/"
 # Copy index.html for testing
 cp "$WASM_PROJECT/index.html" "$WASM_DIST/"
 
-# Patch dotnet.js for cross-origin CDN compatibility
+# Patch dotnet.js and dotnet.native.js for cross-origin CDN compatibility
 # The .NET WASM runtime uses credentials:"same-origin" which conflicts with CDN's CORS wildcard
 # (Access-Control-Allow-Origin: * cannot be used with credentials)
-echo "Patching dotnet.js for CDN compatibility..."
+# Both files make fetch requests and both need to be patched.
+echo "Patching dotnet.js and dotnet.native.js for CDN compatibility..."
 if [[ "$OSTYPE" == "darwin"* ]]; then
     # macOS sed requires empty string for -i
     sed -i '' 's/credentials:"same-origin"/credentials:"omit"/g' "$WASM_DIST/_framework/dotnet.js"
+    sed -i '' 's/credentials:"same-origin"/credentials:"omit"/g' "$WASM_DIST/_framework/dotnet.native.js"
 else
     sed -i 's/credentials:"same-origin"/credentials:"omit"/g' "$WASM_DIST/_framework/dotnet.js"
+    sed -i 's/credentials:"same-origin"/credentials:"omit"/g' "$WASM_DIST/_framework/dotnet.native.js"
+fi
+
+# Verify the patches were applied
+echo "Verifying patches..."
+if grep -q 'credentials:"same-origin"' "$WASM_DIST/_framework/dotnet.js" 2>/dev/null; then
+    echo "WARNING: dotnet.js still contains credentials:same-origin"
+fi
+if grep -q 'credentials:"same-origin"' "$WASM_DIST/_framework/dotnet.native.js" 2>/dev/null; then
+    echo "WARNING: dotnet.native.js still contains credentials:same-origin"
 fi
 
 # Report sizes
