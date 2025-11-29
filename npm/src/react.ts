@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, createElement } from "react";
+import React, { useState, useEffect, useCallback, useRef, createElement, useMemo } from "react";
 import type { CSSProperties, ReactElement } from "react";
 import {
   initialize,
@@ -490,6 +490,15 @@ export function usePagination(
   const [isPaginating, setIsPaginating] = useState(false);
   const [error, setError] = useState<Error | null>(null);
 
+  // Destructure options to use individual values in dependency arrays
+  // This prevents infinite re-renders when options object is recreated each render
+  const {
+    scale = 1,
+    showPageNumbers = true,
+    pageGap = 20,
+    cssPrefix = "page-",
+  } = options;
+
   const paginate = useCallback(() => {
     if (!containerRef.current || !html) {
       return;
@@ -505,7 +514,6 @@ export function usePagination(
       container.innerHTML = html;
 
       // Find staging and page container
-      const cssPrefix = options.cssPrefix ?? "page-";
       const staging =
         container.querySelector<HTMLElement>("#pagination-staging") ||
         container.querySelector<HTMLElement>(`.${cssPrefix}staging`);
@@ -519,7 +527,14 @@ export function usePagination(
         );
       }
 
-      const engine = new PaginationEngine(staging, pageContainer, options);
+      // Reconstruct options object for the engine
+      const engineOptions: PaginationOptions = {
+        scale,
+        showPageNumbers,
+        pageGap,
+        cssPrefix,
+      };
+      const engine = new PaginationEngine(staging, pageContainer, engineOptions);
       const paginationResult = engine.paginate();
       setResult(paginationResult);
     } catch (err) {
@@ -527,7 +542,7 @@ export function usePagination(
     } finally {
       setIsPaginating(false);
     }
-  }, [html, containerRef, options]);
+  }, [html, containerRef, scale, showPageNumbers, pageGap, cssPrefix]);
 
   // Auto-paginate when HTML changes
   useEffect(() => {
@@ -587,12 +602,17 @@ export function PaginatedDocument({
   style,
 }: PaginatedDocumentProps): ReactElement {
   const containerRef = useRef<HTMLDivElement>(null);
-  const { result, isPaginating, error } = usePagination(html, containerRef, {
+
+  // Memoize options to prevent unnecessary re-renders
+  // (usePagination also handles this internally, but this is belt-and-suspenders)
+  const options = useMemo(() => ({
     scale,
     showPageNumbers,
     pageGap,
     cssPrefix,
-  });
+  }), [scale, showPageNumbers, pageGap, cssPrefix]);
+
+  const { result, isPaginating, error } = usePagination(html, containerRef, options);
 
   // Notify when pagination completes
   useEffect(() => {
