@@ -83,6 +83,16 @@ export interface ConversionOptions {
   annotationLabelMode?: AnnotationLabelMode;
   /** CSS class prefix for annotation elements (default: "annot-") */
   annotationCssClassPrefix?: string;
+  /** Whether to render footnotes and endnotes sections at the end of the document (default: false) */
+  renderFootnotesAndEndnotes?: boolean;
+  /** Whether to render document headers and footers (default: false) */
+  renderHeadersAndFooters?: boolean;
+  /** Whether to render tracked changes visually (insertions/deletions) (default: false) */
+  renderTrackedChanges?: boolean;
+  /** Whether to show deleted content with strikethrough (only when renderTrackedChanges=true, default: true) */
+  showDeletedContent?: boolean;
+  /** Whether to distinguish move operations from regular insert/delete (only when renderTrackedChanges=true, default: true) */
+  renderMoveOperations?: boolean;
 }
 
 /**
@@ -371,6 +381,26 @@ export interface DocxodusWasmExports {
       renderAnnotations: boolean,
       annotationLabelMode: number,
       annotationCssClassPrefix: string
+    ) => string;
+    ConvertDocxToHtmlComplete: (
+      bytes: Uint8Array,
+      pageTitle: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      additionalCss: string,
+      commentRenderMode: number,
+      commentCssClassPrefix: string,
+      paginationMode: number,
+      paginationScale: number,
+      paginationCssClassPrefix: string,
+      renderAnnotations: boolean,
+      annotationLabelMode: number,
+      annotationCssClassPrefix: string,
+      renderFootnotesAndEndnotes: boolean,
+      renderHeadersAndFooters: boolean,
+      renderTrackedChanges: boolean,
+      showDeletedContent: boolean,
+      renderMoveOperations: boolean
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;

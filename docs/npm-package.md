@@ -14,6 +14,9 @@ npm install docxodus
 - **Move Detection**: Automatically identify when content is relocated (not just deleted/inserted)
 - **HTML Conversion**: Convert DOCX documents to HTML for display in the browser
 - **Comment Rendering**: Render Word document comments in three different styles
+- **Footnotes & Endnotes**: Render footnotes and endnotes with bidirectional links
+- **Headers & Footers**: Render document headers and footers in HTML output
+- **Tracked Changes Rendering**: Render insertions, deletions, and move operations in HTML
 - **Custom Annotations**: Add, remove, and render custom highlights with labels on document content
 - **Document Structure API**: Analyze documents and get navigable element trees for precise targeting
 - **Revision Extraction**: Get structured data about all revisions in a compared document
@@ -106,6 +109,35 @@ const html = await convertDocxToHtml(docxFile, {
 | `additionalCss` | `string` | `""` | Additional CSS to include |
 | `commentRenderMode` | `CommentRenderMode` | `Disabled` | How to render comments |
 | `commentCssClassPrefix` | `string` | `"comment-"` | CSS prefix for comment elements |
+| `renderFootnotesAndEndnotes` | `boolean` | `false` | Render footnotes/endnotes sections |
+| `renderHeadersAndFooters` | `boolean` | `false` | Render document headers/footers |
+| `renderTrackedChanges` | `boolean` | `false` | Render tracked changes (redlines) |
+| `showDeletedContent` | `boolean` | `true` | Show deleted content with strikethrough |
+| `renderMoveOperations` | `boolean` | `true` | Distinguish moves from insert/delete |
+| `renderAnnotations` | `boolean` | `false` | Render custom annotations |
+| `annotationLabelMode` | `AnnotationLabelMode` | `Above` | How to display annotation labels |
+| `annotationCssClassPrefix` | `string` | `"annot-"` | CSS prefix for annotations |
+| `paginationMode` | `PaginationMode` | `None` | Pagination mode for PDF-style view |
+| `paginationScale` | `number` | `1.0` | Scale factor for paginated view |
+| `paginationCssClassPrefix` | `string` | `"page-"` | CSS prefix for pagination |
+
+**Examples:**
+
+```typescript
+// Render with footnotes and tracked changes
+const html = await convertDocxToHtml(docxFile, {
+  renderFootnotesAndEndnotes: true,
+  renderHeadersAndFooters: true,
+  renderTrackedChanges: true,
+  showDeletedContent: true
+});
+
+// Render with annotations
+const html = await convertDocxToHtml(docxFile, {
+  renderAnnotations: true,
+  annotationLabelMode: AnnotationLabelMode.Above
+});
+```
 
 #### `compareDocuments(original, modified, options?): Promise<Uint8Array>`
 

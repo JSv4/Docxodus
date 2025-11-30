@@ -147,6 +147,72 @@ public partial class DocumentConverter
         int annotationLabelMode,
         string annotationCssClassPrefix)
     {
+        // Delegate to complete version with new options disabled for backward compatibility
+        return ConvertDocxToHtmlComplete(
+            docxBytes,
+            pageTitle,
+            cssPrefix,
+            fabricateClasses,
+            additionalCss,
+            commentRenderMode,
+            commentCssClassPrefix,
+            paginationMode,
+            paginationScale,
+            paginationCssClassPrefix,
+            renderAnnotations,
+            annotationLabelMode,
+            annotationCssClassPrefix,
+            renderFootnotesAndEndnotes: false,
+            renderHeadersAndFooters: false,
+            renderTrackedChanges: false,
+            showDeletedContent: true,
+            renderMoveOperations: true
+        );
+    }
+
+    /// <summary>
+    /// Convert a DOCX file to HTML with all available options.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="pageTitle">Title for the HTML document</param>
+    /// <param name="cssPrefix">Prefix for generated CSS class names</param>
+    /// <param name="fabricateClasses">Whether to generate CSS classes</param>
+    /// <param name="additionalCss">Additional CSS to include</param>
+    /// <param name="commentRenderMode">Comment render mode: -1=disabled, 0=EndnoteStyle, 1=Inline, 2=Margin</param>
+    /// <param name="commentCssClassPrefix">CSS class prefix for comments (default: "comment-")</param>
+    /// <param name="paginationMode">Pagination mode: 0=None, 1=Paginated</param>
+    /// <param name="paginationScale">Scale factor for page rendering (1.0 = 100%)</param>
+    /// <param name="paginationCssClassPrefix">CSS class prefix for pagination elements (default: "page-")</param>
+    /// <param name="renderAnnotations">Whether to render custom annotations</param>
+    /// <param name="annotationLabelMode">Annotation label mode: 0=Above, 1=Inline, 2=Tooltip, 3=None</param>
+    /// <param name="annotationCssClassPrefix">CSS class prefix for annotations (default: "annot-")</param>
+    /// <param name="renderFootnotesAndEndnotes">Whether to render footnotes and endnotes sections</param>
+    /// <param name="renderHeadersAndFooters">Whether to render document headers and footers</param>
+    /// <param name="renderTrackedChanges">Whether to render tracked changes (insertions/deletions)</param>
+    /// <param name="showDeletedContent">Whether to show deleted content with strikethrough (only when renderTrackedChanges=true)</param>
+    /// <param name="renderMoveOperations">Whether to distinguish move operations from insert/delete (only when renderTrackedChanges=true)</param>
+    /// <returns>HTML string or JSON error object</returns>
+    [JSExport]
+    public static string ConvertDocxToHtmlComplete(
+        byte[] docxBytes,
+        string pageTitle,
+        string cssPrefix,
+        bool fabricateClasses,
+        string additionalCss,
+        int commentRenderMode,
+        string commentCssClassPrefix,
+        int paginationMode,
+        double paginationScale,
+        string paginationCssClassPrefix,
+        bool renderAnnotations,
+        int annotationLabelMode,
+        string annotationCssClassPrefix,
+        bool renderFootnotesAndEndnotes,
+        bool renderHeadersAndFooters,
+        bool renderTrackedChanges,
+        bool showDeletedContent,
+        bool renderMoveOperations)
+    {
         if (docxBytes == null || docxBytes.Length == 0)
         {
             return SerializeError("No document data provided");
@@ -180,7 +246,13 @@ public partial class DocumentConverter
                 RenderAnnotations = renderAnnotations,
                 AnnotationLabelMode = (AnnotationLabelMode)annotationLabelMode,
                 AnnotationCssClassPrefix = annotationCssClassPrefix ?? "annot-",
-                IncludeAnnotationMetadata = true
+                IncludeAnnotationMetadata = true,
+                RenderFootnotesAndEndnotes = renderFootnotesAndEndnotes,
+                RenderHeadersAndFooters = renderHeadersAndFooters,
+                RenderTrackedChanges = renderTrackedChanges,
+                ShowDeletedContent = showDeletedContent,
+                RenderMoveOperations = renderMoveOperations,
+                IncludeRevisionMetadata = true
             };
 
             var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, settings);
