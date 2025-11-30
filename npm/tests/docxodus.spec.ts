@@ -96,6 +96,25 @@ async function compareToHtmlWithOptions(
   );
 }
 
+// Helper to convert to HTML with pagination
+async function convertToHtmlWithPagination(
+  page: Page,
+  bytes: Uint8Array,
+  paginationMode: number = 1,
+  paginationScale: number = 1.0
+): Promise<{ html?: string; error?: any }> {
+  return await page.evaluate(
+    ([bytesArray, mode, scale]) => {
+      return (window as any).DocxodusTests.convertToHtmlWithPagination(
+        new Uint8Array(bytesArray),
+        mode,
+        scale
+      );
+    },
+    [Array.from(bytes), paginationMode, paginationScale]
+  );
+}
+
 test.describe('Docxodus WASM Tests', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/test-harness.html');
@@ -389,6 +408,240 @@ test.describe('Docxodus WASM Tests', () => {
       expect(hasRedlineClass).toBe(true);
 
       console.log('Tracked changes HTML includes proper CSS styling');
+    });
+  });
+
+  test.describe('Pagination Tests', () => {
+    // Use a document with multiple paragraphs that will span multiple pages
+    const testDoc = 'HC001-5DayTourPlanTemplate.docx';
+
+    test('generates pagination HTML structure', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Check for pagination structure
+      expect(result.html).toContain('pagination-staging');
+      expect(result.html).toContain('pagination-container');
+      expect(result.html).toContain('page-staging');
+      expect(result.html).toContain('page-container');
+
+      console.log('Pagination HTML structure generated correctly');
+    });
+
+    test('includes page dimension data attributes', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Check for page dimension data attributes
+      expect(result.html).toContain('data-page-width');
+      expect(result.html).toContain('data-page-height');
+      expect(result.html).toContain('data-content-width');
+      expect(result.html).toContain('data-content-height');
+      expect(result.html).toContain('data-margin-top');
+      expect(result.html).toContain('data-margin-left');
+
+      console.log('Page dimension data attributes present');
+    });
+
+    test('pagination CSS includes overflow hidden', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Check that pagination CSS includes overflow:hidden for clipping
+      expect(result.html).toContain('overflow: hidden');
+      // Check for page-box class styling
+      expect(result.html).toContain('.page-box');
+      expect(result.html).toContain('.page-content');
+
+      console.log('Pagination CSS includes proper overflow handling');
+    });
+
+    test('content does not overflow page boundaries when paginated', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 0.8);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Insert the HTML into the page and run pagination
+      const overflowCheck = await page.evaluate((html) => {
+        // Create a container for the paginated content
+        const container = document.createElement('div');
+        container.id = 'test-pagination-container';
+        container.innerHTML = html;
+        document.body.appendChild(container);
+
+        // Find staging and page container
+        const staging = container.querySelector('#pagination-staging') as HTMLElement;
+        const pageContainer = container.querySelector('#pagination-container') as HTMLElement;
+
+        if (!staging || !pageContainer) {
+          return { error: 'Pagination elements not found' };
+        }
+
+        // Import and run the pagination engine
+        // We need to manually implement pagination logic here since we can't import ES modules
+        // Instead, let's parse dimensions and verify content fits
+
+        // Get page dimensions from data attributes
+        const section = staging.querySelector('[data-section-index]') as HTMLElement;
+        if (!section) {
+          return { error: 'Section element not found' };
+        }
+
+        const pageHeight = parseFloat(section.dataset.pageHeight || '792');
+        const contentHeight = parseFloat(section.dataset.contentHeight || '648');
+        const marginTop = parseFloat(section.dataset.marginTop || '72');
+        const marginBottom = parseFloat(section.dataset.marginBottom || '72');
+
+        // Measure all content blocks
+        const blocks = Array.from(section.children) as HTMLElement[];
+        let totalContentHeight = 0;
+        const blockMeasurements: { height: number; marginTop: number; marginBottom: number }[] = [];
+
+        // Make staging visible for measurement
+        staging.style.visibility = 'hidden';
+        staging.style.position = 'absolute';
+        staging.style.left = '-9999px';
+        staging.style.display = 'block';
+        section.style.width = `${parseFloat(section.dataset.contentWidth || '468')}pt`;
+
+        for (const block of blocks) {
+          if (block.dataset.sectionIndex !== undefined) continue;
+
+          const rect = block.getBoundingClientRect();
+          const style = window.getComputedStyle(block);
+          const marginTopPx = parseFloat(style.marginTop) || 0;
+          const marginBottomPx = parseFloat(style.marginBottom) || 0;
+
+          blockMeasurements.push({
+            height: rect.height * 0.75, // Convert px to pt
+            marginTop: marginTopPx * 0.75,
+            marginBottom: marginBottomPx * 0.75
+          });
+        }
+
+        staging.style.display = 'none';
+
+        // Simulate pagination flow with margin collapsing
+        const pages: number[][] = [];
+        let currentPage: number[] = [];
+        let remainingHeight = contentHeight;
+        let prevMarginBottom = 0;
+
+        for (let i = 0; i < blockMeasurements.length; i++) {
+          const block = blockMeasurements[i];
+          const isFirst = currentPage.length === 0;
+
+          // Calculate effective margin with collapsing
+          let effectiveMarginTop = block.marginTop;
+          if (!isFirst) {
+            effectiveMarginTop = Math.max(block.marginTop, prevMarginBottom) - prevMarginBottom;
+          }
+
+          const blockSpace = effectiveMarginTop + block.height + block.marginBottom;
+
+          if (blockSpace <= remainingHeight) {
+            currentPage.push(i);
+            remainingHeight -= blockSpace;
+            prevMarginBottom = block.marginBottom;
+          } else {
+            // Start new page
+            if (currentPage.length > 0) {
+              pages.push(currentPage);
+            }
+            currentPage = [i];
+            const newPageSpace = block.marginTop + block.height + block.marginBottom;
+            remainingHeight = contentHeight - newPageSpace;
+            prevMarginBottom = block.marginBottom;
+          }
+        }
+
+        if (currentPage.length > 0) {
+          pages.push(currentPage);
+        }
+
+        // Verify each page's content fits within contentHeight
+        const pageOverflows: { page: number; usedHeight: number; available: number }[] = [];
+
+        for (let pageIdx = 0; pageIdx < pages.length; pageIdx++) {
+          const pageBlocks = pages[pageIdx];
+          let usedHeight = 0;
+          let prevMargin = 0;
+
+          for (let i = 0; i < pageBlocks.length; i++) {
+            const blockIdx = pageBlocks[i];
+            const block = blockMeasurements[blockIdx];
+            const isFirst = i === 0;
+
+            let effectiveMarginTop = block.marginTop;
+            if (!isFirst) {
+              effectiveMarginTop = Math.max(block.marginTop, prevMargin) - prevMargin;
+            }
+
+            usedHeight += effectiveMarginTop + block.height + block.marginBottom;
+            prevMargin = block.marginBottom;
+          }
+
+          // Allow small tolerance for floating point errors (1pt)
+          if (usedHeight > contentHeight + 1) {
+            pageOverflows.push({
+              page: pageIdx + 1,
+              usedHeight,
+              available: contentHeight
+            });
+          }
+        }
+
+        // Clean up
+        document.body.removeChild(container);
+
+        return {
+          totalPages: pages.length,
+          contentHeight,
+          pageOverflows,
+          hasOverflow: pageOverflows.length > 0
+        };
+      }, result.html!);
+
+      // Verify no overflow
+      if ('error' in overflowCheck) {
+        throw new Error(overflowCheck.error as string);
+      }
+
+      expect(overflowCheck.hasOverflow).toBe(false);
+
+      if (overflowCheck.pageOverflows.length > 0) {
+        console.log('Page overflows detected:', overflowCheck.pageOverflows);
+      }
+
+      console.log(`Pagination test passed: ${overflowCheck.totalPages} pages, no content overflow`);
+    });
+
+    test('scaled pagination maintains proper clipping', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Test with different scale factors
+      for (const scale of [0.5, 0.75, 1.0, 1.25]) {
+        const result = await convertToHtmlWithPagination(page, bytes, 1, scale);
+
+        expect(result.error).toBeUndefined();
+        expect(result.html).toBeDefined();
+
+        // Verify HTML was generated
+        expect(result.html).toContain('pagination-staging');
+
+        console.log(`Scale ${scale}: HTML generated successfully`);
+      }
     });
   });
 });

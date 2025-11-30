@@ -102,6 +102,30 @@
             // Get version info
             getVersion: function() {
                 return JSON.parse(window.Docxodus.DocumentConverter.GetVersion());
+            },
+
+            // Convert DOCX to HTML with pagination
+            convertToHtmlWithPagination: function(bytes, paginationMode = 1, paginationScale = 1.0) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.ConvertDocxToHtmlWithPagination(
+                        bytes,
+                        'Document',      // pageTitle
+                        'docx-',         // cssPrefix
+                        true,            // fabricateClasses
+                        '',              // additionalCss
+                        -1,              // commentRenderMode (disabled)
+                        'comment-',      // commentCssClassPrefix
+                        paginationMode,  // 0=None, 1=Paginated
+                        paginationScale, // scale factor
+                        'page-'          // paginationCssClassPrefix
+                    );
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { html: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
             }
         };
 
