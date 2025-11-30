@@ -14,6 +14,8 @@ npm install docxodus
 - **Move Detection**: Automatically identify when content is relocated (not just deleted/inserted)
 - **HTML Conversion**: Convert DOCX documents to HTML for display in the browser
 - **Comment Rendering**: Render Word document comments in three different styles
+- **Custom Annotations**: Add, remove, and render custom highlights with labels on document content
+- **Document Structure API**: Analyze documents and get navigable element trees for precise targeting
 - **Revision Extraction**: Get structured data about all revisions in a compared document
 - **100% Client-Side**: All processing happens in the browser using WebAssembly
 - **React Hooks**: Ready-to-use hooks for React applications
@@ -269,6 +271,279 @@ const revisions = await getRevisions(comparedDoc, {
 const revisions = await getRevisions(comparedDoc, { detectMoves: false });
 ```
 
+### Custom Annotations
+
+The annotation system allows you to add, remove, and render custom highlights and labels on DOCX documents. Annotations are stored non-destructively in the document and can be rendered in HTML output.
+
+#### `getAnnotations(document): Promise<Annotation[]>`
+
+Get all annotations from a document.
+
+```typescript
+import { getAnnotations } from 'docxodus';
+
+const annotations = await getAnnotations(docxBytes);
+for (const annot of annotations) {
+  console.log(`${annot.label}: "${annot.annotatedText}"`);
+}
+```
+
+#### `addAnnotation(document, request): Promise<AddAnnotationResult>`
+
+Add an annotation to a document using text search or paragraph indices.
+
+```typescript
+import { addAnnotation } from 'docxodus';
+
+// Add annotation by searching for text
+const result = await addAnnotation(docxBytes, {
+  Id: 'annot-001',
+  LabelId: 'IMPORTANT',
+  Label: 'Important Clause',
+  Color: '#FFEB3B',
+  SearchText: 'shall not be liable',
+  Occurrence: 1,  // First occurrence
+  Author: 'Legal Review',
+  Metadata: {
+    category: 'liability',
+    priority: 'high'
+  }
+});
+
+// result.documentBytes contains the modified document
+// result.annotation contains the created annotation details
+```
+
+**AddAnnotationRequest Properties:**
+
+| Property | Type | Required | Description |
+|----------|------|----------|-------------|
+| `Id` | `string` | Yes | Unique annotation identifier |
+| `LabelId` | `string` | Yes | Category/type identifier for grouping |
+| `Label` | `string` | Yes | Human-readable label text |
+| `Color` | `string` | No | Highlight color in hex (default: `#FFEB3B`) |
+| `SearchText` | `string` | * | Text to find and annotate |
+| `Occurrence` | `number` | No | Which occurrence (1-based, default: 1) |
+| `StartParagraphIndex` | `number` | * | Start paragraph (0-based) |
+| `EndParagraphIndex` | `number` | * | End paragraph (0-based, inclusive) |
+| `Author` | `string` | No | Author name |
+| `Metadata` | `Record<string, string>` | No | Custom key-value pairs |
+
+\* Either `SearchText` OR `StartParagraphIndex`/`EndParagraphIndex` is required.
+
+#### `removeAnnotation(document, annotationId): Promise<RemoveAnnotationResult>`
+
+Remove an annotation by ID.
+
+```typescript
+import { removeAnnotation } from 'docxodus';
+
+const result = await removeAnnotation(docxBytes, 'annot-001');
+// result.documentBytes contains the document without the annotation
+```
+
+#### `hasAnnotations(document): Promise<boolean>`
+
+Check if a document has any annotations.
+
+```typescript
+import { hasAnnotations } from 'docxodus';
+
+if (await hasAnnotations(docxBytes)) {
+  console.log('Document has annotations');
+}
+```
+
+#### Rendering Annotations in HTML
+
+Convert a document with annotations to HTML with highlights rendered:
+
+```typescript
+import { convertDocxToHtml, AnnotationLabelMode } from 'docxodus';
+
+const html = await convertDocxToHtml(annotatedDocxBytes, {
+  renderAnnotations: true,
+  annotationLabelMode: AnnotationLabelMode.Above,
+  annotationCssClassPrefix: 'annot-'
+});
+```
+
+**AnnotationLabelMode Options:**
+
+| Mode | Value | Description |
+|------|-------|-------------|
+| `Above` | 0 | Floating label positioned above the highlight |
+| `Inline` | 1 | Label displayed inline at start of highlight |
+| `Tooltip` | 2 | Label shown only on hover |
+| `None` | 3 | Highlight only, no label displayed |
+
+**Generated HTML Structure:**
+
+```html
+<span class="annot-highlight"
+      data-annotation-id="annot-001"
+      data-label-id="IMPORTANT"
+      data-label-mode="above"
+      style="--annot-color: #FFEB3B;">
+  <span class="annot-label">Important Clause</span>
+  shall not be liable
+</span>
+```
+
+### Document Structure API
+
+The Document Structure API analyzes DOCX documents and returns a navigable tree of elements with stable IDs. This enables precise targeting for annotations.
+
+#### `getDocumentStructure(document): Promise<DocumentStructure>`
+
+Analyze document and get element tree.
+
+```typescript
+import {
+  getDocumentStructure,
+  findElementsByType,
+  getParagraphs,
+  getTables,
+  DocumentElementType
+} from 'docxodus';
+
+const structure = await getDocumentStructure(docxBytes);
+
+// Get all paragraphs
+const paragraphs = getParagraphs(structure);
+console.log(`Document has ${paragraphs.length} paragraphs`);
+
+// Get all tables
+const tables = getTables(structure);
+
+// Find specific element types
+const images = findElementsByType(structure, DocumentElementType.Image);
+
+// Look up element by ID
+const element = structure.elementsById['doc/p-0'];
+console.log(`First paragraph: "${element.TextPreview}"`);
+```
+
+**DocumentStructure Interface:**
+
+```typescript
+interface DocumentStructure {
+  root: DocumentElement;                              // Root document element
+  elementsById: Record<string, DocumentElement>;      // All elements by ID
+  tableColumns: Record<string, TableColumnInfo>;      // Table column metadata
+}
+
+interface DocumentElement {
+  Id: string;              // Path-based ID (e.g., "doc/tbl-0/tr-1/tc-2")
+  Type: string;            // Element type
+  TextPreview?: string;    // First ~100 characters of text
+  Index: number;           // Position in parent
+  Children: DocumentElement[];
+  RowIndex?: number;       // For table rows/cells
+  ColumnIndex?: number;    // For table cells
+  RowSpan?: number;        // Cell row span
+  ColumnSpan?: number;     // Cell column span
+}
+```
+
+**Element ID Format:**
+
+| ID Pattern | Description |
+|------------|-------------|
+| `doc` | Document root |
+| `doc/p-0` | First paragraph |
+| `doc/p-0/r-0` | First run in first paragraph |
+| `doc/tbl-0` | First table |
+| `doc/tbl-0/tr-1` | Second row in first table |
+| `doc/tbl-0/tr-1/tc-2` | Third cell in second row |
+| `doc/tbl-0/tr-1/tc-2/p-0` | First paragraph in that cell |
+
+**DocumentElementType Enum:**
+
+```typescript
+enum DocumentElementType {
+  Document = 'Document',
+  Paragraph = 'Paragraph',
+  Run = 'Run',
+  Table = 'Table',
+  TableRow = 'TableRow',
+  TableCell = 'TableCell',
+  TableColumn = 'TableColumn',  // Virtual - metadata only
+  Hyperlink = 'Hyperlink',
+  Image = 'Image'
+}
+```
+
+#### `addAnnotationWithTarget(document, request): Promise<AddAnnotationResult>`
+
+Add an annotation using flexible element-based targeting.
+
+```typescript
+import {
+  addAnnotationWithTarget,
+  targetParagraph,
+  targetTableCell,
+  targetElement,
+  getDocumentStructure
+} from 'docxodus';
+
+// Target by paragraph index
+const result1 = await addAnnotationWithTarget(docxBytes, {
+  Id: 'para-annot',
+  LabelId: 'SECTION',
+  Label: 'Introduction',
+  Color: '#4CAF50',
+  ...targetParagraph(0)  // First paragraph
+});
+
+// Target a table cell
+const result2 = await addAnnotationWithTarget(result1.documentBytes, {
+  Id: 'cell-annot',
+  LabelId: 'DATA',
+  Label: 'Key Value',
+  Color: '#2196F3',
+  ...targetTableCell(0, 1, 2)  // Table 0, Row 1, Cell 2
+});
+
+// Target by element ID (from structure analysis)
+const structure = await getDocumentStructure(docxBytes);
+const cellId = Object.keys(structure.elementsById)
+  .find(id => id.includes('/tc-'));
+
+const result3 = await addAnnotationWithTarget(docxBytes, {
+  Id: 'element-annot',
+  LabelId: 'HIGHLIGHT',
+  Label: 'Selected Cell',
+  Color: '#FF5722',
+  ...targetElement(cellId)
+});
+
+// Search text within a specific element
+const result4 = await addAnnotationWithTarget(docxBytes, {
+  Id: 'scoped-search',
+  LabelId: 'TERM',
+  Label: 'Legal Term',
+  Color: '#9C27B0',
+  ElementId: 'doc/p-5',
+  SearchText: 'indemnify',
+  Occurrence: 1
+});
+```
+
+**Targeting Helper Functions:**
+
+| Function | Description |
+|----------|-------------|
+| `targetElement(id)` | Target by element ID |
+| `targetParagraph(index)` | Target paragraph by index |
+| `targetParagraphRange(start, end)` | Target paragraph range |
+| `targetRun(paragraphIndex, runIndex)` | Target specific run |
+| `targetTable(index)` | Target entire table |
+| `targetTableRow(tableIndex, rowIndex)` | Target table row |
+| `targetTableCell(tableIndex, rowIndex, cellIndex)` | Target table cell |
+| `targetTableColumn(tableIndex, columnIndex)` | Target column (metadata only) |
+| `targetTextSearch(text, occurrence)` | Global text search |
+
 ### React Hooks
 
 #### `useDocxodus(wasmBasePath?: string)`
@@ -314,6 +589,107 @@ const {
   compareToHtml,  // (original, modified, options?) => Promise<void>
   downloadResult  // (filename) => void
 } = useComparison();
+```
+
+#### `useDocumentStructure(docxBytes: Uint8Array | null)`
+
+Hook for analyzing document structure with navigation helpers.
+
+```tsx
+import { useDocumentStructure } from 'docxodus/react';
+
+function DocumentExplorer({ docxBytes }: { docxBytes: Uint8Array | null }) {
+  const {
+    structure,        // DocumentStructure | null
+    isLoading,        // boolean
+    error,            // Error | null
+    paragraphs,       // DocumentElement[] - all paragraphs
+    tables,           // DocumentElement[] - all tables
+    findById,         // (id: string) => DocumentElement | undefined
+    getTableColumns   // (tableId: string) => TableColumnInfo[]
+  } = useDocumentStructure(docxBytes);
+
+  if (isLoading) return <div>Analyzing...</div>;
+  if (error) return <div>Error: {error.message}</div>;
+  if (!structure) return <div>No document loaded</div>;
+
+  return (
+    <div>
+      <h3>Paragraphs ({paragraphs.length})</h3>
+      <ul>
+        {paragraphs.map(p => (
+          <li key={p.Id}>
+            <code>{p.Id}</code>: {p.TextPreview?.slice(0, 50)}...
+          </li>
+        ))}
+      </ul>
+
+      <h3>Tables ({tables.length})</h3>
+      {tables.map(t => (
+        <div key={t.Id}>
+          <code>{t.Id}</code>: {t.Children.length} rows
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+#### `useAnnotations` (via `useDocxodus`)
+
+The `useDocxodus` hook includes annotation methods:
+
+```tsx
+import { useDocxodus } from 'docxodus/react';
+
+function AnnotationManager({ docxBytes }: { docxBytes: Uint8Array }) {
+  const {
+    isReady,
+    getAnnotations,
+    addAnnotation,
+    removeAnnotation,
+    hasAnnotations,
+    getDocumentStructure,
+    addAnnotationWithTarget
+  } = useDocxodus();
+
+  const [annotations, setAnnotations] = useState([]);
+  const [doc, setDoc] = useState(docxBytes);
+
+  useEffect(() => {
+    if (isReady && doc) {
+      getAnnotations(doc).then(setAnnotations);
+    }
+  }, [isReady, doc]);
+
+  const handleAddAnnotation = async () => {
+    const result = await addAnnotation(doc, {
+      Id: `annot-${Date.now()}`,
+      LabelId: 'HIGHLIGHT',
+      Label: 'Important',
+      Color: '#FFEB3B',
+      SearchText: 'contract'
+    });
+    setDoc(result.documentBytes);
+  };
+
+  return (
+    <div>
+      <h3>Annotations ({annotations.length})</h3>
+      <button onClick={handleAddAnnotation}>Add Annotation</button>
+      <ul>
+        {annotations.map(a => (
+          <li key={a.Id}>
+            {a.Label}: "{a.AnnotatedText}"
+            <button onClick={() => removeAnnotation(doc, a.Id).then(r => setDoc(r.documentBytes))}>
+              Remove
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 ```
 
 ## Hosting WASM Files
@@ -393,6 +769,7 @@ You can use Docxodus directly from a CDN without npm:
 
 ## Related Documentation
 
+- [Custom Annotations Architecture](architecture/custom_annotations.md) - Annotation system design and implementation
 - [Comment Rendering Architecture](architecture/comment_rendering.md) - Detailed documentation on comment rendering implementation
 - [DOCX Converter Architecture](architecture/docx_converter.md) - HTML conversion internals
 - [Comparison Engine](architecture/comparison_engine.md) - Document comparison algorithm details
