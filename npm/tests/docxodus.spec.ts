@@ -96,6 +96,25 @@ async function compareToHtmlWithOptions(
   );
 }
 
+// Helper to convert to HTML with pagination
+async function convertToHtmlWithPagination(
+  page: Page,
+  bytes: Uint8Array,
+  paginationMode: number = 1,
+  paginationScale: number = 1.0
+): Promise<{ html?: string; error?: any }> {
+  return await page.evaluate(
+    ([bytesArray, mode, scale]) => {
+      return (window as any).DocxodusTests.convertToHtmlWithPagination(
+        new Uint8Array(bytesArray),
+        mode,
+        scale
+      );
+    },
+    [Array.from(bytes), paginationMode, paginationScale]
+  );
+}
+
 test.describe('Docxodus WASM Tests', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/test-harness.html');
@@ -389,6 +408,248 @@ test.describe('Docxodus WASM Tests', () => {
       expect(hasRedlineClass).toBe(true);
 
       console.log('Tracked changes HTML includes proper CSS styling');
+    });
+  });
+
+  test.describe('Pagination Tests', () => {
+    // Use a document with multiple paragraphs that will span multiple pages
+    const testDoc = 'HC001-5DayTourPlanTemplate.docx';
+
+    test('generates pagination HTML structure', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Check for pagination structure
+      expect(result.html).toContain('pagination-staging');
+      expect(result.html).toContain('pagination-container');
+      expect(result.html).toContain('page-staging');
+      expect(result.html).toContain('page-container');
+
+      console.log('Pagination HTML structure generated correctly');
+    });
+
+    test('includes page dimension data attributes', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Check for page dimension data attributes
+      expect(result.html).toContain('data-page-width');
+      expect(result.html).toContain('data-page-height');
+      expect(result.html).toContain('data-content-width');
+      expect(result.html).toContain('data-content-height');
+      expect(result.html).toContain('data-margin-top');
+      expect(result.html).toContain('data-margin-left');
+
+      console.log('Page dimension data attributes present');
+    });
+
+    test('pagination CSS includes overflow hidden', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Check that pagination CSS includes overflow:hidden for clipping
+      expect(result.html).toContain('overflow: hidden');
+      // Check for page-box class styling
+      expect(result.html).toContain('.page-box');
+      expect(result.html).toContain('.page-content');
+
+      console.log('Pagination CSS includes proper overflow handling');
+    });
+
+    test('content does not overflow page boundaries when paginated', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 0.8);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Load the real pagination engine bundle
+      await page.addScriptTag({ path: 'dist/pagination.bundle.js' });
+
+      // Insert the HTML into the page and run pagination using the real PaginationEngine
+      const paginationResult = await page.evaluate((html) => {
+        // Create a container for the paginated content
+        const container = document.createElement('div');
+        container.id = 'test-pagination-container';
+        container.innerHTML = html;
+        document.body.appendChild(container);
+
+        // Find staging and page container
+        const staging = container.querySelector('#pagination-staging') as HTMLElement;
+        const pageContainer = container.querySelector('#pagination-container') as HTMLElement;
+
+        if (!staging || !pageContainer) {
+          return { error: 'Pagination elements not found' };
+        }
+
+        // Use the real PaginationEngine from the bundle
+        const { PaginationEngine } = (window as any).DocxodusPagination;
+
+        try {
+          const engine = new PaginationEngine(staging, pageContainer, {
+            scale: 0.8,
+            showPageNumbers: true
+          });
+
+          const result = engine.paginate();
+
+          // Now verify that content doesn't overflow in the rendered pages
+          const pageBoxes = pageContainer.querySelectorAll('.page-box');
+          const overflows: { page: number; contentBottom: number; pageBottom: number }[] = [];
+
+          pageBoxes.forEach((pageBox, idx) => {
+            const pageContent = pageBox.querySelector('.page-content') as HTMLElement;
+            if (!pageContent) return;
+
+            const pageBoxRect = pageBox.getBoundingClientRect();
+            const contentRect = pageContent.getBoundingClientRect();
+
+            // Check if content bottom exceeds page box bottom (accounting for transform/zoom)
+            // We need to check the actual children inside page-content
+            const children = pageContent.children;
+            if (children.length > 0) {
+              const lastChild = children[children.length - 1] as HTMLElement;
+              const lastChildRect = lastChild.getBoundingClientRect();
+              const style = window.getComputedStyle(lastChild);
+              const marginBottom = parseFloat(style.marginBottom) || 0;
+
+              // Content should not extend beyond the page-content container
+              const contentBottom = lastChildRect.bottom + marginBottom;
+              const containerBottom = contentRect.bottom;
+
+              // Allow 1px tolerance for rounding
+              if (contentBottom > containerBottom + 1) {
+                overflows.push({
+                  page: idx + 1,
+                  contentBottom: contentBottom,
+                  pageBottom: containerBottom
+                });
+              }
+            }
+          });
+
+          // Clean up
+          document.body.removeChild(container);
+
+          return {
+            totalPages: result.totalPages,
+            pageOverflows: overflows,
+            hasOverflow: overflows.length > 0
+          };
+        } catch (e) {
+          document.body.removeChild(container);
+          return { error: (e as Error).message };
+        }
+      }, result.html!);
+
+      // Verify no errors
+      if ('error' in paginationResult) {
+        throw new Error(paginationResult.error as string);
+      }
+
+      expect(paginationResult.hasOverflow).toBe(false);
+
+      if (paginationResult.pageOverflows && paginationResult.pageOverflows.length > 0) {
+        console.log('Page overflows detected:', paginationResult.pageOverflows);
+      }
+
+      console.log(`Pagination test passed: ${paginationResult.totalPages} pages, no content overflow`);
+    });
+
+    test('scaled pagination maintains proper clipping', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Load the real pagination engine bundle
+      await page.addScriptTag({ path: 'dist/pagination.bundle.js' });
+
+      // Test with different scale factors
+      for (const scale of [0.5, 0.75, 1.0, 1.25]) {
+        const result = await convertToHtmlWithPagination(page, bytes, 1, scale);
+
+        expect(result.error).toBeUndefined();
+        expect(result.html).toBeDefined();
+
+        // Run pagination with the real engine and verify no overflow
+        const paginationResult = await page.evaluate(({ html, scale }) => {
+          // Create a container for the paginated content
+          const container = document.createElement('div');
+          container.id = `test-pagination-container-${scale}`;
+          container.innerHTML = html;
+          document.body.appendChild(container);
+
+          const staging = container.querySelector('#pagination-staging') as HTMLElement;
+          const pageContainer = container.querySelector('#pagination-container') as HTMLElement;
+
+          if (!staging || !pageContainer) {
+            document.body.removeChild(container);
+            return { error: 'Pagination elements not found' };
+          }
+
+          const { PaginationEngine } = (window as any).DocxodusPagination;
+
+          try {
+            const engine = new PaginationEngine(staging, pageContainer, {
+              scale: scale,
+              showPageNumbers: true
+            });
+
+            const result = engine.paginate();
+
+            // Verify page boxes were created
+            const pageBoxes = pageContainer.querySelectorAll('.page-box');
+
+            // Check overflow on each page
+            let hasOverflow = false;
+            pageBoxes.forEach((pageBox) => {
+              const pageContent = pageBox.querySelector('.page-content') as HTMLElement;
+              if (!pageContent) return;
+
+              const contentRect = pageContent.getBoundingClientRect();
+              const children = pageContent.children;
+
+              if (children.length > 0) {
+                const lastChild = children[children.length - 1] as HTMLElement;
+                const lastChildRect = lastChild.getBoundingClientRect();
+                const style = window.getComputedStyle(lastChild);
+                const marginBottom = parseFloat(style.marginBottom) || 0;
+
+                if (lastChildRect.bottom + marginBottom > contentRect.bottom + 1) {
+                  hasOverflow = true;
+                }
+              }
+            });
+
+            document.body.removeChild(container);
+
+            return {
+              totalPages: result.totalPages,
+              pageBoxCount: pageBoxes.length,
+              hasOverflow: hasOverflow
+            };
+          } catch (e) {
+            document.body.removeChild(container);
+            return { error: (e as Error).message };
+          }
+        }, { html: result.html!, scale });
+
+        if ('error' in paginationResult) {
+          throw new Error(`Scale ${scale}: ${paginationResult.error}`);
+        }
+
+        expect(paginationResult.totalPages).toBeGreaterThan(0);
+        expect(paginationResult.hasOverflow).toBe(false);
+
+        console.log(`Scale ${scale}: ${paginationResult.totalPages} pages, no overflow`);
+      }
     });
   });
 });
