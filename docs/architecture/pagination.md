@@ -392,6 +392,28 @@ for (const block of blocks) {
 2. **Footnote registry**: Small upfront data, cloned per-page as needed
 3. **Measurement caching**: Footnote heights measured once per unique combination
 4. **Endnotes unchanged**: Endnotes remain at document end (traditional behavior)
+5. **Footnote continuation**: Long footnotes split at paragraph boundaries and continue on subsequent pages
+
+### Footnote Continuation
+
+When a footnote is too long to fit in the remaining space on a page, the pagination engine splits it:
+
+1. **Split at paragraph boundaries**: The `splitFootnoteToFit()` method finds paragraph-level break points within the footnote content
+2. **Partial rendering**: The fitting portion renders on the current page with the footnote number
+3. **Continuation storage**: Remaining content stored in `FootnoteContinuation` interface for next page
+4. **Continuation rendering**: On subsequent pages, continuation content renders first (before new footnotes), without the footnote number
+
+```typescript
+interface FootnoteContinuation {
+  footnoteId: string;           // ID of the footnote being continued
+  remainingElements: HTMLElement[];  // Paragraphs that didn't fit
+}
+
+interface PartialFootnote {
+  footnoteId: string;           // ID of the split footnote
+  fittingElements: HTMLElement[];    // Paragraphs that fit on this page
+}
+```
 
 ### CSS Classes
 
@@ -415,6 +437,11 @@ for (const block of blocks) {
 .footnote-item {
   margin-bottom: 2pt;
 }
+
+/* Continued footnote content from previous page */
+.footnote-continuation {
+  margin-bottom: 4pt;
+}
 ```
 
 ## Related Documentation
@@ -428,4 +455,4 @@ for (const block of blocks) {
 3. **Column support**: Handle multi-column sections
 4. **Virtual scrolling**: Only render visible pages for large documents
 5. **Server-side rendering**: Pre-compute pagination for static documents
-6. **Footnote continuation**: Split long footnotes across pages
+6. **Line-level footnote splitting**: Split within paragraphs for even better fit
