@@ -958,6 +958,40 @@ namespace Docxodus
             sb.AppendLine("    margin-left: 0.5em;");
             sb.AppendLine("}");
 
+            // Per-page footnotes (for paginated mode)
+            var prefix = settings.PaginationCssClassPrefix ?? "page-";
+            sb.AppendLine();
+            sb.AppendLine("/* Per-page Footnotes (Paginated Mode) */");
+
+            // Page footnotes container
+            sb.AppendLine($".{prefix}footnotes {{");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("    line-height: 1.4;");
+            sb.AppendLine("}");
+
+            // Separator line above footnotes
+            sb.AppendLine($".{prefix}footnotes hr {{");
+            sb.AppendLine("    border: none;");
+            sb.AppendLine("    border-top: 1px solid #666;");
+            sb.AppendLine("    width: 30%;");
+            sb.AppendLine("    margin: 0 0 4pt 0;");
+            sb.AppendLine("}");
+
+            // Individual footnote item (in registry and on page)
+            sb.AppendLine(".footnote-item {");
+            sb.AppendLine("    margin-bottom: 2pt;");
+            sb.AppendLine("}");
+
+            // Footnote number
+            sb.AppendLine(".footnote-number {");
+            sb.AppendLine("    font-weight: normal;");
+            sb.AppendLine("}");
+
+            // Footnote content (inline with number)
+            sb.AppendLine(".footnote-content {");
+            sb.AppendLine("    display: inline;");
+            sb.AppendLine("}");
+
             return sb.ToString();
         }
 
@@ -1223,18 +1257,26 @@ namespace Docxodus
             sb.AppendLine("    transform-origin: top left;");
             sb.AppendLine("}");
 
-            // Header area within page (positioned at top margin)
+            // Header area within page (positioned at top, constrained to top margin height)
             sb.AppendLine($".{prefix}header {{");
             sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    top: 0;");
             sb.AppendLine("    overflow: hidden;");
             sb.AppendLine("    box-sizing: border-box;");
+            sb.AppendLine("    display: flex;");
+            sb.AppendLine("    flex-direction: column;");
+            sb.AppendLine("    justify-content: flex-end;"); // Align content to bottom of header area
             sb.AppendLine("}");
 
-            // Footer area within page (positioned at bottom margin)
+            // Footer area within page (positioned at bottom, constrained to bottom margin height)
             sb.AppendLine($".{prefix}footer {{");
             sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    bottom: 0;");
             sb.AppendLine("    overflow: hidden;");
             sb.AppendLine("    box-sizing: border-box;");
+            sb.AppendLine("    display: flex;");
+            sb.AppendLine("    flex-direction: column;");
+            sb.AppendLine("    justify-content: flex-start;"); // Align content to top of footer area
             sb.AppendLine("}");
 
             // Page number indicator
@@ -1431,10 +1473,24 @@ namespace Docxodus
                 // Add footnotes and endnotes sections if enabled
                 if (settings.RenderFootnotesAndEndnotes)
                 {
-                    var footnotesSection = RenderFootnotesSection(wordDoc, settings);
-                    if (footnotesSection != null)
-                        bodyContent.Add(footnotesSection);
+                    // In paginated mode, use footnote registry for client-side per-page distribution
+                    bool usePaginatedFootnotes = settings.RenderPagination == PaginationMode.Paginated;
 
+                    if (usePaginatedFootnotes)
+                    {
+                        // Footnote registry goes into the staging area for the pagination engine
+                        // The registry is already added to the staging area in CreateSectionDivs
+                        // (we'll handle this there to keep it with the staging container)
+                    }
+                    else
+                    {
+                        // Non-paginated mode: render footnotes section at the end
+                        var footnotesSection = RenderFootnotesSection(wordDoc, settings);
+                        if (footnotesSection != null)
+                            bodyContent.Add(footnotesSection);
+                    }
+
+                    // Endnotes always render at document end (not per-page)
                     var endnotesSection = RenderEndnotesSection(wordDoc, settings);
                     if (endnotesSection != null)
                         bodyContent.Add(endnotesSection);
@@ -1957,6 +2013,7 @@ namespace Docxodus
                 new XAttribute("href", $"#footnote-{footnoteId}"),
                 new XAttribute("id", $"footnote-ref-{footnoteId}"),
                 new XAttribute("class", "footnote-ref"),
+                new XAttribute("data-footnote-id", footnoteId), // For pagination engine to track footnotes per page
                 new XText($"[{footnoteId}]"));
 
             anchor.AddAnnotation(style);
@@ -2072,6 +2129,69 @@ namespace Docxodus
                     new XText("↩")));
 
             return li;
+        }
+
+        /// <summary>
+        /// Renders a footnote registry for paginated mode.
+        /// In paginated mode, footnotes are stored in a hidden registry and distributed
+        /// to each page by the client-side pagination engine based on which footnote
+        /// references appear on each page.
+        /// </summary>
+        private static XElement RenderPaginatedFootnoteRegistry(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings)
+        {
+            var footnotesPart = wordDoc.MainDocumentPart.FootnotesPart;
+            if (footnotesPart == null)
+                return null;
+
+            var footnotesXDoc = footnotesPart.GetXDocument();
+            var footnotes = footnotesXDoc.Root?.Elements(W.footnote)
+                .Where(fn =>
+                {
+                    var typeAttr = (string)fn.Attribute(W.type);
+                    // Skip separator and continuationSeparator footnotes
+                    return typeAttr != "separator" && typeAttr != "continuationSeparator";
+                })
+                .ToList();
+
+            if (footnotes == null || !footnotes.Any())
+                return null;
+
+            var registry = new XElement(Xhtml.div,
+                new XAttribute("id", "pagination-footnote-registry"),
+                new XAttribute("style", "display:none"));
+
+            foreach (var fn in footnotes)
+            {
+                var footnoteId = (string)fn.Attribute(W.id);
+                if (footnoteId == null)
+                    continue;
+
+                // Convert the content of the footnote
+                var content = fn.Elements()
+                    .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                    .ToList();
+
+                // Create a footnote item div with data attribute for lookup
+                var footnoteItem = new XElement(Xhtml.div,
+                    new XAttribute("data-footnote-id", footnoteId),
+                    new XAttribute("class", "footnote-item"),
+                    new XElement(Xhtml.span,
+                        new XAttribute("class", "footnote-number"),
+                        new XText($"{footnoteId}. ")),
+                    new XElement(Xhtml.span,
+                        new XAttribute("class", "footnote-content"),
+                        content),
+                    new XText(" "),
+                    new XElement(Xhtml.a,
+                        new XAttribute("href", $"#footnote-ref-{footnoteId}"),
+                        new XAttribute("class", "footnote-backref"),
+                        new XText("↩")));
+
+                registry.Add(footnoteItem);
+            }
+
+            return registry.HasElements ? registry : null;
         }
 
         private static XElement RenderHeadersSection(WordprocessingDocument wordDoc,
@@ -3509,6 +3629,14 @@ namespace Docxodus
                     var hfRegistry = RenderPaginatedHeaderFooterRegistry(wordDoc, settings, element);
                     if (hfRegistry != null)
                         stagingContent.Add(hfRegistry);
+                }
+
+                // Add footnote registry if footnotes are enabled
+                if (settings.RenderFootnotesAndEndnotes)
+                {
+                    var footnoteRegistry = RenderPaginatedFootnoteRegistry(wordDoc, settings);
+                    if (footnoteRegistry != null)
+                        stagingContent.Add(footnoteRegistry);
                 }
 
                 // Add section content

@@ -169,6 +169,11 @@ function parseDimensions(section: HTMLElement): PageDimensions {
  * Pagination engine that converts HTML with pagination metadata
  * into a paginated view with fixed-size page containers.
  */
+/**
+ * Registry of footnotes by ID for per-page distribution.
+ */
+export type FootnoteRegistry = Map<string, HTMLElement>;
+
 export class PaginationEngine {
   private stagingElement: HTMLElement;
   private containerElement: HTMLElement;
@@ -177,6 +182,7 @@ export class PaginationEngine {
   private showPageNumbers: boolean;
   private pageGap: number;
   private hfRegistry: HeaderFooterRegistry;
+  private footnoteRegistry: FootnoteRegistry;
 
   /**
    * Creates a new pagination engine.
@@ -211,6 +217,7 @@ export class PaginationEngine {
     this.showPageNumbers = options.showPageNumbers ?? true;
     this.pageGap = options.pageGap ?? 20;
     this.hfRegistry = new Map();
+    this.footnoteRegistry = new Map();
   }
 
   /**
@@ -224,6 +231,9 @@ export class PaginationEngine {
 
     // Parse the header/footer registry if present
     this.hfRegistry = this.parseHeaderFooterRegistry();
+
+    // Parse the footnote registry if present
+    this.footnoteRegistry = this.parseFootnoteRegistry();
 
     // Find all section containers
     const sections = this.stagingElement.querySelectorAll<HTMLElement>(
@@ -358,6 +368,119 @@ export class PaginationEngine {
   }
 
   /**
+   * Parses the footnote registry from the staging element.
+   */
+  private parseFootnoteRegistry(): FootnoteRegistry {
+    const registry: FootnoteRegistry = new Map();
+    const registryEl = this.stagingElement.querySelector("#pagination-footnote-registry");
+
+    if (!registryEl) return registry;
+
+    const entries = Array.from(registryEl.querySelectorAll<HTMLElement>("[data-footnote-id]"));
+
+    for (const entry of entries) {
+      const footnoteId = entry.dataset.footnoteId;
+      if (footnoteId) {
+        // Clone the footnote element for later use
+        registry.set(footnoteId, entry.cloneNode(true) as HTMLElement);
+      }
+    }
+
+    return registry;
+  }
+
+  /**
+   * Extracts footnote reference IDs from an element.
+   */
+  private extractFootnoteRefs(element: HTMLElement): string[] {
+    const refs = element.querySelectorAll<HTMLElement>("[data-footnote-id]");
+    const ids: string[] = [];
+    for (const ref of Array.from(refs)) {
+      const id = ref.dataset.footnoteId;
+      if (id && !ids.includes(id)) {
+        ids.push(id);
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * Measures the height of footnotes for given IDs (in points).
+   * Creates a temporary container to measure the footnotes.
+   */
+  private measureFootnotesHeight(footnoteIds: string[], contentWidth: number): number {
+    if (footnoteIds.length === 0 || this.footnoteRegistry.size === 0) {
+      return 0;
+    }
+
+    // Create a temporary measurement container
+    const measureContainer = document.createElement("div");
+    measureContainer.style.position = "absolute";
+    measureContainer.style.visibility = "hidden";
+    measureContainer.style.width = `${contentWidth}pt`;
+    measureContainer.style.left = "-9999px";
+
+    // Add separator line (same as will be rendered)
+    const hr = document.createElement("hr");
+    measureContainer.appendChild(hr);
+
+    // Add footnotes
+    for (const id of footnoteIds) {
+      const footnote = this.footnoteRegistry.get(id);
+      if (footnote) {
+        measureContainer.appendChild(footnote.cloneNode(true));
+      }
+    }
+
+    // Append to staging for measurement
+    this.stagingElement.appendChild(measureContainer);
+
+    // Measure
+    const rect = measureContainer.getBoundingClientRect();
+    const heightPt = pxToPt(rect.height);
+
+    // Clean up
+    this.stagingElement.removeChild(measureContainer);
+
+    return heightPt;
+  }
+
+  /**
+   * Adds footnotes to a page container.
+   */
+  private addPageFootnotes(
+    pageBox: HTMLElement,
+    footnoteIds: string[],
+    dims: PageDimensions
+  ): void {
+    if (footnoteIds.length === 0 || this.footnoteRegistry.size === 0) {
+      return;
+    }
+
+    const footnotesDiv = document.createElement("div");
+    footnotesDiv.className = `${this.cssPrefix}footnotes`;
+    footnotesDiv.style.position = "absolute";
+    footnotesDiv.style.bottom = `${dims.marginBottom}pt`; // Above footer area
+    footnotesDiv.style.left = `${dims.marginLeft}pt`;
+    footnotesDiv.style.width = `${dims.contentWidth}pt`;
+    footnotesDiv.style.boxSizing = "border-box";
+
+    // Add separator line
+    const hr = document.createElement("hr");
+    footnotesDiv.appendChild(hr);
+
+    // Clone footnotes in order of appearance
+    for (const id of footnoteIds) {
+      const footnote = this.footnoteRegistry.get(id);
+      if (footnote) {
+        footnotesDiv.appendChild(footnote.cloneNode(true));
+      }
+    }
+
+    pageBox.appendChild(footnotesDiv);
+  }
+
+  /**
    * Selects the appropriate header for a page based on section, page position, and page number.
    */
   private selectHeader(
@@ -409,6 +532,7 @@ export class PaginationEngine {
 
   /**
    * Flows measured blocks into page containers.
+   * Implements a single-pass, forward-only algorithm that is compatible with future lazy loading.
    */
   private flowToPages(
     blocks: MeasuredBlock[],
@@ -424,11 +548,22 @@ export class PaginationEngine {
     let pageInSection = 1;
     // Track the previous block's bottom margin for margin collapsing
     let prevMarginBottomPt = 0;
+    // Track footnote IDs for the current page
+    let currentFootnoteIds: string[] = [];
+    // Track height consumed by footnotes on current page
+    let currentFootnoteHeight = 0;
 
     const finishPage = () => {
       if (currentContent.length === 0) return;
 
-      const page = this.createPage(dims, pageNumber, sectionIndex, currentContent, pageInSection);
+      const page = this.createPage(
+        dims,
+        pageNumber,
+        sectionIndex,
+        currentContent,
+        pageInSection,
+        currentFootnoteIds
+      );
       pages.push(page);
 
       pageNumber++;
@@ -436,6 +571,8 @@ export class PaginationEngine {
       currentContent = [];
       remainingHeight = dims.contentHeight;
       prevMarginBottomPt = 0; // Reset margin tracking for new page
+      currentFootnoteIds = []; // Reset footnotes for new page
+      currentFootnoteHeight = 0;
     };
 
     for (let i = 0; i < blocks.length; i++) {
@@ -453,6 +590,20 @@ export class PaginationEngine {
         finishPage();
       }
 
+      // Extract footnote references from this block
+      const blockFootnoteIds = this.extractFootnoteRefs(block.element);
+      // Only count new footnotes (not already on this page)
+      const newFootnoteIds = blockFootnoteIds.filter(id => !currentFootnoteIds.includes(id));
+
+      // Calculate additional footnote height if this block is added
+      let additionalFootnoteHeight = 0;
+      if (newFootnoteIds.length > 0 && this.footnoteRegistry.size > 0) {
+        // Measure the combined height of all footnotes that would be on this page
+        const combinedFootnoteIds = [...currentFootnoteIds, ...newFootnoteIds];
+        const totalFootnoteHeight = this.measureFootnotesHeight(combinedFootnoteIds, dims.contentWidth);
+        additionalFootnoteHeight = totalFootnoteHeight - currentFootnoteHeight;
+      }
+
       // Calculate the effective height this block will consume
       // Account for margin collapsing: the gap between blocks is max(prevBottom, currTop), not sum
       const isFirstOnPage = currentContent.length === 0;
@@ -461,9 +612,8 @@ export class PaginationEngine {
         // Margin collapsing: use the larger of the two adjacent margins
         effectiveMarginTop = Math.max(block.marginTopPt, prevMarginBottomPt) - prevMarginBottomPt;
       }
-      // Total height = top margin gap + content + bottom margin
-      // But we only count bottom margin if it's the last block (otherwise it collapses with next)
-      const blockSpace = effectiveMarginTop + block.heightPt + block.marginBottomPt;
+      // Total height = top margin gap + content + bottom margin + footnote space
+      const blockSpace = effectiveMarginTop + block.heightPt + block.marginBottomPt + additionalFootnoteHeight;
 
       // Calculate needed height (including keepWithNext)
       let neededHeight = blockSpace;
@@ -471,23 +621,37 @@ export class PaginationEngine {
         // For keepWithNext, include the next block with collapsed margins
         const collapsedMargin = Math.max(block.marginBottomPt, nextBlock.marginTopPt);
         neededHeight = effectiveMarginTop + block.heightPt + collapsedMargin +
-                       nextBlock.heightPt + nextBlock.marginBottomPt;
+                       nextBlock.heightPt + nextBlock.marginBottomPt + additionalFootnoteHeight;
       }
 
-      // Check if block fits on current page
-      if (blockSpace <= remainingHeight) {
+      // Effective remaining height (content area minus footnotes already on page)
+      const effectiveRemainingHeight = remainingHeight - currentFootnoteHeight;
+
+      // Check if block fits on current page (including its footnotes)
+      if (blockSpace <= effectiveRemainingHeight) {
         // Block fits
         currentContent.push(block.element.cloneNode(true) as HTMLElement);
-        remainingHeight -= blockSpace;
+        remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
         prevMarginBottomPt = block.marginBottomPt;
-      } else if (block.heightPt + block.marginTopPt + block.marginBottomPt <= dims.contentHeight) {
+        // Add new footnotes to current page
+        if (newFootnoteIds.length > 0) {
+          currentFootnoteIds.push(...newFootnoteIds);
+          currentFootnoteHeight += additionalFootnoteHeight;
+        }
+      } else if (block.heightPt + block.marginTopPt + block.marginBottomPt + additionalFootnoteHeight <= dims.contentHeight) {
         // Block doesn't fit but will fit on a new page
         finishPage();
-        // On new page, include full top margin
+        // On new page, recalculate footnote height for just this block's footnotes
+        const newPageFootnoteHeight = blockFootnoteIds.length > 0
+          ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth)
+          : 0;
+        // Include full top margin
         const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
         currentContent.push(block.element.cloneNode(true) as HTMLElement);
         remainingHeight = dims.contentHeight - newPageSpace;
         prevMarginBottomPt = block.marginBottomPt;
+        currentFootnoteIds = [...blockFootnoteIds];
+        currentFootnoteHeight = newPageFootnoteHeight;
       } else {
         // Block is taller than a page - add it and let it overflow
         // (In a more sophisticated implementation, we would split the block)
@@ -495,6 +659,7 @@ export class PaginationEngine {
           finishPage();
         }
         currentContent.push(block.element.cloneNode(true) as HTMLElement);
+        currentFootnoteIds = [...blockFootnoteIds];
         finishPage();
       }
     }
@@ -513,7 +678,8 @@ export class PaginationEngine {
     pageNumber: number,
     sectionIndex: number,
     content: HTMLElement[],
-    pageInSection: number
+    pageInSection: number,
+    footnoteIds: string[] = []
   ): PageInfo {
     // Create page box at full size, then scale the entire box
     // This ensures proper clipping and consistent scaling of all elements
@@ -554,10 +720,16 @@ export class PaginationEngine {
       const headerDiv = document.createElement("div");
       headerDiv.className = `${this.cssPrefix}header`;
       headerDiv.style.position = "absolute";
-      headerDiv.style.top = `${dims.headerHeight}pt`;
+      headerDiv.style.top = "0"; // Start at page top
       headerDiv.style.left = `${dims.marginLeft}pt`;
       headerDiv.style.width = `${dims.contentWidth}pt`;
+      headerDiv.style.height = `${dims.marginTop}pt`; // Constrain to top margin area
       headerDiv.style.overflow = "hidden";
+      headerDiv.style.boxSizing = "border-box";
+      headerDiv.style.display = "flex";
+      headerDiv.style.flexDirection = "column";
+      headerDiv.style.justifyContent = "flex-end"; // Align content to bottom of header area
+      headerDiv.style.paddingBottom = "4pt"; // Small gap before content area
       // Clone the header content (skip the wrapper div's data attributes)
       for (const child of Array.from(headerSource.childNodes)) {
         headerDiv.appendChild(child.cloneNode(true));
@@ -582,16 +754,27 @@ export class PaginationEngine {
 
     pageBox.appendChild(contentArea);
 
+    // Add footnotes if any references appear on this page
+    if (footnoteIds.length > 0) {
+      this.addPageFootnotes(pageBox, footnoteIds, dims);
+    }
+
     // Add footer if available for this section/page
     const footerSource = this.selectFooter(sectionIndex, pageInSection, pageNumber);
     if (footerSource) {
       const footerDiv = document.createElement("div");
       footerDiv.className = `${this.cssPrefix}footer`;
       footerDiv.style.position = "absolute";
-      footerDiv.style.bottom = `${dims.footerHeight}pt`;
+      footerDiv.style.bottom = "0"; // Start at page bottom
       footerDiv.style.left = `${dims.marginLeft}pt`;
       footerDiv.style.width = `${dims.contentWidth}pt`;
+      footerDiv.style.height = `${dims.marginBottom}pt`; // Constrain to bottom margin area
       footerDiv.style.overflow = "hidden";
+      footerDiv.style.boxSizing = "border-box";
+      footerDiv.style.display = "flex";
+      footerDiv.style.flexDirection = "column";
+      footerDiv.style.justifyContent = "flex-start"; // Align content to top of footer area
+      footerDiv.style.paddingTop = "4pt"; // Small gap after content area
       // Clone the footer content (skip the wrapper div's data attributes)
       for (const child of Array.from(footerSource.childNodes)) {
         footerDiv.appendChild(child.cloneNode(true));

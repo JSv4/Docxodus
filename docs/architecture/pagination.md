@@ -316,6 +316,107 @@ Important: CSS `pt` units render at 96/72 ratio to pixels, so setting `width: 10
 4. **No column support**: Multi-column layouts are flattened to single column
 5. **Browser-dependent measurement**: Content measurement depends on browser rendering
 
+## Per-Page Footnotes
+
+When `RenderFootnotesAndEndnotes=true` with `RenderPagination=Paginated`, footnotes are distributed to each page where they are referenced.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      HTML Output Structure                       │
+│  <div id="pagination-staging" class="page-staging">             │
+│    <div id="pagination-footnote-registry" style="display:none"> │
+│      <div data-footnote-id="1" class="footnote-item">...</div>  │
+│      <div data-footnote-id="2" class="footnote-item">...</div>  │
+│    </div>                                                       │
+│    <div data-section-index="0" ...>                             │
+│      <p>Text with <a data-footnote-id="1">[1]</a>...</p>        │
+│    </div>                                                       │
+│  </div>                                                         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Rendered Page Structure                       │
+│  <div class="page-box">                                         │
+│    <div class="page-header">...</div>                           │
+│    <div class="page-content">                                   │
+│      <!-- Body content -->                                      │
+│    </div>                                                       │
+│    <div class="page-footnotes">                                 │
+│      <hr/>                                                      │
+│      <div class="footnote-item">1. Footnote text...</div>       │
+│    </div>                                                       │
+│    <div class="page-footer">...</div>                           │
+│  </div>                                                         │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Single-Pass Algorithm
+
+The pagination algorithm is forward-only and lazy-loading compatible:
+
+```typescript
+for (const block of blocks) {
+  // 1. Extract footnote references from block
+  const blockFootnoteIds = extractFootnoteRefs(block.element);
+  const newFootnoteIds = blockFootnoteIds.filter(id => !currentFootnoteIds.includes(id));
+
+  // 2. Measure additional footnote space needed
+  let additionalFootnoteHeight = 0;
+  if (newFootnoteIds.length > 0) {
+    const combinedIds = [...currentFootnoteIds, ...newFootnoteIds];
+    additionalFootnoteHeight = measureFootnotesHeight(combinedIds) - currentFootnoteHeight;
+  }
+
+  // 3. Include footnote space in page fit calculation
+  const blockSpace = effectiveMarginTop + block.heightPt + block.marginBottomPt + additionalFootnoteHeight;
+
+  if (blockSpace <= effectiveRemainingHeight) {
+    // Block + footnotes fit on current page
+    currentContent.push(block.element.cloneNode(true));
+    currentFootnoteIds.push(...newFootnoteIds);
+    currentFootnoteHeight += additionalFootnoteHeight;
+  } else {
+    // Start new page
+    finishPage(); // Renders footnotes for current page
+    // ... add block to new page
+  }
+}
+```
+
+### Key Design Decisions
+
+1. **Forward-only**: No re-flow of previous pages (lazy-loading compatible)
+2. **Footnote registry**: Small upfront data, cloned per-page as needed
+3. **Measurement caching**: Footnote heights measured once per unique combination
+4. **Endnotes unchanged**: Endnotes remain at document end (traditional behavior)
+
+### CSS Classes
+
+```css
+/* Footnotes container at bottom of page */
+.page-footnotes {
+  position: absolute;
+  bottom: {marginBottom}pt;  /* Above footer */
+  font-size: 0.85em;
+  line-height: 1.4;
+}
+
+/* Separator line */
+.page-footnotes hr {
+  border-top: 1px solid #666;
+  width: 30%;
+  margin: 0 0 4pt 0;
+}
+
+/* Individual footnote */
+.footnote-item {
+  margin-bottom: 2pt;
+}
+```
+
 ## Related Documentation
 
 - [Paginated Headers and Footers](paginated_headers_footers.md) - How headers and footers are rendered within paginated pages
@@ -327,3 +428,4 @@ Important: CSS `pt` units render at 96/72 ratio to pixels, so setting `width: 10
 3. **Column support**: Handle multi-column sections
 4. **Virtual scrolling**: Only render visible pages for large documents
 5. **Server-side rendering**: Pre-compute pagination for static documents
+6. **Footnote continuation**: Split long footnotes across pages

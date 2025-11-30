@@ -139,11 +139,23 @@ All notable changes to this project will be documented in this file.
   - CSS classes `.page-header` and `.page-footer` for positioning within page boxes
   - Automatic hiding of system page number when document has footer content
   - See `docs/architecture/paginated_headers_footers.md` for full architecture details
+- **Per-page Footnote Rendering** - Footnotes now appear at the bottom of each page where they are referenced
+  - When `RenderFootnotesAndEndnotes=true` with `RenderPagination=Paginated`, footnotes are distributed per-page
+  - Footnote registry stores footnotes in a hidden container for client-side distribution
+  - `data-footnote-id` attributes added to footnote references for tracking
+  - Single-pass, forward-only pagination algorithm (lazy-loading compatible)
+  - Pagination engine measures footnote space and includes it in page layout calculations
+  - Footnotes render with separator line (`<hr>`) above them
+  - Endnotes remain at document end (not per-page) - traditional behavior preserved
+  - New TypeScript methods: `parseFootnoteRegistry()`, `extractFootnoteRefs()`, `measureFootnotesHeight()`, `addPageFootnotes()`
+  - New CSS classes: `.page-footnotes`, `.footnote-item`, `.footnote-number`, `.footnote-content`
 - `SkiaSharpHelpers.cs` - Color utilities for SkiaSharp compatibility
 - `GetPackage()` extension method in `PtOpenXmlUtil.cs` for SDK 3.x Package access
 - `SkiaSharp.NativeAssets.Linux.NoDependencies` package for Linux runtime support
 
 ### Fixed
+- **Header/footer positioning in paginated mode** - Fixed headers and footers overlapping with body content. Headers now properly constrain to the top margin area (`height: marginTop`) and footers constrain to the bottom margin area (`height: marginBottom`). Uses flexbox layout for proper content alignment within constrained areas.
+
 - **DocumentBuilder relationship copying** - Fixed bug where relationship IDs from source documents could incorrectly match existing IDs in target header/footer parts when using InsertId functionality. This caused validation errors like "The relationship 'rIdX' referenced by attribute 'r:embed' does not exist."
   - Removed flawed early-return optimization in `CopyRelatedImage()` that skipped processing when target part had matching relationship ID
   - Fixed diagram relationship handling (`R.dm`, `R.lo`, `R.qs`, `R.cs` attributes) to properly copy parts from source documents
@@ -174,3 +186,4 @@ All notable changes to this project will be documented in this file.
 
 ### Test Status
 - 1051 passed, 0 failed, 1 skipped out of 1052 tests (~99.9% pass rate)
+- Header/footer and footnote pagination changes tested via manual integration testing
