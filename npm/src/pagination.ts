@@ -174,6 +174,26 @@ function parseDimensions(section: HTMLElement): PageDimensions {
  */
 export type FootnoteRegistry = Map<string, HTMLElement>;
 
+/**
+ * Tracks footnote content that needs to continue on the next page.
+ */
+interface FootnoteContinuation {
+  /** The footnote ID being continued */
+  footnoteId: string;
+  /** Remaining paragraphs/elements that didn't fit */
+  remainingElements: HTMLElement[];
+}
+
+/**
+ * Tracks a partial footnote that was split on a page.
+ */
+interface PartialFootnote {
+  /** The footnote ID */
+  footnoteId: string;
+  /** Elements that fit on this page */
+  fittingElements: HTMLElement[];
+}
+
 export class PaginationEngine {
   private stagingElement: HTMLElement;
   private containerElement: HTMLElement;
@@ -183,6 +203,7 @@ export class PaginationEngine {
   private pageGap: number;
   private hfRegistry: HeaderFooterRegistry;
   private footnoteRegistry: FootnoteRegistry;
+  private pendingFootnoteContinuation: FootnoteContinuation | null = null;
 
   /**
    * Creates a new pagination engine.
@@ -407,9 +428,17 @@ export class PaginationEngine {
   /**
    * Measures the height of footnotes for given IDs (in points).
    * Creates a temporary container to measure the footnotes.
+   * @param footnoteIds - IDs of footnotes to measure
+   * @param contentWidth - Width for measurement
+   * @param continuation - Optional continuation content to include first
    */
-  private measureFootnotesHeight(footnoteIds: string[], contentWidth: number): number {
-    if (footnoteIds.length === 0 || this.footnoteRegistry.size === 0) {
+  private measureFootnotesHeight(
+    footnoteIds: string[],
+    contentWidth: number,
+    continuation?: FootnoteContinuation | null
+  ): number {
+    const hasContinuation = continuation && continuation.remainingElements.length > 0;
+    if ((footnoteIds.length === 0 && !hasContinuation) || this.footnoteRegistry.size === 0) {
       return 0;
     }
 
@@ -423,6 +452,16 @@ export class PaginationEngine {
     // Add separator line (same as will be rendered)
     const hr = document.createElement("hr");
     measureContainer.appendChild(hr);
+
+    // Add continuation content first (if any)
+    if (hasContinuation) {
+      const contWrapper = document.createElement("div");
+      contWrapper.className = "footnote-continuation";
+      for (const el of continuation!.remainingElements) {
+        contWrapper.appendChild(el.cloneNode(true));
+      }
+      measureContainer.appendChild(contWrapper);
+    }
 
     // Add footnotes
     for (const id of footnoteIds) {
@@ -446,16 +485,153 @@ export class PaginationEngine {
   }
 
   /**
-   * Adds footnotes to a page container.
+   * Measures the height of just the continuation content (in points).
+   */
+  private measureContinuationHeight(
+    continuation: FootnoteContinuation,
+    contentWidth: number
+  ): number {
+    if (!continuation || continuation.remainingElements.length === 0) {
+      return 0;
+    }
+
+    const measureContainer = document.createElement("div");
+    measureContainer.style.position = "absolute";
+    measureContainer.style.visibility = "hidden";
+    measureContainer.style.width = `${contentWidth}pt`;
+    measureContainer.style.left = "-9999px";
+
+    // Add separator line
+    const hr = document.createElement("hr");
+    measureContainer.appendChild(hr);
+
+    // Add continuation content
+    for (const el of continuation.remainingElements) {
+      measureContainer.appendChild(el.cloneNode(true));
+    }
+
+    this.stagingElement.appendChild(measureContainer);
+    const rect = measureContainer.getBoundingClientRect();
+    const heightPt = pxToPt(rect.height);
+    this.stagingElement.removeChild(measureContainer);
+
+    return heightPt;
+  }
+
+  /**
+   * Splits a footnote element into parts that fit within the available height.
+   * Returns the elements that fit and the elements that need to continue.
+   */
+  private splitFootnoteToFit(
+    footnoteElement: HTMLElement,
+    availableHeightPt: number,
+    contentWidth: number
+  ): { fits: HTMLElement[]; overflow: HTMLElement[] } {
+    // Get child elements (paragraphs) of the footnote content
+    const footnoteContent = footnoteElement.querySelector(".footnote-content");
+    if (!footnoteContent) {
+      // No content structure, can't split - return whole footnote
+      return { fits: [footnoteElement.cloneNode(true) as HTMLElement], overflow: [] };
+    }
+
+    const children = Array.from(footnoteContent.children) as HTMLElement[];
+    if (children.length <= 1) {
+      // Single paragraph, can't split at paragraph level
+      return { fits: [footnoteElement.cloneNode(true) as HTMLElement], overflow: [] };
+    }
+
+    const fits: HTMLElement[] = [];
+    const overflow: HTMLElement[] = [];
+    let currentHeight = 0;
+
+    // Measure separator line height
+    const hrMeasure = document.createElement("div");
+    hrMeasure.style.position = "absolute";
+    hrMeasure.style.visibility = "hidden";
+    hrMeasure.style.width = `${contentWidth}pt`;
+    hrMeasure.style.left = "-9999px";
+    const hr = document.createElement("hr");
+    hrMeasure.appendChild(hr);
+    this.stagingElement.appendChild(hrMeasure);
+    const hrHeight = pxToPt(hrMeasure.getBoundingClientRect().height);
+    this.stagingElement.removeChild(hrMeasure);
+
+    currentHeight = hrHeight;
+
+    // Also account for footnote number
+    const footnoteNumber = footnoteElement.querySelector(".footnote-number");
+
+    for (let i = 0; i < children.length; i++) {
+      const child = children[i];
+
+      // Measure this element
+      const measureContainer = document.createElement("div");
+      measureContainer.style.position = "absolute";
+      measureContainer.style.visibility = "hidden";
+      measureContainer.style.width = `${contentWidth}pt`;
+      measureContainer.style.left = "-9999px";
+      measureContainer.appendChild(child.cloneNode(true));
+      this.stagingElement.appendChild(measureContainer);
+      const childHeight = pxToPt(measureContainer.getBoundingClientRect().height);
+      this.stagingElement.removeChild(measureContainer);
+
+      if (currentHeight + childHeight <= availableHeightPt) {
+        fits.push(child.cloneNode(true) as HTMLElement);
+        currentHeight += childHeight;
+      } else {
+        // This and remaining elements overflow
+        for (let j = i; j < children.length; j++) {
+          overflow.push(children[j].cloneNode(true) as HTMLElement);
+        }
+        break;
+      }
+    }
+
+    return { fits, overflow };
+  }
+
+  /**
+   * Measures a single footnote's height.
+   */
+  private measureSingleFootnoteHeight(footnoteId: string, contentWidth: number): number {
+    const footnote = this.footnoteRegistry.get(footnoteId);
+    if (!footnote) return 0;
+
+    const measureContainer = document.createElement("div");
+    measureContainer.style.position = "absolute";
+    measureContainer.style.visibility = "hidden";
+    measureContainer.style.width = `${contentWidth}pt`;
+    measureContainer.style.left = "-9999px";
+    measureContainer.appendChild(footnote.cloneNode(true));
+
+    this.stagingElement.appendChild(measureContainer);
+    const rect = measureContainer.getBoundingClientRect();
+    const heightPt = pxToPt(rect.height);
+    this.stagingElement.removeChild(measureContainer);
+
+    return heightPt;
+  }
+
+  /**
+   * Adds footnotes to a page container, including continuation content.
    */
   private addPageFootnotes(
     pageBox: HTMLElement,
     footnoteIds: string[],
-    dims: PageDimensions
+    dims: PageDimensions,
+    continuation?: FootnoteContinuation | null,
+    partialFootnotes?: PartialFootnote[]
   ): void {
-    if (footnoteIds.length === 0 || this.footnoteRegistry.size === 0) {
+    const hasContinuation = continuation && continuation.remainingElements.length > 0;
+    if (footnoteIds.length === 0 && !hasContinuation) {
       return;
     }
+    if (this.footnoteRegistry.size === 0 && !hasContinuation) {
+      return;
+    }
+
+    // Create a set of partial footnote IDs for quick lookup
+    const partialFootnoteIds = new Set(partialFootnotes?.map(p => p.footnoteId) || []);
 
     const footnotesDiv = document.createElement("div");
     footnotesDiv.className = `${this.cssPrefix}footnotes`;
@@ -469,11 +645,50 @@ export class PaginationEngine {
     const hr = document.createElement("hr");
     footnotesDiv.appendChild(hr);
 
+    // Add continuation content first (if any)
+    if (hasContinuation) {
+      const contWrapper = document.createElement("div");
+      contWrapper.className = "footnote-continuation";
+      for (const el of continuation!.remainingElements) {
+        contWrapper.appendChild(el.cloneNode(true));
+      }
+      footnotesDiv.appendChild(contWrapper);
+    }
+
     // Clone footnotes in order of appearance
     for (const id of footnoteIds) {
-      const footnote = this.footnoteRegistry.get(id);
-      if (footnote) {
-        footnotesDiv.appendChild(footnote.cloneNode(true));
+      // Check if this is a partial footnote
+      const partial = partialFootnotes?.find(p => p.footnoteId === id);
+      if (partial) {
+        // Render partial footnote (only the fitting elements)
+        const footnote = this.footnoteRegistry.get(id);
+        if (footnote) {
+          const partialDiv = document.createElement("div");
+          partialDiv.className = "footnote-item";
+          partialDiv.dataset.footnoteId = id;
+
+          // Add footnote number
+          const numberSpan = footnote.querySelector(".footnote-number");
+          if (numberSpan) {
+            partialDiv.appendChild(numberSpan.cloneNode(true));
+          }
+
+          // Add only the fitting content
+          const contentSpan = document.createElement("span");
+          contentSpan.className = "footnote-content";
+          for (const el of partial.fittingElements) {
+            contentSpan.appendChild(el.cloneNode(true));
+          }
+          partialDiv.appendChild(contentSpan);
+
+          footnotesDiv.appendChild(partialDiv);
+        }
+      } else {
+        // Render full footnote from registry
+        const footnote = this.footnoteRegistry.get(id);
+        if (footnote) {
+          footnotesDiv.appendChild(footnote.cloneNode(true));
+        }
       }
     }
 
@@ -533,6 +748,7 @@ export class PaginationEngine {
   /**
    * Flows measured blocks into page containers.
    * Implements a single-pass, forward-only algorithm that is compatible with future lazy loading.
+   * Supports footnote continuation - long footnotes can split across pages.
    */
   private flowToPages(
     blocks: MeasuredBlock[],
@@ -552,9 +768,20 @@ export class PaginationEngine {
     let currentFootnoteIds: string[] = [];
     // Track height consumed by footnotes on current page
     let currentFootnoteHeight = 0;
+    // Track footnote continuation for current page (from previous page)
+    let currentContinuation: FootnoteContinuation | null = this.pendingFootnoteContinuation;
+    // Track any new continuation that will carry to next page
+    let nextPageContinuation: FootnoteContinuation | null = null;
+    // Track partial footnotes for current page (footnotes that were split)
+    let currentPartialFootnotes: PartialFootnote[] = [];
+
+    // Account for any continuation from previous section/page
+    if (currentContinuation && currentContinuation.remainingElements.length > 0) {
+      currentFootnoteHeight = this.measureContinuationHeight(currentContinuation, dims.contentWidth);
+    }
 
     const finishPage = () => {
-      if (currentContent.length === 0) return;
+      if (currentContent.length === 0 && !currentContinuation) return;
 
       const page = this.createPage(
         dims,
@@ -562,7 +789,9 @@ export class PaginationEngine {
         sectionIndex,
         currentContent,
         pageInSection,
-        currentFootnoteIds
+        currentFootnoteIds,
+        currentContinuation,
+        currentPartialFootnotes.length > 0 ? currentPartialFootnotes : undefined
       );
       pages.push(page);
 
@@ -572,7 +801,18 @@ export class PaginationEngine {
       remainingHeight = dims.contentHeight;
       prevMarginBottomPt = 0; // Reset margin tracking for new page
       currentFootnoteIds = []; // Reset footnotes for new page
-      currentFootnoteHeight = 0;
+      currentPartialFootnotes = []; // Reset partial footnotes for new page
+
+      // Carry over continuation to next page
+      currentContinuation = nextPageContinuation;
+      nextPageContinuation = null;
+
+      // Account for continuation height on new page
+      if (currentContinuation && currentContinuation.remainingElements.length > 0) {
+        currentFootnoteHeight = this.measureContinuationHeight(currentContinuation, dims.contentWidth);
+      } else {
+        currentFootnoteHeight = 0;
+      }
     };
 
     for (let i = 0; i < blocks.length; i++) {
@@ -599,8 +839,13 @@ export class PaginationEngine {
       let additionalFootnoteHeight = 0;
       if (newFootnoteIds.length > 0 && this.footnoteRegistry.size > 0) {
         // Measure the combined height of all footnotes that would be on this page
+        // (including any continuation)
         const combinedFootnoteIds = [...currentFootnoteIds, ...newFootnoteIds];
-        const totalFootnoteHeight = this.measureFootnotesHeight(combinedFootnoteIds, dims.contentWidth);
+        const totalFootnoteHeight = this.measureFootnotesHeight(
+          combinedFootnoteIds,
+          dims.contentWidth,
+          currentContinuation
+        );
         additionalFootnoteHeight = totalFootnoteHeight - currentFootnoteHeight;
       }
 
@@ -638,20 +883,98 @@ export class PaginationEngine {
           currentFootnoteIds.push(...newFootnoteIds);
           currentFootnoteHeight += additionalFootnoteHeight;
         }
-      } else if (block.heightPt + block.marginTopPt + block.marginBottomPt + additionalFootnoteHeight <= dims.contentHeight) {
-        // Block doesn't fit but will fit on a new page
-        finishPage();
-        // On new page, recalculate footnote height for just this block's footnotes
-        const newPageFootnoteHeight = blockFootnoteIds.length > 0
-          ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth)
-          : 0;
-        // Include full top margin
-        const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
-        currentContent.push(block.element.cloneNode(true) as HTMLElement);
-        remainingHeight = dims.contentHeight - newPageSpace;
-        prevMarginBottomPt = block.marginBottomPt;
-        currentFootnoteIds = [...blockFootnoteIds];
-        currentFootnoteHeight = newPageFootnoteHeight;
+      } else if (block.heightPt + block.marginTopPt + block.marginBottomPt <= dims.contentHeight) {
+        // Block doesn't fit but will fit on a new page (even with footnotes)
+        // Check if we need to split any footnotes on the current page first
+        // Try to fit the block with partial footnotes using footnote continuation
+        const blockSpaceWithoutFootnotes = effectiveMarginTop + block.heightPt + block.marginBottomPt;
+
+        if (newFootnoteIds.length > 0 && blockSpaceWithoutFootnotes <= effectiveRemainingHeight) {
+          // Block itself fits, but footnotes don't - try footnote continuation
+          currentContent.push(block.element.cloneNode(true) as HTMLElement);
+          remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
+          prevMarginBottomPt = block.marginBottomPt;
+
+          // Calculate space available for footnotes
+          const spaceForFootnotes = remainingHeight - currentFootnoteHeight;
+
+          // Try to fit as much of each new footnote as possible
+          for (const footnoteId of newFootnoteIds) {
+            const footnote = this.footnoteRegistry.get(footnoteId);
+            if (!footnote) continue;
+
+            const footnoteHeight = this.measureSingleFootnoteHeight(footnoteId, dims.contentWidth);
+
+            if (footnoteHeight <= spaceForFootnotes - currentFootnoteHeight) {
+              // Whole footnote fits
+              currentFootnoteIds.push(footnoteId);
+              currentFootnoteHeight += footnoteHeight;
+            } else {
+              // Footnote needs to be split - try to fit part of it
+              const availableForThisFootnote = spaceForFootnotes;
+              if (availableForThisFootnote > 20) { // Minimum space to start a footnote (roughly 1 line + separator)
+                const { fits, overflow } = this.splitFootnoteToFit(
+                  footnote,
+                  availableForThisFootnote,
+                  dims.contentWidth
+                );
+
+                if (fits.length > 0) {
+                  // Add partial footnote to current page
+                  currentFootnoteIds.push(footnoteId);
+                  // Track this as a partial footnote so we only render the fitting part
+                  currentPartialFootnotes.push({
+                    footnoteId,
+                    fittingElements: fits
+                  });
+                  // Store overflow for next page
+                  nextPageContinuation = {
+                    footnoteId,
+                    remainingElements: overflow
+                  };
+                  // Update height (approximate - we've added some content)
+                  currentFootnoteHeight = spaceForFootnotes;
+                } else {
+                  // Nothing fits, entire footnote continues to next page
+                  nextPageContinuation = {
+                    footnoteId,
+                    remainingElements: Array.from(footnote.querySelectorAll(".footnote-content > *"))
+                      .map(el => el.cloneNode(true) as HTMLElement)
+                  };
+                  // If no content elements found, use the whole footnote
+                  if (nextPageContinuation.remainingElements.length === 0) {
+                    nextPageContinuation.remainingElements = [footnote.cloneNode(true) as HTMLElement];
+                  }
+                }
+              } else {
+                // Not enough space to start footnote - continue whole thing
+                nextPageContinuation = {
+                  footnoteId,
+                  remainingElements: Array.from(footnote.querySelectorAll(".footnote-content > *"))
+                    .map(el => el.cloneNode(true) as HTMLElement)
+                };
+                if (nextPageContinuation.remainingElements.length === 0) {
+                  nextPageContinuation.remainingElements = [footnote.cloneNode(true) as HTMLElement];
+                }
+              }
+            }
+          }
+        } else {
+          // Block itself doesn't fit - start new page
+          finishPage();
+          // On new page, recalculate footnote height for just this block's footnotes
+          // (plus any continuation from previous page)
+          const newPageFootnoteHeight = blockFootnoteIds.length > 0
+            ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth, currentContinuation)
+            : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
+          // Include full top margin
+          const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
+          currentContent.push(block.element.cloneNode(true) as HTMLElement);
+          remainingHeight = dims.contentHeight - newPageSpace;
+          prevMarginBottomPt = block.marginBottomPt;
+          currentFootnoteIds = [...blockFootnoteIds];
+          currentFootnoteHeight = newPageFootnoteHeight;
+        }
       } else {
         // Block is taller than a page - add it and let it overflow
         // (In a more sophisticated implementation, we would split the block)
@@ -667,6 +990,9 @@ export class PaginationEngine {
     // Finish last page
     finishPage();
 
+    // Store any remaining continuation for next section
+    this.pendingFootnoteContinuation = nextPageContinuation;
+
     return pages;
   }
 
@@ -679,7 +1005,9 @@ export class PaginationEngine {
     sectionIndex: number,
     content: HTMLElement[],
     pageInSection: number,
-    footnoteIds: string[] = []
+    footnoteIds: string[] = [],
+    continuation?: FootnoteContinuation | null,
+    partialFootnotes?: PartialFootnote[]
   ): PageInfo {
     // Create page box at full size, then scale the entire box
     // This ensures proper clipping and consistent scaling of all elements
@@ -754,9 +1082,10 @@ export class PaginationEngine {
 
     pageBox.appendChild(contentArea);
 
-    // Add footnotes if any references appear on this page
-    if (footnoteIds.length > 0) {
-      this.addPageFootnotes(pageBox, footnoteIds, dims);
+    // Add footnotes if any references appear on this page (or continuation from previous)
+    const hasContinuation = continuation && continuation.remainingElements.length > 0;
+    if (footnoteIds.length > 0 || hasContinuation) {
+      this.addPageFootnotes(pageBox, footnoteIds, dims, continuation, partialFootnotes);
     }
 
     // Add footer if available for this section/page

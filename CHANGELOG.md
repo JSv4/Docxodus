@@ -146,9 +146,11 @@ All notable changes to this project will be documented in this file.
   - Single-pass, forward-only pagination algorithm (lazy-loading compatible)
   - Pagination engine measures footnote space and includes it in page layout calculations
   - Footnotes render with separator line (`<hr>`) above them
+  - **Footnote continuation**: Long footnotes that don't fit on a page are split at paragraph boundaries and continue on subsequent pages (matching Word/Office behavior)
   - Endnotes remain at document end (not per-page) - traditional behavior preserved
-  - New TypeScript methods: `parseFootnoteRegistry()`, `extractFootnoteRefs()`, `measureFootnotesHeight()`, `addPageFootnotes()`
-  - New CSS classes: `.page-footnotes`, `.footnote-item`, `.footnote-number`, `.footnote-content`
+  - New TypeScript methods: `parseFootnoteRegistry()`, `extractFootnoteRefs()`, `measureFootnotesHeight()`, `addPageFootnotes()`, `splitFootnoteToFit()`, `measureContinuationHeight()`
+  - New TypeScript interfaces: `FootnoteContinuation`, `PartialFootnote`
+  - New CSS classes: `.page-footnotes`, `.footnote-item`, `.footnote-number`, `.footnote-content`, `.footnote-continuation`
 - `SkiaSharpHelpers.cs` - Color utilities for SkiaSharp compatibility
 - `GetPackage()` extension method in `PtOpenXmlUtil.cs` for SDK 3.x Package access
 - `SkiaSharp.NativeAssets.Linux.NoDependencies` package for Linux runtime support
