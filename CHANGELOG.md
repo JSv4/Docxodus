@@ -147,9 +147,11 @@ All notable changes to this project will be documented in this file.
   - Pagination engine measures footnote space and includes it in page layout calculations
   - Footnotes render with separator line (`<hr>`) above them
   - **Footnote continuation**: Long footnotes that don't fit on a page are split at paragraph boundaries and continue on subsequent pages (matching Word/Office behavior)
+  - **Dynamic footnote area expansion**: Footnote area can expand upward into body content space (up to 60% of page height) to fit more footnote content before splitting, reducing wasted space
   - Endnotes remain at document end (not per-page) - traditional behavior preserved
   - New TypeScript methods: `parseFootnoteRegistry()`, `extractFootnoteRefs()`, `measureFootnotesHeight()`, `addPageFootnotes()`, `splitFootnoteToFit()`, `measureContinuationHeight()`
   - New TypeScript interfaces: `FootnoteContinuation`, `PartialFootnote`
+  - New TypeScript constants: `MAX_FOOTNOTE_AREA_RATIO` (0.6), `MIN_BODY_CONTENT_HEIGHT` (72pt)
   - New CSS classes: `.page-footnotes`, `.footnote-item`, `.footnote-number`, `.footnote-content`, `.footnote-continuation`
 - `SkiaSharpHelpers.cs` - Color utilities for SkiaSharp compatibility
 - `GetPackage()` extension method in `PtOpenXmlUtil.cs` for SDK 3.x Package access

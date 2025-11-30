@@ -119,6 +119,13 @@ const DEFAULT_PAGE_WIDTH = 612;
 const DEFAULT_PAGE_HEIGHT = 792;
 const DEFAULT_MARGIN = 72; // 1 inch
 
+// Maximum percentage of content height that footnotes can occupy
+// This allows footnotes to expand upward into body content space when needed
+const MAX_FOOTNOTE_AREA_RATIO = 0.6; // 60% of content height
+
+// Minimum body content height per page (to avoid pages with only footnotes)
+const MIN_BODY_CONTENT_HEIGHT = 72; // 1 inch minimum body content
+
 /**
  * Converts pixels to points (assuming 96 DPI screen).
  */
@@ -872,9 +879,14 @@ export class PaginationEngine {
       // Effective remaining height (content area minus footnotes already on page)
       const effectiveRemainingHeight = remainingHeight - currentFootnoteHeight;
 
+      // Calculate maximum footnote area for this page (can expand into body content space)
+      const bodyContentUsed = dims.contentHeight - remainingHeight;
+      const maxFootnoteArea = dims.contentHeight * MAX_FOOTNOTE_AREA_RATIO;
+      const maxFootnoteExpansion = Math.max(0, maxFootnoteArea - currentFootnoteHeight);
+
       // Check if block fits on current page (including its footnotes)
       if (blockSpace <= effectiveRemainingHeight) {
-        // Block fits
+        // Block fits with current footnote allocation
         currentContent.push(block.element.cloneNode(true) as HTMLElement);
         remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
         prevMarginBottomPt = block.marginBottomPt;
@@ -884,56 +896,60 @@ export class PaginationEngine {
           currentFootnoteHeight += additionalFootnoteHeight;
         }
       } else if (block.heightPt + block.marginTopPt + block.marginBottomPt <= dims.contentHeight) {
-        // Block doesn't fit but will fit on a new page (even with footnotes)
-        // Check if we need to split any footnotes on the current page first
-        // Try to fit the block with partial footnotes using footnote continuation
+        // Block doesn't fit with current allocation - try expanding footnote area
         const blockSpaceWithoutFootnotes = effectiveMarginTop + block.heightPt + block.marginBottomPt;
 
+        // Check if block fits if we expand footnote area
+        // We can expand footnotes up to maxFootnoteArea, leaving room for body content
+        const minBodySpaceNeeded = bodyContentUsed + blockSpaceWithoutFootnotes + MIN_BODY_CONTENT_HEIGHT;
+        const canExpandFootnotes = minBodySpaceNeeded <= dims.contentHeight;
+
         if (newFootnoteIds.length > 0 && blockSpaceWithoutFootnotes <= effectiveRemainingHeight) {
-          // Block itself fits, but footnotes don't - try footnote continuation
+          // Block itself fits, but footnotes don't - expand footnote area
           currentContent.push(block.element.cloneNode(true) as HTMLElement);
           remainingHeight -= (effectiveMarginTop + block.heightPt + block.marginBottomPt);
           prevMarginBottomPt = block.marginBottomPt;
 
-          // Calculate space available for footnotes
-          const spaceForFootnotes = remainingHeight - currentFootnoteHeight;
+          // Calculate EXPANDED space available for footnotes
+          // Footnotes can take up to maxFootnoteArea or all remaining space, whichever is less
+          const availableForFootnotes = Math.min(
+            maxFootnoteArea,
+            dims.contentHeight - bodyContentUsed - blockSpaceWithoutFootnotes
+          );
 
-          // Try to fit as much of each new footnote as possible
+          // Try to fit as much of each new footnote as possible in expanded area
           for (const footnoteId of newFootnoteIds) {
             const footnote = this.footnoteRegistry.get(footnoteId);
             if (!footnote) continue;
 
             const footnoteHeight = this.measureSingleFootnoteHeight(footnoteId, dims.contentWidth);
+            const spaceLeftForFootnotes = availableForFootnotes - currentFootnoteHeight;
 
-            if (footnoteHeight <= spaceForFootnotes - currentFootnoteHeight) {
-              // Whole footnote fits
+            if (footnoteHeight <= spaceLeftForFootnotes) {
+              // Whole footnote fits in expanded area
               currentFootnoteIds.push(footnoteId);
               currentFootnoteHeight += footnoteHeight;
             } else {
-              // Footnote needs to be split - try to fit part of it
-              const availableForThisFootnote = spaceForFootnotes;
-              if (availableForThisFootnote > 20) { // Minimum space to start a footnote (roughly 1 line + separator)
+              // Footnote needs to be split - use all available expanded space
+              if (spaceLeftForFootnotes > 20) { // Minimum space to start a footnote
                 const { fits, overflow } = this.splitFootnoteToFit(
                   footnote,
-                  availableForThisFootnote,
+                  spaceLeftForFootnotes,
                   dims.contentWidth
                 );
 
                 if (fits.length > 0) {
                   // Add partial footnote to current page
                   currentFootnoteIds.push(footnoteId);
-                  // Track this as a partial footnote so we only render the fitting part
                   currentPartialFootnotes.push({
                     footnoteId,
                     fittingElements: fits
                   });
-                  // Store overflow for next page
                   nextPageContinuation = {
                     footnoteId,
                     remainingElements: overflow
                   };
-                  // Update height (approximate - we've added some content)
-                  currentFootnoteHeight = spaceForFootnotes;
+                  currentFootnoteHeight = availableForFootnotes;
                 } else {
                   // Nothing fits, entire footnote continues to next page
                   nextPageContinuation = {
@@ -941,7 +957,6 @@ export class PaginationEngine {
                     remainingElements: Array.from(footnote.querySelectorAll(".footnote-content > *"))
                       .map(el => el.cloneNode(true) as HTMLElement)
                   };
-                  // If no content elements found, use the whole footnote
                   if (nextPageContinuation.remainingElements.length === 0) {
                     nextPageContinuation.remainingElements = [footnote.cloneNode(true) as HTMLElement];
                   }
@@ -958,6 +973,35 @@ export class PaginationEngine {
                 }
               }
             }
+          }
+        } else if (canExpandFootnotes && newFootnoteIds.length > 0) {
+          // Block doesn't fit with current layout, but might fit if we expand footnote area first
+          // This handles the case where we need to give footnotes more space BEFORE adding the block
+
+          // First, try to fit more of current footnotes by expanding the area
+          // Then check if the block fits in reduced body space
+          const expandedFootnoteSpace = Math.min(maxFootnoteArea, additionalFootnoteHeight + currentFootnoteHeight);
+          const bodySpaceAfterExpansion = dims.contentHeight - expandedFootnoteSpace;
+
+          if (blockSpaceWithoutFootnotes <= bodySpaceAfterExpansion - bodyContentUsed) {
+            // Block fits after expanding footnote area
+            currentContent.push(block.element.cloneNode(true) as HTMLElement);
+            remainingHeight = bodySpaceAfterExpansion - bodyContentUsed - blockSpaceWithoutFootnotes;
+            prevMarginBottomPt = block.marginBottomPt;
+            currentFootnoteIds.push(...newFootnoteIds);
+            currentFootnoteHeight = expandedFootnoteSpace;
+          } else {
+            // Still doesn't fit - start new page
+            finishPage();
+            const newPageFootnoteHeight = blockFootnoteIds.length > 0
+              ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth, currentContinuation)
+              : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
+            const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
+            currentContent.push(block.element.cloneNode(true) as HTMLElement);
+            remainingHeight = dims.contentHeight - newPageSpace;
+            prevMarginBottomPt = block.marginBottomPt;
+            currentFootnoteIds = [...blockFootnoteIds];
+            currentFootnoteHeight = newPageFootnoteHeight;
           }
         } else {
           // Block itself doesn't fit - start new page
