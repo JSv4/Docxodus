@@ -28,6 +28,24 @@ All notable changes to this project will be documented in this file.
   - `AnnotationRange` class for specifying annotation targets:
     - `FromSearch(text, occurrence)`: Find text by search
     - `FromParagraphs(start, end)`: Span paragraph indices
+  - **Document Structure API** for element-based annotation targeting:
+    - `DocumentStructureAnalyzer.Analyze()`: Returns navigable tree of document elements
+    - `DocumentElement` class with path-based IDs (e.g., `doc/p-0`, `doc/tbl-0/tr-1/tc-2`)
+    - Supported element types: `Document`, `Paragraph`, `Run`, `Table`, `TableRow`, `TableCell`, `TableColumn`, `Hyperlink`, `Image`
+    - `TableColumnInfo` for virtual column elements (columns aren't real OOXML elements)
+  - `AnnotationTarget` class with flexible targeting modes:
+    - `Element(elementId)`: Target by element ID from structure analysis
+    - `Paragraph(index)`, `ParagraphRange(start, end)`: Target by paragraph index
+    - `Run(paragraphIndex, runIndex)`: Target specific run
+    - `Table(index)`, `TableRow(tableIndex, rowIndex)`: Target tables/rows
+    - `TableCell(tableIndex, rowIndex, cellIndex)`: Target specific cell
+    - `TableColumn(tableIndex, columnIndex)`: Metadata-only column annotation
+    - `TextSearch(text, occurrence)`: Search text globally
+    - `SearchInElement(elementId, text, occurrence)`: Search within specific element
+  - WASM methods: `GetDocumentStructure()`, `AddAnnotationWithTarget()`
+  - TypeScript helper functions: `findElementById()`, `findElementsByType()`, `getParagraphs()`, `getTables()`, `getTableColumns()`
+  - TypeScript targeting factories: `targetElement()`, `targetParagraph()`, `targetTableCell()`, etc.
+  - React `useDocumentStructure` hook with structure navigation helpers
   - Annotations stored as Custom XML Part in DOCX (non-destructive)
   - Bookmark-based text range marking for precise positioning
   - HTML rendering with configurable label modes:
@@ -49,7 +67,7 @@ All notable changes to this project will be documented in this file.
     - `useAnnotations` hook for annotation state management
     - `AnnotatedDocument` component with click/hover event handling
     - `useDocxodus` hook extended with annotation methods
-  - 20 .NET unit tests and 10 Playwright browser tests for full coverage
+  - 20 .NET unit tests and 21 Playwright browser tests for full coverage (including 11 for element-based targeting)
 - **Comment Rendering in HTML Converter** - Full support for rendering Word document comments in HTML output
   - `CommentRenderMode` enum with three rendering modes:
     - `EndnoteStyle` (default): Comments rendered at end of document with bidirectional anchor links

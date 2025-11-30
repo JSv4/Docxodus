@@ -108,6 +108,109 @@ namespace Docxodus
         }
 
         /// <summary>
+        /// Add an annotation to a document using flexible targeting.
+        /// </summary>
+        /// <param name="doc">The document to annotate.</param>
+        /// <param name="annotation">The annotation to add.</param>
+        /// <param name="target">Specifies what to annotate (element, indices, or text search).</param>
+        /// <returns>A new document with the annotation added.</returns>
+        public static WmlDocument AddAnnotation(
+            WmlDocument doc,
+            DocumentAnnotation annotation,
+            AnnotationTarget target)
+        {
+            if (doc == null) throw new ArgumentNullException(nameof(doc));
+            if (annotation == null) throw new ArgumentNullException(nameof(annotation));
+            if (target == null) throw new ArgumentNullException(nameof(target));
+            if (string.IsNullOrEmpty(annotation.Id)) throw new ArgumentException("Annotation ID is required.", nameof(annotation));
+
+            // Handle table column annotations specially (metadata-only, no bookmark)
+            if (target.GetTargetMode() == AnnotationTargetMode.TableColumn)
+            {
+                return AddColumnAnnotation(doc, annotation, target);
+            }
+
+            // Analyze structure BEFORE opening for modification to avoid conflicts
+            var targetMode = target.GetTargetMode();
+            DocumentStructure? structure = null;
+            if (targetMode == AnnotationTargetMode.ElementId ||
+                targetMode == AnnotationTargetMode.SearchInElement ||
+                targetMode == AnnotationTargetMode.IndexBased)
+            {
+                structure = DocumentStructureAnalyzer.Analyze(doc);
+            }
+
+            using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
+            {
+                using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+                {
+                    // Check for duplicate ID
+                    var existingAnnotations = GetAnnotationsInternal(wordDoc);
+                    if (existingAnnotations.Any(a => a.Id == annotation.Id))
+                    {
+                        throw new InvalidOperationException($"An annotation with ID '{annotation.Id}' already exists.");
+                    }
+
+                    // Set bookmark name if not already set
+                    if (string.IsNullOrEmpty(annotation.BookmarkName))
+                    {
+                        annotation.BookmarkName = BookmarkPrefix + annotation.Id;
+                    }
+
+                    // Create bookmark based on target mode
+                    switch (targetMode)
+                    {
+                        case AnnotationTargetMode.ElementId:
+                            CreateBookmarkFromElementId(wordDoc, annotation.BookmarkName, target.ElementId!, structure!);
+                            break;
+
+                        case AnnotationTargetMode.SearchInElement:
+                            CreateBookmarkFromSearchInElement(wordDoc, annotation.BookmarkName, target.ElementId!, target.SearchText!, target.Occurrence, structure!);
+                            break;
+
+                        case AnnotationTargetMode.TextSearch:
+                            CreateBookmarkFromSearch(wordDoc, annotation.BookmarkName, target.SearchText!, target.Occurrence);
+                            break;
+
+                        case AnnotationTargetMode.IndexBased:
+                            CreateBookmarkFromTarget(wordDoc, annotation.BookmarkName, target, structure!);
+                            break;
+
+                        default:
+                            throw new ArgumentException("Could not determine targeting mode from target.", nameof(target));
+                    }
+
+                    // Store target info in annotation metadata for reference
+                    if (!string.IsNullOrEmpty(target.ElementId))
+                    {
+                        annotation.Metadata["_targetElementId"] = target.ElementId;
+                    }
+                    if (target.ElementType.HasValue)
+                    {
+                        annotation.Metadata["_targetElementType"] = target.ElementType.Value.ToString();
+                    }
+
+                    // Add to custom XML part
+                    AddAnnotationToCustomXml(wordDoc, annotation);
+
+                    wordDoc.MainDocumentPart.PutXDocument();
+                }
+                return streamDoc.GetModifiedWmlDocument();
+            }
+        }
+
+        /// <summary>
+        /// Get the document structure for element selection.
+        /// </summary>
+        /// <param name="doc">The document to analyze.</param>
+        /// <returns>The document structure with element tree.</returns>
+        public static DocumentStructure GetDocumentStructure(WmlDocument doc)
+        {
+            if (doc == null) throw new ArgumentNullException(nameof(doc));
+            return DocumentStructureAnalyzer.Analyze(doc);
+        }
+
+        /// <summary>
         /// Remove an annotation by ID.
         /// </summary>
         /// <param name="doc">The document containing the annotation.</param>
@@ -880,6 +983,445 @@ namespace Docxodus
             }
 
             return textBuilder.ToString();
+        }
+
+        private static WmlDocument AddColumnAnnotation(
+            WmlDocument doc,
+            DocumentAnnotation annotation,
+            AnnotationTarget target)
+        {
+            // Table column annotations are metadata-only (columns aren't real OOXML elements)
+            // Store the column info in metadata and add annotation without bookmark
+
+            // Analyze structure BEFORE opening for modification to avoid conflicts
+            var structure = DocumentStructureAnalyzer.Analyze(doc);
+
+            // Find table
+            var tables = structure.FindByType(DocumentElementType.Table).ToList();
+            if (!target.TableIndex.HasValue || target.TableIndex.Value < 0 || target.TableIndex.Value >= tables.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(target), "Table index out of range.");
+            }
+
+            var table = tables[target.TableIndex.Value];
+            var columnInfo = structure.GetTableColumns(table.Id).FirstOrDefault(c => c.ColumnIndex == target.ColumnIndex);
+
+            if (columnInfo == null)
+            {
+                throw new ArgumentOutOfRangeException(nameof(target), $"Column index {target.ColumnIndex} not found in table.");
+            }
+
+            using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
+            {
+                using (WordprocessingDocument wordDoc = streamDoc.GetWordprocessingDocument())
+                {
+                    // Check for duplicate ID
+                    var existingAnnotations = GetAnnotationsInternal(wordDoc);
+                    if (existingAnnotations.Any(a => a.Id == annotation.Id))
+                    {
+                        throw new InvalidOperationException($"An annotation with ID '{annotation.Id}' already exists.");
+                    }
+
+                    // Store column targeting info in metadata
+                    annotation.Metadata["_targetType"] = "TableColumn";
+                    annotation.Metadata["_tableId"] = table.Id;
+                    annotation.Metadata["_columnIndex"] = target.ColumnIndex?.ToString() ?? "0";
+                    annotation.Metadata["_cellIds"] = string.Join(",", columnInfo.CellIds);
+
+                    // No bookmark needed for column annotations
+                    annotation.BookmarkName = null;
+
+                    // Add to custom XML part
+                    AddAnnotationToCustomXml(wordDoc, annotation);
+                }
+                return streamDoc.GetModifiedWmlDocument();
+            }
+        }
+
+        private static void CreateBookmarkFromElementId(
+            WordprocessingDocument wordDoc,
+            string bookmarkName,
+            string elementId,
+            DocumentStructure structure)
+        {
+            var element = structure.FindById(elementId);
+            if (element == null)
+            {
+                throw new InvalidOperationException($"Element with ID '{elementId}' not found.");
+            }
+
+            var xmlElement = element.XmlElement;
+            if (xmlElement == null)
+            {
+                throw new InvalidOperationException($"Element '{elementId}' has no associated XML element.");
+            }
+
+            var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+
+            // Generate unique bookmark ID
+            var existingIds = mainDoc.Descendants(W.bookmarkStart)
+                .Select(b => (int?)b.Attribute(W.id))
+                .Where(id => id.HasValue)
+                .Select(id => id.Value)
+                .ToHashSet();
+
+            int newId = 1;
+            while (existingIds.Contains(newId)) newId++;
+
+            // Find the element in the live document (structure has a copy)
+            var liveElement = FindLiveElement(mainDoc, element);
+            if (liveElement == null)
+            {
+                throw new InvalidOperationException($"Could not locate element '{elementId}' in document.");
+            }
+
+            var bookmarkStart = new XElement(W.bookmarkStart,
+                new XAttribute(W.id, newId),
+                new XAttribute(W.name, bookmarkName));
+
+            var bookmarkEnd = new XElement(W.bookmarkEnd,
+                new XAttribute(W.id, newId));
+
+            // Insert bookmark around the element based on type
+            switch (element.Type)
+            {
+                case DocumentElementType.Paragraph:
+                    // Insert start at beginning of paragraph, end at end
+                    liveElement.AddFirst(bookmarkStart);
+                    liveElement.Add(bookmarkEnd);
+                    break;
+
+                case DocumentElementType.Run:
+                    // Insert around the run
+                    liveElement.AddBeforeSelf(bookmarkStart);
+                    liveElement.AddAfterSelf(bookmarkEnd);
+                    break;
+
+                case DocumentElementType.Table:
+                case DocumentElementType.TableRow:
+                case DocumentElementType.TableCell:
+                    // Insert before and after the element
+                    liveElement.AddBeforeSelf(bookmarkStart);
+                    liveElement.AddAfterSelf(bookmarkEnd);
+                    break;
+
+                case DocumentElementType.Hyperlink:
+                case DocumentElementType.Image:
+                    // Insert around the element
+                    liveElement.AddBeforeSelf(bookmarkStart);
+                    liveElement.AddAfterSelf(bookmarkEnd);
+                    break;
+
+                default:
+                    throw new NotSupportedException($"Element type '{element.Type}' is not supported for annotation.");
+            }
+
+            wordDoc.MainDocumentPart.PutXDocument();
+        }
+
+        private static void CreateBookmarkFromSearchInElement(
+            WordprocessingDocument wordDoc,
+            string bookmarkName,
+            string elementId,
+            string searchText,
+            int occurrence,
+            DocumentStructure structure)
+        {
+            var element = structure.FindById(elementId);
+            if (element == null)
+            {
+                throw new InvalidOperationException($"Element with ID '{elementId}' not found.");
+            }
+
+            var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+
+            // Find the element in the live document
+            var liveElement = FindLiveElement(mainDoc, element);
+            if (liveElement == null)
+            {
+                throw new InvalidOperationException($"Could not locate element '{elementId}' in document.");
+            }
+
+            // Find all text elements within this element
+            var textNodes = liveElement.Descendants(W.t).ToList();
+            if (textNodes.Count == 0)
+            {
+                throw new InvalidOperationException($"Element '{elementId}' contains no text.");
+            }
+
+            var fullText = string.Concat(textNodes.Select(t => t.Value));
+
+            int startIndex = -1;
+            int currentOccurrence = 0;
+            int searchPos = 0;
+
+            while ((searchPos = fullText.IndexOf(searchText, searchPos, StringComparison.Ordinal)) >= 0)
+            {
+                currentOccurrence++;
+                if (currentOccurrence == occurrence)
+                {
+                    startIndex = searchPos;
+                    break;
+                }
+                searchPos++;
+            }
+
+            if (startIndex < 0)
+            {
+                throw new InvalidOperationException(
+                    $"Could not find occurrence {occurrence} of text '{searchText}' in element '{elementId}'.");
+            }
+
+            int endIndex = startIndex + searchText.Length;
+
+            // Find which text elements contain the start and end positions
+            int currentPos = 0;
+            XElement startTextElement = null;
+            XElement endTextElement = null;
+            int startOffsetInElement = 0;
+            int endOffsetInElement = 0;
+
+            foreach (var textNode in textNodes)
+            {
+                var text = textNode.Value;
+                var elementStart = currentPos;
+                var elementEnd = currentPos + text.Length;
+
+                if (startTextElement == null && startIndex >= elementStart && startIndex < elementEnd)
+                {
+                    startTextElement = textNode;
+                    startOffsetInElement = startIndex - elementStart;
+                }
+
+                if (endIndex > elementStart && endIndex <= elementEnd)
+                {
+                    endTextElement = textNode;
+                    endOffsetInElement = endIndex - elementStart;
+                }
+
+                currentPos = elementEnd;
+
+                if (startTextElement != null && endTextElement != null)
+                    break;
+            }
+
+            if (startTextElement == null || endTextElement == null)
+            {
+                throw new InvalidOperationException("Could not locate text elements for bookmark.");
+            }
+
+            // Generate unique bookmark ID
+            var existingIds = mainDoc.Descendants(W.bookmarkStart)
+                .Select(b => (int?)b.Attribute(W.id))
+                .Where(id => id.HasValue)
+                .Select(id => id.Value)
+                .ToHashSet();
+
+            int newId = 1;
+            while (existingIds.Contains(newId)) newId++;
+
+            // Insert bookmark markers
+            if (startTextElement == endTextElement)
+            {
+                InsertBookmarkInSameTextElement(startTextElement, bookmarkName, newId,
+                    startOffsetInElement, endOffsetInElement);
+            }
+            else
+            {
+                InsertBookmarkStart(startTextElement, bookmarkName, newId, startOffsetInElement);
+                InsertBookmarkEnd(endTextElement, bookmarkName, newId, endOffsetInElement);
+            }
+
+            wordDoc.MainDocumentPart.PutXDocument();
+        }
+
+        private static void CreateBookmarkFromTarget(
+            WordprocessingDocument wordDoc,
+            string bookmarkName,
+            AnnotationTarget target,
+            DocumentStructure structure)
+        {
+            var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var body = mainDoc.Root?.Element(W.body);
+            if (body == null)
+                throw new InvalidOperationException("Document body not found.");
+
+            // Generate unique bookmark ID
+            var existingIds = mainDoc.Descendants(W.bookmarkStart)
+                .Select(b => (int?)b.Attribute(W.id))
+                .Where(id => id.HasValue)
+                .Select(id => id.Value)
+                .ToHashSet();
+
+            int newId = 1;
+            while (existingIds.Contains(newId)) newId++;
+
+            XElement targetElement = null;
+            XElement rangeEndElement = null;
+
+            switch (target.ElementType)
+            {
+                case DocumentElementType.Paragraph:
+                    var paragraphs = body.Elements(W.p).ToList();
+                    if (!target.ParagraphIndex.HasValue || target.ParagraphIndex.Value < 0 || target.ParagraphIndex.Value >= paragraphs.Count)
+                        throw new ArgumentOutOfRangeException(nameof(target), "Paragraph index out of range.");
+
+                    targetElement = paragraphs[target.ParagraphIndex.Value];
+
+                    if (target.RangeEnd != null && target.RangeEnd.ParagraphIndex.HasValue)
+                    {
+                        var endIdx = target.RangeEnd.ParagraphIndex.Value;
+                        if (endIdx >= 0 && endIdx < paragraphs.Count)
+                            rangeEndElement = paragraphs[endIdx];
+                    }
+                    break;
+
+                case DocumentElementType.Run:
+                    if (!target.ParagraphIndex.HasValue)
+                        throw new ArgumentException("Paragraph index required for run targeting.", nameof(target));
+
+                    var paras = body.Elements(W.p).ToList();
+                    if (target.ParagraphIndex.Value < 0 || target.ParagraphIndex.Value >= paras.Count)
+                        throw new ArgumentOutOfRangeException(nameof(target), "Paragraph index out of range.");
+
+                    var para = paras[target.ParagraphIndex.Value];
+                    var runs = para.Elements(W.r).ToList();
+
+                    if (!target.RunIndex.HasValue || target.RunIndex.Value < 0 || target.RunIndex.Value >= runs.Count)
+                        throw new ArgumentOutOfRangeException(nameof(target), "Run index out of range.");
+
+                    targetElement = runs[target.RunIndex.Value];
+                    break;
+
+                case DocumentElementType.Table:
+                    var tables = body.Elements(W.tbl).ToList();
+                    if (!target.TableIndex.HasValue || target.TableIndex.Value < 0 || target.TableIndex.Value >= tables.Count)
+                        throw new ArgumentOutOfRangeException(nameof(target), "Table index out of range.");
+
+                    targetElement = tables[target.TableIndex.Value];
+                    break;
+
+                case DocumentElementType.TableRow:
+                    var tbls = body.Elements(W.tbl).ToList();
+                    if (!target.TableIndex.HasValue || target.TableIndex.Value < 0 || target.TableIndex.Value >= tbls.Count)
+                        throw new ArgumentOutOfRangeException(nameof(target), "Table index out of range.");
+
+                    var tbl = tbls[target.TableIndex.Value];
+                    var rows = tbl.Elements(W.tr).ToList();
+
+                    if (!target.RowIndex.HasValue || target.RowIndex.Value < 0 || target.RowIndex.Value >= rows.Count)
+                        throw new ArgumentOutOfRangeException(nameof(target), "Row index out of range.");
+
+                    targetElement = rows[target.RowIndex.Value];
+                    break;
+
+                case DocumentElementType.TableCell:
+                    var tables2 = body.Elements(W.tbl).ToList();
+                    if (!target.TableIndex.HasValue || target.TableIndex.Value < 0 || target.TableIndex.Value >= tables2.Count)
+                        throw new ArgumentOutOfRangeException(nameof(target), "Table index out of range.");
+
+                    var table2 = tables2[target.TableIndex.Value];
+                    var rows2 = table2.Elements(W.tr).ToList();
+
+                    if (!target.RowIndex.HasValue || target.RowIndex.Value < 0 || target.RowIndex.Value >= rows2.Count)
+                        throw new ArgumentOutOfRangeException(nameof(target), "Row index out of range.");
+
+                    var row2 = rows2[target.RowIndex.Value];
+                    var cells = row2.Elements(W.tc).ToList();
+
+                    if (!target.CellIndex.HasValue || target.CellIndex.Value < 0 || target.CellIndex.Value >= cells.Count)
+                        throw new ArgumentOutOfRangeException(nameof(target), "Cell index out of range.");
+
+                    targetElement = cells[target.CellIndex.Value];
+                    break;
+
+                default:
+                    throw new NotSupportedException($"Element type '{target.ElementType}' is not supported for index-based targeting.");
+            }
+
+            if (targetElement == null)
+                throw new InvalidOperationException("Could not find target element.");
+
+            var bookmarkStart = new XElement(W.bookmarkStart,
+                new XAttribute(W.id, newId),
+                new XAttribute(W.name, bookmarkName));
+
+            var bookmarkEnd = new XElement(W.bookmarkEnd,
+                new XAttribute(W.id, newId));
+
+            // For range targeting (multiple paragraphs)
+            if (rangeEndElement != null)
+            {
+                targetElement.AddFirst(bookmarkStart);
+                rangeEndElement.Add(bookmarkEnd);
+            }
+            else
+            {
+                // Single element targeting
+                switch (target.ElementType)
+                {
+                    case DocumentElementType.Paragraph:
+                        targetElement.AddFirst(bookmarkStart);
+                        targetElement.Add(bookmarkEnd);
+                        break;
+
+                    case DocumentElementType.Run:
+                        targetElement.AddBeforeSelf(bookmarkStart);
+                        targetElement.AddAfterSelf(bookmarkEnd);
+                        break;
+
+                    case DocumentElementType.Table:
+                    case DocumentElementType.TableRow:
+                    case DocumentElementType.TableCell:
+                        targetElement.AddBeforeSelf(bookmarkStart);
+                        targetElement.AddAfterSelf(bookmarkEnd);
+                        break;
+                }
+            }
+
+            wordDoc.MainDocumentPart.PutXDocument();
+        }
+
+        private static XElement FindLiveElement(XDocument mainDoc, DocumentElement element)
+        {
+            var body = mainDoc.Root?.Element(W.body);
+            if (body == null) return null;
+
+            // Parse the element ID to navigate to the element
+            // Format: "doc/p-0/r-1" or "doc/tbl-0/tr-1/tc-2"
+            var parts = element.Id.Split('/');
+            XElement current = body;
+
+            foreach (var part in parts.Skip(1)) // Skip "doc"
+            {
+                if (current == null) return null;
+
+                var match = System.Text.RegularExpressions.Regex.Match(part, @"^(\w+)-(\d+)$");
+                if (!match.Success) return null;
+
+                var elementType = match.Groups[1].Value;
+                var index = int.Parse(match.Groups[2].Value);
+
+                XName elementName = elementType switch
+                {
+                    "p" => W.p,
+                    "r" => W.r,
+                    "tbl" => W.tbl,
+                    "tr" => W.tr,
+                    "tc" => W.tc,
+                    "hl" => W.hyperlink,
+                    _ => null
+                };
+
+                if (elementName == null) return null;
+
+                var elements = current.Elements(elementName).ToList();
+                if (index < 0 || index >= elements.Count) return null;
+
+                current = elements[index];
+            }
+
+            return current;
         }
 
         #endregion

@@ -374,8 +374,10 @@ export interface DocxodusWasmExports {
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;
+    AddAnnotationWithTarget: (bytes: Uint8Array, requestJson: string) => string;
     RemoveAnnotation: (bytes: Uint8Array, annotationId: string) => string;
     HasAnnotations: (bytes: Uint8Array) => string;
+    GetDocumentStructure: (bytes: Uint8Array) => string;
     GetVersion: () => string;
   };
   DocumentComparer: {
@@ -531,4 +533,347 @@ export interface AnnotationOptions {
   annotationLabelMode?: AnnotationLabelMode;
   /** CSS class prefix for annotation elements (default: "annot-") */
   annotationCssClassPrefix?: string;
+}
+
+// ============================================================================
+// Document Structure Types (for element-based annotation targeting)
+// ============================================================================
+
+/**
+ * Document element types that can be annotated.
+ */
+export enum DocumentElementType {
+  /** Root document element */
+  Document = "Document",
+  /** A paragraph (w:p) */
+  Paragraph = "Paragraph",
+  /** A run within a paragraph (w:r) */
+  Run = "Run",
+  /** A table (w:tbl) */
+  Table = "Table",
+  /** A table row (w:tr) */
+  TableRow = "TableRow",
+  /** A table cell (w:tc) */
+  TableCell = "TableCell",
+  /** A virtual table column (not a real OOXML element) */
+  TableColumn = "TableColumn",
+  /** A hyperlink (w:hyperlink) */
+  Hyperlink = "Hyperlink",
+  /** An image/drawing (w:drawing) */
+  Image = "Image",
+}
+
+/**
+ * A document element in the structure tree.
+ */
+export interface DocumentElement {
+  /** Unique element ID (path-based, e.g., "doc/tbl-0/tr-1/tc-2") */
+  id: string;
+  /** Element type */
+  type: DocumentElementType | string;
+  /** Preview of text content (first ~100 characters) */
+  textPreview?: string;
+  /** Position index within parent element */
+  index: number;
+  /** Child elements */
+  children: DocumentElement[];
+  /** For table rows/cells: the row index */
+  rowIndex?: number;
+  /** For table cells: the column index */
+  columnIndex?: number;
+  /** For table cells: number of rows this cell spans */
+  rowSpan?: number;
+  /** For table cells: number of columns this cell spans */
+  columnSpan?: number;
+}
+
+/**
+ * Information about a table column.
+ */
+export interface TableColumnInfo {
+  /** ID of the table this column belongs to */
+  tableId: string;
+  /** Zero-based column index */
+  columnIndex: number;
+  /** IDs of all cells in this column */
+  cellIds: string[];
+  /** Total number of rows in this column */
+  rowCount: number;
+}
+
+/**
+ * Document structure analysis result.
+ */
+export interface DocumentStructure {
+  /** Root document element */
+  root: DocumentElement;
+  /** All elements indexed by ID for quick lookup */
+  elementsById: Record<string, DocumentElement>;
+  /** Table column information indexed by column ID */
+  tableColumns: Record<string, TableColumnInfo>;
+}
+
+/**
+ * Target specification for element-based annotation.
+ * Supports multiple targeting modes: element ID, indices, or text search.
+ */
+export interface AnnotationTarget {
+  /** Target by element ID (e.g., "doc/p-0/r-1") */
+  elementId?: string;
+  /** Element type for index-based targeting */
+  elementType?: DocumentElementType | string;
+  /** Paragraph index (0-based) */
+  paragraphIndex?: number;
+  /** Run index within paragraph (0-based) */
+  runIndex?: number;
+  /** Table index (0-based) */
+  tableIndex?: number;
+  /** Row index within table (0-based) */
+  rowIndex?: number;
+  /** Cell index within row (0-based) */
+  cellIndex?: number;
+  /** Column index for table column targeting (0-based) */
+  columnIndex?: number;
+  /** Text to search for (global or within elementId) */
+  searchText?: string;
+  /** Which occurrence of searchText to target (1-based, default: 1) */
+  occurrence?: number;
+  /** End paragraph index for range targeting */
+  rangeEndParagraphIndex?: number;
+}
+
+/**
+ * Request to add an annotation using flexible targeting.
+ */
+export interface AddAnnotationWithTargetRequest {
+  /** Unique annotation ID */
+  id: string;
+  /** Label category/type identifier */
+  labelId: string;
+  /** Human-readable label text */
+  label: string;
+  /** Highlight color in hex format (default: "#FFEB3B") */
+  color?: string;
+  /** Author who created the annotation */
+  author?: string;
+  /** Custom metadata key-value pairs */
+  metadata?: Record<string, string>;
+  /** Target specification */
+  target: AnnotationTarget;
+}
+
+// ============================================================================
+// Helper functions for document structure navigation
+// ============================================================================
+
+/**
+ * Find an element by ID in the document structure.
+ * @param structure - The document structure
+ * @param elementId - The element ID to find
+ * @returns The element or undefined if not found
+ */
+export function findElementById(
+  structure: DocumentStructure,
+  elementId: string
+): DocumentElement | undefined {
+  return structure.elementsById[elementId];
+}
+
+/**
+ * Find all elements of a specific type in the document structure.
+ * @param structure - The document structure
+ * @param type - The element type to find
+ * @returns Array of matching elements
+ */
+export function findElementsByType(
+  structure: DocumentStructure,
+  type: DocumentElementType | string
+): DocumentElement[] {
+  return Object.values(structure.elementsById).filter(
+    (el) => el.type === type
+  );
+}
+
+/**
+ * Get all paragraphs from the document structure.
+ * @param structure - The document structure
+ * @returns Array of paragraph elements
+ */
+export function getParagraphs(
+  structure: DocumentStructure
+): DocumentElement[] {
+  return findElementsByType(structure, DocumentElementType.Paragraph);
+}
+
+/**
+ * Get all tables from the document structure.
+ * @param structure - The document structure
+ * @returns Array of table elements
+ */
+export function getTables(structure: DocumentStructure): DocumentElement[] {
+  return findElementsByType(structure, DocumentElementType.Table);
+}
+
+/**
+ * Get column information for a specific table.
+ * @param structure - The document structure
+ * @param tableId - The table ID
+ * @returns Array of column info objects sorted by column index
+ */
+export function getTableColumns(
+  structure: DocumentStructure,
+  tableId: string
+): TableColumnInfo[] {
+  return Object.values(structure.tableColumns)
+    .filter((col) => col.tableId === tableId)
+    .sort((a, b) => a.columnIndex - b.columnIndex);
+}
+
+/**
+ * Create an annotation target for an element by ID.
+ * @param elementId - The element ID (e.g., "doc/p-0", "doc/tbl-0/tr-1/tc-2")
+ * @returns AnnotationTarget object
+ */
+export function targetElement(elementId: string): AnnotationTarget {
+  return { elementId };
+}
+
+/**
+ * Create an annotation target for a paragraph by index.
+ * @param paragraphIndex - Zero-based paragraph index
+ * @returns AnnotationTarget object
+ */
+export function targetParagraph(paragraphIndex: number): AnnotationTarget {
+  return {
+    elementType: DocumentElementType.Paragraph,
+    paragraphIndex,
+  };
+}
+
+/**
+ * Create an annotation target for a range of paragraphs.
+ * @param startIndex - Zero-based start paragraph index
+ * @param endIndex - Zero-based end paragraph index
+ * @returns AnnotationTarget object
+ */
+export function targetParagraphRange(
+  startIndex: number,
+  endIndex: number
+): AnnotationTarget {
+  return {
+    elementType: DocumentElementType.Paragraph,
+    paragraphIndex: startIndex,
+    rangeEndParagraphIndex: endIndex,
+  };
+}
+
+/**
+ * Create an annotation target for a specific run within a paragraph.
+ * @param paragraphIndex - Zero-based paragraph index
+ * @param runIndex - Zero-based run index within the paragraph
+ * @returns AnnotationTarget object
+ */
+export function targetRun(
+  paragraphIndex: number,
+  runIndex: number
+): AnnotationTarget {
+  return {
+    elementType: DocumentElementType.Run,
+    paragraphIndex,
+    runIndex,
+  };
+}
+
+/**
+ * Create an annotation target for a table by index.
+ * @param tableIndex - Zero-based table index
+ * @returns AnnotationTarget object
+ */
+export function targetTable(tableIndex: number): AnnotationTarget {
+  return {
+    elementType: DocumentElementType.Table,
+    tableIndex,
+  };
+}
+
+/**
+ * Create an annotation target for a table row.
+ * @param tableIndex - Zero-based table index
+ * @param rowIndex - Zero-based row index within the table
+ * @returns AnnotationTarget object
+ */
+export function targetTableRow(
+  tableIndex: number,
+  rowIndex: number
+): AnnotationTarget {
+  return {
+    elementType: DocumentElementType.TableRow,
+    tableIndex,
+    rowIndex,
+  };
+}
+
+/**
+ * Create an annotation target for a table cell.
+ * @param tableIndex - Zero-based table index
+ * @param rowIndex - Zero-based row index
+ * @param cellIndex - Zero-based cell index within the row
+ * @returns AnnotationTarget object
+ */
+export function targetTableCell(
+  tableIndex: number,
+  rowIndex: number,
+  cellIndex: number
+): AnnotationTarget {
+  return {
+    elementType: DocumentElementType.TableCell,
+    tableIndex,
+    rowIndex,
+    cellIndex,
+  };
+}
+
+/**
+ * Create an annotation target for a table column (all cells in that column).
+ * @param tableIndex - Zero-based table index
+ * @param columnIndex - Zero-based column index
+ * @returns AnnotationTarget object
+ */
+export function targetTableColumn(
+  tableIndex: number,
+  columnIndex: number
+): AnnotationTarget {
+  return {
+    elementType: DocumentElementType.TableColumn,
+    tableIndex,
+    columnIndex,
+  };
+}
+
+/**
+ * Create an annotation target by text search.
+ * @param searchText - Text to search for
+ * @param occurrence - Which occurrence to target (1-based, default: 1)
+ * @returns AnnotationTarget object
+ */
+export function targetSearch(
+  searchText: string,
+  occurrence: number = 1
+): AnnotationTarget {
+  return { searchText, occurrence };
+}
+
+/**
+ * Create an annotation target to search text within a specific element.
+ * @param elementId - The element ID to search within
+ * @param searchText - Text to search for
+ * @param occurrence - Which occurrence to target (1-based, default: 1)
+ * @returns AnnotationTarget object
+ */
+export function targetSearchInElement(
+  elementId: string,
+  searchText: string,
+  occurrence: number = 1
+): AnnotationTarget {
+  return { elementId, searchText, occurrence };
 }

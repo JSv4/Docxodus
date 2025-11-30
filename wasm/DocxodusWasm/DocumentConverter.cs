@@ -292,7 +292,7 @@ public partial class DocumentConverter
             // Get the added annotation to return its details
             var addedAnnotation = AnnotationManager.GetAnnotation(resultDoc, request.Id);
 
-            return JsonSerializer.Serialize(new
+            var response = new AddAnnotationBase64Response
             {
                 Success = true,
                 DocumentBytes = Convert.ToBase64String(resultDoc.DocumentByteArray),
@@ -307,7 +307,8 @@ public partial class DocumentConverter
                     BookmarkName = addedAnnotation.BookmarkName,
                     AnnotatedText = addedAnnotation.AnnotatedText
                 } : null
-            });
+            };
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.AddAnnotationBase64Response);
         }
         catch (Exception ex)
         {
@@ -339,11 +340,12 @@ public partial class DocumentConverter
             var wmlDoc = new WmlDocument("document.docx", docxBytes);
             var resultDoc = AnnotationManager.RemoveAnnotation(wmlDoc, annotationId);
 
-            return JsonSerializer.Serialize(new
+            var response = new RemoveAnnotationResponse
             {
                 Success = true,
                 DocumentBytes = Convert.ToBase64String(resultDoc.DocumentByteArray)
-            });
+            };
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.RemoveAnnotationResponse);
         }
         catch (Exception ex)
         {
@@ -369,12 +371,192 @@ public partial class DocumentConverter
             var wmlDoc = new WmlDocument("document.docx", docxBytes);
             var hasAnnotations = AnnotationManager.HasAnnotations(wmlDoc);
 
-            return JsonSerializer.Serialize(new { HasAnnotations = hasAnnotations });
+            var response = new HasAnnotationsResponse { HasAnnotations = hasAnnotations };
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.HasAnnotationsResponse);
         }
         catch (Exception ex)
         {
             return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
         }
+    }
+
+    /// <summary>
+    /// Get the document structure for element-based annotation targeting.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <returns>JSON response with document structure tree</returns>
+    [JSExport]
+    public static string GetDocumentStructure(byte[] docxBytes)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            return SerializeError("No document data provided");
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            var structure = AnnotationManager.GetDocumentStructure(wmlDoc);
+
+            var response = new DocumentStructureResponse
+            {
+                Root = ConvertElement(structure.Root),
+                ElementsById = structure.ElementsById.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => ConvertElementShallow(kvp.Value)),
+                TableColumns = structure.TableColumns.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => new TableColumnInfoDto
+                    {
+                        TableId = kvp.Value.TableId,
+                        ColumnIndex = kvp.Value.ColumnIndex,
+                        CellIds = kvp.Value.CellIds.ToArray(),
+                        RowCount = kvp.Value.RowCount
+                    })
+            };
+
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.DocumentStructureResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Add an annotation using flexible targeting (element ID, indices, or text search).
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="requestJson">JSON request with annotation and target details</param>
+    /// <returns>JSON response with modified document bytes and annotation info</returns>
+    [JSExport]
+    public static string AddAnnotationWithTarget(byte[] docxBytes, string requestJson)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            return SerializeError("No document data provided");
+        }
+
+        try
+        {
+            var request = JsonSerializer.Deserialize(requestJson, DocxodusJsonContext.Default.AddAnnotationWithTargetRequest);
+            if (request == null)
+            {
+                return SerializeError("Invalid request JSON");
+            }
+
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+
+            var annotation = new DocumentAnnotation(request.Id, request.LabelId, request.Label, request.Color)
+            {
+                Author = request.Author
+            };
+
+            if (request.Metadata != null)
+            {
+                foreach (var (key, value) in request.Metadata)
+                {
+                    annotation.Metadata[key] = value;
+                }
+            }
+
+            // Build AnnotationTarget from request
+            var target = new AnnotationTarget
+            {
+                ElementId = request.ElementId,
+                SearchText = request.SearchText,
+                Occurrence = request.Occurrence,
+                ParagraphIndex = request.ParagraphIndex,
+                RunIndex = request.RunIndex,
+                TableIndex = request.TableIndex,
+                RowIndex = request.RowIndex,
+                CellIndex = request.CellIndex,
+                ColumnIndex = request.ColumnIndex
+            };
+
+            // Parse element type if provided
+            if (!string.IsNullOrEmpty(request.ElementType))
+            {
+                if (Enum.TryParse<DocumentElementType>(request.ElementType, true, out var elementType))
+                {
+                    target.ElementType = elementType;
+                }
+                else
+                {
+                    return SerializeError($"Invalid element type: {request.ElementType}");
+                }
+            }
+
+            // Handle range end for paragraph ranges
+            if (request.RangeEndParagraphIndex.HasValue)
+            {
+                target.RangeEnd = new AnnotationTarget
+                {
+                    ParagraphIndex = request.RangeEndParagraphIndex.Value
+                };
+            }
+
+            var resultDoc = AnnotationManager.AddAnnotation(wmlDoc, annotation, target);
+
+            // Get the added annotation to return its details
+            var addedAnnotation = AnnotationManager.GetAnnotation(resultDoc, request.Id);
+
+            var response = new AddAnnotationResponse
+            {
+                DocumentBytes = resultDoc.DocumentByteArray,
+                Annotation = addedAnnotation != null ? new AnnotationInfo
+                {
+                    Id = addedAnnotation.Id,
+                    LabelId = addedAnnotation.LabelId,
+                    Label = addedAnnotation.Label,
+                    Color = addedAnnotation.Color,
+                    Author = addedAnnotation.Author,
+                    Created = addedAnnotation.Created?.ToString("o"),
+                    BookmarkName = addedAnnotation.BookmarkName,
+                    AnnotatedText = addedAnnotation.AnnotatedText,
+                    Metadata = addedAnnotation.Metadata
+                } : null
+            };
+
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.AddAnnotationResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    private static DocumentElementInfo ConvertElement(DocumentElement element)
+    {
+        return new DocumentElementInfo
+        {
+            Id = element.Id,
+            Type = element.Type.ToString(),
+            TextPreview = element.TextPreview,
+            Index = element.Index,
+            RowIndex = element.RowIndex,
+            ColumnIndex = element.ColumnIndex,
+            RowSpan = element.RowSpan,
+            ColumnSpan = element.ColumnSpan,
+            Children = element.Children.Select(ConvertElement).ToArray()
+        };
+    }
+
+    private static DocumentElementInfo ConvertElementShallow(DocumentElement element)
+    {
+        // For the lookup dictionary, we don't include children to avoid duplication
+        return new DocumentElementInfo
+        {
+            Id = element.Id,
+            Type = element.Type.ToString(),
+            TextPreview = element.TextPreview,
+            Index = element.Index,
+            RowIndex = element.RowIndex,
+            ColumnIndex = element.ColumnIndex,
+            RowSpan = element.RowSpan,
+            ColumnSpan = element.ColumnSpan,
+            Children = Array.Empty<DocumentElementInfo>()
+        };
     }
 
     /// <summary>

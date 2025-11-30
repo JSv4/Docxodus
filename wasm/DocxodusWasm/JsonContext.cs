@@ -15,9 +15,20 @@ namespace DocxodusWasm;
 [JsonSerializable(typeof(AnnotationInfo))]
 [JsonSerializable(typeof(AnnotationInfo[]))]
 [JsonSerializable(typeof(AnnotationsResponse))]
+[JsonSerializable(typeof(HasAnnotationsResponse))]
+[JsonSerializable(typeof(AddAnnotationBase64Response))]
+[JsonSerializable(typeof(RemoveAnnotationResponse))]
 [JsonSerializable(typeof(AddAnnotationRequest))]
 [JsonSerializable(typeof(AddAnnotationResponse))]
+[JsonSerializable(typeof(AddAnnotationWithTargetRequest))]
+[JsonSerializable(typeof(DocumentStructureResponse))]
+[JsonSerializable(typeof(DocumentElementInfo))]
+[JsonSerializable(typeof(DocumentElementInfo[]))]
+[JsonSerializable(typeof(TableColumnInfoDto))]
+[JsonSerializable(typeof(TableColumnInfoDto[]))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
+[JsonSerializable(typeof(Dictionary<string, DocumentElementInfo>))]
+[JsonSerializable(typeof(Dictionary<string, TableColumnInfoDto>))]
 internal partial class DocxodusJsonContext : JsonSerializerContext
 {
 }
@@ -160,6 +171,33 @@ public class AnnotationsResponse
 }
 
 /// <summary>
+/// Response for checking if document has annotations.
+/// </summary>
+public class HasAnnotationsResponse
+{
+    public bool HasAnnotations { get; set; }
+}
+
+/// <summary>
+/// Response for AddAnnotation with base64-encoded document bytes.
+/// </summary>
+public class AddAnnotationBase64Response
+{
+    public bool Success { get; set; }
+    public string DocumentBytes { get; set; } = "";
+    public AnnotationInfo? Annotation { get; set; }
+}
+
+/// <summary>
+/// Response for RemoveAnnotation with base64-encoded document bytes.
+/// </summary>
+public class RemoveAnnotationResponse
+{
+    public bool Success { get; set; }
+    public string DocumentBytes { get; set; } = "";
+}
+
+/// <summary>
 /// Request to add an annotation.
 /// </summary>
 public class AddAnnotationRequest
@@ -229,4 +267,195 @@ public class AddAnnotationResponse
     /// The annotation that was added.
     /// </summary>
     public AnnotationInfo? Annotation { get; set; }
+}
+
+/// <summary>
+/// Request to add an annotation using flexible targeting.
+/// </summary>
+public class AddAnnotationWithTargetRequest
+{
+    /// <summary>
+    /// Unique annotation ID.
+    /// </summary>
+    public string Id { get; set; } = "";
+
+    /// <summary>
+    /// Label category/type identifier.
+    /// </summary>
+    public string LabelId { get; set; } = "";
+
+    /// <summary>
+    /// Human-readable label text.
+    /// </summary>
+    public string Label { get; set; } = "";
+
+    /// <summary>
+    /// Highlight color in hex format.
+    /// </summary>
+    public string Color { get; set; } = "#FFEB3B";
+
+    /// <summary>
+    /// Author who created the annotation.
+    /// </summary>
+    public string? Author { get; set; }
+
+    /// <summary>
+    /// Custom metadata key-value pairs.
+    /// </summary>
+    public Dictionary<string, string>? Metadata { get; set; }
+
+    // Target specification (one of these should be set):
+
+    /// <summary>
+    /// Target by element ID (e.g., "doc/p-0/r-1").
+    /// </summary>
+    public string? ElementId { get; set; }
+
+    /// <summary>
+    /// Element type for index-based targeting: Paragraph, Run, Table, TableRow, TableCell, TableColumn.
+    /// </summary>
+    public string? ElementType { get; set; }
+
+    /// <summary>
+    /// Paragraph index (0-based).
+    /// </summary>
+    public int? ParagraphIndex { get; set; }
+
+    /// <summary>
+    /// Run index within paragraph (0-based).
+    /// </summary>
+    public int? RunIndex { get; set; }
+
+    /// <summary>
+    /// Table index (0-based).
+    /// </summary>
+    public int? TableIndex { get; set; }
+
+    /// <summary>
+    /// Row index within table (0-based).
+    /// </summary>
+    public int? RowIndex { get; set; }
+
+    /// <summary>
+    /// Cell index within row (0-based).
+    /// </summary>
+    public int? CellIndex { get; set; }
+
+    /// <summary>
+    /// Column index for table column targeting (0-based).
+    /// </summary>
+    public int? ColumnIndex { get; set; }
+
+    /// <summary>
+    /// Text to search for (global or within ElementId).
+    /// </summary>
+    public string? SearchText { get; set; }
+
+    /// <summary>
+    /// Which occurrence of SearchText to target (1-based, default: 1).
+    /// </summary>
+    public int Occurrence { get; set; } = 1;
+
+    /// <summary>
+    /// End paragraph index for range targeting.
+    /// </summary>
+    public int? RangeEndParagraphIndex { get; set; }
+}
+
+/// <summary>
+/// Response containing document structure.
+/// </summary>
+public class DocumentStructureResponse
+{
+    /// <summary>
+    /// Root document element.
+    /// </summary>
+    public DocumentElementInfo Root { get; set; } = new();
+
+    /// <summary>
+    /// All elements indexed by ID for quick lookup.
+    /// </summary>
+    public Dictionary<string, DocumentElementInfo> ElementsById { get; set; } = new();
+
+    /// <summary>
+    /// Table column information indexed by column ID.
+    /// </summary>
+    public Dictionary<string, TableColumnInfoDto> TableColumns { get; set; } = new();
+}
+
+/// <summary>
+/// Information about a document element.
+/// </summary>
+public class DocumentElementInfo
+{
+    /// <summary>
+    /// Unique element ID (path-based, e.g., "doc/tbl-0/tr-1/tc-2").
+    /// </summary>
+    public string Id { get; set; } = "";
+
+    /// <summary>
+    /// Element type: Document, Paragraph, Run, Table, TableRow, TableCell, TableColumn, Hyperlink, Image.
+    /// </summary>
+    public string Type { get; set; } = "";
+
+    /// <summary>
+    /// Preview of text content (first ~100 characters).
+    /// </summary>
+    public string? TextPreview { get; set; }
+
+    /// <summary>
+    /// Position index within parent element.
+    /// </summary>
+    public int Index { get; set; }
+
+    /// <summary>
+    /// Child elements.
+    /// </summary>
+    public DocumentElementInfo[] Children { get; set; } = Array.Empty<DocumentElementInfo>();
+
+    /// <summary>
+    /// For table rows/cells: the row index.
+    /// </summary>
+    public int? RowIndex { get; set; }
+
+    /// <summary>
+    /// For table cells: the column index.
+    /// </summary>
+    public int? ColumnIndex { get; set; }
+
+    /// <summary>
+    /// For table cells: number of rows this cell spans.
+    /// </summary>
+    public int? RowSpan { get; set; }
+
+    /// <summary>
+    /// For table cells: number of columns this cell spans.
+    /// </summary>
+    public int? ColumnSpan { get; set; }
+}
+
+/// <summary>
+/// Information about a table column.
+/// </summary>
+public class TableColumnInfoDto
+{
+    /// <summary>
+    /// ID of the table this column belongs to.
+    /// </summary>
+    public string TableId { get; set; } = "";
+
+    /// <summary>
+    /// Zero-based column index.
+    /// </summary>
+    public int ColumnIndex { get; set; }
+
+    /// <summary>
+    /// IDs of all cells in this column.
+    /// </summary>
+    public string[] CellIds { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Total number of rows in this column.
+    /// </summary>
+    public int RowCount { get; set; }
 }

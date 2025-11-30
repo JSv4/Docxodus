@@ -8,8 +8,10 @@ import {
   getRevisions,
   getAnnotations,
   addAnnotation,
+  addAnnotationWithTarget,
   removeAnnotation,
   hasAnnotations,
+  getDocumentStructure,
   isInitialized,
 } from "./index.js";
 import type {
@@ -20,8 +22,31 @@ import type {
   AddAnnotationRequest,
   AddAnnotationResponse,
   RemoveAnnotationResponse,
+  DocumentStructure,
+  DocumentElement,
+  TableColumnInfo,
+  AnnotationTarget,
+  AddAnnotationWithTargetRequest,
 } from "./types.js";
-import { AnnotationLabelMode } from "./types.js";
+import {
+  AnnotationLabelMode,
+  DocumentElementType,
+  targetElement,
+  targetParagraph,
+  targetParagraphRange,
+  targetRun,
+  targetTable,
+  targetTableRow,
+  targetTableCell,
+  targetTableColumn,
+  targetSearch,
+  targetSearchInElement,
+  findElementById,
+  findElementsByType,
+  getParagraphs,
+  getTables,
+  getTableColumns,
+} from "./types.js";
 import {
   PaginationEngine,
   type PaginationOptions,
@@ -38,8 +63,31 @@ export type {
   AddAnnotationRequest,
   AddAnnotationResponse,
   RemoveAnnotationResponse,
+  DocumentStructure,
+  DocumentElement,
+  TableColumnInfo,
+  AnnotationTarget,
+  AddAnnotationWithTargetRequest,
 };
-export { AnnotationLabelMode };
+export {
+  AnnotationLabelMode,
+  DocumentElementType,
+  targetElement,
+  targetParagraph,
+  targetParagraphRange,
+  targetRun,
+  targetTable,
+  targetTableRow,
+  targetTableCell,
+  targetTableColumn,
+  targetSearch,
+  targetSearchInElement,
+  findElementById,
+  findElementsByType,
+  getParagraphs,
+  getTables,
+  getTableColumns,
+};
 
 export interface UseDocxodusResult {
   /** Whether the WASM runtime is loaded and ready */
@@ -74,6 +122,11 @@ export interface UseDocxodusResult {
     document: File | Uint8Array,
     request: AddAnnotationRequest
   ) => Promise<AddAnnotationResponse>;
+  /** Add an annotation using flexible targeting (element ID, indices, or text search) */
+  addAnnotationWithTarget: (
+    document: File | Uint8Array,
+    request: AddAnnotationWithTargetRequest
+  ) => Promise<AddAnnotationResponse>;
   /** Remove an annotation from a document */
   removeAnnotation: (
     document: File | Uint8Array,
@@ -81,6 +134,8 @@ export interface UseDocxodusResult {
   ) => Promise<RemoveAnnotationResponse>;
   /** Check if a document has any annotations */
   hasAnnotations: (document: File | Uint8Array) => Promise<boolean>;
+  /** Get the document structure for element-based annotation targeting */
+  getDocumentStructure: (document: File | Uint8Array) => Promise<DocumentStructure>;
 }
 
 /**
@@ -240,6 +295,26 @@ export function useDocxodus(wasmBasePath?: string): UseDocxodusResult {
     [isReady]
   );
 
+  const addAnnotationWithTargetCallback = useCallback(
+    async (document: File | Uint8Array, request: AddAnnotationWithTargetRequest) => {
+      if (!isReady) {
+        throw new Error("Docxodus not initialized");
+      }
+      return addAnnotationWithTarget(document, request);
+    },
+    [isReady]
+  );
+
+  const getDocumentStructureCallback = useCallback(
+    async (document: File | Uint8Array) => {
+      if (!isReady) {
+        throw new Error("Docxodus not initialized");
+      }
+      return getDocumentStructure(document);
+    },
+    [isReady]
+  );
+
   return {
     isReady,
     isLoading,
@@ -250,8 +325,10 @@ export function useDocxodus(wasmBasePath?: string): UseDocxodusResult {
     getRevisions: getRevisionsCallback,
     getAnnotations: getAnnotationsCallback,
     addAnnotation: addAnnotationCallback,
+    addAnnotationWithTarget: addAnnotationWithTargetCallback,
     removeAnnotation: removeAnnotationCallback,
     hasAnnotations: hasAnnotationsCallback,
+    getDocumentStructure: getDocumentStructureCallback,
   };
 }
 
@@ -1105,4 +1182,165 @@ export function AnnotatedDocument({
     style: containerStyle,
     dangerouslySetInnerHTML: { __html: html },
   });
+}
+
+/**
+ * Result of the useDocumentStructure hook.
+ */
+export interface UseDocumentStructureResult {
+  /** The document structure tree */
+  structure: DocumentStructure | null;
+  /** Whether the structure is being loaded */
+  isLoading: boolean;
+  /** Error from loading the structure */
+  error: Error | null;
+  /** Reload the document structure */
+  reload: () => Promise<void>;
+  /** Find an element by ID */
+  findById: (elementId: string) => DocumentElement | undefined;
+  /** Find all elements of a specific type */
+  findByType: (type: DocumentElementType | string) => DocumentElement[];
+  /** Get all paragraphs */
+  paragraphs: DocumentElement[];
+  /** Get all tables */
+  tables: DocumentElement[];
+  /** Get columns for a specific table */
+  getColumns: (tableId: string) => TableColumnInfo[];
+}
+
+/**
+ * React hook for exploring document structure for element-based annotation targeting.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param wasmBasePath - Optional custom path to WASM files
+ * @returns Document structure state and navigation helpers
+ *
+ * @example
+ * ```tsx
+ * function DocumentExplorer({ docxFile }: { docxFile: File }) {
+ *   const {
+ *     structure,
+ *     isLoading,
+ *     paragraphs,
+ *     tables,
+ *     findById,
+ *     getColumns
+ *   } = useDocumentStructure(docxFile);
+ *
+ *   if (isLoading || !structure) {
+ *     return <div>Loading structure...</div>;
+ *   }
+ *
+ *   return (
+ *     <div>
+ *       <h2>Document Structure</h2>
+ *       <h3>Paragraphs ({paragraphs.length})</h3>
+ *       <ul>
+ *         {paragraphs.map(p => (
+ *           <li key={p.id}>
+ *             {p.id}: {p.textPreview}
+ *           </li>
+ *         ))}
+ *       </ul>
+ *       <h3>Tables ({tables.length})</h3>
+ *       {tables.map(t => (
+ *         <div key={t.id}>
+ *           <h4>{t.id}</h4>
+ *           <p>Columns: {getColumns(t.id).length}</p>
+ *         </div>
+ *       ))}
+ *     </div>
+ *   );
+ * }
+ * ```
+ */
+export function useDocumentStructure(
+  document: File | Uint8Array | null,
+  wasmBasePath?: string
+): UseDocumentStructureResult {
+  const docxodus = useDocxodus(wasmBasePath);
+  const [structure, setStructure] = useState<DocumentStructure | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+
+  // Load structure when document or WASM is ready
+  const reload = useCallback(async () => {
+    if (!docxodus.isReady || !document) {
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const struct = await docxodus.getDocumentStructure(document);
+      setStructure(struct);
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [docxodus, document]);
+
+  // Auto-load when document changes
+  useEffect(() => {
+    if (document && docxodus.isReady) {
+      reload();
+    }
+  }, [document, docxodus.isReady, reload]);
+
+  // Clear structure when document is removed
+  useEffect(() => {
+    if (!document) {
+      setStructure(null);
+      setError(null);
+    }
+  }, [document]);
+
+  // Helper functions that work with current structure
+  const findById = useCallback(
+    (elementId: string): DocumentElement | undefined => {
+      if (!structure) return undefined;
+      return findElementById(structure, elementId);
+    },
+    [structure]
+  );
+
+  const findByType = useCallback(
+    (type: DocumentElementType | string): DocumentElement[] => {
+      if (!structure) return [];
+      return findElementsByType(structure, type);
+    },
+    [structure]
+  );
+
+  const paragraphs = useMemo(() => {
+    if (!structure) return [];
+    return getParagraphs(structure);
+  }, [structure]);
+
+  const tables = useMemo(() => {
+    if (!structure) return [];
+    return getTables(structure);
+  }, [structure]);
+
+  const getColumns = useCallback(
+    (tableId: string): TableColumnInfo[] => {
+      if (!structure) return [];
+      return getTableColumns(structure, tableId);
+    },
+    [structure]
+  );
+
+  return {
+    structure,
+    isLoading,
+    error,
+    reload,
+    findById,
+    findByType,
+    paragraphs,
+    tables,
+    getColumns,
+  };
 }

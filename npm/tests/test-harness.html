@@ -235,6 +235,52 @@
                 } catch (e) {
                     return { error: { message: e.message } };
                 }
+            },
+
+            // Get document structure for element-based annotation targeting
+            getDocumentStructure: function(bytes) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.GetDocumentStructure(bytes);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    return {
+                        root: parsed.Root,
+                        elementsById: parsed.ElementsById,
+                        tableColumns: parsed.TableColumns
+                    };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Add annotation with flexible targeting
+            addAnnotationWithTarget: function(bytes, request) {
+                try {
+                    const requestJson = JSON.stringify(request);
+                    const result = window.Docxodus.DocumentConverter.AddAnnotationWithTarget(bytes, requestJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    // Decode base64 document bytes
+                    let documentBytes = null;
+                    if (parsed.DocumentBytes) {
+                        const binaryString = atob(parsed.DocumentBytes);
+                        documentBytes = new Uint8Array(binaryString.length);
+                        for (let i = 0; i < binaryString.length; i++) {
+                            documentBytes[i] = binaryString.charCodeAt(i);
+                        }
+                    }
+                    return {
+                        success: documentBytes != null,  // Success if we have document bytes
+                        documentBytes: documentBytes,
+                        annotation: parsed.Annotation
+                    };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
             }
         };
 

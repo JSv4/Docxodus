@@ -205,6 +205,42 @@ async function hasAnnotationsInDoc(
   }, Array.from(bytes as any));
 }
 
+// Helper to get document structure
+async function getDocumentStructure(
+  page: Page,
+  bytes: Uint8Array
+): Promise<{ root?: any; elementsById?: any; tableColumns?: any; error?: any }> {
+  return await page.evaluate((bytesArray) => {
+    return (window as any).DocxodusTests.getDocumentStructure(new Uint8Array(bytesArray));
+  }, Array.from(bytes));
+}
+
+// Helper to add annotation with flexible targeting
+async function addAnnotationWithTarget(
+  page: Page,
+  bytes: Uint8Array,
+  request: any
+): Promise<{ success?: boolean; documentBytes?: number[]; annotation?: any; error?: any }> {
+  const result = await page.evaluate(
+    ([bytesArray, req]) => {
+      const result = (window as any).DocxodusTests.addAnnotationWithTarget(
+        new Uint8Array(bytesArray),
+        req
+      );
+      if (result.documentBytes) {
+        return {
+          success: result.success,
+          documentBytes: Array.from(result.documentBytes),
+          annotation: result.annotation
+        };
+      }
+      return result;
+    },
+    [Array.from(bytes), request]
+  );
+  return result;
+}
+
 test.describe('Docxodus WASM Tests', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/test-harness.html');
@@ -1081,6 +1117,347 @@ test.describe('Docxodus WASM Tests', () => {
       expect(htmlResult.html).not.toContain('data-annotation-id');
 
       console.log('Disabled annotation rendering produces clean HTML');
+    });
+  });
+
+  test.describe('Document Structure Tests', () => {
+    // Use a simple document for structure tests
+    const testDoc = 'HC006-Test-01.docx';
+    // Use a document with tables for table structure tests
+    const tableDoc = 'HC001-5DayTourPlanTemplate.docx';
+
+    test('can get document structure', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await getDocumentStructure(page, bytes);
+
+      expect(result.error).toBeUndefined();
+      expect(result.root).toBeDefined();
+      expect(result.root.Id).toBe('doc');
+      expect(result.root.Type).toBe('Document');
+      expect(result.elementsById).toBeDefined();
+
+      console.log('Document structure retrieved successfully');
+    });
+
+    test('structure contains paragraphs with correct IDs', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await getDocumentStructure(page, bytes);
+
+      expect(result.error).toBeUndefined();
+
+      // Find paragraphs by checking element type, not just ID pattern
+      // (IDs containing /p- might be part of longer paths like doc/p-0/hl-0/r-0)
+      const paragraphIds = Object.keys(result.elementsById!).filter(id => {
+        const element = result.elementsById![id];
+        return element.Type === 'Paragraph';
+      });
+      expect(paragraphIds.length).toBeGreaterThan(0);
+
+      // Verify all paragraph IDs end with /p-N and start with doc/
+      for (const id of paragraphIds) {
+        expect(id).toMatch(/\/p-\d+$/);  // Should end with /p-N
+        expect(id).toMatch(/^doc\//);   // Should start with doc/
+      }
+
+      console.log(`Found ${paragraphIds.length} paragraphs with correct ID format`);
+    });
+
+    test('structure contains table information', async ({ page }) => {
+      const bytes = readTestFile(tableDoc);
+      const result = await getDocumentStructure(page, bytes);
+
+      expect(result.error).toBeUndefined();
+
+      // Find tables in elementsById
+      const tableIds = Object.keys(result.elementsById!).filter(id => id.match(/\/tbl-\d+$/));
+
+      if (tableIds.length > 0) {
+        // Verify table structure
+        const tableId = tableIds[0];
+        const table = result.elementsById![tableId];
+        expect(table.Type).toBe('Table');
+
+        // Check for table column info
+        expect(result.tableColumns).toBeDefined();
+        const columnKeys = Object.keys(result.tableColumns!);
+        expect(columnKeys.length).toBeGreaterThan(0);
+
+        // Verify column format
+        for (const colKey of columnKeys) {
+          const col = result.tableColumns![colKey];
+          expect(col.TableId).toBeDefined();
+          expect(col.ColumnIndex).toBeDefined();
+          expect(col.CellIds).toBeDefined();
+        }
+
+        console.log(`Found ${tableIds.length} tables with ${columnKeys.length} columns`);
+      } else {
+        console.log('No tables found in test document');
+      }
+    });
+
+    test('structure contains rows and cells for tables', async ({ page }) => {
+      const bytes = readTestFile(tableDoc);
+      const result = await getDocumentStructure(page, bytes);
+
+      expect(result.error).toBeUndefined();
+
+      // Find table rows by checking element type, not ID pattern
+      // (IDs containing /tr- might be part of longer paths like doc/tbl-0/tr-1/tc-0/p-0)
+      const rowIds = Object.keys(result.elementsById!).filter(id => {
+        const element = result.elementsById![id];
+        return element.Type === 'TableRow';
+      });
+      // Find table cells by checking element type
+      const cellIds = Object.keys(result.elementsById!).filter(id => {
+        const element = result.elementsById![id];
+        return element.Type === 'TableCell';
+      });
+
+      // Find tables
+      const tableIds = Object.keys(result.elementsById!).filter(id => id.match(/\/tbl-\d+$/));
+
+      if (tableIds.length > 0) {
+        expect(rowIds.length).toBeGreaterThan(0);
+        expect(cellIds.length).toBeGreaterThan(0);
+
+        // Verify row structure
+        const rowId = rowIds[0];
+        const row = result.elementsById![rowId];
+        expect(row.Type).toBe('TableRow');
+        // RowIndex might be null for some rows
+        expect(typeof row.RowIndex === 'number' || row.RowIndex === null || row.RowIndex === undefined).toBe(true);
+
+        // Verify cell structure
+        const cellId = cellIds[0];
+        const cell = result.elementsById![cellId];
+        expect(cell.Type).toBe('TableCell');
+
+        console.log(`Found ${tableIds.length} tables, ${rowIds.length} rows and ${cellIds.length} cells`);
+      } else {
+        console.log('No tables found in test document');
+      }
+    });
+
+    test('element IDs are path-based and deterministic', async ({ page }) => {
+      const bytes = readTestFile(tableDoc);
+
+      // Get structure twice to verify determinism
+      const result1 = await getDocumentStructure(page, bytes);
+      const result2 = await getDocumentStructure(page, bytes);
+
+      expect(result1.error).toBeUndefined();
+      expect(result2.error).toBeUndefined();
+
+      // Verify same element IDs
+      const ids1 = Object.keys(result1.elementsById!).sort();
+      const ids2 = Object.keys(result2.elementsById!).sort();
+
+      expect(ids1).toEqual(ids2);
+
+      console.log('Element IDs are deterministic');
+    });
+  });
+
+  test.describe('Element-based Annotation Targeting Tests', () => {
+    // Use a simple document for targeting tests
+    const testDoc = 'HC006-Test-01.docx';
+
+    test('can annotate a paragraph by element ID', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // First get the structure to find a paragraph ID (top-level or nested)
+      const structure = await getDocumentStructure(page, bytes);
+      expect(structure.error).toBeUndefined();
+
+      // Find any paragraph (could be top-level like doc/p-0 or nested like doc/tbl-0/tr-0/tc-0/p-0)
+      const paragraphIds = Object.keys(structure.elementsById!).filter(id => id.includes('/p-'));
+      expect(paragraphIds.length).toBeGreaterThan(0);
+
+      // Prefer a top-level paragraph if available, otherwise use the first one
+      const topLevelParagraphs = paragraphIds.filter(id => id.match(/^doc\/p-\d+$/));
+      const targetId = topLevelParagraphs.length > 0 ? topLevelParagraphs[0] : paragraphIds[0];
+
+      // Add annotation targeting this element
+      const addResult = await addAnnotationWithTarget(page, bytes, {
+        Id: 'element-id-test',
+        LabelId: 'PARAGRAPH',
+        Label: 'Targeted Paragraph',
+        Color: '#4CAF50',
+        ElementId: targetId
+      });
+
+      expect(addResult.error).toBeUndefined();
+      expect(addResult.success).toBe(true);
+      expect(addResult.documentBytes).toBeDefined();
+      expect(addResult.annotation).toBeDefined();
+      expect(addResult.annotation.Id).toBe('element-id-test');
+
+      console.log(`Annotated paragraph ${targetId} by element ID`);
+    });
+
+    test('can annotate a paragraph by index', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Add annotation targeting paragraph by index
+      const addResult = await addAnnotationWithTarget(page, bytes, {
+        Id: 'paragraph-index-test',
+        LabelId: 'PARA_IDX',
+        Label: 'First Paragraph',
+        Color: '#2196F3',
+        ElementType: 'Paragraph',
+        ParagraphIndex: 0
+      });
+
+      expect(addResult.error).toBeUndefined();
+      expect(addResult.success).toBe(true);
+      expect(addResult.documentBytes).toBeDefined();
+      expect(addResult.annotation).toBeDefined();
+
+      // Verify annotation was added
+      const getResult = await getAnnotationsFromDoc(
+        page,
+        new Uint8Array(addResult.documentBytes!)
+      );
+
+      expect(getResult.error).toBeUndefined();
+      expect(getResult.annotations!.length).toBe(1);
+      expect(getResult.annotations![0].Id).toBe('paragraph-index-test');
+
+      console.log('Annotated paragraph by index');
+    });
+
+    test('can annotate using text search', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Add annotation using text search
+      const addResult = await addAnnotationWithTarget(page, bytes, {
+        Id: 'text-search-test',
+        LabelId: 'SEARCH',
+        Label: 'Found Text',
+        Color: '#FF9800',
+        SearchText: 'the',
+        Occurrence: 1
+      });
+
+      expect(addResult.error).toBeUndefined();
+      expect(addResult.success).toBe(true);
+      expect(addResult.documentBytes).toBeDefined();
+
+      console.log('Annotated using text search');
+    });
+
+    test('can annotate a paragraph range', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Get structure to verify we have enough top-level paragraphs
+      const structure = await getDocumentStructure(page, bytes);
+      const topLevelParagraphs = Object.keys(structure.elementsById!).filter(id => id.match(/^doc\/p-\d+$/));
+      const paragraphCount = topLevelParagraphs.length;
+
+      if (paragraphCount >= 2) {
+        // Add annotation spanning paragraphs 0-1
+        const addResult = await addAnnotationWithTarget(page, bytes, {
+          Id: 'range-test',
+          LabelId: 'RANGE',
+          Label: 'Paragraph Range',
+          Color: '#9C27B0',
+          ElementType: 'Paragraph',
+          ParagraphIndex: 0,
+          RangeEndParagraphIndex: 1
+        });
+
+        expect(addResult.error).toBeUndefined();
+        expect(addResult.success).toBe(true);
+        expect(addResult.documentBytes).toBeDefined();
+
+        console.log('Annotated paragraph range 0-1');
+      } else {
+        console.log(`Skipped range test: only ${paragraphCount} paragraphs`);
+      }
+    });
+
+    test('annotation renders correctly when targeting by element ID', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Get structure to find first paragraph (prefer top-level)
+      const structure = await getDocumentStructure(page, bytes);
+      const allParagraphIds = Object.keys(structure.elementsById!).filter(id => id.includes('/p-'));
+      const topLevelParagraphs = allParagraphIds.filter(id => id.match(/^doc\/p-\d+$/));
+      const targetId = topLevelParagraphs.length > 0 ? topLevelParagraphs[0] : allParagraphIds[0];
+
+      // Add annotation
+      const addResult = await addAnnotationWithTarget(page, bytes, {
+        Id: 'render-element-test',
+        LabelId: 'RENDER',
+        Label: 'Rendered Element',
+        Color: '#E91E63',
+        ElementId: targetId
+      });
+
+      expect(addResult.error).toBeUndefined();
+
+      // Convert to HTML with annotations
+      const htmlResult = await convertToHtmlWithAnnotations(
+        page,
+        new Uint8Array(addResult.documentBytes!),
+        true,
+        0
+      );
+
+      expect(htmlResult.error).toBeUndefined();
+      expect(htmlResult.html).toContain('annot-highlight');
+      expect(htmlResult.html).toContain('data-annotation-id="render-element-test"');
+      expect(htmlResult.html).toContain('Rendered Element');
+
+      console.log('Element-targeted annotation renders correctly');
+    });
+
+    test('multiple targeting methods work together', async ({ page }) => {
+      let bytes = readTestFile(testDoc);
+
+      // Get structure (prefer top-level paragraphs)
+      const structure = await getDocumentStructure(page, bytes);
+      const allParagraphIds = Object.keys(structure.elementsById!).filter(id => id.includes('/p-'));
+      const topLevelParagraphs = allParagraphIds.filter(id => id.match(/^doc\/p-\d+$/));
+      const paragraphIds = topLevelParagraphs.length > 0 ? topLevelParagraphs : allParagraphIds;
+
+      // Add annotation by element ID
+      const add1 = await addAnnotationWithTarget(page, bytes, {
+        Id: 'multi-1',
+        LabelId: 'TYPE_A',
+        Label: 'By Element ID',
+        Color: '#4CAF50',
+        ElementId: paragraphIds[0]
+      });
+
+      expect(add1.error).toBeUndefined();
+      bytes = new Uint8Array(add1.documentBytes!);
+
+      // Add annotation by text search
+      const add2 = await addAnnotationWithTarget(page, bytes, {
+        Id: 'multi-2',
+        LabelId: 'TYPE_B',
+        Label: 'By Text Search',
+        Color: '#2196F3',
+        SearchText: 'and',
+        Occurrence: 1
+      });
+
+      expect(add2.error).toBeUndefined();
+      bytes = new Uint8Array(add2.documentBytes!);
+
+      // Verify both annotations exist
+      const getResult = await getAnnotationsFromDoc(page, bytes);
+
+      expect(getResult.error).toBeUndefined();
+      expect(getResult.annotations!.length).toBe(2);
+
+      const ids = getResult.annotations!.map((a: any) => a.Id);
+      expect(ids).toContain('multi-1');
+      expect(ids).toContain('multi-2');
+
+      console.log('Multiple targeting methods work together');
     });
   });
 });
