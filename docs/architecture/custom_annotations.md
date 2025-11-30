@@ -206,6 +206,12 @@ namespace Docxodus
 
         /// <summary>End run index within end paragraph (0-based, inclusive).</summary>
         public int? EndRunIndex { get; set; }
+
+        // Factory methods for creating range specifications
+        public static AnnotationRange FromSearch(string searchText, int occurrence = 1);
+        public static AnnotationRange FromBookmark(string bookmarkName);
+        public static AnnotationRange FromParagraphs(int startIndex, int endIndex);
+        public static AnnotationRange FromRuns(int startParaIdx, int startRunIdx, int endParaIdx, int endRunIdx);
     }
 }
 ```
@@ -272,6 +278,19 @@ namespace Docxodus
         /// Get the text content within an annotation's range.
         /// </summary>
         public static string GetAnnotatedText(WmlDocument doc, string annotationId);
+
+        /// <summary>
+        /// Get the document structure for element selection.
+        /// </summary>
+        public static DocumentStructure GetDocumentStructure(WmlDocument doc);
+
+        /// <summary>
+        /// Add an annotation using flexible element targeting.
+        /// </summary>
+        public static WmlDocument AddAnnotation(
+            WmlDocument doc,
+            DocumentAnnotation annotation,
+            AnnotationTarget target);
     }
 }
 ```
@@ -730,17 +749,17 @@ namespace Docxodus
     /// </summary>
     public class DocumentElement
     {
-        public string Id { get; set; }
-        public DocumentElementType Type { get; set; }
-        public string? TextPreview { get; set; }  // First ~100 chars
-        public int Index { get; set; }            // Position in parent
-        public List<DocumentElement> Children { get; set; }
+        public string Id { get; init; }
+        public DocumentElementType Type { get; init; }
+        public string? TextPreview { get; init; }  // First ~100 chars
+        public int Index { get; init; }            // Position in parent
+        public List<DocumentElement> Children { get; init; }
 
         // Table-specific properties
-        public int? RowIndex { get; set; }
-        public int? ColumnIndex { get; set; }
-        public int? RowSpan { get; set; }
-        public int? ColumnSpan { get; set; }
+        public int? RowIndex { get; init; }
+        public int? ColumnIndex { get; init; }
+        public int? RowSpan { get; init; }
+        public int? ColumnSpan { get; init; }
     }
 
     /// <summary>
@@ -748,20 +767,32 @@ namespace Docxodus
     /// </summary>
     public class TableColumnInfo
     {
-        public string TableId { get; set; }
-        public int ColumnIndex { get; set; }
-        public List<string> CellIds { get; set; }
-        public int RowCount { get; set; }
+        public string TableId { get; init; }
+        public int ColumnIndex { get; init; }
+        public List<string> CellIds { get; init; }
+        public int RowCount => CellIds.Count;  // Computed property
     }
 
     /// <summary>
-    /// Complete document structure.
+    /// Complete document structure with lookup utilities.
     /// </summary>
     public class DocumentStructure
     {
-        public DocumentElement Root { get; set; }
-        public Dictionary<string, DocumentElement> ElementsById { get; set; }
-        public Dictionary<string, TableColumnInfo> TableColumns { get; set; }
+        public DocumentElement Root { get; init; }
+        public Dictionary<string, DocumentElement> ElementsById { get; init; }
+        public Dictionary<string, TableColumnInfo> TableColumns { get; init; }
+
+        /// <summary>Find element by ID.</summary>
+        public DocumentElement? FindById(string id);
+
+        /// <summary>Find all elements of a specific type.</summary>
+        public IEnumerable<DocumentElement> FindByType(DocumentElementType type);
+
+        /// <summary>Search for elements containing specific text.</summary>
+        public IEnumerable<DocumentElement> Search(string text);
+
+        /// <summary>Get column information for a specific table.</summary>
+        public IEnumerable<TableColumnInfo> GetTableColumns(string tableId);
     }
 
     /// <summary>
@@ -865,8 +896,8 @@ public class AnnotationTarget
     public string? SearchText { get; set; }
     public int Occurrence { get; set; } = 1;
 
-    // Paragraph range targeting
-    public int? RangeEndParagraphIndex { get; set; }
+    // Range targeting (for spanning multiple elements)
+    public AnnotationTarget? RangeEnd { get; set; }
 
     // Factory methods
     public static AnnotationTarget Element(string elementId);
@@ -877,7 +908,7 @@ public class AnnotationTarget
     public static AnnotationTarget TableRow(int tableIndex, int rowIndex);
     public static AnnotationTarget TableCell(int tableIndex, int rowIndex, int cellIndex);
     public static AnnotationTarget TableColumn(int tableIndex, int columnIndex);
-    public static AnnotationTarget TextSearch(string text, int occurrence = 1);
+    public static AnnotationTarget Search(string text, int occurrence = 1);
     public static AnnotationTarget SearchInElement(string elementId, string text, int occurrence = 1);
 }
 ```
