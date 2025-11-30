@@ -316,6 +316,10 @@ Important: CSS `pt` units render at 96/72 ratio to pixels, so setting `width: 10
 4. **No column support**: Multi-column layouts are flattened to single column
 5. **Browser-dependent measurement**: Content measurement depends on browser rendering
 
+## Related Documentation
+
+- [Paginated Headers and Footers](paginated_headers_footers.md) - How headers and footers are rendered within paginated pages
+
 ## Future Enhancements
 
 1. **Block splitting**: Split oversized paragraphs/tables across pages

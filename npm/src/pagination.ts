@@ -25,7 +25,34 @@ export interface PageDimensions {
   marginBottom: number;
   /** Left margin in points */
   marginLeft: number;
+  /** Header distance from top of page in points */
+  headerHeight: number;
+  /** Footer distance from bottom of page in points */
+  footerHeight: number;
 }
+
+/**
+ * Headers and footers for a specific section.
+ */
+export interface SectionHeaderFooter {
+  /** Default header (used for odd pages or all pages) */
+  headerDefault?: HTMLElement;
+  /** First page header */
+  headerFirst?: HTMLElement;
+  /** Even page header */
+  headerEven?: HTMLElement;
+  /** Default footer (used for odd pages or all pages) */
+  footerDefault?: HTMLElement;
+  /** First page footer */
+  footerFirst?: HTMLElement;
+  /** Even page footer */
+  footerEven?: HTMLElement;
+}
+
+/**
+ * Registry of headers and footers by section index.
+ */
+export type HeaderFooterRegistry = Map<number, SectionHeaderFooter>;
 
 /**
  * A measured content block with metadata for pagination decisions.
@@ -106,6 +133,9 @@ function ptToPx(pt: number): number {
   return pt / 0.75;
 }
 
+// Default header/footer distance (0.5 inch)
+const DEFAULT_HEADER_FOOTER_HEIGHT = 36;
+
 /**
  * Parses page dimensions from a section element's data attributes.
  */
@@ -118,6 +148,8 @@ function parseDimensions(section: HTMLElement): PageDimensions {
   const marginRight = parseFloat(section.dataset.marginRight || "") || DEFAULT_MARGIN;
   const marginBottom = parseFloat(section.dataset.marginBottom || "") || DEFAULT_MARGIN;
   const marginLeft = parseFloat(section.dataset.marginLeft || "") || DEFAULT_MARGIN;
+  const headerHeight = parseFloat(section.dataset.headerHeight || "") || DEFAULT_HEADER_FOOTER_HEIGHT;
+  const footerHeight = parseFloat(section.dataset.footerHeight || "") || DEFAULT_HEADER_FOOTER_HEIGHT;
 
   return {
     pageWidth,
@@ -128,6 +160,8 @@ function parseDimensions(section: HTMLElement): PageDimensions {
     marginRight,
     marginBottom,
     marginLeft,
+    headerHeight,
+    footerHeight,
   };
 }
 
@@ -142,6 +176,7 @@ export class PaginationEngine {
   private cssPrefix: string;
   private showPageNumbers: boolean;
   private pageGap: number;
+  private hfRegistry: HeaderFooterRegistry;
 
   /**
    * Creates a new pagination engine.
@@ -175,6 +210,7 @@ export class PaginationEngine {
     this.cssPrefix = options.cssPrefix ?? "page-";
     this.showPageNumbers = options.showPageNumbers ?? true;
     this.pageGap = options.pageGap ?? 20;
+    this.hfRegistry = new Map();
   }
 
   /**
@@ -185,6 +221,9 @@ export class PaginationEngine {
   paginate(): PaginationResult {
     const pages: PageInfo[] = [];
     let pageNumber = 1;
+
+    // Parse the header/footer registry if present
+    this.hfRegistry = this.parseHeaderFooterRegistry();
 
     // Find all section containers
     const sections = this.stagingElement.querySelectorAll<HTMLElement>(
@@ -271,6 +310,104 @@ export class PaginationEngine {
   }
 
   /**
+   * Parses the header/footer registry from the staging element.
+   */
+  private parseHeaderFooterRegistry(): HeaderFooterRegistry {
+    const registry: HeaderFooterRegistry = new Map();
+    const registryEl = this.stagingElement.querySelector("#pagination-hf-registry");
+
+    if (!registryEl) return registry;
+
+    const entries = Array.from(registryEl.querySelectorAll<HTMLElement>("[data-section][data-hf-type]"));
+
+    for (const entry of entries) {
+      const sectionIndex = parseInt(entry.dataset.section || "0", 10);
+      const hfType = entry.dataset.hfType as string;
+
+      if (!registry.has(sectionIndex)) {
+        registry.set(sectionIndex, {});
+      }
+
+      const section = registry.get(sectionIndex)!;
+      // Clone the first child element (the actual header/footer content)
+      const content = entry.cloneNode(true) as HTMLElement;
+
+      switch (hfType) {
+        case "header-default":
+          section.headerDefault = content;
+          break;
+        case "header-first":
+          section.headerFirst = content;
+          break;
+        case "header-even":
+          section.headerEven = content;
+          break;
+        case "footer-default":
+          section.footerDefault = content;
+          break;
+        case "footer-first":
+          section.footerFirst = content;
+          break;
+        case "footer-even":
+          section.footerEven = content;
+          break;
+      }
+    }
+
+    return registry;
+  }
+
+  /**
+   * Selects the appropriate header for a page based on section, page position, and page number.
+   */
+  private selectHeader(
+    sectionIndex: number,
+    pageInSection: number,
+    globalPageNumber: number
+  ): HTMLElement | undefined {
+    const sectionHf = this.hfRegistry.get(sectionIndex);
+    if (!sectionHf) return undefined;
+
+    // First page of section uses first header if available
+    if (pageInSection === 1 && sectionHf.headerFirst) {
+      return sectionHf.headerFirst;
+    }
+
+    // Even pages use even header if available
+    if (globalPageNumber % 2 === 0 && sectionHf.headerEven) {
+      return sectionHf.headerEven;
+    }
+
+    // Default (odd) pages
+    return sectionHf.headerDefault;
+  }
+
+  /**
+   * Selects the appropriate footer for a page based on section, page position, and page number.
+   */
+  private selectFooter(
+    sectionIndex: number,
+    pageInSection: number,
+    globalPageNumber: number
+  ): HTMLElement | undefined {
+    const sectionHf = this.hfRegistry.get(sectionIndex);
+    if (!sectionHf) return undefined;
+
+    // First page of section uses first footer if available
+    if (pageInSection === 1 && sectionHf.footerFirst) {
+      return sectionHf.footerFirst;
+    }
+
+    // Even pages use even footer if available
+    if (globalPageNumber % 2 === 0 && sectionHf.footerEven) {
+      return sectionHf.footerEven;
+    }
+
+    // Default (odd) pages
+    return sectionHf.footerDefault;
+  }
+
+  /**
    * Flows measured blocks into page containers.
    */
   private flowToPages(
@@ -283,16 +420,19 @@ export class PaginationEngine {
     let currentContent: HTMLElement[] = [];
     let remainingHeight = dims.contentHeight;
     let pageNumber = startPageNumber;
+    // Track page number within this section for first-page header/footer selection
+    let pageInSection = 1;
     // Track the previous block's bottom margin for margin collapsing
     let prevMarginBottomPt = 0;
 
     const finishPage = () => {
       if (currentContent.length === 0) return;
 
-      const page = this.createPage(dims, pageNumber, sectionIndex, currentContent);
+      const page = this.createPage(dims, pageNumber, sectionIndex, currentContent, pageInSection);
       pages.push(page);
 
       pageNumber++;
+      pageInSection++;
       currentContent = [];
       remainingHeight = dims.contentHeight;
       prevMarginBottomPt = 0; // Reset margin tracking for new page
@@ -372,7 +512,8 @@ export class PaginationEngine {
     dims: PageDimensions,
     pageNumber: number,
     sectionIndex: number,
-    content: HTMLElement[]
+    content: HTMLElement[],
+    pageInSection: number
   ): PageInfo {
     // Create page box at full size, then scale the entire box
     // This ensures proper clipping and consistent scaling of all elements
@@ -407,6 +548,23 @@ export class PaginationEngine {
     pageBox.dataset.pageNumber = String(pageNumber);
     pageBox.dataset.sectionIndex = String(sectionIndex);
 
+    // Add header if available for this section/page
+    const headerSource = this.selectHeader(sectionIndex, pageInSection, pageNumber);
+    if (headerSource) {
+      const headerDiv = document.createElement("div");
+      headerDiv.className = `${this.cssPrefix}header`;
+      headerDiv.style.position = "absolute";
+      headerDiv.style.top = `${dims.headerHeight}pt`;
+      headerDiv.style.left = `${dims.marginLeft}pt`;
+      headerDiv.style.width = `${dims.contentWidth}pt`;
+      headerDiv.style.overflow = "hidden";
+      // Clone the header content (skip the wrapper div's data attributes)
+      for (const child of Array.from(headerSource.childNodes)) {
+        headerDiv.appendChild(child.cloneNode(true));
+      }
+      pageBox.appendChild(headerDiv);
+    }
+
     // Create content area at full page margins and dimensions
     const contentArea = document.createElement("div");
     contentArea.className = `${this.cssPrefix}content`;
@@ -424,7 +582,24 @@ export class PaginationEngine {
 
     pageBox.appendChild(contentArea);
 
-    // Add page number
+    // Add footer if available for this section/page
+    const footerSource = this.selectFooter(sectionIndex, pageInSection, pageNumber);
+    if (footerSource) {
+      const footerDiv = document.createElement("div");
+      footerDiv.className = `${this.cssPrefix}footer`;
+      footerDiv.style.position = "absolute";
+      footerDiv.style.bottom = `${dims.footerHeight}pt`;
+      footerDiv.style.left = `${dims.marginLeft}pt`;
+      footerDiv.style.width = `${dims.contentWidth}pt`;
+      footerDiv.style.overflow = "hidden";
+      // Clone the footer content (skip the wrapper div's data attributes)
+      for (const child of Array.from(footerSource.childNodes)) {
+        footerDiv.appendChild(child.cloneNode(true));
+      }
+      pageBox.appendChild(footerDiv);
+    }
+
+    // Add page number (will be hidden by CSS if document has footer)
     if (this.showPageNumbers) {
       const pageNum = document.createElement("div");
       pageNum.className = `${this.cssPrefix}number`;
