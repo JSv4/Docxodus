@@ -460,6 +460,102 @@ private createPage(
 
 The feature activates automatically when both existing settings are enabled. No new configuration options are needed.
 
+## Dynamic Header/Footer Heights
+
+Word documents can have headers/footers whose content exceeds the margin area. For example, a first-page header with a multi-paragraph legal disclaimer may be much taller than the standard top margin.
+
+### Problem
+
+If headers are constrained to the margin height:
+- Content gets clipped when header is larger than margin
+- Body content positioning doesn't account for actual header size
+- Page breaks are calculated incorrectly
+
+### Solution: Pre-measured Heights
+
+The pagination engine measures all headers/footers during initialization and uses these measurements throughout:
+
+```typescript
+interface SectionHeaderFooter {
+  // Element references
+  headerDefault?: HTMLElement;
+  headerFirst?: HTMLElement;
+  headerEven?: HTMLElement;
+  footerDefault?: HTMLElement;
+  footerFirst?: HTMLElement;
+  footerEven?: HTMLElement;
+
+  // Pre-measured heights (populated during registry parsing)
+  headerDefaultHeight?: number;
+  headerFirstHeight?: number;
+  headerEvenHeight?: number;
+  footerDefaultHeight?: number;
+  footerFirstHeight?: number;
+  footerEvenHeight?: number;
+}
+```
+
+### Height Calculation
+
+For any page position, the effective heights are computed deterministically:
+
+```typescript
+private getEffectiveHeights(
+  dims: PageDimensions,
+  sectionIndex: number,
+  pageInSection: number,
+  globalPageNumber: number
+): { headerHeight: number; footerHeight: number; contentHeight: number }
+```
+
+The effective header height is `max(marginTop, measuredHeaderHeight)`. This ensures:
+1. Headers always fit within their allocated space
+2. Content area adjusts to accommodate larger headers
+3. Page breaks are calculated with correct available space
+
+### Flow Algorithm Integration
+
+The `flowToPages()` algorithm uses dynamic content heights per page position:
+
+```typescript
+for (const block of blocks) {
+  // Get effective height for CURRENT page position
+  const { contentHeight } = getEffectiveHeights(dims, sectionIndex, pageInSection, pageNumber);
+
+  if (blockFitsInRemainingSpace) {
+    // Add to current page
+  } else {
+    // Start new page - recalculate for new position
+    const newHeights = getEffectiveHeights(dims, sectionIndex, pageInSection + 1, pageNumber + 1);
+    remainingHeight = newHeights.contentHeight;
+  }
+}
+```
+
+### Lazy Loading Compatibility
+
+This approach is designed for future lazy loading:
+
+1. **Deterministic**: Same inputs always produce same page breaks
+2. **Forward-only**: No backtracking during content flow
+3. **Pre-computed**: Header/footer heights measured once at start
+4. **Position-based**: Can compute available height for any page without knowing content
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    PAGINATION PHASES                         │
+├─────────────────────────────────────────────────────────────┤
+│  1. INITIALIZATION (one-time)                                │
+│     └─ Parse and measure all headers/footers                │
+│                                                              │
+│  2. CONTENT FLOW (streamable)                                │
+│     └─ Use pre-computed heights for page break decisions    │
+│                                                              │
+│  3. PAGE RENDERING (on-demand)                               │
+│     └─ Look up cached heights, no re-measurement needed     │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ## Limitations
 
 1. **No section break tracking within pagination**: When content flows across section boundaries, the pagination engine doesn't detect which section a particular page belongs to (future enhancement)
@@ -468,17 +564,13 @@ The feature activates automatically when both existing settings are enabled. No 
 
 3. **Even page headers require knowing total pages**: To correctly determine odd/even, page numbering must be sequential (currently supported)
 
-4. **Header/footer height is fixed**: If actual header content is taller than `w:header` distance, it will be clipped
-
 ## Future Enhancements
 
 1. **Section boundary detection** - Track when content crosses section breaks to switch headers/footers mid-document
 
 2. **Field resolution** - Process `PAGE`, `NUMPAGES`, `SECTIONPAGES` fields with actual page numbers
 
-3. **Dynamic header/footer height** - Measure actual rendered height and adjust positioning
-
-4. **Different first page per-section** - Currently supported in data model, needs pagination tracking
+3. **Different first page per-section** - Currently supported in data model, needs pagination tracking
 
 ## Testing Strategy
 

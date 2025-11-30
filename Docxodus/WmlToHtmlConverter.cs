@@ -969,10 +969,12 @@ namespace Docxodus
             sb.AppendLine("    line-height: 1.4;");
             sb.AppendLine("}");
 
-            // Separator line above footnotes - subtle horizontal rule
+            // Separator line above footnotes - using background instead of border
+            // to avoid subpixel rendering issues that can cause the line to disappear during scrolling
             sb.AppendLine($".{prefix}footnotes hr {{");
             sb.AppendLine("    border: none;");
-            sb.AppendLine("    border-top: 1px solid #999;");
+            sb.AppendLine("    height: 1px;");
+            sb.AppendLine("    background-color: #999;");
             sb.AppendLine("    width: 33%;");
             sb.AppendLine("    margin: 0 0 6pt 0;");
             sb.AppendLine("    opacity: 0.6;");
@@ -998,12 +1000,14 @@ namespace Docxodus
             sb.AppendLine("}");
 
             // Make first paragraph in footnote content inline to flow with number
-            sb.AppendLine(".footnote-content > p:first-child {");
+            // Use :first-of-type instead of :first-child because XML serialization adds
+            // whitespace text nodes that would prevent :first-child from matching
+            sb.AppendLine(".footnote-content > p:first-of-type {");
             sb.AppendLine("    display: inline;");
             sb.AppendLine("}");
 
             // Subsequent paragraphs in footnote get normal block display with indent
-            sb.AppendLine(".footnote-content > p:not(:first-child) {");
+            sb.AppendLine(".footnote-content > p:not(:first-of-type) {");
             sb.AppendLine("    display: block;");
             sb.AppendLine("    margin-top: 2pt;");
             sb.AppendLine("    margin-left: 12pt;");
