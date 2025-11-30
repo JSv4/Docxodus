@@ -94,6 +94,8 @@ All notable changes to this project will be documented in this file.
 
 - **Vite bundler compatibility** - Added `@vite-ignore` comment to dynamic import in `npm/src/index.ts` to prevent Vite from trying to analyze/resolve the WASM loader path during development builds.
 
+- **Pagination content overflow** - Fixed content overflowing page boundaries in the paginated view. The issue was caused by applying CSS transform scale to the content area while using inconsistent coordinate systems for positioning. The fix applies the scale transform to the entire page box instead, ensuring proper clipping and consistent scaling of all page elements.
+
 ### Changed
 - Replaced `FontPartType`/`ImagePartType` with `PartTypeInfo` pattern for SDK 3.x compatibility
 - Replaced `.Close()` calls with `Dispose()` pattern

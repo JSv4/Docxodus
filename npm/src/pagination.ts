@@ -339,26 +339,48 @@ export class PaginationEngine {
     sectionIndex: number,
     content: HTMLElement[]
   ): PageInfo {
-    const scaledWidth = dims.pageWidth * this.scale;
-    const scaledHeight = dims.pageHeight * this.scale;
-
-    // Create page box
+    // Create page box at full size, then scale the entire box
+    // This ensures proper clipping and consistent scaling of all elements
     const pageBox = document.createElement("div");
     pageBox.className = `${this.cssPrefix}box`;
-    pageBox.style.width = `${scaledWidth}pt`;
-    pageBox.style.height = `${scaledHeight}pt`;
+    pageBox.style.width = `${dims.pageWidth}pt`;
+    pageBox.style.height = `${dims.pageHeight}pt`;
+    pageBox.style.overflow = "hidden";
+    pageBox.style.position = "relative";
+    // Use CSS zoom for better text rendering when supported, fall back to transform
+    // Zoom affects layout (no negative margin hack needed) and renders text more crisply
+    // Note: zoom is non-standard but supported in all major browsers
+    if (this.scale !== 1) {
+      // Try zoom first (better text quality), with transform as fallback
+      pageBox.style.zoom = String(this.scale);
+      // For browsers that don't support zoom, also set transform
+      // The zoom takes precedence in supporting browsers
+      pageBox.style.transform = `scale(${this.scale})`;
+      pageBox.style.transformOrigin = "top left";
+      // Compensate for transform not affecting layout (only needed if zoom not supported)
+      // Convert pt to px for consistent unit math
+      const heightReductionPt = dims.pageHeight * (1 - this.scale);
+      const widthReductionPt = dims.pageWidth * (1 - this.scale);
+      const heightReductionPx = ptToPx(heightReductionPt);
+      const widthReductionPx = ptToPx(widthReductionPt);
+      pageBox.style.marginRight = `-${widthReductionPx}px`;
+      pageBox.style.marginBottom = `${this.pageGap - heightReductionPx}px`;
+    }
+    // Hint browser for GPU compositing and layout isolation
+    pageBox.style.willChange = "transform";
+    pageBox.style.contain = "layout paint";
     pageBox.dataset.pageNumber = String(pageNumber);
     pageBox.dataset.sectionIndex = String(sectionIndex);
 
-    // Create content area
+    // Create content area at full page margins and dimensions
     const contentArea = document.createElement("div");
     contentArea.className = `${this.cssPrefix}content`;
-    contentArea.style.top = `${dims.marginTop * this.scale}pt`;
-    contentArea.style.left = `${dims.marginLeft * this.scale}pt`;
+    contentArea.style.position = "absolute";
+    contentArea.style.top = `${dims.marginTop}pt`;
+    contentArea.style.left = `${dims.marginLeft}pt`;
     contentArea.style.width = `${dims.contentWidth}pt`;
     contentArea.style.height = `${dims.contentHeight}pt`;
-    contentArea.style.transform = `scale(${this.scale})`;
-    contentArea.style.transformOrigin = "top left";
+    contentArea.style.overflow = "hidden";
 
     // Add content
     for (const el of content) {
