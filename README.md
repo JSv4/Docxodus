@@ -166,6 +166,7 @@ dotnet test --filter "FullyQualifiedName~WmlComparerTests"
 ### npm/WASM Browser Tests (Playwright)
 
 ```bash
+# Need to be in npm subdirectory
 cd npm
 
 # Install dependencies (first time only)

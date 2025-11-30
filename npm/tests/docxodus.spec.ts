@@ -249,26 +249,47 @@ test.describe('Docxodus WASM Tests', () => {
 
   test.describe('HTML Conversion (HC tests)', () => {
     const htmlConversionTests = [
-      { name: 'HC001-5DayTourPlanTemplate.docx', description: 'Tour plan template' },
-      { name: 'HC004-ResumeTemplate.docx', description: 'Resume template' },
-      { name: 'HC005-TaskPlanTemplate.docx', description: 'Task plan template' },
-      { name: 'HC006-Test-01.docx', description: 'Basic test document' },
-      { name: 'HC007-Test-02.docx', description: 'Test document 2' },
-      { name: 'HC008-Test-03.docx', description: 'Test document 3' },
-      { name: 'HC019-Hidden-Run.docx', description: 'Hidden text run' },
-      { name: 'HC020-Small-Caps.docx', description: 'Small caps formatting' },
+      { name: 'HC001-5DayTourPlanTemplate.docx', description: 'Tour plan template', expectTables: true },
+      { name: 'HC004-ResumeTemplate.docx', description: 'Resume template', expectTables: true },
+      { name: 'HC005-TaskPlanTemplate.docx', description: 'Task plan template', expectTables: true },
+      { name: 'HC006-Test-01.docx', description: 'Basic test document', expectTables: false },
+      { name: 'HC007-Test-02.docx', description: 'Test document 2', expectTables: false },
+      { name: 'HC008-Test-03.docx', description: 'Test document 3', expectTables: false },
+      { name: 'HC019-Hidden-Run.docx', description: 'Hidden text run', expectTables: false },
+      { name: 'HC020-Small-Caps.docx', description: 'Small caps formatting', expectTables: false },
     ];
 
     for (const testCase of htmlConversionTests) {
-      test(`converts ${testCase.name} to HTML`, async ({ page }) => {
+      test(`converts ${testCase.name} to HTML and renders correctly`, async ({ page }) => {
         const bytes = readTestFile(testCase.name);
         const result = await convertToHtml(page, bytes);
 
         expect(result.error).toBeUndefined();
         expect(result.html).toBeDefined();
         expect(result.html!.length).toBeGreaterThan(100);
-        expect(result.html).toContain('<html');
-        expect(result.html).toContain('</html>');
+
+        // Actually render the HTML to the page
+        await page.setContent(result.html!);
+
+        // Verify basic document structure is rendered in DOM
+        await expect(page.locator('html')).toBeAttached();
+        await expect(page.locator('body')).toBeAttached();
+
+        // Verify content is visible (not empty body)
+        const bodyText = await page.locator('body').textContent();
+        expect(bodyText!.length).toBeGreaterThan(10);
+
+        // Verify styles are present
+        await expect(page.locator('style')).toBeAttached();
+
+        // Check for tables if expected
+        if (testCase.expectTables) {
+          await expect(page.locator('table').first()).toBeVisible();
+        }
+
+        // Verify paragraphs or spans exist (actual content)
+        const contentElements = await page.locator('p, span, div').count();
+        expect(contentElements).toBeGreaterThan(0);
       });
     }
   });
@@ -355,7 +376,7 @@ test.describe('Docxodus WASM Tests', () => {
         console.log(`${testCase.name}: Found ${revisionsResult.revisions!.length} revisions`);
       });
 
-      test(`compares ${testCase.name} to HTML`, async ({ page }) => {
+      test(`compares ${testCase.name} to HTML and renders tracked changes`, async ({ page }) => {
         const originalBytes = readTestFile(testCase.original);
         const modifiedBytes = readTestFile(testCase.modified);
 
@@ -363,7 +384,22 @@ test.describe('Docxodus WASM Tests', () => {
         expect(result.error).toBeUndefined();
         expect(result.html).toBeDefined();
         expect(result.html!.length).toBeGreaterThan(100);
-        expect(result.html).toContain('<html');
+
+        // Actually render the HTML to the page
+        await page.setContent(result.html!);
+
+        // Verify document structure is rendered
+        await expect(page.locator('html')).toBeAttached();
+        await expect(page.locator('body')).toBeAttached();
+
+        // Verify tracked changes are rendered (ins/del elements)
+        const insertions = await page.locator('ins').count();
+        const deletions = await page.locator('del').count();
+        expect(insertions + deletions).toBeGreaterThan(0);
+
+        // Verify content is visible
+        const bodyText = await page.locator('body').textContent();
+        expect(bodyText!.length).toBeGreaterThan(5);
       });
     }
   });
@@ -937,7 +973,7 @@ test.describe('Docxodus WASM Tests', () => {
       console.log('Successfully removed annotation');
     });
 
-    test('annotation rendering generates highlight spans', async ({ page }) => {
+    test('annotation rendering generates highlight spans in DOM', async ({ page }) => {
       const bytes = readTestFile(testDoc);
 
       // Add an annotation
@@ -963,15 +999,29 @@ test.describe('Docxodus WASM Tests', () => {
       expect(htmlResult.error).toBeUndefined();
       expect(htmlResult.html).toBeDefined();
 
-      // Check for annotation highlight elements
-      expect(htmlResult.html).toContain('annot-highlight');
-      expect(htmlResult.html).toContain('data-annotation-id="render-test"');
-      expect(htmlResult.html).toContain('Highlighted Text');  // The label text
+      // Actually render the HTML to the page
+      await page.setContent(htmlResult.html!);
 
-      console.log('Annotation rendering generates highlight spans with labels');
+      // Verify annotation highlight elements are rendered in DOM
+      const highlights = page.locator('.annot-highlight');
+      await expect(highlights.first()).toBeAttached();
+
+      // Verify annotation has correct data attribute
+      const annotationEl = page.locator('[data-annotation-id="render-test"]');
+      await expect(annotationEl).toBeAttached();
+
+      // Verify label is rendered
+      const label = page.locator('.annot-label');
+      await expect(label.first()).toBeAttached();
+      await expect(label.first()).toContainText('Highlighted Text');
+
+      // Verify highlight is visible
+      await expect(highlights.first()).toBeVisible();
+
+      console.log('Annotation highlight spans verified in DOM');
     });
 
-    test('annotation CSS includes highlight styles', async ({ page }) => {
+    test('annotation CSS applies highlight styles in DOM', async ({ page }) => {
       const bytes = readTestFile(testDoc);
 
       // Add an annotation with a specific color
@@ -997,17 +1047,33 @@ test.describe('Docxodus WASM Tests', () => {
       expect(htmlResult.error).toBeUndefined();
       expect(htmlResult.html).toBeDefined();
 
-      // Check for annotation CSS
-      expect(htmlResult.html).toContain('<style');
-      expect(htmlResult.html).toContain('.annot-highlight');
-
-      // Check that the annotation color is used
+      // Verify the color is in the HTML (in stylesheet)
       expect(htmlResult.html).toContain('#4CAF50');
 
-      console.log('Annotation CSS includes highlight styles with proper color');
+      // Actually render the HTML to the page
+      await page.setContent(htmlResult.html!);
+
+      // Verify style element is in DOM and contains annotation styles
+      const styleContent = await page.locator('style').first().textContent();
+      expect(styleContent).toContain('.annot-highlight');
+      expect(styleContent).toContain('#4CAF50');
+
+      // Verify highlight element exists and is visible
+      const highlight = page.locator('.annot-highlight').first();
+      await expect(highlight).toBeVisible();
+
+      // Verify the highlight has the correct data attributes
+      await expect(highlight).toHaveAttribute('data-annotation-id', 'css-test');
+
+      // Verify label is visible
+      const label = page.locator('.annot-label').first();
+      await expect(label).toBeVisible();
+      await expect(label).toContainText('Styled');
+
+      console.log('Annotation CSS verified as applied in DOM');
     });
 
-    test('annotation label modes render differently', async ({ page }) => {
+    test('annotation label modes render differently in DOM', async ({ page }) => {
       const bytes = readTestFile(testDoc);
 
       // Add an annotation
@@ -1023,28 +1089,32 @@ test.describe('Docxodus WASM Tests', () => {
       expect(addResult.error).toBeUndefined();
       const annotatedBytes = new Uint8Array(addResult.documentBytes!);
 
-      // Test different label modes
-      const modes = [
-        { mode: 0, name: 'Above', checkFor: 'annot-label' },
-        { mode: 1, name: 'Inline', checkFor: 'annot-label' },
-        { mode: 2, name: 'Tooltip', checkFor: 'annot-highlight' },
-        { mode: 3, name: 'None', checkFor: 'annot-highlight' }
-      ];
+      // Test Above mode - label should be visible
+      const aboveResult = await convertToHtmlWithAnnotations(page, annotatedBytes, true, 0);
+      await page.setContent(aboveResult.html!);
+      await expect(page.locator('.annot-highlight').first()).toBeVisible();
+      await expect(page.locator('.annot-label').first()).toBeAttached();
+      console.log('Label mode Above: Label element present');
 
-      for (const { mode, name, checkFor } of modes) {
-        const htmlResult = await convertToHtmlWithAnnotations(
-          page,
-          annotatedBytes,
-          true,
-          mode
-        );
+      // Test Inline mode - label should be inline
+      const inlineResult = await convertToHtmlWithAnnotations(page, annotatedBytes, true, 1);
+      await page.setContent(inlineResult.html!);
+      await expect(page.locator('.annot-highlight').first()).toBeVisible();
+      console.log('Label mode Inline: Rendered correctly');
 
-        expect(htmlResult.error).toBeUndefined();
-        expect(htmlResult.html).toBeDefined();
-        expect(htmlResult.html).toContain(checkFor);
+      // Test Tooltip mode - highlight visible, label for tooltip
+      const tooltipResult = await convertToHtmlWithAnnotations(page, annotatedBytes, true, 2);
+      await page.setContent(tooltipResult.html!);
+      await expect(page.locator('.annot-highlight').first()).toBeVisible();
+      console.log('Label mode Tooltip: Rendered correctly');
 
-        console.log(`Label mode ${name} (${mode}): Rendered correctly`);
-      }
+      // Test None mode - highlight only, no label element
+      const noneResult = await convertToHtmlWithAnnotations(page, annotatedBytes, true, 3);
+      await page.setContent(noneResult.html!);
+      await expect(page.locator('.annot-highlight').first()).toBeVisible();
+      const labelCount = await page.locator('.annot-label').count();
+      expect(labelCount).toBe(0);
+      console.log('Label mode None: No label elements rendered');
     });
 
     test('annotation metadata is preserved', async ({ page }) => {
@@ -1086,7 +1156,7 @@ test.describe('Docxodus WASM Tests', () => {
       console.log('Annotation metadata preserved:', annot.Metadata);
     });
 
-    test('disabling annotation rendering produces clean HTML', async ({ page }) => {
+    test('disabling annotation rendering produces clean DOM', async ({ page }) => {
       const bytes = readTestFile(testDoc);
 
       // Add an annotation
@@ -1112,11 +1182,18 @@ test.describe('Docxodus WASM Tests', () => {
       expect(htmlResult.error).toBeUndefined();
       expect(htmlResult.html).toBeDefined();
 
-      // Verify no annotation elements
-      expect(htmlResult.html).not.toContain('annot-highlight');
-      expect(htmlResult.html).not.toContain('data-annotation-id');
+      // Actually render the HTML to the page
+      await page.setContent(htmlResult.html!);
 
-      console.log('Disabled annotation rendering produces clean HTML');
+      // Verify document renders but has no annotation elements in DOM
+      await expect(page.locator('body')).toBeAttached();
+      const highlightCount = await page.locator('.annot-highlight').count();
+      expect(highlightCount).toBe(0);
+
+      const annotationIdCount = await page.locator('[data-annotation-id]').count();
+      expect(annotationIdCount).toBe(0);
+
+      console.log('Disabled annotation rendering produces clean DOM');
     });
   });
 
