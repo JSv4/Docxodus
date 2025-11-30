@@ -8,12 +8,24 @@ import type {
   DocxodusWasmExports,
   GetRevisionsOptions,
   FormatChangeDetails,
+  Annotation,
+  AddAnnotationRequest,
+  AddAnnotationResponse,
+  RemoveAnnotationResponse,
+  AnnotationOptions,
+  DocumentStructure,
+  DocumentElement,
+  TableColumnInfo,
+  AnnotationTarget,
+  AddAnnotationWithTargetRequest,
 } from "./types.js";
 
 import {
   CommentRenderMode,
   PaginationMode,
+  AnnotationLabelMode,
   RevisionType,
+  DocumentElementType,
   isInsertion,
   isDeletion,
   isMove,
@@ -21,6 +33,21 @@ import {
   isMoveDestination,
   findMovePair,
   isFormatChange,
+  findElementById,
+  findElementsByType,
+  getParagraphs,
+  getTables,
+  getTableColumns,
+  targetElement,
+  targetParagraph,
+  targetParagraphRange,
+  targetRun,
+  targetTable,
+  targetTableRow,
+  targetTableCell,
+  targetTableColumn,
+  targetSearch,
+  targetSearchInElement,
 } from "./types.js";
 
 // Re-export pagination types and engine
@@ -43,12 +70,24 @@ export type {
   CompareResult,
   GetRevisionsOptions,
   FormatChangeDetails,
+  Annotation,
+  AddAnnotationRequest,
+  AddAnnotationResponse,
+  RemoveAnnotationResponse,
+  AnnotationOptions,
+  DocumentStructure,
+  DocumentElement,
+  TableColumnInfo,
+  AnnotationTarget,
+  AddAnnotationWithTargetRequest,
 };
 
 export {
   CommentRenderMode,
   PaginationMode,
+  AnnotationLabelMode,
   RevisionType,
+  DocumentElementType,
   isInsertion,
   isDeletion,
   isMove,
@@ -56,6 +95,23 @@ export {
   isMoveDestination,
   findMovePair,
   isFormatChange,
+  // Document structure helpers
+  findElementById,
+  findElementsByType,
+  getParagraphs,
+  getTables,
+  getTableColumns,
+  // Annotation target factory functions
+  targetElement,
+  targetParagraph,
+  targetParagraphRange,
+  targetRun,
+  targetTable,
+  targetTableRow,
+  targetTableCell,
+  targetTableColumn,
+  targetSearch,
+  targetSearchInElement,
 };
 
 let wasmExports: DocxodusWasmExports | null = null;
@@ -235,6 +291,12 @@ async function toBytes(input: File | Uint8Array): Promise<Uint8Array> {
  *   paginationMode: PaginationMode.Paginated,
  *   paginationScale: 0.8
  * });
+ *
+ * // With annotations rendered
+ * const html = await convertDocxToHtml(docxFile, {
+ *   renderAnnotations: true,
+ *   annotationLabelMode: AnnotationLabelMode.Above
+ * });
  * ```
  */
 export async function convertDocxToHtml(
@@ -246,8 +308,26 @@ export async function convertDocxToHtml(
 
   let result: string;
 
+  // Use full method when annotations are requested
+  if (options?.renderAnnotations) {
+    result = exports.DocumentConverter.ConvertDocxToHtmlFull(
+      bytes,
+      options.pageTitle ?? "Document",
+      options.cssPrefix ?? "docx-",
+      options.fabricateClasses ?? true,
+      options.additionalCss ?? "",
+      options.commentRenderMode ?? CommentRenderMode.Disabled,
+      options.commentCssClassPrefix ?? "comment-",
+      options.paginationMode ?? PaginationMode.None,
+      options.paginationScale ?? 1.0,
+      options.paginationCssClassPrefix ?? "page-",
+      options.renderAnnotations,
+      options.annotationLabelMode ?? AnnotationLabelMode.Above,
+      options.annotationCssClassPrefix ?? "annot-"
+    );
+  }
   // Use pagination-aware method when pagination is requested
-  if (options?.paginationMode !== undefined && options.paginationMode !== PaginationMode.None) {
+  else if (options?.paginationMode !== undefined && options.paginationMode !== PaginationMode.None) {
     result = exports.DocumentConverter.ConvertDocxToHtmlWithPagination(
       bytes,
       options.pageTitle ?? "Document",
@@ -447,4 +527,389 @@ export function getVersion(): VersionInfo {
  */
 export function isInitialized(): boolean {
   return wasmExports !== null;
+}
+
+/**
+ * Get all annotations from a document.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @returns Array of annotations
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * const annotations = await getAnnotations(docxFile);
+ * for (const annot of annotations) {
+ *   console.log(`${annot.label}: "${annot.annotatedText}"`);
+ * }
+ * ```
+ */
+export async function getAnnotations(
+  document: File | Uint8Array
+): Promise<Annotation[]> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const result = exports.DocumentConverter.GetAnnotations(bytes);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get annotations: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return (parsed.Annotations || parsed.annotations || []).map((a: any) => ({
+    id: a.Id || a.id,
+    labelId: a.LabelId || a.labelId,
+    label: a.Label || a.label,
+    color: a.Color || a.color,
+    author: a.Author || a.author,
+    created: a.Created || a.created,
+    bookmarkName: a.BookmarkName || a.bookmarkName,
+    startPage: a.StartPage ?? a.startPage,
+    endPage: a.EndPage ?? a.endPage,
+    annotatedText: a.AnnotatedText || a.annotatedText,
+    metadata: a.Metadata || a.metadata,
+  }));
+}
+
+/**
+ * Add an annotation to a document.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param request - Annotation details including search text or paragraph indices
+ * @returns Response with modified document bytes and annotation info
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * // Annotate by searching for text
+ * const result = await addAnnotation(docxFile, {
+ *   id: "annot-1",
+ *   labelId: "CLAUSE_A",
+ *   label: "Important Clause",
+ *   color: "#FFEB3B",
+ *   searchText: "shall not be liable",
+ *   occurrence: 1
+ * });
+ *
+ * // Annotate by paragraph range
+ * const result = await addAnnotation(docxFile, {
+ *   id: "annot-2",
+ *   labelId: "SECTION_1",
+ *   label: "Introduction",
+ *   color: "#4CAF50",
+ *   startParagraphIndex: 0,
+ *   endParagraphIndex: 2
+ * });
+ *
+ * // Get modified document
+ * const modifiedDocBytes = base64ToBytes(result.documentBytes);
+ * ```
+ */
+export async function addAnnotation(
+  document: File | Uint8Array,
+  request: AddAnnotationRequest
+): Promise<AddAnnotationResponse> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const requestJson = JSON.stringify({
+    Id: request.id,
+    LabelId: request.labelId,
+    Label: request.label,
+    Color: request.color ?? "#FFEB3B",
+    Author: request.author,
+    SearchText: request.searchText,
+    Occurrence: request.occurrence ?? 1,
+    StartParagraphIndex: request.startParagraphIndex,
+    EndParagraphIndex: request.endParagraphIndex,
+    Metadata: request.metadata,
+  });
+
+  const result = exports.DocumentConverter.AddAnnotation(bytes, requestJson);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to add annotation: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  const annotation = parsed.Annotation || parsed.annotation;
+
+  return {
+    success: parsed.Success ?? parsed.success ?? true,
+    documentBytes: parsed.DocumentBytes || parsed.documentBytes,
+    annotation: annotation ? {
+      id: annotation.Id || annotation.id,
+      labelId: annotation.LabelId || annotation.labelId,
+      label: annotation.Label || annotation.label,
+      color: annotation.Color || annotation.color,
+      author: annotation.Author || annotation.author,
+      created: annotation.Created || annotation.created,
+      bookmarkName: annotation.BookmarkName || annotation.bookmarkName,
+      annotatedText: annotation.AnnotatedText || annotation.annotatedText,
+    } : undefined,
+  };
+}
+
+/**
+ * Remove an annotation from a document.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param annotationId - The ID of the annotation to remove
+ * @returns Response with modified document bytes
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * const result = await removeAnnotation(docxFile, "annot-1");
+ * const modifiedDocBytes = base64ToBytes(result.documentBytes);
+ * ```
+ */
+export async function removeAnnotation(
+  document: File | Uint8Array,
+  annotationId: string
+): Promise<RemoveAnnotationResponse> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const result = exports.DocumentConverter.RemoveAnnotation(bytes, annotationId);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to remove annotation: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return {
+    success: parsed.Success ?? parsed.success ?? true,
+    documentBytes: parsed.DocumentBytes || parsed.documentBytes,
+  };
+}
+
+/**
+ * Check if a document has any annotations.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @returns true if the document has annotations
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * if (await hasAnnotations(docxFile)) {
+ *   const annotations = await getAnnotations(docxFile);
+ *   console.log(`Document has ${annotations.length} annotations`);
+ * }
+ * ```
+ */
+export async function hasAnnotations(
+  document: File | Uint8Array
+): Promise<boolean> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const result = exports.DocumentConverter.HasAnnotations(bytes);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to check annotations: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return parsed.HasAnnotations ?? parsed.hasAnnotations ?? false;
+}
+
+/**
+ * Get the document structure for element-based annotation targeting.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @returns Document structure with element tree
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * const structure = await getDocumentStructure(docxFile);
+ *
+ * // Navigate the structure tree
+ * console.log(`Document has ${structure.root.children.length} top-level elements`);
+ *
+ * // Find all paragraphs
+ * const paragraphs = getParagraphs(structure);
+ * console.log(`Found ${paragraphs.length} paragraphs`);
+ *
+ * // Find all tables
+ * const tables = getTables(structure);
+ * for (const table of tables) {
+ *   const columns = getTableColumns(structure, table.id);
+ *   console.log(`Table ${table.id} has ${columns.length} columns`);
+ * }
+ *
+ * // Look up element by ID
+ * const element = findElementById(structure, "doc/p-0");
+ * if (element) {
+ *   console.log(`First paragraph: "${element.textPreview}"`);
+ * }
+ * ```
+ */
+export async function getDocumentStructure(
+  document: File | Uint8Array
+): Promise<DocumentStructure> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const result = exports.DocumentConverter.GetDocumentStructure(bytes);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get document structure: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+
+  // Convert from PascalCase to camelCase
+  const convertElement = (el: any): DocumentElement => ({
+    id: el.Id || el.id,
+    type: el.Type || el.type,
+    textPreview: el.TextPreview || el.textPreview,
+    index: el.Index ?? el.index,
+    rowIndex: el.RowIndex ?? el.rowIndex,
+    columnIndex: el.ColumnIndex ?? el.columnIndex,
+    rowSpan: el.RowSpan ?? el.rowSpan,
+    columnSpan: el.ColumnSpan ?? el.columnSpan,
+    children: (el.Children || el.children || []).map(convertElement),
+  });
+
+  const convertTableColumn = (col: any): TableColumnInfo => ({
+    tableId: col.TableId || col.tableId,
+    columnIndex: col.ColumnIndex ?? col.columnIndex,
+    cellIds: col.CellIds || col.cellIds || [],
+    rowCount: col.RowCount ?? col.rowCount,
+  });
+
+  const root = convertElement(parsed.Root || parsed.root);
+
+  // Convert elementsById dictionary
+  const elementsById: Record<string, DocumentElement> = {};
+  const rawElementsById = parsed.ElementsById || parsed.elementsById || {};
+  for (const [key, el] of Object.entries(rawElementsById)) {
+    elementsById[key] = convertElement(el);
+  }
+
+  // Convert tableColumns dictionary
+  const tableColumns: Record<string, TableColumnInfo> = {};
+  const rawTableColumns = parsed.TableColumns || parsed.tableColumns || {};
+  for (const [key, col] of Object.entries(rawTableColumns)) {
+    tableColumns[key] = convertTableColumn(col);
+  }
+
+  return {
+    root,
+    elementsById,
+    tableColumns,
+  };
+}
+
+/**
+ * Add an annotation using flexible targeting (element ID, indices, or text search).
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param request - Annotation details with target specification
+ * @returns Response with modified document bytes and annotation info
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * // First get the document structure to find target elements
+ * const structure = await getDocumentStructure(docxFile);
+ *
+ * // Annotate a specific paragraph by element ID
+ * const result1 = await addAnnotationWithTarget(docxFile, {
+ *   id: "annot-1",
+ *   labelId: "INTRO",
+ *   label: "Introduction",
+ *   color: "#4CAF50",
+ *   target: targetElement("doc/p-0")
+ * });
+ *
+ * // Annotate a table cell
+ * const result2 = await addAnnotationWithTarget(docxFile, {
+ *   id: "annot-2",
+ *   labelId: "CELL_HIGHLIGHT",
+ *   label: "Important Cell",
+ *   color: "#FFEB3B",
+ *   target: targetTableCell(0, 1, 2)  // Table 0, Row 1, Cell 2
+ * });
+ *
+ * // Annotate a table column
+ * const result3 = await addAnnotationWithTarget(docxFile, {
+ *   id: "annot-3",
+ *   labelId: "COLUMN_DATA",
+ *   label: "Values Column",
+ *   color: "#2196F3",
+ *   target: targetTableColumn(0, 1)  // Table 0, Column 1
+ * });
+ *
+ * // Search for text within a specific element
+ * const result4 = await addAnnotationWithTarget(docxFile, {
+ *   id: "annot-4",
+ *   labelId: "KEYWORD",
+ *   label: "Keyword",
+ *   color: "#FF5722",
+ *   target: targetSearchInElement("doc/p-2", "important", 1)
+ * });
+ * ```
+ */
+export async function addAnnotationWithTarget(
+  document: File | Uint8Array,
+  request: AddAnnotationWithTargetRequest
+): Promise<AddAnnotationResponse> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const requestJson = JSON.stringify({
+    Id: request.id,
+    LabelId: request.labelId,
+    Label: request.label,
+    Color: request.color ?? "#FFEB3B",
+    Author: request.author,
+    Metadata: request.metadata,
+    ElementId: request.target.elementId,
+    ElementType: request.target.elementType,
+    ParagraphIndex: request.target.paragraphIndex,
+    RunIndex: request.target.runIndex,
+    TableIndex: request.target.tableIndex,
+    RowIndex: request.target.rowIndex,
+    CellIndex: request.target.cellIndex,
+    ColumnIndex: request.target.columnIndex,
+    SearchText: request.target.searchText,
+    Occurrence: request.target.occurrence ?? 1,
+    RangeEndParagraphIndex: request.target.rangeEndParagraphIndex,
+  });
+
+  const result = exports.DocumentConverter.AddAnnotationWithTarget(bytes, requestJson);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to add annotation: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  const annotation = parsed.Annotation || parsed.annotation;
+
+  return {
+    success: parsed.Success ?? parsed.success ?? true,
+    documentBytes: parsed.DocumentBytes || parsed.documentBytes,
+    annotation: annotation ? {
+      id: annotation.Id || annotation.id,
+      labelId: annotation.LabelId || annotation.labelId,
+      label: annotation.Label || annotation.label,
+      color: annotation.Color || annotation.color,
+      author: annotation.Author || annotation.author,
+      created: annotation.Created || annotation.created,
+      bookmarkName: annotation.BookmarkName || annotation.bookmarkName,
+      annotatedText: annotation.AnnotatedText || annotation.annotatedText,
+      metadata: annotation.Metadata || annotation.metadata,
+    } : undefined,
+  };
 }

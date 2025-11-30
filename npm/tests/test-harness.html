@@ -126,6 +126,161 @@
                 } catch (e) {
                     return { error: { message: e.message } };
                 }
+            },
+
+            // Convert DOCX to HTML with annotations
+            convertToHtmlWithAnnotations: function(bytes, renderAnnotations = true, annotationLabelMode = 0) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.ConvertDocxToHtmlFull(
+                        bytes,
+                        'Document',      // pageTitle
+                        'docx-',         // cssPrefix
+                        true,            // fabricateClasses
+                        '',              // additionalCss
+                        -1,              // commentRenderMode (disabled)
+                        'comment-',      // commentCssClassPrefix
+                        0,               // paginationMode (None)
+                        1.0,             // paginationScale
+                        'page-',         // paginationCssClassPrefix
+                        renderAnnotations,      // renderAnnotations
+                        annotationLabelMode,    // annotationLabelMode: 0=Above, 1=Inline, 2=Tooltip, 3=None
+                        'annot-'                // annotationCssClassPrefix
+                    );
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { html: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Get annotations from a document
+            getAnnotations: function(bytes) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.GetAnnotations(bytes);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    return { annotations: parsed.Annotations || [] };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Add an annotation to a document
+            addAnnotation: function(bytes, request) {
+                try {
+                    const requestJson = JSON.stringify(request);
+                    const result = window.Docxodus.DocumentConverter.AddAnnotation(bytes, requestJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    // Decode base64 document bytes
+                    let documentBytes = null;
+                    if (parsed.DocumentBytes) {
+                        const binaryString = atob(parsed.DocumentBytes);
+                        documentBytes = new Uint8Array(binaryString.length);
+                        for (let i = 0; i < binaryString.length; i++) {
+                            documentBytes[i] = binaryString.charCodeAt(i);
+                        }
+                    }
+                    return {
+                        success: parsed.Success,
+                        documentBytes: documentBytes,
+                        annotation: parsed.Annotation
+                    };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Remove an annotation from a document
+            removeAnnotation: function(bytes, annotationId) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.RemoveAnnotation(bytes, annotationId);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    // Decode base64 document bytes
+                    let documentBytes = null;
+                    if (parsed.DocumentBytes) {
+                        const binaryString = atob(parsed.DocumentBytes);
+                        documentBytes = new Uint8Array(binaryString.length);
+                        for (let i = 0; i < binaryString.length; i++) {
+                            documentBytes[i] = binaryString.charCodeAt(i);
+                        }
+                    }
+                    return {
+                        success: parsed.Success,
+                        documentBytes: documentBytes
+                    };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Check if a document has annotations
+            hasAnnotations: function(bytes) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.HasAnnotations(bytes);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    return { hasAnnotations: parsed.HasAnnotations };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Get document structure for element-based annotation targeting
+            getDocumentStructure: function(bytes) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.GetDocumentStructure(bytes);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    return {
+                        root: parsed.Root,
+                        elementsById: parsed.ElementsById,
+                        tableColumns: parsed.TableColumns
+                    };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Add annotation with flexible targeting
+            addAnnotationWithTarget: function(bytes, request) {
+                try {
+                    const requestJson = JSON.stringify(request);
+                    const result = window.Docxodus.DocumentConverter.AddAnnotationWithTarget(bytes, requestJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    // Decode base64 document bytes
+                    let documentBytes = null;
+                    if (parsed.DocumentBytes) {
+                        const binaryString = atob(parsed.DocumentBytes);
+                        documentBytes = new Uint8Array(binaryString.length);
+                        for (let i = 0; i < binaryString.length; i++) {
+                            documentBytes[i] = binaryString.charCodeAt(i);
+                        }
+                    }
+                    return {
+                        success: documentBytes != null,  // Success if we have document bytes
+                        documentBytes: documentBytes,
+                        annotation: parsed.Annotation
+                    };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
             }
         };
 

@@ -10,6 +10,64 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
+- **Custom Annotations** - Full support for adding, removing, and rendering custom annotations on DOCX documents
+  - `AnnotationManager` class for programmatic annotation CRUD operations:
+    - `AddAnnotation()`: Add annotation by text search or paragraph range
+    - `RemoveAnnotation()`: Remove annotation by ID
+    - `GetAnnotations()`: Retrieve all annotations from a document
+    - `GetAnnotation()`: Get a specific annotation by ID
+    - `HasAnnotations()`: Check if document has any annotations
+  - `DocumentAnnotation` class with properties:
+    - `Id`: Unique annotation identifier
+    - `LabelId`: Category/type identifier for grouping
+    - `Label`: Human-readable label text
+    - `Color`: Highlight color in hex format (e.g., "#FFEB3B")
+    - `Author`: Optional author name
+    - `Created`: Optional creation timestamp
+    - `Metadata`: Custom key-value pairs
+  - `AnnotationRange` class for specifying annotation targets:
+    - `FromSearch(text, occurrence)`: Find text by search
+    - `FromParagraphs(start, end)`: Span paragraph indices
+  - **Document Structure API** for element-based annotation targeting:
+    - `DocumentStructureAnalyzer.Analyze()`: Returns navigable tree of document elements
+    - `DocumentElement` class with path-based IDs (e.g., `doc/p-0`, `doc/tbl-0/tr-1/tc-2`)
+    - Supported element types: `Document`, `Paragraph`, `Run`, `Table`, `TableRow`, `TableCell`, `TableColumn`, `Hyperlink`, `Image`
+    - `TableColumnInfo` for virtual column elements (columns aren't real OOXML elements)
+  - `AnnotationTarget` class with flexible targeting modes:
+    - `Element(elementId)`: Target by element ID from structure analysis
+    - `Paragraph(index)`, `ParagraphRange(start, end)`: Target by paragraph index
+    - `Run(paragraphIndex, runIndex)`: Target specific run
+    - `Table(index)`, `TableRow(tableIndex, rowIndex)`: Target tables/rows
+    - `TableCell(tableIndex, rowIndex, cellIndex)`: Target specific cell
+    - `TableColumn(tableIndex, columnIndex)`: Metadata-only column annotation
+    - `TextSearch(text, occurrence)`: Search text globally
+    - `SearchInElement(elementId, text, occurrence)`: Search within specific element
+  - WASM methods: `GetDocumentStructure()`, `AddAnnotationWithTarget()`
+  - TypeScript helper functions: `findElementById()`, `findElementsByType()`, `getParagraphs()`, `getTables()`, `getTableColumns()`
+  - TypeScript targeting factories: `targetElement()`, `targetParagraph()`, `targetTableCell()`, etc.
+  - React `useDocumentStructure` hook with structure navigation helpers
+  - Annotations stored as Custom XML Part in DOCX (non-destructive)
+  - Bookmark-based text range marking for precise positioning
+  - HTML rendering with configurable label modes:
+    - `AnnotationLabelMode.Above`: Floating label above highlight
+    - `AnnotationLabelMode.Inline`: Label at start of highlight
+    - `AnnotationLabelMode.Tooltip`: Label shown on hover
+    - `AnnotationLabelMode.None`: Highlight only, no label
+  - New settings in `WmlToHtmlConverterSettings`:
+    - `RenderAnnotations`: Enable/disable annotation rendering
+    - `AnnotationLabelMode`: Select label display mode
+    - `AnnotationCssClassPrefix`: Customize CSS class names (default: "annot-")
+    - `IncludeAnnotationMetadata`: Include metadata in HTML data attributes
+  - WASM/npm support:
+    - `getAnnotations()`, `addAnnotation()`, `removeAnnotation()`, `hasAnnotations()` functions
+    - `Annotation`, `AddAnnotationRequest`, `AddAnnotationResponse`, `RemoveAnnotationResponse` types
+    - `AnnotationLabelMode` enum
+    - `ConversionOptions` extended with annotation rendering options
+  - React support:
+    - `useAnnotations` hook for annotation state management
+    - `AnnotatedDocument` component with click/hover event handling
+    - `useDocxodus` hook extended with annotation methods
+  - 20 .NET unit tests and 21 Playwright browser tests for full coverage (including 11 for element-based targeting)
 - **Comment Rendering in HTML Converter** - Full support for rendering Word document comments in HTML output
   - `CommentRenderMode` enum with three rendering modes:
     - `EndnoteStyle` (default): Comments rendered at end of document with bidirectional anchor links
@@ -104,4 +162,4 @@ All notable changes to this project will be documented in this file.
 - Migrated image handling from `Bitmap`/`ImageFormat` to `SKBitmap`/`SKEncodedImageFormat`
 
 ### Test Status
-- 995 passed, 0 failed, 1 skipped out of 996 tests (~99.9% pass rate)
+- 1051 passed, 0 failed, 1 skipped out of 1052 tests (~99.9% pass rate)
