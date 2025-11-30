@@ -339,26 +339,37 @@ export class PaginationEngine {
     sectionIndex: number,
     content: HTMLElement[]
   ): PageInfo {
-    const scaledWidth = dims.pageWidth * this.scale;
-    const scaledHeight = dims.pageHeight * this.scale;
-
-    // Create page box
+    // Create page box at full size, then scale the entire box
+    // This ensures proper clipping and consistent scaling of all elements
     const pageBox = document.createElement("div");
     pageBox.className = `${this.cssPrefix}box`;
-    pageBox.style.width = `${scaledWidth}pt`;
-    pageBox.style.height = `${scaledHeight}pt`;
+    pageBox.style.width = `${dims.pageWidth}pt`;
+    pageBox.style.height = `${dims.pageHeight}pt`;
+    pageBox.style.overflow = "hidden";
+    pageBox.style.position = "relative";
+    pageBox.style.transform = `scale(${this.scale})`;
+    pageBox.style.transformOrigin = "top left";
+    // Use margin to create proper spacing between scaled pages
+    // Transform doesn't affect layout, so we use negative margin to pull next page up
+    // and positive margin-bottom for the gap
+    if (this.scale !== 1) {
+      const heightReduction = dims.pageHeight * (1 - this.scale);
+      const widthReduction = dims.pageWidth * (1 - this.scale);
+      pageBox.style.marginRight = `-${widthReduction}pt`;
+      pageBox.style.marginBottom = `${this.pageGap - heightReduction}px`;
+    }
     pageBox.dataset.pageNumber = String(pageNumber);
     pageBox.dataset.sectionIndex = String(sectionIndex);
 
-    // Create content area
+    // Create content area at full page margins and dimensions
     const contentArea = document.createElement("div");
     contentArea.className = `${this.cssPrefix}content`;
-    contentArea.style.top = `${dims.marginTop * this.scale}pt`;
-    contentArea.style.left = `${dims.marginLeft * this.scale}pt`;
+    contentArea.style.position = "absolute";
+    contentArea.style.top = `${dims.marginTop}pt`;
+    contentArea.style.left = `${dims.marginLeft}pt`;
     contentArea.style.width = `${dims.contentWidth}pt`;
     contentArea.style.height = `${dims.contentHeight}pt`;
-    contentArea.style.transform = `scale(${this.scale})`;
-    contentArea.style.transformOrigin = "top left";
+    contentArea.style.overflow = "hidden";
 
     // Add content
     for (const el of content) {
