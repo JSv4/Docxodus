@@ -969,27 +969,44 @@ namespace Docxodus
             sb.AppendLine("    line-height: 1.4;");
             sb.AppendLine("}");
 
-            // Separator line above footnotes
+            // Separator line above footnotes - subtle horizontal rule
             sb.AppendLine($".{prefix}footnotes hr {{");
             sb.AppendLine("    border: none;");
-            sb.AppendLine("    border-top: 1px solid #666;");
-            sb.AppendLine("    width: 30%;");
-            sb.AppendLine("    margin: 0 0 4pt 0;");
+            sb.AppendLine("    border-top: 1px solid #999;");
+            sb.AppendLine("    width: 33%;");
+            sb.AppendLine("    margin: 0 0 6pt 0;");
+            sb.AppendLine("    opacity: 0.6;");
             sb.AppendLine("}");
 
             // Individual footnote item (in registry and on page)
             sb.AppendLine(".footnote-item {");
-            sb.AppendLine("    margin-bottom: 2pt;");
+            sb.AppendLine("    margin-bottom: 4pt;");
             sb.AppendLine("}");
 
-            // Footnote number
+            // Footnote number - inline with superscript styling
             sb.AppendLine(".footnote-number {");
             sb.AppendLine("    font-weight: normal;");
+            sb.AppendLine("    display: inline;");
+            sb.AppendLine("    vertical-align: super;");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("    margin-right: 2pt;");
             sb.AppendLine("}");
 
             // Footnote content (inline with number)
             sb.AppendLine(".footnote-content {");
             sb.AppendLine("    display: inline;");
+            sb.AppendLine("}");
+
+            // Make first paragraph in footnote content inline to flow with number
+            sb.AppendLine(".footnote-content > p:first-child {");
+            sb.AppendLine("    display: inline;");
+            sb.AppendLine("}");
+
+            // Subsequent paragraphs in footnote get normal block display with indent
+            sb.AppendLine(".footnote-content > p:not(:first-child) {");
+            sb.AppendLine("    display: block;");
+            sb.AppendLine("    margin-top: 2pt;");
+            sb.AppendLine("    margin-left: 12pt;");
             sb.AppendLine("}");
 
             return sb.ToString();
