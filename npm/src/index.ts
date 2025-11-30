@@ -297,6 +297,23 @@ async function toBytes(input: File | Uint8Array): Promise<Uint8Array> {
  *   renderAnnotations: true,
  *   annotationLabelMode: AnnotationLabelMode.Above
  * });
+ *
+ * // With footnotes and endnotes
+ * const html = await convertDocxToHtml(docxFile, {
+ *   renderFootnotesAndEndnotes: true
+ * });
+ *
+ * // With headers and footers
+ * const html = await convertDocxToHtml(docxFile, {
+ *   renderHeadersAndFooters: true
+ * });
+ *
+ * // With tracked changes (redlines visible)
+ * const html = await convertDocxToHtml(docxFile, {
+ *   renderTrackedChanges: true,
+ *   showDeletedContent: true,
+ *   renderMoveOperations: true
+ * });
  * ```
  */
 export async function convertDocxToHtml(
@@ -308,22 +325,34 @@ export async function convertDocxToHtml(
 
   let result: string;
 
-  // Use full method when annotations are requested
-  if (options?.renderAnnotations) {
-    result = exports.DocumentConverter.ConvertDocxToHtmlFull(
+  // Check if any of the new complete options are specified
+  const needsCompleteMethod = options?.renderFootnotesAndEndnotes !== undefined ||
+    options?.renderHeadersAndFooters !== undefined ||
+    options?.renderTrackedChanges !== undefined ||
+    options?.showDeletedContent !== undefined ||
+    options?.renderMoveOperations !== undefined;
+
+  // Use complete method when any new options are specified (most comprehensive)
+  if (needsCompleteMethod || options?.renderAnnotations) {
+    result = exports.DocumentConverter.ConvertDocxToHtmlComplete(
       bytes,
-      options.pageTitle ?? "Document",
-      options.cssPrefix ?? "docx-",
-      options.fabricateClasses ?? true,
-      options.additionalCss ?? "",
-      options.commentRenderMode ?? CommentRenderMode.Disabled,
-      options.commentCssClassPrefix ?? "comment-",
-      options.paginationMode ?? PaginationMode.None,
-      options.paginationScale ?? 1.0,
-      options.paginationCssClassPrefix ?? "page-",
-      options.renderAnnotations,
-      options.annotationLabelMode ?? AnnotationLabelMode.Above,
-      options.annotationCssClassPrefix ?? "annot-"
+      options?.pageTitle ?? "Document",
+      options?.cssPrefix ?? "docx-",
+      options?.fabricateClasses ?? true,
+      options?.additionalCss ?? "",
+      options?.commentRenderMode ?? CommentRenderMode.Disabled,
+      options?.commentCssClassPrefix ?? "comment-",
+      options?.paginationMode ?? PaginationMode.None,
+      options?.paginationScale ?? 1.0,
+      options?.paginationCssClassPrefix ?? "page-",
+      options?.renderAnnotations ?? false,
+      options?.annotationLabelMode ?? AnnotationLabelMode.Above,
+      options?.annotationCssClassPrefix ?? "annot-",
+      options?.renderFootnotesAndEndnotes ?? false,
+      options?.renderHeadersAndFooters ?? false,
+      options?.renderTrackedChanges ?? false,
+      options?.showDeletedContent ?? true,
+      options?.renderMoveOperations ?? true
     );
   }
   // Use pagination-aware method when pagination is requested
