@@ -33,8 +33,12 @@ export interface PageDimensions {
 export interface MeasuredBlock {
   /** The DOM element */
   element: HTMLElement;
-  /** Measured height in points */
+  /** Measured height in points (content + padding + border, excluding margins) */
   heightPt: number;
+  /** Top margin in points */
+  marginTopPt: number;
+  /** Bottom margin in points */
+  marginBottomPt: number;
   /** Whether to keep this block with the next one */
   keepWithNext: boolean;
   /** Whether to keep all lines of this block together */
@@ -237,8 +241,15 @@ export class PaginationEngine {
         continue;
       }
 
+      // Measure height and margins separately for proper margin collapsing calculation
+      // getBoundingClientRect() returns content+padding+border, not margins
       const rect = child.getBoundingClientRect();
+      const style = window.getComputedStyle(child);
+      const marginTopPx = parseFloat(style.marginTop) || 0;
+      const marginBottomPx = parseFloat(style.marginBottom) || 0;
       const heightPt = pxToPt(rect.height);
+      const marginTopPt = pxToPt(marginTopPx);
+      const marginBottomPt = pxToPt(marginBottomPx);
 
       const isPageBreak =
         child.dataset.pageBreak === "true" ||
@@ -247,6 +258,8 @@ export class PaginationEngine {
       blocks.push({
         element: child,
         heightPt,
+        marginTopPt,
+        marginBottomPt,
         keepWithNext: child.dataset.keepWithNext === "true",
         keepLines: child.dataset.keepLines === "true",
         pageBreakBefore: child.dataset.pageBreakBefore === "true",
@@ -270,6 +283,8 @@ export class PaginationEngine {
     let currentContent: HTMLElement[] = [];
     let remainingHeight = dims.contentHeight;
     let pageNumber = startPageNumber;
+    // Track the previous block's bottom margin for margin collapsing
+    let prevMarginBottomPt = 0;
 
     const finishPage = () => {
       if (currentContent.length === 0) return;
@@ -280,6 +295,7 @@ export class PaginationEngine {
       pageNumber++;
       currentContent = [];
       remainingHeight = dims.contentHeight;
+      prevMarginBottomPt = 0; // Reset margin tracking for new page
     };
 
     for (let i = 0; i < blocks.length; i++) {
@@ -297,22 +313,41 @@ export class PaginationEngine {
         finishPage();
       }
 
+      // Calculate the effective height this block will consume
+      // Account for margin collapsing: the gap between blocks is max(prevBottom, currTop), not sum
+      const isFirstOnPage = currentContent.length === 0;
+      let effectiveMarginTop = block.marginTopPt;
+      if (!isFirstOnPage) {
+        // Margin collapsing: use the larger of the two adjacent margins
+        effectiveMarginTop = Math.max(block.marginTopPt, prevMarginBottomPt) - prevMarginBottomPt;
+      }
+      // Total height = top margin gap + content + bottom margin
+      // But we only count bottom margin if it's the last block (otherwise it collapses with next)
+      const blockSpace = effectiveMarginTop + block.heightPt + block.marginBottomPt;
+
       // Calculate needed height (including keepWithNext)
-      let neededHeight = block.heightPt;
+      let neededHeight = blockSpace;
       if (block.keepWithNext && nextBlock && !nextBlock.isPageBreak) {
-        neededHeight += nextBlock.heightPt;
+        // For keepWithNext, include the next block with collapsed margins
+        const collapsedMargin = Math.max(block.marginBottomPt, nextBlock.marginTopPt);
+        neededHeight = effectiveMarginTop + block.heightPt + collapsedMargin +
+                       nextBlock.heightPt + nextBlock.marginBottomPt;
       }
 
       // Check if block fits on current page
-      if (block.heightPt <= remainingHeight) {
+      if (blockSpace <= remainingHeight) {
         // Block fits
         currentContent.push(block.element.cloneNode(true) as HTMLElement);
-        remainingHeight -= block.heightPt;
-      } else if (block.heightPt <= dims.contentHeight) {
+        remainingHeight -= blockSpace;
+        prevMarginBottomPt = block.marginBottomPt;
+      } else if (block.heightPt + block.marginTopPt + block.marginBottomPt <= dims.contentHeight) {
         // Block doesn't fit but will fit on a new page
         finishPage();
+        // On new page, include full top margin
+        const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
         currentContent.push(block.element.cloneNode(true) as HTMLElement);
-        remainingHeight = dims.contentHeight - block.heightPt;
+        remainingHeight = dims.contentHeight - newPageSpace;
+        prevMarginBottomPt = block.marginBottomPt;
       } else {
         // Block is taller than a page - add it and let it overflow
         // (In a more sophisticated implementation, we would split the block)

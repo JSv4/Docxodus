@@ -118,25 +118,51 @@ The pagination algorithm in `flowToPages()` handles several cases:
 3. **Keep with next**: Blocks marked with `data-keep-with-next="true"` consider the next block's height
 4. **Oversized blocks**: Blocks taller than a page get their own page (overflow is clipped)
 
+### Block Measurement
+
+Each block is measured with `getBoundingClientRect()` for content dimensions, plus `getComputedStyle()` for margins:
+
 ```typescript
+interface MeasuredBlock {
+  element: HTMLElement;
+  heightPt: number;      // Content + padding + border (excluding margins)
+  marginTopPt: number;   // Top margin
+  marginBottomPt: number; // Bottom margin
+  // ... other properties
+}
+```
+
+### Margin Collapsing
+
+CSS vertical margins collapse between adjacent blocks. The algorithm accounts for this:
+
+```typescript
+// Track the previous block's bottom margin
+let prevMarginBottomPt = 0;
+
 for (const block of blocks) {
-  if (block.heightPt <= remainingHeight) {
-    // Block fits on current page
+  // Calculate effective margin gap (collapsed)
+  const isFirstOnPage = currentContent.length === 0;
+  let effectiveMarginTop = block.marginTopPt;
+  if (!isFirstOnPage) {
+    // Margin collapsing: gap is max(prevBottom, currTop), not sum
+    effectiveMarginTop = Math.max(block.marginTopPt, prevMarginBottomPt) - prevMarginBottomPt;
+  }
+
+  // Total space = effective margin + content + bottom margin
+  const blockSpace = effectiveMarginTop + block.heightPt + block.marginBottomPt;
+
+  if (blockSpace <= remainingHeight) {
     currentContent.push(block.element.cloneNode(true));
-    remainingHeight -= block.heightPt;
-  } else if (block.heightPt <= dims.contentHeight) {
-    // Block fits on a new page
-    finishPage();
-    currentContent.push(block.element.cloneNode(true));
-    remainingHeight = dims.contentHeight - block.heightPt;
+    remainingHeight -= blockSpace;
+    prevMarginBottomPt = block.marginBottomPt;
   } else {
-    // Oversized block - let it overflow (clipped by page container)
-    finishPage();
-    currentContent.push(block.element.cloneNode(true));
-    finishPage();
+    // Start new page...
   }
 }
 ```
+
+This ensures accurate pagination that matches browser rendering behavior.
 
 ## Scaling Implementation
 
