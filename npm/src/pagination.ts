@@ -347,17 +347,28 @@ export class PaginationEngine {
     pageBox.style.height = `${dims.pageHeight}pt`;
     pageBox.style.overflow = "hidden";
     pageBox.style.position = "relative";
-    pageBox.style.transform = `scale(${this.scale})`;
-    pageBox.style.transformOrigin = "top left";
-    // Use margin to create proper spacing between scaled pages
-    // Transform doesn't affect layout, so we use negative margin to pull next page up
-    // and positive margin-bottom for the gap
+    // Use CSS zoom for better text rendering when supported, fall back to transform
+    // Zoom affects layout (no negative margin hack needed) and renders text more crisply
+    // Note: zoom is non-standard but supported in all major browsers
     if (this.scale !== 1) {
-      const heightReduction = dims.pageHeight * (1 - this.scale);
-      const widthReduction = dims.pageWidth * (1 - this.scale);
-      pageBox.style.marginRight = `-${widthReduction}pt`;
-      pageBox.style.marginBottom = `${this.pageGap - heightReduction}px`;
+      // Try zoom first (better text quality), with transform as fallback
+      pageBox.style.zoom = String(this.scale);
+      // For browsers that don't support zoom, also set transform
+      // The zoom takes precedence in supporting browsers
+      pageBox.style.transform = `scale(${this.scale})`;
+      pageBox.style.transformOrigin = "top left";
+      // Compensate for transform not affecting layout (only needed if zoom not supported)
+      // Convert pt to px for consistent unit math
+      const heightReductionPt = dims.pageHeight * (1 - this.scale);
+      const widthReductionPt = dims.pageWidth * (1 - this.scale);
+      const heightReductionPx = ptToPx(heightReductionPt);
+      const widthReductionPx = ptToPx(widthReductionPt);
+      pageBox.style.marginRight = `-${widthReductionPx}px`;
+      pageBox.style.marginBottom = `${this.pageGap - heightReductionPx}px`;
     }
+    // Hint browser for GPU compositing and layout isolation
+    pageBox.style.willChange = "transform";
+    pageBox.style.contain = "layout paint";
     pageBox.dataset.pageNumber = String(pageNumber);
     pageBox.dataset.sectionIndex = String(sectionIndex);
 

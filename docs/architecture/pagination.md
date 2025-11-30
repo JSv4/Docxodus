@@ -140,18 +140,32 @@ for (const block of blocks) {
 
 ## Scaling Implementation
 
-Scaling is implemented by applying CSS `transform: scale()` to the entire page box:
+Scaling uses a hybrid approach with CSS `zoom` (preferred) and `transform` (fallback):
 
 1. Page box is created at **full document size** (e.g., 612pt × 792pt)
 2. Content area is positioned at **full margins** with **full dimensions**
-3. `transform: scale(factor)` scales the entire page box
-4. `transform-origin: top left` keeps the top-left corner fixed
-5. Negative margins compensate for transform not affecting layout
+3. **CSS `zoom`** is applied first (better text rendering, affects layout naturally)
+4. **CSS `transform: scale()`** is also set as fallback for browsers without zoom support
+5. `transform-origin: top left` keeps the top-left corner fixed
+6. Negative margins compensate for transform not affecting layout (only needed when zoom unsupported)
+
+### Why Zoom + Transform?
+
+- **CSS `zoom`**: Non-standard but widely supported (Chrome, Safari, Edge, Firefox 126+). Affects layout directly, renders text at target resolution for crisp output.
+- **CSS `transform`**: Standard but doesn't affect layout. Text may appear blurry at fractional scales because it's rasterized at original size then scaled.
+
+When both are set, browsers that support `zoom` use it and ignore the redundant transform scaling effect. Browsers without zoom support fall back to transform.
+
+### Performance Optimizations
+
+- **`will-change: transform`**: Hints browser to create a GPU compositing layer
+- **`contain: layout paint`**: Isolates the page box for layout and paint operations, preventing changes from affecting siblings
 
 This approach ensures:
 - Content is properly contained and clipped by `overflow: hidden`
 - Scaling is uniform for all page elements
-- No coordinate system mismatches between content and container
+- Crisp text rendering in modern browsers
+- Fallback for older browsers
 
 ## CSS Structure
 
