@@ -393,6 +393,28 @@ for (const block of blocks) {
 3. **Measurement caching**: Footnote heights measured once per unique combination
 4. **Endnotes unchanged**: Endnotes remain at document end (traditional behavior)
 5. **Footnote continuation**: Long footnotes split at paragraph boundaries and continue on subsequent pages
+6. **Dynamic footnote area**: Footnotes can expand upward to use more page space before splitting
+
+### Dynamic Footnote Area Expansion
+
+Unlike a fixed body/footnote split, the footnote area can dynamically expand upward to fit more content:
+
+```typescript
+// Maximum footnote area: 60% of content height
+const MAX_FOOTNOTE_AREA_RATIO = 0.6;
+
+// Minimum body content per page: 72pt (1 inch)
+const MIN_BODY_CONTENT_HEIGHT = 72;
+```
+
+**Algorithm:**
+1. Calculate space needed for body block + its footnotes
+2. If total exceeds remaining space, check if footnote area can expand
+3. Footnote area can grow up to `MAX_FOOTNOTE_AREA_RATIO * contentHeight`
+4. Body content area shrinks correspondingly (minimum `MIN_BODY_CONTENT_HEIGHT`)
+5. Only split footnotes when expanded area is still insufficient
+
+This matches Word/Office behavior where footnotes tactically expand to fill available space.
 
 ### Footnote Continuation
 
