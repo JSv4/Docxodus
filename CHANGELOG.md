@@ -128,6 +128,17 @@ All notable changes to this project will be documented in this file.
   - `findMovePair()` function to find the matching revision for a move
   - Comprehensive JSDoc documentation on the `Revision` interface
   - All types are properly exported from the package
+- **Paginated Headers and Footers** - Headers/footers now render correctly with pagination enabled
+  - When both `RenderHeadersAndFooters` and `RenderPagination=Paginated` are enabled, headers and footers appear on each page
+  - Per-section header/footer support with section index tracking
+  - First page headers/footers supported (when `w:titlePg` is set in document)
+  - Even page headers/footers supported for different odd/even page layouts
+  - Headers/footers rendered into hidden registry for client-side cloning per-page
+  - New data attributes: `data-header-height`, `data-footer-height` on section elements
+  - TypeScript `PageDimensions` interface extended with `headerHeight` and `footerHeight`
+  - CSS classes `.page-header` and `.page-footer` for positioning within page boxes
+  - Automatic hiding of system page number when document has footer content
+  - See `docs/architecture/paginated_headers_footers.md` for full architecture details
 - `SkiaSharpHelpers.cs` - Color utilities for SkiaSharp compatibility
 - `GetPackage()` extension method in `PtOpenXmlUtil.cs` for SDK 3.x Package access
 - `SkiaSharp.NativeAssets.Linux.NoDependencies` package for Linux runtime support

@@ -1223,6 +1223,20 @@ namespace Docxodus
             sb.AppendLine("    transform-origin: top left;");
             sb.AppendLine("}");
 
+            // Header area within page (positioned at top margin)
+            sb.AppendLine($".{prefix}header {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    overflow: hidden;");
+            sb.AppendLine("    box-sizing: border-box;");
+            sb.AppendLine("}");
+
+            // Footer area within page (positioned at bottom margin)
+            sb.AppendLine($".{prefix}footer {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    overflow: hidden;");
+            sb.AppendLine("    box-sizing: border-box;");
+            sb.AppendLine("}");
+
             // Page number indicator
             sb.AppendLine($".{prefix}number {{");
             sb.AppendLine("    position: absolute;");
@@ -1232,6 +1246,11 @@ namespace Docxodus
             sb.AppendLine("    font-size: 11px;");
             sb.AppendLine("    color: #666;");
             sb.AppendLine("    pointer-events: none;");
+            sb.AppendLine("}");
+
+            // Hide system page number when page has a document footer
+            sb.AppendLine($".{prefix}box:has(.{prefix}footer) .{prefix}number {{");
+            sb.AppendLine("    display: none;");
             sb.AppendLine("}");
 
             // Page break marker (rendered by client-side as separator)
@@ -1371,8 +1390,15 @@ namespace Docxodus
             {
                 var bodyContent = new List<object>();
 
-                // Add headers at the top if enabled
-                if (settings.RenderHeadersAndFooters)
+                // In pagination mode, headers/footers are rendered into the registry
+                // and cloned per-page by the client-side pagination engine.
+                // Only render document-level headers when NOT using pagination.
+                bool usePaginatedHeadersFooters =
+                    settings.RenderHeadersAndFooters &&
+                    settings.RenderPagination == PaginationMode.Paginated;
+
+                // Add headers at the top if enabled (non-paginated mode only)
+                if (settings.RenderHeadersAndFooters && !usePaginatedHeadersFooters)
                 {
                     var headersSection = RenderHeadersSection(wordDoc, settings);
                     if (headersSection != null)
@@ -1414,8 +1440,8 @@ namespace Docxodus
                         bodyContent.Add(endnotesSection);
                 }
 
-                // Add footers at the bottom if enabled
-                if (settings.RenderHeadersAndFooters)
+                // Add footers at the bottom if enabled (non-paginated mode only)
+                if (settings.RenderHeadersAndFooters && !usePaginatedHeadersFooters)
                 {
                     var footersSection = RenderFootersSection(wordDoc, settings);
                     if (footersSection != null)
@@ -2182,6 +2208,195 @@ namespace Docxodus
             return new XElement(Xhtml.footer,
                 new XAttribute("class", "document-footer"),
                 content);
+        }
+
+        /// <summary>
+        /// Renders headers and footers into a hidden registry for pagination mode.
+        /// Each header/footer is stored with section index and type metadata for client-side cloning.
+        /// </summary>
+        private static XElement RenderPaginatedHeaderFooterRegistry(
+            WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings,
+            XElement bodyElement)
+        {
+            var registry = new XElement(Xhtml.div,
+                new XAttribute("id", "pagination-hf-registry"),
+                new XAttribute("style", "display:none"));
+
+            // Collect all section properties from the document
+            var sectionProperties = new List<XElement>();
+
+            // Get section properties from paragraph annotations
+            foreach (var para in bodyElement.Descendants(W.p))
+            {
+                var sectAnnotation = para.Annotation<SectionAnnotation>();
+                if (sectAnnotation?.SectionElement != null)
+                {
+                    var sectPr = sectAnnotation.SectionElement;
+                    if (!sectionProperties.Contains(sectPr))
+                        sectionProperties.Add(sectPr);
+                }
+            }
+
+            // If no sections found from annotations, get from document body
+            if (sectionProperties.Count == 0)
+            {
+                var mainDoc = wordDoc.MainDocumentPart.GetXDocument();
+                var body = mainDoc.Root?.Element(W.body);
+                var sectPr = body?.Element(W.sectPr) ?? body?.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
+                if (sectPr != null)
+                    sectionProperties.Add(sectPr);
+            }
+
+            // Render headers/footers for each section
+            for (int sectionIndex = 0; sectionIndex < sectionProperties.Count; sectionIndex++)
+            {
+                var sectPr = sectionProperties[sectionIndex];
+
+                // Check if section has different first page headers/footers
+                bool hasTitlePage = sectPr.Element(W.titlePg) != null;
+
+                // Render default header
+                var defaultHeaderContent = RenderHeaderForSection(wordDoc, settings, sectPr, "default");
+                if (defaultHeaderContent != null)
+                {
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "header-default"),
+                        defaultHeaderContent));
+                }
+
+                // Render first page header if different first page is enabled
+                if (hasTitlePage)
+                {
+                    var firstHeaderContent = RenderHeaderForSection(wordDoc, settings, sectPr, "first");
+                    if (firstHeaderContent != null)
+                    {
+                        registry.Add(new XElement(Xhtml.div,
+                            new XAttribute("data-section", sectionIndex),
+                            new XAttribute("data-hf-type", "header-first"),
+                            firstHeaderContent));
+                    }
+                }
+
+                // Render even header if exists
+                var evenHeaderContent = RenderHeaderForSection(wordDoc, settings, sectPr, "even");
+                if (evenHeaderContent != null)
+                {
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "header-even"),
+                        evenHeaderContent));
+                }
+
+                // Render default footer
+                var defaultFooterContent = RenderFooterForSection(wordDoc, settings, sectPr, "default");
+                if (defaultFooterContent != null)
+                {
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "footer-default"),
+                        defaultFooterContent));
+                }
+
+                // Render first page footer if different first page is enabled
+                if (hasTitlePage)
+                {
+                    var firstFooterContent = RenderFooterForSection(wordDoc, settings, sectPr, "first");
+                    if (firstFooterContent != null)
+                    {
+                        registry.Add(new XElement(Xhtml.div,
+                            new XAttribute("data-section", sectionIndex),
+                            new XAttribute("data-hf-type", "footer-first"),
+                            firstFooterContent));
+                    }
+                }
+
+                // Render even footer if exists
+                var evenFooterContent = RenderFooterForSection(wordDoc, settings, sectPr, "even");
+                if (evenFooterContent != null)
+                {
+                    registry.Add(new XElement(Xhtml.div,
+                        new XAttribute("data-section", sectionIndex),
+                        new XAttribute("data-hf-type", "footer-even"),
+                        evenFooterContent));
+                }
+            }
+
+            // Only return registry if it has content
+            return registry.HasElements ? registry : null;
+        }
+
+        /// <summary>
+        /// Renders a header of a specific type for a section.
+        /// </summary>
+        private static object RenderHeaderForSection(
+            WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings,
+            XElement sectPr,
+            string headerType)
+        {
+            var headerRef = sectPr?.Elements(W.headerReference)
+                .FirstOrDefault(hr => (string)hr.Attribute(W.type) == headerType);
+
+            if (headerRef == null)
+                return null;
+
+            var headerId = (string)headerRef.Attribute(R.id);
+            if (headerId == null)
+                return null;
+
+            var headerPart = wordDoc.MainDocumentPart.GetPartById(headerId) as HeaderPart;
+            if (headerPart == null)
+                return null;
+
+            var headerXDoc = headerPart.GetXDocument();
+            var headerRoot = headerXDoc.Root;
+
+            if (headerRoot == null || !headerRoot.Elements().Any())
+                return null;
+
+            // Convert the content of the header
+            return headerRoot.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .Where(c => c != null)
+                .ToList();
+        }
+
+        /// <summary>
+        /// Renders a footer of a specific type for a section.
+        /// </summary>
+        private static object RenderFooterForSection(
+            WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings,
+            XElement sectPr,
+            string footerType)
+        {
+            var footerRef = sectPr?.Elements(W.footerReference)
+                .FirstOrDefault(fr => (string)fr.Attribute(W.type) == footerType);
+
+            if (footerRef == null)
+                return null;
+
+            var footerId = (string)footerRef.Attribute(R.id);
+            if (footerId == null)
+                return null;
+
+            var footerPart = wordDoc.MainDocumentPart.GetPartById(footerId) as FooterPart;
+            if (footerPart == null)
+                return null;
+
+            var footerXDoc = footerPart.GetXDocument();
+            var footerRoot = footerXDoc.Root;
+
+            if (footerRoot == null || !footerRoot.Elements().Any())
+                return null;
+
+            // Convert the content of the footer
+            return footerRoot.Elements()
+                .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
+                .Where(c => c != null)
+                .ToList();
         }
 
         private static void LoadComments(WordprocessingDocument wordDoc, CommentTracker tracker)
@@ -3272,6 +3487,8 @@ namespace Docxodus
                             div.Add(new XAttribute("data-margin-right", dims.MarginRightPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
                             div.Add(new XAttribute("data-margin-bottom", dims.MarginBottomPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
                             div.Add(new XAttribute("data-margin-left", dims.MarginLeftPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                            div.Add(new XAttribute("data-header-height", dims.HeaderPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
+                            div.Add(new XAttribute("data-footer-height", dims.FooterPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
                         }
                     }
 
@@ -3284,13 +3501,26 @@ namespace Docxodus
             if (settings.RenderPagination == PaginationMode.Paginated)
             {
                 var prefix = settings.PaginationCssClassPrefix ?? "page-";
+                var stagingContent = new List<object>();
+
+                // Add header/footer registry if headers/footers are enabled
+                if (settings.RenderHeadersAndFooters)
+                {
+                    var hfRegistry = RenderPaginatedHeaderFooterRegistry(wordDoc, settings, element);
+                    if (hfRegistry != null)
+                        stagingContent.Add(hfRegistry);
+                }
+
+                // Add section content
+                stagingContent.AddRange(divList);
+
                 return new object[]
                 {
                     // Staging area containing the content (hidden by CSS for client-side measurement)
                     new XElement(Xhtml.div,
                         new XAttribute("id", "pagination-staging"),
                         new XAttribute("class", prefix + "staging"),
-                        divList),
+                        stagingContent),
                     // Container where paginated content will be rendered by client-side JavaScript
                     new XElement(Xhtml.div,
                         new XAttribute("id", "pagination-container"),
