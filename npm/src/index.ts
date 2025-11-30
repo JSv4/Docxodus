@@ -8,11 +8,17 @@ import type {
   DocxodusWasmExports,
   GetRevisionsOptions,
   FormatChangeDetails,
+  Annotation,
+  AddAnnotationRequest,
+  AddAnnotationResponse,
+  RemoveAnnotationResponse,
+  AnnotationOptions,
 } from "./types.js";
 
 import {
   CommentRenderMode,
   PaginationMode,
+  AnnotationLabelMode,
   RevisionType,
   isInsertion,
   isDeletion,
@@ -43,11 +49,17 @@ export type {
   CompareResult,
   GetRevisionsOptions,
   FormatChangeDetails,
+  Annotation,
+  AddAnnotationRequest,
+  AddAnnotationResponse,
+  RemoveAnnotationResponse,
+  AnnotationOptions,
 };
 
 export {
   CommentRenderMode,
   PaginationMode,
+  AnnotationLabelMode,
   RevisionType,
   isInsertion,
   isDeletion,
@@ -235,6 +247,12 @@ async function toBytes(input: File | Uint8Array): Promise<Uint8Array> {
  *   paginationMode: PaginationMode.Paginated,
  *   paginationScale: 0.8
  * });
+ *
+ * // With annotations rendered
+ * const html = await convertDocxToHtml(docxFile, {
+ *   renderAnnotations: true,
+ *   annotationLabelMode: AnnotationLabelMode.Above
+ * });
  * ```
  */
 export async function convertDocxToHtml(
@@ -246,8 +264,26 @@ export async function convertDocxToHtml(
 
   let result: string;
 
+  // Use full method when annotations are requested
+  if (options?.renderAnnotations) {
+    result = exports.DocumentConverter.ConvertDocxToHtmlFull(
+      bytes,
+      options.pageTitle ?? "Document",
+      options.cssPrefix ?? "docx-",
+      options.fabricateClasses ?? true,
+      options.additionalCss ?? "",
+      options.commentRenderMode ?? CommentRenderMode.Disabled,
+      options.commentCssClassPrefix ?? "comment-",
+      options.paginationMode ?? PaginationMode.None,
+      options.paginationScale ?? 1.0,
+      options.paginationCssClassPrefix ?? "page-",
+      options.renderAnnotations,
+      options.annotationLabelMode ?? AnnotationLabelMode.Above,
+      options.annotationCssClassPrefix ?? "annot-"
+    );
+  }
   // Use pagination-aware method when pagination is requested
-  if (options?.paginationMode !== undefined && options.paginationMode !== PaginationMode.None) {
+  else if (options?.paginationMode !== undefined && options.paginationMode !== PaginationMode.None) {
     result = exports.DocumentConverter.ConvertDocxToHtmlWithPagination(
       bytes,
       options.pageTitle ?? "Document",
@@ -447,4 +483,195 @@ export function getVersion(): VersionInfo {
  */
 export function isInitialized(): boolean {
   return wasmExports !== null;
+}
+
+/**
+ * Get all annotations from a document.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @returns Array of annotations
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * const annotations = await getAnnotations(docxFile);
+ * for (const annot of annotations) {
+ *   console.log(`${annot.label}: "${annot.annotatedText}"`);
+ * }
+ * ```
+ */
+export async function getAnnotations(
+  document: File | Uint8Array
+): Promise<Annotation[]> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const result = exports.DocumentConverter.GetAnnotations(bytes);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get annotations: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return (parsed.Annotations || parsed.annotations || []).map((a: any) => ({
+    id: a.Id || a.id,
+    labelId: a.LabelId || a.labelId,
+    label: a.Label || a.label,
+    color: a.Color || a.color,
+    author: a.Author || a.author,
+    created: a.Created || a.created,
+    bookmarkName: a.BookmarkName || a.bookmarkName,
+    startPage: a.StartPage ?? a.startPage,
+    endPage: a.EndPage ?? a.endPage,
+    annotatedText: a.AnnotatedText || a.annotatedText,
+    metadata: a.Metadata || a.metadata,
+  }));
+}
+
+/**
+ * Add an annotation to a document.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param request - Annotation details including search text or paragraph indices
+ * @returns Response with modified document bytes and annotation info
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * // Annotate by searching for text
+ * const result = await addAnnotation(docxFile, {
+ *   id: "annot-1",
+ *   labelId: "CLAUSE_A",
+ *   label: "Important Clause",
+ *   color: "#FFEB3B",
+ *   searchText: "shall not be liable",
+ *   occurrence: 1
+ * });
+ *
+ * // Annotate by paragraph range
+ * const result = await addAnnotation(docxFile, {
+ *   id: "annot-2",
+ *   labelId: "SECTION_1",
+ *   label: "Introduction",
+ *   color: "#4CAF50",
+ *   startParagraphIndex: 0,
+ *   endParagraphIndex: 2
+ * });
+ *
+ * // Get modified document
+ * const modifiedDocBytes = base64ToBytes(result.documentBytes);
+ * ```
+ */
+export async function addAnnotation(
+  document: File | Uint8Array,
+  request: AddAnnotationRequest
+): Promise<AddAnnotationResponse> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const requestJson = JSON.stringify({
+    Id: request.id,
+    LabelId: request.labelId,
+    Label: request.label,
+    Color: request.color ?? "#FFEB3B",
+    Author: request.author,
+    SearchText: request.searchText,
+    Occurrence: request.occurrence ?? 1,
+    StartParagraphIndex: request.startParagraphIndex,
+    EndParagraphIndex: request.endParagraphIndex,
+    Metadata: request.metadata,
+  });
+
+  const result = exports.DocumentConverter.AddAnnotation(bytes, requestJson);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to add annotation: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  const annotation = parsed.Annotation || parsed.annotation;
+
+  return {
+    success: parsed.Success ?? parsed.success ?? true,
+    documentBytes: parsed.DocumentBytes || parsed.documentBytes,
+    annotation: annotation ? {
+      id: annotation.Id || annotation.id,
+      labelId: annotation.LabelId || annotation.labelId,
+      label: annotation.Label || annotation.label,
+      color: annotation.Color || annotation.color,
+      author: annotation.Author || annotation.author,
+      created: annotation.Created || annotation.created,
+      bookmarkName: annotation.BookmarkName || annotation.bookmarkName,
+      annotatedText: annotation.AnnotatedText || annotation.annotatedText,
+    } : undefined,
+  };
+}
+
+/**
+ * Remove an annotation from a document.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param annotationId - The ID of the annotation to remove
+ * @returns Response with modified document bytes
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * const result = await removeAnnotation(docxFile, "annot-1");
+ * const modifiedDocBytes = base64ToBytes(result.documentBytes);
+ * ```
+ */
+export async function removeAnnotation(
+  document: File | Uint8Array,
+  annotationId: string
+): Promise<RemoveAnnotationResponse> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const result = exports.DocumentConverter.RemoveAnnotation(bytes, annotationId);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to remove annotation: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return {
+    success: parsed.Success ?? parsed.success ?? true,
+    documentBytes: parsed.DocumentBytes || parsed.documentBytes,
+  };
+}
+
+/**
+ * Check if a document has any annotations.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @returns true if the document has annotations
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * if (await hasAnnotations(docxFile)) {
+ *   const annotations = await getAnnotations(docxFile);
+ *   console.log(`Document has ${annotations.length} annotations`);
+ * }
+ * ```
+ */
+export async function hasAnnotations(
+  document: File | Uint8Array
+): Promise<boolean> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const result = exports.DocumentConverter.HasAnnotations(bytes);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to check annotations: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return parsed.HasAnnotations ?? parsed.hasAnnotations ?? false;
 }

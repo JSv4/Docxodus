@@ -115,6 +115,96 @@ async function convertToHtmlWithPagination(
   );
 }
 
+// Helper to convert to HTML with annotations
+async function convertToHtmlWithAnnotations(
+  page: Page,
+  bytes: Uint8Array,
+  renderAnnotations: boolean = true,
+  annotationLabelMode: number = 0
+): Promise<{ html?: string; error?: any }> {
+  return await page.evaluate(
+    ([bytesArray, render, labelMode]) => {
+      return (window as any).DocxodusTests.convertToHtmlWithAnnotations(
+        new Uint8Array(bytesArray),
+        render,
+        labelMode
+      );
+    },
+    [Array.from(bytes), renderAnnotations, annotationLabelMode]
+  );
+}
+
+// Helper to get annotations from a document
+async function getAnnotationsFromDoc(
+  page: Page,
+  bytes: Uint8Array
+): Promise<{ annotations?: any[]; error?: any }> {
+  return await page.evaluate((bytesArray) => {
+    return (window as any).DocxodusTests.getAnnotations(new Uint8Array(bytesArray));
+  }, Array.from(bytes));
+}
+
+// Helper to add an annotation to a document
+async function addAnnotationToDoc(
+  page: Page,
+  bytes: Uint8Array,
+  request: any
+): Promise<{ success?: boolean; documentBytes?: number[]; annotation?: any; error?: any }> {
+  const result = await page.evaluate(
+    ([bytesArray, req]) => {
+      const result = (window as any).DocxodusTests.addAnnotation(
+        new Uint8Array(bytesArray),
+        req
+      );
+      if (result.documentBytes) {
+        return {
+          success: result.success,
+          documentBytes: Array.from(result.documentBytes),
+          annotation: result.annotation
+        };
+      }
+      return result;
+    },
+    [Array.from(bytes), request]
+  );
+  return result;
+}
+
+// Helper to remove an annotation from a document
+async function removeAnnotationFromDoc(
+  page: Page,
+  bytes: number[],
+  annotationId: string
+): Promise<{ success?: boolean; documentBytes?: number[]; error?: any }> {
+  const result = await page.evaluate(
+    ([bytesArray, id]) => {
+      const result = (window as any).DocxodusTests.removeAnnotation(
+        new Uint8Array(bytesArray),
+        id
+      );
+      if (result.documentBytes) {
+        return {
+          success: result.success,
+          documentBytes: Array.from(result.documentBytes)
+        };
+      }
+      return result;
+    },
+    [bytes, annotationId]
+  );
+  return result;
+}
+
+// Helper to check if a document has annotations
+async function hasAnnotationsInDoc(
+  page: Page,
+  bytes: Uint8Array | number[]
+): Promise<{ hasAnnotations?: boolean; error?: any }> {
+  return await page.evaluate((bytesArray) => {
+    return (window as any).DocxodusTests.hasAnnotations(new Uint8Array(bytesArray));
+  }, Array.from(bytes as any));
+}
+
 test.describe('Docxodus WASM Tests', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/test-harness.html');
@@ -650,6 +740,347 @@ test.describe('Docxodus WASM Tests', () => {
 
         console.log(`Scale ${scale}: ${paginationResult.totalPages} pages, no overflow`);
       }
+    });
+  });
+
+  test.describe('Annotation Tests', () => {
+    // Use a simple document for annotation tests
+    const testDoc = 'HC006-Test-01.docx';
+
+    test('document initially has no annotations', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await hasAnnotationsInDoc(page, bytes);
+
+      expect(result.error).toBeUndefined();
+      expect(result.hasAnnotations).toBe(false);
+
+      console.log('Document has no initial annotations');
+    });
+
+    test('can add an annotation using text search', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Add an annotation
+      const addResult = await addAnnotationToDoc(page, bytes, {
+        Id: 'test-annot-1',
+        LabelId: 'CLAUSE_A',
+        Label: 'Test Clause',
+        Color: '#FFEB3B',
+        SearchText: 'the',
+        Occurrence: 1
+      });
+
+      expect(addResult.error).toBeUndefined();
+      expect(addResult.success).toBe(true);
+      expect(addResult.documentBytes).toBeDefined();
+      expect(addResult.documentBytes!.length).toBeGreaterThan(1000);
+      expect(addResult.annotation).toBeDefined();
+      expect(addResult.annotation.Id).toBe('test-annot-1');
+
+      console.log('Added annotation:', addResult.annotation);
+    });
+
+    test('can retrieve annotations from a document', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Add an annotation
+      const addResult = await addAnnotationToDoc(page, bytes, {
+        Id: 'test-annot-retrieve',
+        LabelId: 'SECTION_1',
+        Label: 'Section One',
+        Color: '#4CAF50',
+        SearchText: 'the',
+        Occurrence: 1
+      });
+
+      expect(addResult.error).toBeUndefined();
+      expect(addResult.documentBytes).toBeDefined();
+
+      // Retrieve annotations
+      const getResult = await getAnnotationsFromDoc(
+        page,
+        new Uint8Array(addResult.documentBytes!)
+      );
+
+      expect(getResult.error).toBeUndefined();
+      expect(getResult.annotations).toBeDefined();
+      expect(getResult.annotations!.length).toBe(1);
+      expect(getResult.annotations![0].Id).toBe('test-annot-retrieve');
+      expect(getResult.annotations![0].LabelId).toBe('SECTION_1');
+      expect(getResult.annotations![0].Label).toBe('Section One');
+      expect(getResult.annotations![0].Color).toBe('#4CAF50');
+
+      console.log('Retrieved annotations:', getResult.annotations);
+    });
+
+    test('can add multiple annotations', async ({ page }) => {
+      let bytes = readTestFile(testDoc);
+
+      // Add first annotation
+      const addResult1 = await addAnnotationToDoc(page, bytes, {
+        Id: 'multi-annot-1',
+        LabelId: 'CLAUSE_A',
+        Label: 'First',
+        Color: '#FFEB3B',
+        SearchText: 'the',
+        Occurrence: 1
+      });
+
+      expect(addResult1.error).toBeUndefined();
+      expect(addResult1.success).toBe(true);
+
+      // Add second annotation to modified document
+      const addResult2 = await addAnnotationToDoc(
+        page,
+        new Uint8Array(addResult1.documentBytes!),
+        {
+          Id: 'multi-annot-2',
+          LabelId: 'CLAUSE_B',
+          Label: 'Second',
+          Color: '#4CAF50',
+          SearchText: 'and',
+          Occurrence: 1
+        }
+      );
+
+      expect(addResult2.error).toBeUndefined();
+      expect(addResult2.success).toBe(true);
+
+      // Verify both annotations exist
+      const getResult = await getAnnotationsFromDoc(
+        page,
+        new Uint8Array(addResult2.documentBytes!)
+      );
+
+      expect(getResult.error).toBeUndefined();
+      expect(getResult.annotations).toBeDefined();
+      expect(getResult.annotations!.length).toBe(2);
+
+      const ids = getResult.annotations!.map((a: any) => a.Id);
+      expect(ids).toContain('multi-annot-1');
+      expect(ids).toContain('multi-annot-2');
+
+      console.log('Added multiple annotations:', getResult.annotations!.length);
+    });
+
+    test('can remove an annotation', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Add an annotation
+      const addResult = await addAnnotationToDoc(page, bytes, {
+        Id: 'test-annot-remove',
+        LabelId: 'REMOVE_ME',
+        Label: 'To Remove',
+        Color: '#F44336',
+        SearchText: 'the',
+        Occurrence: 1
+      });
+
+      expect(addResult.error).toBeUndefined();
+      expect(addResult.documentBytes).toBeDefined();
+
+      // Verify it was added
+      const hasResult1 = await hasAnnotationsInDoc(page, addResult.documentBytes!);
+      expect(hasResult1.hasAnnotations).toBe(true);
+
+      // Remove the annotation
+      const removeResult = await removeAnnotationFromDoc(
+        page,
+        addResult.documentBytes!,
+        'test-annot-remove'
+      );
+
+      expect(removeResult.error).toBeUndefined();
+      expect(removeResult.success).toBe(true);
+      expect(removeResult.documentBytes).toBeDefined();
+
+      // Verify it was removed
+      const hasResult2 = await hasAnnotationsInDoc(page, removeResult.documentBytes!);
+      expect(hasResult2.hasAnnotations).toBe(false);
+
+      console.log('Successfully removed annotation');
+    });
+
+    test('annotation rendering generates highlight spans', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Add an annotation
+      const addResult = await addAnnotationToDoc(page, bytes, {
+        Id: 'render-test',
+        LabelId: 'HIGHLIGHT',
+        Label: 'Highlighted Text',
+        Color: '#FFEB3B',
+        SearchText: 'the',
+        Occurrence: 1
+      });
+
+      expect(addResult.error).toBeUndefined();
+
+      // Convert to HTML with annotations enabled
+      const htmlResult = await convertToHtmlWithAnnotations(
+        page,
+        new Uint8Array(addResult.documentBytes!),
+        true,
+        0  // AnnotationLabelMode.Above
+      );
+
+      expect(htmlResult.error).toBeUndefined();
+      expect(htmlResult.html).toBeDefined();
+
+      // Check for annotation highlight elements
+      expect(htmlResult.html).toContain('annot-highlight');
+      expect(htmlResult.html).toContain('data-annotation-id="render-test"');
+      expect(htmlResult.html).toContain('Highlighted Text');  // The label text
+
+      console.log('Annotation rendering generates highlight spans with labels');
+    });
+
+    test('annotation CSS includes highlight styles', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Add an annotation with a specific color
+      const addResult = await addAnnotationToDoc(page, bytes, {
+        Id: 'css-test',
+        LabelId: 'STYLE_CHECK',
+        Label: 'Styled',
+        Color: '#4CAF50',
+        SearchText: 'the',
+        Occurrence: 1
+      });
+
+      expect(addResult.error).toBeUndefined();
+
+      // Convert to HTML with annotations
+      const htmlResult = await convertToHtmlWithAnnotations(
+        page,
+        new Uint8Array(addResult.documentBytes!),
+        true,
+        0
+      );
+
+      expect(htmlResult.error).toBeUndefined();
+      expect(htmlResult.html).toBeDefined();
+
+      // Check for annotation CSS
+      expect(htmlResult.html).toContain('<style');
+      expect(htmlResult.html).toContain('.annot-highlight');
+
+      // Check that the annotation color is used
+      expect(htmlResult.html).toContain('#4CAF50');
+
+      console.log('Annotation CSS includes highlight styles with proper color');
+    });
+
+    test('annotation label modes render differently', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Add an annotation
+      const addResult = await addAnnotationToDoc(page, bytes, {
+        Id: 'label-mode-test',
+        LabelId: 'MODE_TEST',
+        Label: 'Test Label',
+        Color: '#2196F3',
+        SearchText: 'the',
+        Occurrence: 1
+      });
+
+      expect(addResult.error).toBeUndefined();
+      const annotatedBytes = new Uint8Array(addResult.documentBytes!);
+
+      // Test different label modes
+      const modes = [
+        { mode: 0, name: 'Above', checkFor: 'annot-label' },
+        { mode: 1, name: 'Inline', checkFor: 'annot-label' },
+        { mode: 2, name: 'Tooltip', checkFor: 'annot-highlight' },
+        { mode: 3, name: 'None', checkFor: 'annot-highlight' }
+      ];
+
+      for (const { mode, name, checkFor } of modes) {
+        const htmlResult = await convertToHtmlWithAnnotations(
+          page,
+          annotatedBytes,
+          true,
+          mode
+        );
+
+        expect(htmlResult.error).toBeUndefined();
+        expect(htmlResult.html).toBeDefined();
+        expect(htmlResult.html).toContain(checkFor);
+
+        console.log(`Label mode ${name} (${mode}): Rendered correctly`);
+      }
+    });
+
+    test('annotation metadata is preserved', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Add an annotation with metadata
+      const addResult = await addAnnotationToDoc(page, bytes, {
+        Id: 'metadata-test',
+        LabelId: 'META',
+        Label: 'With Metadata',
+        Color: '#9C27B0',
+        SearchText: 'the',
+        Occurrence: 1,
+        Author: 'Test Author',
+        Metadata: {
+          customKey: 'customValue',
+          priority: 'high'
+        }
+      });
+
+      expect(addResult.error).toBeUndefined();
+
+      // Retrieve and verify metadata
+      const getResult = await getAnnotationsFromDoc(
+        page,
+        new Uint8Array(addResult.documentBytes!)
+      );
+
+      expect(getResult.error).toBeUndefined();
+      expect(getResult.annotations).toBeDefined();
+      expect(getResult.annotations!.length).toBe(1);
+
+      const annot = getResult.annotations![0];
+      expect(annot.Author).toBe('Test Author');
+      expect(annot.Metadata).toBeDefined();
+      expect(annot.Metadata.customKey).toBe('customValue');
+      expect(annot.Metadata.priority).toBe('high');
+
+      console.log('Annotation metadata preserved:', annot.Metadata);
+    });
+
+    test('disabling annotation rendering produces clean HTML', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Add an annotation
+      const addResult = await addAnnotationToDoc(page, bytes, {
+        Id: 'disable-test',
+        LabelId: 'HIDDEN',
+        Label: 'Should Be Hidden',
+        Color: '#FF5722',
+        SearchText: 'the',
+        Occurrence: 1
+      });
+
+      expect(addResult.error).toBeUndefined();
+
+      // Convert to HTML with annotations DISABLED
+      const htmlResult = await convertToHtmlWithAnnotations(
+        page,
+        new Uint8Array(addResult.documentBytes!),
+        false,  // renderAnnotations = false
+        0
+      );
+
+      expect(htmlResult.error).toBeUndefined();
+      expect(htmlResult.html).toBeDefined();
+
+      // Verify no annotation elements
+      expect(htmlResult.html).not.toContain('annot-highlight');
+      expect(htmlResult.html).not.toContain('data-annotation-id');
+
+      console.log('Disabled annotation rendering produces clean HTML');
     });
   });
 });

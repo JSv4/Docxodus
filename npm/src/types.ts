@@ -42,6 +42,20 @@ export enum PaginationMode {
 }
 
 /**
+ * Annotation label display mode
+ */
+export enum AnnotationLabelMode {
+  /** Floating label positioned above the highlight */
+  Above = 0,
+  /** Label displayed inline at start of highlight */
+  Inline = 1,
+  /** Label shown only on hover (tooltip) */
+  Tooltip = 2,
+  /** No labels displayed, only highlights */
+  None = 3,
+}
+
+/**
  * Options for DOCX to HTML conversion
  */
 export interface ConversionOptions {
@@ -63,6 +77,12 @@ export interface ConversionOptions {
   paginationScale?: number;
   /** CSS class prefix for pagination elements. Default: "page-" */
   paginationCssClassPrefix?: string;
+  /** Whether to render custom annotations (default: false) */
+  renderAnnotations?: boolean;
+  /** How to display annotation labels (default: Above) */
+  annotationLabelMode?: AnnotationLabelMode;
+  /** CSS class prefix for annotation elements (default: "annot-") */
+  annotationCssClassPrefix?: string;
 }
 
 /**
@@ -337,6 +357,25 @@ export interface DocxodusWasmExports {
       paginationScale: number,
       paginationCssClassPrefix: string
     ) => string;
+    ConvertDocxToHtmlFull: (
+      bytes: Uint8Array,
+      pageTitle: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      additionalCss: string,
+      commentRenderMode: number,
+      commentCssClassPrefix: string,
+      paginationMode: number,
+      paginationScale: number,
+      paginationCssClassPrefix: string,
+      renderAnnotations: boolean,
+      annotationLabelMode: number,
+      annotationCssClassPrefix: string
+    ) => string;
+    GetAnnotations: (bytes: Uint8Array) => string;
+    AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;
+    RemoveAnnotation: (bytes: Uint8Array, annotationId: string) => string;
+    HasAnnotations: (bytes: Uint8Array) => string;
     GetVersion: () => string;
   };
   DocumentComparer: {
@@ -404,4 +443,92 @@ export interface GetRevisionsOptions {
    * @default false
    */
   caseInsensitive?: boolean;
+}
+
+/**
+ * A custom annotation on a document range.
+ */
+export interface Annotation {
+  /** Unique annotation ID */
+  id: string;
+  /** Label category/type identifier (e.g., "CLAUSE_TYPE_A", "DATE_REF") */
+  labelId: string;
+  /** Human-readable label text */
+  label: string;
+  /** Highlight color in hex format (e.g., "#FFEB3B") */
+  color: string;
+  /** Author who created the annotation */
+  author?: string;
+  /** Creation timestamp (ISO 8601) */
+  created?: string;
+  /** Internal bookmark name */
+  bookmarkName?: string;
+  /** Start page number (if computed) */
+  startPage?: number;
+  /** End page number (if computed) */
+  endPage?: number;
+  /** The annotated text content */
+  annotatedText?: string;
+  /** Custom metadata key-value pairs */
+  metadata?: Record<string, string>;
+}
+
+/**
+ * Request to add an annotation to a document.
+ */
+export interface AddAnnotationRequest {
+  /** Unique annotation ID */
+  id: string;
+  /** Label category/type identifier */
+  labelId: string;
+  /** Human-readable label text */
+  label: string;
+  /** Highlight color in hex format (default: "#FFEB3B") */
+  color?: string;
+  /** Author who created the annotation */
+  author?: string;
+  /** Text to search for and annotate */
+  searchText?: string;
+  /** Which occurrence to annotate (1-based, default: 1) */
+  occurrence?: number;
+  /** Start paragraph index (0-based) */
+  startParagraphIndex?: number;
+  /** End paragraph index (0-based, inclusive) */
+  endParagraphIndex?: number;
+  /** Custom metadata key-value pairs */
+  metadata?: Record<string, string>;
+}
+
+/**
+ * Response from adding an annotation.
+ */
+export interface AddAnnotationResponse {
+  /** Whether the operation succeeded */
+  success: boolean;
+  /** The modified document as base64 string */
+  documentBytes: string;
+  /** The added annotation details */
+  annotation?: Annotation;
+}
+
+/**
+ * Response from removing an annotation.
+ */
+export interface RemoveAnnotationResponse {
+  /** Whether the operation succeeded */
+  success: boolean;
+  /** The modified document as base64 string */
+  documentBytes: string;
+}
+
+/**
+ * Options for annotation rendering in HTML output.
+ */
+export interface AnnotationOptions {
+  /** Whether to render annotations (default: false) */
+  renderAnnotations?: boolean;
+  /** How to display annotation labels (default: Above) */
+  annotationLabelMode?: AnnotationLabelMode;
+  /** CSS class prefix for annotation elements (default: "annot-") */
+  annotationCssClassPrefix?: string;
 }

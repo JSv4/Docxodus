@@ -175,6 +175,30 @@ namespace Docxodus
         /// </summary>
         public string PaginationCssClassPrefix;
 
+        /// <summary>
+        /// If true, render custom annotations as highlights in HTML output.
+        /// Default: false
+        /// </summary>
+        public bool RenderAnnotations;
+
+        /// <summary>
+        /// CSS class prefix for annotation elements.
+        /// Default: "annot-"
+        /// </summary>
+        public string AnnotationCssClassPrefix;
+
+        /// <summary>
+        /// How to display annotation labels.
+        /// Default: Above
+        /// </summary>
+        public AnnotationLabelMode AnnotationLabelMode;
+
+        /// <summary>
+        /// If true, include annotation metadata as data attributes.
+        /// Default: true
+        /// </summary>
+        public bool IncludeAnnotationMetadata;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -199,6 +223,10 @@ namespace Docxodus
             RenderPagination = PaginationMode.None;
             PaginationScale = 1.0;
             PaginationCssClassPrefix = "page-";
+            RenderAnnotations = false;
+            AnnotationCssClassPrefix = "annot-";
+            AnnotationLabelMode = AnnotationLabelMode.Above;
+            IncludeAnnotationMetadata = true;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -227,6 +255,10 @@ namespace Docxodus
             RenderPagination = htmlConverterSettings.RenderPagination;
             PaginationScale = htmlConverterSettings.PaginationScale;
             PaginationCssClassPrefix = htmlConverterSettings.PaginationCssClassPrefix;
+            RenderAnnotations = htmlConverterSettings.RenderAnnotations;
+            AnnotationCssClassPrefix = htmlConverterSettings.AnnotationCssClassPrefix;
+            AnnotationLabelMode = htmlConverterSettings.AnnotationLabelMode;
+            IncludeAnnotationMetadata = htmlConverterSettings.IncludeAnnotationMetadata;
         }
     }
 
@@ -327,6 +359,30 @@ namespace Docxodus
         /// </summary>
         public string PaginationCssClassPrefix;
 
+        /// <summary>
+        /// If true, render custom annotations as highlights in HTML output.
+        /// Default: false
+        /// </summary>
+        public bool RenderAnnotations;
+
+        /// <summary>
+        /// CSS class prefix for annotation elements.
+        /// Default: "annot-"
+        /// </summary>
+        public string AnnotationCssClassPrefix;
+
+        /// <summary>
+        /// How to display annotation labels.
+        /// Default: Above
+        /// </summary>
+        public AnnotationLabelMode AnnotationLabelMode;
+
+        /// <summary>
+        /// If true, include annotation metadata as data attributes.
+        /// Default: true
+        /// </summary>
+        public bool IncludeAnnotationMetadata;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -351,6 +407,10 @@ namespace Docxodus
             RenderPagination = PaginationMode.None;
             PaginationScale = 1.0;
             PaginationCssClassPrefix = "page-";
+            RenderAnnotations = false;
+            AnnotationCssClassPrefix = "annot-";
+            AnnotationLabelMode = AnnotationLabelMode.Above;
+            IncludeAnnotationMetadata = true;
         }
     }
 
@@ -437,6 +497,33 @@ namespace Docxodus
         public List<int> ReferencedCommentIds { get; } = new List<int>();
     }
 
+    /// <summary>
+    /// Tracks annotation state during HTML transformation.
+    /// </summary>
+    internal class AnnotationTracker
+    {
+        /// <summary>
+        /// All annotations loaded from the document, keyed by ID.
+        /// </summary>
+        public Dictionary<string, DocumentAnnotation> Annotations { get; } = new Dictionary<string, DocumentAnnotation>();
+
+        /// <summary>
+        /// Maps bookmark names to annotation IDs.
+        /// </summary>
+        public Dictionary<string, string> BookmarkToAnnotationId { get; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// IDs of annotation ranges that are currently open (between bookmarkStart and bookmarkEnd).
+        /// </summary>
+        public HashSet<string> OpenRanges { get; } = new HashSet<string>();
+
+        /// <summary>
+        /// Tracks whether this is the first segment (paragraph) of an annotation for label positioning.
+        /// Key: annotation ID, Value: true if first segment has been rendered.
+        /// </summary>
+        public HashSet<string> FirstSegmentRendered { get; } = new HashSet<string>();
+    }
+
     public static class WmlToHtmlConverter
     {
         public static XElement ConvertToHtml(WmlDocument doc, WmlToHtmlConverterSettings htmlConverterSettings)
@@ -513,6 +600,14 @@ namespace Docxodus
             }
             // Store tracker as annotation on the root element for access during transform
             rootElement.AddAnnotation(commentTracker);
+
+            // Load custom annotations if rendering is enabled
+            var annotationTracker = new AnnotationTracker();
+            if (htmlConverterSettings.RenderAnnotations)
+            {
+                LoadAnnotations(wordDoc, annotationTracker);
+            }
+            rootElement.AddAnnotation(annotationTracker);
 
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
                 rootElement, false, 0m);
@@ -651,7 +746,8 @@ namespace Docxodus
                 var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
                 var commentCss = GenerateCommentCss(htmlConverterSettings);
                 var paginationCss = GeneratePaginationCss(htmlConverterSettings);
-                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + htmlConverterSettings.AdditionalCss;
+                var annotationCss = GenerateAnnotationCss(htmlConverterSettings);
+                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + annotationCss + htmlConverterSettings.AdditionalCss;
 
                 SetStyleElementValue(xhtml, styleValue);
             }
@@ -664,7 +760,8 @@ namespace Docxodus
                 var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
                 var commentCss = GenerateCommentCss(htmlConverterSettings);
                 var paginationCss = GeneratePaginationCss(htmlConverterSettings);
-                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + htmlConverterSettings.AdditionalCss);
+                var annotationCss = GenerateAnnotationCss(htmlConverterSettings);
+                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + annotationCss + htmlConverterSettings.AdditionalCss);
 
                 foreach (var d in xhtml.DescendantsAndSelf())
                 {
@@ -1150,6 +1247,98 @@ namespace Docxodus
             return sb.ToString();
         }
 
+        private static string GenerateAnnotationCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderAnnotations)
+                return string.Empty;
+
+            var prefix = settings.AnnotationCssClassPrefix ?? "annot-";
+            var sb = new StringBuilder();
+
+            sb.AppendLine();
+            sb.AppendLine("/* Custom Annotations CSS */");
+
+            // Annotation highlight base
+            sb.AppendLine($".{prefix}highlight {{");
+            sb.AppendLine("    position: relative;");
+            sb.AppendLine("    display: inline;");
+            sb.AppendLine("    background-color: color-mix(in srgb, var(--annot-color, #FFFF00) 35%, transparent);");
+            sb.AppendLine("    border-bottom: 2px solid var(--annot-color, #FFFF00);");
+            sb.AppendLine("    padding: 1px 2px;");
+            sb.AppendLine("    border-radius: 2px;");
+            sb.AppendLine("    transition: background-color 0.15s ease;");
+            sb.AppendLine("}");
+
+            // Hover state
+            sb.AppendLine($".{prefix}highlight:hover {{");
+            sb.AppendLine("    background-color: color-mix(in srgb, var(--annot-color, #FFFF00) 50%, transparent);");
+            sb.AppendLine("}");
+
+            // Floating label above highlight
+            sb.AppendLine($".{prefix}label {{");
+            sb.AppendLine("    position: absolute;");
+            sb.AppendLine("    top: -1.7em;");
+            sb.AppendLine("    left: 0;");
+            sb.AppendLine("    font-size: 0.7em;");
+            sb.AppendLine("    font-weight: 600;");
+            sb.AppendLine("    background: var(--annot-color, #FFFF00);");
+            sb.AppendLine("    color: #000;");
+            sb.AppendLine("    padding: 2px 6px;");
+            sb.AppendLine("    border-radius: 3px;");
+            sb.AppendLine("    white-space: nowrap;");
+            sb.AppendLine("    box-shadow: 0 1px 3px rgba(0,0,0,0.2);");
+            sb.AppendLine("    z-index: 100;");
+            sb.AppendLine("    pointer-events: none;");
+            sb.AppendLine("    line-height: 1.2;");
+            sb.AppendLine("}");
+
+            // Only show label on first segment of multi-paragraph annotations
+            sb.AppendLine($".{prefix}continuation .{prefix}label,");
+            sb.AppendLine($".{prefix}end .{prefix}label {{");
+            sb.AppendLine("    display: none;");
+            sb.AppendLine("}");
+
+            // Inline label mode
+            sb.AppendLine($".{prefix}highlight[data-label-mode=\"inline\"] .{prefix}label {{");
+            sb.AppendLine("    position: static;");
+            sb.AppendLine("    display: inline;");
+            sb.AppendLine("    margin-right: 4px;");
+            sb.AppendLine("    font-size: 0.8em;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+
+            // Tooltip mode - show on hover
+            sb.AppendLine($".{prefix}highlight[data-label-mode=\"tooltip\"] .{prefix}label {{");
+            sb.AppendLine("    display: none;");
+            sb.AppendLine("    top: auto;");
+            sb.AppendLine("    bottom: 100%;");
+            sb.AppendLine("    margin-bottom: 4px;");
+            sb.AppendLine("}");
+
+            sb.AppendLine($".{prefix}highlight[data-label-mode=\"tooltip\"]:hover .{prefix}label {{");
+            sb.AppendLine("    display: block;");
+            sb.AppendLine("}");
+
+            // No label mode
+            sb.AppendLine($".{prefix}highlight[data-label-mode=\"none\"] .{prefix}label {{");
+            sb.AppendLine("    display: none;");
+            sb.AppendLine("}");
+
+            // Handle nested/overlapping annotations
+            sb.AppendLine($".{prefix}highlight .{prefix}highlight {{");
+            sb.AppendLine("    background: none;");
+            sb.AppendLine("    border-bottom-style: dashed;");
+            sb.AppendLine("    padding: 0;");
+            sb.AppendLine("}");
+
+            // Ensure labels don't overlap badly for nested annotations
+            sb.AppendLine($".{prefix}highlight .{prefix}highlight .{prefix}label {{");
+            sb.AppendLine("    top: -3.2em;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
         private static object ConvertToHtmlTransform(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
@@ -1291,10 +1480,16 @@ namespace Docxodus
                 return ConvertRun(wordDoc, settings, element);
             }
 
-            // Transform w:bookmarkStart into anchor
+            // Transform w:bookmarkStart into anchor (and track annotation ranges)
             if (element.Name == W.bookmarkStart)
             {
-                return ProcessBookmarkStart(element);
+                return ProcessBookmarkStart(settings, element);
+            }
+
+            // Handle bookmarkEnd for closing annotation ranges
+            if (element.Name == W.bookmarkEnd)
+            {
+                return ProcessBookmarkEnd(settings, element);
             }
 
             // Transform every w:t element to a text node.
@@ -1450,10 +1645,20 @@ namespace Docxodus
             return a;
         }
 
-        private static object ProcessBookmarkStart(XElement element)
+        private static object ProcessBookmarkStart(WmlToHtmlConverterSettings settings, XElement element)
         {
             var name = (string) element.Attribute(W.name);
             if (name == null) return null;
+
+            // Check if this is an annotation bookmark and track it
+            if (settings.RenderAnnotations && name.StartsWith(AnnotationManager.BookmarkPrefix))
+            {
+                var tracker = GetAnnotationTracker(element);
+                if (tracker != null && tracker.BookmarkToAnnotationId.TryGetValue(name, out var annotationId))
+                {
+                    tracker.OpenRanges.Add(annotationId);
+                }
+            }
 
             var style = new Dictionary<string, string>();
             var a = new XElement(Xhtml.a,
@@ -1464,6 +1669,42 @@ namespace Docxodus
             style.Add("text-decoration", "none");
             a.AddAnnotation(style);
             return a;
+        }
+
+        private static object ProcessBookmarkEnd(WmlToHtmlConverterSettings settings, XElement element)
+        {
+            // bookmarkEnd uses w:id to reference the bookmark, not w:name
+            // We need to find the corresponding bookmarkStart to get the name
+            var id = (string)element.Attribute(W.id);
+            if (id == null)
+                return null;
+
+            if (!settings.RenderAnnotations)
+                return null;
+
+            var tracker = GetAnnotationTracker(element);
+            if (tracker == null)
+                return null;
+
+            // Find the corresponding bookmarkStart in the document to get the name
+            var root = element.AncestorsAndSelf().LastOrDefault();
+            if (root != null)
+            {
+                var bookmarkStart = root.Descendants(W.bookmarkStart)
+                    .FirstOrDefault(bs => (string)bs.Attribute(W.id) == id);
+
+                if (bookmarkStart != null)
+                {
+                    var name = (string)bookmarkStart.Attribute(W.name);
+                    if (name != null && name.StartsWith(AnnotationManager.BookmarkPrefix) &&
+                        tracker.BookmarkToAnnotationId.TryGetValue(name, out var annotationId))
+                    {
+                        tracker.OpenRanges.Remove(annotationId);
+                    }
+                }
+            }
+
+            return null;
         }
 
         private static object ProcessInsertion(WordprocessingDocument wordDoc,
@@ -1975,6 +2216,100 @@ namespace Docxodus
             // Walk up to the document root to find the annotation
             var root = element.AncestorsAndSelf().LastOrDefault();
             return root?.Annotation<CommentTracker>();
+        }
+
+        private static void LoadAnnotations(WordprocessingDocument wordDoc, AnnotationTracker tracker)
+        {
+            // Look for the custom XML part with our namespace
+            var customXmlParts = wordDoc.MainDocumentPart.CustomXmlParts;
+            if (customXmlParts == null)
+                return;
+
+            foreach (var customXmlPart in customXmlParts)
+            {
+                try
+                {
+                    var xDoc = XDocument.Load(customXmlPart.GetStream());
+                    if (xDoc.Root?.Name.LocalName == "annotations" &&
+                        xDoc.Root.Name.NamespaceName == AnnotationManager.AnnotationsNamespace)
+                    {
+                        // Found our annotations - parse them
+                        var ns = XNamespace.Get(AnnotationManager.AnnotationsNamespace);
+                        foreach (var annotElement in xDoc.Root.Elements(ns + "annotation"))
+                        {
+                            // Annotation data is stored as attributes, not elements
+                            var annotation = new DocumentAnnotation
+                            {
+                                Id = (string)annotElement.Attribute("id"),
+                                LabelId = (string)annotElement.Attribute("labelId"),
+                                Label = (string)annotElement.Attribute("label"),
+                                Color = (string)annotElement.Attribute("color"),
+                                Author = (string)annotElement.Attribute("author")
+                            };
+
+                            // BookmarkName is in a child range element
+                            var rangeElement = annotElement.Element(ns + "range");
+                            if (rangeElement != null)
+                            {
+                                annotation.BookmarkName = (string)rangeElement.Attribute("bookmarkName");
+                            }
+
+                            var createdStr = (string)annotElement.Attribute("created");
+                            if (!string.IsNullOrEmpty(createdStr) && DateTime.TryParse(createdStr, out var created))
+                                annotation.Created = created;
+
+                            // Page span is in a child element
+                            var pageSpanElement = annotElement.Element(ns + "pageSpan");
+                            if (pageSpanElement != null)
+                            {
+                                var startPageStr = (string)pageSpanElement.Attribute("startPage");
+                                if (!string.IsNullOrEmpty(startPageStr) && int.TryParse(startPageStr, out var startPage))
+                                    annotation.StartPage = startPage;
+
+                                var endPageStr = (string)pageSpanElement.Attribute("endPage");
+                                if (!string.IsNullOrEmpty(endPageStr) && int.TryParse(endPageStr, out var endPage))
+                                    annotation.EndPage = endPage;
+                            }
+
+                            // Load metadata
+                            var metadataElement = annotElement.Element(ns + "metadata");
+                            if (metadataElement != null)
+                            {
+                                foreach (var item in metadataElement.Elements(ns + "item"))
+                                {
+                                    var key = (string)item.Attribute("key");
+                                    var value = item.Value;
+                                    if (!string.IsNullOrEmpty(key))
+                                        annotation.Metadata[key] = value;
+                                }
+                            }
+
+                            if (!string.IsNullOrEmpty(annotation.Id))
+                            {
+                                tracker.Annotations[annotation.Id] = annotation;
+
+                                // Map bookmark name to annotation ID
+                                if (!string.IsNullOrEmpty(annotation.BookmarkName))
+                                {
+                                    tracker.BookmarkToAnnotationId[annotation.BookmarkName] = annotation.Id;
+                                }
+                            }
+                        }
+                        break; // Found our part, no need to continue
+                    }
+                }
+                catch
+                {
+                    // Skip invalid XML parts
+                }
+            }
+        }
+
+        private static AnnotationTracker GetAnnotationTracker(XElement element)
+        {
+            // Walk up to the document root to find the tracker
+            var root = element.AncestorsAndSelf().LastOrDefault();
+            return root?.Annotation<AnnotationTracker>();
         }
 
         private static object ProcessCommentRangeStart(WmlToHtmlConverterSettings settings, XElement element)
@@ -3465,6 +3800,79 @@ namespace Docxodus
 
                         highlightSpan.Add(content);
                         content = highlightSpan;
+                    }
+                }
+            }
+
+            // Wrap content in annotation highlight spans if inside an open annotation range
+            if (settings.RenderAnnotations)
+            {
+                var annotTracker = GetAnnotationTracker(run);
+                if (annotTracker != null && annotTracker.OpenRanges.Any())
+                {
+                    var prefix = settings.AnnotationCssClassPrefix ?? "annot-";
+
+                    // For each open annotation range, wrap the content
+                    foreach (var annotationId in annotTracker.OpenRanges.OrderBy(id => id))
+                    {
+                        if (annotTracker.Annotations.TryGetValue(annotationId, out var annotation))
+                        {
+                            var highlightSpan = new XElement(Xhtml.span,
+                                new XAttribute("class", prefix + "highlight"),
+                                new XAttribute("data-annotation-id", annotationId));
+
+                            // Set the color as a CSS custom property
+                            var inlineStyle = new Dictionary<string, string>();
+                            if (!string.IsNullOrEmpty(annotation.Color))
+                            {
+                                inlineStyle["--annot-color"] = annotation.Color;
+                            }
+
+                            // Add label mode
+                            var labelMode = settings.AnnotationLabelMode.ToString().ToLowerInvariant();
+                            highlightSpan.Add(new XAttribute("data-label-mode", labelMode));
+
+                            // Add metadata if requested
+                            if (settings.IncludeAnnotationMetadata)
+                            {
+                                highlightSpan.Add(new XAttribute("data-label-id", annotation.LabelId ?? ""));
+                                if (annotation.Author != null)
+                                    highlightSpan.Add(new XAttribute("data-author", annotation.Author));
+                                if (annotation.Created.HasValue)
+                                    highlightSpan.Add(new XAttribute("data-created", annotation.Created.Value.ToString("o")));
+                                if (annotation.StartPage.HasValue)
+                                    highlightSpan.Add(new XAttribute("data-start-page", annotation.StartPage.Value.ToString()));
+                                if (annotation.EndPage.HasValue)
+                                    highlightSpan.Add(new XAttribute("data-end-page", annotation.EndPage.Value.ToString()));
+                            }
+
+                            // Add floating label if this is the first segment of the annotation
+                            // and label mode is not None
+                            if (settings.AnnotationLabelMode != AnnotationLabelMode.None &&
+                                !annotTracker.FirstSegmentRendered.Contains(annotationId))
+                            {
+                                annotTracker.FirstSegmentRendered.Add(annotationId);
+                                var labelSpan = new XElement(Xhtml.span,
+                                    new XAttribute("class", prefix + "label"),
+                                    new XText(annotation.Label ?? annotation.LabelId ?? ""));
+                                highlightSpan.AddFirst(labelSpan);
+                            }
+                            else if (annotTracker.FirstSegmentRendered.Contains(annotationId))
+                            {
+                                // Mark as continuation for CSS styling
+                                var existingClass = (string)highlightSpan.Attribute("class");
+                                highlightSpan.SetAttributeValue("class", existingClass + " " + prefix + "continuation");
+                            }
+
+                            // Apply inline style
+                            if (inlineStyle.Any())
+                            {
+                                highlightSpan.AddAnnotation(inlineStyle);
+                            }
+
+                            highlightSpan.Add(content);
+                            content = highlightSpan;
+                        }
                     }
                 }
             }

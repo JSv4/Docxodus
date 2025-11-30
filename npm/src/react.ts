@@ -6,20 +6,40 @@ import {
   compareDocuments,
   compareDocumentsToHtml,
   getRevisions,
+  getAnnotations,
+  addAnnotation,
+  removeAnnotation,
+  hasAnnotations,
   isInitialized,
 } from "./index.js";
 import type {
   ConversionOptions,
   CompareOptions,
   Revision,
+  Annotation,
+  AddAnnotationRequest,
+  AddAnnotationResponse,
+  RemoveAnnotationResponse,
 } from "./types.js";
+import { AnnotationLabelMode } from "./types.js";
 import {
   PaginationEngine,
   type PaginationOptions,
   type PaginationResult,
 } from "./pagination.js";
 
-export type { ConversionOptions, CompareOptions, Revision, PaginationOptions, PaginationResult };
+export type {
+  ConversionOptions,
+  CompareOptions,
+  Revision,
+  PaginationOptions,
+  PaginationResult,
+  Annotation,
+  AddAnnotationRequest,
+  AddAnnotationResponse,
+  RemoveAnnotationResponse,
+};
+export { AnnotationLabelMode };
 
 export interface UseDocxodusResult {
   /** Whether the WASM runtime is loaded and ready */
@@ -47,6 +67,20 @@ export interface UseDocxodusResult {
   ) => Promise<string>;
   /** Get revisions from a compared document */
   getRevisions: (document: File | Uint8Array) => Promise<Revision[]>;
+  /** Get all annotations from a document */
+  getAnnotations: (document: File | Uint8Array) => Promise<Annotation[]>;
+  /** Add an annotation to a document */
+  addAnnotation: (
+    document: File | Uint8Array,
+    request: AddAnnotationRequest
+  ) => Promise<AddAnnotationResponse>;
+  /** Remove an annotation from a document */
+  removeAnnotation: (
+    document: File | Uint8Array,
+    annotationId: string
+  ) => Promise<RemoveAnnotationResponse>;
+  /** Check if a document has any annotations */
+  hasAnnotations: (document: File | Uint8Array) => Promise<boolean>;
 }
 
 /**
@@ -166,6 +200,46 @@ export function useDocxodus(wasmBasePath?: string): UseDocxodusResult {
     [isReady]
   );
 
+  const getAnnotationsCallback = useCallback(
+    async (document: File | Uint8Array) => {
+      if (!isReady) {
+        throw new Error("Docxodus not initialized");
+      }
+      return getAnnotations(document);
+    },
+    [isReady]
+  );
+
+  const addAnnotationCallback = useCallback(
+    async (document: File | Uint8Array, request: AddAnnotationRequest) => {
+      if (!isReady) {
+        throw new Error("Docxodus not initialized");
+      }
+      return addAnnotation(document, request);
+    },
+    [isReady]
+  );
+
+  const removeAnnotationCallback = useCallback(
+    async (document: File | Uint8Array, annotationId: string) => {
+      if (!isReady) {
+        throw new Error("Docxodus not initialized");
+      }
+      return removeAnnotation(document, annotationId);
+    },
+    [isReady]
+  );
+
+  const hasAnnotationsCallback = useCallback(
+    async (document: File | Uint8Array) => {
+      if (!isReady) {
+        throw new Error("Docxodus not initialized");
+      }
+      return hasAnnotations(document);
+    },
+    [isReady]
+  );
+
   return {
     isReady,
     isLoading,
@@ -174,6 +248,10 @@ export function useDocxodus(wasmBasePath?: string): UseDocxodusResult {
     compare,
     compareToHtml,
     getRevisions: getRevisionsCallback,
+    getAnnotations: getAnnotationsCallback,
+    addAnnotation: addAnnotationCallback,
+    removeAnnotation: removeAnnotationCallback,
+    hasAnnotations: hasAnnotationsCallback,
   };
 }
 
@@ -667,4 +745,364 @@ export function PaginatedDocument({
     className,
     style: containerStyle,
   }, isPaginating ? "Loading..." : null);
+}
+
+/**
+ * Result of the useAnnotations hook.
+ */
+export interface UseAnnotationsResult {
+  /** All annotations in the document */
+  annotations: Annotation[];
+  /** Whether annotations are being loaded or modified */
+  isLoading: boolean;
+  /** Error from the last operation */
+  error: Error | null;
+  /** Reload annotations from the document */
+  reload: () => Promise<void>;
+  /** Add a new annotation */
+  add: (request: AddAnnotationRequest) => Promise<AddAnnotationResponse | null>;
+  /** Remove an annotation by ID */
+  remove: (annotationId: string) => Promise<RemoveAnnotationResponse | null>;
+  /** The current document bytes (updated after add/remove) */
+  documentBytes: Uint8Array | null;
+}
+
+/**
+ * React hook for managing document annotations.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param wasmBasePath - Optional custom path to WASM files
+ * @returns Annotation state and CRUD operations
+ *
+ * @example
+ * ```tsx
+ * function AnnotationManager({ docxFile }: { docxFile: File }) {
+ *   const { annotations, isLoading, add, remove, documentBytes } = useAnnotations(docxFile);
+ *
+ *   const handleAddAnnotation = async () => {
+ *     await add({
+ *       id: `annot-${Date.now()}`,
+ *       labelId: "CLAUSE_A",
+ *       label: "Important Clause",
+ *       color: "#FFEB3B",
+ *       searchText: "shall not be liable"
+ *     });
+ *   };
+ *
+ *   return (
+ *     <div>
+ *       <h2>Annotations ({annotations.length})</h2>
+ *       {annotations.map(a => (
+ *         <div key={a.id} style={{ backgroundColor: a.color }}>
+ *           <span>{a.label}: {a.annotatedText}</span>
+ *           <button onClick={() => remove(a.id)}>Remove</button>
+ *         </div>
+ *       ))}
+ *       <button onClick={handleAddAnnotation}>Add Annotation</button>
+ *     </div>
+ *   );
+ * }
+ * ```
+ */
+export function useAnnotations(
+  document: File | Uint8Array | null,
+  wasmBasePath?: string
+): UseAnnotationsResult {
+  const docxodus = useDocxodus(wasmBasePath);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const [documentBytes, setDocumentBytes] = useState<Uint8Array | null>(null);
+
+  // Convert File to Uint8Array for internal use
+  const toBytes = useCallback(async (input: File | Uint8Array): Promise<Uint8Array> => {
+    if (input instanceof Uint8Array) {
+      return input;
+    }
+    const buffer = await input.arrayBuffer();
+    return new Uint8Array(buffer);
+  }, []);
+
+  // Initialize document bytes when document changes
+  useEffect(() => {
+    if (!document) {
+      setDocumentBytes(null);
+      setAnnotations([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const init = async () => {
+      try {
+        const bytes = await toBytes(document);
+        if (!cancelled) {
+          setDocumentBytes(bytes);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    };
+
+    init();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [document, toBytes]);
+
+  // Load annotations when document or WASM is ready
+  const reload = useCallback(async () => {
+    if (!docxodus.isReady || !documentBytes) {
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const annots = await docxodus.getAnnotations(documentBytes);
+      setAnnotations(annots);
+    } catch (err) {
+      setError(err instanceof Error ? err : new Error(String(err)));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [docxodus, documentBytes]);
+
+  // Auto-reload when document bytes change
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const add = useCallback(
+    async (request: AddAnnotationRequest): Promise<AddAnnotationResponse | null> => {
+      if (!docxodus.isReady || !documentBytes) {
+        setError(new Error("Document or WASM not ready"));
+        return null;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const response = await docxodus.addAnnotation(documentBytes, request);
+        if (response.success && response.documentBytes) {
+          // Decode base64 to Uint8Array
+          const binaryString = atob(response.documentBytes);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          setDocumentBytes(bytes);
+          // Annotations will reload via effect
+        }
+        return response;
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error(String(err)));
+        return null;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [docxodus, documentBytes]
+  );
+
+  const remove = useCallback(
+    async (annotationId: string): Promise<RemoveAnnotationResponse | null> => {
+      if (!docxodus.isReady || !documentBytes) {
+        setError(new Error("Document or WASM not ready"));
+        return null;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      try {
+        const response = await docxodus.removeAnnotation(documentBytes, annotationId);
+        if (response.success && response.documentBytes) {
+          // Decode base64 to Uint8Array
+          const binaryString = atob(response.documentBytes);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          setDocumentBytes(bytes);
+          // Annotations will reload via effect
+        }
+        return response;
+      } catch (err) {
+        setError(err instanceof Error ? err : new Error(String(err)));
+        return null;
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [docxodus, documentBytes]
+  );
+
+  return {
+    annotations,
+    isLoading,
+    error,
+    reload,
+    add,
+    remove,
+    documentBytes,
+  };
+}
+
+/**
+ * Props for the AnnotatedDocument component.
+ */
+export interface AnnotatedDocumentProps {
+  /** HTML string with annotation highlights (from convertDocxToHtml with renderAnnotations: true) */
+  html: string;
+  /** Callback when an annotation highlight is clicked */
+  onAnnotationClick?: (annotationId: string, annotation: Annotation | null) => void;
+  /** Callback when an annotation highlight is hovered */
+  onAnnotationHover?: (annotationId: string | null, annotation: Annotation | null) => void;
+  /** List of annotations for looking up details on click/hover */
+  annotations?: Annotation[];
+  /** CSS class prefix for annotation elements. Default: "annot-" */
+  cssPrefix?: string;
+  /** Additional CSS class for the container */
+  className?: string;
+  /** Additional inline styles for the container */
+  style?: CSSProperties;
+}
+
+/**
+ * React component for displaying a document with annotation highlights.
+ * Handles click and hover events on annotation spans.
+ *
+ * @example
+ * ```tsx
+ * import { useState, useEffect } from 'react';
+ * import { useDocxodus, useAnnotations, AnnotatedDocument, AnnotationLabelMode } from 'docxodus/react';
+ *
+ * function DocumentWithAnnotations({ docxFile }: { docxFile: File }) {
+ *   const { isReady, convertToHtml } = useDocxodus();
+ *   const { annotations } = useAnnotations(docxFile);
+ *   const [html, setHtml] = useState<string | null>(null);
+ *   const [selectedAnnotation, setSelectedAnnotation] = useState<Annotation | null>(null);
+ *
+ *   useEffect(() => {
+ *     if (isReady) {
+ *       convertToHtml(docxFile, {
+ *         renderAnnotations: true,
+ *         annotationLabelMode: AnnotationLabelMode.Above
+ *       }).then(setHtml);
+ *     }
+ *   }, [isReady, docxFile]);
+ *
+ *   return (
+ *     <div>
+ *       {html && (
+ *         <AnnotatedDocument
+ *           html={html}
+ *           annotations={annotations}
+ *           onAnnotationClick={(id, annot) => setSelectedAnnotation(annot)}
+ *         />
+ *       )}
+ *       {selectedAnnotation && (
+ *         <div className="sidebar">
+ *           <h3>{selectedAnnotation.label}</h3>
+ *           <p>{selectedAnnotation.annotatedText}</p>
+ *         </div>
+ *       )}
+ *     </div>
+ *   );
+ * }
+ * ```
+ */
+export function AnnotatedDocument({
+  html,
+  onAnnotationClick,
+  onAnnotationHover,
+  annotations = [],
+  cssPrefix = "annot-",
+  className,
+  style,
+}: AnnotatedDocumentProps): ReactElement {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Create annotation lookup map
+  const annotationMap = useMemo(() => {
+    const map = new Map<string, Annotation>();
+    for (const a of annotations) {
+      map.set(a.id, a);
+    }
+    return map;
+  }, [annotations]);
+
+  // Set up event delegation for annotation clicks and hovers
+  useEffect(() => {
+    if (!containerRef.current) {
+      return;
+    }
+
+    const container = containerRef.current;
+
+    const handleClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const annotSpan = target.closest(`.${cssPrefix}highlight`);
+      if (annotSpan && onAnnotationClick) {
+        const annotId = annotSpan.getAttribute("data-annotation-id");
+        if (annotId) {
+          const annotation = annotationMap.get(annotId) || null;
+          onAnnotationClick(annotId, annotation);
+        }
+      }
+    };
+
+    const handleMouseOver = (e: MouseEvent) => {
+      if (!onAnnotationHover) return;
+      const target = e.target as HTMLElement;
+      const annotSpan = target.closest(`.${cssPrefix}highlight`);
+      if (annotSpan) {
+        const annotId = annotSpan.getAttribute("data-annotation-id");
+        if (annotId) {
+          const annotation = annotationMap.get(annotId) || null;
+          onAnnotationHover(annotId, annotation);
+        }
+      }
+    };
+
+    const handleMouseOut = (e: MouseEvent) => {
+      if (!onAnnotationHover) return;
+      const target = e.target as HTMLElement;
+      const annotSpan = target.closest(`.${cssPrefix}highlight`);
+      if (annotSpan) {
+        // Check if we're moving to another annotation or outside
+        const relatedTarget = e.relatedTarget as HTMLElement | null;
+        if (!relatedTarget || !relatedTarget.closest(`.${cssPrefix}highlight`)) {
+          onAnnotationHover(null, null);
+        }
+      }
+    };
+
+    container.addEventListener("click", handleClick);
+    container.addEventListener("mouseover", handleMouseOver);
+    container.addEventListener("mouseout", handleMouseOut);
+
+    return () => {
+      container.removeEventListener("click", handleClick);
+      container.removeEventListener("mouseover", handleMouseOver);
+      container.removeEventListener("mouseout", handleMouseOut);
+    };
+  }, [cssPrefix, annotationMap, onAnnotationClick, onAnnotationHover]);
+
+  const containerStyle: CSSProperties = {
+    ...style,
+  };
+
+  return createElement("div", {
+    ref: containerRef,
+    className,
+    style: containerStyle,
+    dangerouslySetInnerHTML: { __html: html },
+  });
 }

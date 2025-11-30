@@ -96,6 +96,57 @@ public partial class DocumentConverter
         double paginationScale,
         string paginationCssClassPrefix)
     {
+        // Delegate to full version with annotations disabled
+        return ConvertDocxToHtmlFull(
+            docxBytes,
+            pageTitle,
+            cssPrefix,
+            fabricateClasses,
+            additionalCss,
+            commentRenderMode,
+            commentCssClassPrefix,
+            paginationMode,
+            paginationScale,
+            paginationCssClassPrefix,
+            renderAnnotations: false,
+            annotationLabelMode: 0,
+            annotationCssClassPrefix: "annot-"
+        );
+    }
+
+    /// <summary>
+    /// Convert a DOCX file to HTML with full options including annotations.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="pageTitle">Title for the HTML document</param>
+    /// <param name="cssPrefix">Prefix for generated CSS class names</param>
+    /// <param name="fabricateClasses">Whether to generate CSS classes</param>
+    /// <param name="additionalCss">Additional CSS to include</param>
+    /// <param name="commentRenderMode">Comment render mode: -1=disabled, 0=EndnoteStyle, 1=Inline, 2=Margin</param>
+    /// <param name="commentCssClassPrefix">CSS class prefix for comments (default: "comment-")</param>
+    /// <param name="paginationMode">Pagination mode: 0=None, 1=Paginated</param>
+    /// <param name="paginationScale">Scale factor for page rendering (1.0 = 100%)</param>
+    /// <param name="paginationCssClassPrefix">CSS class prefix for pagination elements (default: "page-")</param>
+    /// <param name="renderAnnotations">Whether to render custom annotations</param>
+    /// <param name="annotationLabelMode">Annotation label mode: 0=Above, 1=Inline, 2=Tooltip, 3=None</param>
+    /// <param name="annotationCssClassPrefix">CSS class prefix for annotations (default: "annot-")</param>
+    /// <returns>HTML string or JSON error object</returns>
+    [JSExport]
+    public static string ConvertDocxToHtmlFull(
+        byte[] docxBytes,
+        string pageTitle,
+        string cssPrefix,
+        bool fabricateClasses,
+        string additionalCss,
+        int commentRenderMode,
+        string commentCssClassPrefix,
+        int paginationMode,
+        double paginationScale,
+        string paginationCssClassPrefix,
+        bool renderAnnotations,
+        int annotationLabelMode,
+        string annotationCssClassPrefix)
+    {
         if (docxBytes == null || docxBytes.Length == 0)
         {
             return SerializeError("No document data provided");
@@ -125,11 +176,200 @@ public partial class DocumentConverter
                 IncludeCommentMetadata = true,
                 RenderPagination = (PaginationMode)paginationMode,
                 PaginationScale = paginationScale > 0 ? paginationScale : 1.0,
-                PaginationCssClassPrefix = paginationCssClassPrefix ?? "page-"
+                PaginationCssClassPrefix = paginationCssClassPrefix ?? "page-",
+                RenderAnnotations = renderAnnotations,
+                AnnotationLabelMode = (AnnotationLabelMode)annotationLabelMode,
+                AnnotationCssClassPrefix = annotationCssClassPrefix ?? "annot-",
+                IncludeAnnotationMetadata = true
             };
 
             var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, settings);
             return htmlElement.ToString(SaveOptions.DisableFormatting);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Get all annotations from a document.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <returns>JSON response with annotations array or error</returns>
+    [JSExport]
+    public static string GetAnnotations(byte[] docxBytes)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            return SerializeError("No document data provided");
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            var annotations = AnnotationManager.GetAnnotations(wmlDoc);
+
+            var response = new AnnotationsResponse
+            {
+                Annotations = annotations.Select(a => new AnnotationInfo
+                {
+                    Id = a.Id,
+                    LabelId = a.LabelId,
+                    Label = a.Label,
+                    Color = a.Color,
+                    Author = a.Author,
+                    Created = a.Created?.ToString("o"),
+                    BookmarkName = a.BookmarkName,
+                    StartPage = a.StartPage,
+                    EndPage = a.EndPage,
+                    AnnotatedText = a.AnnotatedText,
+                    Metadata = a.Metadata?.Count > 0 ? a.Metadata : null
+                }).ToArray()
+            };
+
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.AnnotationsResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Add an annotation to a document.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="requestJson">JSON request with annotation details</param>
+    /// <returns>JSON response with modified document bytes and annotation info</returns>
+    [JSExport]
+    public static string AddAnnotation(byte[] docxBytes, string requestJson)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            return SerializeError("No document data provided");
+        }
+
+        try
+        {
+            var request = JsonSerializer.Deserialize(requestJson, DocxodusJsonContext.Default.AddAnnotationRequest);
+            if (request == null)
+            {
+                return SerializeError("Invalid request JSON");
+            }
+
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+
+            var annotation = new DocumentAnnotation(request.Id, request.LabelId, request.Label, request.Color)
+            {
+                Author = request.Author
+            };
+
+            if (request.Metadata != null)
+            {
+                foreach (var (key, value) in request.Metadata)
+                {
+                    annotation.Metadata[key] = value;
+                }
+            }
+
+            AnnotationRange range;
+            if (!string.IsNullOrEmpty(request.SearchText))
+            {
+                range = AnnotationRange.FromSearch(request.SearchText, request.Occurrence);
+            }
+            else if (request.StartParagraphIndex.HasValue && request.EndParagraphIndex.HasValue)
+            {
+                range = AnnotationRange.FromParagraphs(request.StartParagraphIndex.Value, request.EndParagraphIndex.Value);
+            }
+            else
+            {
+                return SerializeError("Request must specify either SearchText or paragraph indices");
+            }
+
+            var resultDoc = AnnotationManager.AddAnnotation(wmlDoc, annotation, range);
+
+            // Get the added annotation to return its details
+            var addedAnnotation = AnnotationManager.GetAnnotation(resultDoc, request.Id);
+
+            return JsonSerializer.Serialize(new
+            {
+                Success = true,
+                DocumentBytes = Convert.ToBase64String(resultDoc.DocumentByteArray),
+                Annotation = addedAnnotation != null ? new AnnotationInfo
+                {
+                    Id = addedAnnotation.Id,
+                    LabelId = addedAnnotation.LabelId,
+                    Label = addedAnnotation.Label,
+                    Color = addedAnnotation.Color,
+                    Author = addedAnnotation.Author,
+                    Created = addedAnnotation.Created?.ToString("o"),
+                    BookmarkName = addedAnnotation.BookmarkName,
+                    AnnotatedText = addedAnnotation.AnnotatedText
+                } : null
+            });
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Remove an annotation from a document.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="annotationId">The ID of the annotation to remove</param>
+    /// <returns>Base64-encoded modified document bytes or JSON error</returns>
+    [JSExport]
+    public static string RemoveAnnotation(byte[] docxBytes, string annotationId)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            return SerializeError("No document data provided");
+        }
+
+        if (string.IsNullOrEmpty(annotationId))
+        {
+            return SerializeError("Annotation ID is required");
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            var resultDoc = AnnotationManager.RemoveAnnotation(wmlDoc, annotationId);
+
+            return JsonSerializer.Serialize(new
+            {
+                Success = true,
+                DocumentBytes = Convert.ToBase64String(resultDoc.DocumentByteArray)
+            });
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Check if a document has any annotations.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <returns>JSON with HasAnnotations boolean</returns>
+    [JSExport]
+    public static string HasAnnotations(byte[] docxBytes)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            return SerializeError("No document data provided");
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            var hasAnnotations = AnnotationManager.HasAnnotations(wmlDoc);
+
+            return JsonSerializer.Serialize(new { HasAnnotations = hasAnnotations });
         }
         catch (Exception ex)
         {
