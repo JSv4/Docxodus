@@ -144,11 +144,48 @@ cd Redlines
 # Build
 dotnet build Docxodus.sln
 
-# Run tests
-dotnet test Docxodus.Tests/Docxodus.Tests.csproj
-
 # Run the CLI
 dotnet run --project tools/redline/redline.csproj -- --help
+```
+
+## Testing
+
+### .NET Unit Tests
+
+```bash
+# Run all tests (~1,050 tests)
+dotnet test Docxodus.Tests/Docxodus.Tests.csproj
+
+# Run specific test by name
+dotnet test --filter "FullyQualifiedName~WC001"
+
+# Run tests for a specific class
+dotnet test --filter "FullyQualifiedName~WmlComparerTests"
+```
+
+### npm/WASM Browser Tests (Playwright)
+
+```bash
+cd npm
+
+# Install dependencies (first time only)
+npm install
+npx playwright install chromium
+
+# Build WASM and TypeScript (required before tests)
+npm run build
+
+# Run all Playwright tests (~62 tests)
+npm test
+
+# Run specific test by name pattern
+npx playwright test --grep "Document Structure"
+
+# Run tests with browser visible
+npx playwright test --headed
+
+# TypeScript type checking
+npx tsc --noEmit
 ```
 
 ## Features
