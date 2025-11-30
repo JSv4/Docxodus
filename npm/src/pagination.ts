@@ -626,6 +626,7 @@ export class PaginationEngine {
     pageBox: HTMLElement,
     footnoteIds: string[],
     dims: PageDimensions,
+    footnoteHeight: number,
     continuation?: FootnoteContinuation | null,
     partialFootnotes?: PartialFootnote[]
   ): void {
@@ -640,6 +641,12 @@ export class PaginationEngine {
     // Create a set of partial footnote IDs for quick lookup
     const partialFootnoteIds = new Set(partialFootnotes?.map(p => p.footnoteId) || []);
 
+    // Calculate max height for footnotes area (content height minus margin for body content)
+    const maxFootnoteHeight = Math.min(
+      footnoteHeight,
+      dims.contentHeight * MAX_FOOTNOTE_AREA_RATIO
+    );
+
     const footnotesDiv = document.createElement("div");
     footnotesDiv.className = `${this.cssPrefix}footnotes`;
     footnotesDiv.style.position = "absolute";
@@ -647,6 +654,9 @@ export class PaginationEngine {
     footnotesDiv.style.left = `${dims.marginLeft}pt`;
     footnotesDiv.style.width = `${dims.contentWidth}pt`;
     footnotesDiv.style.boxSizing = "border-box";
+    // Constrain height and clip overflow to prevent footnotes covering body content
+    footnotesDiv.style.maxHeight = `${maxFootnoteHeight}pt`;
+    footnotesDiv.style.overflow = "hidden";
 
     // Add separator line
     const hr = document.createElement("hr");
@@ -797,6 +807,7 @@ export class PaginationEngine {
         currentContent,
         pageInSection,
         currentFootnoteIds,
+        currentFootnoteHeight,
         currentContinuation,
         currentPartialFootnotes.length > 0 ? currentPartialFootnotes : undefined
       );
@@ -1050,6 +1061,7 @@ export class PaginationEngine {
     content: HTMLElement[],
     pageInSection: number,
     footnoteIds: string[] = [],
+    footnoteHeight: number = 0,
     continuation?: FootnoteContinuation | null,
     partialFootnotes?: PartialFootnote[]
   ): PageInfo {
@@ -1129,7 +1141,7 @@ export class PaginationEngine {
     // Add footnotes if any references appear on this page (or continuation from previous)
     const hasContinuation = continuation && continuation.remainingElements.length > 0;
     if (footnoteIds.length > 0 || hasContinuation) {
-      this.addPageFootnotes(pageBox, footnoteIds, dims, continuation, partialFootnotes);
+      this.addPageFootnotes(pageBox, footnoteIds, dims, footnoteHeight, continuation, partialFootnotes);
     }
 
     // Add footer if available for this section/page
