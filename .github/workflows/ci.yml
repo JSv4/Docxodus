@@ -73,6 +73,19 @@ jobs:
       - name: TypeScript type check
         run: cd npm && npx tsc --noEmit
 
+      - name: Install Playwright browsers
+        run: cd npm && npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        run: cd npm && npm test
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v5
+        if: failure()
+        with:
+          name: playwright-report
+          path: npm/playwright-report/
+
   build-matrix:
     runs-on: ${{ matrix.os }}
     strategy:
