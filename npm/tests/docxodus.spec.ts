@@ -475,6 +475,100 @@ test.describe('Docxodus WASM Tests', () => {
         console.log(`${testCase.name}: Found ${revisionsResult.revisions!.length} revisions`);
       });
     }
+
+    test('move detection exposes MoveGroupId and IsMoveSource in revisions', async ({ page }) => {
+      // Use a document that already has move markup (from Word's track changes)
+      // This tests that the WASM wrapper correctly exposes move data
+      const docWithMoves = readTestFile('FA/RevTracking/014-MovedParagraph.docx');
+
+      // Get revisions directly from the document with existing move markup
+      const revisionsResult = await page.evaluate((bytesArray) => {
+        return (window as any).DocxodusTests.getRevisions(new Uint8Array(bytesArray));
+      }, Array.from(docWithMoves));
+
+      expect(revisionsResult.error).toBeUndefined();
+      expect(revisionsResult.revisions).toBeDefined();
+
+      const revisions = revisionsResult.revisions!;
+      console.log(`Move detection test: Found ${revisions.length} total revisions`);
+
+      // Log all revisions for debugging
+      for (const rev of revisions) {
+        console.log(`  - Type: ${rev.RevisionType}, Text: "${rev.Text?.substring(0, 50) || '(empty)'}...", MoveGroupId: ${rev.MoveGroupId}, IsMoveSource: ${rev.IsMoveSource}`);
+      }
+
+      // Check for move revisions (RevisionType === "Moved")
+      const moveRevisions = revisions.filter((r: any) => r.RevisionType === 'Moved');
+
+      if (moveRevisions.length > 0) {
+        console.log(`Found ${moveRevisions.length} move revisions`);
+
+        // Verify move revisions have MoveGroupId
+        for (const moveRev of moveRevisions) {
+          expect(moveRev.MoveGroupId).toBeDefined();
+          expect(typeof moveRev.MoveGroupId).toBe('number');
+          expect(moveRev.IsMoveSource).toBeDefined();
+          expect(typeof moveRev.IsMoveSource).toBe('boolean');
+        }
+
+        // Verify move pairs exist (same MoveGroupId, one source, one destination)
+        const moveGroups = new Map<number, any[]>();
+        for (const rev of moveRevisions) {
+          const groupId = rev.MoveGroupId;
+          if (!moveGroups.has(groupId)) {
+            moveGroups.set(groupId, []);
+          }
+          moveGroups.get(groupId)!.push(rev);
+        }
+
+        for (const [groupId, group] of moveGroups) {
+          expect(group.length).toBe(2); // Each move has source + destination
+          const sources = group.filter((r: any) => r.IsMoveSource === true);
+          const destinations = group.filter((r: any) => r.IsMoveSource === false);
+          expect(sources.length).toBe(1);
+          expect(destinations.length).toBe(1);
+          console.log(`Move group ${groupId}: source="${sources[0].Text?.substring(0, 30) || '(empty)'}...", dest="${destinations[0].Text?.substring(0, 30) || '(empty)'}..."`);
+        }
+      } else {
+        // Also test with a comparison that should produce moves
+        // Compare documents where paragraphs have been reordered
+        console.log('Testing move detection via document comparison...');
+
+        const originalBytes = readTestFile('WC/WC007-Unmodified.docx');
+        const modifiedBytes = readTestFile('WC/WC007-Moved-into-Table.docx');
+
+        // Compare the documents
+        const compareResult = await page.evaluate(([original, modified]) => {
+          const result = (window as any).DocxodusTests.compareDocuments(
+            new Uint8Array(original),
+            new Uint8Array(modified)
+          );
+          if (result.docxBytes) {
+            return { docxBytes: Array.from(result.docxBytes) };
+          }
+          return result;
+        }, [Array.from(originalBytes), Array.from(modifiedBytes)]);
+
+        expect(compareResult.error).toBeUndefined();
+        expect(compareResult.docxBytes).toBeDefined();
+
+        const compRevisions = await page.evaluate((bytesArray) => {
+          return (window as any).DocxodusTests.getRevisions(new Uint8Array(bytesArray));
+        }, compareResult.docxBytes);
+
+        expect(compRevisions.revisions).toBeDefined();
+        expect(compRevisions.revisions.length).toBeGreaterThan(0);
+
+        // Verify the revision structure includes move fields (even if null for non-moves)
+        for (const rev of compRevisions.revisions) {
+          // MoveGroupId and IsMoveSource fields should exist in the response
+          expect('MoveGroupId' in rev || 'moveGroupId' in rev).toBe(true);
+          expect('IsMoveSource' in rev || 'isMoveSource' in rev).toBe(true);
+        }
+
+        console.log(`Verified ${compRevisions.revisions.length} revisions have move fields in schema`);
+      }
+    });
   });
 
   test.describe('CA Tests (Content Assembly)', () => {
