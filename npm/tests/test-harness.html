@@ -313,6 +313,38 @@
                 }
             },
 
+            // Convert DOCX to HTML with pagination AND tracked changes
+            convertToHtmlWithPaginationAndTrackedChanges: function(bytes, paginationMode = 1, paginationScale = 1.0, renderTrackedChanges = true) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.ConvertDocxToHtmlComplete(
+                        bytes,
+                        'Document',           // pageTitle
+                        'docx-',              // cssPrefix
+                        true,                 // fabricateClasses
+                        '',                   // additionalCss
+                        -1,                   // commentRenderMode (disabled)
+                        'comment-',           // commentCssClassPrefix
+                        paginationMode,       // 0=None, 1=Paginated
+                        paginationScale,      // scale factor
+                        'page-',              // paginationCssClassPrefix
+                        false,                // renderAnnotations
+                        0,                    // annotationLabelMode
+                        'annot-',             // annotationCssClassPrefix
+                        true,                 // renderFootnotesAndEndnotes
+                        true,                 // renderHeadersAndFooters
+                        renderTrackedChanges, // renderTrackedChanges
+                        true,                 // showDeletedContent
+                        true                  // renderMoveOperations
+                    );
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { html: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
             // Add annotation with flexible targeting
             addAnnotationWithTarget: function(bytes, request) {
                 try {
