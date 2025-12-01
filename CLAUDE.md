@@ -6,6 +6,35 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Never credit yourself in commits.** Do not add "Generated with Claude Code" or "Co-Authored-By: Claude" to commit messages.
 
+## Coding Standards
+
+### Nullable Reference Types
+
+The project has `<Nullable>disable</Nullable>` globally due to ~9,000 warnings in legacy code. However, **new code should use nullable annotations**:
+
+- **New files**: Add `#nullable enable` at the top of the file
+- **Substantial refactors**: When significantly modifying an existing file, consider adding `#nullable enable` and fixing warnings in that file
+- **Use proper annotations**: Mark nullable parameters/returns with `?`, use null checks or `!` where appropriate
+
+```csharp
+#nullable enable
+
+namespace Docxodus;
+
+public class MyNewClass
+{
+    public string Name { get; set; } = string.Empty;  // Non-nullable with default
+    public string? Description { get; set; }           // Explicitly nullable
+
+    public string? FindItem(string key)                // May return null
+    {
+        // ...
+    }
+}
+```
+
+See [Issue #13](https://github.com/JSv4/Docxodus/issues/13) for the full nullable migration plan.
+
 ## Feature Development Workflow
 
 When implementing new features or significant changes, follow this workflow:
