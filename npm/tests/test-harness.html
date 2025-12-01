@@ -371,6 +371,30 @@
                 } catch (e) {
                     return { error: { message: e.message } };
                 }
+            },
+
+            // Render a specific page range for lazy loading/virtual scrolling
+            renderPageRange: function(bytes, startPage, endPage, options = {}) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.RenderPageRange(
+                        bytes,
+                        startPage,
+                        endPage,
+                        options.pageTitle || 'Document',
+                        options.cssPrefix || 'docx-',
+                        options.fabricateClasses !== false,
+                        options.paginationScale || 1.0,
+                        options.paginationCssClassPrefix || 'page-',
+                        options.renderFootnotesAndEndnotes || false,
+                        options.renderHeadersAndFooters || false
+                    );
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { html: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
             }
         };
 

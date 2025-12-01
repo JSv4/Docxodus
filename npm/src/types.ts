@@ -341,6 +341,36 @@ export interface CompareResult {
 }
 
 /**
+ * Options for rendering a specific page range (lazy loading).
+ */
+export interface RenderPageRangeOptions {
+  /** Title for the HTML document (default: "Document") */
+  pageTitle?: string;
+  /** Prefix for generated CSS class names (default: "docx-") */
+  cssPrefix?: string;
+  /** Whether to generate CSS classes (default: true) */
+  fabricateClasses?: boolean;
+  /** Additional CSS to include */
+  additionalCss?: string;
+  /** Scale factor for page rendering (default: 1.0) */
+  paginationScale?: number;
+  /** CSS class prefix for pagination elements (default: "page-") */
+  paginationCssClassPrefix?: string;
+  /** Whether to include footnote/endnote registries (default: false) */
+  renderFootnotesAndEndnotes?: boolean;
+  /** Whether to include header/footer registries (default: false) */
+  renderHeadersAndFooters?: boolean;
+  /** Whether to render tracked changes (default: false) */
+  renderTrackedChanges?: boolean;
+  /** Whether to show deleted content when rendering tracked changes (default: true) */
+  showDeletedContent?: boolean;
+  /** Whether to render comments (default: false) */
+  renderComments?: boolean;
+  /** Comment render mode: 0=EndnoteStyle, 1=Inline, 2=Margin (default: 0) */
+  commentRenderMode?: CommentRenderMode;
+}
+
+/**
  * Internal WASM exports structure
  */
 export interface DocxodusWasmExports {
@@ -409,6 +439,35 @@ export interface DocxodusWasmExports {
     HasAnnotations: (bytes: Uint8Array) => string;
     GetDocumentStructure: (bytes: Uint8Array) => string;
     GetDocumentMetadata: (bytes: Uint8Array) => string;
+    RenderPageRange: (
+      bytes: Uint8Array,
+      startPage: number,
+      endPage: number,
+      pageTitle: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      paginationScale: number,
+      paginationCssClassPrefix: string,
+      renderFootnotesAndEndnotes: boolean,
+      renderHeadersAndFooters: boolean
+    ) => string;
+    RenderPageRangeFull: (
+      bytes: Uint8Array,
+      startPage: number,
+      endPage: number,
+      pageTitle: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      additionalCss: string,
+      paginationScale: number,
+      paginationCssClassPrefix: string,
+      renderFootnotesAndEndnotes: boolean,
+      renderHeadersAndFooters: boolean,
+      renderTrackedChanges: boolean,
+      showDeletedContent: boolean,
+      renderComments: boolean,
+      commentRenderMode: number
+    ) => string;
     GetVersion: () => string;
   };
   DocumentComparer: {
@@ -1055,6 +1114,7 @@ export type WorkerRequestType =
   | "compareDocumentsToHtml"
   | "getRevisions"
   | "getDocumentMetadata"
+  | "renderPageRange"
   | "getVersion";
 
 /**
@@ -1134,6 +1194,21 @@ export interface WorkerGetDocumentMetadataRequest extends WorkerRequestBase {
 }
 
 /**
+ * Render a specific page range for lazy loading.
+ */
+export interface WorkerRenderPageRangeRequest extends WorkerRequestBase {
+  type: "renderPageRange";
+  /** Document bytes */
+  documentBytes: Uint8Array;
+  /** 1-based start page number */
+  startPage: number;
+  /** 1-based end page number (inclusive) */
+  endPage: number;
+  /** Render options */
+  options?: RenderPageRangeOptions;
+}
+
+/**
  * Get library version request.
  */
 export interface WorkerGetVersionRequest extends WorkerRequestBase {
@@ -1150,6 +1225,7 @@ export type WorkerRequest =
   | WorkerCompareToHtmlRequest
   | WorkerGetRevisionsRequest
   | WorkerGetDocumentMetadataRequest
+  | WorkerRenderPageRangeRequest
   | WorkerGetVersionRequest;
 
 /**
@@ -1217,6 +1293,15 @@ export interface WorkerGetDocumentMetadataResponse extends WorkerResponseBase {
 }
 
 /**
+ * Response from renderPageRange request.
+ */
+export interface WorkerRenderPageRangeResponse extends WorkerResponseBase {
+  type: "renderPageRange";
+  /** The rendered HTML for the requested page range */
+  html?: string;
+}
+
+/**
  * Response from getVersion request.
  */
 export interface WorkerGetVersionResponse extends WorkerResponseBase {
@@ -1235,6 +1320,7 @@ export type WorkerResponse =
   | WorkerCompareToHtmlResponse
   | WorkerGetRevisionsResponse
   | WorkerGetDocumentMetadataResponse
+  | WorkerRenderPageRangeResponse
   | WorkerGetVersionResponse;
 
 /**
@@ -1246,4 +1332,209 @@ export interface WorkerDocxodusOptions {
    * Defaults to auto-detection from module URL.
    */
   wasmBasePath?: string;
+}
+
+// ============================================================================
+// Virtual Scrolling / Lazy Loading Types (Phase 3: Issue #31)
+// ============================================================================
+
+/**
+ * Extended pagination options with virtual scrolling support.
+ *
+ * @example
+ * ```typescript
+ * const engine = new VirtualPaginationEngine(staging, container, {
+ *   scale: 0.8,
+ *   virtualScroll: true,
+ *   bufferPages: 3
+ * });
+ * ```
+ */
+export interface VirtualPaginationOptions {
+  /** Scale factor for rendering (1.0 = 100%). Default: 1 */
+  scale?: number;
+  /** CSS class prefix used in the HTML. Default: "page-" */
+  cssPrefix?: string;
+  /** Whether to show page numbers. Default: true */
+  showPageNumbers?: boolean;
+  /** Gap between pages in pixels. Default: 20 */
+  pageGap?: number;
+  /** Enable virtual scrolling (only render visible pages). Default: false */
+  virtualScroll?: boolean;
+  /** Number of pages to render outside viewport buffer. Default: 3 */
+  bufferPages?: number;
+}
+
+/**
+ * Pre-computed page layout for a single page.
+ * Contains all information needed to render the page on-demand.
+ */
+export interface PageLayout {
+  /** 1-based page number */
+  pageNumber: number;
+  /** Section index this page belongs to */
+  sectionIndex: number;
+  /** Page dimensions (width, height, margins) */
+  dimensions: PageLayoutDimensions;
+
+  // Computed layout values
+  /** Page height after scale factor applied, in pixels */
+  scaledHeight: number;
+  /** Y position in scroll container, in pixels */
+  offsetTop: number;
+
+  // Content assignments
+  /** Start and end indices into the CachedBlock[] array (end is exclusive) */
+  blockRange: { start: number; end: number };
+  /** IDs of footnotes referenced on this page */
+  footnoteIds: string[];
+  /** Total height of footnotes on this page, in points */
+  footnoteHeight: number;
+  /** Footnote continuation from previous page, if any */
+  continuation?: PageLayoutFootnoteContinuation;
+  /** Partial footnotes that were split on this page */
+  partialFootnotes?: PageLayoutPartialFootnote[];
+
+  // Header/footer selection
+  /** Header type to use for this page */
+  headerType: "default" | "first" | "even" | null;
+  /** Footer type to use for this page */
+  footerType: "default" | "first" | "even" | null;
+  /** Pre-computed effective heights for header, footer, and content areas */
+  effectiveHeights: {
+    header: number;
+    footer: number;
+    content: number;
+  };
+}
+
+/**
+ * Page dimensions for a layout (in points).
+ */
+export interface PageLayoutDimensions {
+  /** Page width in points */
+  pageWidth: number;
+  /** Page height in points */
+  pageHeight: number;
+  /** Content area width (page minus margins) in points */
+  contentWidth: number;
+  /** Content area height (page minus margins) in points */
+  contentHeight: number;
+  /** Top margin in points */
+  marginTop: number;
+  /** Right margin in points */
+  marginRight: number;
+  /** Bottom margin in points */
+  marginBottom: number;
+  /** Left margin in points */
+  marginLeft: number;
+  /** Header distance from top of page in points */
+  headerHeight: number;
+  /** Footer distance from bottom of page in points */
+  footerHeight: number;
+}
+
+/**
+ * Footnote continuation information for page layout.
+ */
+export interface PageLayoutFootnoteContinuation {
+  /** The footnote ID being continued */
+  footnoteId: string;
+  /** Number of elements remaining to render */
+  remainingElementCount: number;
+}
+
+/**
+ * Partial footnote information for page layout.
+ */
+export interface PageLayoutPartialFootnote {
+  /** The footnote ID */
+  footnoteId: string;
+  /** Number of elements that fit on this page */
+  fittingElementCount: number;
+}
+
+/**
+ * Complete pagination layout plan.
+ * Contains all pre-computed information for virtual scrolling.
+ */
+export interface PageLayoutPlan {
+  /** Array of page layouts */
+  pages: PageLayout[];
+  /** Total height of all pages + gaps, in pixels (for scroll container) */
+  totalHeight: number;
+  /** Total number of pages */
+  totalPages: number;
+}
+
+/**
+ * Cached block data for on-demand page rendering.
+ * Extends MeasuredBlock with an index for lookup.
+ */
+export interface CachedBlock {
+  /** Position in the original block array */
+  index: number;
+  /** The DOM element (reference to staging, for cloning) */
+  element: HTMLElement;
+  /** Measured height in points (content + padding + border, excluding margins) */
+  heightPt: number;
+  /** Top margin in points */
+  marginTopPt: number;
+  /** Bottom margin in points */
+  marginBottomPt: number;
+  /** Whether to keep this block with the next one */
+  keepWithNext: boolean;
+  /** Whether to keep all lines of this block together */
+  keepLines: boolean;
+  /** Whether to force a page break before this block */
+  pageBreakBefore: boolean;
+  /** Whether this is a page break marker */
+  isPageBreak: boolean;
+  /** Footnote IDs referenced in this block */
+  footnoteIds: string[];
+}
+
+/**
+ * Search result from in-memory search across cached blocks.
+ */
+export interface SearchResult {
+  /** 1-based page number where the match is found */
+  pageNumber: number;
+  /** Index of the block containing the match */
+  blockIndex: number;
+  /** Which match within the block (0-based) */
+  matchIndex: number;
+  /** The matched text */
+  text: string;
+  /** Surrounding text for preview (context window) */
+  context: string;
+  /** Character offset within the block's text content */
+  charOffset: number;
+}
+
+/**
+ * Options for in-memory search.
+ */
+export interface SearchOptions {
+  /** Case-sensitive search. Default: false */
+  caseSensitive?: boolean;
+  /** Match whole words only. Default: false */
+  wholeWord?: boolean;
+  /** Maximum number of results to return. Default: unlimited */
+  maxResults?: number;
+}
+
+/**
+ * Result of virtual pagination operation.
+ * Similar to PaginationResult but with virtual scrolling state.
+ */
+export interface VirtualPaginationResult {
+  /** Total number of pages */
+  totalPages: number;
+  /** Total scroll height in pixels */
+  totalHeight: number;
+  /** The pre-computed layout plan */
+  layoutPlan: PageLayoutPlan;
+  /** Number of pages currently rendered */
+  renderedPageCount: number;
 }

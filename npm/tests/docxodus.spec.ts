@@ -262,6 +262,35 @@ async function addAnnotationWithTarget(
   return result;
 }
 
+// Helper to render a specific page range for lazy loading
+async function renderPageRange(
+  page: Page,
+  bytes: Uint8Array,
+  startPage: number,
+  endPage: number,
+  options?: {
+    pageTitle?: string;
+    cssPrefix?: string;
+    fabricateClasses?: boolean;
+    paginationScale?: number;
+    paginationCssClassPrefix?: string;
+    renderFootnotesAndEndnotes?: boolean;
+    renderHeadersAndFooters?: boolean;
+  }
+): Promise<{ html?: string; error?: any }> {
+  return await page.evaluate(
+    ([bytesArray, start, end, opts]) => {
+      return (window as any).DocxodusTests.renderPageRange(
+        new Uint8Array(bytesArray),
+        start,
+        end,
+        opts || {}
+      );
+    },
+    [Array.from(bytes), startPage, endPage, options || {}]
+  );
+}
+
 test.describe('Docxodus WASM Tests', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/test-harness.html');
@@ -2434,6 +2463,394 @@ test.describe('Docxodus WASM Tests', () => {
       expect(result.heightMatch).toBe(true);
       console.log(`Content width: ${result.contentWidthPt}pt (calculated: ${result.calculatedContentWidth}pt)`);
       console.log(`Content height: ${result.contentHeightPt}pt (calculated: ${result.calculatedContentHeight}pt)`);
+    });
+  });
+
+  test.describe('Page Range Rendering (RPR tests - Issue #31)', () => {
+    // Use a document with multiple paragraphs that will span estimated pages
+    const testDoc = 'HC001-5DayTourPlanTemplate.docx';
+
+    test('renderPageRange returns valid HTML for page 1', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await renderPageRange(page, bytes, 1, 1);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+      expect(result.html!.length).toBeGreaterThan(100);
+
+      // Verify HTML structure
+      expect(result.html).toContain('<html');
+      expect(result.html).toContain('<body');
+      expect(result.html).toContain('</html>');
+    });
+
+    test('renderPageRange includes page metadata attributes', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await renderPageRange(page, bytes, 1, 3);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Verify page range metadata attributes
+      expect(result.html).toContain('data-start-page="1"');
+      expect(result.html).toContain('data-end-page="3"');
+      expect(result.html).toContain('data-total-pages=');
+    });
+
+    test('renderPageRange renders and displays correctly in DOM', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await renderPageRange(page, bytes, 1, 2);
+
+      expect(result.error).toBeUndefined();
+
+      // Render the HTML to verify visual correctness
+      await page.setContent(result.html!);
+
+      // Verify document structure
+      await expect(page.locator('html')).toBeAttached();
+      await expect(page.locator('body')).toBeAttached();
+
+      // Verify pagination container exists with data attributes
+      const paginationContainer = page.locator('[data-start-page]');
+      await expect(paginationContainer).toBeAttached();
+
+      // Read the page range attributes
+      const startPage = await paginationContainer.getAttribute('data-start-page');
+      const endPage = await paginationContainer.getAttribute('data-end-page');
+
+      expect(startPage).toBe('1');
+      expect(endPage).toBe('2');
+
+      // Verify content is visible
+      const bodyText = await page.locator('body').textContent();
+      expect(bodyText!.length).toBeGreaterThan(10);
+    });
+
+    test('renderPageRange only displays specified page range content', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Request pages 1-2
+      const startPage = 1;
+      const endPage = 2;
+      const result = await renderPageRange(page, bytes, startPage, endPage);
+
+      expect(result.error).toBeUndefined();
+
+      // Render and verify
+      await page.setContent(result.html!);
+
+      // Verify the data attributes contain the requested range
+      const container = page.locator('[data-start-page]');
+      const dataStartPage = await container.getAttribute('data-start-page');
+      const dataEndPage = await container.getAttribute('data-end-page');
+      const dataTotalPages = await container.getAttribute('data-total-pages');
+
+      // Verify requested page range is reflected in attributes
+      expect(parseInt(dataStartPage!)).toBe(startPage);
+      expect(parseInt(dataEndPage!)).toBe(endPage);
+      expect(parseInt(dataTotalPages!)).toBeGreaterThan(0);
+
+      console.log(`Rendered pages ${dataStartPage}-${dataEndPage} of ${dataTotalPages} total`);
+    });
+
+    test('renderPageRange includes block index attributes for lazy loading', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await renderPageRange(page, bytes, 1, 2);
+
+      expect(result.error).toBeUndefined();
+
+      // Render to DOM
+      await page.setContent(result.html!);
+
+      // Verify block index metadata
+      const container = page.locator('[data-start-block]');
+      const dataStartBlock = await container.getAttribute('data-start-block');
+      const dataEndBlock = await container.getAttribute('data-end-block');
+
+      expect(dataStartBlock).toBeDefined();
+      expect(dataEndBlock).toBeDefined();
+
+      // Start block should be 0 for page 1
+      expect(parseInt(dataStartBlock!)).toBe(0);
+
+      // End block should be >= start block
+      expect(parseInt(dataEndBlock!)).toBeGreaterThanOrEqual(parseInt(dataStartBlock!));
+
+      console.log(`Block range: ${dataStartBlock}-${dataEndBlock}`);
+    });
+
+    test('renderPageRange content blocks have block-index attributes', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await renderPageRange(page, bytes, 1, 3);
+
+      expect(result.error).toBeUndefined();
+
+      // Render to DOM
+      await page.setContent(result.html!);
+
+      // Find elements with block-index attribute
+      const blocksWithIndex = page.locator('[data-block-index]');
+      const blockCount = await blocksWithIndex.count();
+
+      expect(blockCount).toBeGreaterThan(0);
+      console.log(`Found ${blockCount} content blocks with data-block-index`);
+
+      // Verify first block has index 0
+      const firstBlockIndex = await blocksWithIndex.first().getAttribute('data-block-index');
+      expect(parseInt(firstBlockIndex!)).toBe(0);
+
+      // Verify block indices are sequential
+      const indices: number[] = [];
+      for (let i = 0; i < Math.min(blockCount, 10); i++) {
+        const idx = await blocksWithIndex.nth(i).getAttribute('data-block-index');
+        indices.push(parseInt(idx!));
+      }
+
+      // Check sequential ordering
+      for (let i = 1; i < indices.length; i++) {
+        expect(indices[i]).toBe(indices[i - 1] + 1);
+      }
+
+      console.log(`Block indices verified: ${indices.join(', ')}...`);
+    });
+
+    test('renderPageRange with custom CSS prefix', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await renderPageRange(page, bytes, 1, 1, {
+        cssPrefix: 'custom-',
+        paginationCssClassPrefix: 'mypage-'
+      });
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Should contain custom CSS class prefix in styles
+      expect(result.html).toContain('custom-');
+    });
+
+    test('renderPageRange handles single page document', async ({ page }) => {
+      // Use a small test file
+      const bytes = readTestFile('HC006-Test-01.docx');
+      const result = await renderPageRange(page, bytes, 1, 1);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Render and verify
+      await page.setContent(result.html!);
+
+      const container = page.locator('[data-start-page]');
+      const startPage = await container.getAttribute('data-start-page');
+      const endPage = await container.getAttribute('data-end-page');
+
+      expect(startPage).toBe('1');
+      expect(endPage).toBe('1');
+    });
+
+    test('renderPageRange handles out-of-bounds page range gracefully', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Request page 100 which is beyond document bounds
+      const result = await renderPageRange(page, bytes, 100, 200);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Should still render content (internally clamped to valid range)
+      await page.setContent(result.html!);
+
+      // Verify the container is present
+      const container = page.locator('[data-start-page]');
+      await expect(container).toBeAttached();
+
+      // The document should render with content even for out-of-bounds requests
+      // The internal clamping ensures we get the last valid page(s)
+      const totalPages = await container.getAttribute('data-total-pages');
+      expect(parseInt(totalPages!)).toBeGreaterThan(0);
+
+      // Verify body has content (proving something was rendered)
+      const bodyText = await page.locator('body').textContent();
+      expect(bodyText!.length).toBeGreaterThan(0);
+
+      console.log(`Out-of-bounds request rendered successfully (total pages: ${totalPages})`);
+    });
+
+    test('renderPageRange visual test - content is readable', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+      const result = await renderPageRange(page, bytes, 1, 2);
+
+      expect(result.error).toBeUndefined();
+
+      // Render to the page
+      await page.setContent(result.html!);
+
+      // Wait for rendering
+      await page.waitForLoadState('domcontentloaded');
+
+      // Verify the page has visible text content
+      const textContent = await page.textContent('body');
+      expect(textContent).toBeTruthy();
+      expect(textContent!.length).toBeGreaterThan(50);
+
+      // Verify styles are applied (check for style tag)
+      const styleTag = page.locator('style').first();
+      await expect(styleTag).toBeAttached();
+
+      const styleContent = await styleTag.textContent();
+      expect(styleContent!.length).toBeGreaterThan(100);
+
+      // Take screenshot for visual inspection
+      const screenshot = await page.screenshot({ fullPage: true });
+      expect(screenshot.byteLength).toBeGreaterThan(0);
+
+      console.log('Visual test passed - content rendered with styles');
+    });
+
+    test('renderPageRange displays only requested pages without other content', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Get full document HTML for comparison
+      const fullResult = await convertToHtml(page, bytes);
+      expect(fullResult.error).toBeUndefined();
+
+      // Get page 2-3 only
+      const rangeResult = await renderPageRange(page, bytes, 2, 3);
+      expect(rangeResult.error).toBeUndefined();
+
+      // Page range HTML should be smaller than full document
+      expect(rangeResult.html!.length).toBeLessThan(fullResult.html!.length);
+
+      console.log(`Full document HTML: ${fullResult.html!.length} chars`);
+      console.log(`Page 2-3 HTML: ${rangeResult.html!.length} chars`);
+
+      // Render the range and verify it's displayable
+      await page.setContent(rangeResult.html!);
+
+      const container = page.locator('[data-start-page]');
+      await expect(container).toBeAttached();
+
+      // Verify the rendered range has content
+      const bodyText = await page.locator('body').textContent();
+      expect(bodyText!.trim().length).toBeGreaterThan(0);
+    });
+
+    /**
+     * DEFINITIVE TEST: 5-page document, render only pages 2-4
+     *
+     * This test uses a specially crafted 5-page document where each page
+     * has unique marker text (===PAGE_N_START=== and ===PAGE_N_END===).
+     *
+     * We request pages 2-4 and verify:
+     * - Pages 2, 3, 4 markers ARE in the rendered HTML
+     * - Pages 1, 5 markers are NOT in the rendered HTML
+     *
+     * This definitively proves that virtual scrolling works: we render
+     * only the requested pages, not the entire document.
+     */
+    test('CRITICAL: 5-page document renders only pages 2-4, excludes pages 1 and 5', async ({ page }) => {
+      // Load the 5-page test document with unique markers per page
+      const bytes = readTestFile('RPR-FivePageTestDoc.docx');
+
+      // First, verify the document structure with metadata
+      const metadataResult = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        return metadata;
+      }, Array.from(bytes));
+
+      console.log(`Document has ${metadataResult.totalParagraphs} paragraphs`);
+      console.log(`Estimated page count: ${metadataResult.estimatedPageCount}`);
+
+      // Verify we have 5 pages
+      expect(metadataResult.estimatedPageCount).toBe(5);
+
+      // Render only pages 2-4 (the middle 3 pages)
+      const result = await renderPageRange(page, bytes, 2, 4);
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      const html = result.html!;
+
+      // CRITICAL ASSERTIONS: Pages 2, 3, 4 content IS present
+      expect(html).toContain('===PAGE_2_START===');
+      expect(html).toContain('===PAGE_2_END===');
+      expect(html).toContain('===PAGE_3_START===');
+      expect(html).toContain('===PAGE_3_END===');
+      expect(html).toContain('===PAGE_4_START===');
+      expect(html).toContain('===PAGE_4_END===');
+
+      // CRITICAL ASSERTIONS: Pages 1 and 5 content is NOT present
+      expect(html).not.toContain('===PAGE_1_START===');
+      expect(html).not.toContain('===PAGE_1_END===');
+      expect(html).not.toContain('===PAGE_5_START===');
+      expect(html).not.toContain('===PAGE_5_END===');
+
+      // Verify data attributes
+      expect(html).toContain('data-start-page="2"');
+      expect(html).toContain('data-end-page="4"');
+      expect(html).toContain('data-total-pages="5"');
+
+      // Render to DOM and verify visual correctness
+      await page.setContent(html);
+      await page.waitForLoadState('domcontentloaded');
+
+      // Verify content is visible
+      const bodyText = await page.locator('body').textContent();
+      expect(bodyText).toContain('===PAGE_2_START===');
+      expect(bodyText).toContain('===PAGE_3_START===');
+      expect(bodyText).toContain('===PAGE_4_START===');
+      expect(bodyText).not.toContain('===PAGE_1_START===');
+      expect(bodyText).not.toContain('===PAGE_5_START===');
+
+      console.log('SUCCESS: Rendered pages 2-4 of 5');
+      console.log('  - Pages 2, 3, 4 markers found: YES');
+      console.log('  - Pages 1, 5 markers absent: YES');
+      console.log(`  - HTML size: ${html.length} characters`);
+    });
+
+    test('5-page document: render only page 1 excludes all other pages', async ({ page }) => {
+      const bytes = readTestFile('RPR-FivePageTestDoc.docx');
+      const result = await renderPageRange(page, bytes, 1, 1);
+
+      expect(result.error).toBeUndefined();
+      const html = result.html!;
+
+      // Only page 1 should be present
+      expect(html).toContain('===PAGE_1_START===');
+      expect(html).toContain('===PAGE_1_END===');
+
+      // Pages 2-5 should NOT be present
+      expect(html).not.toContain('===PAGE_2_START===');
+      expect(html).not.toContain('===PAGE_3_START===');
+      expect(html).not.toContain('===PAGE_4_START===');
+      expect(html).not.toContain('===PAGE_5_START===');
+
+      expect(html).toContain('data-start-page="1"');
+      expect(html).toContain('data-end-page="1"');
+
+      console.log('SUCCESS: Page 1 only - other pages excluded');
+    });
+
+    test('5-page document: render only page 5 excludes all other pages', async ({ page }) => {
+      const bytes = readTestFile('RPR-FivePageTestDoc.docx');
+      const result = await renderPageRange(page, bytes, 5, 5);
+
+      expect(result.error).toBeUndefined();
+      const html = result.html!;
+
+      // Only page 5 should be present
+      expect(html).toContain('===PAGE_5_START===');
+      expect(html).toContain('===PAGE_5_END===');
+
+      // Pages 1-4 should NOT be present
+      expect(html).not.toContain('===PAGE_1_START===');
+      expect(html).not.toContain('===PAGE_2_START===');
+      expect(html).not.toContain('===PAGE_3_START===');
+      expect(html).not.toContain('===PAGE_4_START===');
+
+      expect(html).toContain('data-start-page="5"');
+      expect(html).toContain('data-end-page="5"');
+
+      console.log('SUCCESS: Page 5 only - other pages excluded');
     });
   });
 });
