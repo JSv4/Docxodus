@@ -389,6 +389,9 @@ export function useConversion(wasmBasePath?: string): UseConversionResult {
       setIsConverting(true);
       setError(null);
 
+      // Yield to allow React to render the loading state before WASM blocks
+      await new Promise(resolve => requestAnimationFrame(resolve));
+
       try {
         const result = await convertToHtml(document, options);
         setHtml(result);
@@ -491,6 +494,9 @@ export function useComparison(wasmBasePath?: string): UseComparisonResult {
       setIsComparing(true);
       setError(null);
 
+      // Yield to allow React to render the loading state before WASM blocks
+      await new Promise(resolve => requestAnimationFrame(resolve));
+
       try {
         const docResult = await docxodus.compare(original, modified, options);
         setResult(docResult);
@@ -521,6 +527,9 @@ export function useComparison(wasmBasePath?: string): UseComparisonResult {
 
       setIsComparing(true);
       setError(null);
+
+      // Yield to allow React to render the loading state before WASM blocks
+      await new Promise(resolve => requestAnimationFrame(resolve));
 
       try {
         const htmlResult = await docxodus.compareToHtml(original, modified, options);
@@ -939,6 +948,9 @@ export function useAnnotations(
     setIsLoading(true);
     setError(null);
 
+    // Yield to allow React to render the loading state before WASM blocks
+    await new Promise(resolve => requestAnimationFrame(resolve));
+
     try {
       const annots = await docxodus.getAnnotations(documentBytes);
       setAnnotations(annots);
@@ -963,6 +975,9 @@ export function useAnnotations(
 
       setIsLoading(true);
       setError(null);
+
+      // Yield to allow React to render the loading state before WASM blocks
+      await new Promise(resolve => requestAnimationFrame(resolve));
 
       try {
         const response = await docxodus.addAnnotation(documentBytes, request);
@@ -996,6 +1011,9 @@ export function useAnnotations(
 
       setIsLoading(true);
       setError(null);
+
+      // Yield to allow React to render the loading state before WASM blocks
+      await new Promise(resolve => requestAnimationFrame(resolve));
 
       try {
         const response = await docxodus.removeAnnotation(documentBytes, annotationId);
@@ -1271,6 +1289,9 @@ export function useDocumentStructure(
 
     setIsLoading(true);
     setError(null);
+
+    // Yield to allow React to render the loading state before WASM blocks
+    await new Promise(resolve => requestAnimationFrame(resolve));
 
     try {
       const struct = await docxodus.getDocumentStructure(document);
