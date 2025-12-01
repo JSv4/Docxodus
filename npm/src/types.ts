@@ -408,6 +408,7 @@ export interface DocxodusWasmExports {
     RemoveAnnotation: (bytes: Uint8Array, annotationId: string) => string;
     HasAnnotations: (bytes: Uint8Array) => string;
     GetDocumentStructure: (bytes: Uint8Array) => string;
+    GetDocumentMetadata: (bytes: Uint8Array) => string;
     GetVersion: () => string;
   };
   DocumentComparer: {
@@ -909,6 +910,86 @@ export function targetSearchInElement(
 }
 
 // ============================================================================
+// Document Metadata Types (Phase 3: Lazy Loading)
+// ============================================================================
+
+/**
+ * Metadata for a single section in the document.
+ * All dimension values are in points (1/72 inch).
+ */
+export interface SectionMetadata {
+  /** Section index (0-based) */
+  sectionIndex: number;
+  /** Page width in points */
+  pageWidthPt: number;
+  /** Page height in points */
+  pageHeightPt: number;
+  /** Top margin in points */
+  marginTopPt: number;
+  /** Right margin in points */
+  marginRightPt: number;
+  /** Bottom margin in points */
+  marginBottomPt: number;
+  /** Left margin in points */
+  marginLeftPt: number;
+  /** Content width (page minus margins) in points */
+  contentWidthPt: number;
+  /** Content height (page minus margins) in points */
+  contentHeightPt: number;
+  /** Header distance from top in points */
+  headerPt: number;
+  /** Footer distance from bottom in points */
+  footerPt: number;
+  /** Number of paragraphs in this section */
+  paragraphCount: number;
+  /** Number of tables in this section */
+  tableCount: number;
+  /** Whether this section has a default header */
+  hasHeader: boolean;
+  /** Whether this section has a default footer */
+  hasFooter: boolean;
+  /** Whether this section has a first page header (titlePg enabled) */
+  hasFirstPageHeader: boolean;
+  /** Whether this section has a first page footer (titlePg enabled) */
+  hasFirstPageFooter: boolean;
+  /** Whether this section has an even page header */
+  hasEvenPageHeader: boolean;
+  /** Whether this section has an even page footer */
+  hasEvenPageFooter: boolean;
+  /** Start paragraph index (0-based, global across document) */
+  startParagraphIndex: number;
+  /** End paragraph index (exclusive, global across document) */
+  endParagraphIndex: number;
+  /** Start table index (0-based, global across document) */
+  startTableIndex: number;
+  /** End table index (exclusive, global across document) */
+  endTableIndex: number;
+}
+
+/**
+ * Document metadata for lazy loading pagination.
+ * Provides fast access to document structure without full HTML rendering.
+ */
+export interface DocumentMetadata {
+  /** List of sections with their metadata */
+  sections: SectionMetadata[];
+  /** Total number of paragraphs in the document */
+  totalParagraphs: number;
+  /** Total number of tables in the document */
+  totalTables: number;
+  /** Whether the document has any footnotes */
+  hasFootnotes: boolean;
+  /** Whether the document has any endnotes */
+  hasEndnotes: boolean;
+  /** Whether the document has tracked changes */
+  hasTrackedChanges: boolean;
+  /** Whether the document has comments */
+  hasComments: boolean;
+  /** Estimated total page count (rough estimate based on content) */
+  estimatedPageCount: number;
+}
+
+// ============================================================================
 // Web Worker Types (Phase 2: Non-blocking WASM operations)
 // ============================================================================
 
@@ -921,6 +1002,7 @@ export type WorkerRequestType =
   | "compareDocuments"
   | "compareDocumentsToHtml"
   | "getRevisions"
+  | "getDocumentMetadata"
   | "getVersion";
 
 /**
@@ -991,6 +1073,15 @@ export interface WorkerGetRevisionsRequest extends WorkerRequestBase {
 }
 
 /**
+ * Get document metadata for lazy loading request.
+ */
+export interface WorkerGetDocumentMetadataRequest extends WorkerRequestBase {
+  type: "getDocumentMetadata";
+  /** Document bytes */
+  documentBytes: Uint8Array;
+}
+
+/**
  * Get library version request.
  */
 export interface WorkerGetVersionRequest extends WorkerRequestBase {
@@ -1006,6 +1097,7 @@ export type WorkerRequest =
   | WorkerCompareRequest
   | WorkerCompareToHtmlRequest
   | WorkerGetRevisionsRequest
+  | WorkerGetDocumentMetadataRequest
   | WorkerGetVersionRequest;
 
 /**
@@ -1064,6 +1156,15 @@ export interface WorkerGetRevisionsResponse extends WorkerResponseBase {
 }
 
 /**
+ * Response from getDocumentMetadata request.
+ */
+export interface WorkerGetDocumentMetadataResponse extends WorkerResponseBase {
+  type: "getDocumentMetadata";
+  /** Document metadata */
+  metadata?: DocumentMetadata;
+}
+
+/**
  * Response from getVersion request.
  */
 export interface WorkerGetVersionResponse extends WorkerResponseBase {
@@ -1081,6 +1182,7 @@ export type WorkerResponse =
   | WorkerCompareResponse
   | WorkerCompareToHtmlResponse
   | WorkerGetRevisionsResponse
+  | WorkerGetDocumentMetadataResponse
   | WorkerGetVersionResponse;
 
 /**

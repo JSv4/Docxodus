@@ -26,6 +26,7 @@ import type {
   WorkerCompareResponse,
   WorkerCompareToHtmlResponse,
   WorkerGetRevisionsResponse,
+  WorkerGetDocumentMetadataResponse,
   WorkerGetVersionResponse,
   WorkerDocxodusOptions,
   ConversionOptions,
@@ -33,6 +34,7 @@ import type {
   GetRevisionsOptions,
   Revision,
   VersionInfo,
+  DocumentMetadata,
 } from "./types.js";
 
 /**
@@ -126,6 +128,14 @@ export interface WorkerDocxodus {
     document: File | Uint8Array,
     options?: GetRevisionsOptions
   ): Promise<Revision[]>;
+
+  /**
+   * Get document metadata for lazy loading pagination.
+   * This is a fast operation that extracts structure without full HTML rendering.
+   * @param document - DOCX file as File object or Uint8Array
+   * @returns Document metadata including sections, dimensions, and content counts
+   */
+  getDocumentMetadata(document: File | Uint8Array): Promise<DocumentMetadata>;
 
   /**
    * Get version information about the library.
@@ -337,6 +347,21 @@ export async function createWorkerDocxodus(
         [bytes.buffer]
       );
       return response.revisions!;
+    },
+
+    async getDocumentMetadata(
+      document: File | Uint8Array
+    ): Promise<DocumentMetadata> {
+      const bytes = await toBytes(document);
+      const response = await sendRequest<WorkerGetDocumentMetadataResponse>(
+        {
+          id: generateId(),
+          type: "getDocumentMetadata",
+          documentBytes: bytes,
+        },
+        [bytes.buffer]
+      );
+      return response.metadata!;
     },
 
     async getVersion(): Promise<VersionInfo> {

@@ -524,6 +524,113 @@ namespace Docxodus
         public HashSet<string> FirstSegmentRendered { get; } = new HashSet<string>();
     }
 
+    /// <summary>
+    /// Metadata for a single section in the document (for lazy loading).
+    /// All dimension values are in points (1/72 inch).
+    /// </summary>
+    public class SectionMetadata
+    {
+        /// <summary>Section index (0-based)</summary>
+        public int SectionIndex { get; set; }
+
+        /// <summary>Page width in points</summary>
+        public double PageWidthPt { get; set; }
+
+        /// <summary>Page height in points</summary>
+        public double PageHeightPt { get; set; }
+
+        /// <summary>Top margin in points</summary>
+        public double MarginTopPt { get; set; }
+
+        /// <summary>Right margin in points</summary>
+        public double MarginRightPt { get; set; }
+
+        /// <summary>Bottom margin in points</summary>
+        public double MarginBottomPt { get; set; }
+
+        /// <summary>Left margin in points</summary>
+        public double MarginLeftPt { get; set; }
+
+        /// <summary>Content width (page minus margins) in points</summary>
+        public double ContentWidthPt { get; set; }
+
+        /// <summary>Content height (page minus margins) in points</summary>
+        public double ContentHeightPt { get; set; }
+
+        /// <summary>Header distance from top in points</summary>
+        public double HeaderPt { get; set; }
+
+        /// <summary>Footer distance from bottom in points</summary>
+        public double FooterPt { get; set; }
+
+        /// <summary>Number of paragraphs in this section</summary>
+        public int ParagraphCount { get; set; }
+
+        /// <summary>Number of tables in this section</summary>
+        public int TableCount { get; set; }
+
+        /// <summary>Whether this section has a default header</summary>
+        public bool HasHeader { get; set; }
+
+        /// <summary>Whether this section has a default footer</summary>
+        public bool HasFooter { get; set; }
+
+        /// <summary>Whether this section has a first page header (titlePg enabled)</summary>
+        public bool HasFirstPageHeader { get; set; }
+
+        /// <summary>Whether this section has a first page footer (titlePg enabled)</summary>
+        public bool HasFirstPageFooter { get; set; }
+
+        /// <summary>Whether this section has an even page header</summary>
+        public bool HasEvenPageHeader { get; set; }
+
+        /// <summary>Whether this section has an even page footer</summary>
+        public bool HasEvenPageFooter { get; set; }
+
+        /// <summary>Start paragraph index (0-based, global across document)</summary>
+        public int StartParagraphIndex { get; set; }
+
+        /// <summary>End paragraph index (exclusive, global across document)</summary>
+        public int EndParagraphIndex { get; set; }
+
+        /// <summary>Start table index (0-based, global across document)</summary>
+        public int StartTableIndex { get; set; }
+
+        /// <summary>End table index (exclusive, global across document)</summary>
+        public int EndTableIndex { get; set; }
+    }
+
+    /// <summary>
+    /// Document metadata for lazy loading pagination.
+    /// Provides fast access to document structure without full HTML rendering.
+    /// </summary>
+    public class DocumentMetadata
+    {
+        /// <summary>List of sections with their metadata</summary>
+        public List<SectionMetadata> Sections { get; set; } = new List<SectionMetadata>();
+
+        /// <summary>Total number of paragraphs in the document</summary>
+        public int TotalParagraphs { get; set; }
+
+        /// <summary>Total number of tables in the document</summary>
+        public int TotalTables { get; set; }
+
+        /// <summary>Whether the document has any footnotes</summary>
+        public bool HasFootnotes { get; set; }
+
+        /// <summary>Whether the document has any endnotes</summary>
+        public bool HasEndnotes { get; set; }
+
+        /// <summary>Whether the document has tracked changes</summary>
+        public bool HasTrackedChanges { get; set; }
+
+        /// <summary>Whether the document has comments</summary>
+        public bool HasComments { get; set; }
+
+        /// <summary>Estimated total page count (rough estimate based on content)</summary>
+        public int EstimatedPageCount { get; set; }
+    }
+
     public static class WmlToHtmlConverter
     {
         public static XElement ConvertToHtml(WmlDocument doc, WmlToHtmlConverterSettings htmlConverterSettings)
@@ -623,6 +730,352 @@ namespace Docxodus
             // must do it correctly, or entities will not be serialized properly.
 
             return xhtml;
+        }
+
+        /// <summary>
+        /// Extracts document metadata for lazy loading pagination.
+        /// This is a fast operation that doesn't perform full HTML conversion.
+        /// </summary>
+        /// <param name="doc">The Word document to analyze</param>
+        /// <returns>Document metadata including section dimensions and content counts</returns>
+        public static DocumentMetadata GetDocumentMetadata(WmlDocument doc)
+        {
+            using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
+            {
+                using (WordprocessingDocument document = streamDoc.GetWordprocessingDocument())
+                {
+                    return GetDocumentMetadata(document);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Extracts document metadata for lazy loading pagination.
+        /// This is a fast operation that doesn't perform full HTML conversion.
+        /// </summary>
+        /// <param name="wordDoc">The Word document to analyze</param>
+        /// <returns>Document metadata including section dimensions and content counts</returns>
+        public static DocumentMetadata GetDocumentMetadata(WordprocessingDocument wordDoc)
+        {
+            var metadata = new DocumentMetadata();
+
+            var mainDocPart = wordDoc.MainDocumentPart;
+            if (mainDocPart == null)
+                return metadata;
+
+            var xDoc = mainDocPart.GetXDocument();
+            var body = xDoc.Root?.Element(W.body);
+            if (body == null)
+                return metadata;
+
+            // Check for footnotes
+            var footnotesPart = mainDocPart.FootnotesPart;
+            metadata.HasFootnotes = footnotesPart != null &&
+                footnotesPart.GetXDocument().Root?.Elements(W.footnote)
+                    .Any(fn => (string)fn.Attribute(W.type) != "separator" &&
+                              (string)fn.Attribute(W.type) != "continuationSeparator") == true;
+
+            // Check for endnotes
+            var endnotesPart = mainDocPart.EndnotesPart;
+            metadata.HasEndnotes = endnotesPart != null &&
+                endnotesPart.GetXDocument().Root?.Elements(W.endnote)
+                    .Any(en => (string)en.Attribute(W.type) != "separator" &&
+                              (string)en.Attribute(W.type) != "continuationSeparator") == true;
+
+            // Check for comments
+            var commentsPart = mainDocPart.WordprocessingCommentsPart;
+            metadata.HasComments = commentsPart != null &&
+                commentsPart.GetXDocument().Root?.Elements(W.comment).Any() == true;
+
+            // Check for tracked changes (insertions, deletions, moves)
+            metadata.HasTrackedChanges = body.Descendants()
+                .Any(e => e.Name == W.ins || e.Name == W.del ||
+                         e.Name == W.moveFrom || e.Name == W.moveTo);
+
+            // Collect all section properties and their associated content
+            var sectionData = CollectSectionData(body);
+
+            int globalParagraphIndex = 0;
+            int globalTableIndex = 0;
+            int sectionIndex = 0;
+
+            foreach (var (sectPr, paragraphs, tables) in sectionData)
+            {
+                var sectionMeta = new SectionMetadata
+                {
+                    SectionIndex = sectionIndex,
+                    ParagraphCount = paragraphs.Count,
+                    TableCount = tables.Count,
+                    StartParagraphIndex = globalParagraphIndex,
+                    EndParagraphIndex = globalParagraphIndex + paragraphs.Count,
+                    StartTableIndex = globalTableIndex,
+                    EndTableIndex = globalTableIndex + tables.Count
+                };
+
+                // Extract page dimensions
+                var dims = ExtractPageDimensions(sectPr);
+                sectionMeta.PageWidthPt = dims.PageWidthPt;
+                sectionMeta.PageHeightPt = dims.PageHeightPt;
+                sectionMeta.MarginTopPt = dims.MarginTopPt;
+                sectionMeta.MarginRightPt = dims.MarginRightPt;
+                sectionMeta.MarginBottomPt = dims.MarginBottomPt;
+                sectionMeta.MarginLeftPt = dims.MarginLeftPt;
+                sectionMeta.ContentWidthPt = dims.ContentWidthPt;
+                sectionMeta.ContentHeightPt = dims.ContentHeightPt;
+                sectionMeta.HeaderPt = dims.HeaderPt;
+                sectionMeta.FooterPt = dims.FooterPt;
+
+                // Detect headers and footers
+                DetectHeadersFooters(wordDoc, sectPr, sectionMeta);
+
+                metadata.Sections.Add(sectionMeta);
+
+                globalParagraphIndex += paragraphs.Count;
+                globalTableIndex += tables.Count;
+                sectionIndex++;
+            }
+
+            metadata.TotalParagraphs = globalParagraphIndex;
+            metadata.TotalTables = globalTableIndex;
+
+            // Estimate page count based on content
+            metadata.EstimatedPageCount = EstimatePageCount(metadata);
+
+            return metadata;
+        }
+
+        /// <summary>
+        /// Collects section data including section properties and their associated paragraphs/tables.
+        /// </summary>
+        private static List<(XElement sectPr, List<XElement> paragraphs, List<XElement> tables)> CollectSectionData(XElement body)
+        {
+            var result = new List<(XElement sectPr, List<XElement> paragraphs, List<XElement> tables)>();
+            var currentParagraphs = new List<XElement>();
+            var currentTables = new List<XElement>();
+
+            // Get all top-level block elements
+            var blockElements = body.Elements()
+                .Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sectPr)
+                .ToList();
+
+            foreach (var element in blockElements)
+            {
+                if (element.Name == W.p)
+                {
+                    currentParagraphs.Add(element);
+
+                    // Check for section break in paragraph properties
+                    var pPr = element.Element(W.pPr);
+                    var sectPr = pPr?.Element(W.sectPr);
+                    if (sectPr != null)
+                    {
+                        // End of section
+                        result.Add((sectPr, new List<XElement>(currentParagraphs), new List<XElement>(currentTables)));
+                        currentParagraphs.Clear();
+                        currentTables.Clear();
+                    }
+                }
+                else if (element.Name == W.tbl)
+                {
+                    currentTables.Add(element);
+                    // Also count paragraphs inside tables
+                    var tableParagraphs = element.Descendants(W.p).ToList();
+                    currentParagraphs.AddRange(tableParagraphs);
+                }
+                else if (element.Name == W.sectPr)
+                {
+                    // Document-level sectPr (at end of body)
+                    result.Add((element, new List<XElement>(currentParagraphs), new List<XElement>(currentTables)));
+                    currentParagraphs.Clear();
+                    currentTables.Clear();
+                }
+            }
+
+            // If there's remaining content without a sectPr, use default dimensions
+            if (currentParagraphs.Count > 0 || currentTables.Count > 0)
+            {
+                // Try to find a trailing sectPr
+                var trailingSectPr = body.Element(W.sectPr);
+                result.Add((trailingSectPr, new List<XElement>(currentParagraphs), new List<XElement>(currentTables)));
+            }
+
+            // Ensure at least one section exists
+            if (result.Count == 0)
+            {
+                var defaultSectPr = body.Element(W.sectPr);
+                result.Add((defaultSectPr, new List<XElement>(), new List<XElement>()));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Extracts page dimensions from a sectPr element.
+        /// Returns default US Letter dimensions if sectPr is null.
+        /// </summary>
+        private static (double PageWidthPt, double PageHeightPt, double MarginTopPt, double MarginRightPt,
+            double MarginBottomPt, double MarginLeftPt, double ContentWidthPt, double ContentHeightPt,
+            double HeaderPt, double FooterPt) ExtractPageDimensions(XElement sectPr)
+        {
+            // Default to US Letter: 8.5" x 11" (612pt x 792pt) with 1" margins (72pt)
+            double pageWidthPt = 612;
+            double pageHeightPt = 792;
+            double marginTopPt = 72;
+            double marginRightPt = 72;
+            double marginBottomPt = 72;
+            double marginLeftPt = 72;
+            double headerPt = 36; // 0.5 inch
+            double footerPt = 36;
+
+            if (sectPr != null)
+            {
+                // Parse page size (w:pgSz) - values are in twips (1/20 of a point)
+                var pgSz = sectPr.Element(W.pgSz);
+                if (pgSz != null)
+                {
+                    if (int.TryParse((string)pgSz.Attribute(W._w), out int w))
+                        pageWidthPt = w / 20.0;
+                    if (int.TryParse((string)pgSz.Attribute(W.h), out int h))
+                        pageHeightPt = h / 20.0;
+                }
+
+                // Parse page margins (w:pgMar) - values are in twips
+                var pgMar = sectPr.Element(W.pgMar);
+                if (pgMar != null)
+                {
+                    if (int.TryParse((string)pgMar.Attribute(W.top), out int top))
+                        marginTopPt = top / 20.0;
+                    if (int.TryParse((string)pgMar.Attribute(W.right), out int right))
+                        marginRightPt = right / 20.0;
+                    if (int.TryParse((string)pgMar.Attribute(W.bottom), out int bottom))
+                        marginBottomPt = bottom / 20.0;
+                    if (int.TryParse((string)pgMar.Attribute(W.left), out int left))
+                        marginLeftPt = left / 20.0;
+                    if (int.TryParse((string)pgMar.Attribute(W.header), out int header))
+                        headerPt = header / 20.0;
+                    if (int.TryParse((string)pgMar.Attribute(W.footer), out int footer))
+                        footerPt = footer / 20.0;
+                }
+            }
+
+            double contentWidthPt = pageWidthPt - marginLeftPt - marginRightPt;
+            double contentHeightPt = pageHeightPt - marginTopPt - marginBottomPt;
+
+            return (pageWidthPt, pageHeightPt, marginTopPt, marginRightPt, marginBottomPt, marginLeftPt,
+                contentWidthPt, contentHeightPt, headerPt, footerPt);
+        }
+
+        /// <summary>
+        /// Detects presence of headers and footers for a section.
+        /// </summary>
+        private static void DetectHeadersFooters(WordprocessingDocument wordDoc, XElement sectPr, SectionMetadata sectionMeta)
+        {
+            if (sectPr == null)
+                return;
+
+            var mainDocPart = wordDoc.MainDocumentPart;
+            bool hasTitlePage = sectPr.Element(W.titlePg) != null;
+
+            // Check header references
+            var headerRefs = sectPr.Elements(W.headerReference).ToList();
+            foreach (var headerRef in headerRefs)
+            {
+                var type = (string)headerRef.Attribute(W.type);
+                var headerId = (string)headerRef.Attribute(R.id);
+
+                if (string.IsNullOrEmpty(headerId))
+                    continue;
+
+                try
+                {
+                    var headerPart = mainDocPart.GetPartById(headerId) as HeaderPart;
+                    if (headerPart != null && headerPart.GetXDocument().Root?.HasElements == true)
+                    {
+                        switch (type)
+                        {
+                            case "default":
+                                sectionMeta.HasHeader = true;
+                                break;
+                            case "first":
+                                sectionMeta.HasFirstPageHeader = hasTitlePage;
+                                break;
+                            case "even":
+                                sectionMeta.HasEvenPageHeader = true;
+                                break;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore invalid references
+                }
+            }
+
+            // Check footer references
+            var footerRefs = sectPr.Elements(W.footerReference).ToList();
+            foreach (var footerRef in footerRefs)
+            {
+                var type = (string)footerRef.Attribute(W.type);
+                var footerId = (string)footerRef.Attribute(R.id);
+
+                if (string.IsNullOrEmpty(footerId))
+                    continue;
+
+                try
+                {
+                    var footerPart = mainDocPart.GetPartById(footerId) as FooterPart;
+                    if (footerPart != null && footerPart.GetXDocument().Root?.HasElements == true)
+                    {
+                        switch (type)
+                        {
+                            case "default":
+                                sectionMeta.HasFooter = true;
+                                break;
+                            case "first":
+                                sectionMeta.HasFirstPageFooter = hasTitlePage;
+                                break;
+                            case "even":
+                                sectionMeta.HasEvenPageFooter = true;
+                                break;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Ignore invalid references
+                }
+            }
+        }
+
+        /// <summary>
+        /// Estimates the total page count based on content volume.
+        /// This is a rough estimate using average content density.
+        /// </summary>
+        private static int EstimatePageCount(DocumentMetadata metadata)
+        {
+            if (metadata.Sections.Count == 0)
+                return 1;
+
+            int totalPages = 0;
+
+            foreach (var section in metadata.Sections)
+            {
+                // Rough estimate: ~25 paragraphs per page for average document
+                // Tables count as ~3 paragraphs each due to their size
+                double contentUnits = section.ParagraphCount + (section.TableCount * 3);
+
+                // Adjust for page size (smaller pages = more pages needed)
+                double pageAreaRatio = (section.ContentWidthPt * section.ContentHeightPt) / (468.0 * 648.0);
+                if (pageAreaRatio > 0)
+                {
+                    contentUnits /= pageAreaRatio;
+                }
+
+                int sectionPages = Math.Max(1, (int)Math.Ceiling(contentUnits / 25.0));
+                totalPages += sectionPages;
+            }
+
+            return Math.Max(1, totalPages);
         }
 
         private static void ReverseTableBordersForRtlTables(WordprocessingDocument wordDoc)

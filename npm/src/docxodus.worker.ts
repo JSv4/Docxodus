@@ -16,12 +16,15 @@ import type {
   WorkerCompareRequest,
   WorkerCompareToHtmlRequest,
   WorkerGetRevisionsRequest,
+  WorkerGetDocumentMetadataRequest,
   DocxodusWasmExports,
   ConversionOptions,
   CompareOptions,
   GetRevisionsOptions,
   Revision,
   RevisionType,
+  DocumentMetadata,
+  SectionMetadata,
 } from "./types.js";
 
 // Worker-local state
@@ -310,6 +313,69 @@ function handleGetRevisions(
 }
 
 /**
+ * Handle getDocumentMetadata request.
+ */
+function handleGetDocumentMetadata(
+  request: WorkerGetDocumentMetadataRequest
+): { metadata?: DocumentMetadata; error?: string } {
+  const exports = ensureInitialized();
+
+  try {
+    const result = exports.DocumentConverter.GetDocumentMetadata(
+      request.documentBytes
+    );
+
+    if (isErrorResponse(result)) {
+      return parseError(result);
+    }
+
+    const parsed = JSON.parse(result);
+
+    // Convert from PascalCase to camelCase
+    const convertSection = (s: any): SectionMetadata => ({
+      sectionIndex: s.SectionIndex ?? s.sectionIndex,
+      pageWidthPt: s.PageWidthPt ?? s.pageWidthPt,
+      pageHeightPt: s.PageHeightPt ?? s.pageHeightPt,
+      marginTopPt: s.MarginTopPt ?? s.marginTopPt,
+      marginRightPt: s.MarginRightPt ?? s.marginRightPt,
+      marginBottomPt: s.MarginBottomPt ?? s.marginBottomPt,
+      marginLeftPt: s.MarginLeftPt ?? s.marginLeftPt,
+      contentWidthPt: s.ContentWidthPt ?? s.contentWidthPt,
+      contentHeightPt: s.ContentHeightPt ?? s.contentHeightPt,
+      headerPt: s.HeaderPt ?? s.headerPt,
+      footerPt: s.FooterPt ?? s.footerPt,
+      paragraphCount: s.ParagraphCount ?? s.paragraphCount,
+      tableCount: s.TableCount ?? s.tableCount,
+      hasHeader: s.HasHeader ?? s.hasHeader,
+      hasFooter: s.HasFooter ?? s.hasFooter,
+      hasFirstPageHeader: s.HasFirstPageHeader ?? s.hasFirstPageHeader,
+      hasFirstPageFooter: s.HasFirstPageFooter ?? s.hasFirstPageFooter,
+      hasEvenPageHeader: s.HasEvenPageHeader ?? s.hasEvenPageHeader,
+      hasEvenPageFooter: s.HasEvenPageFooter ?? s.hasEvenPageFooter,
+      startParagraphIndex: s.StartParagraphIndex ?? s.startParagraphIndex,
+      endParagraphIndex: s.EndParagraphIndex ?? s.endParagraphIndex,
+      startTableIndex: s.StartTableIndex ?? s.startTableIndex,
+      endTableIndex: s.EndTableIndex ?? s.endTableIndex,
+    });
+
+    const metadata: DocumentMetadata = {
+      sections: (parsed.Sections || parsed.sections || []).map(convertSection),
+      totalParagraphs: parsed.TotalParagraphs ?? parsed.totalParagraphs,
+      totalTables: parsed.TotalTables ?? parsed.totalTables,
+      hasFootnotes: parsed.HasFootnotes ?? parsed.hasFootnotes,
+      hasEndnotes: parsed.HasEndnotes ?? parsed.hasEndnotes,
+      hasTrackedChanges: parsed.HasTrackedChanges ?? parsed.hasTrackedChanges,
+      hasComments: parsed.HasComments ?? parsed.hasComments,
+      estimatedPageCount: parsed.EstimatedPageCount ?? parsed.estimatedPageCount,
+    };
+
+    return { metadata };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/**
  * Handle getVersion request.
  */
 function handleGetVersion(): {
@@ -416,6 +482,19 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
           type: "getRevisions",
           success: !result.error,
           revisions: result.revisions,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "getDocumentMetadata": {
+        const getMetadataRequest = request as WorkerGetDocumentMetadataRequest;
+        const result = handleGetDocumentMetadata(getMetadataRequest);
+        response = {
+          id: request.id,
+          type: "getDocumentMetadata",
+          success: !result.error,
+          metadata: result.metadata,
           error: result.error,
         };
         break;

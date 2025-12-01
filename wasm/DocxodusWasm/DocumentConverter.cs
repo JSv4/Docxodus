@@ -632,6 +632,70 @@ public partial class DocumentConverter
     }
 
     /// <summary>
+    /// Get document metadata for lazy loading pagination.
+    /// This is a fast operation that extracts structure without full HTML conversion.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <returns>JSON response with document metadata</returns>
+    [JSExport]
+    public static string GetDocumentMetadata(byte[] docxBytes)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            return SerializeError("No document data provided");
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            var metadata = WmlToHtmlConverter.GetDocumentMetadata(wmlDoc);
+
+            var response = new DocumentMetadataResponse
+            {
+                TotalParagraphs = metadata.TotalParagraphs,
+                TotalTables = metadata.TotalTables,
+                HasFootnotes = metadata.HasFootnotes,
+                HasEndnotes = metadata.HasEndnotes,
+                HasTrackedChanges = metadata.HasTrackedChanges,
+                HasComments = metadata.HasComments,
+                EstimatedPageCount = metadata.EstimatedPageCount,
+                Sections = metadata.Sections.Select(s => new SectionMetadataInfo
+                {
+                    SectionIndex = s.SectionIndex,
+                    PageWidthPt = s.PageWidthPt,
+                    PageHeightPt = s.PageHeightPt,
+                    MarginTopPt = s.MarginTopPt,
+                    MarginRightPt = s.MarginRightPt,
+                    MarginBottomPt = s.MarginBottomPt,
+                    MarginLeftPt = s.MarginLeftPt,
+                    ContentWidthPt = s.ContentWidthPt,
+                    ContentHeightPt = s.ContentHeightPt,
+                    HeaderPt = s.HeaderPt,
+                    FooterPt = s.FooterPt,
+                    ParagraphCount = s.ParagraphCount,
+                    TableCount = s.TableCount,
+                    HasHeader = s.HasHeader,
+                    HasFooter = s.HasFooter,
+                    HasFirstPageHeader = s.HasFirstPageHeader,
+                    HasFirstPageFooter = s.HasFirstPageFooter,
+                    HasEvenPageHeader = s.HasEvenPageHeader,
+                    HasEvenPageFooter = s.HasEvenPageFooter,
+                    StartParagraphIndex = s.StartParagraphIndex,
+                    EndParagraphIndex = s.EndParagraphIndex,
+                    StartTableIndex = s.StartTableIndex,
+                    EndTableIndex = s.EndTableIndex
+                }).ToArray()
+            };
+
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.DocumentMetadataResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
     /// Get library version information.
     /// </summary>
     [JSExport]

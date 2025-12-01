@@ -18,6 +18,8 @@ import type {
   TableColumnInfo,
   AnnotationTarget,
   AddAnnotationWithTargetRequest,
+  DocumentMetadata,
+  SectionMetadata,
 } from "./types.js";
 
 import {
@@ -80,6 +82,9 @@ export type {
   TableColumnInfo,
   AnnotationTarget,
   AddAnnotationWithTargetRequest,
+  // Lazy loading / Phase 3 types
+  DocumentMetadata,
+  SectionMetadata,
 };
 
 export {
@@ -882,6 +887,96 @@ export async function getDocumentStructure(
     root,
     elementsById,
     tableColumns,
+  };
+}
+
+/**
+ * Get document metadata for lazy loading pagination.
+ * This is a fast operation that extracts structure information without full HTML rendering.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @returns Document metadata including sections, dimensions, and content counts
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * const metadata = await getDocumentMetadata(docxFile);
+ *
+ * // Check document overview
+ * console.log(`Document has ${metadata.totalParagraphs} paragraphs`);
+ * console.log(`Document has ${metadata.sections.length} sections`);
+ * console.log(`Estimated ${metadata.estimatedPageCount} pages`);
+ *
+ * // Check section properties
+ * for (const section of metadata.sections) {
+ *   console.log(`Section ${section.sectionIndex}: ${section.pageWidthPt}x${section.pageHeightPt}pt`);
+ *   console.log(`  Paragraphs: ${section.paragraphCount}, Tables: ${section.tableCount}`);
+ *   console.log(`  Has header: ${section.hasHeader}, Has footer: ${section.hasFooter}`);
+ * }
+ *
+ * // Check document features
+ * if (metadata.hasTrackedChanges) {
+ *   console.log("Document has tracked changes");
+ * }
+ * if (metadata.hasFootnotes) {
+ *   console.log("Document has footnotes");
+ * }
+ * ```
+ */
+export async function getDocumentMetadata(
+  document: File | Uint8Array
+): Promise<DocumentMetadata> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  // Yield to browser before WASM work - allows loading states to render
+  await yieldToMain();
+
+  const result = exports.DocumentConverter.GetDocumentMetadata(bytes);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get document metadata: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+
+  // Convert from PascalCase to camelCase
+  const convertSection = (s: any): SectionMetadata => ({
+    sectionIndex: s.SectionIndex ?? s.sectionIndex,
+    pageWidthPt: s.PageWidthPt ?? s.pageWidthPt,
+    pageHeightPt: s.PageHeightPt ?? s.pageHeightPt,
+    marginTopPt: s.MarginTopPt ?? s.marginTopPt,
+    marginRightPt: s.MarginRightPt ?? s.marginRightPt,
+    marginBottomPt: s.MarginBottomPt ?? s.marginBottomPt,
+    marginLeftPt: s.MarginLeftPt ?? s.marginLeftPt,
+    contentWidthPt: s.ContentWidthPt ?? s.contentWidthPt,
+    contentHeightPt: s.ContentHeightPt ?? s.contentHeightPt,
+    headerPt: s.HeaderPt ?? s.headerPt,
+    footerPt: s.FooterPt ?? s.footerPt,
+    paragraphCount: s.ParagraphCount ?? s.paragraphCount,
+    tableCount: s.TableCount ?? s.tableCount,
+    hasHeader: s.HasHeader ?? s.hasHeader,
+    hasFooter: s.HasFooter ?? s.hasFooter,
+    hasFirstPageHeader: s.HasFirstPageHeader ?? s.hasFirstPageHeader,
+    hasFirstPageFooter: s.HasFirstPageFooter ?? s.hasFirstPageFooter,
+    hasEvenPageHeader: s.HasEvenPageHeader ?? s.hasEvenPageHeader,
+    hasEvenPageFooter: s.HasEvenPageFooter ?? s.hasEvenPageFooter,
+    startParagraphIndex: s.StartParagraphIndex ?? s.startParagraphIndex,
+    endParagraphIndex: s.EndParagraphIndex ?? s.endParagraphIndex,
+    startTableIndex: s.StartTableIndex ?? s.startTableIndex,
+    endTableIndex: s.EndTableIndex ?? s.endTableIndex,
+  });
+
+  return {
+    sections: (parsed.Sections || parsed.sections || []).map(convertSection),
+    totalParagraphs: parsed.TotalParagraphs ?? parsed.totalParagraphs,
+    totalTables: parsed.TotalTables ?? parsed.totalTables,
+    hasFootnotes: parsed.HasFootnotes ?? parsed.hasFootnotes,
+    hasEndnotes: parsed.HasEndnotes ?? parsed.hasEndnotes,
+    hasTrackedChanges: parsed.HasTrackedChanges ?? parsed.hasTrackedChanges,
+    hasComments: parsed.HasComments ?? parsed.hasComments,
+    estimatedPageCount: parsed.EstimatedPageCount ?? parsed.estimatedPageCount,
   };
 }
 

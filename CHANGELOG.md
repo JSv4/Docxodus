@@ -21,7 +21,20 @@ All notable changes to this project will be documented in this file.
   - Main thread remains fully responsive during WASM execution - animations continue, user interactions work
   - Zero-copy transfer of document bytes via Transferable for optimal performance
   - Worker can be terminated when no longer needed
-  - Phase 3 (lazy loading) will build on this foundation
+- **Document Metadata API for Lazy Loading** (Issue #44 Phase 3) - Fast metadata extraction without full HTML rendering
+  - New `getDocumentMetadata()` function returns document structure information:
+    - `sections`: Array of section metadata with page dimensions and content ranges
+    - `totalParagraphs`, `totalTables`: Document-wide content counts
+    - `hasFootnotes`, `hasEndnotes`, `hasComments`, `hasTrackedChanges`: Feature detection
+    - `estimatedPageCount`: Heuristic-based page count estimation
+  - Section metadata includes:
+    - Page dimensions: `pageWidthPt`, `pageHeightPt`, `marginTopPt`, etc.
+    - Content area: `contentWidthPt`, `contentHeightPt`
+    - Header/footer heights: `headerPt`, `footerPt`
+    - Content tracking: `paragraphCount`, `tableCount`, `startParagraphIndex`, `endParagraphIndex`
+    - Header/footer presence: `hasHeader`, `hasFooter`, `hasFirstPageHeader`, `hasEvenPageHeader`, etc.
+  - Available in main API, worker API, and raw WASM: `DocumentConverter.GetDocumentMetadata()`
+  - Enables efficient lazy loading for paginated document viewing
 - **Custom Annotations** - Full support for adding, removing, and rendering custom annotations on DOCX documents
   - `AnnotationManager` class for programmatic annotation CRUD operations:
     - `AddAnnotation()`: Add annotation by text search or paragraph range
