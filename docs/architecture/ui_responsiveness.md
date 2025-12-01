@@ -16,7 +16,7 @@ A three-phase approach addresses this problem with increasing sophistication:
 | Phase | Approach | Blocking | Complexity | Status |
 |-------|----------|----------|------------|--------|
 | 1 | Frame Yielding | Yes (after initial paint) | Low | **Implemented** |
-| 2 | Web Worker | No | Medium | Planned |
+| 2 | Web Worker | No | Medium | **Implemented** |
 | 3 | Lazy Loading | No (per-page) | High | Planned |
 
 ## Phase 1: Frame Yielding (Implemented)
@@ -78,7 +78,7 @@ setLoading(false);
 - Long operations (10+ seconds) will still feel unresponsive
 - No progress indication during conversion
 
-## Phase 2: Web Worker (Planned)
+## Phase 2: Web Worker (Implemented)
 
 ### Architecture
 
@@ -101,14 +101,40 @@ Main Thread                           Web Worker
 2. **Transferable bytes**: Document `Uint8Array` is transferred (zero-copy)
 3. **Streaming-ready API**: Message structure supports future chunked output
 
-### API Design (Preliminary)
+### Files
+
+- `npm/src/docxodus.worker.ts` - Worker script that loads WASM and handles messages
+- `npm/src/worker-proxy.ts` - Main thread interface for worker communication
+- `npm/src/types.ts` - Worker message types (WorkerRequest, WorkerResponse)
+
+### API
 
 ```typescript
-// Opt-in worker-based conversion
-import { createWorkerDocxodus } from 'docxodus/worker';
+import { createWorkerDocxodus, isWorkerSupported } from 'docxodus/worker';
 
-const docxodus = await createWorkerDocxodus();
-const html = await docxodus.convertDocxToHtml(doc); // Non-blocking!
+// Check if workers are supported
+if (isWorkerSupported()) {
+  // Create worker instance (loads WASM in worker)
+  const docxodus = await createWorkerDocxodus();
+
+  // Use the same API - but non-blocking!
+  const html = await docxodus.convertDocxToHtml(docxFile);
+  const redlined = await docxodus.compareDocuments(original, modified);
+  const revisions = await docxodus.getRevisions(comparedDoc);
+  const version = await docxodus.getVersion();
+
+  // Clean up when done
+  docxodus.terminate();
+}
+```
+
+### Options
+
+```typescript
+const docxodus = await createWorkerDocxodus({
+  // Custom WASM path (defaults to auto-detection)
+  wasmBasePath: '/assets/wasm/'
+});
 ```
 
 ### Benefits
@@ -116,6 +142,7 @@ const html = await docxodus.convertDocxToHtml(doc); // Non-blocking!
 - Main thread remains responsive during entire operation
 - UI animations continue smoothly
 - User can interact with other parts of the application
+- Same API as main module - easy migration
 
 ## Phase 3: Lazy Loading (Planned)
 
@@ -204,12 +231,33 @@ test.describe('Frame Yielding Tests (Issue #44)', () => {
 });
 ```
 
-### Phase 2 Tests (Planned)
+### Phase 2 Tests (npm/tests/worker.spec.ts)
 
-- Worker initialization
-- Message passing roundtrip
-- Large document conversion without main thread blocking
-- Error handling across worker boundary
+```typescript
+test.describe('Docxodus Web Worker Tests', () => {
+  // Initialization
+  test('isWorkerSupported returns true in browser');
+  test('worker can be created and initialized');
+  test('worker can be terminated');
+
+  // Non-blocking behavior
+  test('UI remains responsive during conversion');
+  test('multiple operations can be queued');
+
+  // Conversion operations
+  test('convertDocxToHtml produces valid HTML');
+  test('getVersion returns library info');
+
+  // Comparison operations
+  test('compareDocuments produces valid redlined document');
+  test('compareDocumentsToHtml produces HTML with tracked changes');
+  test('getRevisions extracts revisions from compared document');
+
+  // Error handling
+  test('handles invalid document gracefully');
+  test('rejects requests after termination');
+});
+```
 
 ### Phase 3 Tests (Planned)
 
