@@ -15,6 +15,36 @@ namespace DocxodusWasm;
 public partial class DocumentConverter
 {
     /// <summary>
+    /// Maximum allowed document size in bytes (100 MB).
+    /// This limit helps prevent memory exhaustion from malicious or extremely large documents.
+    /// </summary>
+    private const int MaxDocumentSizeBytes = 100 * 1024 * 1024;
+
+    /// <summary>
+    /// Validates input document bytes.
+    /// </summary>
+    /// <param name="docxBytes">The document bytes to validate</param>
+    /// <param name="errorMessage">Error message if validation fails</param>
+    /// <returns>True if valid, false otherwise</returns>
+    private static bool ValidateInput(byte[]? docxBytes, out string? errorMessage)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            errorMessage = "No document data provided";
+            return false;
+        }
+
+        if (docxBytes.Length > MaxDocumentSizeBytes)
+        {
+            errorMessage = $"Document size ({docxBytes.Length / (1024 * 1024)}MB) exceeds maximum allowed size ({MaxDocumentSizeBytes / (1024 * 1024)}MB)";
+            return false;
+        }
+
+        errorMessage = null;
+        return true;
+    }
+
+    /// <summary>
     /// Convert a DOCX file to HTML with default settings.
     /// </summary>
     /// <param name="docxBytes">The DOCX file as a byte array (from JavaScript Uint8Array)</param>
@@ -629,6 +659,70 @@ public partial class DocumentConverter
             ColumnSpan = element.ColumnSpan,
             Children = Array.Empty<DocumentElementInfo>()
         };
+    }
+
+    /// <summary>
+    /// Get document metadata for lazy loading pagination.
+    /// This is a fast operation that extracts structure without full HTML conversion.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <returns>JSON response with document metadata</returns>
+    [JSExport]
+    public static string GetDocumentMetadata(byte[] docxBytes)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            var metadata = WmlToHtmlConverter.GetDocumentMetadata(wmlDoc);
+
+            var response = new DocumentMetadataResponse
+            {
+                TotalParagraphs = metadata.TotalParagraphs,
+                TotalTables = metadata.TotalTables,
+                HasFootnotes = metadata.HasFootnotes,
+                HasEndnotes = metadata.HasEndnotes,
+                HasTrackedChanges = metadata.HasTrackedChanges,
+                HasComments = metadata.HasComments,
+                EstimatedPageCount = metadata.EstimatedPageCount,
+                Sections = metadata.Sections.Select(s => new SectionMetadataInfo
+                {
+                    SectionIndex = s.SectionIndex,
+                    PageWidthPt = s.PageWidthPt,
+                    PageHeightPt = s.PageHeightPt,
+                    MarginTopPt = s.MarginTopPt,
+                    MarginRightPt = s.MarginRightPt,
+                    MarginBottomPt = s.MarginBottomPt,
+                    MarginLeftPt = s.MarginLeftPt,
+                    ContentWidthPt = s.ContentWidthPt,
+                    ContentHeightPt = s.ContentHeightPt,
+                    HeaderPt = s.HeaderPt,
+                    FooterPt = s.FooterPt,
+                    ParagraphCount = s.ParagraphCount,
+                    TableCount = s.TableCount,
+                    HasHeader = s.HasHeader,
+                    HasFooter = s.HasFooter,
+                    HasFirstPageHeader = s.HasFirstPageHeader,
+                    HasFirstPageFooter = s.HasFirstPageFooter,
+                    HasEvenPageHeader = s.HasEvenPageHeader,
+                    HasEvenPageFooter = s.HasEvenPageFooter,
+                    StartParagraphIndex = s.StartParagraphIndex,
+                    EndParagraphIndex = s.EndParagraphIndex,
+                    StartTableIndex = s.StartTableIndex,
+                    EndTableIndex = s.EndTableIndex
+                }).ToArray()
+            };
+
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.DocumentMetadataResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
     }
 
     /// <summary>

@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>Docxodus Worker Test Harness</title>
+</head>
+<body>
+    <h1>Docxodus Worker Test Harness</h1>
+    <div id="status">Loading...</div>
+    <pre id="output"></pre>
+
+    <script type="module">
+        // Import the worker proxy
+        import { createWorkerDocxodus, isWorkerSupported } from './worker-proxy.js';
+
+        // Store the worker instance globally for testing
+        window.DocxodusWorker = null;
+        window.DocxodusWorkerReady = false;
+        window.DocxodusWorkerError = null;
+
+        // Test helper to create worker
+        window.createDocxodusWorker = async function() {
+            try {
+                // The WASM files are in the same directory (test harness is served from dist/wasm)
+                window.DocxodusWorker = await createWorkerDocxodus({
+                    wasmBasePath: './'
+                });
+                window.DocxodusWorkerReady = true;
+                document.getElementById('status').textContent = 'Worker Ready';
+                console.log('Docxodus Worker Ready');
+                return window.DocxodusWorker;
+            } catch (error) {
+                window.DocxodusWorkerError = error;
+                document.getElementById('status').textContent = 'Worker Error: ' + error.message;
+                console.error('Failed to create worker:', error);
+                throw error;
+            }
+        };
+
+        // Test helpers
+        window.DocxodusWorkerTests = {
+            isSupported: function() {
+                return isWorkerSupported();
+            },
+
+            // Convert DOCX to HTML using worker
+            convertToHtml: async function(bytes) {
+                if (!window.DocxodusWorker) {
+                    return { error: { message: 'Worker not initialized' } };
+                }
+                try {
+                    const html = await window.DocxodusWorker.convertDocxToHtml(new Uint8Array(bytes));
+                    return { html };
+                } catch (error) {
+                    return { error: { message: error.message } };
+                }
+            },
+
+            // Compare documents using worker
+            compareDocuments: async function(originalBytes, modifiedBytes, authorName = 'Test') {
+                if (!window.DocxodusWorker) {
+                    return { error: { message: 'Worker not initialized' } };
+                }
+                try {
+                    const docxBytes = await window.DocxodusWorker.compareDocuments(
+                        new Uint8Array(originalBytes),
+                        new Uint8Array(modifiedBytes),
+                        { authorName }
+                    );
+                    return { docxBytes: Array.from(docxBytes) };
+                } catch (error) {
+                    return { error: { message: error.message } };
+                }
+            },
+
+            // Compare and get HTML using worker
+            compareToHtml: async function(originalBytes, modifiedBytes, authorName = 'Test') {
+                if (!window.DocxodusWorker) {
+                    return { error: { message: 'Worker not initialized' } };
+                }
+                try {
+                    const html = await window.DocxodusWorker.compareDocumentsToHtml(
+                        new Uint8Array(originalBytes),
+                        new Uint8Array(modifiedBytes),
+                        { authorName }
+                    );
+                    return { html };
+                } catch (error) {
+                    return { error: { message: error.message } };
+                }
+            },
+
+            // Get revisions using worker
+            getRevisions: async function(docxBytes) {
+                if (!window.DocxodusWorker) {
+                    return { error: { message: 'Worker not initialized' } };
+                }
+                try {
+                    const revisions = await window.DocxodusWorker.getRevisions(new Uint8Array(docxBytes));
+                    return { revisions };
+                } catch (error) {
+                    return { error: { message: error.message } };
+                }
+            },
+
+            // Get version using worker
+            getVersion: async function() {
+                if (!window.DocxodusWorker) {
+                    return { error: { message: 'Worker not initialized' } };
+                }
+                try {
+                    const version = await window.DocxodusWorker.getVersion();
+                    return version;
+                } catch (error) {
+                    return { error: { message: error.message } };
+                }
+            },
+
+            // Get document metadata using worker (for lazy loading)
+            getDocumentMetadata: async function(bytes) {
+                if (!window.DocxodusWorker) {
+                    return { error: { message: 'Worker not initialized' } };
+                }
+                try {
+                    const metadata = await window.DocxodusWorker.getDocumentMetadata(new Uint8Array(bytes));
+                    return { metadata };
+                } catch (error) {
+                    return { error: { message: error.message } };
+                }
+            },
+
+            // Convert with pagination options using worker
+            convertToHtmlWithPagination: async function(bytes, paginationMode = 1, paginationScale = 1.0) {
+                if (!window.DocxodusWorker) {
+                    return { error: { message: 'Worker not initialized' } };
+                }
+                try {
+                    const html = await window.DocxodusWorker.convertDocxToHtml(new Uint8Array(bytes), {
+                        paginationMode: paginationMode,
+                        paginationScale: paginationScale
+                    });
+                    return { html };
+                } catch (error) {
+                    return { error: { message: error.message } };
+                }
+            },
+
+            // Check if worker is active
+            isActive: function() {
+                return window.DocxodusWorker?.isActive() ?? false;
+            },
+
+            // Terminate worker
+            terminate: function() {
+                if (window.DocxodusWorker) {
+                    window.DocxodusWorker.terminate();
+                    window.DocxodusWorkerReady = false;
+                }
+            }
+        };
+
+        document.getElementById('status').textContent = 'Test harness loaded, call createDocxodusWorker() to initialize';
+    </script>
+</body>
+</html>

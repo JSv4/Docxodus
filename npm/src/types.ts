@@ -408,6 +408,7 @@ export interface DocxodusWasmExports {
     RemoveAnnotation: (bytes: Uint8Array, annotationId: string) => string;
     HasAnnotations: (bytes: Uint8Array) => string;
     GetDocumentStructure: (bytes: Uint8Array) => string;
+    GetDocumentMetadata: (bytes: Uint8Array) => string;
     GetVersion: () => string;
   };
   DocumentComparer: {
@@ -906,4 +907,343 @@ export function targetSearchInElement(
   occurrence: number = 1
 ): AnnotationTarget {
   return { elementId, searchText, occurrence };
+}
+
+// ============================================================================
+// Document Metadata Types (Phase 3: Lazy Loading)
+// ============================================================================
+
+/**
+ * Metadata for a single section in the document.
+ *
+ * ## Units
+ * All dimension values are in **points** (1 point = 1/72 inch).
+ *
+ * Common page sizes in points:
+ * - **US Letter**: 612 × 792 pt (8.5" × 11")
+ * - **A4**: 595 × 842 pt (210mm × 297mm)
+ * - **Legal**: 612 × 1008 pt (8.5" × 14")
+ *
+ * To convert points to other units:
+ * - Points to inches: `pt / 72`
+ * - Points to mm: `pt / 72 * 25.4`
+ * - Points to pixels (96 DPI): `pt * 96 / 72` (or `pt * 1.333...`)
+ *
+ * @example
+ * ```typescript
+ * const section = metadata.sections[0];
+ * // US Letter: pageWidthPt = 612, pageHeightPt = 792
+ *
+ * // Convert to inches
+ * const widthInches = section.pageWidthPt / 72; // 8.5
+ *
+ * // Convert to pixels at 96 DPI
+ * const widthPx = section.pageWidthPt * 96 / 72; // 816
+ * ```
+ */
+export interface SectionMetadata {
+  /** Section index (0-based, sequential across document) */
+  sectionIndex: number;
+  /** Page width in points (1 pt = 1/72 inch). US Letter = 612pt, A4 ≈ 595pt */
+  pageWidthPt: number;
+  /** Page height in points (1 pt = 1/72 inch). US Letter = 792pt, A4 ≈ 842pt */
+  pageHeightPt: number;
+  /** Top margin in points. Default is typically 72pt (1 inch) */
+  marginTopPt: number;
+  /** Right margin in points. Default is typically 72pt (1 inch) */
+  marginRightPt: number;
+  /** Bottom margin in points. Default is typically 72pt (1 inch) */
+  marginBottomPt: number;
+  /** Left margin in points. Default is typically 72pt (1 inch) */
+  marginLeftPt: number;
+  /** Content width in points (pageWidthPt - marginLeftPt - marginRightPt) */
+  contentWidthPt: number;
+  /** Content height in points (pageHeightPt - marginTopPt - marginBottomPt) */
+  contentHeightPt: number;
+  /** Header distance from page top in points. Default is typically 36pt (0.5 inch) */
+  headerPt: number;
+  /** Footer distance from page bottom in points. Default is typically 36pt (0.5 inch) */
+  footerPt: number;
+  /** Number of paragraphs in this section (includes paragraphs inside tables) */
+  paragraphCount: number;
+  /** Number of top-level tables in this section */
+  tableCount: number;
+  /** Whether this section has a default header (w:headerReference type="default") */
+  hasHeader: boolean;
+  /** Whether this section has a default footer (w:footerReference type="default") */
+  hasFooter: boolean;
+  /** Whether this section has a first page header (requires titlePg element) */
+  hasFirstPageHeader: boolean;
+  /** Whether this section has a first page footer (requires titlePg element) */
+  hasFirstPageFooter: boolean;
+  /** Whether this section has an even page header (for different even/odd headers) */
+  hasEvenPageHeader: boolean;
+  /** Whether this section has an even page footer (for different even/odd footers) */
+  hasEvenPageFooter: boolean;
+  /** Start paragraph index (0-based, global across document). Inclusive. */
+  startParagraphIndex: number;
+  /** End paragraph index (global across document). Exclusive - use `endParagraphIndex - startParagraphIndex` for count. */
+  endParagraphIndex: number;
+  /** Start table index (0-based, global across document). Inclusive. */
+  startTableIndex: number;
+  /** End table index (global across document). Exclusive - use `endTableIndex - startTableIndex` for count. */
+  endTableIndex: number;
+}
+
+/**
+ * Document metadata for lazy loading pagination.
+ * Provides fast access to document structure without full HTML rendering.
+ *
+ * This is significantly faster than full HTML conversion and is designed for:
+ * - Lazy loading / virtual scrolling of large documents
+ * - Pre-calculating pagination layouts
+ * - Document feature detection before rendering
+ *
+ * @example
+ * ```typescript
+ * const metadata = await getDocumentMetadata(docxFile);
+ *
+ * // Check document features before rendering
+ * if (metadata.hasTrackedChanges) {
+ *   console.log('Document has tracked changes');
+ * }
+ *
+ * // Calculate total content for lazy loading
+ * const totalSections = metadata.sections.length;
+ * const firstPageWidth = metadata.sections[0].pageWidthPt;
+ *
+ * // Paragraph count includes paragraphs inside tables
+ * console.log(`${metadata.totalParagraphs} paragraphs, ${metadata.totalTables} tables`);
+ * ```
+ *
+ * @remarks
+ * **Limitations:**
+ * - Section breaks inside tables or text boxes are not detected (see GitHub issue #51)
+ * - Estimated page count is heuristic-based and may not match actual rendered pages
+ * - Maximum document size is 100MB
+ */
+export interface DocumentMetadata {
+  /** List of sections with their metadata. Documents always have at least one section. */
+  sections: SectionMetadata[];
+  /** Total number of paragraphs in the document (includes paragraphs inside tables) */
+  totalParagraphs: number;
+  /** Total number of top-level tables in the document */
+  totalTables: number;
+  /** Whether the document has any footnotes (excludes separator/continuationSeparator) */
+  hasFootnotes: boolean;
+  /** Whether the document has any endnotes (excludes separator/continuationSeparator) */
+  hasEndnotes: boolean;
+  /** Whether the document has tracked changes (w:ins, w:del, w:moveFrom, w:moveTo) */
+  hasTrackedChanges: boolean;
+  /** Whether the document has comments (w:comment elements with content) */
+  hasComments: boolean;
+  /** Estimated total page count (heuristic based on content volume and page sizes) */
+  estimatedPageCount: number;
+}
+
+// ============================================================================
+// Web Worker Types (Phase 2: Non-blocking WASM operations)
+// ============================================================================
+
+/**
+ * Message types sent from main thread to worker.
+ */
+export type WorkerRequestType =
+  | "init"
+  | "convertDocxToHtml"
+  | "compareDocuments"
+  | "compareDocumentsToHtml"
+  | "getRevisions"
+  | "getDocumentMetadata"
+  | "getVersion";
+
+/**
+ * Base structure for worker requests.
+ */
+export interface WorkerRequestBase {
+  /** Unique request ID for correlating responses */
+  id: string;
+  /** The operation type */
+  type: WorkerRequestType;
+}
+
+/**
+ * Initialize the worker with WASM base path.
+ */
+export interface WorkerInitRequest extends WorkerRequestBase {
+  type: "init";
+  /** Base URL for loading WASM files (e.g., "/wasm/") */
+  wasmBasePath: string;
+}
+
+/**
+ * Convert DOCX to HTML request.
+ */
+export interface WorkerConvertRequest extends WorkerRequestBase {
+  type: "convertDocxToHtml";
+  /** Document bytes (transferred, not copied) */
+  documentBytes: Uint8Array;
+  /** Conversion options */
+  options?: ConversionOptions;
+}
+
+/**
+ * Compare two documents request.
+ */
+export interface WorkerCompareRequest extends WorkerRequestBase {
+  type: "compareDocuments";
+  /** Original document bytes */
+  originalBytes: Uint8Array;
+  /** Modified document bytes */
+  modifiedBytes: Uint8Array;
+  /** Comparison options */
+  options?: CompareOptions;
+}
+
+/**
+ * Compare documents and return HTML request.
+ */
+export interface WorkerCompareToHtmlRequest extends WorkerRequestBase {
+  type: "compareDocumentsToHtml";
+  /** Original document bytes */
+  originalBytes: Uint8Array;
+  /** Modified document bytes */
+  modifiedBytes: Uint8Array;
+  /** Comparison options */
+  options?: CompareOptions;
+}
+
+/**
+ * Get revisions from a document request.
+ */
+export interface WorkerGetRevisionsRequest extends WorkerRequestBase {
+  type: "getRevisions";
+  /** Document bytes */
+  documentBytes: Uint8Array;
+  /** Revision extraction options */
+  options?: GetRevisionsOptions;
+}
+
+/**
+ * Get document metadata for lazy loading request.
+ */
+export interface WorkerGetDocumentMetadataRequest extends WorkerRequestBase {
+  type: "getDocumentMetadata";
+  /** Document bytes */
+  documentBytes: Uint8Array;
+}
+
+/**
+ * Get library version request.
+ */
+export interface WorkerGetVersionRequest extends WorkerRequestBase {
+  type: "getVersion";
+}
+
+/**
+ * Union type of all possible worker requests.
+ */
+export type WorkerRequest =
+  | WorkerInitRequest
+  | WorkerConvertRequest
+  | WorkerCompareRequest
+  | WorkerCompareToHtmlRequest
+  | WorkerGetRevisionsRequest
+  | WorkerGetDocumentMetadataRequest
+  | WorkerGetVersionRequest;
+
+/**
+ * Base structure for worker responses.
+ */
+export interface WorkerResponseBase {
+  /** Request ID this response corresponds to */
+  id: string;
+  /** Whether the operation succeeded */
+  success: boolean;
+  /** Error message if success is false */
+  error?: string;
+}
+
+/**
+ * Response from init request.
+ */
+export interface WorkerInitResponse extends WorkerResponseBase {
+  type: "init";
+}
+
+/**
+ * Response from convertDocxToHtml request.
+ */
+export interface WorkerConvertResponse extends WorkerResponseBase {
+  type: "convertDocxToHtml";
+  /** The converted HTML string */
+  html?: string;
+}
+
+/**
+ * Response from compareDocuments request.
+ */
+export interface WorkerCompareResponse extends WorkerResponseBase {
+  type: "compareDocuments";
+  /** The redlined document bytes */
+  documentBytes?: Uint8Array;
+}
+
+/**
+ * Response from compareDocumentsToHtml request.
+ */
+export interface WorkerCompareToHtmlResponse extends WorkerResponseBase {
+  type: "compareDocumentsToHtml";
+  /** The HTML string with redlines */
+  html?: string;
+}
+
+/**
+ * Response from getRevisions request.
+ */
+export interface WorkerGetRevisionsResponse extends WorkerResponseBase {
+  type: "getRevisions";
+  /** Array of revisions */
+  revisions?: Revision[];
+}
+
+/**
+ * Response from getDocumentMetadata request.
+ */
+export interface WorkerGetDocumentMetadataResponse extends WorkerResponseBase {
+  type: "getDocumentMetadata";
+  /** Document metadata */
+  metadata?: DocumentMetadata;
+}
+
+/**
+ * Response from getVersion request.
+ */
+export interface WorkerGetVersionResponse extends WorkerResponseBase {
+  type: "getVersion";
+  /** Version information */
+  version?: VersionInfo;
+}
+
+/**
+ * Union type of all possible worker responses.
+ */
+export type WorkerResponse =
+  | WorkerInitResponse
+  | WorkerConvertResponse
+  | WorkerCompareResponse
+  | WorkerCompareToHtmlResponse
+  | WorkerGetRevisionsResponse
+  | WorkerGetDocumentMetadataResponse
+  | WorkerGetVersionResponse;
+
+/**
+ * Options for creating a worker-based Docxodus instance.
+ */
+export interface WorkerDocxodusOptions {
+  /**
+   * Base URL for loading WASM files.
+   * Defaults to auto-detection from module URL.
+   */
+  wasmBasePath?: string;
 }

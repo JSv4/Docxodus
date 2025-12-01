@@ -29,6 +29,9 @@ namespace DocxodusWasm;
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(Dictionary<string, DocumentElementInfo>))]
 [JsonSerializable(typeof(Dictionary<string, TableColumnInfoDto>))]
+[JsonSerializable(typeof(DocumentMetadataResponse))]
+[JsonSerializable(typeof(SectionMetadataInfo))]
+[JsonSerializable(typeof(SectionMetadataInfo[]))]
 internal partial class DocxodusJsonContext : JsonSerializerContext
 {
 }
@@ -458,4 +461,171 @@ public class TableColumnInfoDto
     /// Total number of rows in this column.
     /// </summary>
     public int RowCount { get; set; }
+}
+
+/// <summary>
+/// Response containing document metadata for lazy loading pagination.
+/// </summary>
+public class DocumentMetadataResponse
+{
+    /// <summary>
+    /// Section metadata array.
+    /// </summary>
+    public SectionMetadataInfo[] Sections { get; set; } = Array.Empty<SectionMetadataInfo>();
+
+    /// <summary>
+    /// Total number of paragraphs in the document.
+    /// </summary>
+    public int TotalParagraphs { get; set; }
+
+    /// <summary>
+    /// Total number of tables in the document.
+    /// </summary>
+    public int TotalTables { get; set; }
+
+    /// <summary>
+    /// Whether the document has footnotes.
+    /// </summary>
+    public bool HasFootnotes { get; set; }
+
+    /// <summary>
+    /// Whether the document has endnotes.
+    /// </summary>
+    public bool HasEndnotes { get; set; }
+
+    /// <summary>
+    /// Whether the document has tracked changes.
+    /// </summary>
+    public bool HasTrackedChanges { get; set; }
+
+    /// <summary>
+    /// Whether the document has comments.
+    /// </summary>
+    public bool HasComments { get; set; }
+
+    /// <summary>
+    /// Estimated total page count.
+    /// </summary>
+    public int EstimatedPageCount { get; set; }
+}
+
+/// <summary>
+/// Metadata for a single section.
+/// </summary>
+public class SectionMetadataInfo
+{
+    /// <summary>
+    /// Section index (0-based).
+    /// </summary>
+    public int SectionIndex { get; set; }
+
+    /// <summary>
+    /// Page width in points.
+    /// </summary>
+    public double PageWidthPt { get; set; }
+
+    /// <summary>
+    /// Page height in points.
+    /// </summary>
+    public double PageHeightPt { get; set; }
+
+    /// <summary>
+    /// Top margin in points.
+    /// </summary>
+    public double MarginTopPt { get; set; }
+
+    /// <summary>
+    /// Right margin in points.
+    /// </summary>
+    public double MarginRightPt { get; set; }
+
+    /// <summary>
+    /// Bottom margin in points.
+    /// </summary>
+    public double MarginBottomPt { get; set; }
+
+    /// <summary>
+    /// Left margin in points.
+    /// </summary>
+    public double MarginLeftPt { get; set; }
+
+    /// <summary>
+    /// Content width in points.
+    /// </summary>
+    public double ContentWidthPt { get; set; }
+
+    /// <summary>
+    /// Content height in points.
+    /// </summary>
+    public double ContentHeightPt { get; set; }
+
+    /// <summary>
+    /// Header distance in points.
+    /// </summary>
+    public double HeaderPt { get; set; }
+
+    /// <summary>
+    /// Footer distance in points.
+    /// </summary>
+    public double FooterPt { get; set; }
+
+    /// <summary>
+    /// Number of paragraphs in this section.
+    /// </summary>
+    public int ParagraphCount { get; set; }
+
+    /// <summary>
+    /// Number of tables in this section.
+    /// </summary>
+    public int TableCount { get; set; }
+
+    /// <summary>
+    /// Whether this section has a default header.
+    /// </summary>
+    public bool HasHeader { get; set; }
+
+    /// <summary>
+    /// Whether this section has a default footer.
+    /// </summary>
+    public bool HasFooter { get; set; }
+
+    /// <summary>
+    /// Whether this section has a first page header.
+    /// </summary>
+    public bool HasFirstPageHeader { get; set; }
+
+    /// <summary>
+    /// Whether this section has a first page footer.
+    /// </summary>
+    public bool HasFirstPageFooter { get; set; }
+
+    /// <summary>
+    /// Whether this section has an even page header.
+    /// </summary>
+    public bool HasEvenPageHeader { get; set; }
+
+    /// <summary>
+    /// Whether this section has an even page footer.
+    /// </summary>
+    public bool HasEvenPageFooter { get; set; }
+
+    /// <summary>
+    /// Start paragraph index (0-based, global).
+    /// </summary>
+    public int StartParagraphIndex { get; set; }
+
+    /// <summary>
+    /// End paragraph index (exclusive, global).
+    /// </summary>
+    public int EndParagraphIndex { get; set; }
+
+    /// <summary>
+    /// Start table index (0-based, global).
+    /// </summary>
+    public int StartTableIndex { get; set; }
+
+    /// <summary>
+    /// End table index (exclusive, global).
+    /// </summary>
+    public int EndTableIndex { get; set; }
 }

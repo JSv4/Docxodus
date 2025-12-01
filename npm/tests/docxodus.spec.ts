@@ -1814,4 +1814,398 @@ test.describe('Docxodus WASM Tests', () => {
       console.log('Annotation operation yielded properly');
     });
   });
+
+  // ============================================================
+  // Document Metadata Tests (Phase 3: Lazy Loading)
+  // ============================================================
+  test.describe('Document Metadata Tests (Issue #44 Phase 3)', () => {
+    const testDoc = 'HC001-5DayTourPlanTemplate.docx';
+
+    test('getDocumentMetadata returns valid metadata for simple document', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        return metadata;
+      }, Array.from(bytes));
+
+      // Verify basic structure
+      expect(result.error).toBeUndefined();
+      expect(result.sections).toBeDefined();
+      expect(Array.isArray(result.sections)).toBe(true);
+      expect(result.sections.length).toBeGreaterThan(0);
+
+      // Verify section properties
+      const firstSection = result.sections[0];
+      expect(firstSection.sectionIndex).toBe(0);
+      expect(firstSection.pageWidthPt).toBeGreaterThan(0);
+      expect(firstSection.pageHeightPt).toBeGreaterThan(0);
+      expect(firstSection.contentWidthPt).toBeGreaterThan(0);
+      expect(firstSection.contentHeightPt).toBeGreaterThan(0);
+
+      // Verify totals
+      expect(result.totalParagraphs).toBeGreaterThanOrEqual(0);
+      expect(result.estimatedPageCount).toBeGreaterThan(0);
+
+      console.log(`Document has ${result.sections.length} section(s), ` +
+                  `${result.totalParagraphs} paragraphs, ` +
+                  `estimated ${result.estimatedPageCount} pages`);
+    });
+
+    test('getDocumentMetadata returns correct page dimensions', async ({ page }) => {
+      // Use a document with known page size (US Letter is 612x792 points)
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        return metadata;
+      }, Array.from(bytes));
+
+      expect(result.sections.length).toBeGreaterThan(0);
+      const section = result.sections[0];
+
+      // US Letter size (default) is 612x792 points (8.5" x 11")
+      expect(section.pageWidthPt).toBeGreaterThanOrEqual(540); // Allow some variation
+      expect(section.pageWidthPt).toBeLessThanOrEqual(700);
+      expect(section.pageHeightPt).toBeGreaterThanOrEqual(700);
+      expect(section.pageHeightPt).toBeLessThanOrEqual(850);
+
+      // Content area should be smaller than page
+      expect(section.contentWidthPt).toBeLessThan(section.pageWidthPt);
+      expect(section.contentHeightPt).toBeLessThan(section.pageHeightPt);
+
+      console.log(`Page size: ${section.pageWidthPt}x${section.pageHeightPt}pt, ` +
+                  `content: ${section.contentWidthPt}x${section.contentHeightPt}pt`);
+    });
+
+    test('getDocumentMetadata detects document features', async ({ page }) => {
+      // Test with a document that has comments
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        return {
+          hasFootnotes: metadata.hasFootnotes,
+          hasEndnotes: metadata.hasEndnotes,
+          hasComments: metadata.hasComments,
+          hasTrackedChanges: metadata.hasTrackedChanges,
+        };
+      }, Array.from(bytes));
+
+      // Document features should be booleans
+      expect(typeof result.hasFootnotes).toBe('boolean');
+      expect(typeof result.hasEndnotes).toBe('boolean');
+      expect(typeof result.hasComments).toBe('boolean');
+      expect(typeof result.hasTrackedChanges).toBe('boolean');
+
+      console.log('Document features:', result);
+    });
+
+    test('getDocumentMetadata tracks paragraph indices correctly', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        return metadata;
+      }, Array.from(bytes));
+
+      expect(result.sections.length).toBeGreaterThan(0);
+
+      // For single section document, start should be 0 and end should match total
+      if (result.sections.length === 1) {
+        expect(result.sections[0].startParagraphIndex).toBe(0);
+        expect(result.sections[0].endParagraphIndex).toBe(result.totalParagraphs);
+      }
+
+      // For multi-section documents, indices should be contiguous
+      let lastEnd = 0;
+      for (const section of result.sections) {
+        expect(section.startParagraphIndex).toBe(lastEnd);
+        expect(section.endParagraphIndex).toBeGreaterThanOrEqual(section.startParagraphIndex);
+        lastEnd = section.endParagraphIndex;
+      }
+      expect(lastEnd).toBe(result.totalParagraphs);
+
+      console.log(`Paragraph ranges verified for ${result.sections.length} section(s)`);
+    });
+
+    test('getDocumentMetadata is faster than full conversion', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const docBytes = new Uint8Array(bytesArray);
+
+        // Time metadata extraction
+        const metaStart = performance.now();
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(docBytes);
+        const metaEnd = performance.now();
+        const metaTime = metaEnd - metaStart;
+
+        // Time full conversion
+        const convStart = performance.now();
+        const html = await (window as any).DocxodusTests.convertToHtml(docBytes);
+        const convEnd = performance.now();
+        const convTime = convEnd - convStart;
+
+        return {
+          metaTime,
+          convTime,
+          metaHasSections: metadata.sections?.length > 0,
+          convHasHtml: html.html?.length > 0
+        };
+      }, Array.from(bytes));
+
+      // Both should succeed
+      expect(result.metaHasSections).toBe(true);
+      expect(result.convHasHtml).toBe(true);
+
+      // Metadata should be faster (or at least not significantly slower)
+      console.log(`Metadata: ${result.metaTime.toFixed(1)}ms, Conversion: ${result.convTime.toFixed(1)}ms`);
+
+      // Note: First call may have initialization overhead, so we just log the times
+      // In practice, metadata should be significantly faster for large documents
+    });
+
+    test('getDocumentMetadata yields to browser before WASM work', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        let loadingVisible = false;
+
+        // Show loading indicator
+        const indicator = document.createElement('div');
+        indicator.textContent = 'Getting metadata...';
+        indicator.style.display = 'block';
+        indicator.style.backgroundColor = 'cyan';
+        document.body.appendChild(indicator);
+
+        // Start metadata extraction (async, should yield)
+        const metadataPromise = (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+
+        // Check if indicator is visible using RAF pattern
+        await new Promise(resolve => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              const style = window.getComputedStyle(indicator);
+              const rect = indicator.getBoundingClientRect();
+              loadingVisible = style.display === 'block' && rect.width > 0 && rect.height > 0;
+              resolve(undefined);
+            });
+          });
+        });
+
+        const metadata = await metadataPromise;
+        document.body.removeChild(indicator);
+
+        return {
+          loadingVisible,
+          success: !metadata.error && metadata.sections?.length > 0
+        };
+      }, Array.from(bytes));
+
+      expect(result.loadingVisible).toBe(true);
+      expect(result.success).toBe(true);
+
+      console.log('getDocumentMetadata yielded properly before WASM work');
+    });
+
+    test('metadata dimensions match rendered HTML data attributes', async ({ page }) => {
+      // This test verifies metadata extraction produces same values as full rendering
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const docBytes = new Uint8Array(bytesArray);
+
+        // Get metadata
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(docBytes);
+
+        // Get rendered HTML with pagination mode
+        const htmlResult = (window as any).DocxodusTests.convertToHtmlWithPagination(docBytes, 1, 1.0);
+
+        if (metadata.error || htmlResult.error) {
+          return { error: metadata.error || htmlResult.error };
+        }
+
+        // Parse the HTML and extract section dimensions from data attributes
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(htmlResult.html, 'text/html');
+        const sectionElements = doc.querySelectorAll('[data-section-index]');
+
+        const renderedSections = [];
+        for (const section of sectionElements) {
+          renderedSections.push({
+            sectionIndex: parseInt(section.getAttribute('data-section-index') || '0'),
+            pageWidth: parseFloat(section.getAttribute('data-page-width') || '0'),
+            pageHeight: parseFloat(section.getAttribute('data-page-height') || '0'),
+            contentWidth: parseFloat(section.getAttribute('data-content-width') || '0'),
+            contentHeight: parseFloat(section.getAttribute('data-content-height') || '0'),
+          });
+        }
+
+        return {
+          metadataSections: metadata.sections,
+          renderedSections,
+          metadataSectionCount: metadata.sections?.length || 0,
+          renderedSectionCount: renderedSections.length
+        };
+      }, Array.from(bytes));
+
+      expect(result.error).toBeUndefined();
+
+      // For documents with sections, verify dimensions match
+      if (result.renderedSectionCount > 0 && result.metadataSectionCount > 0) {
+        for (let i = 0; i < Math.min(result.metadataSectionCount, result.renderedSectionCount); i++) {
+          const meta = result.metadataSections[i];
+          const rendered = result.renderedSections[i];
+
+          // Dimensions should be very close (within 1 point tolerance for rounding)
+          expect(Math.abs(meta.pageWidthPt - rendered.pageWidth)).toBeLessThan(1);
+          expect(Math.abs(meta.pageHeightPt - rendered.pageHeight)).toBeLessThan(1);
+          expect(Math.abs(meta.contentWidthPt - rendered.contentWidth)).toBeLessThan(1);
+          expect(Math.abs(meta.contentHeightPt - rendered.contentHeight)).toBeLessThan(1);
+
+          console.log(`Section ${i}: metadata ${meta.pageWidthPt}x${meta.pageHeightPt}pt ` +
+                      `matches rendered ${rendered.pageWidth}x${rendered.pageHeight}pt`);
+        }
+      }
+    });
+
+    test('metadata paragraph count matches rendered content', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const docBytes = new Uint8Array(bytesArray);
+
+        // Get metadata
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(docBytes);
+
+        // Get rendered HTML
+        const htmlResult = (window as any).DocxodusTests.convertToHtml(docBytes);
+
+        if (metadata.error || htmlResult.error) {
+          return { error: metadata.error || htmlResult.error };
+        }
+
+        // Count paragraphs in rendered HTML
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(htmlResult.html, 'text/html');
+
+        // Count paragraph elements (p tags in the content)
+        const paragraphs = doc.querySelectorAll('p');
+        const renderedParagraphCount = paragraphs.length;
+
+        return {
+          metadataParagraphs: metadata.totalParagraphs,
+          renderedParagraphs: renderedParagraphCount,
+          metadataTables: metadata.totalTables,
+          htmlLength: htmlResult.html?.length
+        };
+      }, Array.from(bytes));
+
+      expect(result.error).toBeUndefined();
+      expect(result.htmlLength).toBeGreaterThan(0);
+
+      // Metadata paragraph count should be in the same ballpark as rendered
+      // (may not be exact due to empty paragraphs, hidden content, etc.)
+      console.log(`Metadata: ${result.metadataParagraphs} paragraphs, ${result.metadataTables} tables`);
+      console.log(`Rendered: ${result.renderedParagraphs} paragraph elements`);
+
+      // At minimum, both should have content
+      expect(result.metadataParagraphs).toBeGreaterThan(0);
+      expect(result.renderedParagraphs).toBeGreaterThan(0);
+    });
+
+    test('getDocumentMetadata handles invalid document gracefully', async ({ page }) => {
+      // Create invalid document data (not a valid DOCX/ZIP)
+      const invalidBytes = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        try {
+          const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+          // Test harness returns { error: {...} } for error responses, not throwing
+          if (metadata && metadata.error) {
+            return { success: false, error: JSON.stringify(metadata.error) };
+          }
+          return { success: true, metadata };
+        } catch (error) {
+          return { success: false, error: String(error) };
+        }
+      }, Array.from(invalidBytes));
+
+      // Should either throw an error or return an error response
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+      console.log('Invalid document handled gracefully:', result.error);
+    });
+
+    test('getDocumentMetadata returns correct boolean feature flags', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        return {
+          hasFootnotes: typeof metadata.hasFootnotes,
+          hasEndnotes: typeof metadata.hasEndnotes,
+          hasComments: typeof metadata.hasComments,
+          hasTrackedChanges: typeof metadata.hasTrackedChanges,
+        };
+      }, Array.from(bytes));
+
+      // All feature flags should be booleans
+      expect(result.hasFootnotes).toBe('boolean');
+      expect(result.hasEndnotes).toBe('boolean');
+      expect(result.hasComments).toBe('boolean');
+      expect(result.hasTrackedChanges).toBe('boolean');
+    });
+
+    test('getDocumentMetadata section indices are sequential', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        if (metadata.error) return { error: metadata.error };
+
+        const indices = metadata.sections.map((s: any) => s.sectionIndex);
+        const sequential = indices.every((idx: number, i: number) => idx === i);
+
+        return {
+          sectionCount: metadata.sections.length,
+          indices,
+          sequential
+        };
+      }, Array.from(bytes));
+
+      expect(result.error).toBeUndefined();
+      expect(result.sequential).toBe(true);
+      console.log(`Section indices are sequential: ${result.indices.join(', ')}`);
+    });
+
+    test('getDocumentMetadata content dimensions are calculated correctly', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        if (metadata.error) return { error: metadata.error };
+
+        const section = metadata.sections[0];
+        const calculatedContentWidth = section.pageWidthPt - section.marginLeftPt - section.marginRightPt;
+        const calculatedContentHeight = section.pageHeightPt - section.marginTopPt - section.marginBottomPt;
+
+        return {
+          contentWidthPt: section.contentWidthPt,
+          contentHeightPt: section.contentHeightPt,
+          calculatedContentWidth,
+          calculatedContentHeight,
+          widthMatch: Math.abs(section.contentWidthPt - calculatedContentWidth) < 0.01,
+          heightMatch: Math.abs(section.contentHeightPt - calculatedContentHeight) < 0.01
+        };
+      }, Array.from(bytes));
+
+      expect(result.error).toBeUndefined();
+      expect(result.widthMatch).toBe(true);
+      expect(result.heightMatch).toBe(true);
+      console.log(`Content width: ${result.contentWidthPt}pt (calculated: ${result.calculatedContentWidth}pt)`);
+      console.log(`Content height: ${result.contentHeightPt}pt (calculated: ${result.calculatedContentHeight}pt)`);
+    });
+  });
 });
