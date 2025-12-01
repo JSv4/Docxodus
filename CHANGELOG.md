@@ -186,6 +186,12 @@ All notable changes to this project will be documented in this file.
 - `SkiaSharp.NativeAssets.Linux.NoDependencies` package for Linux runtime support
 
 ### Fixed
+- **React hooks loading state not rendering before WASM blocks** (Issue #45) - Fixed `isConverting`/`isComparing`/`isLoading` states in React hooks not painting before WASM execution blocks the main thread. Added `requestAnimationFrame` yielding after state updates in:
+  - `useConversion`: `convert()` function
+  - `useComparison`: `compare()` and `compareToHtml()` functions
+  - `useAnnotations`: `reload()`, `add()`, and `remove()` functions
+  - `useDocumentStructure`: `reload()` function
+
 - **Header/footer positioning in paginated mode** - Fixed headers and footers overlapping with body content. Headers now properly constrain to the top margin area (`height: marginTop`) and footers constrain to the bottom margin area (`height: marginBottom`). Uses flexbox layout for proper content alignment within constrained areas.
 
 - **DocumentBuilder relationship copying** - Fixed bug where relationship IDs from source documents could incorrectly match existing IDs in target header/footer parts when using InsertId functionality. This caused validation errors like "The relationship 'rIdX' referenced by attribute 'r:embed' does not exist."
