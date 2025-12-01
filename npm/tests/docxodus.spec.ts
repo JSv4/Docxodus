@@ -2122,6 +2122,10 @@ test.describe('Docxodus WASM Tests', () => {
       const result = await page.evaluate(async (bytesArray) => {
         try {
           const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+          // Test harness returns { error: {...} } for error responses, not throwing
+          if (metadata && metadata.error) {
+            return { success: false, error: JSON.stringify(metadata.error) };
+          }
           return { success: true, metadata };
         } catch (error) {
           return { success: false, error: String(error) };
