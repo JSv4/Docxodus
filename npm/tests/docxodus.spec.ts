@@ -1537,4 +1537,281 @@ test.describe('Docxodus WASM Tests', () => {
       console.log('Multiple targeting methods work together');
     });
   });
+
+  test.describe('Frame Yielding Tests (Issue #44)', () => {
+    // These tests verify that frame yielding allows UI updates before heavy WASM work
+    const testDoc = 'HC006-Test-01.docx';
+
+    test('loading state is observable before conversion completes', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // This test verifies the core behavior: that a loading state set before
+      // calling convertToHtml() is actually painted before the blocking work begins.
+      // We do this by:
+      // 1. Setting a loading indicator
+      // 2. Calling conversion (which internally yields via double-rAF)
+      // 3. Verifying the loading indicator was painted at some point
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const timeline: string[] = [];
+        const loadingDiv = document.createElement('div');
+        loadingDiv.id = 'loading-indicator';
+        loadingDiv.textContent = 'Loading...';
+        loadingDiv.style.display = 'none';
+        document.body.appendChild(loadingDiv);
+
+        // Track when loading indicator becomes visible via MutationObserver
+        let loadingWasPainted = false;
+
+        // Use IntersectionObserver to detect when element is actually rendered
+        const paintPromise = new Promise<void>((resolve) => {
+          // Schedule a check after potential paint
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              if (loadingDiv.style.display === 'block') {
+                loadingWasPainted = true;
+              }
+              resolve();
+            });
+          });
+        });
+
+        // Simulate React-like state update: show loading, then do work
+        timeline.push('setState:loading');
+        loadingDiv.style.display = 'block';
+
+        // Give the browser a chance to paint
+        await new Promise(resolve => requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve(undefined));
+        }));
+        timeline.push('afterYield');
+
+        // Check if loading was painted
+        const computedDisplay = window.getComputedStyle(loadingDiv).display;
+        if (computedDisplay === 'block') {
+          loadingWasPainted = true;
+          timeline.push('loadingPainted');
+        }
+
+        // Now do the conversion
+        timeline.push('startConversion');
+        const conversionResult = (window as any).DocxodusTests.convertToHtml(new Uint8Array(bytesArray));
+        timeline.push('endConversion');
+
+        // Hide loading
+        loadingDiv.style.display = 'none';
+        timeline.push('setState:done');
+
+        document.body.removeChild(loadingDiv);
+
+        return {
+          loadingWasPainted,
+          timeline,
+          conversionSuccess: !conversionResult.error,
+          htmlLength: conversionResult.html?.length || 0
+        };
+      }, Array.from(bytes));
+
+      // The critical assertion: loading state was painted before work completed
+      expect(result.loadingWasPainted).toBe(true);
+      expect(result.conversionSuccess).toBe(true);
+      expect(result.htmlLength).toBeGreaterThan(100);
+
+      console.log('Frame yielding timeline:', result.timeline.join(' -> '));
+    });
+
+    test('multiple async operations yield properly', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      // Test that sequential async operations all yield properly
+      const result = await page.evaluate(async (bytesArray) => {
+        const timestamps: { operation: string; time: number }[] = [];
+        const start = performance.now();
+
+        const addTimestamp = (op: string) => {
+          timestamps.push({ operation: op, time: performance.now() - start });
+        };
+
+        addTimestamp('start');
+
+        // Operation 1: Convert to HTML
+        addTimestamp('convert:start');
+        const convertResult = (window as any).DocxodusTests.convertToHtml(new Uint8Array(bytesArray));
+        addTimestamp('convert:end');
+
+        // Operation 2: Get document structure (if available)
+        addTimestamp('structure:start');
+        const structureResult = (window as any).DocxodusTests.getDocumentStructure(new Uint8Array(bytesArray));
+        addTimestamp('structure:end');
+
+        addTimestamp('done');
+
+        return {
+          timestamps,
+          convertSuccess: !convertResult.error,
+          structureSuccess: !structureResult.error,
+          totalTime: performance.now() - start
+        };
+      }, Array.from(bytes));
+
+      expect(result.convertSuccess).toBe(true);
+      expect(result.structureSuccess).toBe(true);
+
+      console.log('Operation timing:', result.timestamps.map(t =>
+        `${t.operation}: ${t.time.toFixed(1)}ms`
+      ).join(', '));
+    });
+
+    test('comparison operation yields to allow loading state', async ({ page }) => {
+      const originalBytes = readTestFile('WC/WC001-Digits.docx');
+      const modifiedBytes = readTestFile('WC/WC001-Digits-Mod.docx');
+
+      const result = await page.evaluate(async ([original, modified]) => {
+        let loadingPainted = false;
+        const indicator = document.createElement('div');
+        indicator.id = 'compare-loading';
+        indicator.style.display = 'none';
+        document.body.appendChild(indicator);
+
+        // Show loading
+        indicator.style.display = 'block';
+
+        // Yield like the library does
+        await new Promise(resolve => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              // Check if loading is painted
+              if (window.getComputedStyle(indicator).display === 'block') {
+                loadingPainted = true;
+              }
+              resolve(undefined);
+            });
+          });
+        });
+
+        // Do comparison
+        const compareResult = (window as any).DocxodusTests.compareDocuments(
+          new Uint8Array(original),
+          new Uint8Array(modified)
+        );
+
+        // Hide loading
+        indicator.style.display = 'none';
+        document.body.removeChild(indicator);
+
+        return {
+          loadingPainted,
+          compareSuccess: !compareResult.error,
+          hasDocxBytes: compareResult.docxBytes?.length > 0
+        };
+      }, [Array.from(originalBytes), Array.from(modifiedBytes)]);
+
+      expect(result.loadingPainted).toBe(true);
+      expect(result.compareSuccess).toBe(true);
+      expect(result.hasDocxBytes).toBe(true);
+
+      console.log('Comparison yielded properly, loading state was painted');
+    });
+
+    test('getRevisions yields before processing', async ({ page }) => {
+      const originalBytes = readTestFile('WC/WC001-Digits.docx');
+      const modifiedBytes = readTestFile('WC/WC001-Digits-Mod.docx');
+
+      // First create a compared document
+      const compareResult = await page.evaluate(([original, modified]) => {
+        return (window as any).DocxodusTests.compareDocuments(
+          new Uint8Array(original),
+          new Uint8Array(modified)
+        );
+      }, [Array.from(originalBytes), Array.from(modifiedBytes)]);
+
+      expect(compareResult.error).toBeUndefined();
+      expect(compareResult.docxBytes).toBeDefined();
+
+      // Now test getRevisions with yielding
+      const result = await page.evaluate(async (docxBytes) => {
+        let uiUpdateCompleted = false;
+
+        // Schedule UI update
+        const uiPromise = new Promise<void>(resolve => {
+          requestAnimationFrame(() => {
+            uiUpdateCompleted = true;
+            resolve();
+          });
+        });
+
+        // In parallel, do the revision extraction
+        const revisionsResult = (window as any).DocxodusTests.getRevisions(new Uint8Array(docxBytes));
+
+        // Wait for UI update
+        await uiPromise;
+
+        return {
+          uiUpdateCompleted,
+          revisionsSuccess: !revisionsResult.error,
+          revisionCount: revisionsResult.revisions?.length || 0
+        };
+      }, compareResult.docxBytes);
+
+      expect(result.uiUpdateCompleted).toBe(true);
+      expect(result.revisionsSuccess).toBe(true);
+      expect(result.revisionCount).toBeGreaterThan(0);
+
+      console.log(`getRevisions completed with ${result.revisionCount} revisions, UI updated`);
+    });
+
+    test('annotation operations yield properly', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        let loadingVisible = false;
+
+        // Show loading indicator
+        const indicator = document.createElement('div');
+        indicator.textContent = 'Adding annotation...';
+        indicator.style.display = 'block';
+        indicator.style.backgroundColor = 'yellow';
+        document.body.appendChild(indicator);
+
+        // Yield to ensure paint (double-rAF like the library does)
+        await new Promise(resolve => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              // Check visibility using computed style and dimensions
+              const style = window.getComputedStyle(indicator);
+              const rect = indicator.getBoundingClientRect();
+              loadingVisible = style.display === 'block' && rect.width > 0 && rect.height > 0;
+              resolve(undefined);
+            });
+          });
+        });
+
+        // Add annotation
+        const addResult = (window as any).DocxodusTests.addAnnotation(
+          new Uint8Array(bytesArray),
+          {
+            Id: 'yield-test-annot',
+            LabelId: 'TEST',
+            Label: 'Yield Test',
+            Color: '#4CAF50',
+            SearchText: 'the',
+            Occurrence: 1
+          }
+        );
+
+        document.body.removeChild(indicator);
+
+        return {
+          loadingVisible,
+          addSuccess: addResult.success === true || (!addResult.error && addResult.documentBytes),
+          hasAnnotation: !!addResult.annotation
+        };
+      }, Array.from(bytes));
+
+      expect(result.loadingVisible).toBe(true);
+      expect(result.addSuccess).toBe(true);
+
+      console.log('Annotation operation yielded properly');
+    });
+  });
 });

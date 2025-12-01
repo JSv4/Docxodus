@@ -10,6 +10,12 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
+- **Frame Yielding for UI Responsiveness** (Issue #44) - WASM operations now yield to the browser before heavy work begins
+  - All async functions in the npm wrapper (`convertDocxToHtml`, `compareDocuments`, `compareDocumentsToHtml`, `getRevisions`, `addAnnotation`, `addAnnotationWithTarget`, `getDocumentStructure`) automatically yield using double-`requestAnimationFrame` pattern
+  - This allows React state updates (loading spinners, progress indicators) to paint before blocking WASM execution
+  - Transparent to consumers - no API changes required
+  - Gracefully skipped in non-browser environments (Node.js, SSR)
+  - Phase 1 of 3: Future phases will add Web Worker support and lazy loading
 - **Custom Annotations** - Full support for adding, removing, and rendering custom annotations on DOCX documents
   - `AnnotationManager` class for programmatic annotation CRUD operations:
     - `AddAnnotation()`: Add annotation by text search or paragraph range
