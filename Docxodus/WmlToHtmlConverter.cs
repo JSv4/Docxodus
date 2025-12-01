@@ -847,6 +847,20 @@ namespace Docxodus
         /// <summary>
         /// Collects section data including section properties and their associated paragraphs/tables.
         /// </summary>
+        /// <remarks>
+        /// <para>
+        /// This method handles the following sectPr placements:
+        /// <list type="bullet">
+        ///   <item><description>sectPr inside paragraph properties (w:p/w:pPr/w:sectPr) - mid-document section breaks</description></item>
+        ///   <item><description>Document-level sectPr at end of body (w:body/w:sectPr) - final section</description></item>
+        /// </list>
+        /// </para>
+        /// <para>
+        /// LIMITATION: sectPr elements inside tables or text boxes are NOT detected.
+        /// This is an edge case - most documents don't have section breaks inside tables.
+        /// See GitHub issue #51 for tracking this enhancement.
+        /// </para>
+        /// </remarks>
         private static List<(XElement sectPr, List<XElement> paragraphs, List<XElement> tables)> CollectSectionData(XElement body)
         {
             var result = new List<(XElement sectPr, List<XElement> paragraphs, List<XElement> tables)>();
@@ -1005,9 +1019,11 @@ namespace Docxodus
                         }
                     }
                 }
-                catch
+                catch (ArgumentOutOfRangeException)
                 {
-                    // Ignore invalid references
+                    // Invalid relationship ID - header reference points to non-existent part.
+                    // This can happen with corrupted or manually edited documents.
+                    // For metadata extraction, we silently skip invalid references.
                 }
             }
 
@@ -1040,9 +1056,11 @@ namespace Docxodus
                         }
                     }
                 }
-                catch
+                catch (ArgumentOutOfRangeException)
                 {
-                    // Ignore invalid references
+                    // Invalid relationship ID - footer reference points to non-existent part.
+                    // This can happen with corrupted or manually edited documents.
+                    // For metadata extraction, we silently skip invalid references.
                 }
             }
         }

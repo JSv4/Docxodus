@@ -15,6 +15,36 @@ namespace DocxodusWasm;
 public partial class DocumentConverter
 {
     /// <summary>
+    /// Maximum allowed document size in bytes (100 MB).
+    /// This limit helps prevent memory exhaustion from malicious or extremely large documents.
+    /// </summary>
+    private const int MaxDocumentSizeBytes = 100 * 1024 * 1024;
+
+    /// <summary>
+    /// Validates input document bytes.
+    /// </summary>
+    /// <param name="docxBytes">The document bytes to validate</param>
+    /// <param name="errorMessage">Error message if validation fails</param>
+    /// <returns>True if valid, false otherwise</returns>
+    private static bool ValidateInput(byte[]? docxBytes, out string? errorMessage)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            errorMessage = "No document data provided";
+            return false;
+        }
+
+        if (docxBytes.Length > MaxDocumentSizeBytes)
+        {
+            errorMessage = $"Document size ({docxBytes.Length / (1024 * 1024)}MB) exceeds maximum allowed size ({MaxDocumentSizeBytes / (1024 * 1024)}MB)";
+            return false;
+        }
+
+        errorMessage = null;
+        return true;
+    }
+
+    /// <summary>
     /// Convert a DOCX file to HTML with default settings.
     /// </summary>
     /// <param name="docxBytes">The DOCX file as a byte array (from JavaScript Uint8Array)</param>
@@ -640,9 +670,9 @@ public partial class DocumentConverter
     [JSExport]
     public static string GetDocumentMetadata(byte[] docxBytes)
     {
-        if (docxBytes == null || docxBytes.Length == 0)
+        if (!ValidateInput(docxBytes, out var errorMessage))
         {
-            return SerializeError("No document data provided");
+            return SerializeError(errorMessage!);
         }
 
         try

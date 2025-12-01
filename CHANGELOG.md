@@ -28,13 +28,16 @@ All notable changes to this project will be documented in this file.
     - `hasFootnotes`, `hasEndnotes`, `hasComments`, `hasTrackedChanges`: Feature detection
     - `estimatedPageCount`: Heuristic-based page count estimation
   - Section metadata includes:
-    - Page dimensions: `pageWidthPt`, `pageHeightPt`, `marginTopPt`, etc.
+    - Page dimensions: `pageWidthPt`, `pageHeightPt`, `marginTopPt`, etc. (all values in points, 1pt = 1/72 inch)
     - Content area: `contentWidthPt`, `contentHeightPt`
     - Header/footer heights: `headerPt`, `footerPt`
     - Content tracking: `paragraphCount`, `tableCount`, `startParagraphIndex`, `endParagraphIndex`
     - Header/footer presence: `hasHeader`, `hasFooter`, `hasFirstPageHeader`, `hasEvenPageHeader`, etc.
   - Available in main API, worker API, and raw WASM: `DocumentConverter.GetDocumentMetadata()`
   - Enables efficient lazy loading for paginated document viewing
+  - Security: Maximum document size limit of 100MB to prevent memory exhaustion
+  - Graceful handling of malformed documents and invalid header/footer references
+  - Known limitation: Section breaks inside tables or text boxes are not detected (see #51)
 - **Custom Annotations** - Full support for adding, removing, and rendering custom annotations on DOCX documents
   - `AnnotationManager` class for programmatic annotation CRUD operations:
     - `AddAnnotation()`: Add annotation by text search or paragraph range

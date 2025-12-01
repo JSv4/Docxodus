@@ -915,77 +915,129 @@ export function targetSearchInElement(
 
 /**
  * Metadata for a single section in the document.
- * All dimension values are in points (1/72 inch).
+ *
+ * ## Units
+ * All dimension values are in **points** (1 point = 1/72 inch).
+ *
+ * Common page sizes in points:
+ * - **US Letter**: 612 × 792 pt (8.5" × 11")
+ * - **A4**: 595 × 842 pt (210mm × 297mm)
+ * - **Legal**: 612 × 1008 pt (8.5" × 14")
+ *
+ * To convert points to other units:
+ * - Points to inches: `pt / 72`
+ * - Points to mm: `pt / 72 * 25.4`
+ * - Points to pixels (96 DPI): `pt * 96 / 72` (or `pt * 1.333...`)
+ *
+ * @example
+ * ```typescript
+ * const section = metadata.sections[0];
+ * // US Letter: pageWidthPt = 612, pageHeightPt = 792
+ *
+ * // Convert to inches
+ * const widthInches = section.pageWidthPt / 72; // 8.5
+ *
+ * // Convert to pixels at 96 DPI
+ * const widthPx = section.pageWidthPt * 96 / 72; // 816
+ * ```
  */
 export interface SectionMetadata {
-  /** Section index (0-based) */
+  /** Section index (0-based, sequential across document) */
   sectionIndex: number;
-  /** Page width in points */
+  /** Page width in points (1 pt = 1/72 inch). US Letter = 612pt, A4 ≈ 595pt */
   pageWidthPt: number;
-  /** Page height in points */
+  /** Page height in points (1 pt = 1/72 inch). US Letter = 792pt, A4 ≈ 842pt */
   pageHeightPt: number;
-  /** Top margin in points */
+  /** Top margin in points. Default is typically 72pt (1 inch) */
   marginTopPt: number;
-  /** Right margin in points */
+  /** Right margin in points. Default is typically 72pt (1 inch) */
   marginRightPt: number;
-  /** Bottom margin in points */
+  /** Bottom margin in points. Default is typically 72pt (1 inch) */
   marginBottomPt: number;
-  /** Left margin in points */
+  /** Left margin in points. Default is typically 72pt (1 inch) */
   marginLeftPt: number;
-  /** Content width (page minus margins) in points */
+  /** Content width in points (pageWidthPt - marginLeftPt - marginRightPt) */
   contentWidthPt: number;
-  /** Content height (page minus margins) in points */
+  /** Content height in points (pageHeightPt - marginTopPt - marginBottomPt) */
   contentHeightPt: number;
-  /** Header distance from top in points */
+  /** Header distance from page top in points. Default is typically 36pt (0.5 inch) */
   headerPt: number;
-  /** Footer distance from bottom in points */
+  /** Footer distance from page bottom in points. Default is typically 36pt (0.5 inch) */
   footerPt: number;
-  /** Number of paragraphs in this section */
+  /** Number of paragraphs in this section (includes paragraphs inside tables) */
   paragraphCount: number;
-  /** Number of tables in this section */
+  /** Number of top-level tables in this section */
   tableCount: number;
-  /** Whether this section has a default header */
+  /** Whether this section has a default header (w:headerReference type="default") */
   hasHeader: boolean;
-  /** Whether this section has a default footer */
+  /** Whether this section has a default footer (w:footerReference type="default") */
   hasFooter: boolean;
-  /** Whether this section has a first page header (titlePg enabled) */
+  /** Whether this section has a first page header (requires titlePg element) */
   hasFirstPageHeader: boolean;
-  /** Whether this section has a first page footer (titlePg enabled) */
+  /** Whether this section has a first page footer (requires titlePg element) */
   hasFirstPageFooter: boolean;
-  /** Whether this section has an even page header */
+  /** Whether this section has an even page header (for different even/odd headers) */
   hasEvenPageHeader: boolean;
-  /** Whether this section has an even page footer */
+  /** Whether this section has an even page footer (for different even/odd footers) */
   hasEvenPageFooter: boolean;
-  /** Start paragraph index (0-based, global across document) */
+  /** Start paragraph index (0-based, global across document). Inclusive. */
   startParagraphIndex: number;
-  /** End paragraph index (exclusive, global across document) */
+  /** End paragraph index (global across document). Exclusive - use `endParagraphIndex - startParagraphIndex` for count. */
   endParagraphIndex: number;
-  /** Start table index (0-based, global across document) */
+  /** Start table index (0-based, global across document). Inclusive. */
   startTableIndex: number;
-  /** End table index (exclusive, global across document) */
+  /** End table index (global across document). Exclusive - use `endTableIndex - startTableIndex` for count. */
   endTableIndex: number;
 }
 
 /**
  * Document metadata for lazy loading pagination.
  * Provides fast access to document structure without full HTML rendering.
+ *
+ * This is significantly faster than full HTML conversion and is designed for:
+ * - Lazy loading / virtual scrolling of large documents
+ * - Pre-calculating pagination layouts
+ * - Document feature detection before rendering
+ *
+ * @example
+ * ```typescript
+ * const metadata = await getDocumentMetadata(docxFile);
+ *
+ * // Check document features before rendering
+ * if (metadata.hasTrackedChanges) {
+ *   console.log('Document has tracked changes');
+ * }
+ *
+ * // Calculate total content for lazy loading
+ * const totalSections = metadata.sections.length;
+ * const firstPageWidth = metadata.sections[0].pageWidthPt;
+ *
+ * // Paragraph count includes paragraphs inside tables
+ * console.log(`${metadata.totalParagraphs} paragraphs, ${metadata.totalTables} tables`);
+ * ```
+ *
+ * @remarks
+ * **Limitations:**
+ * - Section breaks inside tables or text boxes are not detected (see GitHub issue #51)
+ * - Estimated page count is heuristic-based and may not match actual rendered pages
+ * - Maximum document size is 100MB
  */
 export interface DocumentMetadata {
-  /** List of sections with their metadata */
+  /** List of sections with their metadata. Documents always have at least one section. */
   sections: SectionMetadata[];
-  /** Total number of paragraphs in the document */
+  /** Total number of paragraphs in the document (includes paragraphs inside tables) */
   totalParagraphs: number;
-  /** Total number of tables in the document */
+  /** Total number of top-level tables in the document */
   totalTables: number;
-  /** Whether the document has any footnotes */
+  /** Whether the document has any footnotes (excludes separator/continuationSeparator) */
   hasFootnotes: boolean;
-  /** Whether the document has any endnotes */
+  /** Whether the document has any endnotes (excludes separator/continuationSeparator) */
   hasEndnotes: boolean;
-  /** Whether the document has tracked changes */
+  /** Whether the document has tracked changes (w:ins, w:del, w:moveFrom, w:moveTo) */
   hasTrackedChanges: boolean;
-  /** Whether the document has comments */
+  /** Whether the document has comments (w:comment elements with content) */
   hasComments: boolean;
-  /** Estimated total page count (rough estimate based on content) */
+  /** Estimated total page count (heuristic based on content volume and page sizes) */
   estimatedPageCount: number;
 }
 

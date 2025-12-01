@@ -2114,5 +2114,94 @@ test.describe('Docxodus WASM Tests', () => {
       expect(result.metadataParagraphs).toBeGreaterThan(0);
       expect(result.renderedParagraphs).toBeGreaterThan(0);
     });
+
+    test('getDocumentMetadata handles invalid document gracefully', async ({ page }) => {
+      // Create invalid document data (not a valid DOCX/ZIP)
+      const invalidBytes = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        try {
+          const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+          return { success: true, metadata };
+        } catch (error) {
+          return { success: false, error: String(error) };
+        }
+      }, Array.from(invalidBytes));
+
+      // Should either throw an error or return an error response
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
+      console.log('Invalid document handled gracefully:', result.error);
+    });
+
+    test('getDocumentMetadata returns correct boolean feature flags', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        return {
+          hasFootnotes: typeof metadata.hasFootnotes,
+          hasEndnotes: typeof metadata.hasEndnotes,
+          hasComments: typeof metadata.hasComments,
+          hasTrackedChanges: typeof metadata.hasTrackedChanges,
+        };
+      }, Array.from(bytes));
+
+      // All feature flags should be booleans
+      expect(result.hasFootnotes).toBe('boolean');
+      expect(result.hasEndnotes).toBe('boolean');
+      expect(result.hasComments).toBe('boolean');
+      expect(result.hasTrackedChanges).toBe('boolean');
+    });
+
+    test('getDocumentMetadata section indices are sequential', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        if (metadata.error) return { error: metadata.error };
+
+        const indices = metadata.sections.map((s: any) => s.sectionIndex);
+        const sequential = indices.every((idx: number, i: number) => idx === i);
+
+        return {
+          sectionCount: metadata.sections.length,
+          indices,
+          sequential
+        };
+      }, Array.from(bytes));
+
+      expect(result.error).toBeUndefined();
+      expect(result.sequential).toBe(true);
+      console.log(`Section indices are sequential: ${result.indices.join(', ')}`);
+    });
+
+    test('getDocumentMetadata content dimensions are calculated correctly', async ({ page }) => {
+      const bytes = readTestFile(testDoc);
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const metadata = await (window as any).DocxodusTests.getDocumentMetadata(new Uint8Array(bytesArray));
+        if (metadata.error) return { error: metadata.error };
+
+        const section = metadata.sections[0];
+        const calculatedContentWidth = section.pageWidthPt - section.marginLeftPt - section.marginRightPt;
+        const calculatedContentHeight = section.pageHeightPt - section.marginTopPt - section.marginBottomPt;
+
+        return {
+          contentWidthPt: section.contentWidthPt,
+          contentHeightPt: section.contentHeightPt,
+          calculatedContentWidth,
+          calculatedContentHeight,
+          widthMatch: Math.abs(section.contentWidthPt - calculatedContentWidth) < 0.01,
+          heightMatch: Math.abs(section.contentHeightPt - calculatedContentHeight) < 0.01
+        };
+      }, Array.from(bytes));
+
+      expect(result.error).toBeUndefined();
+      expect(result.widthMatch).toBe(true);
+      expect(result.heightMatch).toBe(true);
+      console.log(`Content width: ${result.contentWidthPt}pt (calculated: ${result.calculatedContentWidth}pt)`);
+      console.log(`Content height: ${result.contentHeightPt}pt (calculated: ${result.calculatedContentHeight}pt)`);
+    });
   });
 });
