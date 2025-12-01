@@ -115,6 +115,27 @@ async function convertToHtmlWithPagination(
   );
 }
 
+// Helper to convert to HTML with pagination AND tracked changes
+async function convertToHtmlWithPaginationAndTrackedChanges(
+  page: Page,
+  bytes: Uint8Array,
+  paginationMode: number = 1,
+  paginationScale: number = 1.0,
+  renderTrackedChanges: boolean = true
+): Promise<{ html?: string; error?: any }> {
+  return await page.evaluate(
+    ([bytesArray, mode, scale, renderChanges]) => {
+      return (window as any).DocxodusTests.convertToHtmlWithPaginationAndTrackedChanges(
+        new Uint8Array(bytesArray),
+        mode,
+        scale,
+        renderChanges
+      );
+    },
+    [Array.from(bytes), paginationMode, paginationScale, renderTrackedChanges]
+  );
+}
+
 // Helper to convert to HTML with annotations
 async function convertToHtmlWithAnnotations(
   page: Page,
@@ -812,6 +833,119 @@ test.describe('Docxodus WASM Tests', () => {
 
         console.log(`Scale ${scale}: ${paginationResult.totalPages} pages, no overflow`);
       }
+    });
+
+    test('tracked changes are preserved when paginating a compared document', async ({ page }) => {
+      // Compare two documents to get tracked changes
+      const originalBytes = readTestFile('WC/WC002-Unmodified.docx');
+      const modifiedBytes = readTestFile('WC/WC002-DiffInMiddle.docx');
+
+      // First compare the documents
+      const compResult = await compareDocuments(page, originalBytes, modifiedBytes);
+      expect(compResult.error).toBeUndefined();
+      expect(compResult.docxBytes).toBeDefined();
+
+      // Convert the compared document (which has tracked changes) to HTML with pagination
+      const htmlResult = await convertToHtmlWithPaginationAndTrackedChanges(
+        page,
+        new Uint8Array(compResult.docxBytes!),
+        1,    // paginated mode
+        0.8,  // scale
+        true  // renderTrackedChanges
+      );
+
+      expect(htmlResult.error).toBeUndefined();
+      expect(htmlResult.html).toBeDefined();
+
+      // Verify tracked change markup is present in the HTML
+      expect(htmlResult.html).toContain('rev-ins');  // insertion class
+      expect(htmlResult.html).toContain('rev-del');  // deletion class
+      expect(htmlResult.html).toContain('<ins');     // semantic ins element
+      expect(htmlResult.html).toContain('<del');     // semantic del element
+
+      // Verify pagination structure is also present
+      expect(htmlResult.html).toContain('pagination-staging');
+      expect(htmlResult.html).toContain('pagination-container');
+
+      // Load the pagination bundle and run pagination
+      await page.addScriptTag({ path: 'dist/pagination.bundle.js' });
+
+      const paginationResult = await page.evaluate((html) => {
+        // Create container and insert HTML
+        const container = document.createElement('div');
+        container.id = 'test-pagination-tracked-changes';
+        container.innerHTML = html;
+        document.body.appendChild(container);
+
+        const staging = container.querySelector('#pagination-staging') as HTMLElement;
+        const pageContainer = container.querySelector('#pagination-container') as HTMLElement;
+
+        if (!staging || !pageContainer) {
+          document.body.removeChild(container);
+          return { error: 'Pagination elements not found' };
+        }
+
+        const { PaginationEngine } = (window as any).DocxodusPagination;
+
+        try {
+          const engine = new PaginationEngine(staging, pageContainer, {
+            scale: 0.8,
+            showPageNumbers: true
+          });
+
+          const result = engine.paginate();
+
+          // Check that tracked change elements are present in the paginated output
+          const pageBoxes = pageContainer.querySelectorAll('.page-box');
+          const pageContents = pageContainer.querySelectorAll('.page-content');
+
+          // Find ins/del elements in the paginated pages
+          let insCount = 0;
+          let delCount = 0;
+
+          pageContents.forEach((pageContent) => {
+            insCount += pageContent.querySelectorAll('ins').length;
+            delCount += pageContent.querySelectorAll('del').length;
+          });
+
+          // Verify tracked changes CSS classes are preserved after cloning
+          const insWithClass = pageContainer.querySelectorAll('ins.rev-ins').length;
+          const delWithClass = pageContainer.querySelectorAll('del.rev-del').length;
+
+          document.body.removeChild(container);
+
+          return {
+            totalPages: result.totalPages,
+            pageBoxCount: pageBoxes.length,
+            insElements: insCount,
+            delElements: delCount,
+            insWithClass: insWithClass,
+            delWithClass: delWithClass
+          };
+        } catch (e) {
+          document.body.removeChild(container);
+          return { error: (e as Error).message };
+        }
+      }, htmlResult.html!);
+
+      if ('error' in paginationResult) {
+        throw new Error(paginationResult.error as string);
+      }
+
+      // Verify pagination completed successfully
+      expect(paginationResult.totalPages).toBeGreaterThan(0);
+      expect(paginationResult.pageBoxCount).toBeGreaterThan(0);
+
+      // Verify tracked change elements are present in paginated output
+      // The comparison should have created at least some insertions and deletions
+      expect(paginationResult.insElements + paginationResult.delElements).toBeGreaterThan(0);
+
+      // Verify CSS classes were preserved during cloning
+      expect(paginationResult.insWithClass + paginationResult.delWithClass).toBeGreaterThan(0);
+
+      console.log(`Pagination with tracked changes: ${paginationResult.totalPages} pages, ` +
+        `${paginationResult.insElements} ins elements, ${paginationResult.delElements} del elements, ` +
+        `${paginationResult.insWithClass} ins.rev-ins, ${paginationResult.delWithClass} del.rev-del`);
     });
   });
 

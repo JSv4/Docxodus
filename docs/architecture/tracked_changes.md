@@ -592,6 +592,58 @@ var settings = new WmlToHtmlConverterSettings
 var html = WmlToHtmlConverter.ConvertToHtml(wmlDoc, settings);
 ```
 
+## Pagination Compatibility
+
+Tracked changes rendering is **fully compatible** with the client-side pagination system (`RenderPagination = PaginationMode.Paginated`). Both features can be enabled simultaneously.
+
+### How It Works
+
+1. **C# Generation**: When both features are enabled, the HTML output contains:
+   - Pagination staging area with dimension data attributes
+   - Tracked change markup (`<ins>`, `<del>`, etc.) within the content
+   - CSS for both pagination and tracked changes (distinct prefixes: `page-` and `rev-`)
+
+2. **TypeScript Pagination**: The pagination engine processes tracked changes transparently:
+   - `getBoundingClientRect()` correctly measures content including styled revisions
+   - `cloneNode(true)` preserves all tracked change elements, classes, and `data-*` attributes
+   - No special handling is required - tracked changes are standard DOM elements
+
+### Combined Usage Example
+
+```csharp
+var settings = new WmlToHtmlConverterSettings
+{
+    PageTitle = "Paginated Document with Tracked Changes",
+    RenderTrackedChanges = true,
+    IncludeRevisionMetadata = true,
+    RenderPagination = PaginationMode.Paginated,
+    PaginationScale = 0.8,
+    RenderFootnotesAndEndnotes = true,
+    RenderHeadersAndFooters = true
+};
+
+var html = WmlToHtmlConverter.ConvertToHtml(wmlDoc, settings);
+// Pass to PaginationEngine in browser for page layout
+```
+
+### Supported Scenarios
+
+| Content Type | Pagination Support |
+|-------------|-------------------|
+| Inline insertions/deletions | ✅ Measured and cloned correctly |
+| Move operations | ✅ Preserved with `data-move-id` linking |
+| Table row revisions | ✅ Part of block measurement |
+| Format changes | ✅ Spans with tooltips preserved |
+| Revisions in headers/footers | ✅ Cloned via header/footer registry |
+| Revisions in footnotes | ✅ Cloned via footnote registry |
+
+### Edge Cases
+
+- **Move pairs across pages**: If moved content source and destination land on different pages, the visual connection between them is lost (this matches Word's behavior when printing)
+- **Page boundary clipping**: The `overflow: hidden` on page containers may clip text decorations (underline/strikethrough) at exact boundaries - negligible in practice
+
+See [Pagination Architecture](pagination.md) for details on the pagination system.
+
 ## Conclusion
 
 This design provides a comprehensive approach to rendering tracked changes in HTML while:
