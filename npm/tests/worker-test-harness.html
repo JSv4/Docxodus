@@ -116,6 +116,35 @@
                 }
             },
 
+            // Get document metadata using worker (for lazy loading)
+            getDocumentMetadata: async function(bytes) {
+                if (!window.DocxodusWorker) {
+                    return { error: { message: 'Worker not initialized' } };
+                }
+                try {
+                    const metadata = await window.DocxodusWorker.getDocumentMetadata(new Uint8Array(bytes));
+                    return { metadata };
+                } catch (error) {
+                    return { error: { message: error.message } };
+                }
+            },
+
+            // Convert with pagination options using worker
+            convertToHtmlWithPagination: async function(bytes, paginationMode = 1, paginationScale = 1.0) {
+                if (!window.DocxodusWorker) {
+                    return { error: { message: 'Worker not initialized' } };
+                }
+                try {
+                    const html = await window.DocxodusWorker.convertDocxToHtml(new Uint8Array(bytes), {
+                        paginationMode: paginationMode,
+                        paginationScale: paginationScale
+                    });
+                    return { html };
+                } catch (error) {
+                    return { error: { message: error.message } };
+                }
+            },
+
             // Check if worker is active
             isActive: function() {
                 return window.DocxodusWorker?.isActive() ?? false;

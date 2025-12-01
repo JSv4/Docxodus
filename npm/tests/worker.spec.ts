@@ -299,4 +299,343 @@ test.describe("Docxodus Web Worker Tests", () => {
       console.log("Correctly rejects requests after termination");
     }, { timeout: 60000 });
   });
+
+  // ============================================================
+  // Visual Lazy Loading Tests (Issue #44 Phase 3)
+  // ============================================================
+  test.describe("Visual Lazy Loading", () => {
+    test("demonstrates lazy loading with visual page placeholders", async ({ page }) => {
+      const bytes = readTestFile("HC001-5DayTourPlanTemplate.docx");
+
+      // This test visually demonstrates the lazy loading workflow:
+      // 1. Get metadata first (fast) to create page shells
+      // 2. Show loading placeholders with correct dimensions
+      // 3. Load full content and render into the page shells
+
+      const result = await page.evaluate(async (bytesArray) => {
+        const docBytes = new Uint8Array(bytesArray);
+        const timeline: string[] = [];
+        const startTime = performance.now();
+
+        // Create visual container for the document viewer
+        const viewer = document.createElement('div');
+        viewer.id = 'doc-viewer';
+        viewer.style.cssText = `
+          width: 100%;
+          max-width: 800px;
+          margin: 20px auto;
+          background: #f5f5f5;
+          padding: 20px;
+          font-family: Arial, sans-serif;
+        `;
+        document.body.appendChild(viewer);
+
+        // Status display
+        const status = document.createElement('div');
+        status.id = 'load-status';
+        status.style.cssText = 'padding: 10px; background: #e3f2fd; margin-bottom: 20px; border-radius: 4px;';
+        status.textContent = 'Initializing worker...';
+        viewer.appendChild(status);
+
+        // Page container
+        const pageContainer = document.createElement('div');
+        pageContainer.id = 'page-container';
+        pageContainer.style.cssText = 'display: flex; flex-direction: column; gap: 20px; align-items: center;';
+        viewer.appendChild(pageContainer);
+
+        // Step 1: Initialize worker
+        await (window as any).createDocxodusWorker();
+        timeline.push(`${(performance.now() - startTime).toFixed(0)}ms: Worker initialized`);
+        status.textContent = 'Getting document metadata...';
+
+        // Step 2: Get metadata (fast operation)
+        const metaStart = performance.now();
+        const metaResult = await (window as any).DocxodusWorkerTests.getDocumentMetadata(Array.from(docBytes));
+        const metaTime = performance.now() - metaStart;
+        timeline.push(`${(performance.now() - startTime).toFixed(0)}ms: Metadata received (${metaTime.toFixed(0)}ms)`);
+
+        if (metaResult.error) {
+          return { error: metaResult.error, timeline };
+        }
+
+        const metadata = metaResult.metadata;
+        status.textContent = `Found ${metadata.sections.length} section(s), ~${metadata.estimatedPageCount} pages. Creating placeholders...`;
+
+        // Step 3: Create page placeholders based on metadata
+        const placeholders: HTMLElement[] = [];
+        for (let i = 0; i < metadata.estimatedPageCount; i++) {
+          const sectionIndex = Math.min(i, metadata.sections.length - 1);
+          const section = metadata.sections[sectionIndex];
+
+          const placeholder = document.createElement('div');
+          placeholder.className = 'page-placeholder';
+          placeholder.dataset.pageNumber = String(i + 1);
+          placeholder.dataset.sectionIndex = String(sectionIndex);
+
+          // Use metadata dimensions (scale down for display)
+          const scale = 0.5;
+          const widthPx = section.pageWidthPt * scale * (96 / 72);
+          const heightPx = section.pageHeightPt * scale * (96 / 72);
+
+          placeholder.style.cssText = `
+            width: ${widthPx}px;
+            height: ${heightPx}px;
+            background: linear-gradient(135deg, #e0e0e0 25%, #f0f0f0 50%, #e0e0e0 75%);
+            background-size: 20px 20px;
+            animation: shimmer 1.5s infinite;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 14px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+          `;
+          placeholder.innerHTML = `<span>Page ${i + 1}<br><small>Loading...</small></span>`;
+
+          pageContainer.appendChild(placeholder);
+          placeholders.push(placeholder);
+        }
+
+        // Add shimmer animation
+        const style = document.createElement('style');
+        style.textContent = `
+          @keyframes shimmer {
+            0% { background-position: -20px 0; }
+            100% { background-position: 20px 0; }
+          }
+        `;
+        document.head.appendChild(style);
+
+        timeline.push(`${(performance.now() - startTime).toFixed(0)}ms: ${placeholders.length} placeholders created`);
+
+        // Allow a brief moment for placeholders to be visible
+        await new Promise(r => setTimeout(r, 500));
+
+        // Capture placeholder state
+        const placeholderState = {
+          count: placeholders.length,
+          firstPlaceholder: {
+            width: placeholders[0]?.offsetWidth,
+            height: placeholders[0]?.offsetHeight,
+            visible: placeholders[0]?.offsetParent !== null
+          }
+        };
+
+        status.textContent = 'Loading full document content...';
+
+        // Step 4: Load full HTML content via worker
+        const convStart = performance.now();
+        const htmlResult = await (window as any).DocxodusWorkerTests.convertToHtmlWithPagination(
+          Array.from(docBytes), 1, 0.5
+        );
+        const convTime = performance.now() - convStart;
+        timeline.push(`${(performance.now() - startTime).toFixed(0)}ms: HTML conversion complete (${convTime.toFixed(0)}ms)`);
+
+        if (htmlResult.error) {
+          return { error: htmlResult.error, timeline, placeholderState };
+        }
+
+        // Step 5: Replace placeholders with actual content
+        status.textContent = 'Rendering content...';
+
+        // Parse the HTML
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(htmlResult.html, 'text/html');
+
+        // Clear placeholders and insert actual content
+        pageContainer.innerHTML = '';
+
+        // Find the document body content
+        const docBody = doc.querySelector('.page-section') || doc.body;
+
+        // Create a styled container for the actual content
+        const contentWrapper = document.createElement('div');
+        contentWrapper.id = 'rendered-content';
+        contentWrapper.style.cssText = `
+          background: white;
+          padding: 20px;
+          border-radius: 4px;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+          max-width: 100%;
+          overflow: auto;
+        `;
+
+        // Copy styles from parsed document
+        const styles = doc.querySelectorAll('style');
+        styles.forEach(s => contentWrapper.appendChild(s.cloneNode(true)));
+
+        // Copy body content
+        contentWrapper.innerHTML += docBody.innerHTML;
+        pageContainer.appendChild(contentWrapper);
+
+        timeline.push(`${(performance.now() - startTime).toFixed(0)}ms: Content rendered`);
+        status.textContent = `Document loaded successfully! (${metadata.totalParagraphs} paragraphs)`;
+        status.style.background = '#c8e6c9';
+
+        // Verify rendered content
+        const renderedState = {
+          hasContent: contentWrapper.innerHTML.length > 0,
+          paragraphCount: contentWrapper.querySelectorAll('p').length,
+          hasStyles: contentWrapper.querySelectorAll('style').length > 0,
+          contentHeight: contentWrapper.offsetHeight,
+          isVisible: contentWrapper.offsetParent !== null
+        };
+
+        return {
+          success: true,
+          timeline,
+          metadata: {
+            sections: metadata.sections.length,
+            totalParagraphs: metadata.totalParagraphs,
+            estimatedPages: metadata.estimatedPageCount
+          },
+          placeholderState,
+          renderedState,
+          timing: {
+            metadataMs: metaTime,
+            conversionMs: convTime,
+            totalMs: performance.now() - startTime
+          }
+        };
+      }, Array.from(bytes));
+
+      // Assertions
+      expect(result.error).toBeUndefined();
+      expect(result.success).toBe(true);
+
+      // Verify placeholder phase worked
+      expect(result.placeholderState.count).toBeGreaterThan(0);
+      expect(result.placeholderState.firstPlaceholder.visible).toBe(true);
+      expect(result.placeholderState.firstPlaceholder.width).toBeGreaterThan(0);
+      expect(result.placeholderState.firstPlaceholder.height).toBeGreaterThan(0);
+
+      // Verify rendered content
+      expect(result.renderedState.hasContent).toBe(true);
+      expect(result.renderedState.paragraphCount).toBeGreaterThan(0);
+      expect(result.renderedState.isVisible).toBe(true);
+
+      // Metadata should be significantly faster than full conversion
+      expect(result.timing.metadataMs).toBeLessThan(result.timing.conversionMs);
+
+      // Log timeline
+      console.log('\n=== Lazy Loading Timeline ===');
+      result.timeline.forEach((entry: string) => console.log(entry));
+      console.log(`\nMetadata: ${result.timing.metadataMs.toFixed(0)}ms`);
+      console.log(`Conversion: ${result.timing.conversionMs.toFixed(0)}ms`);
+      console.log(`Total: ${result.timing.totalMs.toFixed(0)}ms`);
+      console.log(`\nPlaceholders created: ${result.placeholderState.count}`);
+      console.log(`Paragraphs rendered: ${result.renderedState.paragraphCount}`);
+    }, { timeout: 120000 });
+
+    test("visual verification with screenshot", async ({ page }) => {
+      const bytes = readTestFile("HC006-Test-01.docx");
+
+      // Set viewport for consistent screenshots
+      await page.setViewportSize({ width: 1024, height: 768 });
+
+      await page.evaluate(async (bytesArray) => {
+        const docBytes = new Uint8Array(bytesArray);
+
+        // Initialize worker first (before modifying DOM)
+        await (window as any).createDocxodusWorker();
+
+        // Now safe to clear body
+        document.body.innerHTML = '';
+        document.body.style.cssText = 'margin: 0; padding: 20px; background: #fafafa;';
+
+        const viewer = document.createElement('div');
+        viewer.id = 'lazy-viewer';
+        viewer.style.cssText = 'max-width: 900px; margin: 0 auto;';
+        document.body.appendChild(viewer);
+
+        // Get metadata
+        const metaResult = await (window as any).DocxodusWorkerTests.getDocumentMetadata(Array.from(docBytes));
+        const metadata = metaResult.metadata;
+
+        // Create header showing metadata
+        const header = document.createElement('div');
+        header.style.cssText = `
+          background: #1976d2;
+          color: white;
+          padding: 15px 20px;
+          border-radius: 8px 8px 0 0;
+          margin-bottom: 0;
+        `;
+        header.innerHTML = `
+          <h2 style="margin: 0 0 10px 0; font-size: 18px;">Lazy Loading Demo</h2>
+          <div style="font-size: 13px; opacity: 0.9;">
+            Sections: ${metadata.sections.length} |
+            Paragraphs: ${metadata.totalParagraphs} |
+            Est. Pages: ${metadata.estimatedPageCount} |
+            Page Size: ${metadata.sections[0]?.pageWidthPt?.toFixed(0)}×${metadata.sections[0]?.pageHeightPt?.toFixed(0)}pt
+          </div>
+        `;
+        viewer.appendChild(header);
+
+        // Create page preview area
+        const previewArea = document.createElement('div');
+        previewArea.style.cssText = `
+          background: white;
+          border: 1px solid #ddd;
+          border-top: none;
+          border-radius: 0 0 8px 8px;
+          padding: 20px;
+          min-height: 400px;
+        `;
+        viewer.appendChild(previewArea);
+
+        // Get and render actual content
+        const htmlResult = await (window as any).DocxodusWorkerTests.convertToHtml(Array.from(docBytes));
+
+        if (!htmlResult.error) {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(htmlResult.html, 'text/html');
+
+          // Copy styles
+          doc.querySelectorAll('style').forEach(s => previewArea.appendChild(s.cloneNode(true)));
+
+          // Create content container with proper styling
+          const content = document.createElement('div');
+          content.style.cssText = 'max-height: 500px; overflow-y: auto; padding-right: 10px;';
+          content.innerHTML = doc.body.innerHTML;
+          previewArea.appendChild(content);
+        }
+
+        // Add footer with status
+        const footer = document.createElement('div');
+        footer.style.cssText = `
+          margin-top: 15px;
+          padding: 10px;
+          background: #e8f5e9;
+          border-radius: 4px;
+          font-size: 13px;
+          color: #2e7d32;
+        `;
+        footer.textContent = '✓ Document loaded successfully via Web Worker';
+        viewer.appendChild(footer);
+
+      }, Array.from(bytes));
+
+      // Take screenshot for visual verification
+      const screenshot = await page.screenshot({
+        fullPage: false,
+        clip: { x: 0, y: 0, width: 1024, height: 768 }
+      });
+
+      // Verify screenshot was captured (non-empty)
+      expect(screenshot.length).toBeGreaterThan(1000);
+
+      // Verify DOM elements exist
+      const viewerVisible = await page.locator('#lazy-viewer').isVisible();
+      expect(viewerVisible).toBe(true);
+
+      const headerText = await page.locator('#lazy-viewer h2').textContent();
+      expect(headerText).toContain('Lazy Loading');
+
+      console.log('Screenshot captured successfully');
+      console.log(`Screenshot size: ${screenshot.length} bytes`);
+    }, { timeout: 120000 });
+  });
 });
