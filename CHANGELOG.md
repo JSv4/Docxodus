@@ -10,12 +10,18 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
-- **Frame Yielding for UI Responsiveness** (Issue #44) - WASM operations now yield to the browser before heavy work begins
+- **Frame Yielding for UI Responsiveness** (Issue #44 Phase 1) - WASM operations now yield to the browser before heavy work begins
   - All async functions in the npm wrapper (`convertDocxToHtml`, `compareDocuments`, `compareDocumentsToHtml`, `getRevisions`, `addAnnotation`, `addAnnotationWithTarget`, `getDocumentStructure`) automatically yield using double-`requestAnimationFrame` pattern
   - This allows React state updates (loading spinners, progress indicators) to paint before blocking WASM execution
   - Transparent to consumers - no API changes required
   - Gracefully skipped in non-browser environments (Node.js, SSR)
-  - Phase 1 of 3: Future phases will add Web Worker support and lazy loading
+- **Web Worker Support for Non-blocking Operations** (Issue #44 Phase 2) - Fully non-blocking WASM execution via Web Workers
+  - New `docxodus/worker` export provides worker-based API: `import { createWorkerDocxodus } from 'docxodus/worker'`
+  - Worker API mirrors main API: `convertDocxToHtml`, `compareDocuments`, `compareDocumentsToHtml`, `getRevisions`, `getVersion`
+  - Main thread remains fully responsive during WASM execution - animations continue, user interactions work
+  - Zero-copy transfer of document bytes via Transferable for optimal performance
+  - Worker can be terminated when no longer needed
+  - Phase 3 (lazy loading) will build on this foundation
 - **Custom Annotations** - Full support for adding, removing, and rendering custom annotations on DOCX documents
   - `AnnotationManager` class for programmatic annotation CRUD operations:
     - `AddAnnotation()`: Add annotation by text search or paragraph range

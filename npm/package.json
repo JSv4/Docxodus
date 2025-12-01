@@ -14,6 +14,10 @@
     "./react": {
       "import": "./dist/react.js",
       "types": "./dist/react.d.ts"
+    },
+    "./worker": {
+      "import": "./dist/worker-proxy.js",
+      "types": "./dist/worker-proxy.d.ts"
     }
   },
   "files": [
@@ -23,8 +27,9 @@
     "build:wasm": "../scripts/build-wasm.sh",
     "build:ts": "tsc",
     "build:pagination-bundle": "esbuild src/pagination.ts --bundle --format=iife --global-name=DocxodusPagination --outfile=dist/pagination.bundle.js",
-    "build": "npm run build:wasm && npm run build:ts && npm run build:pagination-bundle",
-    "pretest": "cp tests/test-harness.html dist/wasm/ && cp dist/pagination.bundle.js dist/wasm/",
+    "build:worker-bundle": "esbuild src/docxodus.worker.ts --bundle --format=esm --outfile=dist/docxodus.worker.js && esbuild src/worker-proxy.ts --bundle --format=esm --outfile=dist/worker-proxy.bundle.js",
+    "build": "npm run build:wasm && npm run build:ts && npm run build:pagination-bundle && npm run build:worker-bundle",
+    "pretest": "cp tests/test-harness.html dist/wasm/ && cp tests/worker-test-harness.html dist/wasm/ && cp dist/pagination.bundle.js dist/wasm/ && cp dist/docxodus.worker.js dist/wasm/ && cp dist/worker-proxy.bundle.js dist/wasm/worker-proxy.js",
     "test": "playwright test",
     "test:ui": "playwright test --ui",
     "prepublishOnly": "npm run build"

@@ -907,3 +907,189 @@ export function targetSearchInElement(
 ): AnnotationTarget {
   return { elementId, searchText, occurrence };
 }
+
+// ============================================================================
+// Web Worker Types (Phase 2: Non-blocking WASM operations)
+// ============================================================================
+
+/**
+ * Message types sent from main thread to worker.
+ */
+export type WorkerRequestType =
+  | "init"
+  | "convertDocxToHtml"
+  | "compareDocuments"
+  | "compareDocumentsToHtml"
+  | "getRevisions"
+  | "getVersion";
+
+/**
+ * Base structure for worker requests.
+ */
+export interface WorkerRequestBase {
+  /** Unique request ID for correlating responses */
+  id: string;
+  /** The operation type */
+  type: WorkerRequestType;
+}
+
+/**
+ * Initialize the worker with WASM base path.
+ */
+export interface WorkerInitRequest extends WorkerRequestBase {
+  type: "init";
+  /** Base URL for loading WASM files (e.g., "/wasm/") */
+  wasmBasePath: string;
+}
+
+/**
+ * Convert DOCX to HTML request.
+ */
+export interface WorkerConvertRequest extends WorkerRequestBase {
+  type: "convertDocxToHtml";
+  /** Document bytes (transferred, not copied) */
+  documentBytes: Uint8Array;
+  /** Conversion options */
+  options?: ConversionOptions;
+}
+
+/**
+ * Compare two documents request.
+ */
+export interface WorkerCompareRequest extends WorkerRequestBase {
+  type: "compareDocuments";
+  /** Original document bytes */
+  originalBytes: Uint8Array;
+  /** Modified document bytes */
+  modifiedBytes: Uint8Array;
+  /** Comparison options */
+  options?: CompareOptions;
+}
+
+/**
+ * Compare documents and return HTML request.
+ */
+export interface WorkerCompareToHtmlRequest extends WorkerRequestBase {
+  type: "compareDocumentsToHtml";
+  /** Original document bytes */
+  originalBytes: Uint8Array;
+  /** Modified document bytes */
+  modifiedBytes: Uint8Array;
+  /** Comparison options */
+  options?: CompareOptions;
+}
+
+/**
+ * Get revisions from a document request.
+ */
+export interface WorkerGetRevisionsRequest extends WorkerRequestBase {
+  type: "getRevisions";
+  /** Document bytes */
+  documentBytes: Uint8Array;
+  /** Revision extraction options */
+  options?: GetRevisionsOptions;
+}
+
+/**
+ * Get library version request.
+ */
+export interface WorkerGetVersionRequest extends WorkerRequestBase {
+  type: "getVersion";
+}
+
+/**
+ * Union type of all possible worker requests.
+ */
+export type WorkerRequest =
+  | WorkerInitRequest
+  | WorkerConvertRequest
+  | WorkerCompareRequest
+  | WorkerCompareToHtmlRequest
+  | WorkerGetRevisionsRequest
+  | WorkerGetVersionRequest;
+
+/**
+ * Base structure for worker responses.
+ */
+export interface WorkerResponseBase {
+  /** Request ID this response corresponds to */
+  id: string;
+  /** Whether the operation succeeded */
+  success: boolean;
+  /** Error message if success is false */
+  error?: string;
+}
+
+/**
+ * Response from init request.
+ */
+export interface WorkerInitResponse extends WorkerResponseBase {
+  type: "init";
+}
+
+/**
+ * Response from convertDocxToHtml request.
+ */
+export interface WorkerConvertResponse extends WorkerResponseBase {
+  type: "convertDocxToHtml";
+  /** The converted HTML string */
+  html?: string;
+}
+
+/**
+ * Response from compareDocuments request.
+ */
+export interface WorkerCompareResponse extends WorkerResponseBase {
+  type: "compareDocuments";
+  /** The redlined document bytes */
+  documentBytes?: Uint8Array;
+}
+
+/**
+ * Response from compareDocumentsToHtml request.
+ */
+export interface WorkerCompareToHtmlResponse extends WorkerResponseBase {
+  type: "compareDocumentsToHtml";
+  /** The HTML string with redlines */
+  html?: string;
+}
+
+/**
+ * Response from getRevisions request.
+ */
+export interface WorkerGetRevisionsResponse extends WorkerResponseBase {
+  type: "getRevisions";
+  /** Array of revisions */
+  revisions?: Revision[];
+}
+
+/**
+ * Response from getVersion request.
+ */
+export interface WorkerGetVersionResponse extends WorkerResponseBase {
+  type: "getVersion";
+  /** Version information */
+  version?: VersionInfo;
+}
+
+/**
+ * Union type of all possible worker responses.
+ */
+export type WorkerResponse =
+  | WorkerInitResponse
+  | WorkerConvertResponse
+  | WorkerCompareResponse
+  | WorkerCompareToHtmlResponse
+  | WorkerGetRevisionsResponse
+  | WorkerGetVersionResponse;
+
+/**
+ * Options for creating a worker-based Docxodus instance.
+ */
+export interface WorkerDocxodusOptions {
+  /**
+   * Base URL for loading WASM files.
+   * Defaults to auto-detection from module URL.
+   */
+  wasmBasePath?: string;
+}
