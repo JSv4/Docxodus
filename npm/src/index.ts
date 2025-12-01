@@ -118,6 +118,34 @@ let wasmExports: DocxodusWasmExports | null = null;
 let initPromise: Promise<void> | null = null;
 
 /**
+ * Yields to the browser's main thread, allowing pending UI updates to render.
+ *
+ * This is critical for WASM operations: since WASM runs synchronously on the
+ * main thread, React state updates (like loading spinners) won't paint unless
+ * we yield before the blocking work begins.
+ *
+ * Uses requestAnimationFrame which fires just before the next paint, ensuring
+ * any queued state updates are committed to the DOM.
+ *
+ * @internal
+ */
+async function yieldToMain(): Promise<void> {
+  // In non-browser environments (SSR, tests), skip yielding
+  if (typeof requestAnimationFrame === "undefined") {
+    return;
+  }
+
+  // Double-rAF ensures the browser has fully painted before we continue
+  // First rAF: scheduled for next frame
+  // Second rAF: ensures first frame actually painted
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+/**
  * Derive the WASM base path from this module's URL.
  * Works whether loaded from node_modules, CDN, or bundled.
  */
@@ -323,6 +351,9 @@ export async function convertDocxToHtml(
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
 
+  // Yield to browser before heavy WASM work - allows loading states to render
+  await yieldToMain();
+
   let result: string;
 
   // Check if any of the new complete options are specified
@@ -409,6 +440,9 @@ export async function compareDocuments(
   const originalBytes = await toBytes(original);
   const modifiedBytes = await toBytes(modified);
 
+  // Yield to browser before heavy WASM work - allows loading states to render
+  await yieldToMain();
+
   let result: Uint8Array;
 
   if (options?.detailThreshold !== undefined || options?.caseInsensitive) {
@@ -451,6 +485,9 @@ export async function compareDocumentsToHtml(
   const exports = ensureInitialized();
   const originalBytes = await toBytes(original);
   const modifiedBytes = await toBytes(modified);
+
+  // Yield to browser before heavy WASM work - allows loading states to render
+  await yieldToMain();
 
   // Use the new options method if renderTrackedChanges is explicitly set
   const renderTrackedChanges = options?.renderTrackedChanges ?? true;
@@ -501,6 +538,9 @@ export async function getRevisions(
 ): Promise<Revision[]> {
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
+
+  // Yield to browser before WASM work - allows loading states to render
+  await yieldToMain();
 
   // Apply defaults for move detection options
   const detectMoves = options?.detectMoves ?? true;
@@ -642,6 +682,9 @@ export async function addAnnotation(
 ): Promise<AddAnnotationResponse> {
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
+
+  // Yield to browser before WASM work - allows loading states to render
+  await yieldToMain();
 
   const requestJson = JSON.stringify({
     Id: request.id,
@@ -787,6 +830,9 @@ export async function getDocumentStructure(
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
 
+  // Yield to browser before WASM work - allows loading states to render
+  await yieldToMain();
+
   const result = exports.DocumentConverter.GetDocumentStructure(bytes);
 
   if (isErrorResponse(result)) {
@@ -895,6 +941,9 @@ export async function addAnnotationWithTarget(
 ): Promise<AddAnnotationResponse> {
   const exports = ensureInitialized();
   const bytes = await toBytes(document);
+
+  // Yield to browser before WASM work - allows loading states to render
+  await yieldToMain();
 
   const requestJson = JSON.stringify({
     Id: request.id,
