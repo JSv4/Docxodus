@@ -20,6 +20,7 @@ import type {
   AddAnnotationWithTargetRequest,
   DocumentMetadata,
   SectionMetadata,
+  RenderPageRangeOptions,
 } from "./types.js";
 
 import {
@@ -85,6 +86,7 @@ export type {
   // Lazy loading / Phase 3 types
   DocumentMetadata,
   SectionMetadata,
+  RenderPageRangeOptions,
 };
 
 export {
@@ -978,6 +980,99 @@ export async function getDocumentMetadata(
     hasComments: parsed.HasComments ?? parsed.hasComments,
     estimatedPageCount: parsed.EstimatedPageCount ?? parsed.estimatedPageCount,
   };
+}
+
+/**
+ * Render a specific page range for lazy loading/virtual scrolling.
+ * Use getDocumentMetadata() first to get page count and dimensions for placeholder sizing.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param startPage - 1-based start page number
+ * @param endPage - 1-based end page number (inclusive)
+ * @param options - Rendering options
+ * @returns HTML string containing only the requested page range
+ * @throws Error if rendering fails
+ *
+ * @example
+ * ```typescript
+ * // First get metadata to understand the document
+ * const metadata = await getDocumentMetadata(docxFile);
+ * console.log(`Document has ${metadata.estimatedPageCount} estimated pages`);
+ *
+ * // Render just pages 1-3
+ * const html = await renderPageRange(docxFile, 1, 3);
+ *
+ * // Render with options
+ * const html = await renderPageRange(docxFile, 5, 10, {
+ *   paginationScale: 0.8,
+ *   renderHeadersAndFooters: true
+ * });
+ *
+ * // The returned HTML contains data attributes for the page range:
+ * // - data-start-page, data-end-page: requested range
+ * // - data-total-pages: total estimated pages
+ * // - data-start-block, data-end-block: content block indices
+ * ```
+ */
+export async function renderPageRange(
+  document: File | Uint8Array,
+  startPage: number,
+  endPage: number,
+  options?: RenderPageRangeOptions
+): Promise<string> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  // Yield to browser before heavy WASM work - allows loading states to render
+  await yieldToMain();
+
+  let result: string;
+
+  // Check if any advanced options are specified
+  const needsFullMethod = options?.renderTrackedChanges !== undefined ||
+    options?.showDeletedContent !== undefined ||
+    options?.renderComments !== undefined ||
+    options?.additionalCss !== undefined;
+
+  if (needsFullMethod) {
+    result = exports.DocumentConverter.RenderPageRangeFull(
+      bytes,
+      startPage,
+      endPage,
+      options?.pageTitle ?? "Document",
+      options?.cssPrefix ?? "docx-",
+      options?.fabricateClasses ?? true,
+      options?.additionalCss ?? "",
+      options?.paginationScale ?? 1.0,
+      options?.paginationCssClassPrefix ?? "page-",
+      options?.renderFootnotesAndEndnotes ?? false,
+      options?.renderHeadersAndFooters ?? false,
+      options?.renderTrackedChanges ?? false,
+      options?.showDeletedContent ?? true,
+      options?.renderComments ?? false,
+      options?.commentRenderMode ?? CommentRenderMode.EndnoteStyle
+    );
+  } else {
+    result = exports.DocumentConverter.RenderPageRange(
+      bytes,
+      startPage,
+      endPage,
+      options?.pageTitle ?? "Document",
+      options?.cssPrefix ?? "docx-",
+      options?.fabricateClasses ?? true,
+      options?.paginationScale ?? 1.0,
+      options?.paginationCssClassPrefix ?? "page-",
+      options?.renderFootnotesAndEndnotes ?? false,
+      options?.renderHeadersAndFooters ?? false
+    );
+  }
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Page range rendering failed: ${error.error}`);
+  }
+
+  return result;
 }
 
 /**

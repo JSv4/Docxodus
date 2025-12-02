@@ -726,6 +726,177 @@ public partial class DocumentConverter
     }
 
     /// <summary>
+    /// Render a specific page range for lazy loading/virtual scrolling.
+    /// Uses estimated pagination to determine which content blocks fall on each page.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="startPage">1-based start page number</param>
+    /// <param name="endPage">1-based end page number (inclusive)</param>
+    /// <param name="pageTitle">Title for the HTML document</param>
+    /// <param name="cssPrefix">Prefix for generated CSS class names</param>
+    /// <param name="fabricateClasses">Whether to generate CSS classes</param>
+    /// <param name="paginationScale">Scale factor for page rendering (1.0 = 100%)</param>
+    /// <param name="paginationCssClassPrefix">CSS class prefix for pagination elements</param>
+    /// <param name="renderFootnotesAndEndnotes">Whether to include footnote/endnote registries</param>
+    /// <param name="renderHeadersAndFooters">Whether to include header/footer registries</param>
+    /// <returns>HTML string containing only the requested page range, or JSON error</returns>
+    [JSExport]
+    public static string RenderPageRange(
+        byte[] docxBytes,
+        int startPage,
+        int endPage,
+        string pageTitle,
+        string cssPrefix,
+        bool fabricateClasses,
+        double paginationScale,
+        string paginationCssClassPrefix,
+        bool renderFootnotesAndEndnotes,
+        bool renderHeadersAndFooters)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        if (startPage < 1)
+        {
+            return SerializeError("startPage must be >= 1");
+        }
+
+        if (endPage < startPage)
+        {
+            return SerializeError("endPage must be >= startPage");
+        }
+
+        try
+        {
+            // Must use writable stream - WmlToHtmlConverter calls RevisionAccepter internally
+            using var memoryStream = new MemoryStream();
+            memoryStream.Write(docxBytes, 0, docxBytes.Length);
+            memoryStream.Position = 0;
+            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
+
+            var settings = new WmlToHtmlConverterSettings
+            {
+                PageTitle = pageTitle ?? "Document",
+                CssClassPrefix = cssPrefix ?? "docx-",
+                FabricateCssClasses = fabricateClasses,
+                GeneralCss = "body { font-family: Arial, sans-serif; margin: 0; } " +
+                             "span { white-space: pre-wrap; }",
+                RenderPagination = PaginationMode.Paginated,
+                PaginationScale = paginationScale > 0 ? paginationScale : 1.0,
+                PaginationCssClassPrefix = paginationCssClassPrefix ?? "page-",
+                RenderFootnotesAndEndnotes = renderFootnotesAndEndnotes,
+                RenderHeadersAndFooters = renderHeadersAndFooters,
+                // Disable features not needed for lazy loading
+                RenderComments = false,
+                RenderAnnotations = false,
+                RenderTrackedChanges = false
+            };
+
+            var htmlElement = WmlToHtmlConverter.RenderPageRange(wordDoc, settings, startPage, endPage);
+            return htmlElement.ToString(SaveOptions.DisableFormatting);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Render a specific page range with full options for lazy loading/virtual scrolling.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="startPage">1-based start page number</param>
+    /// <param name="endPage">1-based end page number (inclusive)</param>
+    /// <param name="pageTitle">Title for the HTML document</param>
+    /// <param name="cssPrefix">Prefix for generated CSS class names</param>
+    /// <param name="fabricateClasses">Whether to generate CSS classes</param>
+    /// <param name="additionalCss">Additional CSS to include</param>
+    /// <param name="paginationScale">Scale factor for page rendering (1.0 = 100%)</param>
+    /// <param name="paginationCssClassPrefix">CSS class prefix for pagination elements</param>
+    /// <param name="renderFootnotesAndEndnotes">Whether to include footnote/endnote registries</param>
+    /// <param name="renderHeadersAndFooters">Whether to include header/footer registries</param>
+    /// <param name="renderTrackedChanges">Whether to render tracked changes</param>
+    /// <param name="showDeletedContent">Whether to show deleted content</param>
+    /// <param name="renderComments">Whether to render comments</param>
+    /// <param name="commentRenderMode">Comment render mode: 0=EndnoteStyle, 1=Inline, 2=Margin</param>
+    /// <returns>HTML string containing only the requested page range, or JSON error</returns>
+    [JSExport]
+    public static string RenderPageRangeFull(
+        byte[] docxBytes,
+        int startPage,
+        int endPage,
+        string pageTitle,
+        string cssPrefix,
+        bool fabricateClasses,
+        string additionalCss,
+        double paginationScale,
+        string paginationCssClassPrefix,
+        bool renderFootnotesAndEndnotes,
+        bool renderHeadersAndFooters,
+        bool renderTrackedChanges,
+        bool showDeletedContent,
+        bool renderComments,
+        int commentRenderMode)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        if (startPage < 1)
+        {
+            return SerializeError("startPage must be >= 1");
+        }
+
+        if (endPage < startPage)
+        {
+            return SerializeError("endPage must be >= startPage");
+        }
+
+        try
+        {
+            // Must use writable stream - WmlToHtmlConverter calls RevisionAccepter internally
+            using var memoryStream = new MemoryStream();
+            memoryStream.Write(docxBytes, 0, docxBytes.Length);
+            memoryStream.Position = 0;
+            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
+
+            var settings = new WmlToHtmlConverterSettings
+            {
+                PageTitle = pageTitle ?? "Document",
+                CssClassPrefix = cssPrefix ?? "docx-",
+                FabricateCssClasses = fabricateClasses,
+                AdditionalCss = additionalCss ?? "",
+                GeneralCss = "body { font-family: Arial, sans-serif; margin: 0; } " +
+                             "span { white-space: pre-wrap; }",
+                RenderPagination = PaginationMode.Paginated,
+                PaginationScale = paginationScale > 0 ? paginationScale : 1.0,
+                PaginationCssClassPrefix = paginationCssClassPrefix ?? "page-",
+                RenderFootnotesAndEndnotes = renderFootnotesAndEndnotes,
+                RenderHeadersAndFooters = renderHeadersAndFooters,
+                RenderTrackedChanges = renderTrackedChanges,
+                ShowDeletedContent = showDeletedContent,
+                RenderMoveOperations = true,
+                IncludeRevisionMetadata = true,
+                RenderComments = renderComments,
+                CommentRenderMode = renderComments ? (CommentRenderMode)commentRenderMode : CommentRenderMode.EndnoteStyle,
+                CommentCssClassPrefix = "comment-",
+                IncludeCommentMetadata = true,
+                RenderAnnotations = false
+            };
+
+            var htmlElement = WmlToHtmlConverter.RenderPageRange(wordDoc, settings, startPage, endPage);
+            return htmlElement.ToString(SaveOptions.DisableFormatting);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
     /// Get library version information.
     /// </summary>
     [JSExport]

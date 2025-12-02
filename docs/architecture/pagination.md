@@ -470,11 +470,217 @@ interface PartialFootnote {
 
 - [Paginated Headers and Footers](paginated_headers_footers.md) - How headers and footers are rendered within paginated pages
 
+## Virtual Scrolling / Lazy Loading (Issue #31)
+
+Virtual scrolling enables rendering only visible pages for large documents, dramatically improving performance and memory usage.
+
+### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Initial Load (Metadata Only)                  │
+│  GetDocumentMetadata() → { totalParagraphs, estimatedPageCount } │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Virtual Scroll Container                      │
+│  • Fixed-height viewport with overflow-y: auto                   │
+│  • Placeholder elements for each page (600px estimated height)   │
+│  • IntersectionObserver watches placeholders                     │
+│  • Load indicator shows "Pages loaded: N/Total"                  │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ (on scroll / intersection)
+┌─────────────────────────────────────────────────────────────────┐
+│                    On-Demand Page Rendering                      │
+│  RenderPageRange(bytes, startPage, endPage) → HTML               │
+│  • Renders only the requested page range                         │
+│  • Uses heuristic: ~25 paragraphs per page                       │
+│  • Includes pagination metadata in data attributes               │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### WASM API
+
+#### GetDocumentMetadata
+
+Returns document structure without rendering:
+
+```typescript
+interface DocumentMetadata {
+  totalParagraphs: number;
+  totalTables: number;
+  estimatedPageCount: number;  // Based on ~25 paragraphs/page heuristic
+  hasFootnotes: boolean;
+  hasEndnotes: boolean;
+  hasTrackedChanges: boolean;
+  hasComments: boolean;
+  sections: SectionMetadata[];
+}
+```
+
+#### RenderPageRange
+
+Renders a specific page range:
+
+```csharp
+// C# WASM export
+[JSExport]
+public static string RenderPageRange(
+    byte[] docxBytes,
+    int startPage,           // 1-indexed start page
+    int endPage,             // 1-indexed end page
+    string pageTitle,
+    string cssPrefix,
+    bool fabricateClasses,
+    double paginationScale,
+    string paginationCssClassPrefix,
+    bool renderFootnotesAndEndnotes,
+    bool renderHeadersAndFooters)
+```
+
+```typescript
+// TypeScript usage
+const result = await docxodus.renderPageRange(bytes, 2, 4, {
+  paginationScale: 1.0,
+  renderFootnotesAndEndnotes: false
+});
+// Returns HTML for pages 2, 3, 4 only
+```
+
+### HTML Output Structure
+
+The rendered HTML includes pagination metadata as data attributes:
+
+```html
+<html>
+<head>
+  <style>/* Document styles */</style>
+</head>
+<body data-start-page="2"
+      data-end-page="4"
+      data-total-pages="10"
+      data-block-index="25">
+  <!-- Only content for pages 2-4 -->
+  <div data-block-index="25">Page 2 content...</div>
+  <div data-block-index="26">Page 2 content...</div>
+  ...
+  <div data-block-index="99">Page 4 content...</div>
+</body>
+</html>
+```
+
+### Page-to-Block Mapping Heuristic
+
+Since DOCX files don't contain explicit page boundaries (pagination is render-time), we use a heuristic:
+
+```csharp
+const int PARAGRAPHS_PER_PAGE = 25;  // Empirically reasonable default
+
+int startBlockIndex = (startPage - 1) * PARAGRAPHS_PER_PAGE;
+int endBlockIndex = endPage * PARAGRAPHS_PER_PAGE - 1;
+```
+
+This is intentionally simple. More sophisticated approaches could:
+- Use section break information for explicit page boundaries
+- Measure content heights (requires rendering)
+- Allow custom paragraphs-per-page configuration
+
+### TypeScript Virtual Scroll Infrastructure
+
+```typescript
+// Create scrollable container with placeholders
+const container = await docxodus.createVirtualScrollContainer(bytes, {
+  viewportHeight: 500,  // Fixed viewport height in pixels
+  pageHeight: 600       // Estimated page height for placeholders
+});
+
+// Load a specific page on-demand
+await docxodus.loadPage(pageNumber);
+
+// Get current state
+const state = docxodus.getVirtualScrollState();
+// { loadedPages: [1, 5, 10], unloadedPages: [2, 3, 4, 6, 7, 8, 9], ... }
+
+// Scroll to a specific page
+docxodus.scrollToPage(5);
+```
+
+### IntersectionObserver Integration
+
+```typescript
+const observer = new IntersectionObserver((entries) => {
+  entries.forEach(entry => {
+    if (entry.isIntersecting) {
+      const pageNum = parseInt(entry.target.dataset.page, 10);
+      if (!loadedPages.has(pageNum)) {
+        loadPage(pageNum);  // Calls RenderPageRange for single page
+      }
+    }
+  });
+}, {
+  root: document.getElementById('viewport'),
+  rootMargin: '100px',  // Pre-load pages slightly before visible
+  threshold: 0.1
+});
+
+// Observe all page placeholders
+document.querySelectorAll('.page-placeholder').forEach(el => {
+  observer.observe(el);
+});
+```
+
+### Performance Benefits
+
+| Scenario | Full Render | Virtual Scroll |
+|----------|-------------|----------------|
+| 100-page document | Render all 100 pages | Render 2-3 visible pages |
+| Memory usage | High (all DOM nodes) | Low (only visible pages) |
+| Initial load time | Slow | Fast |
+| Scroll to page 50 | Instant (already rendered) | ~100ms (on-demand render) |
+
+### Test Coverage
+
+The implementation includes comprehensive Playwright tests with a 10-page test document (`RPR-TenPageTestDoc.docx`) that proves virtualization:
+
+```typescript
+// Load pages 1, 5, 10 - verify only those 3 pages have content
+test('VIRTUALIZED: 10-page document - scroll through and load pages on demand', async ({ page }) => {
+  // Initialize container
+  await initVirtualScroll(page, bytes, 500);
+
+  // Load only pages 1, 5, 10
+  await loadPage(1);
+  await loadPage(5);
+  await loadPage(10);
+
+  // Verify ONLY loaded pages have content
+  const bodyText = await page.locator('body').textContent();
+  expect(bodyText).toContain('===PAGE_1_START===');
+  expect(bodyText).toContain('===PAGE_5_START===');
+  expect(bodyText).toContain('===PAGE_10_START===');
+
+  // Verify UNLOADED pages do NOT have content
+  expect(bodyText).not.toContain('===PAGE_2_START===');
+  expect(bodyText).not.toContain('===PAGE_3_START===');
+  // ... pages 4, 6, 7, 8, 9 also verified absent
+});
+```
+
+### Limitations
+
+1. **Heuristic page boundaries**: Page-to-block mapping is approximate (~25 paragraphs/page)
+2. **No content-aware splitting**: Large tables or images may span page boundaries unexpectedly
+3. **Requires metadata call first**: Must call `GetDocumentMetadata()` before `RenderPageRange()`
+4. **Single-page granularity**: Minimum render unit is one "page" worth of blocks
+
 ## Future Enhancements
 
 1. **Block splitting**: Split oversized paragraphs/tables across pages
 2. **Line-level pagination**: Measure and flow individual lines for better control
 3. **Column support**: Handle multi-column sections
-4. **Virtual scrolling**: Only render visible pages for large documents
+4. ~~**Virtual scrolling**: Only render visible pages for large documents~~ ✅ Implemented
 5. **Server-side rendering**: Pre-compute pagination for static documents
 6. **Line-level footnote splitting**: Split within paragraphs for even better fit
+7. **Content-aware page boundaries**: Use actual content measurement for more accurate page mapping

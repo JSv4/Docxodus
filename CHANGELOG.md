@@ -38,6 +38,22 @@ All notable changes to this project will be documented in this file.
   - Security: Maximum document size limit of 100MB to prevent memory exhaustion
   - Graceful handling of malformed documents and invalid header/footer references
   - Known limitation: Section breaks inside tables or text boxes are not detected (see #51)
+- **Page Range Rendering for Virtual Scrolling** (Issue #31 Phase 4) - Render specific page ranges for lazy loading
+  - New `RenderPageRange()` method in `WmlToHtmlConverter` renders only specified pages
+  - Page-to-block mapping uses heuristic-based estimation (paragraphs and tables per page)
+  - HTML output includes pagination metadata via data attributes:
+    - `data-start-page`, `data-end-page`: Requested page range
+    - `data-total-pages`: Total estimated pages in document
+    - `data-start-block`, `data-end-block`: Block index range for rendered content
+    - `data-block-index`: Per-element block indices for tracking
+  - WASM exports: `DocumentConverter.RenderPageRange()`, `DocumentConverter.RenderPageRangeFull()`
+  - TypeScript wrapper: `renderPageRange()` with full options support
+  - Worker proxy support: `WorkerDocxodus.renderPageRange()` for non-blocking execution
+  - React components for virtual scrolling:
+    - `useVirtualPagination` hook: Manages viewport-aware page loading with IntersectionObserver
+    - `VirtualPaginatedDocument` component: Auto-renders visible pages plus configurable buffer
+  - All existing converter options supported (tracked changes, comments, headers/footers, etc.)
+  - Graceful handling of out-of-bounds page requests (internally clamped to valid range)
 - **Custom Annotations** - Full support for adding, removing, and rendering custom annotations on DOCX documents
   - `AnnotationManager` class for programmatic annotation CRUD operations:
     - `AddAnnotation()`: Add annotation by text search or paragraph range

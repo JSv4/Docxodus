@@ -371,6 +371,238 @@
                 } catch (e) {
                     return { error: { message: e.message } };
                 }
+            },
+
+            // Render a specific page range for lazy loading/virtual scrolling
+            renderPageRange: function(bytes, startPage, endPage, options = {}) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.RenderPageRange(
+                        bytes,
+                        startPage,
+                        endPage,
+                        options.pageTitle || 'Document',
+                        options.cssPrefix || 'docx-',
+                        options.fabricateClasses !== false,
+                        options.paginationScale || 1.0,
+                        options.paginationCssClassPrefix || 'page-',
+                        options.renderFootnotesAndEndnotes || false,
+                        options.renderHeadersAndFooters || false
+                    );
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { html: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            /**
+             * Virtual Scroll Container - implements true virtualization with on-demand page loading
+             *
+             * This creates a scrollable viewport that:
+             * 1. Initially loads only the first 2 pages
+             * 2. Shows placeholders for unloaded pages
+             * 3. Loads pages on-demand when placeholders scroll into view
+             * 4. Tracks which pages are loaded for verification
+             */
+            virtualScrollState: null,
+
+            createVirtualScrollContainer: async function(bytes, viewportHeight = 400) {
+                const self = this;
+
+                // Get document metadata first
+                const metadata = await this.getDocumentMetadata(bytes);
+                if (metadata.error) {
+                    return { error: metadata.error };
+                }
+
+                const totalPages = metadata.estimatedPageCount;
+                const pageHeight = 600; // Estimated page height in pixels
+
+                // Initialize state
+                this.virtualScrollState = {
+                    bytes: bytes,
+                    totalPages: totalPages,
+                    loadedPages: new Set(),
+                    loadEvents: [], // Track when pages are loaded
+                    viewportHeight: viewportHeight,
+                    pageHeight: pageHeight
+                };
+
+                // Create container HTML
+                const containerHtml = `
+                    <style>
+                        #virtual-scroll-viewport {
+                            height: ${viewportHeight}px;
+                            overflow-y: auto;
+                            border: 2px solid #333;
+                            position: relative;
+                        }
+                        #virtual-scroll-content {
+                            position: relative;
+                        }
+                        .page-placeholder {
+                            height: ${pageHeight}px;
+                            background: linear-gradient(135deg, #f0f0f0 25%, #e8e8e8 50%, #f0f0f0 75%);
+                            border-bottom: 1px dashed #ccc;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            font-family: sans-serif;
+                            color: #666;
+                        }
+                        .page-container {
+                            min-height: ${pageHeight}px;
+                            border-bottom: 1px solid #ddd;
+                        }
+                        .page-loaded {
+                            background: #fff;
+                        }
+                        .load-indicator {
+                            position: fixed;
+                            top: 10px;
+                            right: 10px;
+                            background: rgba(0,0,0,0.8);
+                            color: white;
+                            padding: 10px;
+                            border-radius: 5px;
+                            font-family: monospace;
+                            font-size: 12px;
+                            z-index: 1000;
+                        }
+                    </style>
+                    <div id="load-indicator" class="load-indicator">
+                        Pages loaded: <span id="pages-loaded-count">0</span>/${totalPages}
+                    </div>
+                    <div id="virtual-scroll-viewport">
+                        <div id="virtual-scroll-content">
+                            ${Array.from({length: totalPages}, (_, i) => `
+                                <div class="page-container" data-page="${i + 1}" id="page-container-${i + 1}">
+                                    <div class="page-placeholder" data-page="${i + 1}">
+                                        Loading Page ${i + 1}...
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `;
+
+                return {
+                    html: containerHtml,
+                    totalPages: totalPages,
+                    viewportHeight: viewportHeight,
+                    pageHeight: pageHeight
+                };
+            },
+
+            // Load a specific page into the virtual scroll container
+            loadPage: async function(pageNumber) {
+                const state = this.virtualScrollState;
+                if (!state || state.loadedPages.has(pageNumber)) {
+                    return { alreadyLoaded: true };
+                }
+
+                try {
+                    // Render just this one page
+                    const result = this.renderPageRange(state.bytes, pageNumber, pageNumber);
+                    if (result.error) {
+                        return { error: result.error };
+                    }
+
+                    // Extract just the body content (skip the full HTML wrapper)
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(result.html, 'text/html');
+                    const bodyContent = doc.body.innerHTML;
+
+                    // Find the page container and update it
+                    const container = document.getElementById(`page-container-${pageNumber}`);
+                    if (container) {
+                        container.innerHTML = bodyContent;
+                        container.classList.add('page-loaded');
+                    }
+
+                    // Track the load
+                    state.loadedPages.add(pageNumber);
+                    state.loadEvents.push({
+                        page: pageNumber,
+                        timestamp: Date.now()
+                    });
+
+                    // Update indicator
+                    const indicator = document.getElementById('pages-loaded-count');
+                    if (indicator) {
+                        indicator.textContent = state.loadedPages.size.toString();
+                    }
+
+                    return {
+                        loaded: true,
+                        page: pageNumber,
+                        loadedPages: Array.from(state.loadedPages).sort((a, b) => a - b)
+                    };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // Set up IntersectionObserver for lazy loading
+            setupLazyLoading: function() {
+                const self = this;
+                const state = this.virtualScrollState;
+                if (!state) return;
+
+                const observer = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting) {
+                            const pageNum = parseInt(entry.target.dataset.page, 10);
+                            if (!state.loadedPages.has(pageNum)) {
+                                self.loadPage(pageNum);
+                            }
+                        }
+                    });
+                }, {
+                    root: document.getElementById('virtual-scroll-viewport'),
+                    rootMargin: '100px', // Load pages slightly before they're visible
+                    threshold: 0.1
+                });
+
+                // Observe all page placeholders
+                document.querySelectorAll('.page-placeholder').forEach(placeholder => {
+                    observer.observe(placeholder);
+                });
+
+                return { observerSetup: true };
+            },
+
+            // Get current virtual scroll state
+            getVirtualScrollState: function() {
+                const state = this.virtualScrollState;
+                if (!state) return { error: { message: 'No virtual scroll state' } };
+
+                return {
+                    totalPages: state.totalPages,
+                    loadedPages: Array.from(state.loadedPages).sort((a, b) => a - b),
+                    loadEvents: state.loadEvents,
+                    unloadedPages: Array.from({length: state.totalPages}, (_, i) => i + 1)
+                        .filter(p => !state.loadedPages.has(p))
+                };
+            },
+
+            // Scroll to a specific page
+            scrollToPage: function(pageNumber) {
+                const state = this.virtualScrollState;
+                if (!state) return { error: { message: 'No virtual scroll state' } };
+
+                const viewport = document.getElementById('virtual-scroll-viewport');
+                if (!viewport) return { error: { message: 'Viewport not found' } };
+
+                const targetScroll = (pageNumber - 1) * state.pageHeight;
+                viewport.scrollTo({ top: targetScroll, behavior: 'instant' });
+
+                return {
+                    scrolledTo: pageNumber,
+                    scrollTop: targetScroll
+                };
             }
         };
 
