@@ -2853,4 +2853,308 @@ test.describe('Docxodus WASM Tests', () => {
       console.log('SUCCESS: Page 5 only - other pages excluded');
     });
   });
+
+  /**
+   * VIRTUAL SCROLLING TESTS
+   *
+   * These tests demonstrate true virtual scrolling/lazy loading with a 10-page document.
+   * We create a scrollable viewport and verify that:
+   * 1. Pages are loaded on-demand as the user scrolls
+   * 2. Only visible pages are rendered
+   * 3. Page content markers prove correct page rendering
+   */
+  test.describe('Virtual Scrolling with 10-Page Document (Issue #31)', () => {
+    /**
+     * CRITICAL TEST: Demonstrates true virtualized rendering with scrolling
+     *
+     * This test uses a 10-page document where each page has unique markers:
+     * ===PAGE_N_START=== and ===PAGE_N_END===
+     *
+     * We prove virtualization by:
+     * 1. Creating a scrollable container with fixed viewport height
+     * 2. Loading pages on-demand as we scroll
+     * 3. Verifying that ONLY loaded pages have their content present
+     * 4. Verifying that unloaded pages do NOT have their content present
+     */
+    test('VIRTUALIZED: 10-page document - scroll through and load pages on demand', async ({ page }) => {
+      const bytes = readTestFile('RPR-TenPageTestDoc.docx');
+
+      // Step 1: Initialize virtual scroll container
+      const containerResult = await page.evaluate(async (bytesArray) => {
+        const tests = (window as any).DocxodusTests;
+        return await tests.createVirtualScrollContainer(new Uint8Array(bytesArray), 500);
+      }, Array.from(bytes));
+
+      expect(containerResult.error).toBeUndefined();
+      expect(containerResult.totalPages).toBe(10);
+      console.log(`Created virtual scroll container for ${containerResult.totalPages} pages`);
+
+      // Step 2: Set up the page with the virtual scroll container
+      await page.setContent(`
+        <!DOCTYPE html>
+        <html>
+        <head><title>Virtual Scroll Test</title></head>
+        <body>${containerResult.html}</body>
+        </html>
+      `);
+      await page.waitForLoadState('domcontentloaded');
+
+      // Re-initialize WASM for the new page content
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      // Create virtual scroll container on the test harness page
+      const initResult = await page.evaluate(async (bytesArray) => {
+        const tests = (window as any).DocxodusTests;
+        const result = await tests.createVirtualScrollContainer(new Uint8Array(bytesArray), 500);
+        if (result.error) return result;
+
+        // Replace body with the container
+        document.body.innerHTML = result.html;
+        return result;
+      }, Array.from(bytes));
+
+      expect(initResult.error).toBeUndefined();
+      console.log('Virtual scroll container initialized');
+
+      // Step 3: Initially, NO pages are loaded
+      let state = await page.evaluate(() => {
+        return (window as any).DocxodusTests.getVirtualScrollState();
+      });
+      expect(state.loadedPages).toHaveLength(0);
+      console.log('Initial state: 0 pages loaded');
+
+      // Step 4: Load page 1 manually (simulating initial viewport load)
+      const loadPage1 = await page.evaluate(() => {
+        return (window as any).DocxodusTests.loadPage(1);
+      });
+      expect(loadPage1.loaded).toBe(true);
+
+      // Verify page 1 content is present
+      let bodyText = await page.locator('body').textContent();
+      expect(bodyText).toContain('===PAGE_1_START===');
+      expect(bodyText).toContain('===PAGE_1_END===');
+      console.log('Page 1 loaded - markers verified');
+
+      // Verify pages 2-10 are NOT loaded
+      expect(bodyText).not.toContain('===PAGE_2_START===');
+      expect(bodyText).not.toContain('===PAGE_5_START===');
+      expect(bodyText).not.toContain('===PAGE_10_START===');
+      console.log('Pages 2-10 confirmed NOT loaded');
+
+      // Step 5: Load page 5 (middle page)
+      const loadPage5 = await page.evaluate(() => {
+        return (window as any).DocxodusTests.loadPage(5);
+      });
+      expect(loadPage5.loaded).toBe(true);
+
+      // Verify page 5 content is now present
+      bodyText = await page.locator('body').textContent();
+      expect(bodyText).toContain('===PAGE_5_START===');
+      expect(bodyText).toContain('===PAGE_5_END===');
+      console.log('Page 5 loaded - markers verified');
+
+      // Pages 1 and 5 are loaded, others are not
+      expect(bodyText).toContain('===PAGE_1_START==='); // Still present
+      expect(bodyText).not.toContain('===PAGE_2_START===');
+      expect(bodyText).not.toContain('===PAGE_3_START===');
+      expect(bodyText).not.toContain('===PAGE_10_START===');
+
+      // Step 6: Load page 10 (last page)
+      const loadPage10 = await page.evaluate(() => {
+        return (window as any).DocxodusTests.loadPage(10);
+      });
+      expect(loadPage10.loaded).toBe(true);
+
+      bodyText = await page.locator('body').textContent();
+      expect(bodyText).toContain('===PAGE_10_START===');
+      expect(bodyText).toContain('===PAGE_10_END===');
+      console.log('Page 10 loaded - markers verified');
+
+      // Step 7: Verify final state
+      state = await page.evaluate(() => {
+        return (window as any).DocxodusTests.getVirtualScrollState();
+      });
+
+      // Exactly pages 1, 5, 10 should be loaded
+      expect(state.loadedPages).toEqual([1, 5, 10]);
+      expect(state.unloadedPages).toEqual([2, 3, 4, 6, 7, 8, 9]);
+      console.log(`Final state: Pages ${state.loadedPages.join(', ')} loaded`);
+      console.log(`Unloaded pages: ${state.unloadedPages.join(', ')}`);
+
+      // Verify load events were tracked
+      expect(state.loadEvents).toHaveLength(3);
+      expect(state.loadEvents[0].page).toBe(1);
+      expect(state.loadEvents[1].page).toBe(5);
+      expect(state.loadEvents[2].page).toBe(10);
+
+      console.log('SUCCESS: Virtualization proven - only 3 of 10 pages were loaded');
+    });
+
+    test('VIRTUALIZED: Sequential page loading simulates real scrolling', async ({ page }) => {
+      const bytes = readTestFile('RPR-TenPageTestDoc.docx');
+
+      // Initialize
+      await page.evaluate(async (bytesArray) => {
+        const tests = (window as any).DocxodusTests;
+        const result = await tests.createVirtualScrollContainer(new Uint8Array(bytesArray), 400);
+        document.body.innerHTML = result.html;
+        return result;
+      }, Array.from(bytes));
+
+      // Simulate scrolling through pages 1, 2, 3 sequentially
+      for (let pageNum = 1; pageNum <= 3; pageNum++) {
+        const loadResult = await page.evaluate((pn) => {
+          return (window as any).DocxodusTests.loadPage(pn);
+        }, pageNum);
+        expect(loadResult.loaded).toBe(true);
+        console.log(`Scrolled to and loaded page ${pageNum}`);
+      }
+
+      // Verify state
+      const state = await page.evaluate(() => {
+        return (window as any).DocxodusTests.getVirtualScrollState();
+      });
+
+      expect(state.loadedPages).toEqual([1, 2, 3]);
+      expect(state.unloadedPages).toContain(4);
+      expect(state.unloadedPages).toContain(10);
+
+      // Verify content
+      const bodyText = await page.locator('body').textContent();
+      expect(bodyText).toContain('===PAGE_1_START===');
+      expect(bodyText).toContain('===PAGE_2_START===');
+      expect(bodyText).toContain('===PAGE_3_START===');
+      expect(bodyText).not.toContain('===PAGE_4_START===');
+      expect(bodyText).not.toContain('===PAGE_10_START===');
+
+      console.log('SUCCESS: Sequential scroll loading verified');
+    });
+
+    test('VIRTUALIZED: Jump to last pages (simulates scroll to end)', async ({ page }) => {
+      const bytes = readTestFile('RPR-TenPageTestDoc.docx');
+
+      // Initialize
+      await page.evaluate(async (bytesArray) => {
+        const tests = (window as any).DocxodusTests;
+        const result = await tests.createVirtualScrollContainer(new Uint8Array(bytesArray), 400);
+        document.body.innerHTML = result.html;
+      }, Array.from(bytes));
+
+      // Jump directly to pages 9 and 10 (simulating scroll to end)
+      await page.evaluate(() => (window as any).DocxodusTests.loadPage(9));
+      await page.evaluate(() => (window as any).DocxodusTests.loadPage(10));
+
+      const state = await page.evaluate(() => {
+        return (window as any).DocxodusTests.getVirtualScrollState();
+      });
+
+      // Only pages 9 and 10 should be loaded
+      expect(state.loadedPages).toEqual([9, 10]);
+      expect(state.unloadedPages).toContain(1);
+      expect(state.unloadedPages).toContain(5);
+
+      // Verify content
+      const bodyText = await page.locator('body').textContent();
+      expect(bodyText).toContain('===PAGE_9_START===');
+      expect(bodyText).toContain('===PAGE_10_START===');
+      expect(bodyText).not.toContain('===PAGE_1_START===');
+      expect(bodyText).not.toContain('===PAGE_5_START===');
+
+      console.log('SUCCESS: Jump to end verified - only pages 9,10 loaded');
+    });
+
+    test('VIRTUALIZED: Load indicator shows correct count', async ({ page }) => {
+      const bytes = readTestFile('RPR-TenPageTestDoc.docx');
+
+      // Initialize
+      await page.evaluate(async (bytesArray) => {
+        const tests = (window as any).DocxodusTests;
+        const result = await tests.createVirtualScrollContainer(new Uint8Array(bytesArray), 400);
+        document.body.innerHTML = result.html;
+      }, Array.from(bytes));
+
+      // Initially 0 pages loaded
+      let indicator = await page.locator('#pages-loaded-count').textContent();
+      expect(indicator).toBe('0');
+
+      // Load 3 pages
+      await page.evaluate(() => (window as any).DocxodusTests.loadPage(1));
+      await page.evaluate(() => (window as any).DocxodusTests.loadPage(3));
+      await page.evaluate(() => (window as any).DocxodusTests.loadPage(7));
+
+      // Indicator should show 3
+      indicator = await page.locator('#pages-loaded-count').textContent();
+      expect(indicator).toBe('3');
+
+      console.log('SUCCESS: Load indicator correctly tracks loaded pages');
+    });
+
+    test('VIRTUALIZED: Prevents duplicate page loads', async ({ page }) => {
+      const bytes = readTestFile('RPR-TenPageTestDoc.docx');
+
+      // Initialize
+      await page.evaluate(async (bytesArray) => {
+        const tests = (window as any).DocxodusTests;
+        const result = await tests.createVirtualScrollContainer(new Uint8Array(bytesArray), 400);
+        document.body.innerHTML = result.html;
+      }, Array.from(bytes));
+
+      // Load page 1
+      const firstLoad = await page.evaluate(() => {
+        return (window as any).DocxodusTests.loadPage(1);
+      });
+      expect(firstLoad.loaded).toBe(true);
+
+      // Try to load page 1 again
+      const secondLoad = await page.evaluate(() => {
+        return (window as any).DocxodusTests.loadPage(1);
+      });
+      expect(secondLoad.alreadyLoaded).toBe(true);
+
+      // Should still only have 1 load event
+      const state = await page.evaluate(() => {
+        return (window as any).DocxodusTests.getVirtualScrollState();
+      });
+      expect(state.loadEvents).toHaveLength(1);
+
+      console.log('SUCCESS: Duplicate page load prevented');
+    });
+
+    test('VIRTUALIZED: Content verification - each page has unique content', async ({ page }) => {
+      const bytes = readTestFile('RPR-TenPageTestDoc.docx');
+
+      // Initialize
+      await page.evaluate(async (bytesArray) => {
+        const tests = (window as any).DocxodusTests;
+        const result = await tests.createVirtualScrollContainer(new Uint8Array(bytesArray), 400);
+        document.body.innerHTML = result.html;
+      }, Array.from(bytes));
+
+      // Load all 10 pages and verify each has its unique marker
+      for (let pageNum = 1; pageNum <= 10; pageNum++) {
+        await page.evaluate((pn) => {
+          return (window as any).DocxodusTests.loadPage(pn);
+        }, pageNum);
+      }
+
+      const bodyText = await page.locator('body').textContent();
+
+      // Every page should have its unique markers
+      for (let pageNum = 1; pageNum <= 10; pageNum++) {
+        expect(bodyText).toContain(`===PAGE_${pageNum}_START===`);
+        expect(bodyText).toContain(`===PAGE_${pageNum}_END===`);
+        expect(bodyText).toContain(`--- PAGE ${pageNum} OF 10 ---`);
+      }
+
+      const state = await page.evaluate(() => {
+        return (window as any).DocxodusTests.getVirtualScrollState();
+      });
+
+      expect(state.loadedPages).toHaveLength(10);
+      expect(state.unloadedPages).toHaveLength(0);
+
+      console.log('SUCCESS: All 10 pages loaded with unique content verified');
+    });
+  });
 });
