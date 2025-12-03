@@ -35,6 +35,23 @@ namespace DocxodusWasm;
 // Profiling types
 [JsonSerializable(typeof(ProfilingResponse))]
 [JsonSerializable(typeof(Dictionary<string, double>))]
+// OpenContracts export types
+[JsonSerializable(typeof(OpenContractExportResponse))]
+[JsonSerializable(typeof(PawlsPageDto))]
+[JsonSerializable(typeof(PawlsPageDto[]))]
+[JsonSerializable(typeof(PawlsPageBoundaryDto))]
+[JsonSerializable(typeof(PawlsTokenDto))]
+[JsonSerializable(typeof(PawlsTokenDto[]))]
+[JsonSerializable(typeof(OpenContractsAnnotationDto))]
+[JsonSerializable(typeof(OpenContractsAnnotationDto[]))]
+[JsonSerializable(typeof(OpenContractsRelationshipDto))]
+[JsonSerializable(typeof(OpenContractsRelationshipDto[]))]
+[JsonSerializable(typeof(TextSpanDto))]
+[JsonSerializable(typeof(BoundingBoxDto))]
+[JsonSerializable(typeof(TokenIdDto))]
+[JsonSerializable(typeof(TokenIdDto[]))]
+[JsonSerializable(typeof(OpenContractsSinglePageAnnotationDto))]
+[JsonSerializable(typeof(Dictionary<string, OpenContractsSinglePageAnnotationDto>))]
 internal partial class DocxodusJsonContext : JsonSerializerContext
 {
 }
@@ -660,3 +677,287 @@ public class ProfilingResponse
     public int TableCount { get; set; }
     public int ElementCount { get; set; }
 }
+
+#region OpenContracts Export Types
+
+/// <summary>
+/// Response containing the OpenContracts export format.
+/// </summary>
+public class OpenContractExportResponse
+{
+    /// <summary>
+    /// Document title.
+    /// </summary>
+    public string Title { get; set; } = "";
+
+    /// <summary>
+    /// Complete document text content.
+    /// </summary>
+    public string Content { get; set; } = "";
+
+    /// <summary>
+    /// Optional document description.
+    /// </summary>
+    public string? Description { get; set; }
+
+    /// <summary>
+    /// Estimated page count.
+    /// </summary>
+    public int PageCount { get; set; }
+
+    /// <summary>
+    /// PAWLS-format page layout information.
+    /// </summary>
+    public PawlsPageDto[] PawlsFileContent { get; set; } = Array.Empty<PawlsPageDto>();
+
+    /// <summary>
+    /// Document-level labels.
+    /// </summary>
+    public string[] DocLabels { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Annotations/labeled text spans.
+    /// </summary>
+    public OpenContractsAnnotationDto[] LabelledText { get; set; } = Array.Empty<OpenContractsAnnotationDto>();
+
+    /// <summary>
+    /// Relationships between annotations.
+    /// </summary>
+    public OpenContractsRelationshipDto[]? Relationships { get; set; }
+}
+
+/// <summary>
+/// PAWLS page with boundary and token information.
+/// </summary>
+public class PawlsPageDto
+{
+    /// <summary>
+    /// Page boundary information.
+    /// </summary>
+    public PawlsPageBoundaryDto Page { get; set; } = new();
+
+    /// <summary>
+    /// Tokens on this page.
+    /// </summary>
+    public PawlsTokenDto[] Tokens { get; set; } = Array.Empty<PawlsTokenDto>();
+}
+
+/// <summary>
+/// Page boundary information.
+/// </summary>
+public class PawlsPageBoundaryDto
+{
+    /// <summary>
+    /// Page width in points.
+    /// </summary>
+    public double Width { get; set; }
+
+    /// <summary>
+    /// Page height in points.
+    /// </summary>
+    public double Height { get; set; }
+
+    /// <summary>
+    /// Zero-based page index.
+    /// </summary>
+    public int Index { get; set; }
+}
+
+/// <summary>
+/// Token with position information.
+/// </summary>
+public class PawlsTokenDto
+{
+    /// <summary>
+    /// X coordinate (left edge) in points.
+    /// </summary>
+    public double X { get; set; }
+
+    /// <summary>
+    /// Y coordinate (top edge) in points.
+    /// </summary>
+    public double Y { get; set; }
+
+    /// <summary>
+    /// Token width in points.
+    /// </summary>
+    public double Width { get; set; }
+
+    /// <summary>
+    /// Token height in points.
+    /// </summary>
+    public double Height { get; set; }
+
+    /// <summary>
+    /// The text content of this token.
+    /// </summary>
+    public string Text { get; set; } = "";
+}
+
+/// <summary>
+/// OpenContracts annotation format.
+/// </summary>
+public class OpenContractsAnnotationDto
+{
+    /// <summary>
+    /// Unique annotation identifier.
+    /// </summary>
+    public string? Id { get; set; }
+
+    /// <summary>
+    /// Label/category for this annotation.
+    /// </summary>
+    public string AnnotationLabel { get; set; } = "";
+
+    /// <summary>
+    /// The raw text content of the annotation.
+    /// </summary>
+    public string RawText { get; set; } = "";
+
+    /// <summary>
+    /// Starting page number (0-indexed).
+    /// </summary>
+    public int Page { get; set; }
+
+    /// <summary>
+    /// Position data for the annotation (TextSpanDto or page-indexed dictionary).
+    /// </summary>
+    public object? AnnotationJson { get; set; }
+
+    /// <summary>
+    /// Parent annotation ID for hierarchical annotations.
+    /// </summary>
+    public string? ParentId { get; set; }
+
+    /// <summary>
+    /// Type of annotation (e.g., "text", "structural").
+    /// </summary>
+    public string? AnnotationType { get; set; }
+
+    /// <summary>
+    /// Whether this is a structural element.
+    /// </summary>
+    public bool Structural { get; set; }
+}
+
+/// <summary>
+/// Text span with character offsets.
+/// </summary>
+public class TextSpanDto
+{
+    /// <summary>
+    /// Optional span identifier.
+    /// </summary>
+    public string? Id { get; set; }
+
+    /// <summary>
+    /// Start character offset (0-indexed).
+    /// </summary>
+    public int Start { get; set; }
+
+    /// <summary>
+    /// End character offset (exclusive).
+    /// </summary>
+    public int End { get; set; }
+
+    /// <summary>
+    /// The text content of this span.
+    /// </summary>
+    public string Text { get; set; } = "";
+}
+
+/// <summary>
+/// Per-page annotation position data.
+/// </summary>
+public class OpenContractsSinglePageAnnotationDto
+{
+    /// <summary>
+    /// Bounding box for the annotation on this page.
+    /// </summary>
+    public BoundingBoxDto Bounds { get; set; } = new();
+
+    /// <summary>
+    /// Token indices that make up this annotation on this page.
+    /// </summary>
+    public TokenIdDto[] TokensJsons { get; set; } = Array.Empty<TokenIdDto>();
+
+    /// <summary>
+    /// Raw text content on this page.
+    /// </summary>
+    public string RawText { get; set; } = "";
+}
+
+/// <summary>
+/// Bounding box coordinates.
+/// </summary>
+public class BoundingBoxDto
+{
+    /// <summary>
+    /// Top edge coordinate.
+    /// </summary>
+    public double Top { get; set; }
+
+    /// <summary>
+    /// Bottom edge coordinate.
+    /// </summary>
+    public double Bottom { get; set; }
+
+    /// <summary>
+    /// Left edge coordinate.
+    /// </summary>
+    public double Left { get; set; }
+
+    /// <summary>
+    /// Right edge coordinate.
+    /// </summary>
+    public double Right { get; set; }
+}
+
+/// <summary>
+/// Token identifier.
+/// </summary>
+public class TokenIdDto
+{
+    /// <summary>
+    /// Zero-based page index.
+    /// </summary>
+    public int PageIndex { get; set; }
+
+    /// <summary>
+    /// Zero-based token index within the page.
+    /// </summary>
+    public int TokenIndex { get; set; }
+}
+
+/// <summary>
+/// Relationship between annotations.
+/// </summary>
+public class OpenContractsRelationshipDto
+{
+    /// <summary>
+    /// Unique relationship identifier.
+    /// </summary>
+    public string? Id { get; set; }
+
+    /// <summary>
+    /// Label describing the relationship type.
+    /// </summary>
+    public string RelationshipLabel { get; set; } = "";
+
+    /// <summary>
+    /// IDs of source annotations.
+    /// </summary>
+    public string[] SourceAnnotationIds { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// IDs of target annotations.
+    /// </summary>
+    public string[] TargetAnnotationIds { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Whether this is a structural relationship.
+    /// </summary>
+    public bool Structural { get; set; }
+}
+
+#endregion

@@ -10,6 +10,34 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
+- **OpenContracts Export Format** (Issue #56) - Export documents to OpenContracts format for interoperability
+  - New `OpenContractExporter.Export()` method for complete document export:
+    - `title`: Document title from core properties
+    - `content`: Complete document text (paragraphs, tables, headers, footers, footnotes, endnotes)
+    - `description`: Optional document description
+    - `pageCount`: Estimated page count
+    - `pawlsFileContent`: PAWLS-format page layout with token positions
+    - `docLabels`: Document-level labels
+    - `labelledText`: Annotations including structural elements (sections, paragraphs, tables)
+    - `relationships`: Parent-child relationships between annotations
+  - Full text extraction ensures 100% text coverage:
+    - Main body paragraphs and tables
+    - Nested tables
+    - Headers and footers
+    - Footnotes and endnotes
+    - Content controls (structured document tags)
+  - PAWLS (Page-Aware Layout Segmentation) format for layout data:
+    - Page boundary information (width, height, index)
+    - Token positions (x, y, width, height, text)
+    - Supports annotation targeting by character offset
+  - Structural annotations automatically generated:
+    - Section annotations with page dimensions
+    - Paragraph annotations with text spans
+    - Table annotations with content ranges
+    - Parent-child relationships (section contains paragraphs)
+  - TypeScript API: `exportToOpenContract()` function with full type definitions
+  - WASM export: `DocumentConverter.ExportToOpenContract()`
+  - Compatible with OpenContracts ecosystem for document analysis
 - **ReadyToRun and AOT Compilation** - Performance optimizations to reduce cold-start times
   - .NET library: Added `PublishReadyToRun` for pre-compiled native code during publish
   - WASM: Added `RunAOTCompilation` for Release builds to pre-compile IL to WebAssembly

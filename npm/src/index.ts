@@ -20,6 +20,17 @@ import type {
   AddAnnotationWithTargetRequest,
   DocumentMetadata,
   SectionMetadata,
+  // OpenContracts export types
+  OpenContractDocExport,
+  PawlsPage,
+  PawlsPageBoundary,
+  PawlsToken,
+  OpenContractsAnnotation,
+  OpenContractsSinglePageAnnotation,
+  BoundingBox,
+  TokenId,
+  TextSpan,
+  OpenContractsRelationship,
 } from "./types.js";
 
 import {
@@ -85,6 +96,17 @@ export type {
   // Document metadata (useful for info)
   DocumentMetadata,
   SectionMetadata,
+  // OpenContracts export types
+  OpenContractDocExport,
+  PawlsPage,
+  PawlsPageBoundary,
+  PawlsToken,
+  OpenContractsAnnotation,
+  OpenContractsSinglePageAnnotation,
+  BoundingBox,
+  TokenId,
+  TextSpan,
+  OpenContractsRelationship,
 };
 
 export {
@@ -977,6 +999,132 @@ export async function getDocumentMetadata(
     hasTrackedChanges: parsed.HasTrackedChanges ?? parsed.hasTrackedChanges,
     hasComments: parsed.HasComments ?? parsed.hasComments,
     estimatedPageCount: parsed.EstimatedPageCount ?? parsed.estimatedPageCount,
+  };
+}
+
+/**
+ * Export document to OpenContracts format.
+ *
+ * This provides complete document text, structure, and layout information
+ * compatible with the OpenContracts ecosystem for document analysis.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @returns OpenContractDocExport with complete document data
+ * @throws Error if export fails
+ *
+ * @example
+ * ```typescript
+ * const result = await exportToOpenContract(docxFile);
+ *
+ * // Access complete document text
+ * console.log(`Content length: ${result.content.length} characters`);
+ *
+ * // Get document structure
+ * console.log(`Pages: ${result.pageCount}`);
+ * console.log(`Structural annotations: ${result.labelledText.filter(a => a.structural).length}`);
+ *
+ * // Access PAWLS layout data
+ * for (const page of result.pawlsFileContent) {
+ *   console.log(`Page ${page.page.index}: ${page.tokens.length} tokens`);
+ * }
+ * ```
+ */
+export async function exportToOpenContract(
+  document: File | Uint8Array
+): Promise<OpenContractDocExport> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  // Yield to browser before WASM work - allows loading states to render
+  await yieldToMain();
+
+  const result = exports.DocumentConverter.ExportToOpenContract(bytes);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to export to OpenContract format: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+
+  // Convert from PascalCase to camelCase
+  const convertPawlsPage = (p: any): PawlsPage => ({
+    page: {
+      width: p.Page?.Width ?? p.page?.width,
+      height: p.Page?.Height ?? p.page?.height,
+      index: p.Page?.Index ?? p.page?.index,
+    },
+    tokens: (p.Tokens || p.tokens || []).map((t: any) => ({
+      x: t.X ?? t.x,
+      y: t.Y ?? t.y,
+      width: t.Width ?? t.width,
+      height: t.Height ?? t.height,
+      text: t.Text ?? t.text,
+    })),
+  });
+
+  const convertAnnotation = (a: any): OpenContractsAnnotation => ({
+    id: a.Id ?? a.id,
+    annotationLabel: a.AnnotationLabel ?? a.annotationLabel,
+    rawText: a.RawText ?? a.rawText,
+    page: a.Page ?? a.page,
+    annotationJson: convertAnnotationJson(a.AnnotationJson ?? a.annotationJson),
+    parentId: a.ParentId ?? a.parentId,
+    annotationType: a.AnnotationType ?? a.annotationType,
+    structural: a.Structural ?? a.structural,
+  });
+
+  const convertAnnotationJson = (json: any): TextSpan | Record<string, OpenContractsSinglePageAnnotation> | undefined => {
+    if (!json) return undefined;
+
+    // Check if it's a TextSpan
+    if (json.Start !== undefined || json.start !== undefined) {
+      return {
+        id: json.Id ?? json.id,
+        start: json.Start ?? json.start,
+        end: json.End ?? json.end,
+        text: json.Text ?? json.text,
+      };
+    }
+
+    // Otherwise it's a dictionary of single-page annotations
+    const result: Record<string, OpenContractsSinglePageAnnotation> = {};
+    for (const [key, value] of Object.entries(json)) {
+      const v = value as any;
+      result[key] = {
+        bounds: {
+          top: v.Bounds?.Top ?? v.bounds?.top,
+          bottom: v.Bounds?.Bottom ?? v.bounds?.bottom,
+          left: v.Bounds?.Left ?? v.bounds?.left,
+          right: v.Bounds?.Right ?? v.bounds?.right,
+        },
+        tokensJsons: (v.TokensJsons || v.tokensJsons || []).map((t: any) => ({
+          pageIndex: t.PageIndex ?? t.pageIndex,
+          tokenIndex: t.TokenIndex ?? t.tokenIndex,
+        })),
+        rawText: v.RawText ?? v.rawText,
+      };
+    }
+    return result;
+  };
+
+  const convertRelationship = (r: any): OpenContractsRelationship => ({
+    id: r.Id ?? r.id,
+    relationshipLabel: r.RelationshipLabel ?? r.relationshipLabel,
+    sourceAnnotationIds: r.SourceAnnotationIds ?? r.sourceAnnotationIds ?? [],
+    targetAnnotationIds: r.TargetAnnotationIds ?? r.targetAnnotationIds ?? [],
+    structural: r.Structural ?? r.structural,
+  });
+
+  return {
+    title: parsed.Title ?? parsed.title,
+    content: parsed.Content ?? parsed.content,
+    description: parsed.Description ?? parsed.description,
+    pageCount: parsed.PageCount ?? parsed.pageCount,
+    pawlsFileContent: (parsed.PawlsFileContent || parsed.pawlsFileContent || []).map(convertPawlsPage),
+    docLabels: parsed.DocLabels ?? parsed.docLabels ?? [],
+    labelledText: (parsed.LabelledText || parsed.labelledText || []).map(convertAnnotation),
+    relationships: (parsed.Relationships || parsed.relationships)?.map(convertRelationship),
   };
 }
 
