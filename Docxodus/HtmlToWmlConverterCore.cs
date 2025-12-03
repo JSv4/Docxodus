@@ -98,7 +98,9 @@
 
 using System;
 using System.Collections.Generic;
+#if !WASM_BUILD
 using SkiaSharp;
+#endif
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -1141,10 +1143,10 @@ namespace Docxodus.HtmlToWml
                (string)r.Ancestors(W.p).First().Attribute(PtOpenXml.FontName);
             if (fontName == null)
                 throw new DocxodusException("Internal Error, should have FontName attribute");
-            if (UnknownFonts.Contains(fontName))
+            if (FontFamilyHelper.IsMarkedUnknown(fontName))
                 return 0;
 
-            if (UnknownFonts.Contains(fontName))
+            if (FontFamilyHelper.IsMarkedUnknown(fontName))
                 return null;
 
             var rPr = r.Element(W.rPr);
@@ -1858,23 +1860,7 @@ namespace Docxodus.HtmlToWml
             return FontType.HAnsi;
         }
 
-        private static readonly HashSet<string> UnknownFonts = new HashSet<string>();
-        private static HashSet<string> _knownFamilies;
-
-        private static HashSet<string> KnownFamilies
-        {
-            get
-            {
-                if (_knownFamilies == null)
-                {
-                    _knownFamilies = new HashSet<string>();
-                    var families = SKFontManager.Default.FontFamilies;
-                    foreach (var fam in families)
-                        _knownFamilies.Add(fam);
-                }
-                return _knownFamilies;
-            }
-        }
+        private static HashSet<string> KnownFamilies => FontFamilyHelper.KnownFamilies;
 
         private static HashSet<char> WeakAndNeutralDirectionalCharacters = new HashSet<char>() {
             '0',
@@ -2262,7 +2248,8 @@ namespace Docxodus.HtmlToWml
         {
             string srcAttribute = (string)element.Attribute(XhtmlNoNamespace.src);
             byte[] ba = null;
-            SKBitmap bmp = null;
+            int imageWidth = 0;
+            int imageHeight = 0;
 
             if (srcAttribute.StartsWith("data:"))
             {
@@ -2270,7 +2257,6 @@ namespace Docxodus.HtmlToWml
                 var commaIndex = srcAttribute.IndexOf(',', semiIndex);
                 var base64 = srcAttribute.Substring(commaIndex + 1);
                 ba = Convert.FromBase64String(base64);
-                bmp = SKBitmap.Decode(ba);
             }
             else
             {
@@ -2278,7 +2264,6 @@ namespace Docxodus.HtmlToWml
                 {
                     var imagePath = settings.BaseUriForImages + "/" + srcAttribute;
                     ba = File.ReadAllBytes(imagePath);
-                    bmp = SKBitmap.Decode(ba);
                 }
                 catch (ArgumentException)
                 {
@@ -2293,6 +2278,36 @@ namespace Docxodus.HtmlToWml
                     return null;
                 }
             }
+
+            // Get image dimensions
+#if WASM_BUILD
+            var dims = ImageHeaderParser.GetDimensions(ba);
+            if (dims.HasValue)
+            {
+                imageWidth = dims.Value.Width;
+                imageHeight = dims.Value.Height;
+            }
+            else
+            {
+                // Fallback to default size if header parsing fails
+                imageWidth = 100;
+                imageHeight = 100;
+            }
+#else
+            using (var bmp = SKBitmap.Decode(ba))
+            {
+                if (bmp != null)
+                {
+                    imageWidth = bmp.Width;
+                    imageHeight = bmp.Height;
+                }
+                else
+                {
+                    imageWidth = 100;
+                    imageHeight = 100;
+                }
+            }
+#endif
 
             MainDocumentPart mdp = wDoc.MainDocumentPart;
             string rId = "R" + Guid.NewGuid().ToString().Replace("-", "");
@@ -2321,7 +2336,7 @@ namespace Docxodus.HtmlToWml
                 XElement run = new XElement(W.r,
                     GetRunPropertiesForImage(),
                     new XElement(W.drawing,
-                        GetImageAsInline(element, settings, wDoc, bmp, rId, pictureId, pictureDescription)));
+                        GetImageAsInline(element, settings, wDoc, imageWidth, imageHeight, rId, pictureId, pictureDescription)));
                 return run;
             }
             if (floatValue == "left" || floatValue == "right")
@@ -2329,13 +2344,13 @@ namespace Docxodus.HtmlToWml
                 XElement run = new XElement(W.r,
                     GetRunPropertiesForImage(),
                     new XElement(W.drawing,
-                        GetImageAsAnchor(element, settings, wDoc, bmp, rId, floatValue, pictureId, pictureDescription)));
+                        GetImageAsAnchor(element, settings, wDoc, imageWidth, imageHeight, rId, floatValue, pictureId, pictureDescription)));
                 return run;
             }
             return null;
         }
 
-        private static XElement GetImageAsInline(XElement element, HtmlToWmlConverterSettings settings, WordprocessingDocument wDoc, SKBitmap bmp,
+        private static XElement GetImageAsInline(XElement element, HtmlToWmlConverterSettings settings, WordprocessingDocument wDoc, int imageWidth, int imageHeight,
             string rId, int pictureId, string pictureDescription)
         {
             XElement inline = new XElement(WP.inline, // 20.4.2.8
@@ -2344,15 +2359,15 @@ namespace Docxodus.HtmlToWml
                 new XAttribute(NoNamespace.distB, 0),  // bottom
                 new XAttribute(NoNamespace.distL, 0),  // left
                 new XAttribute(NoNamespace.distR, 0),  // right
-                GetImageExtent(element, bmp),
+                GetImageExtent(element, imageWidth, imageHeight),
                 GetEffectExtent(),
                 GetDocPr(element, pictureId, pictureDescription),
                 GetCNvGraphicFramePr(),
-                GetGraphicForImage(element, rId, bmp, pictureId, pictureDescription));
+                GetGraphicForImage(element, rId, imageWidth, imageHeight, pictureId, pictureDescription));
             return inline;
         }
 
-        private static XElement GetImageAsAnchor(XElement element, HtmlToWmlConverterSettings settings, WordprocessingDocument wDoc, SKBitmap bmp,
+        private static XElement GetImageAsAnchor(XElement element, HtmlToWmlConverterSettings settings, WordprocessingDocument wDoc, int imageWidth, int imageHeight,
             string rId, string floatValue, int pictureId, string pictureDescription)
         {
             Emu minDistFromEdge = (long)(0.125 * Emu.s_EmusPerInch);
@@ -2392,7 +2407,7 @@ namespace Docxodus.HtmlToWml
             else if (floatValue == "right")
             {
                 Emu printWidth = (long)settings.PageWidthEmus - (long)settings.PageMarginLeftEmus - (long)settings.PageMarginRightEmus;
-                SizeEmu sl = GetImageSizeInEmus(element, bmp);
+                SizeEmu sl = GetImageSizeInEmus(element, imageWidth, imageHeight);
                 relativeFromColumn = printWidth - sl.m_Width;
                 if (marginRightProp.IsNotAuto)
                     relativeFromColumn -= (long)(Emu)marginRightInEmus;
@@ -2424,12 +2439,12 @@ namespace Docxodus.HtmlToWml
                     new XElement(WP.posOffset, (long)relativeFromColumn)),
                 new XElement(WP.positionV, new XAttribute(NoNamespace.relativeFrom, "paragraph"),
                     new XElement(WP.posOffset, (long)relativeFromParagraph)),
-                GetImageExtent(element, bmp),
+                GetImageExtent(element, imageWidth, imageHeight),
                 GetEffectExtent(),
                 new XElement(WP.wrapSquare, new XAttribute(NoNamespace.wrapText, "bothSides")),
                 GetDocPr(element, pictureId, pictureDescription),
                 GetCNvGraphicFramePr(),
-                GetGraphicForImage(element, rId, bmp, pictureId, pictureDescription),
+                GetGraphicForImage(element, rId, imageWidth, imageHeight, pictureId, pictureDescription),
                 new XElement(WP14.sizeRelH, new XAttribute(NoNamespace.relativeFrom, "page"),
                     new XElement(WP14.pctWidth, 0)),
                 new XElement(WP14.sizeRelV, new XAttribute(NoNamespace.relativeFrom, "page"),
@@ -2533,14 +2548,14 @@ namespace Docxodus.HtmlToWml
                 new XElement(W.noProof));
         }
 
-        private static SizeEmu GetImageSizeInEmus(XElement img, SKBitmap bmp)
+        private static SizeEmu GetImageSizeInEmus(XElement img, int imageWidth, int imageHeight)
         {
-            // SKBitmap doesn't provide DPI info, assume 96 DPI (standard screen resolution)
+            // Assume 96 DPI (standard screen resolution)
             const double defaultDpi = 96.0;
             double hres = defaultDpi;
             double vres = defaultDpi;
-            Emu cx = (long)((double)(bmp.Width / hres) * (double)Emu.s_EmusPerInch);
-            Emu cy = (long)((double)(bmp.Height / vres) * (double)Emu.s_EmusPerInch);
+            Emu cx = (long)((double)(imageWidth / hres) * (double)Emu.s_EmusPerInch);
+            Emu cy = (long)((double)(imageHeight / vres) * (double)Emu.s_EmusPerInch);
 
             CssExpression width = img.GetProp("width");
             CssExpression height = img.GetProp("height");
@@ -2567,9 +2582,9 @@ namespace Docxodus.HtmlToWml
             return new SizeEmu(cx, cy);
         }
 
-        private static XElement GetImageExtent(XElement img, SKBitmap bmp)
+        private static XElement GetImageExtent(XElement img, int imageWidth, int imageHeight)
         {
-            SizeEmu szEmu = GetImageSizeInEmus(img, bmp);
+            SizeEmu szEmu = GetImageSizeInEmus(img, imageWidth, imageHeight);
             return new XElement(WP.extent,
                 new XAttribute(NoNamespace.cx, (long)szEmu.m_Width),   // in EMUs
                 new XAttribute(NoNamespace.cy, (long)szEmu.m_Height)); // in EMUs
@@ -2600,9 +2615,9 @@ namespace Docxodus.HtmlToWml
                     new XAttribute(NoNamespace.noChangeAspect, 1)));
         }
 
-        private static XElement GetGraphicForImage(XElement element, string rId, SKBitmap bmp, int pictureId, string pictureDescription)
+        private static XElement GetGraphicForImage(XElement element, string rId, int imageWidth, int imageHeight, int pictureId, string pictureDescription)
         {
-            SizeEmu szEmu = GetImageSizeInEmus(element, bmp);
+            SizeEmu szEmu = GetImageSizeInEmus(element, imageWidth, imageHeight);
             XElement graphic = new XElement(A.graphic,
                 new XAttribute(XNamespace.Xmlns + "a", A.a.NamespaceName),
                 new XElement(A.graphicData,

@@ -3,7 +3,9 @@
 
 using System;
 using System.Collections.Generic;
+#if !WASM_BUILD
 using SkiaSharp;
+#endif
 using System.IO;
 using System.Linq;
 using System.Xml;
@@ -373,6 +375,23 @@ AAsACwDBAgAAbCwAAAAA";
                                 localDirInfo.Create();
                             ++imageCounter;
                             string extension = imageInfo.ContentType?.Split('/')[1].ToLower() ?? "png";
+#if WASM_BUILD
+                            // In WASM builds, save raw bytes with appropriate extension
+                            // Handle format conversions
+                            if (extension == "tiff" || extension == "x-wmf")
+                                extension = "png";
+
+                            string imageFileName = imageDirectoryName + "/image" +
+                                imageCounter.ToString() + "." + extension;
+                            try
+                            {
+                                File.WriteAllBytes(imageFileName, imageInfo.ImageBytes);
+                            }
+                            catch (Exception)
+                            {
+                                return null;
+                            }
+#else
                             SKEncodedImageFormat? imageFormat = null;
                             if (extension == "png")
                             {
@@ -418,6 +437,7 @@ AAsACwDBAgAAbCwAAAAA";
                             {
                                 return null;
                             }
+#endif
                             XElement img = new XElement(Xhtml.img,
                                 new XAttribute(NoNamespace.src, imageFileName),
                                 imageInfo.ImgStyleAttribute,

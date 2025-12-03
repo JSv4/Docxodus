@@ -14,7 +14,6 @@ using System.IO.Packaging;
 using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
-using SkiaSharp;
 using System.Security.Cryptography;
 using Docxodus;
 
@@ -106,7 +105,7 @@ namespace Docxodus
     {
         public WmlDocument RevisedDocument;
         public string Revisor;
-        public SKColor Color;
+        public DocxColor Color;
     }
 
     public static class WmlComparer
@@ -597,7 +596,7 @@ namespace Docxodus
         private class ConsolidationInfo
         {
             public string Revisor;
-            public SKColor Color;
+            public DocxColor Color;
             public XElement RevisionElement;
             public bool InsertBefore = false;
             public string RevisionHash;

@@ -10,7 +10,6 @@ using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using System.IO;
-using SkiaSharp;
 
 namespace Docxodus
 {
@@ -226,23 +225,7 @@ namespace Docxodus
             return null;
         }
 
-        private static readonly HashSet<string> UnknownFonts = new HashSet<string>();
-        private static HashSet<string> _knownFamilies;
-
-        private static HashSet<string> KnownFamilies
-        {
-            get
-            {
-                if (_knownFamilies == null)
-                {
-                    _knownFamilies = new HashSet<string>();
-                    var families = SKFontManager.Default.FontFamilies;
-                    foreach (var fam in families)
-                        _knownFamilies.Add(fam);
-                }
-                return _knownFamilies;
-            }
-        }
+        private static HashSet<string> KnownFamilies => FontFamilyHelper.KnownFamilies;
 
         private static readonly Dictionary<string, string> FontFallback = new Dictionary<string, string>()
         {

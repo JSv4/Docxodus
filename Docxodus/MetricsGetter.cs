@@ -3,7 +3,9 @@
 
 using System;
 using System.Collections.Generic;
+#if !WASM_BUILD
 using SkiaSharp;
+#endif
 using System.IO;
 using System.IO.Packaging;
 using System.Linq;
@@ -25,10 +27,12 @@ namespace Docxodus
 
     public class MetricsGetter
     {
+#if !WASM_BUILD
         private static readonly Lazy<SKPaint> MeasurePaint = new Lazy<SKPaint>(() => new SKPaint
         {
             IsAntialias = true,
         });
+#endif
 
         public static XElement GetMetrics(string fileName, MetricsGetterSettings settings)
         {
@@ -109,6 +113,15 @@ namespace Docxodus
 
         private static int _getTextWidth(string fontName, bool bold, bool italic, decimal sz, string text)
         {
+#if WASM_BUILD
+            // In WASM builds, return an estimate based on character count and font size
+            // This is a rough approximation since we don't have SkiaSharp for text measurement
+            if (string.IsNullOrEmpty(text))
+                return 0;
+            // Approximate character width: ~0.6 of the font size for most fonts
+            float charWidth = (float)sz * 0.6f / 2f;
+            return (int)(text.Length * charWidth);
+#else
             try
             {
                 var weight = bold ? SKFontStyleWeight.Bold : SKFontStyleWeight.Normal;
@@ -125,6 +138,7 @@ namespace Docxodus
             {
                 return 0;
             }
+#endif
         }
 
         public static int GetTextWidth(string fontName, bool bold, bool italic, decimal sz, string text)
