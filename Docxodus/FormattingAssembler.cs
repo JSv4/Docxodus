@@ -50,27 +50,33 @@ namespace Docxodus
         {
             FormattingAssemblerInfo fai = new FormattingAssemblerInfo();
             XDocument sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
-            XElement defaultParagraphStyle = sXDoc
-                .Root
-                .Elements(W.style)
-                .FirstOrDefault(st => st.Attribute(W._default).ToBoolean() == true &&
-                    (string)st.Attribute(W.type) == "paragraph");
-            if (defaultParagraphStyle != null)
-                fai.DefaultParagraphStyleName = (string)defaultParagraphStyle.Attribute(W.styleId);
-            XElement defaultCharacterStyle = sXDoc
-                .Root
-                .Elements(W.style)
-                .FirstOrDefault(st => st.Attribute(W._default).ToBoolean() == true &&
-                    (string)st.Attribute(W.type) == "character");
-            if (defaultCharacterStyle != null)
-                fai.DefaultCharacterStyleName = (string)defaultCharacterStyle.Attribute(W.styleId);
-            XElement defaultTableStyle = sXDoc
-                .Root
-                .Elements(W.style)
-                .FirstOrDefault(st => st.Attribute(W._default).ToBoolean() == true &&
-                    (string)st.Attribute(W.type) == "table");
-            if (defaultTableStyle != null)
-                fai.DefaultTableStyleName = (string)defaultTableStyle.Attribute(W.styleId);
+
+            // Optimization #1: Build style indexes once for O(1) lookups throughout processing
+            IndexStylesDocument(sXDoc, fai);
+
+            // Find default styles using the indexed data (single pass through styles)
+            foreach (var style in sXDoc.Root.Elements(W.style))
+            {
+                if (style.Attribute(W._default).ToBoolean() != true)
+                    continue;
+
+                var styleType = (string)style.Attribute(W.type);
+                var styleId = (string)style.Attribute(W.styleId);
+
+                switch (styleType)
+                {
+                    case "paragraph":
+                        fai.DefaultParagraphStyleName = styleId;
+                        break;
+                    case "character":
+                        fai.DefaultCharacterStyleName = styleId;
+                        break;
+                    case "table":
+                        fai.DefaultTableStyleName = styleId;
+                        break;
+                }
+            }
+
             ListItemRetrieverSettings listItemRetrieverSettings = new ListItemRetrieverSettings();
             AssembleListItemInformation(wDoc, settings.ListItemRetrieverSettings);
             foreach (var part in wDoc.ContentParts())
@@ -93,6 +99,39 @@ namespace Docxodus
                 var newRoot = (XElement)CleanupTransform(pxd.Root);
                 pxd.Root.ReplaceWith(newRoot);
                 part.PutXDocument();
+            }
+        }
+
+        /// <summary>
+        /// Optimization #1: Build style indexes for O(1) lookups instead of O(n) linear searches.
+        /// This is called once per document and dramatically speeds up style resolution.
+        /// </summary>
+        private static void IndexStylesDocument(XDocument stylesXDoc, FormattingAssemblerInfo fai)
+        {
+            if (stylesXDoc?.Root == null)
+                return;
+
+            foreach (var style in stylesXDoc.Root.Elements(W.style))
+            {
+                var styleId = (string)style.Attribute(W.styleId);
+                if (string.IsNullOrEmpty(styleId))
+                    continue;
+
+                var styleType = (string)style.Attribute(W.type);
+
+                // Index by type for type-specific lookups
+                switch (styleType)
+                {
+                    case "paragraph":
+                        fai.ParagraphStyleIndex[styleId] = style;
+                        break;
+                    case "character":
+                        fai.CharacterStyleIndex[styleId] = style;
+                        break;
+                }
+
+                // Also add to the general index for fallback lookups
+                fai.AllStylesIndex[styleId] = style;
             }
         }
 
@@ -2166,7 +2205,7 @@ namespace Docxodus
 
             ListItemRetriever.ListItemInfo lif = para.Annotation<ListItemRetriever.ListItemInfo>();
 
-            XElement rolledParaProps = ParagraphStyleRollup(para, sXDoc, fai.DefaultParagraphStyleName);
+            XElement rolledParaProps = ParagraphStyleRollupInternal(para, sXDoc, fai.DefaultParagraphStyleName, fai);
             if (lif != null && lif.IsZeroNumId)
                 rolledParaProps.Elements(W.ind).Remove();
             XElement toggledParaProps = MergeStyleElement(rolledParaProps, tablepPr);
@@ -2275,7 +2314,21 @@ namespace Docxodus
             "none",
         };
 
+        /// <summary>
+        /// Rolls up paragraph style properties from the style hierarchy.
+        /// Public overload for external callers (e.g., ListItemRetriever).
+        /// </summary>
         public static XElement ParagraphStyleRollup(XElement paragraph, XDocument stylesXDoc, string defaultParagraphStyleName)
+        {
+            return ParagraphStyleRollupInternal(paragraph, stylesXDoc, defaultParagraphStyleName, null);
+        }
+
+        /// <summary>
+        /// Rolls up paragraph style properties from the style hierarchy.
+        /// Optimization #2: Caches results for non-list-item paragraphs by style name.
+        /// Internal version with FormattingAssemblerInfo for caching support.
+        /// </summary>
+        private static XElement ParagraphStyleRollupInternal(XElement paragraph, XDocument stylesXDoc, string defaultParagraphStyleName, FormattingAssemblerInfo fai)
         {
             var paraStyle = (string)paragraph
                 .Elements(W.pPr)
@@ -2289,7 +2342,18 @@ namespace Docxodus
                 return rolledUpParaStyleParaProps;
             if (paraStyle != null)
             {
-                rolledUpParaStyleParaProps = ParaStyleParaPropsStack(stylesXDoc, paraStyle, paragraph)
+                // Check if this is a list item - list items need per-paragraph computation
+                var listItemInfo = paragraph.Annotation<ListItemRetriever.ListItemInfo>();
+                bool isListItem = listItemInfo != null && listItemInfo.IsListItem;
+
+                // Optimization #2: Try to use cached result for non-list-item paragraphs
+                if (!isListItem && fai != null && fai.CachedParagraphStyleRollups.TryGetValue(paraStyle, out var cachedProps))
+                {
+                    // Return a clone to prevent mutations affecting the cache
+                    return new XElement(cachedProps);
+                }
+
+                rolledUpParaStyleParaProps = ParaStyleParaPropsStack(stylesXDoc, paraStyle, paragraph, fai)
                     .Reverse()
                     .Aggregate(new XElement(W.pPr),
                         (r, s) =>
@@ -2297,20 +2361,41 @@ namespace Docxodus
                             var newParaProps = MergeStyleElement(s, r);
                             return newParaProps;
                         });
+
+                // Cache the result for non-list-item paragraphs
+                if (!isListItem && fai != null)
+                {
+                    fai.CachedParagraphStyleRollups[paraStyle] = new XElement(rolledUpParaStyleParaProps);
+                }
             }
             return rolledUpParaStyleParaProps;
         }
 
-        private static IEnumerable<XElement> ParaStyleParaPropsStack(XDocument stylesXDoc, string paraStyleName, XElement para)
+        /// <summary>
+        /// Builds a stack of paragraph properties from the style inheritance chain.
+        /// Optimization #1: Uses pre-indexed style lookups for O(1) access.
+        /// </summary>
+        private static IEnumerable<XElement> ParaStyleParaPropsStack(XDocument stylesXDoc, string paraStyleName, XElement para, FormattingAssemblerInfo fai = null)
         {
             if (stylesXDoc == null)
                 yield break;
             var localParaStyleName = paraStyleName;
             while (localParaStyleName != null)
             {
-                XElement paraStyle = stylesXDoc.Root.Elements(W.style).FirstOrDefault(s =>
-                    s.Attribute(W.type).Value == "paragraph" &&
-                    s.Attribute(W.styleId).Value == localParaStyleName);
+                // Optimization #1: Use indexed lookup if available, otherwise fall back to linear search
+                XElement paraStyle;
+                if (fai != null && fai.ParagraphStyleIndex.TryGetValue(localParaStyleName, out paraStyle))
+                {
+                    // Found via index - O(1)
+                }
+                else
+                {
+                    // Fall back to linear search - O(n)
+                    paraStyle = stylesXDoc.Root.Elements(W.style).FirstOrDefault(s =>
+                        (string)s.Attribute(W.type) == "paragraph" &&
+                        (string)s.Attribute(W.styleId) == localParaStyleName);
+                }
+
                 if (paraStyle == null)
                 {
                     yield break;
@@ -2593,7 +2678,7 @@ namespace Docxodus
                 if (charStyle != null)
                 {
                     rolledUpCharStyleRunProps =
-                        CharStyleStack(wDoc, charStyle)
+                        CharStyleStack(wDoc, charStyle, fai)
                             .Aggregate(new XElement(W.rPr),
                                 (r, s) =>
                                 {
@@ -2604,7 +2689,7 @@ namespace Docxodus
 
                 if (paraStyle != null)
                 {
-                    rolledUpParaStyleRunProps = ParaStyleRunPropsStack(wDoc, paraStyle)
+                    rolledUpParaStyleRunProps = ParaStyleRunPropsStack(wDoc, paraStyle, fai)
                         .Aggregate(new XElement(W.rPr),
                             (r, s) =>
                             {
@@ -2619,18 +2704,33 @@ namespace Docxodus
             return rolledRunProps;
         }
 
-        private static IEnumerable<XElement> ParaStyleRunPropsStack(WordprocessingDocument wDoc, string paraStyleName)
+        /// <summary>
+        /// Builds a stack of run properties from the paragraph style inheritance chain.
+        /// Optimization #1: Uses pre-indexed style lookups for O(1) access.
+        /// </summary>
+        private static IEnumerable<XElement> ParaStyleRunPropsStack(WordprocessingDocument wDoc, string paraStyleName, FormattingAssemblerInfo fai = null)
         {
             var localParaStyleName = paraStyleName;
             var sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
             var rValue = new Stack<XElement>();
             while (localParaStyleName != null)
             {
-                var paraStyle = sXDoc.Root.Elements(W.style).FirstOrDefault(s =>
+                // Optimization #1: Use indexed lookup if available, otherwise fall back to linear search
+                XElement paraStyle;
+                if (fai != null && fai.ParagraphStyleIndex.TryGetValue(localParaStyleName, out paraStyle))
                 {
-                    return (string)s.Attribute(W.type) == "paragraph" &&
-                        (string)s.Attribute(W.styleId) == localParaStyleName;
-                });
+                    // Found via index - O(1)
+                }
+                else
+                {
+                    // Fall back to linear search - O(n)
+                    paraStyle = sXDoc.Root.Elements(W.style).FirstOrDefault(s =>
+                    {
+                        return (string)s.Attribute(W.type) == "paragraph" &&
+                            (string)s.Attribute(W.styleId) == localParaStyleName;
+                    });
+                }
+
                 if (paraStyle == null)
                 {
                     return rValue;
@@ -2647,8 +2747,11 @@ namespace Docxodus
             return rValue;
         }
 
-        // returns collection of run properties
-        private static IEnumerable<XElement> CharStyleStack(WordprocessingDocument wDoc, string charStyleName)
+        /// <summary>
+        /// Builds a stack of run properties from the character style inheritance chain.
+        /// Optimization #1: Uses pre-indexed style lookups for O(1) access.
+        /// </summary>
+        private static IEnumerable<XElement> CharStyleStack(WordprocessingDocument wDoc, string charStyleName, FormattingAssemblerInfo fai = null)
         {
             var localCharStyleName = charStyleName;
             var sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
@@ -2656,20 +2759,42 @@ namespace Docxodus
             while (localCharStyleName != null)
             {
                 XElement basedOn = null;
-                // first look for character style
-                var charStyle = sXDoc.Root.Elements(W.style).FirstOrDefault(s =>
+                XElement charStyle = null;
+
+                // Optimization #1: Use indexed lookup if available
+                if (fai != null)
                 {
-                    return (string)s.Attribute(W.type) == "character" &&
-                        (string)s.Attribute(W.styleId) == localCharStyleName;
-                });
-                // if not found, look for paragraph style
+                    // First try character style index
+                    if (fai.CharacterStyleIndex.TryGetValue(localCharStyleName, out charStyle))
+                    {
+                        // Found via character style index - O(1)
+                    }
+                    // If not found, try all styles index (for paragraph styles used as character styles)
+                    else if (fai.AllStylesIndex.TryGetValue(localCharStyleName, out charStyle))
+                    {
+                        // Found via all styles index - O(1)
+                    }
+                }
+
+                // Fall back to linear search if not found or no index
                 if (charStyle == null)
                 {
+                    // first look for character style
                     charStyle = sXDoc.Root.Elements(W.style).FirstOrDefault(s =>
                     {
-                        return (string)s.Attribute(W.styleId) == localCharStyleName;
+                        return (string)s.Attribute(W.type) == "character" &&
+                            (string)s.Attribute(W.styleId) == localCharStyleName;
                     });
+                    // if not found, look for paragraph style
+                    if (charStyle == null)
+                    {
+                        charStyle = sXDoc.Root.Elements(W.style).FirstOrDefault(s =>
+                        {
+                            return (string)s.Attribute(W.styleId) == localCharStyleName;
+                        });
+                    }
                 }
+
                 if (charStyle == null)
                 {
                     return rValue;
@@ -3779,9 +3904,23 @@ namespace Docxodus
             public string DefaultCharacterStyleName;
             public string DefaultTableStyleName;
             public Dictionary<string, XElement> RolledCharacterStyles;
+
+            // Optimization #1: Pre-indexed style lookups (O(1) instead of O(n) linear search)
+            public Dictionary<string, XElement> ParagraphStyleIndex;
+            public Dictionary<string, XElement> CharacterStyleIndex;
+            public Dictionary<string, XElement> AllStylesIndex;
+
+            // Optimization #2: Cached paragraph style rollups (avoid recomputing for same style)
+            // Key: styleId, Value: rolled-up paragraph properties (without list item info)
+            public Dictionary<string, XElement> CachedParagraphStyleRollups;
+
             public FormattingAssemblerInfo()
             {
                 RolledCharacterStyles = new Dictionary<string, XElement>();
+                ParagraphStyleIndex = new Dictionary<string, XElement>();
+                CharacterStyleIndex = new Dictionary<string, XElement>();
+                AllStylesIndex = new Dictionary<string, XElement>();
+                CachedParagraphStyleRollups = new Dictionary<string, XElement>();
             }
         }
 

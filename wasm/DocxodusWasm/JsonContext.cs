@@ -32,6 +32,9 @@ namespace DocxodusWasm;
 [JsonSerializable(typeof(DocumentMetadataResponse))]
 [JsonSerializable(typeof(SectionMetadataInfo))]
 [JsonSerializable(typeof(SectionMetadataInfo[]))]
+// Profiling types
+[JsonSerializable(typeof(ProfilingResponse))]
+[JsonSerializable(typeof(Dictionary<string, double>))]
 internal partial class DocxodusJsonContext : JsonSerializerContext
 {
 }
@@ -628,4 +631,32 @@ public class SectionMetadataInfo
     /// End table index (exclusive, global).
     /// </summary>
     public int EndTableIndex { get; set; }
+}
+
+/// <summary>
+/// Response containing profiling timing data for document conversion.
+/// </summary>
+public class ProfilingResponse
+{
+    /// <summary>
+    /// The generated HTML content.
+    /// </summary>
+    public string Html { get; set; } = "";
+
+    /// <summary>
+    /// Timing breakdown in milliseconds for each operation.
+    /// </summary>
+    public Dictionary<string, double> Timings { get; set; } = new();
+
+    /// <summary>
+    /// Total conversion time in milliseconds.
+    /// </summary>
+    public double TotalMs { get; set; }
+
+    /// <summary>
+    /// Document statistics.
+    /// </summary>
+    public int ParagraphCount { get; set; }
+    public int TableCount { get; set; }
+    public int ElementCount { get; set; }
 }

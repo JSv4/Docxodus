@@ -27,13 +27,11 @@ import type {
   WorkerCompareToHtmlResponse,
   WorkerGetRevisionsResponse,
   WorkerGetDocumentMetadataResponse,
-  WorkerRenderPageRangeResponse,
   WorkerGetVersionResponse,
   WorkerDocxodusOptions,
   ConversionOptions,
   CompareOptions,
   GetRevisionsOptions,
-  RenderPageRangeOptions,
   Revision,
   VersionInfo,
   DocumentMetadata,
@@ -138,22 +136,6 @@ export interface WorkerDocxodus {
    * @returns Document metadata including sections, dimensions, and content counts
    */
   getDocumentMetadata(document: File | Uint8Array): Promise<DocumentMetadata>;
-
-  /**
-   * Render a specific page range for lazy loading/virtual scrolling.
-   * Use getDocumentMetadata() first to get page count and dimensions.
-   * @param document - DOCX file as File object or Uint8Array
-   * @param startPage - 1-based start page number
-   * @param endPage - 1-based end page number (inclusive)
-   * @param options - Rendering options
-   * @returns HTML string containing only the requested page range
-   */
-  renderPageRange(
-    document: File | Uint8Array,
-    startPage: number,
-    endPage: number,
-    options?: RenderPageRangeOptions
-  ): Promise<string>;
 
   /**
    * Get version information about the library.
@@ -380,27 +362,6 @@ export async function createWorkerDocxodus(
         [bytes.buffer]
       );
       return response.metadata!;
-    },
-
-    async renderPageRange(
-      document: File | Uint8Array,
-      startPage: number,
-      endPage: number,
-      options?: RenderPageRangeOptions
-    ): Promise<string> {
-      const bytes = await toBytes(document);
-      const response = await sendRequest<WorkerRenderPageRangeResponse>(
-        {
-          id: generateId(),
-          type: "renderPageRange",
-          documentBytes: bytes,
-          startPage,
-          endPage,
-          options,
-        },
-        [bytes.buffer]
-      );
-      return response.html!;
     },
 
     async getVersion(): Promise<VersionInfo> {
