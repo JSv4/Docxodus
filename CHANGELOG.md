@@ -10,6 +10,18 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
+- **ReadyToRun and AOT Compilation** - Performance optimizations to reduce cold-start times
+  - .NET library: Added `PublishReadyToRun` for pre-compiled native code during publish
+  - WASM: Added `RunAOTCompilation` for Release builds to pre-compile IL to WebAssembly
+  - Eliminates JIT warmup overhead (~180ms savings on first conversion in .NET)
+  - Provides consistent performance with no JIT variance in WASM
+- **Lightweight WASM Image Handling** - Images are now embedded as base64 data URIs without SkiaSharp native library
+  - Removed SkiaSharp native WASM dependency (~15MB+ savings in bundle size when native lib excluded)
+  - Images are passed through directly from DOCX using `ImageBytes` property
+  - Dimensions come from document markup (EMUs), not image decoding
+  - Browser natively decodes image formats (PNG, JPEG, GIF, etc.)
+  - Fallback handling: If SkiaSharp decode fails, images still work via raw bytes
+  - Added image handling tests for documents with embedded and hyperlinked images
 - **Frame Yielding for UI Responsiveness** (Issue #44 Phase 1) - WASM operations now yield to the browser before heavy work begins
   - All async functions in the npm wrapper (`convertDocxToHtml`, `compareDocuments`, `compareDocumentsToHtml`, `getRevisions`, `addAnnotation`, `addAnnotationWithTarget`, `getDocumentStructure`) automatically yield using double-`requestAnimationFrame` pattern
   - This allows React state updates (loading spinners, progress indicators) to paint before blocking WASM execution

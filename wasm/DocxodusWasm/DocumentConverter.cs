@@ -283,7 +283,9 @@ public partial class DocumentConverter
                 RenderTrackedChanges = renderTrackedChanges,
                 ShowDeletedContent = showDeletedContent,
                 RenderMoveOperations = renderMoveOperations,
-                IncludeRevisionMetadata = true
+                IncludeRevisionMetadata = true,
+                // Embed images as base64 data URIs - no SkiaSharp needed
+                ImageHandler = CreateBase64ImageHandler()
             };
 
             var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, settings);
@@ -841,6 +843,7 @@ public partial class DocumentConverter
                 RenderPagination = PaginationMode.Paginated,
                 PaginationScale = 1.0,
                 PaginationCssClassPrefix = "page-",
+                ImageHandler = CreateBase64ImageHandler()
             };
 
             // We need to re-open the document since we've already modified it
@@ -996,6 +999,7 @@ public partial class DocumentConverter
                 RenderPagination = PaginationMode.Paginated,
                 PaginationScale = 1.0,
                 PaginationCssClassPrefix = "page-",
+                ImageHandler = CreateBase64ImageHandler()
             };
 
             // Note: ConvertToHtml will redo some preprocessing since the document
@@ -1030,6 +1034,46 @@ public partial class DocumentConverter
         {
             return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
         }
+    }
+
+    /// <summary>
+    /// Creates an image handler that embeds images as base64 data URIs.
+    /// This allows image handling without SkiaSharp dependency.
+    /// </summary>
+    private static Func<ImageInfo, XElement> CreateBase64ImageHandler()
+    {
+        return imageInfo =>
+        {
+            if (imageInfo.ImageBytes == null || imageInfo.ImageBytes.Length == 0)
+            {
+                return null!;
+            }
+
+            // Convert content type to MIME type for data URI
+            var mimeType = imageInfo.ContentType ?? "image/png";
+
+            // Create base64 data URI
+            var base64 = Convert.ToBase64String(imageInfo.ImageBytes);
+            var dataUri = $"data:{mimeType};base64,{base64}";
+
+            // Create img element with data URI
+            var imgElement = new XElement(XhtmlNoNamespace.img,
+                new XAttribute("src", dataUri));
+
+            // Add style attribute if available (contains width/height)
+            if (imageInfo.ImgStyleAttribute != null)
+            {
+                imgElement.Add(imageInfo.ImgStyleAttribute);
+            }
+
+            // Add alt text if available
+            if (!string.IsNullOrEmpty(imageInfo.AltText))
+            {
+                imgElement.Add(new XAttribute("alt", imageInfo.AltText));
+            }
+
+            return imgElement;
+        };
     }
 
     internal static string SerializeError(string error, string? type = null, string? stackTrace = null)

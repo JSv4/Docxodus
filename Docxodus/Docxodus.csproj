@@ -23,6 +23,9 @@
     <!-- Disable TreatWarningsAsErrors for legacy code - too many existing warnings -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <NoWarn>$(NoWarn);CS8073;CA2200;CS8632</NoWarn>
+
+    <!-- ReadyToRun: Pre-compile to native code during publish to eliminate JIT warmup -->
+    <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 
   <ItemGroup>

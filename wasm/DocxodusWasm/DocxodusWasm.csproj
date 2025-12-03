@@ -34,22 +34,27 @@
     <!-- Debug settings - disable for release -->
     <DebuggerSupport Condition="'$(Configuration)' == 'Release'">false</DebuggerSupport>
     <EventSourceSupport Condition="'$(Configuration)' == 'Release'">false</EventSourceSupport>
+
+    <!-- AOT Compilation: Pre-compile IL to WebAssembly to eliminate interpreter/JIT warmup -->
+    <!-- This significantly reduces cold-start time but increases build time and output size -->
+    <RunAOTCompilation Condition="'$(Configuration)' == 'Release'">true</RunAOTCompilation>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- Reference Docxodus library directly -->
     <ProjectReference Include="../../Docxodus/Docxodus.csproj" />
 
-    <!-- SkiaSharp with WASM support (matching Docxodus version) -->
-    <PackageReference Include="SkiaSharp" Version="2.88.9" />
-    <PackageReference Include="SkiaSharp.NativeAssets.WebAssembly" Version="2.88.9" />
+    <!-- SkiaSharp DISABLED for smaller bundle size -->
+    <!-- The WASM converter doesn't use ImageHandler, so SkiaSharp is not needed -->
+    <!-- Uncomment if image processing is required -->
+    <!-- <PackageReference Include="SkiaSharp" Version="2.88.9" /> -->
+    <!-- <PackageReference Include="SkiaSharp.NativeAssets.WebAssembly" Version="2.88.9" /> -->
   </ItemGroup>
 
-  <!-- Manually link native SkiaSharp library for browser-wasm -->
-  <!-- Uses Emscripten 3.1.34 (single-threaded, SIMD enabled) -->
-  <ItemGroup>
+  <!-- Native SkiaSharp library DISABLED - saves ~15MB -->
+  <!-- <ItemGroup>
     <NativeFileReference Include="$(NuGetPackageRoot)skiasharp.nativeassets.webassembly/2.88.9/build/netstandard1.0/libSkiaSharp.a/3.1.34/simd,st/libSkiaSharp.a" />
-  </ItemGroup>
+  </ItemGroup> -->
 
   <ItemGroup>
     <WasmExtraFilesToDeploy Include="main.js" />

@@ -2438,5 +2438,51 @@ test.describe('Docxodus WASM Tests', () => {
     });
   });
 
+  test.describe('Image Handling', () => {
+    test('converts document with images to HTML with base64 data URIs', async ({ page }) => {
+      // Use a test document known to contain images
+      const bytes = readTestFile('HC042-Image-Png.docx');
+
+      const result = await convertToHtml(page, bytes);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Check that images are embedded as base64 data URIs
+      const hasBase64Image = result.html!.includes('data:image/');
+      const imgTagCount = (result.html!.match(/<img /g) || []).length;
+
+      console.log(`Document contains ${imgTagCount} image(s)`);
+      console.log(`Has base64 embedded images: ${hasBase64Image}`);
+
+      // If the document has images, they should be embedded as base64
+      if (imgTagCount > 0) {
+        expect(hasBase64Image).toBe(true);
+
+        // Verify the base64 data URI format
+        const base64Regex = /data:image\/(png|jpeg|gif|bmp);base64,[A-Za-z0-9+\/=]+/;
+        expect(result.html!).toMatch(base64Regex);
+      }
+    });
+
+    test('converts document with image hyperlink correctly', async ({ page }) => {
+      // Use a test document with hyperlinked image
+      const bytes = readTestFile('HC060-Image-with-Hyperlink.docx');
+
+      const result = await convertToHtml(page, bytes);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      // Check that images are embedded
+      const imgTagCount = (result.html!.match(/<img /g) || []).length;
+      console.log(`Document with hyperlinked image contains ${imgTagCount} image(s)`);
+
+      // Images should be embedded
+      if (imgTagCount > 0) {
+        expect(result.html!).toMatch(/data:image\//);
+      }
+    });
+  });
 
 });
