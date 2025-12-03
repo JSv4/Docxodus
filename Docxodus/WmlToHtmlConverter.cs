@@ -6559,49 +6559,67 @@ namespace Docxodus
             {
                 partStream.CopyTo(memoryStream);
                 var imageBytes = memoryStream.ToArray();
-                using var bitmap = SKBitmap.Decode(imageBytes);
 
-                if (extentCx != null && extentCy != null)
+                // Try to decode bitmap for width/height, but allow graceful fallback
+                // This enables WASM builds without SkiaSharp to still handle images via ImageBytes
+                SKBitmap bitmap = null;
+                try
                 {
-                    var imageInfo = new ImageInfo()
+                    bitmap = SKBitmap.Decode(imageBytes);
+                }
+                catch
+                {
+                    // SkiaSharp not available or decode failed - continue with ImageBytes only
+                }
+
+                try
+                {
+                    if (extentCx != null && extentCy != null)
+                    {
+                        var imageInfo = new ImageInfo()
+                        {
+                            Bitmap = bitmap,
+                            ImageBytes = imageBytes,
+                            ImgStyleAttribute = new XAttribute("style",
+                                string.Format(NumberFormatInfo.InvariantInfo,
+                                    "width: {0}in; height: {1}in",
+                                    (float)extentCx / (float)ImageInfo.EmusPerInch,
+                                    (float)extentCy / (float)ImageInfo.EmusPerInch)),
+                            ContentType = contentType,
+                            DrawingElement = element,
+                            AltText = altText,
+                        };
+                        var imgElement2 = imageHandler(imageInfo);
+                        if (hyperlinkUri != null)
+                        {
+                            return new XElement(XhtmlNoNamespace.a,
+                                new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
+                                imgElement2);
+                        }
+                        return imgElement2;
+                    }
+
+                    var imageInfo2 = new ImageInfo()
                     {
                         Bitmap = bitmap,
                         ImageBytes = imageBytes,
-                        ImgStyleAttribute = new XAttribute("style",
-                            string.Format(NumberFormatInfo.InvariantInfo,
-                                "width: {0}in; height: {1}in",
-                                (float)extentCx / (float)ImageInfo.EmusPerInch,
-                                (float)extentCy / (float)ImageInfo.EmusPerInch)),
                         ContentType = contentType,
                         DrawingElement = element,
                         AltText = altText,
                     };
-                    var imgElement2 = imageHandler(imageInfo);
+                    var imgElement = imageHandler(imageInfo2);
                     if (hyperlinkUri != null)
                     {
                         return new XElement(XhtmlNoNamespace.a,
                             new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
-                            imgElement2);
+                            imgElement);
                     }
-                    return imgElement2;
+                    return imgElement;
                 }
-
-                var imageInfo2 = new ImageInfo()
+                finally
                 {
-                    Bitmap = bitmap,
-                    ImageBytes = imageBytes,
-                    ContentType = contentType,
-                    DrawingElement = element,
-                    AltText = altText,
-                };
-                var imgElement = imageHandler(imageInfo2);
-                if (hyperlinkUri != null)
-                {
-                    return new XElement(XhtmlNoNamespace.a,
-                        new XAttribute(XhtmlNoNamespace.href, hyperlinkUri),
-                        imgElement);
+                    bitmap?.Dispose();
                 }
-                return imgElement;
             }
         }
 
@@ -6630,29 +6648,47 @@ namespace Docxodus
                     {
                         partStream.CopyTo(memoryStream);
                         var imageBytes = memoryStream.ToArray();
-                        using var bitmap = SKBitmap.Decode(imageBytes);
 
-                        var imageInfo = new ImageInfo()
+                        // Try to decode bitmap, but allow graceful fallback
+                        // This enables WASM builds without SkiaSharp to still handle images via ImageBytes
+                        SKBitmap bitmap = null;
+                        try
                         {
-                            Bitmap = bitmap,
-                            ImageBytes = imageBytes,
-                            ContentType = contentType,
-                            DrawingElement = element
-                        };
-
-                        var style = (string?)element.Elements(VML.shape).Attributes("style").FirstOrDefault();
-                        if (style == null) return imageHandler(imageInfo);
-
-                        var tokens = style.Split(';');
-                        var widthInPoints = WidthInPoints(tokens);
-                        var heightInPoints = HeightInPoints(tokens);
-                        if (widthInPoints != null && heightInPoints != null)
-                        {
-                            imageInfo.ImgStyleAttribute = new XAttribute("style",
-                                string.Format(NumberFormatInfo.InvariantInfo,
-                                    "width: {0}pt; height: {1}pt", widthInPoints, heightInPoints));
+                            bitmap = SKBitmap.Decode(imageBytes);
                         }
-                        return imageHandler(imageInfo);
+                        catch
+                        {
+                            // SkiaSharp not available or decode failed - continue with ImageBytes only
+                        }
+
+                        try
+                        {
+                            var imageInfo = new ImageInfo()
+                            {
+                                Bitmap = bitmap,
+                                ImageBytes = imageBytes,
+                                ContentType = contentType,
+                                DrawingElement = element
+                            };
+
+                            var style = (string?)element.Elements(VML.shape).Attributes("style").FirstOrDefault();
+                            if (style == null) return imageHandler(imageInfo);
+
+                            var tokens = style.Split(';');
+                            var widthInPoints = WidthInPoints(tokens);
+                            var heightInPoints = HeightInPoints(tokens);
+                            if (widthInPoints != null && heightInPoints != null)
+                            {
+                                imageInfo.ImgStyleAttribute = new XAttribute("style",
+                                    string.Format(NumberFormatInfo.InvariantInfo,
+                                        "width: {0}pt; height: {1}pt", widthInPoints, heightInPoints));
+                            }
+                            return imageHandler(imageInfo);
+                        }
+                        finally
+                        {
+                            bitmap?.Dispose();
+                        }
                     }
                     catch (OutOfMemoryException)
                     {
