@@ -408,7 +408,7 @@ namespace OxPt
                 new WmlRevisedDocumentInfo()
                 {
                     RevisedDocument = source2Wml,
-                    Color = SKColors.LightBlue,
+                    Color = DocxColors.LightBlue,
                     Revisor = "Revised by Eric White",
                 }
             };
