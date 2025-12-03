@@ -13,7 +13,6 @@ using System.Linq;
 using System.Xml.Linq;
 using System.Collections.Generic;
 using DocumentFormat.OpenXml.Packaging;
-using SkiaSharp;
 
 // ReSharper disable InconsistentNaming
 
@@ -744,25 +743,16 @@ namespace Docxodus
 
     public static class WordprocessingMLUtil
     {
-        private static HashSet<string> UnknownFonts = new HashSet<string>();
-        private static HashSet<string>? KnownFamilies = null;
-
         public static int CalcWidthOfRunInTwips(XElement r)
         {
-            if (KnownFamilies == null)
-            {
-                KnownFamilies = new HashSet<string>();
-                var families = SKFontManager.Default.FontFamilies;
-                foreach (var fam in families)
-                    KnownFamilies.Add(fam);
-            }
+            var KnownFamilies = FontFamilyHelper.KnownFamilies;
 
             var fontName = (string?)r.Attribute(PtOpenXml.pt + "FontName");
             if (fontName == null)
                 fontName = (string?)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
             if (fontName == null)
                 throw new DocxodusException("Internal Error, should have FontName attribute");
-            if (UnknownFonts.Contains(fontName))
+            if (FontFamilyHelper.IsMarkedUnknown(fontName))
                 return 0;
 
             var rPr = r.Element(W.rPr);

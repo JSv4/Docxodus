@@ -4,7 +4,9 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+#if !WASM_BUILD
 using SkiaSharp;
+#endif
 using System.Globalization;
 using System.Linq;
 using System.Text;
@@ -433,7 +435,9 @@ namespace Docxodus
     [SuppressMessage("ReSharper", "UnusedMember.Global")]
     public class ImageInfo
     {
+#if !WASM_BUILD
         public SKBitmap? Bitmap;
+#endif
         public byte[]? ImageBytes;
         public XAttribute? ImgStyleAttribute;
         public string? ContentType;
@@ -443,6 +447,7 @@ namespace Docxodus
         public const int EmusPerInch = 914400;
         public const int EmusPerCm = 360000;
 
+#if !WASM_BUILD
         /// <summary>
         /// Saves the image to a file using the specified format.
         /// </summary>
@@ -462,6 +467,7 @@ namespace Docxodus
                 data.SaveTo(stream);
             }
         }
+#endif
     }
 
     /// <summary>
@@ -5640,23 +5646,7 @@ namespace Docxodus
             return tabs;
         }
 
-        private static readonly HashSet<string> UnknownFonts = new HashSet<string>();
-        private static HashSet<string> _knownFamilies;
-
-        private static HashSet<string> KnownFamilies
-        {
-            get
-            {
-                if (_knownFamilies == null)
-                {
-                    _knownFamilies = new HashSet<string>();
-                    var families = SKFontManager.Default.FontFamilies;
-                    foreach (var fam in families)
-                        _knownFamilies.Add(fam);
-                }
-                return _knownFamilies;
-            }
-        }
+        private static HashSet<string> KnownFamilies => FontFamilyHelper.KnownFamilies;
 
         private static int CalcWidthOfRunInTwips(XElement r)
         {
@@ -5664,7 +5654,7 @@ namespace Docxodus
                            (string)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
             if (fontName == null)
                 throw new DocxodusException("Internal Error, should have FontName attribute");
-            if (UnknownFonts.Contains(fontName))
+            if (FontFamilyHelper.IsMarkedUnknown(fontName))
                 return 0;
 
             var rPr = r.Element(W.rPr);
@@ -6560,8 +6550,8 @@ namespace Docxodus
                 partStream.CopyTo(memoryStream);
                 var imageBytes = memoryStream.ToArray();
 
+#if !WASM_BUILD
                 // Try to decode bitmap for width/height, but allow graceful fallback
-                // This enables WASM builds without SkiaSharp to still handle images via ImageBytes
                 SKBitmap bitmap = null;
                 try
                 {
@@ -6569,8 +6559,9 @@ namespace Docxodus
                 }
                 catch
                 {
-                    // SkiaSharp not available or decode failed - continue with ImageBytes only
+                    // SkiaSharp decode failed - continue with ImageBytes only
                 }
+#endif
 
                 try
                 {
@@ -6578,7 +6569,9 @@ namespace Docxodus
                     {
                         var imageInfo = new ImageInfo()
                         {
+#if !WASM_BUILD
                             Bitmap = bitmap,
+#endif
                             ImageBytes = imageBytes,
                             ImgStyleAttribute = new XAttribute("style",
                                 string.Format(NumberFormatInfo.InvariantInfo,
@@ -6601,7 +6594,9 @@ namespace Docxodus
 
                     var imageInfo2 = new ImageInfo()
                     {
+#if !WASM_BUILD
                         Bitmap = bitmap,
+#endif
                         ImageBytes = imageBytes,
                         ContentType = contentType,
                         DrawingElement = element,
@@ -6618,7 +6613,9 @@ namespace Docxodus
                 }
                 finally
                 {
+#if !WASM_BUILD
                     bitmap?.Dispose();
+#endif
                 }
             }
         }
@@ -6649,8 +6646,8 @@ namespace Docxodus
                         partStream.CopyTo(memoryStream);
                         var imageBytes = memoryStream.ToArray();
 
+#if !WASM_BUILD
                         // Try to decode bitmap, but allow graceful fallback
-                        // This enables WASM builds without SkiaSharp to still handle images via ImageBytes
                         SKBitmap bitmap = null;
                         try
                         {
@@ -6658,14 +6655,17 @@ namespace Docxodus
                         }
                         catch
                         {
-                            // SkiaSharp not available or decode failed - continue with ImageBytes only
+                            // SkiaSharp decode failed - continue with ImageBytes only
                         }
+#endif
 
                         try
                         {
                             var imageInfo = new ImageInfo()
                             {
+#if !WASM_BUILD
                                 Bitmap = bitmap,
+#endif
                                 ImageBytes = imageBytes,
                                 ContentType = contentType,
                                 DrawingElement = element
@@ -6687,7 +6687,9 @@ namespace Docxodus
                         }
                         finally
                         {
+#if !WASM_BUILD
                             bitmap?.Dispose();
+#endif
                         }
                     }
                     catch (OutOfMemoryException)

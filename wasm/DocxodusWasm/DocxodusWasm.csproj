@@ -35,14 +35,17 @@
     <DebuggerSupport Condition="'$(Configuration)' == 'Release'">false</DebuggerSupport>
     <EventSourceSupport Condition="'$(Configuration)' == 'Release'">false</EventSourceSupport>
 
-    <!-- AOT Compilation: Pre-compile IL to WebAssembly to eliminate interpreter/JIT warmup -->
-    <!-- This significantly reduces cold-start time but increases build time and output size -->
-    <RunAOTCompilation Condition="'$(Configuration)' == 'Release'">true</RunAOTCompilation>
+    <!-- AOT Compilation DISABLED for smaller bundle size -->
+    <!-- JIT/interpreter mode is slower at startup but bundle is ~50% smaller -->
+    <!-- <RunAOTCompilation Condition="'$(Configuration)' == 'Release'">true</RunAOTCompilation> -->
+
+    <!-- Define WASM_BUILD to enable SkiaSharp-free code paths in Docxodus -->
+    <DefineConstants>$(DefineConstants);WASM_BUILD</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Reference Docxodus library directly -->
-    <ProjectReference Include="../../Docxodus/Docxodus.csproj" />
+    <!-- Reference Docxodus library with WASM_BUILD property to exclude SkiaSharp dependencies -->
+    <ProjectReference Include="../../Docxodus/Docxodus.csproj" AdditionalProperties="WASM_BUILD=true" />
 
     <!-- SkiaSharp DISABLED for smaller bundle size -->
     <!-- The WASM converter doesn't use ImageHandler, so SkiaSharp is not needed -->

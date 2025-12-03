@@ -17,7 +17,6 @@ Resource Center and Documentation: http://openxmldeveloper.org/wiki/w/wiki/power
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using SkiaSharp;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -820,7 +819,7 @@ namespace Docxodus.HtmlToWml.CSS
             }
         }
 
-        public SKColor ToColor()
+        public DocxColor ToColor()
         {
             string hex = "000000";
             if (m_type == CssValueType.Hex)
@@ -1583,7 +1582,7 @@ namespace Docxodus.HtmlToWml.CSS
             return 0;
         }
 
-        public SKColor ToColor()
+        public DocxColor ToColor()
         {
             string hex = "000000";
             if (m_type == CssTermType.Hex)
@@ -1608,7 +1607,7 @@ namespace Docxodus.HtmlToWml.CSS
                     {
                         if (m_function.Expression.Terms[i].Type != CssTermType.Number)
                         {
-                            return SKColors.Black;
+                            return DocxColor.Black;
                         }
                         switch (i)
                         {
@@ -1629,7 +1628,7 @@ namespace Docxodus.HtmlToWml.CSS
                     int h = 0, s = 0, v = 0;
                     for (int i = 0; i < m_function.Expression.Terms.Count; i++)
                     {
-                        if (m_function.Expression.Terms[i].Type != CssTermType.Number) { return SKColors.Black; }
+                        if (m_function.Expression.Terms[i].Type != CssTermType.Number) { return DocxColor.Black; }
                         switch (i)
                         {
                             case 0: h = GetHueValue(m_function.Expression.Terms[i]);
@@ -1831,7 +1830,7 @@ namespace Docxodus.HtmlToWml.CSS
             m_sat = s;
             m_val = v;
         }
-        public HueSatVal(SKColor color)
+        public HueSatVal(DocxColor color)
         {
             m_hue = 0;
             m_sat = 0;
@@ -1865,7 +1864,7 @@ namespace Docxodus.HtmlToWml.CSS
                 m_val = value;
             }
         }
-        public SKColor Color
+        public DocxColor Color
         {
             get {
                 return ConvertToRGB();
@@ -1874,7 +1873,7 @@ namespace Docxodus.HtmlToWml.CSS
                 ConvertFromRGB(value);
             }
         }
-        private void ConvertFromRGB(SKColor color)
+        private void ConvertFromRGB(DocxColor color)
         {
             double min; double max; double delta;
             double r = (double)color.Red / 255.0d;
@@ -1917,7 +1916,7 @@ namespace Docxodus.HtmlToWml.CSS
             Value = (int)(v * 255.0d);
         }
 
-        private SKColor ConvertToRGB()
+        private DocxColor ConvertToRGB()
         {
             double h;
             double s;
