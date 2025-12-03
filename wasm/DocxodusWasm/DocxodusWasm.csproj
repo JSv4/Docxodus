@@ -42,7 +42,7 @@
 
     <!-- SkiaSharp with WASM support (matching Docxodus version) -->
     <PackageReference Include="SkiaSharp" Version="2.88.9" />
-    <PackageReference Include="SkiaSharp.NativeAssets.WebAssembly" Version="2.88.9" />
+    <PackageReference Include="SkiaSharp.NativeAssets.WebAssembly" Version="3.119.1" />
   </ItemGroup>
 
   <!-- Manually link native SkiaSharp library for browser-wasm -->
