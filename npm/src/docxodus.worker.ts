@@ -17,12 +17,10 @@ import type {
   WorkerCompareToHtmlRequest,
   WorkerGetRevisionsRequest,
   WorkerGetDocumentMetadataRequest,
-  WorkerRenderPageRangeRequest,
   DocxodusWasmExports,
   ConversionOptions,
   CompareOptions,
   GetRevisionsOptions,
-  RenderPageRangeOptions,
   Revision,
   RevisionType,
   DocumentMetadata,
@@ -379,68 +377,6 @@ function handleGetDocumentMetadata(
 }
 
 /**
- * Handle renderPageRange request.
- */
-function handleRenderPageRange(
-  request: WorkerRenderPageRangeRequest
-): { html?: string; error?: string } {
-  const exports = ensureInitialized();
-  const options = request.options;
-
-  try {
-    let result: string;
-
-    // Check if any advanced options are specified
-    const needsFullMethod =
-      options?.renderTrackedChanges !== undefined ||
-      options?.showDeletedContent !== undefined ||
-      options?.renderComments !== undefined ||
-      options?.additionalCss !== undefined;
-
-    if (needsFullMethod) {
-      result = exports.DocumentConverter.RenderPageRangeFull(
-        request.documentBytes,
-        request.startPage,
-        request.endPage,
-        options?.pageTitle ?? "Document",
-        options?.cssPrefix ?? "docx-",
-        options?.fabricateClasses ?? true,
-        options?.additionalCss ?? "",
-        options?.paginationScale ?? 1.0,
-        options?.paginationCssClassPrefix ?? "page-",
-        options?.renderFootnotesAndEndnotes ?? false,
-        options?.renderHeadersAndFooters ?? false,
-        options?.renderTrackedChanges ?? false,
-        options?.showDeletedContent ?? true,
-        options?.renderComments ?? false,
-        options?.commentRenderMode ?? 0
-      );
-    } else {
-      result = exports.DocumentConverter.RenderPageRange(
-        request.documentBytes,
-        request.startPage,
-        request.endPage,
-        options?.pageTitle ?? "Document",
-        options?.cssPrefix ?? "docx-",
-        options?.fabricateClasses ?? true,
-        options?.paginationScale ?? 1.0,
-        options?.paginationCssClassPrefix ?? "page-",
-        options?.renderFootnotesAndEndnotes ?? false,
-        options?.renderHeadersAndFooters ?? false
-      );
-    }
-
-    if (isErrorResponse(result)) {
-      return parseError(result);
-    }
-
-    return { html: result };
-  } catch (error) {
-    return { error: String(error) };
-  }
-}
-
-/**
  * Handle getVersion request.
  */
 function handleGetVersion(): {
@@ -560,19 +496,6 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
           type: "getDocumentMetadata",
           success: !result.error,
           metadata: result.metadata,
-          error: result.error,
-        };
-        break;
-      }
-
-      case "renderPageRange": {
-        const renderRequest = request as WorkerRenderPageRangeRequest;
-        const result = handleRenderPageRange(renderRequest);
-        response = {
-          id: request.id,
-          type: "renderPageRange",
-          success: !result.error,
-          html: result.html,
           error: result.error,
         };
         break;

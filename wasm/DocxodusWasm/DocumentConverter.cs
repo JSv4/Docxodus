@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.InteropServices.JavaScript;
 using System.Runtime.Versioning;
 using System.Text.Json;
@@ -726,177 +727,6 @@ public partial class DocumentConverter
     }
 
     /// <summary>
-    /// Render a specific page range for lazy loading/virtual scrolling.
-    /// Uses estimated pagination to determine which content blocks fall on each page.
-    /// </summary>
-    /// <param name="docxBytes">The DOCX file as a byte array</param>
-    /// <param name="startPage">1-based start page number</param>
-    /// <param name="endPage">1-based end page number (inclusive)</param>
-    /// <param name="pageTitle">Title for the HTML document</param>
-    /// <param name="cssPrefix">Prefix for generated CSS class names</param>
-    /// <param name="fabricateClasses">Whether to generate CSS classes</param>
-    /// <param name="paginationScale">Scale factor for page rendering (1.0 = 100%)</param>
-    /// <param name="paginationCssClassPrefix">CSS class prefix for pagination elements</param>
-    /// <param name="renderFootnotesAndEndnotes">Whether to include footnote/endnote registries</param>
-    /// <param name="renderHeadersAndFooters">Whether to include header/footer registries</param>
-    /// <returns>HTML string containing only the requested page range, or JSON error</returns>
-    [JSExport]
-    public static string RenderPageRange(
-        byte[] docxBytes,
-        int startPage,
-        int endPage,
-        string pageTitle,
-        string cssPrefix,
-        bool fabricateClasses,
-        double paginationScale,
-        string paginationCssClassPrefix,
-        bool renderFootnotesAndEndnotes,
-        bool renderHeadersAndFooters)
-    {
-        if (!ValidateInput(docxBytes, out var errorMessage))
-        {
-            return SerializeError(errorMessage!);
-        }
-
-        if (startPage < 1)
-        {
-            return SerializeError("startPage must be >= 1");
-        }
-
-        if (endPage < startPage)
-        {
-            return SerializeError("endPage must be >= startPage");
-        }
-
-        try
-        {
-            // Must use writable stream - WmlToHtmlConverter calls RevisionAccepter internally
-            using var memoryStream = new MemoryStream();
-            memoryStream.Write(docxBytes, 0, docxBytes.Length);
-            memoryStream.Position = 0;
-            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
-
-            var settings = new WmlToHtmlConverterSettings
-            {
-                PageTitle = pageTitle ?? "Document",
-                CssClassPrefix = cssPrefix ?? "docx-",
-                FabricateCssClasses = fabricateClasses,
-                GeneralCss = "body { font-family: Arial, sans-serif; margin: 0; } " +
-                             "span { white-space: pre-wrap; }",
-                RenderPagination = PaginationMode.Paginated,
-                PaginationScale = paginationScale > 0 ? paginationScale : 1.0,
-                PaginationCssClassPrefix = paginationCssClassPrefix ?? "page-",
-                RenderFootnotesAndEndnotes = renderFootnotesAndEndnotes,
-                RenderHeadersAndFooters = renderHeadersAndFooters,
-                // Disable features not needed for lazy loading
-                RenderComments = false,
-                RenderAnnotations = false,
-                RenderTrackedChanges = false
-            };
-
-            var htmlElement = WmlToHtmlConverter.RenderPageRange(wordDoc, settings, startPage, endPage);
-            return htmlElement.ToString(SaveOptions.DisableFormatting);
-        }
-        catch (Exception ex)
-        {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
-        }
-    }
-
-    /// <summary>
-    /// Render a specific page range with full options for lazy loading/virtual scrolling.
-    /// </summary>
-    /// <param name="docxBytes">The DOCX file as a byte array</param>
-    /// <param name="startPage">1-based start page number</param>
-    /// <param name="endPage">1-based end page number (inclusive)</param>
-    /// <param name="pageTitle">Title for the HTML document</param>
-    /// <param name="cssPrefix">Prefix for generated CSS class names</param>
-    /// <param name="fabricateClasses">Whether to generate CSS classes</param>
-    /// <param name="additionalCss">Additional CSS to include</param>
-    /// <param name="paginationScale">Scale factor for page rendering (1.0 = 100%)</param>
-    /// <param name="paginationCssClassPrefix">CSS class prefix for pagination elements</param>
-    /// <param name="renderFootnotesAndEndnotes">Whether to include footnote/endnote registries</param>
-    /// <param name="renderHeadersAndFooters">Whether to include header/footer registries</param>
-    /// <param name="renderTrackedChanges">Whether to render tracked changes</param>
-    /// <param name="showDeletedContent">Whether to show deleted content</param>
-    /// <param name="renderComments">Whether to render comments</param>
-    /// <param name="commentRenderMode">Comment render mode: 0=EndnoteStyle, 1=Inline, 2=Margin</param>
-    /// <returns>HTML string containing only the requested page range, or JSON error</returns>
-    [JSExport]
-    public static string RenderPageRangeFull(
-        byte[] docxBytes,
-        int startPage,
-        int endPage,
-        string pageTitle,
-        string cssPrefix,
-        bool fabricateClasses,
-        string additionalCss,
-        double paginationScale,
-        string paginationCssClassPrefix,
-        bool renderFootnotesAndEndnotes,
-        bool renderHeadersAndFooters,
-        bool renderTrackedChanges,
-        bool showDeletedContent,
-        bool renderComments,
-        int commentRenderMode)
-    {
-        if (!ValidateInput(docxBytes, out var errorMessage))
-        {
-            return SerializeError(errorMessage!);
-        }
-
-        if (startPage < 1)
-        {
-            return SerializeError("startPage must be >= 1");
-        }
-
-        if (endPage < startPage)
-        {
-            return SerializeError("endPage must be >= startPage");
-        }
-
-        try
-        {
-            // Must use writable stream - WmlToHtmlConverter calls RevisionAccepter internally
-            using var memoryStream = new MemoryStream();
-            memoryStream.Write(docxBytes, 0, docxBytes.Length);
-            memoryStream.Position = 0;
-            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
-
-            var settings = new WmlToHtmlConverterSettings
-            {
-                PageTitle = pageTitle ?? "Document",
-                CssClassPrefix = cssPrefix ?? "docx-",
-                FabricateCssClasses = fabricateClasses,
-                AdditionalCss = additionalCss ?? "",
-                GeneralCss = "body { font-family: Arial, sans-serif; margin: 0; } " +
-                             "span { white-space: pre-wrap; }",
-                RenderPagination = PaginationMode.Paginated,
-                PaginationScale = paginationScale > 0 ? paginationScale : 1.0,
-                PaginationCssClassPrefix = paginationCssClassPrefix ?? "page-",
-                RenderFootnotesAndEndnotes = renderFootnotesAndEndnotes,
-                RenderHeadersAndFooters = renderHeadersAndFooters,
-                RenderTrackedChanges = renderTrackedChanges,
-                ShowDeletedContent = showDeletedContent,
-                RenderMoveOperations = true,
-                IncludeRevisionMetadata = true,
-                RenderComments = renderComments,
-                CommentRenderMode = renderComments ? (CommentRenderMode)commentRenderMode : CommentRenderMode.EndnoteStyle,
-                CommentCssClassPrefix = "comment-",
-                IncludeCommentMetadata = true,
-                RenderAnnotations = false
-            };
-
-            var htmlElement = WmlToHtmlConverter.RenderPageRange(wordDoc, settings, startPage, endPage);
-            return htmlElement.ToString(SaveOptions.DisableFormatting);
-        }
-        catch (Exception ex)
-        {
-            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
-        }
-    }
-
-    /// <summary>
     /// Get library version information.
     /// </summary>
     [JSExport]
@@ -909,6 +739,297 @@ public partial class DocumentConverter
             Platform = "browser-wasm"
         };
         return JsonSerializer.Serialize(info, DocxodusJsonContext.Default.VersionInfo);
+    }
+
+    /// <summary>
+    /// Convert a DOCX file to HTML with detailed profiling information.
+    /// This method measures time spent in each major phase of conversion.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <returns>JSON response with HTML, timings, and statistics</returns>
+    [JSExport]
+    public static string ConvertDocxToHtmlProfiled(byte[] docxBytes)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            return SerializeError("No document data provided");
+        }
+
+        var totalSw = Stopwatch.StartNew();
+        var timings = new Dictionary<string, double>();
+        var response = new ProfilingResponse();
+
+        try
+        {
+            var sw = Stopwatch.StartNew();
+
+            // Phase 1: Create MemoryStream and open document
+            using var memoryStream = new MemoryStream();
+            memoryStream.Write(docxBytes, 0, docxBytes.Length);
+            memoryStream.Position = 0;
+            timings["1_MemoryStream_Create"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
+            timings["2_OpenXml_Open"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // Phase 2: Accept revisions (simplify document)
+            RevisionAccepter.AcceptRevisions(wordDoc);
+            timings["3_RevisionAccepter"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // Phase 3: Simplify markup
+            var simplifySettings = new SimplifyMarkupSettings
+            {
+                RemoveComments = true,
+                RemoveContentControls = true,
+                RemoveEndAndFootNotes = true,
+                RemoveFieldCodes = false,
+                RemoveLastRenderedPageBreak = true,
+                RemovePermissions = true,
+                RemoveProof = true,
+                RemoveRsidInfo = true,
+                RemoveSmartTags = true,
+                RemoveSoftHyphens = true,
+                RemoveGoBackBookmark = true,
+                ReplaceTabsWithSpaces = false,
+            };
+            MarkupSimplifier.SimplifyMarkup(wordDoc, simplifySettings);
+            timings["4_SimplifyMarkup"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // Phase 4: Assemble formatting (style resolution - likely hotspot)
+            var formattingSettings = new FormattingAssemblerSettings
+            {
+                RemoveStyleNamesFromParagraphAndRunProperties = false,
+                ClearStyles = false,
+                RestrictToSupportedLanguages = false,
+                RestrictToSupportedNumberingFormats = false,
+                CreateHtmlConverterAnnotationAttributes = true,
+                OrderElementsPerStandard = false,
+                ListItemRetrieverSettings = new ListItemRetrieverSettings
+                {
+                    ListItemTextImplementations = ListItemRetrieverSettings.DefaultListItemTextImplementations,
+                },
+            };
+            FormattingAssembler.AssembleFormatting(wordDoc, formattingSettings);
+            timings["5_FormattingAssembler"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // Phase 5: Various preprocessing
+            var mainPart = wordDoc.MainDocumentPart;
+            var rootElement = mainPart?.GetXDocument().Root;
+
+            // Count elements for stats
+            if (rootElement != null)
+            {
+                response.ParagraphCount = rootElement.Descendants(W.p).Count();
+                response.TableCount = rootElement.Descendants(W.tbl).Count();
+                response.ElementCount = rootElement.DescendantsAndSelf().Count();
+            }
+            timings["6_ElementCounting"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // Now do the actual HTML conversion using the standard method
+            var settings = new WmlToHtmlConverterSettings
+            {
+                PageTitle = "Document",
+                CssClassPrefix = "docx-",
+                FabricateCssClasses = true,
+                GeneralCss = "body { font-family: Arial, sans-serif; margin: 20px; } span { white-space: pre-wrap; }",
+                RenderPagination = PaginationMode.Paginated,
+                PaginationScale = 1.0,
+                PaginationCssClassPrefix = "page-",
+            };
+
+            // We need to re-open the document since we've already modified it
+            // For accurate profiling, let's measure the full conversion on a fresh copy
+            using var freshStream = new MemoryStream();
+            freshStream.Write(docxBytes, 0, docxBytes.Length);
+            freshStream.Position = 0;
+            using var freshDoc = WordprocessingDocument.Open(freshStream, true);
+
+            sw.Restart();
+            var htmlElement = WmlToHtmlConverter.ConvertToHtml(freshDoc, settings);
+            timings["7_ConvertToHtml_Full"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // Serialize to string
+            var html = htmlElement.ToString(SaveOptions.DisableFormatting);
+            timings["8_XElement_ToString"] = sw.Elapsed.TotalMilliseconds;
+
+            response.Html = html;
+            response.Timings = timings;
+            response.TotalMs = totalSw.Elapsed.TotalMilliseconds;
+
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.ProfilingResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Profile document conversion with granular timing for each internal phase.
+    /// This uses a custom converter path to measure individual steps.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <returns>JSON response with detailed phase timings</returns>
+    [JSExport]
+    public static string ProfileConversionDetailed(byte[] docxBytes)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+        {
+            return SerializeError("No document data provided");
+        }
+
+        var totalSw = Stopwatch.StartNew();
+        var timings = new Dictionary<string, double>();
+        var response = new ProfilingResponse();
+
+        try
+        {
+            var sw = Stopwatch.StartNew();
+
+            // ═══════════════════════════════════════════════════════════════════
+            // PHASE 1: DOCUMENT LOADING
+            // ═══════════════════════════════════════════════════════════════════
+
+            // 1a: Create MemoryStream
+            using var memoryStream = new MemoryStream();
+            memoryStream.Write(docxBytes, 0, docxBytes.Length);
+            memoryStream.Position = 0;
+            timings["Load_1_MemoryStream"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // 1b: Open as WordprocessingDocument (this decompresses the ZIP)
+            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
+            timings["Load_2_OpenXml_Open"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // 1c: Get the XML document (parses document.xml)
+            var mainPart = wordDoc.MainDocumentPart;
+            var xDoc = mainPart?.GetXDocument();
+            timings["Load_3_GetXDocument"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // ═══════════════════════════════════════════════════════════════════
+            // PHASE 2: DOCUMENT PREPROCESSING
+            // ═══════════════════════════════════════════════════════════════════
+
+            // 2a: Accept revisions
+            RevisionAccepter.AcceptRevisions(wordDoc);
+            timings["Preprocess_1_AcceptRevisions"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // 2b: Simplify markup
+            var simplifySettings = new SimplifyMarkupSettings
+            {
+                RemoveComments = true,
+                RemoveContentControls = true,
+                RemoveEndAndFootNotes = true,
+                RemoveFieldCodes = false,
+                RemoveLastRenderedPageBreak = true,
+                RemovePermissions = true,
+                RemoveProof = true,
+                RemoveRsidInfo = true,
+                RemoveSmartTags = true,
+                RemoveSoftHyphens = true,
+                RemoveGoBackBookmark = true,
+                ReplaceTabsWithSpaces = false,
+            };
+            MarkupSimplifier.SimplifyMarkup(wordDoc, simplifySettings);
+            timings["Preprocess_2_SimplifyMarkup"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // ═══════════════════════════════════════════════════════════════════
+            // PHASE 3: STYLE RESOLUTION (likely bottleneck)
+            // ═══════════════════════════════════════════════════════════════════
+
+            var formattingSettings = new FormattingAssemblerSettings
+            {
+                RemoveStyleNamesFromParagraphAndRunProperties = false,
+                ClearStyles = false,
+                RestrictToSupportedLanguages = false,
+                RestrictToSupportedNumberingFormats = false,
+                CreateHtmlConverterAnnotationAttributes = true,
+                OrderElementsPerStandard = false,
+                ListItemRetrieverSettings = new ListItemRetrieverSettings
+                {
+                    ListItemTextImplementations = ListItemRetrieverSettings.DefaultListItemTextImplementations,
+                },
+            };
+            FormattingAssembler.AssembleFormatting(wordDoc, formattingSettings);
+            timings["Style_1_FormattingAssembler"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // ═══════════════════════════════════════════════════════════════════
+            // PHASE 4: ADDITIONAL PREPROCESSING
+            // ═══════════════════════════════════════════════════════════════════
+
+            // These are internal WmlToHtmlConverter helpers - we call them via ConvertToHtml
+            // but we can measure the total transform time
+
+            // Get stats before transform
+            var rootElement = mainPart?.GetXDocument().Root;
+            if (rootElement != null)
+            {
+                response.ParagraphCount = rootElement.Descendants(W.p).Count();
+                response.TableCount = rootElement.Descendants(W.tbl).Count();
+                response.ElementCount = rootElement.DescendantsAndSelf().Count();
+            }
+            timings["Stats_ElementCount"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // ═══════════════════════════════════════════════════════════════════
+            // PHASE 5: HTML TRANSFORMATION
+            // ═══════════════════════════════════════════════════════════════════
+
+            var settings = new WmlToHtmlConverterSettings
+            {
+                PageTitle = "Document",
+                CssClassPrefix = "docx-",
+                FabricateCssClasses = true,
+                GeneralCss = "body { font-family: Arial, sans-serif; margin: 20px; } span { white-space: pre-wrap; }",
+                RenderPagination = PaginationMode.Paginated,
+                PaginationScale = 1.0,
+                PaginationCssClassPrefix = "page-",
+            };
+
+            // Note: ConvertToHtml will redo some preprocessing since the document
+            // is already processed. For accurate measurement, we use a fresh document.
+            using var freshStream = new MemoryStream();
+            freshStream.Write(docxBytes, 0, docxBytes.Length);
+            freshStream.Position = 0;
+            using var freshDoc = WordprocessingDocument.Open(freshStream, true);
+
+            sw.Restart();
+            var htmlElement = WmlToHtmlConverter.ConvertToHtml(freshDoc, settings);
+            timings["Transform_1_ConvertToHtml"] = sw.Elapsed.TotalMilliseconds;
+            sw.Restart();
+
+            // ═══════════════════════════════════════════════════════════════════
+            // PHASE 6: SERIALIZATION
+            // ═══════════════════════════════════════════════════════════════════
+
+            var html = htmlElement.ToString(SaveOptions.DisableFormatting);
+            timings["Serialize_1_ToString"] = sw.Elapsed.TotalMilliseconds;
+
+            // Calculate HTML size
+            timings["Output_HtmlLength"] = html.Length;
+
+            response.Html = html;
+            response.Timings = timings;
+            response.TotalMs = totalSw.Elapsed.TotalMilliseconds;
+
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.ProfilingResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
     }
 
     internal static string SerializeError(string error, string? type = null, string? stackTrace = null)
