@@ -7,14 +7,7 @@ A command-line tool for comparing Word documents and generating redlines with tr
 ### As a .NET Global Tool
 
 ```bash
-# Add GitHub Packages source (one-time setup)
-dotnet nuget add source https://nuget.pkg.github.com/JSv4/index.json \
-  --name github \
-  --username YOUR_GITHUB_USERNAME \
-  --password YOUR_GITHUB_PAT
-
-# Install globally
-dotnet tool install -g Redline --source github
+dotnet tool install --global Redline
 ```
 
 ## Usage

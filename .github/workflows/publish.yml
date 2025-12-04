@@ -20,7 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
 
     steps:
       - name: Checkout
@@ -71,9 +70,6 @@ jobs:
         with:
           name: nuget-packages
           path: ./artifacts/*.nupkg
-
-      - name: Push to GitHub Packages
-        run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.GITHUB_TOKEN }} --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --skip-duplicate --timeout 600
 
   # Publish to NuGet.org with trusted publishing (OIDC)
   publish-nuget:
