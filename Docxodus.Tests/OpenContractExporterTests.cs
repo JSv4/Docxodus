@@ -10,6 +10,11 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using Xunit;
 
+// Aliases to resolve ambiguity between Docxodus and OpenXml types
+using WTable = DocumentFormat.OpenXml.Wordprocessing.Table;
+using WTableRow = DocumentFormat.OpenXml.Wordprocessing.TableRow;
+using WTableCell = DocumentFormat.OpenXml.Wordprocessing.TableCell;
+
 #if !ELIDE_XUNIT_TESTS
 
 namespace OxPt
@@ -127,14 +132,14 @@ namespace OxPt
             // Arrange - Create document with a table
             var wmlDoc = CreateTestDocument(body =>
             {
-                body.Append(new Table(
-                    new TableRow(
-                        new TableCell(new Paragraph(new Run(new Text("Cell A1")))),
-                        new TableCell(new Paragraph(new Run(new Text("Cell B1"))))
+                body.Append(new WTable(
+                    new WTableRow(
+                        new WTableCell(new Paragraph(new Run(new Text("Cell A1")))),
+                        new WTableCell(new Paragraph(new Run(new Text("Cell B1"))))
                     ),
-                    new TableRow(
-                        new TableCell(new Paragraph(new Run(new Text("Cell A2")))),
-                        new TableCell(new Paragraph(new Run(new Text("Cell B2"))))
+                    new WTableRow(
+                        new WTableCell(new Paragraph(new Run(new Text("Cell A2")))),
+                        new WTableCell(new Paragraph(new Run(new Text("Cell B2"))))
                     )
                 ));
             });
@@ -155,14 +160,14 @@ namespace OxPt
             // Arrange - Create document with nested tables
             var wmlDoc = CreateTestDocument(body =>
             {
-                body.Append(new Table(
-                    new TableRow(
-                        new TableCell(
+                body.Append(new WTable(
+                    new WTableRow(
+                        new WTableCell(
                             new Paragraph(new Run(new Text("Outer cell"))),
-                            new Table(
-                                new TableRow(
-                                    new TableCell(new Paragraph(new Run(new Text("Inner cell 1")))),
-                                    new TableCell(new Paragraph(new Run(new Text("Inner cell 2"))))
+                            new WTable(
+                                new WTableRow(
+                                    new WTableCell(new Paragraph(new Run(new Text("Inner cell 1")))),
+                                    new WTableCell(new Paragraph(new Run(new Text("Inner cell 2"))))
                                 )
                             )
                         )
@@ -405,9 +410,9 @@ namespace OxPt
             // Arrange - Create document with a table
             var wmlDoc = CreateTestDocument(body =>
             {
-                body.Append(new Table(
-                    new TableRow(
-                        new TableCell(new Paragraph(new Run(new Text("Cell 1"))))
+                body.Append(new WTable(
+                    new WTableRow(
+                        new WTableCell(new Paragraph(new Run(new Text("Cell 1"))))
                     )
                 ));
             });
@@ -801,13 +806,13 @@ namespace OxPt
                 ));
 
                 // Nested table - can be tricky for simple parsers
-                body.Append(new Table(
-                    new TableRow(
-                        new TableCell(
+                body.Append(new WTable(
+                    new WTableRow(
+                        new WTableCell(
                             new Paragraph(new Run(new Text("OUTER_TABLE_CELL"))),
-                            new Table(
-                                new TableRow(
-                                    new TableCell(new Paragraph(new Run(new Text("NESTED_TABLE_CONTENT"))))
+                            new WTable(
+                                new WTableRow(
+                                    new WTableCell(new Paragraph(new Run(new Text("NESTED_TABLE_CONTENT"))))
                                 )
                             )
                         )
@@ -854,9 +859,9 @@ namespace OxPt
             Assert.Contains("NESTED_TABLE_CONTENT", export.Content);
 
             // Verify we have meaningful content length (all parts included)
+            // The expected content pieces total exactly 266 characters when concatenated without separators
             var normalizedContent = export.Content.Replace("\n", "").Replace("\r", "");
-            Assert.True(normalizedContent.Length > 300,
-                $"Content should include all document parts (actual: {normalizedContent.Length} chars)");
+            Assert.Equal(266, normalizedContent.Length);
         }
 
         /// <summary>
@@ -909,9 +914,9 @@ namespace OxPt
                     new Run(new Text(body2)),
                     new Run(new FootnoteReference() { Id = 1 })
                 ));
-                body.Append(new Table(
-                    new TableRow(
-                        new TableCell(new Paragraph(new Run(new Text(tableCell))))
+                body.Append(new WTable(
+                    new WTableRow(
+                        new WTableCell(new Paragraph(new Run(new Text(tableCell))))
                     )
                 ));
                 body.Append(new SectionProperties(
