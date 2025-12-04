@@ -47,12 +47,14 @@ jobs:
           dotnet restore Docxodus.Tests/Docxodus.Tests.csproj
           dotnet restore tools/redline/redline.csproj
           dotnet restore tools/docx2html/docx2html.csproj
+          dotnet restore tools/docx2oc/docx2oc.csproj
 
       - name: Build
         run: |
           dotnet build Docxodus/Docxodus.csproj -c Release --no-restore
           dotnet build tools/redline/redline.csproj -c Release --no-restore
           dotnet build tools/docx2html/docx2html.csproj -c Release --no-restore
+          dotnet build tools/docx2oc/docx2oc.csproj -c Release --no-restore
 
       - name: Run tests
         run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --verbosity normal
@@ -62,6 +64,7 @@ jobs:
           dotnet pack Docxodus/Docxodus.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
           dotnet pack tools/redline/redline.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
           dotnet pack tools/docx2html/docx2html.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
+          dotnet pack tools/docx2oc/docx2oc.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v5
@@ -167,6 +170,54 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: ./publish/docx2html*
+
+  # Build self-contained executables for docx2oc
+  build-docx2oc-binaries:
+    needs: build-test-publish
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            rid: linux-x64
+            artifact: docx2oc-linux-x64
+          - os: windows-latest
+            rid: win-x64
+            artifact: docx2oc-win-x64.exe
+          - os: macos-latest
+            rid: osx-x64
+            artifact: docx2oc-osx-x64
+          - os: macos-latest
+            rid: osx-arm64
+            artifact: docx2oc-osx-arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "VERSION=${{ inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish self-contained
+        run: dotnet publish tools/docx2oc/docx2oc.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ matrix.artifact }}
+          path: ./publish/docx2oc*
 
   # Build and publish npm package
   build-npm:

@@ -729,6 +729,124 @@ public partial class DocumentConverter
     }
 
     /// <summary>
+    /// Export document to OpenContracts format.
+    /// This provides complete document text, structure, and layout information
+    /// compatible with the OpenContracts ecosystem.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <returns>JSON response with OpenContracts export data</returns>
+    [JSExport]
+    public static string ExportToOpenContract(byte[] docxBytes)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            var export = OpenContractExporter.Export(wmlDoc);
+
+            var response = new OpenContractExportResponse
+            {
+                Title = export.Title,
+                Content = export.Content,
+                Description = export.Description,
+                PageCount = export.PageCount,
+                DocLabels = export.DocLabels.ToArray(),
+                PawlsFileContent = export.PawlsFileContent.Select(p => new PawlsPageDto
+                {
+                    Page = new PawlsPageBoundaryDto
+                    {
+                        Width = p.Page.Width,
+                        Height = p.Page.Height,
+                        Index = p.Page.Index
+                    },
+                    Tokens = p.Tokens.Select(t => new PawlsTokenDto
+                    {
+                        X = t.X,
+                        Y = t.Y,
+                        Width = t.Width,
+                        Height = t.Height,
+                        Text = t.Text
+                    }).ToArray()
+                }).ToArray(),
+                LabelledText = export.LabelledText.Select(a => new OpenContractsAnnotationDto
+                {
+                    Id = a.Id,
+                    AnnotationLabel = a.AnnotationLabel,
+                    RawText = a.RawText,
+                    Page = a.Page,
+                    AnnotationJson = ConvertAnnotationJson(a.AnnotationJson),
+                    ParentId = a.ParentId,
+                    AnnotationType = a.AnnotationType,
+                    Structural = a.Structural
+                }).ToArray(),
+                Relationships = export.Relationships?.Select(r => new OpenContractsRelationshipDto
+                {
+                    Id = r.Id,
+                    RelationshipLabel = r.RelationshipLabel,
+                    SourceAnnotationIds = r.SourceAnnotationIds.ToArray(),
+                    TargetAnnotationIds = r.TargetAnnotationIds.ToArray(),
+                    Structural = r.Structural
+                }).ToArray()
+            };
+
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.OpenContractExportResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    private static object? ConvertAnnotationJson(object? annotationJson)
+    {
+        if (annotationJson == null) return null;
+
+        if (annotationJson is TextSpan textSpan)
+        {
+            return new TextSpanDto
+            {
+                Id = textSpan.Id,
+                Start = textSpan.Start,
+                End = textSpan.End,
+                Text = textSpan.Text
+            };
+        }
+
+        // For dictionary-based annotations (per-page)
+        if (annotationJson is Dictionary<string, OpenContractsSinglePageAnnotation> pageDict)
+        {
+            var result = new Dictionary<string, OpenContractsSinglePageAnnotationDto>();
+            foreach (var (key, value) in pageDict)
+            {
+                result[key] = new OpenContractsSinglePageAnnotationDto
+                {
+                    Bounds = new BoundingBoxDto
+                    {
+                        Top = value.Bounds.Top,
+                        Bottom = value.Bounds.Bottom,
+                        Left = value.Bounds.Left,
+                        Right = value.Bounds.Right
+                    },
+                    TokensJsons = value.TokensJsons.Select(t => new TokenIdDto
+                    {
+                        PageIndex = t.PageIndex,
+                        TokenIndex = t.TokenIndex
+                    }).ToArray(),
+                    RawText = value.RawText
+                };
+            }
+            return result;
+        }
+
+        // Return as-is for other types
+        return annotationJson;
+    }
+
+    /// <summary>
     /// Get library version information.
     /// </summary>
     [JSExport]

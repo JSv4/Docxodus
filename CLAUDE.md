@@ -184,6 +184,13 @@ See `docs/architecture/comment_rendering.md` for detailed comment rendering docu
 
 **MetricsGetter.cs** - Extract document metrics (styles, fonts, languages).
 
+**OpenContractExporter.cs** - Export documents to OpenContracts format for interoperability:
+- `Export(WmlDocument)` / `Export(WordprocessingDocument)` - Export to `OpenContractDocExport`
+- Complete text extraction (paragraphs, tables, headers, footers, footnotes, endnotes)
+- PAWLS-format page layout with token positions
+- Structural annotations (sections, paragraphs, tables) with relationships
+- See `docs/architecture/opencontracts_export.md` for detailed documentation
+
 ### Target Frameworks
 
 Library targets: `net8.0`

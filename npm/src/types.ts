@@ -409,6 +409,7 @@ export interface DocxodusWasmExports {
     HasAnnotations: (bytes: Uint8Array) => string;
     GetDocumentStructure: (bytes: Uint8Array) => string;
     GetDocumentMetadata: (bytes: Uint8Array) => string;
+    ExportToOpenContract: (bytes: Uint8Array) => string;
     GetVersion: () => string;
     // Profiling methods
     ConvertDocxToHtmlProfiled: (bytes: Uint8Array) => string;
@@ -1249,5 +1250,177 @@ export interface WorkerDocxodusOptions {
    * Defaults to auto-detection from module URL.
    */
   wasmBasePath?: string;
+}
+
+// ============================================================================
+// OpenContracts Export Types (Issue #56)
+// ============================================================================
+
+/**
+ * OpenContracts document export format.
+ * Compatible with the OpenContracts ecosystem for document analysis.
+ *
+ * @example
+ * ```typescript
+ * const export = await exportToOpenContract(docxFile);
+ * console.log(`Title: ${export.title}`);
+ * console.log(`Content length: ${export.content.length} characters`);
+ * console.log(`Pages: ${export.pageCount}`);
+ * console.log(`Structural annotations: ${export.labelledText.filter(a => a.structural).length}`);
+ * ```
+ */
+export interface OpenContractDocExport {
+  /** Document title (from core properties or filename) */
+  title: string;
+  /** Complete document text content - ALL text from the document */
+  content: string;
+  /** Optional document description */
+  description?: string;
+  /** Estimated page count */
+  pageCount: number;
+  /** PAWLS-format page layout information with token positions */
+  pawlsFileContent: PawlsPage[];
+  /** Document-level labels (categories applied to the whole document) */
+  docLabels: string[];
+  /** Annotations/labeled text spans in the document */
+  labelledText: OpenContractsAnnotation[];
+  /** Relationships between annotations */
+  relationships?: OpenContractsRelationship[];
+}
+
+/**
+ * PAWLS page containing page boundary and token information.
+ * PAWLS (Page-Aware Layout Segmentation) is a format for document layout data.
+ */
+export interface PawlsPage {
+  /** Page boundary information (dimensions and index) */
+  page: PawlsPageBoundary;
+  /** Tokens on this page with position information */
+  tokens: PawlsToken[];
+}
+
+/**
+ * Page boundary information for PAWLS format.
+ */
+export interface PawlsPageBoundary {
+  /** Page width in points (1pt = 1/72 inch) */
+  width: number;
+  /** Page height in points */
+  height: number;
+  /** Zero-based page index */
+  index: number;
+}
+
+/**
+ * Token with position information for PAWLS format.
+ * Each token represents a word or text fragment with its bounding box.
+ */
+export interface PawlsToken {
+  /** X coordinate (left edge) in points */
+  x: number;
+  /** Y coordinate (top edge) in points */
+  y: number;
+  /** Token width in points */
+  width: number;
+  /** Token height in points */
+  height: number;
+  /** The text content of this token */
+  text: string;
+}
+
+/**
+ * OpenContracts annotation format.
+ * Used for both user annotations and structural elements.
+ */
+export interface OpenContractsAnnotation {
+  /** Unique annotation identifier */
+  id?: string;
+  /** Label/category for this annotation (e.g., "SECTION", "PARAGRAPH", "CLAUSE_TYPE_A") */
+  annotationLabel: string;
+  /** The raw text content of the annotation */
+  rawText: string;
+  /** Starting page number (0-indexed) */
+  page: number;
+  /**
+   * Position data for the annotation. Can be either:
+   * - A TextSpan with start/end character offsets
+   * - A dictionary of page indices to single-page annotation data
+   */
+  annotationJson?: TextSpan | Record<string, OpenContractsSinglePageAnnotation>;
+  /** Parent annotation ID for hierarchical annotations */
+  parentId?: string;
+  /** Type of annotation (e.g., "text", "structural") */
+  annotationType?: string;
+  /** Whether this is a structural element (section, heading, table, etc.) */
+  structural: boolean;
+}
+
+/**
+ * Per-page annotation position data.
+ * Used when an annotation spans multiple pages.
+ */
+export interface OpenContractsSinglePageAnnotation {
+  /** Bounding box for the annotation on this page */
+  bounds: BoundingBox;
+  /** Token indices that make up this annotation on this page */
+  tokensJsons: TokenId[];
+  /** Raw text content on this page */
+  rawText: string;
+}
+
+/**
+ * Bounding box coordinates in points.
+ */
+export interface BoundingBox {
+  /** Top edge coordinate */
+  top: number;
+  /** Bottom edge coordinate */
+  bottom: number;
+  /** Left edge coordinate */
+  left: number;
+  /** Right edge coordinate */
+  right: number;
+}
+
+/**
+ * Token identifier referencing a specific token on a specific page.
+ */
+export interface TokenId {
+  /** Zero-based page index */
+  pageIndex: number;
+  /** Zero-based token index within the page */
+  tokenIndex: number;
+}
+
+/**
+ * Text span with character offsets for annotation positioning.
+ * This is the simpler form of annotation_json for single-page annotations.
+ */
+export interface TextSpan {
+  /** Optional span identifier */
+  id?: string;
+  /** Start character offset (0-indexed, inclusive) */
+  start: number;
+  /** End character offset (exclusive) */
+  end: number;
+  /** The text content of this span */
+  text: string;
+}
+
+/**
+ * Relationship between annotations.
+ * Used to express hierarchical or semantic connections between annotations.
+ */
+export interface OpenContractsRelationship {
+  /** Unique relationship identifier */
+  id?: string;
+  /** Label describing the relationship type (e.g., "CONTAINS", "REFERENCES") */
+  relationshipLabel: string;
+  /** IDs of source annotations */
+  sourceAnnotationIds: string[];
+  /** IDs of target annotations */
+  targetAnnotationIds: string[];
+  /** Whether this is a structural relationship */
+  structural: boolean;
 }
 
