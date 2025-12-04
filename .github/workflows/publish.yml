@@ -75,6 +75,39 @@ jobs:
       - name: Push to GitHub Packages
         run: dotnet nuget push ./artifacts/*.nupkg --api-key ${{ secrets.GITHUB_TOKEN }} --source "https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json" --skip-duplicate --timeout 600
 
+  # Publish to NuGet.org with trusted publishing (OIDC)
+  publish-nuget:
+    needs: build-test-publish
+    runs-on: ubuntu-latest
+    environment: Publisher
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download NuGet packages
+        uses: actions/download-artifact@v5
+        with:
+          name: nuget-packages
+          path: ./artifacts
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Login to NuGet with OIDC
+        uses: nuget/login@v1
+        with:
+          nuget-server-url: https://api.nuget.org/v3/index.json
+          allowed-package-owner: JSv4
+
+      - name: Publish NuGet packages
+        run: |
+          for package in ./artifacts/*.nupkg; do
+            dotnet nuget push "$package" --source https://api.nuget.org/v3/index.json --skip-duplicate --timeout 600
+          done
+
   # Build self-contained executables for releases
   build-binaries:
     needs: build-test-publish
