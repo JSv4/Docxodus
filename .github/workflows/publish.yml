@@ -98,14 +98,14 @@ jobs:
 
       - name: Login to NuGet with OIDC
         uses: nuget/login@v1
+        id: nuget-login
         with:
-          nuget-server-url: https://api.nuget.org/v3/index.json
-          allowed-package-owner: JSv4
+          user: JSv4
 
       - name: Publish NuGet packages
         run: |
           for package in ./artifacts/*.nupkg; do
-            dotnet nuget push "$package" --source https://api.nuget.org/v3/index.json --skip-duplicate --timeout 600
+            dotnet nuget push "$package" --api-key "${{ steps.nuget-login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate --timeout 600
           done
 
   # Build self-contained executables for releases
