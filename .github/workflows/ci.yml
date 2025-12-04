@@ -25,6 +25,7 @@ jobs:
           dotnet restore Docxodus.Tests/Docxodus.Tests.csproj
           dotnet restore tools/redline/redline.csproj
           dotnet restore tools/docx2html/docx2html.csproj
+          dotnet restore tools/docx2oc/docx2oc.csproj
 
       - name: Build library
         run: dotnet build Docxodus/Docxodus.csproj -c Release --no-restore
@@ -33,6 +34,7 @@ jobs:
         run: |
           dotnet build tools/redline/redline.csproj -c Release --no-restore
           dotnet build tools/docx2html/docx2html.csproj -c Release --no-restore
+          dotnet build tools/docx2oc/docx2oc.csproj -c Release --no-restore
 
       - name: Run tests
         run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
@@ -93,6 +95,7 @@ jobs:
           dotnet restore Docxodus/Docxodus.csproj
           dotnet restore tools/redline/redline.csproj
           dotnet restore tools/docx2html/docx2html.csproj
+          dotnet restore tools/docx2oc/docx2oc.csproj
 
       - name: Build
         run: dotnet build Docxodus/Docxodus.csproj -c Release --no-restore
@@ -101,3 +104,4 @@ jobs:
         run: |
           dotnet build tools/redline/redline.csproj -c Release --no-restore
           dotnet build tools/docx2html/docx2html.csproj -c Release --no-restore
+          dotnet build tools/docx2oc/docx2oc.csproj -c Release --no-restore
