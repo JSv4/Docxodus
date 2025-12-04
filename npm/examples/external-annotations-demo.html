@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>External Annotations Demo</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      margin: 0;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 {
+      margin-top: 0;
+    }
+    .container {
+      display: flex;
+      gap: 20px;
+      height: calc(100vh - 100px);
+    }
+    .panel {
+      background: white;
+      border-radius: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .panel-header {
+      padding: 12px 16px;
+      background: #f8f9fa;
+      border-bottom: 1px solid #e9ecef;
+      font-weight: 600;
+    }
+    .panel-content {
+      flex: 1;
+      overflow: auto;
+      padding: 16px;
+    }
+    .left-panel {
+      width: 350px;
+      flex-shrink: 0;
+    }
+    .right-panel {
+      flex: 1;
+    }
+
+    /* File input */
+    .file-input-wrapper {
+      margin-bottom: 16px;
+    }
+    .file-input-wrapper input {
+      width: 100%;
+    }
+
+    /* Status */
+    .status {
+      padding: 8px 12px;
+      border-radius: 4px;
+      margin-bottom: 16px;
+      font-size: 14px;
+    }
+    .status.loading {
+      background: #fff3cd;
+      color: #856404;
+    }
+    .status.success {
+      background: #d4edda;
+      color: #155724;
+    }
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+
+    /* Annotation list */
+    .annotation-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .annotation-item {
+      border: 1px solid #dee2e6;
+      border-radius: 6px;
+      overflow: hidden;
+      font-size: 13px;
+    }
+    .annotation-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #f8f9fa;
+      cursor: pointer;
+    }
+    .annotation-header:hover {
+      background: #e9ecef;
+    }
+    .annotation-color {
+      width: 16px;
+      height: 16px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .annotation-label {
+      font-weight: 500;
+      flex: 1;
+    }
+    .annotation-text {
+      color: #6c757d;
+      font-size: 12px;
+      max-width: 150px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .annotation-json {
+      padding: 8px 12px;
+      background: #f8f9fa;
+      border-top: 1px solid #dee2e6;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 11px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      max-height: 150px;
+      overflow: auto;
+      display: none;
+    }
+    .annotation-item.expanded .annotation-json {
+      display: block;
+    }
+
+    /* Add annotation form */
+    .add-form {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid #dee2e6;
+    }
+    .add-form h4 {
+      margin: 0 0 12px 0;
+      font-size: 14px;
+    }
+    .form-group {
+      margin-bottom: 12px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      color: #6c757d;
+      margin-bottom: 4px;
+    }
+    .form-group input, .form-group select {
+      width: 100%;
+      padding: 6px 10px;
+      border: 1px solid #ced4da;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: #007bff;
+      color: white;
+    }
+    .btn-primary:hover {
+      background: #0056b3;
+    }
+    .btn-primary:disabled {
+      background: #6c757d;
+      cursor: not-allowed;
+    }
+
+    /* Document view */
+    .document-frame {
+      border: 1px solid #dee2e6;
+      border-radius: 4px;
+      background: white;
+      height: 100%;
+      overflow: auto;
+    }
+    .document-frame iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+    }
+
+    /* Hash display */
+    .hash-display {
+      font-family: monospace;
+      font-size: 11px;
+      color: #6c757d;
+      word-break: break-all;
+      margin-bottom: 16px;
+      padding: 8px;
+      background: #f8f9fa;
+      border-radius: 4px;
+    }
+  </style>
+</head>
+<body>
+  <h1>External Annotations Demo</h1>
+
+  <div class="container">
+    <!-- Left Panel: Annotations -->
+    <div class="panel left-panel">
+      <div class="panel-header">Annotations</div>
+      <div class="panel-content">
+        <div class="file-input-wrapper">
+          <input type="file" id="fileInput" accept=".docx" />
+        </div>
+
+        <div id="status" class="status" style="display: none;"></div>
+
+        <div id="hashDisplay" class="hash-display" style="display: none;"></div>
+
+        <div id="annotationList" class="annotation-list"></div>
+
+        <div id="addForm" class="add-form" style="display: none;">
+          <h4>Add Annotation</h4>
+          <div class="form-group">
+            <label>Search Text</label>
+            <input type="text" id="searchText" placeholder="Text to annotate..." />
+          </div>
+          <div class="form-group">
+            <label>Label</label>
+            <select id="labelSelect">
+              <option value="IMPORTANT" data-color="#FF5722">Important</option>
+              <option value="DEFINITION" data-color="#2196F3">Definition</option>
+              <option value="CLAUSE" data-color="#4CAF50">Clause</option>
+              <option value="DATE" data-color="#9C27B0">Date</option>
+              <option value="PARTY" data-color="#FF9800">Party</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Occurrence (1 = first)</label>
+            <input type="number" id="occurrence" value="1" min="1" />
+          </div>
+          <button class="btn btn-primary" id="addBtn" disabled>Add Annotation</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Panel: Document View -->
+    <div class="panel right-panel">
+      <div class="panel-header">Document View</div>
+      <div class="panel-content">
+        <div class="document-frame">
+          <iframe id="documentFrame"></iframe>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // Import from the built library
+    // In production, use: import { ... } from 'docxodus';
+    import {
+      initialize,
+      createExternalAnnotationSet,
+      convertDocxToHtmlWithExternalAnnotations,
+      createAnnotationFromSearch,
+      validateExternalAnnotations,
+      AnnotationLabelMode
+    } from '../dist/index.js';
+
+    // State
+    let currentFile = null;
+    let currentFileBytes = null;
+    let annotationSet = null;
+    let annotationCounter = 0;
+
+    // Label definitions
+    const labelDefinitions = {
+      IMPORTANT: { id: 'IMPORTANT', text: 'Important', color: '#FF5722', description: 'Important text', icon: '', labelType: 'text' },
+      DEFINITION: { id: 'DEFINITION', text: 'Definition', color: '#2196F3', description: 'Term definition', icon: '', labelType: 'text' },
+      CLAUSE: { id: 'CLAUSE', text: 'Clause', color: '#4CAF50', description: 'Contract clause', icon: '', labelType: 'text' },
+      DATE: { id: 'DATE', text: 'Date', color: '#9C27B0', description: 'Date reference', icon: '', labelType: 'text' },
+      PARTY: { id: 'PARTY', text: 'Party', color: '#FF9800', description: 'Party name', icon: '', labelType: 'text' },
+    };
+
+    // DOM elements
+    const fileInput = document.getElementById('fileInput');
+    const status = document.getElementById('status');
+    const hashDisplay = document.getElementById('hashDisplay');
+    const annotationList = document.getElementById('annotationList');
+    const addForm = document.getElementById('addForm');
+    const searchText = document.getElementById('searchText');
+    const labelSelect = document.getElementById('labelSelect');
+    const occurrence = document.getElementById('occurrence');
+    const addBtn = document.getElementById('addBtn');
+    const documentFrame = document.getElementById('documentFrame');
+
+    // Show status
+    function showStatus(message, type = 'loading') {
+      status.textContent = message;
+      status.className = `status ${type}`;
+      status.style.display = 'block';
+    }
+
+    function hideStatus() {
+      status.style.display = 'none';
+    }
+
+    // Render annotation list
+    function renderAnnotations() {
+      if (!annotationSet) {
+        annotationList.innerHTML = '<p style="color: #6c757d; font-size: 13px;">Load a document to see annotations</p>';
+        return;
+      }
+
+      // Filter to only show non-structural (user) annotations
+      const userAnnotations = annotationSet.labelledText.filter(a => !a.structural);
+
+      if (userAnnotations.length === 0) {
+        annotationList.innerHTML = '<p style="color: #6c757d; font-size: 13px;">No annotations yet. Add one below!</p>';
+        return;
+      }
+
+      annotationList.innerHTML = userAnnotations.map((ann, idx) => {
+        const label = annotationSet.textLabels[ann.annotationLabel] || { text: ann.annotationLabel, color: '#FFEB3B' };
+        const span = ann.annotationJson;
+        return `
+          <div class="annotation-item" data-idx="${idx}">
+            <div class="annotation-header" onclick="toggleAnnotation(${idx})">
+              <div class="annotation-color" style="background: ${label.color}"></div>
+              <span class="annotation-label">${label.text}</span>
+              <span class="annotation-text">"${ann.rawText.substring(0, 30)}${ann.rawText.length > 30 ? '...' : ''}"</span>
+            </div>
+            <div class="annotation-json">${JSON.stringify(ann, null, 2)}</div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Toggle annotation JSON visibility
+    window.toggleAnnotation = function(idx) {
+      const item = document.querySelector(`.annotation-item[data-idx="${idx}"]`);
+      if (item) {
+        item.classList.toggle('expanded');
+      }
+    };
+
+    // Render document with annotations
+    async function renderDocument() {
+      if (!currentFileBytes || !annotationSet) return;
+
+      try {
+        const html = await convertDocxToHtmlWithExternalAnnotations(
+          currentFileBytes,
+          annotationSet,
+          { pageTitle: 'Annotated Document' },
+          { labelMode: AnnotationLabelMode.Inline, cssClassPrefix: 'ext-annot-' }
+        );
+
+        // Write to iframe
+        const doc = documentFrame.contentDocument;
+        doc.open();
+        doc.write(html);
+        doc.close();
+      } catch (err) {
+        console.error('Render error:', err);
+        showStatus(`Render error: ${err.message}`, 'error');
+      }
+    }
+
+    // Handle file selection
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      currentFile = file;
+      showStatus('Initializing WASM...');
+
+      try {
+        // Initialize WASM (auto-detects path)
+        await initialize();
+
+        showStatus('Processing document...');
+
+        // Read file bytes
+        const buffer = await file.arrayBuffer();
+        currentFileBytes = new Uint8Array(buffer);
+
+        // Create annotation set
+        annotationSet = await createExternalAnnotationSet(currentFileBytes, file.name);
+
+        // Add label definitions
+        for (const [id, label] of Object.entries(labelDefinitions)) {
+          annotationSet.textLabels[id] = label;
+        }
+
+        // Show hash
+        hashDisplay.innerHTML = `<strong>Document Hash:</strong><br>${annotationSet.documentHash}`;
+        hashDisplay.style.display = 'block';
+
+        // Show form
+        addForm.style.display = 'block';
+        addBtn.disabled = false;
+
+        // Render
+        renderAnnotations();
+        await renderDocument();
+
+        hideStatus();
+      } catch (err) {
+        console.error('Load error:', err);
+        showStatus(`Error: ${err.message}`, 'error');
+      }
+    });
+
+    // Handle add annotation
+    addBtn.addEventListener('click', async () => {
+      const text = searchText.value.trim();
+      if (!text) {
+        alert('Please enter text to search for');
+        return;
+      }
+
+      const labelId = labelSelect.value;
+      const occ = parseInt(occurrence.value) || 1;
+
+      // Create annotation using client-side helper
+      const ann = createAnnotationFromSearch(
+        `ann-${++annotationCounter}`,
+        labelId,
+        annotationSet.content,
+        text,
+        occ
+      );
+
+      if (!ann) {
+        alert(`Text "${text}" not found in document (occurrence ${occ})`);
+        return;
+      }
+
+      // Add to annotation set
+      annotationSet.labelledText.push(ann);
+      annotationSet.updatedAt = new Date().toISOString();
+
+      // Clear form
+      searchText.value = '';
+      occurrence.value = '1';
+
+      // Re-render
+      renderAnnotations();
+      await renderDocument();
+
+      console.log('Added annotation:', ann);
+    });
+
+    // Initial render
+    renderAnnotations();
+  </script>
+</body>
+</html>
