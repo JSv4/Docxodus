@@ -38,6 +38,10 @@ All notable changes to this project will be documented in this file.
   - TypeScript API: `exportToOpenContract()` function with full type definitions
   - WASM export: `DocumentConverter.ExportToOpenContract()`
   - Compatible with OpenContracts ecosystem for document analysis
+  - **New CLI tool: `docx2oc`** - Command-line tool for OpenContracts export
+    - Usage: `docx2oc <input.docx> [output.json]`
+    - Default output: same filename with `.oc` extension
+    - Installable as .NET tool: `dotnet tool install --global Docx2OC`
 - **ReadyToRun and AOT Compilation** - Performance optimizations to reduce cold-start times
   - .NET library: Added `PublishReadyToRun` for pre-compiled native code during publish
   - WASM: Added `RunAOTCompilation` for Release builds to pre-compile IL to WebAssembly
