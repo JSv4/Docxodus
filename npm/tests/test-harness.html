@@ -404,6 +404,157 @@
                 } catch (e) {
                     return { error: { message: e.message } };
                 }
+            },
+
+            // ===== External Annotation API (Issue #57) =====
+
+            /**
+             * Compute SHA256 hash of document for integrity validation.
+             */
+            computeDocumentHash: function(bytes) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.ComputeDocumentHash(bytes);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    return { hash: parsed.Hash || parsed.hash };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            /**
+             * Create external annotation set from document.
+             */
+            createExternalAnnotationSet: function(bytes, documentId) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.CreateExternalAnnotationSet(bytes, documentId);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { annotationSet: JSON.parse(result) };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            /**
+             * Validate external annotations against document.
+             */
+            validateExternalAnnotations: function(bytes, annotationSet) {
+                try {
+                    const annotationSetJson = JSON.stringify(annotationSet);
+                    const result = window.Docxodus.DocumentConverter.ValidateExternalAnnotations(bytes, annotationSetJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    return {
+                        isValid: parsed.IsValid ?? parsed.isValid,
+                        hashMismatch: parsed.HashMismatch ?? parsed.hashMismatch,
+                        issues: parsed.Issues || parsed.issues || []
+                    };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            /**
+             * Convert DOCX to HTML with external annotations projected.
+             */
+            convertToHtmlWithExternalAnnotations: function(bytes, annotationSet, labelMode = 1) {
+                try {
+                    const annotationSetJson = JSON.stringify(annotationSet);
+                    const result = window.Docxodus.DocumentConverter.ConvertDocxToHtmlWithExternalAnnotations(
+                        bytes,
+                        annotationSetJson,
+                        'Document',       // pageTitle
+                        'docx-',          // cssPrefix
+                        true,             // fabricateClasses
+                        '',               // additionalCss
+                        'ext-annot-',     // extAnnotCssClassPrefix
+                        labelMode         // 0=Above, 1=Inline, 2=Tooltip, 3=None
+                    );
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    return { html: parsed.Html || parsed.html };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            /**
+             * Search for text occurrences in document.
+             */
+            searchTextOffsets: function(bytes, searchText, maxResults = 100) {
+                try {
+                    const result = window.Docxodus.DocumentConverter.SearchTextOffsets(bytes, searchText, maxResults);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    const parsed = JSON.parse(result);
+                    return {
+                        results: (parsed.Results || parsed.results || []).map(r => ({
+                            id: r.Id ?? r.id,
+                            start: r.Start ?? r.start,
+                            end: r.End ?? r.end,
+                            text: r.Text ?? r.text
+                        }))
+                    };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            /**
+             * Client-side helper: Create annotation from offsets.
+             */
+            createAnnotationFromOffsets: function(id, labelId, documentText, startOffset, endOffset) {
+                if (startOffset < 0 || endOffset < startOffset || endOffset > documentText.length) {
+                    return { error: { message: 'Invalid offsets' } };
+                }
+                const rawText = documentText.substring(startOffset, endOffset);
+                return {
+                    annotation: {
+                        id: id,
+                        annotationLabel: labelId,
+                        rawText: rawText,
+                        page: 0,
+                        annotationJson: { id: id, start: startOffset, end: endOffset, text: rawText },
+                        annotationType: 'text',
+                        structural: false
+                    }
+                };
+            },
+
+            /**
+             * Client-side helper: Find all occurrences of text.
+             */
+            findTextOccurrences: function(documentText, searchText, maxResults = 100) {
+                const results = [];
+                let index = 0;
+                while (results.length < maxResults) {
+                    index = documentText.indexOf(searchText, index);
+                    if (index < 0) break;
+                    results.push({ start: index, end: index + searchText.length });
+                    index += 1;
+                }
+                return results;
+            },
+
+            /**
+             * Client-side helper: Create annotation by searching for text.
+             */
+            createAnnotationFromSearch: function(id, labelId, documentText, searchText, occurrence = 1) {
+                const offsets = this.findTextOccurrences(documentText, searchText);
+                if (occurrence > offsets.length) {
+                    return { annotation: null };
+                }
+                const { start, end } = offsets[occurrence - 1];
+                return this.createAnnotationFromOffsets(id, labelId, documentText, start, end);
             }
         };
 

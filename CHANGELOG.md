@@ -10,6 +10,34 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
+- **External Annotation System** (Issue #57) - Store annotations externally without modifying the DOCX file
+  - New `ExternalAnnotationSet` type extends `OpenContractDocExport` with document binding:
+    - `documentId`: Unique identifier for the source document
+    - `documentHash`: SHA256 hash for integrity validation
+    - `createdAt`, `updatedAt`: ISO 8601 timestamps
+    - `textLabels`, `docLabelDefinitions`: Label definitions keyed by ID
+  - `ExternalAnnotationManager` static class provides core functionality:
+    - `ComputeDocumentHash()`: SHA256 hash of document bytes
+    - `CreateAnnotationSet()`: Create annotation set from document (wraps OpenContractExporter)
+    - `CreateAnnotation()`: Create annotation from character offsets
+    - `CreateAnnotationFromSearch()`: Create annotation by text search with occurrence index
+    - `FindTextOccurrences()`: Find all occurrences of text in document
+    - `Validate()`: Validate annotations against document (hash check + text verification)
+    - `SerializeToJson()` / `DeserializeFromJson()`: JSON serialization
+  - `ExternalAnnotationProjector` for HTML projection:
+    - `ProjectAnnotations()`: Post-process HTML to wrap annotated text with styled spans
+    - `ConvertWithAnnotations()`: Combined conversion + projection
+    - Supports annotation labels (Above, Inline, Tooltip, None modes)
+    - CSS generation with customizable class prefix
+  - TypeScript/npm wrapper functions:
+    - `computeDocumentHash()`: Get document hash for validation
+    - `createExternalAnnotationSet()`: Create annotation set from DOCX
+    - `validateExternalAnnotations()`: Validate annotations against document
+    - `convertDocxToHtmlWithExternalAnnotations()`: Convert with annotations projected
+    - `searchTextOffsets()`: Search for text occurrences in document
+    - `createAnnotation()`, `createAnnotationFromSearch()`, `findTextOccurrences()`: Client-side helpers
+  - Full type definitions: `AnnotationLabel`, `ExternalAnnotationSet`, `ExternalAnnotationValidationResult`, etc.
+  - 21 unit tests covering hash computation, annotation creation, validation, serialization, and projection
 - **OpenContracts Export Format** (Issue #56) - Export documents to OpenContracts format for interoperability
   - New `OpenContractExporter.Export()` method for complete document export:
     - `title`: Document title from core properties

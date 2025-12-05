@@ -31,6 +31,12 @@ import type {
   TokenId,
   TextSpan,
   OpenContractsRelationship,
+  // External annotation types
+  AnnotationLabel,
+  ExternalAnnotationSet,
+  ExternalAnnotationValidationResult,
+  ExternalAnnotationValidationIssue,
+  ExternalAnnotationProjectionSettings,
 } from "./types.js";
 
 import {
@@ -107,6 +113,12 @@ export type {
   TokenId,
   TextSpan,
   OpenContractsRelationship,
+  // External annotation types
+  AnnotationLabel,
+  ExternalAnnotationSet,
+  ExternalAnnotationValidationResult,
+  ExternalAnnotationValidationIssue,
+  ExternalAnnotationProjectionSettings,
 };
 
 export {
@@ -1232,6 +1244,518 @@ export async function addAnnotationWithTarget(
       annotatedText: annotation.AnnotatedText || annotation.annotatedText,
       metadata: annotation.Metadata || annotation.metadata,
     } : undefined,
+  };
+}
+
+// ============================================================================
+// External Annotation Functions (Issue #57)
+// ============================================================================
+
+/**
+ * Compute the SHA256 hash of a document for integrity validation.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @returns SHA256 hash as lowercase hex string
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * const hash = await computeDocumentHash(docxFile);
+ * console.log(`Document hash: ${hash}`);
+ *
+ * // Later, verify the document hasn't changed
+ * const currentHash = await computeDocumentHash(docxFile);
+ * if (currentHash !== storedHash) {
+ *   console.log("Document has been modified");
+ * }
+ * ```
+ */
+export async function computeDocumentHash(
+  document: File | Uint8Array
+): Promise<string> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  const result = exports.DocumentConverter.ComputeDocumentHash(bytes);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to compute document hash: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return parsed.Hash ?? parsed.hash;
+}
+
+/**
+ * Create an ExternalAnnotationSet from a document.
+ * This extracts the document structure and computes the hash for integrity validation.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param documentId - Unique identifier for the document (filename, UUID, etc.)
+ * @returns ExternalAnnotationSet ready for adding annotations
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * // Create an annotation set
+ * const set = await createExternalAnnotationSet(docxFile, "contract-v1.0");
+ *
+ * // Access document text for searching
+ * console.log(`Document length: ${set.content.length} chars`);
+ *
+ * // Add label definitions
+ * set.textLabels["IMPORTANT"] = {
+ *   id: "IMPORTANT",
+ *   text: "Important",
+ *   color: "#FF0000",
+ *   description: "Important text",
+ *   icon: "",
+ *   labelType: "text"
+ * };
+ *
+ * // Create annotations using the content
+ * const annotation = createAnnotationFromSearch(
+ *   "ann-001", "IMPORTANT", set.content, "shall not be liable"
+ * );
+ * if (annotation) {
+ *   set.labelledText.push(annotation);
+ * }
+ *
+ * // Serialize for storage
+ * const json = JSON.stringify(set);
+ * ```
+ */
+export async function createExternalAnnotationSet(
+  document: File | Uint8Array,
+  documentId: string
+): Promise<ExternalAnnotationSet> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  // Yield to browser before WASM work - allows loading states to render
+  await yieldToMain();
+
+  const result = exports.DocumentConverter.CreateExternalAnnotationSet(bytes, documentId);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to create external annotation set: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+
+  // Convert from PascalCase to camelCase
+  return convertExternalAnnotationSet(parsed);
+}
+
+/**
+ * Validate an external annotation set against a document.
+ * Checks hash match and verifies each annotation's text still matches.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param annotationSet - The annotation set to validate
+ * @returns Validation result with any issues found
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * const result = await validateExternalAnnotations(docxFile, annotationSet);
+ *
+ * if (!result.isValid) {
+ *   if (result.hashMismatch) {
+ *     console.log("Document has been modified since annotations were created");
+ *   }
+ *   for (const issue of result.issues) {
+ *     console.log(`${issue.issueType}: ${issue.description}`);
+ *   }
+ * }
+ * ```
+ */
+export async function validateExternalAnnotations(
+  document: File | Uint8Array,
+  annotationSet: ExternalAnnotationSet
+): Promise<ExternalAnnotationValidationResult> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  // Yield to browser before WASM work - allows loading states to render
+  await yieldToMain();
+
+  const annotationSetJson = JSON.stringify(annotationSet);
+  const result = exports.DocumentConverter.ValidateExternalAnnotations(bytes, annotationSetJson);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to validate external annotations: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+
+  return {
+    isValid: parsed.IsValid ?? parsed.isValid,
+    hashMismatch: parsed.HashMismatch ?? parsed.hashMismatch,
+    issues: (parsed.Issues || parsed.issues || []).map((i: any) => ({
+      annotationId: i.AnnotationId ?? i.annotationId,
+      issueType: i.IssueType ?? i.issueType,
+      description: i.Description ?? i.description,
+      expectedText: i.ExpectedText ?? i.expectedText,
+      actualText: i.ActualText ?? i.actualText,
+    })),
+  };
+}
+
+/**
+ * Convert a DOCX document to HTML with external annotations projected.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param annotationSet - The external annotation set to project
+ * @param conversionOptions - HTML conversion options
+ * @param projectionOptions - Annotation projection options
+ * @returns HTML string with annotations projected
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * // Basic usage
+ * const html = await convertDocxToHtmlWithExternalAnnotations(
+ *   docxFile,
+ *   annotationSet
+ * );
+ *
+ * // With custom options
+ * const html = await convertDocxToHtmlWithExternalAnnotations(
+ *   docxFile,
+ *   annotationSet,
+ *   { pageTitle: "Annotated Document" },
+ *   { labelMode: AnnotationLabelMode.Inline, cssClassPrefix: "my-annot-" }
+ * );
+ * ```
+ */
+export async function convertDocxToHtmlWithExternalAnnotations(
+  document: File | Uint8Array,
+  annotationSet: ExternalAnnotationSet,
+  conversionOptions?: ConversionOptions,
+  projectionOptions?: ExternalAnnotationProjectionSettings
+): Promise<string> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  // Yield to browser before WASM work - allows loading states to render
+  await yieldToMain();
+
+  const annotationSetJson = JSON.stringify(annotationSet);
+  const result = exports.DocumentConverter.ConvertDocxToHtmlWithExternalAnnotations(
+    bytes,
+    annotationSetJson,
+    conversionOptions?.pageTitle ?? "Document",
+    conversionOptions?.cssPrefix ?? "docx-",
+    conversionOptions?.fabricateClasses ?? true,
+    conversionOptions?.additionalCss ?? "",
+    projectionOptions?.cssClassPrefix ?? "ext-annot-",
+    projectionOptions?.labelMode ?? AnnotationLabelMode.Above
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to convert with external annotations: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return parsed.Html ?? parsed.html;
+}
+
+/**
+ * Search for text in a document and return character offsets.
+ * Useful for finding text locations to create annotations.
+ *
+ * @param document - DOCX file as File object or Uint8Array
+ * @param searchText - Text to search for
+ * @param maxResults - Maximum number of results (default: 100)
+ * @returns Array of TextSpan objects with offsets
+ * @throws Error if operation fails
+ *
+ * @example
+ * ```typescript
+ * const occurrences = await searchTextOffsets(docxFile, "liability");
+ * console.log(`Found ${occurrences.length} occurrences`);
+ *
+ * for (const span of occurrences) {
+ *   console.log(`"${span.text}" at offset ${span.start}-${span.end}`);
+ * }
+ * ```
+ */
+export async function searchTextOffsets(
+  document: File | Uint8Array,
+  searchText: string,
+  maxResults: number = 100
+): Promise<TextSpan[]> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  // Yield to browser before WASM work - allows loading states to render
+  await yieldToMain();
+
+  const result = exports.DocumentConverter.SearchTextOffsets(bytes, searchText, maxResults);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to search text: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+
+  return (parsed.Results || parsed.results || []).map((r: any) => ({
+    id: r.Id ?? r.id,
+    start: r.Start ?? r.start,
+    end: r.End ?? r.end,
+    text: r.Text ?? r.text,
+  }));
+}
+
+/**
+ * Create an annotation from character offsets.
+ * This is a client-side helper - no WASM call needed.
+ *
+ * @param id - Unique identifier for the annotation
+ * @param labelId - Label/category ID for the annotation
+ * @param documentText - Full document text (from annotationSet.content)
+ * @param startOffset - Start character offset (0-indexed, inclusive)
+ * @param endOffset - End character offset (exclusive)
+ * @returns OpenContractsAnnotation ready to add to an annotation set
+ * @throws Error if offsets are invalid
+ *
+ * @example
+ * ```typescript
+ * const set = await createExternalAnnotationSet(docxFile, "doc-1");
+ * const annotation = createAnnotation("ann-001", "IMPORTANT", set.content, 100, 150);
+ * set.labelledText.push(annotation);
+ * ```
+ */
+export function createAnnotation(
+  id: string,
+  labelId: string,
+  documentText: string,
+  startOffset: number,
+  endOffset: number
+): OpenContractsAnnotation {
+  if (startOffset < 0) {
+    throw new Error("Start offset must be non-negative");
+  }
+  if (endOffset < startOffset) {
+    throw new Error("End offset must be >= start offset");
+  }
+  if (endOffset > documentText.length) {
+    throw new Error("End offset exceeds document length");
+  }
+
+  const rawText = documentText.substring(startOffset, endOffset);
+
+  return {
+    id,
+    annotationLabel: labelId,
+    rawText,
+    page: 0,
+    annotationJson: {
+      id,
+      start: startOffset,
+      end: endOffset,
+      text: rawText,
+    },
+    annotationType: "text",
+    structural: false,
+  };
+}
+
+/**
+ * Create an annotation by searching for text in the document.
+ * This is a client-side helper - no WASM call needed.
+ *
+ * @param id - Unique identifier for the annotation
+ * @param labelId - Label/category ID for the annotation
+ * @param documentText - Full document text (from annotationSet.content)
+ * @param searchText - Text to search for
+ * @param occurrence - Which occurrence to use (1-based, default: 1)
+ * @returns OpenContractsAnnotation, or null if text not found
+ *
+ * @example
+ * ```typescript
+ * const set = await createExternalAnnotationSet(docxFile, "doc-1");
+ *
+ * // Find first occurrence
+ * const ann1 = createAnnotationFromSearch("ann-001", "LIABILITY", set.content, "shall not be liable");
+ * if (ann1) set.labelledText.push(ann1);
+ *
+ * // Find second occurrence
+ * const ann2 = createAnnotationFromSearch("ann-002", "LIABILITY", set.content, "shall not be liable", 2);
+ * if (ann2) set.labelledText.push(ann2);
+ * ```
+ */
+export function createAnnotationFromSearch(
+  id: string,
+  labelId: string,
+  documentText: string,
+  searchText: string,
+  occurrence: number = 1
+): OpenContractsAnnotation | null {
+  if (occurrence < 1) {
+    throw new Error("Occurrence must be >= 1");
+  }
+
+  const offsets = findTextOccurrences(documentText, searchText);
+
+  if (occurrence > offsets.length) {
+    return null;
+  }
+
+  const { start, end } = offsets[occurrence - 1];
+  return createAnnotation(id, labelId, documentText, start, end);
+}
+
+/**
+ * Find all occurrences of a text string in the document.
+ * This is a client-side helper - no WASM call needed.
+ *
+ * @param documentText - Full document text
+ * @param searchText - Text to search for
+ * @param maxResults - Maximum number of results (default: 100)
+ * @returns Array of { start, end } offsets
+ *
+ * @example
+ * ```typescript
+ * const occurrences = findTextOccurrences(set.content, "the");
+ * console.log(`Found ${occurrences.length} occurrences of "the"`);
+ * ```
+ */
+export function findTextOccurrences(
+  documentText: string,
+  searchText: string,
+  maxResults: number = 100
+): Array<{ start: number; end: number }> {
+  if (!searchText) return [];
+
+  const results: Array<{ start: number; end: number }> = [];
+  let index = 0;
+
+  while (results.length < maxResults) {
+    index = documentText.indexOf(searchText, index);
+    if (index < 0) break;
+
+    results.push({ start: index, end: index + searchText.length });
+    index += 1; // Move past start to find overlapping matches
+  }
+
+  return results;
+}
+
+// Helper function to convert PascalCase response to camelCase ExternalAnnotationSet
+function convertExternalAnnotationSet(parsed: any): ExternalAnnotationSet {
+  const convertLabel = (l: any): AnnotationLabel => ({
+    id: l.Id ?? l.id,
+    color: l.Color ?? l.color,
+    description: l.Description ?? l.description ?? "",
+    icon: l.Icon ?? l.icon ?? "",
+    text: l.Text ?? l.text,
+    labelType: l.LabelType ?? l.labelType ?? "text",
+  });
+
+  const convertPawlsPage = (p: any): PawlsPage => ({
+    page: {
+      width: p.Page?.Width ?? p.page?.width,
+      height: p.Page?.Height ?? p.page?.height,
+      index: p.Page?.Index ?? p.page?.index,
+    },
+    tokens: (p.Tokens || p.tokens || []).map((t: any) => ({
+      x: t.X ?? t.x,
+      y: t.Y ?? t.y,
+      width: t.Width ?? t.width,
+      height: t.Height ?? t.height,
+      text: t.Text ?? t.text,
+    })),
+  });
+
+  const convertAnnotation = (a: any): OpenContractsAnnotation => ({
+    id: a.Id ?? a.id,
+    annotationLabel: a.AnnotationLabel ?? a.annotationLabel,
+    rawText: a.RawText ?? a.rawText,
+    page: a.Page ?? a.page,
+    annotationJson: convertAnnotationJson(a.AnnotationJson ?? a.annotationJson),
+    parentId: a.ParentId ?? a.parentId,
+    annotationType: a.AnnotationType ?? a.annotationType,
+    structural: a.Structural ?? a.structural,
+  });
+
+  const convertAnnotationJson = (json: any): TextSpan | Record<string, OpenContractsSinglePageAnnotation> | undefined => {
+    if (!json) return undefined;
+
+    // Check if it's a TextSpan
+    if (json.Start !== undefined || json.start !== undefined) {
+      return {
+        id: json.Id ?? json.id,
+        start: json.Start ?? json.start,
+        end: json.End ?? json.end,
+        text: json.Text ?? json.text,
+      };
+    }
+
+    // Otherwise it's a dictionary of single-page annotations
+    const result: Record<string, OpenContractsSinglePageAnnotation> = {};
+    for (const [key, value] of Object.entries(json)) {
+      const v = value as any;
+      result[key] = {
+        bounds: {
+          top: v.Bounds?.Top ?? v.bounds?.top,
+          bottom: v.Bounds?.Bottom ?? v.bounds?.bottom,
+          left: v.Bounds?.Left ?? v.bounds?.left,
+          right: v.Bounds?.Right ?? v.bounds?.right,
+        },
+        tokensJsons: (v.TokensJsons || v.tokensJsons || []).map((t: any) => ({
+          pageIndex: t.PageIndex ?? t.pageIndex,
+          tokenIndex: t.TokenIndex ?? t.tokenIndex,
+        })),
+        rawText: v.RawText ?? v.rawText,
+      };
+    }
+    return result;
+  };
+
+  const convertRelationship = (r: any): OpenContractsRelationship => ({
+    id: r.Id ?? r.id,
+    relationshipLabel: r.RelationshipLabel ?? r.relationshipLabel,
+    sourceAnnotationIds: r.SourceAnnotationIds ?? r.sourceAnnotationIds ?? [],
+    targetAnnotationIds: r.TargetAnnotationIds ?? r.targetAnnotationIds ?? [],
+    structural: r.Structural ?? r.structural,
+  });
+
+  // Convert label dictionaries
+  const textLabels: Record<string, AnnotationLabel> = {};
+  const rawTextLabels = parsed.TextLabels || parsed.textLabels || {};
+  for (const [key, value] of Object.entries(rawTextLabels)) {
+    textLabels[key] = convertLabel(value);
+  }
+
+  const docLabelDefinitions: Record<string, AnnotationLabel> = {};
+  const rawDocLabelDefs = parsed.DocLabelDefinitions || parsed.docLabelDefinitions || {};
+  for (const [key, value] of Object.entries(rawDocLabelDefs)) {
+    docLabelDefinitions[key] = convertLabel(value);
+  }
+
+  return {
+    documentId: parsed.DocumentId ?? parsed.documentId,
+    documentHash: parsed.DocumentHash ?? parsed.documentHash,
+    createdAt: parsed.CreatedAt ?? parsed.createdAt,
+    updatedAt: parsed.UpdatedAt ?? parsed.updatedAt,
+    version: parsed.Version ?? parsed.version,
+    title: parsed.Title ?? parsed.title,
+    content: parsed.Content ?? parsed.content,
+    description: parsed.Description ?? parsed.description,
+    pageCount: parsed.PageCount ?? parsed.pageCount,
+    pawlsFileContent: (parsed.PawlsFileContent || parsed.pawlsFileContent || []).map(convertPawlsPage),
+    docLabels: parsed.DocLabels ?? parsed.docLabels ?? [],
+    labelledText: (parsed.LabelledText || parsed.labelledText || []).map(convertAnnotation),
+    relationships: (parsed.Relationships || parsed.relationships)?.map(convertRelationship),
+    textLabels,
+    docLabelDefinitions,
   };
 }
 

@@ -2485,4 +2485,763 @@ test.describe('Docxodus WASM Tests', () => {
     });
   });
 
+  // ============================================================================
+  // External Annotation Tests (Issue #57)
+  // ============================================================================
+  test.describe('External Annotations', () => {
+    // Helper to compute document hash
+    async function computeDocumentHash(page: Page, bytes: Uint8Array): Promise<{ hash?: string; error?: any }> {
+      return await page.evaluate((bytesArray) => {
+        return (window as any).DocxodusTests.computeDocumentHash(new Uint8Array(bytesArray));
+      }, Array.from(bytes));
+    }
+
+    // Helper to create external annotation set
+    async function createExternalAnnotationSet(page: Page, bytes: Uint8Array, documentId: string): Promise<{ annotationSet?: any; error?: any }> {
+      return await page.evaluate(([bytesArray, docId]) => {
+        return (window as any).DocxodusTests.createExternalAnnotationSet(new Uint8Array(bytesArray), docId);
+      }, [Array.from(bytes), documentId] as const);
+    }
+
+    // Helper to validate external annotations
+    async function validateExternalAnnotations(page: Page, bytes: Uint8Array, annotationSet: any): Promise<{ isValid?: boolean; hashMismatch?: boolean; issues?: any[]; error?: any }> {
+      return await page.evaluate(([bytesArray, annSet]) => {
+        return (window as any).DocxodusTests.validateExternalAnnotations(new Uint8Array(bytesArray), annSet);
+      }, [Array.from(bytes), annotationSet] as const);
+    }
+
+    // Helper to convert to HTML with external annotations
+    async function convertToHtmlWithExternalAnnotations(page: Page, bytes: Uint8Array, annotationSet: any, labelMode: number = 1): Promise<{ html?: string; error?: any }> {
+      return await page.evaluate(([bytesArray, annSet, mode]) => {
+        return (window as any).DocxodusTests.convertToHtmlWithExternalAnnotations(new Uint8Array(bytesArray), annSet, mode);
+      }, [Array.from(bytes), annotationSet, labelMode] as const);
+    }
+
+    // Helper to search for text offsets
+    async function searchTextOffsets(page: Page, bytes: Uint8Array, searchText: string, maxResults: number = 100): Promise<{ results?: any[]; error?: any }> {
+      return await page.evaluate(([bytesArray, text, max]) => {
+        return (window as any).DocxodusTests.searchTextOffsets(new Uint8Array(bytesArray), text, max);
+      }, [Array.from(bytes), searchText, maxResults] as const);
+    }
+
+    // Helper to create annotation from search (client-side)
+    async function createAnnotationFromSearch(page: Page, id: string, labelId: string, documentText: string, searchText: string, occurrence: number = 1): Promise<{ annotation?: any; error?: any }> {
+      return await page.evaluate(([annId, label, docText, search, occ]) => {
+        return (window as any).DocxodusTests.createAnnotationFromSearch(annId, label, docText, search, occ);
+      }, [id, labelId, documentText, searchText, occurrence] as const);
+    }
+
+    test('computes document hash consistently', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes = readTestFile('HC006-Test-01.docx');
+
+      // Compute hash twice
+      const result1 = await computeDocumentHash(page, bytes);
+      const result2 = await computeDocumentHash(page, bytes);
+
+      expect(result1.error).toBeUndefined();
+      expect(result2.error).toBeUndefined();
+      expect(result1.hash).toBeDefined();
+      expect(result1.hash).toBe(result2.hash);
+      expect(result1.hash!.length).toBe(64); // SHA256 = 64 hex chars
+
+      console.log(`Document hash: ${result1.hash}`);
+    });
+
+    test('different documents have different hashes', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes1 = readTestFile('HC006-Test-01.docx');
+      const bytes2 = readTestFile('HC007-Test-02.docx');
+
+      const result1 = await computeDocumentHash(page, bytes1);
+      const result2 = await computeDocumentHash(page, bytes2);
+
+      expect(result1.error).toBeUndefined();
+      expect(result2.error).toBeUndefined();
+      expect(result1.hash).not.toBe(result2.hash);
+    });
+
+    test('creates external annotation set from document', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes = readTestFile('HC006-Test-01.docx');
+
+      const result = await createExternalAnnotationSet(page, bytes, 'test-doc-001');
+
+      expect(result.error).toBeUndefined();
+      expect(result.annotationSet).toBeDefined();
+
+      const set = result.annotationSet;
+      expect(set.DocumentId || set.documentId).toBe('test-doc-001');
+      expect(set.DocumentHash || set.documentHash).toBeDefined();
+      expect(set.Content || set.content).toBeDefined();
+      expect((set.Content || set.content).length).toBeGreaterThan(0);
+
+      console.log(`Document content length: ${(set.Content || set.content).length} chars`);
+      console.log(`Document hash: ${set.DocumentHash || set.documentHash}`);
+    });
+
+    test('validates annotation set against document', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes = readTestFile('HC006-Test-01.docx');
+
+      // Create annotation set
+      const createResult = await createExternalAnnotationSet(page, bytes, 'test-doc');
+      expect(createResult.error).toBeUndefined();
+
+      // Validate - should pass since we just created it from the same document
+      const validateResult = await validateExternalAnnotations(page, bytes, createResult.annotationSet);
+
+      expect(validateResult.error).toBeUndefined();
+      expect(validateResult.isValid).toBe(true);
+      expect(validateResult.hashMismatch).toBe(false);
+      expect(validateResult.issues).toHaveLength(0);
+    });
+
+    test('detects hash mismatch when document changes', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes1 = readTestFile('HC006-Test-01.docx');
+      const bytes2 = readTestFile('HC007-Test-02.docx'); // Different document
+
+      // Create annotation set from first document
+      const createResult = await createExternalAnnotationSet(page, bytes1, 'test-doc');
+      expect(createResult.error).toBeUndefined();
+
+      // Validate against second document - should detect hash mismatch
+      const validateResult = await validateExternalAnnotations(page, bytes2, createResult.annotationSet);
+
+      expect(validateResult.error).toBeUndefined();
+      expect(validateResult.isValid).toBe(false);
+      expect(validateResult.hashMismatch).toBe(true);
+    });
+
+    test('searches for text occurrences in document', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes = readTestFile('HC006-Test-01.docx');
+
+      // Search for a common word in Business Trip Checklist
+      const result = await searchTextOffsets(page, bytes, 'trip');
+
+      expect(result.error).toBeUndefined();
+      expect(result.results).toBeDefined();
+      expect(result.results!.length).toBeGreaterThan(0);
+
+      console.log(`Found ${result.results!.length} occurrences of "trip"`);
+
+      // Each result should have start, end, and text
+      const first = result.results![0];
+      expect(first.start).toBeDefined();
+      expect(first.end).toBeDefined();
+      expect(first.end).toBeGreaterThan(first.start);
+    });
+
+    test('creates annotation from text search', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes = readTestFile('HC006-Test-01.docx');
+
+      // Create annotation set to get document content
+      const createResult = await createExternalAnnotationSet(page, bytes, 'test-doc');
+      expect(createResult.error).toBeUndefined();
+
+      const content = createResult.annotationSet.Content || createResult.annotationSet.content;
+
+      // Create annotation by searching for text
+      const annResult = await createAnnotationFromSearch(page, 'ann-001', 'IMPORTANT', content, 'trip', 1);
+
+      expect(annResult.error).toBeUndefined();
+      expect(annResult.annotation).toBeDefined();
+      expect(annResult.annotation.rawText).toBe('trip');
+      expect(annResult.annotation.annotationLabel).toBe('IMPORTANT');
+      expect(annResult.annotation.annotationJson.start).toBeDefined();
+      expect(annResult.annotation.annotationJson.end).toBeDefined();
+
+      console.log(`Created annotation at offset ${annResult.annotation.annotationJson.start}-${annResult.annotation.annotationJson.end}`);
+    });
+
+    test('projects annotations onto HTML', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes = readTestFile('HC006-Test-01.docx');
+
+      // Create annotation set
+      const createResult = await createExternalAnnotationSet(page, bytes, 'test-doc');
+      expect(createResult.error).toBeUndefined();
+
+      const set = createResult.annotationSet;
+      const content = set.Content || set.content;
+      console.log(`Document content length: ${content.length}`);
+      console.log(`Document content sample: "${content.substring(0, 100)}..."`);
+
+      // Add a label definition
+      if (!set.TextLabels) set.TextLabels = {};
+      if (!set.textLabels) set.textLabels = {};
+      const labels = set.TextLabels || set.textLabels;
+      labels['IMPORTANT'] = {
+        Id: 'IMPORTANT',
+        id: 'IMPORTANT',
+        Text: 'Important',
+        text: 'Important',
+        Color: '#FF5722',
+        color: '#FF5722',
+        Description: 'Important text',
+        description: 'Important text',
+        Icon: '',
+        icon: '',
+        LabelType: 'text',
+        labelType: 'text'
+      };
+
+      // Create and add annotation
+      const annResult = await createAnnotationFromSearch(page, 'ann-001', 'IMPORTANT', content, 'trip', 1);
+      console.log(`createAnnotationFromSearch result: ${JSON.stringify(annResult, null, 2)}`);
+      expect(annResult.annotation).toBeDefined();
+
+      // Add to annotation set
+      const labelledText = set.LabelledText || set.labelledText || [];
+      labelledText.push(annResult.annotation);
+      set.LabelledText = labelledText;
+      set.labelledText = labelledText;
+
+      console.log(`Number of annotations in set: ${labelledText.length}`);
+
+      // Convert to HTML with annotations projected
+      const htmlResult = await convertToHtmlWithExternalAnnotations(page, bytes, set, 1); // Inline mode
+
+      expect(htmlResult.error).toBeUndefined();
+      expect(htmlResult.html).toBeDefined();
+
+      // Log debug info
+      const hasHighlight = htmlResult.html!.includes('ext-annot-highlight');
+      const hasAnnotId = htmlResult.html!.includes('data-annotation-id');
+      console.log(`Has ext-annot-highlight: ${hasHighlight}`);
+      console.log(`Has data-annotation-id: ${hasAnnotId}`);
+
+      // Check that annotation wrapper is in the HTML
+      expect(htmlResult.html).toContain('ext-annot-highlight');
+      expect(htmlResult.html).toContain('data-annotation-id');
+      expect(htmlResult.html).toContain('ann-001');
+
+      console.log('Annotations successfully projected onto HTML');
+    });
+
+    test('projects multiple annotations with different labels', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes = readTestFile('HC006-Test-01.docx');
+
+      // Create annotation set
+      const createResult = await createExternalAnnotationSet(page, bytes, 'test-doc');
+      expect(createResult.error).toBeUndefined();
+
+      const set = createResult.annotationSet;
+      const content = set.Content || set.content;
+
+      // Add label definitions
+      if (!set.TextLabels) set.TextLabels = {};
+      if (!set.textLabels) set.textLabels = {};
+      const labels = set.TextLabels || set.textLabels;
+
+      labels['IMPORTANT'] = {
+        id: 'IMPORTANT', Id: 'IMPORTANT',
+        text: 'Important', Text: 'Important',
+        color: '#FF5722', Color: '#FF5722',
+        description: '', Description: '',
+        icon: '', Icon: '',
+        labelType: 'text', LabelType: 'text'
+      };
+      labels['TOPIC'] = {
+        id: 'TOPIC', Id: 'TOPIC',
+        text: 'Topic', Text: 'Topic',
+        color: '#9C27B0', Color: '#9C27B0',
+        description: '', Description: '',
+        icon: '', Icon: '',
+        labelType: 'text', LabelType: 'text'
+      };
+
+      // Create multiple annotations - search for words that appear multiple times
+      const ann1Result = await createAnnotationFromSearch(page, 'ann-001', 'IMPORTANT', content, 'trip', 1);
+      const ann2Result = await createAnnotationFromSearch(page, 'ann-002', 'IMPORTANT', content, 'trip', 2);
+      const ann3Result = await createAnnotationFromSearch(page, 'ann-003', 'TOPIC', content, 'office', 1);
+
+      // Add to annotation set
+      const labelledText = set.LabelledText || set.labelledText || [];
+      if (ann1Result.annotation) labelledText.push(ann1Result.annotation);
+      if (ann2Result.annotation) labelledText.push(ann2Result.annotation);
+      if (ann3Result.annotation) labelledText.push(ann3Result.annotation);
+      set.LabelledText = labelledText;
+      set.labelledText = labelledText;
+
+      // Convert to HTML with annotations projected
+      const htmlResult = await convertToHtmlWithExternalAnnotations(page, bytes, set, 1);
+
+      expect(htmlResult.error).toBeUndefined();
+      expect(htmlResult.html).toBeDefined();
+
+      // Count annotation wrappers
+      const highlightCount = (htmlResult.html!.match(/ext-annot-highlight/g) || []).length;
+      console.log(`Found ${highlightCount} annotation highlights in HTML`);
+
+      // Should have at least the annotations we added (filtering out structural ones)
+      const userAnnotations = labelledText.filter((a: any) => !(a.Structural || a.structural));
+      expect(highlightCount).toBeGreaterThanOrEqual(userAnnotations.length);
+
+      // Check for different annotation IDs
+      expect(htmlResult.html).toContain('ann-001');
+      expect(htmlResult.html).toContain('ann-002');
+      if (ann3Result.annotation) {
+        expect(htmlResult.html).toContain('ann-003');
+      }
+    });
+
+    test('validates annotations with text mismatch detection', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes = readTestFile('HC006-Test-01.docx');
+
+      // Create annotation set
+      const createResult = await createExternalAnnotationSet(page, bytes, 'test-doc');
+      expect(createResult.error).toBeUndefined();
+
+      const set = createResult.annotationSet;
+
+      // Add a bad annotation with wrong text at valid offsets
+      const badAnnotation = {
+        id: 'bad-ann',
+        Id: 'bad-ann',
+        annotationLabel: 'TEST',
+        AnnotationLabel: 'TEST',
+        rawText: 'WRONG TEXT',
+        RawText: 'WRONG TEXT',
+        page: 0,
+        Page: 0,
+        annotationJson: {
+          id: 'bad-ann',
+          Id: 'bad-ann',
+          start: 0,
+          Start: 0,
+          end: 10,
+          End: 10,
+          text: 'WRONG TEXT',
+          Text: 'WRONG TEXT'
+        },
+        AnnotationJson: {
+          id: 'bad-ann',
+          Id: 'bad-ann',
+          start: 0,
+          Start: 0,
+          end: 10,
+          End: 10,
+          text: 'WRONG TEXT',
+          Text: 'WRONG TEXT'
+        },
+        structural: false,
+        Structural: false
+      };
+
+      const labelledText = set.LabelledText || set.labelledText || [];
+      labelledText.push(badAnnotation);
+      set.LabelledText = labelledText;
+      set.labelledText = labelledText;
+
+      // Validate - should detect text mismatch
+      const validateResult = await validateExternalAnnotations(page, bytes, set);
+
+      expect(validateResult.error).toBeUndefined();
+      expect(validateResult.isValid).toBe(false);
+      expect(validateResult.issues!.length).toBeGreaterThan(0);
+
+      // Find the text mismatch issue
+      const textMismatchIssue = validateResult.issues!.find(
+        (i: any) => (i.IssueType || i.issueType) === 'TextMismatch'
+      );
+      expect(textMismatchIssue).toBeDefined();
+
+      console.log('Validation correctly detected text mismatch');
+    });
+
+    test('end-to-end: create, annotate, validate, and render', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes = readTestFile('HC006-Test-01.docx');
+
+      // Step 1: Create annotation set
+      console.log('Step 1: Creating annotation set...');
+      const createResult = await createExternalAnnotationSet(page, bytes, 'business-trip-v1');
+      expect(createResult.error).toBeUndefined();
+      const set = createResult.annotationSet;
+
+      console.log(`  - Document ID: ${set.DocumentId || set.documentId}`);
+      console.log(`  - Document hash: ${(set.DocumentHash || set.documentHash).substring(0, 16)}...`);
+      console.log(`  - Content length: ${(set.Content || set.content).length} chars`);
+
+      // Step 2: Add label definitions
+      console.log('Step 2: Adding label definitions...');
+      if (!set.TextLabels) set.TextLabels = {};
+      if (!set.textLabels) set.textLabels = {};
+      const labels = set.TextLabels || set.textLabels;
+
+      labels['TASK'] = {
+        id: 'TASK', Id: 'TASK',
+        text: 'Task', Text: 'Task',
+        color: '#4CAF50', Color: '#4CAF50',
+        description: 'Checklist task', Description: 'Checklist task',
+        icon: '', Icon: '',
+        labelType: 'text', LabelType: 'text'
+      };
+      labels['TOPIC'] = {
+        id: 'TOPIC', Id: 'TOPIC',
+        text: 'Topic', Text: 'Topic',
+        color: '#2196F3', Color: '#2196F3',
+        description: 'Checklist topic', Description: 'Checklist topic',
+        icon: '', Icon: '',
+        labelType: 'text', LabelType: 'text'
+      };
+
+      // Step 3: Create annotations by searching for text
+      console.log('Step 3: Creating annotations...');
+      const content = set.Content || set.content;
+
+      // Search for "trip" occurrences (common in Business Trip Checklist)
+      const searchResult = await searchTextOffsets(page, bytes, 'trip');
+      console.log(`  - Found ${searchResult.results?.length || 0} occurrences of "trip"`);
+
+      // Create annotations for first 3 occurrences
+      const annotations = [];
+      for (let i = 1; i <= Math.min(3, searchResult.results?.length || 0); i++) {
+        const annResult = await createAnnotationFromSearch(page, `trip-${i}`, 'TASK', content, 'trip', i);
+        if (annResult.annotation) {
+          annotations.push(annResult.annotation);
+          console.log(`  - Created annotation trip-${i} at offset ${annResult.annotation.annotationJson.start}`);
+        }
+      }
+
+      // Add annotations to set
+      const labelledText = set.LabelledText || set.labelledText || [];
+      annotations.forEach(ann => labelledText.push(ann));
+      set.LabelledText = labelledText;
+      set.labelledText = labelledText;
+
+      // Step 4: Validate
+      console.log('Step 4: Validating annotations...');
+      const validateResult = await validateExternalAnnotations(page, bytes, set);
+      console.log(`  - Validation result: isValid=${validateResult.isValid}, hashMismatch=${validateResult.hashMismatch}`);
+      if (validateResult.issues && validateResult.issues.length > 0) {
+        console.log(`  - Validation issues:`);
+        validateResult.issues.forEach((issue: any, i: number) => {
+          console.log(`    ${i + 1}. ${issue.annotationId}: ${issue.issueType} - ${issue.description}`);
+        });
+      }
+      expect(validateResult.isValid).toBe(true);
+      console.log(`  - Validation passed: ${validateResult.isValid}`);
+
+      // Step 5: Render with annotations
+      console.log('Step 5: Rendering HTML with annotations...');
+      const htmlResult = await convertToHtmlWithExternalAnnotations(page, bytes, set, 1);
+      expect(htmlResult.error).toBeUndefined();
+
+      // Verify annotations are in the HTML
+      const highlightCount = (htmlResult.html!.match(/ext-annot-highlight/g) || []).length;
+      console.log(`  - Found ${highlightCount} annotation highlights in rendered HTML`);
+
+      // Check for our specific annotations
+      for (const ann of annotations) {
+        expect(htmlResult.html).toContain(ann.id);
+      }
+
+      console.log('End-to-end test completed successfully!');
+    });
+
+    test('VISUAL DEMO: renders annotated document to DOM', async ({ page }) => {
+      await page.goto('/test-harness.html');
+      await waitForDocxodus(page);
+
+      const bytes = readTestFile('HC006-Test-01.docx');
+
+      // Create annotation set
+      const createResult = await createExternalAnnotationSet(page, bytes, 'visual-demo');
+      const set = createResult.annotationSet;
+
+      // Add colorful label definitions
+      if (!set.TextLabels) set.TextLabels = {};
+      if (!set.textLabels) set.textLabels = {};
+      const labels = set.TextLabels || set.textLabels;
+
+      labels['IMPORTANT'] = {
+        id: 'IMPORTANT', Id: 'IMPORTANT',
+        text: 'Important', Text: 'Important',
+        color: '#FF5722', Color: '#FF5722',
+        description: 'Important item', Description: 'Important item',
+        icon: '', Icon: '',
+        labelType: 'text', LabelType: 'text'
+      };
+      labels['ACTION'] = {
+        id: 'ACTION', Id: 'ACTION',
+        text: 'Action', Text: 'Action',
+        color: '#4CAF50', Color: '#4CAF50',
+        description: 'Action item', Description: 'Action item',
+        icon: '', Icon: '',
+        labelType: 'text', LabelType: 'text'
+      };
+      labels['REFERENCE'] = {
+        id: 'REFERENCE', Id: 'REFERENCE',
+        text: 'Reference', Text: 'Reference',
+        color: '#2196F3', Color: '#2196F3',
+        description: 'Reference', Description: 'Reference',
+        icon: '', Icon: '',
+        labelType: 'text', LabelType: 'text'
+      };
+
+      // Create annotations for various terms
+      const content = set.Content || set.content;
+      const annotations: any[] = [];
+
+      // Annotate "Business" as IMPORTANT
+      const businessResult = await createAnnotationFromSearch(page, 'ann-business', 'IMPORTANT', content, 'Business', 1);
+      if (businessResult.annotation) annotations.push(businessResult.annotation);
+
+      // Annotate "trip" occurrences as ACTION
+      for (let i = 1; i <= 2; i++) {
+        const tripResult = await createAnnotationFromSearch(page, `ann-trip-${i}`, 'ACTION', content, 'trip', i);
+        if (tripResult.annotation) annotations.push(tripResult.annotation);
+      }
+
+      // Annotate "Checklist" as REFERENCE
+      const checklistResult = await createAnnotationFromSearch(page, 'ann-checklist', 'REFERENCE', content, 'Checklist', 1);
+      if (checklistResult.annotation) annotations.push(checklistResult.annotation);
+
+      // Add annotations to set
+      const labelledText = set.LabelledText || set.labelledText || [];
+      annotations.forEach(ann => labelledText.push(ann));
+      set.LabelledText = labelledText;
+      set.labelledText = labelledText;
+
+      // Render with annotations
+      const htmlResult = await convertToHtmlWithExternalAnnotations(page, bytes, set, 1);
+      expect(htmlResult.error).toBeUndefined();
+
+      // Inject the rendered HTML into the page with custom styles and JSON panel
+      await page.evaluate(({ html, annotationSet, annotations }) => {
+        document.body.innerHTML = `
+          <style>
+            * { box-sizing: border-box; }
+            body {
+              font-family: Arial, sans-serif;
+              padding: 20px;
+              margin: 0;
+              background: #f5f5f5;
+            }
+            h1 {
+              color: #333;
+              border-bottom: 2px solid #2196F3;
+              padding-bottom: 10px;
+              margin-top: 0;
+            }
+            .demo-info {
+              background: #e3f2fd;
+              padding: 15px;
+              border-radius: 8px;
+              margin-bottom: 20px;
+            }
+            .demo-info h3 { margin-top: 0; color: #1565c0; }
+            .legend { display: flex; gap: 20px; margin-top: 10px; flex-wrap: wrap; }
+            .legend-item { display: flex; align-items: center; gap: 5px; }
+            .legend-color { width: 20px; height: 20px; border-radius: 4px; }
+
+            .main-container {
+              display: flex;
+              gap: 20px;
+              align-items: flex-start;
+            }
+            #document-container {
+              flex: 1;
+              background: white;
+              padding: 30px;
+              border-radius: 8px;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+              min-width: 0;
+            }
+            #json-panel {
+              width: 400px;
+              flex-shrink: 0;
+              background: #1e1e1e;
+              color: #d4d4d4;
+              padding: 15px;
+              border-radius: 8px;
+              font-family: 'Consolas', 'Monaco', monospace;
+              font-size: 11px;
+              max-height: 80vh;
+              overflow-y: auto;
+              position: sticky;
+              top: 20px;
+            }
+            #json-panel h3 {
+              color: #569cd6;
+              margin-top: 0;
+              margin-bottom: 15px;
+              font-size: 14px;
+            }
+            .json-annotation {
+              background: #2d2d2d;
+              padding: 10px;
+              border-radius: 4px;
+              margin-bottom: 10px;
+              border-left: 3px solid #569cd6;
+              white-space: pre-wrap;
+              word-break: break-all;
+            }
+            .json-annotation.highlighted {
+              border-left-color: #ff0;
+              background: #3d3d1d;
+            }
+            .json-key { color: #9cdcfe; }
+            .json-string { color: #ce9178; }
+            .json-number { color: #b5cea8; }
+
+            /* Annotation highlight hover styles */
+            .ext-annot-highlight {
+              cursor: pointer;
+              transition: all 0.2s;
+              position: relative;
+            }
+            .ext-annot-highlight:hover {
+              filter: brightness(0.85);
+            }
+
+            /* Tooltip styles */
+            .annotation-tooltip {
+              position: fixed;
+              background: #333;
+              color: white;
+              padding: 8px 12px;
+              border-radius: 4px;
+              font-size: 12px;
+              pointer-events: none;
+              z-index: 1000;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+              max-width: 300px;
+            }
+            .annotation-tooltip .tooltip-label {
+              font-weight: bold;
+              margin-bottom: 4px;
+            }
+            .annotation-tooltip .tooltip-text {
+              color: #aaa;
+              font-style: italic;
+            }
+          </style>
+          <h1>External Annotations Visual Demo</h1>
+          <div class="demo-info">
+            <h3>What you're seeing:</h3>
+            <p>This document has <strong>external annotations</strong> projected onto it.
+            The annotations are stored separately (as JSON) and rendered as highlights.
+            <strong>Hover over highlights</strong> to see tooltips. The JSON panel shows the raw annotation data.</p>
+            <div class="legend">
+              <div class="legend-item">
+                <div class="legend-color" style="background: #FF5722;"></div>
+                <span>Important</span>
+              </div>
+              <div class="legend-item">
+                <div class="legend-color" style="background: #4CAF50;"></div>
+                <span>Action</span>
+              </div>
+              <div class="legend-item">
+                <div class="legend-color" style="background: #2196F3;"></div>
+                <span>Reference</span>
+              </div>
+            </div>
+          </div>
+          <div class="main-container">
+            <div id="document-container">${html}</div>
+            <div id="json-panel">
+              <h3>📋 Annotation JSON</h3>
+              ${annotations.map((ann: any, i: number) => `
+                <div class="json-annotation" data-annotation-id="${ann.id}">
+                  <span class="json-key">"id"</span>: <span class="json-string">"${ann.id}"</span>,
+<span class="json-key">"label"</span>: <span class="json-string">"${ann.annotationLabel}"</span>,
+<span class="json-key">"text"</span>: <span class="json-string">"${ann.rawText}"</span>,
+<span class="json-key">"offset"</span>: { <span class="json-key">start</span>: <span class="json-number">${ann.annotationJson?.start || 0}</span>, <span class="json-key">end</span>: <span class="json-number">${ann.annotationJson?.end || 0}</span> }
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          <div id="tooltip" class="annotation-tooltip" style="display: none;"></div>
+        `;
+
+        // Add hover interactions
+        const tooltip = document.getElementById('tooltip')!;
+        const jsonPanel = document.getElementById('json-panel')!;
+
+        document.querySelectorAll('.ext-annot-highlight').forEach(el => {
+          const annotationId = el.getAttribute('data-annotation-id');
+          const labelId = el.getAttribute('data-label-id');
+          const labelText = el.getAttribute('data-label') || labelId;
+          const annotatedText = el.textContent;
+
+          el.addEventListener('mouseenter', (e: Event) => {
+            const mouseEvent = e as MouseEvent;
+            // Show tooltip
+            tooltip.innerHTML = '<div class="tooltip-label">' + labelText + '</div>' +
+              '<div class="tooltip-text">"' + annotatedText + '"</div>';
+            tooltip.style.display = 'block';
+            tooltip.style.left = mouseEvent.pageX + 10 + 'px';
+            tooltip.style.top = mouseEvent.pageY + 10 + 'px';
+
+            // Highlight corresponding JSON
+            jsonPanel.querySelectorAll('.json-annotation').forEach(jsonEl => {
+              if (jsonEl.getAttribute('data-annotation-id') === annotationId) {
+                jsonEl.classList.add('highlighted');
+                jsonEl.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+              } else {
+                jsonEl.classList.remove('highlighted');
+              }
+            });
+          });
+
+          el.addEventListener('mousemove', (e: Event) => {
+            const mouseEvent = e as MouseEvent;
+            tooltip.style.left = mouseEvent.pageX + 10 + 'px';
+            tooltip.style.top = mouseEvent.pageY + 10 + 'px';
+          });
+
+          el.addEventListener('mouseleave', () => {
+            tooltip.style.display = 'none';
+            jsonPanel.querySelectorAll('.json-annotation').forEach(jsonEl => {
+              jsonEl.classList.remove('highlighted');
+            });
+          });
+        });
+      }, { html: htmlResult.html, annotationSet: set, annotations });
+
+      // Only pause in debug/headed mode - check if PWDEBUG env var is set
+      // or use --debug flag. In CI, this will be skipped.
+      if (process.env.PWDEBUG) {
+        await page.pause();
+      }
+
+      // Verify the demo rendered correctly
+      const highlights = await page.locator('.ext-annot-highlight').count();
+      expect(highlights).toBeGreaterThan(0);
+
+      const jsonPanel = await page.locator('#json-panel').isVisible();
+      expect(jsonPanel).toBe(true);
+    });
+  });
+
 });

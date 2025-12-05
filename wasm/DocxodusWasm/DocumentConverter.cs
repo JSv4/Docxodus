@@ -861,6 +861,535 @@ public partial class DocumentConverter
         return JsonSerializer.Serialize(info, DocxodusJsonContext.Default.VersionInfo);
     }
 
+    #region External Annotation Methods
+
+    /// <summary>
+    /// Compute the SHA256 hash of a document for integrity validation.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <returns>JSON response with hash string</returns>
+    [JSExport]
+    public static string ComputeDocumentHash(byte[] docxBytes)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        try
+        {
+            var hash = ExternalAnnotationManager.ComputeDocumentHash(docxBytes);
+            var response = new DocumentHashResponse { Hash = hash };
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.DocumentHashResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Create an ExternalAnnotationSet from a document.
+    /// This extracts the document structure and computes the hash.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="documentId">Identifier for the document</param>
+    /// <returns>JSON response with ExternalAnnotationSet</returns>
+    [JSExport]
+    public static string CreateExternalAnnotationSet(byte[] docxBytes, string documentId)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        if (string.IsNullOrEmpty(documentId))
+        {
+            return SerializeError("Document ID is required");
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            var set = ExternalAnnotationManager.CreateAnnotationSet(wmlDoc, documentId);
+
+            var response = ConvertExternalAnnotationSetToDto(set);
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.ExternalAnnotationSetDto);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Validate an external annotation set against a document.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array</param>
+    /// <param name="annotationSetJson">The annotation set as JSON</param>
+    /// <returns>JSON response with validation result</returns>
+    [JSExport]
+    public static string ValidateExternalAnnotations(byte[] docxBytes, string annotationSetJson)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        if (string.IsNullOrEmpty(annotationSetJson))
+        {
+            return SerializeError("Annotation set JSON is required");
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            // Use AOT-safe deserialization
+            var set = DeserializeExternalAnnotationSet(annotationSetJson);
+
+            if (set == null)
+            {
+                return SerializeError("Invalid annotation set JSON");
+            }
+
+            var result = ExternalAnnotationManager.Validate(wmlDoc, set);
+
+            var response = new ExternalAnnotationValidationResultDto
+            {
+                IsValid = result.IsValid,
+                HashMismatch = result.HashMismatch,
+                Issues = result.Issues.Select(i => new ExternalAnnotationValidationIssueDto
+                {
+                    AnnotationId = i.AnnotationId,
+                    IssueType = i.IssueType,
+                    Description = i.Description,
+                    ExpectedText = i.ExpectedText,
+                    ActualText = i.ActualText
+                }).ToArray()
+            };
+
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.ExternalAnnotationValidationResultDto);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Convert DOCX to HTML with external annotations projected.
+    /// </summary>
+    [JSExport]
+    public static string ConvertDocxToHtmlWithExternalAnnotations(
+        byte[] docxBytes,
+        string annotationSetJson,
+        string pageTitle,
+        string cssPrefix,
+        bool fabricateClasses,
+        string additionalCss,
+        string extAnnotCssClassPrefix,
+        int extAnnotLabelMode)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        if (string.IsNullOrEmpty(annotationSetJson))
+        {
+            return SerializeError("Annotation set JSON is required");
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            // Use AOT-safe deserialization
+            var set = DeserializeExternalAnnotationSet(annotationSetJson);
+
+            if (set == null)
+            {
+                return SerializeError("Invalid annotation set JSON");
+            }
+
+            var htmlSettings = new WmlToHtmlConverterSettings
+            {
+                PageTitle = string.IsNullOrEmpty(pageTitle) ? "Document" : pageTitle,
+                CssClassPrefix = string.IsNullOrEmpty(cssPrefix) ? "docx-" : cssPrefix,
+                FabricateCssClasses = fabricateClasses,
+                AdditionalCss = additionalCss ?? "",
+                ImageHandler = CreateBase64ImageHandler()
+            };
+
+            var projectionSettings = new ExternalAnnotationProjectionSettings
+            {
+                CssClassPrefix = string.IsNullOrEmpty(extAnnotCssClassPrefix) ? "ext-annot-" : extAnnotCssClassPrefix,
+                LabelMode = (AnnotationLabelMode)extAnnotLabelMode,
+                IncludeMetadata = true,
+                ValidateBeforeProjection = true
+            };
+
+            var html = ExternalAnnotationProjector.ConvertWithAnnotations(
+                wmlDoc, set, htmlSettings, projectionSettings);
+
+            var response = new HtmlConversionResponse { Html = html };
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.HtmlConversionResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Search for text in document and return character offsets.
+    /// </summary>
+    [JSExport]
+    public static string SearchTextOffsets(byte[] docxBytes, string searchText, int maxResults)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        if (string.IsNullOrEmpty(searchText))
+        {
+            return SerializeError("Search text is required");
+        }
+
+        try
+        {
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            var export = OpenContractExporter.Export(wmlDoc);
+            var documentText = export.Content;
+
+            var occurrences = ExternalAnnotationManager.FindTextOccurrences(
+                documentText, searchText, maxResults > 0 ? maxResults : 100);
+
+            var results = occurrences.Select((o, i) => new TextSpanDto
+            {
+                Id = $"search-{i + 1}",
+                Start = o.start,
+                End = o.end,
+                Text = documentText.Substring(o.start, o.end - o.start)
+            }).ToArray();
+
+            var response = new TextSearchResponse { Results = results };
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.TextSearchResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    private static ExternalAnnotationSetDto ConvertExternalAnnotationSetToDto(ExternalAnnotationSet set)
+    {
+        return new ExternalAnnotationSetDto
+        {
+            DocumentId = set.DocumentId,
+            DocumentHash = set.DocumentHash,
+            CreatedAt = set.CreatedAt,
+            UpdatedAt = set.UpdatedAt,
+            Version = set.Version,
+            Title = set.Title,
+            Content = set.Content,
+            Description = set.Description,
+            PageCount = set.PageCount,
+            DocLabels = set.DocLabels.ToArray(),
+            PawlsFileContent = set.PawlsFileContent.Select(p => new PawlsPageDto
+            {
+                Page = new PawlsPageBoundaryDto
+                {
+                    Width = p.Page.Width,
+                    Height = p.Page.Height,
+                    Index = p.Page.Index
+                },
+                Tokens = p.Tokens.Select(t => new PawlsTokenDto
+                {
+                    X = t.X,
+                    Y = t.Y,
+                    Width = t.Width,
+                    Height = t.Height,
+                    Text = t.Text
+                }).ToArray()
+            }).ToArray(),
+            LabelledText = set.LabelledText.Select(a => new OpenContractsAnnotationDto
+            {
+                Id = a.Id,
+                AnnotationLabel = a.AnnotationLabel,
+                RawText = a.RawText,
+                Page = a.Page,
+                AnnotationJson = ConvertAnnotationJson(a.AnnotationJson),
+                ParentId = a.ParentId,
+                AnnotationType = a.AnnotationType,
+                Structural = a.Structural
+            }).ToArray(),
+            Relationships = set.Relationships?.Select(r => new OpenContractsRelationshipDto
+            {
+                Id = r.Id,
+                RelationshipLabel = r.RelationshipLabel,
+                SourceAnnotationIds = r.SourceAnnotationIds.ToArray(),
+                TargetAnnotationIds = r.TargetAnnotationIds.ToArray(),
+                Structural = r.Structural
+            }).ToArray(),
+            TextLabels = set.TextLabels.ToDictionary(
+                kvp => kvp.Key,
+                kvp => new AnnotationLabelDto
+                {
+                    Id = kvp.Value.Id,
+                    Color = kvp.Value.Color,
+                    Description = kvp.Value.Description,
+                    Icon = kvp.Value.Icon,
+                    Text = kvp.Value.Text,
+                    LabelType = kvp.Value.LabelType
+                }),
+            DocLabelDefinitions = set.DocLabelDefinitions.ToDictionary(
+                kvp => kvp.Key,
+                kvp => new AnnotationLabelDto
+                {
+                    Id = kvp.Value.Id,
+                    Color = kvp.Value.Color,
+                    Description = kvp.Value.Description,
+                    Icon = kvp.Value.Icon,
+                    Text = kvp.Value.Text,
+                    LabelType = kvp.Value.LabelType
+                })
+        };
+    }
+
+    /// <summary>
+    /// Convert DTO back to domain type for use with ExternalAnnotationManager.
+    /// Uses AOT-safe deserialization via DocxodusJsonContext.
+    /// </summary>
+    private static ExternalAnnotationSet? DeserializeExternalAnnotationSet(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+
+        try
+        {
+            var dto = JsonSerializer.Deserialize(json, DocxodusJsonContext.Default.ExternalAnnotationSetDto);
+            if (dto == null) return null;
+
+            return ConvertDtoToExternalAnnotationSet(dto);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Convert DTO to domain type.
+    /// </summary>
+    private static ExternalAnnotationSet ConvertDtoToExternalAnnotationSet(ExternalAnnotationSetDto dto)
+    {
+        var set = new ExternalAnnotationSet
+        {
+            DocumentId = dto.DocumentId,
+            DocumentHash = dto.DocumentHash,
+            CreatedAt = dto.CreatedAt,
+            UpdatedAt = dto.UpdatedAt,
+            Version = dto.Version,
+            Title = dto.Title,
+            Content = dto.Content,
+            Description = dto.Description,
+            PageCount = dto.PageCount,
+            DocLabels = dto.DocLabels?.ToList() ?? new List<string>(),
+            PawlsFileContent = dto.PawlsFileContent?.Select(p => new PawlsPage
+            {
+                Page = new PawlsPageBoundary
+                {
+                    Width = p.Page.Width,
+                    Height = p.Page.Height,
+                    Index = p.Page.Index
+                },
+                Tokens = p.Tokens?.Select(t => new PawlsToken
+                {
+                    X = t.X,
+                    Y = t.Y,
+                    Width = t.Width,
+                    Height = t.Height,
+                    Text = t.Text
+                }).ToList() ?? new List<PawlsToken>()
+            }).ToList() ?? new List<PawlsPage>(),
+            LabelledText = dto.LabelledText?.Select(a => ConvertDtoToAnnotation(a)).ToList() ?? new List<OpenContractsAnnotation>(),
+            Relationships = dto.Relationships?.Select(r => new OpenContractsRelationship
+            {
+                Id = r.Id,
+                RelationshipLabel = r.RelationshipLabel,
+                SourceAnnotationIds = r.SourceAnnotationIds?.ToList() ?? new List<string>(),
+                TargetAnnotationIds = r.TargetAnnotationIds?.ToList() ?? new List<string>(),
+                Structural = r.Structural
+            }).ToList() ?? new List<OpenContractsRelationship>(),
+            TextLabels = dto.TextLabels?.ToDictionary(
+                kvp => kvp.Key,
+                kvp => new AnnotationLabel
+                {
+                    Id = kvp.Value.Id,
+                    Color = kvp.Value.Color,
+                    Description = kvp.Value.Description,
+                    Icon = kvp.Value.Icon,
+                    Text = kvp.Value.Text,
+                    LabelType = kvp.Value.LabelType
+                }) ?? new Dictionary<string, AnnotationLabel>(),
+            DocLabelDefinitions = dto.DocLabelDefinitions?.ToDictionary(
+                kvp => kvp.Key,
+                kvp => new AnnotationLabel
+                {
+                    Id = kvp.Value.Id,
+                    Color = kvp.Value.Color,
+                    Description = kvp.Value.Description,
+                    Icon = kvp.Value.Icon,
+                    Text = kvp.Value.Text,
+                    LabelType = kvp.Value.LabelType
+                }) ?? new Dictionary<string, AnnotationLabel>()
+        };
+
+        return set;
+    }
+
+    /// <summary>
+    /// Convert annotation DTO to domain type.
+    /// </summary>
+    private static OpenContractsAnnotation ConvertDtoToAnnotation(OpenContractsAnnotationDto dto)
+    {
+        var annotation = new OpenContractsAnnotation
+        {
+            Id = dto.Id,
+            AnnotationLabel = dto.AnnotationLabel,
+            RawText = dto.RawText,
+            Page = dto.Page,
+            ParentId = dto.ParentId,
+            AnnotationType = dto.AnnotationType,
+            Structural = dto.Structural
+        };
+
+        // Convert AnnotationJson - it could be a TextSpan or page-indexed dictionary
+        if (dto.AnnotationJson != null)
+        {
+            annotation.AnnotationJson = ConvertAnnotationJsonToDomain(dto.AnnotationJson);
+        }
+
+        return annotation;
+    }
+
+    /// <summary>
+    /// Convert annotation JSON object from DTO form to domain form.
+    /// Handles both TextSpan and page-indexed dictionary formats.
+    /// </summary>
+    private static object? ConvertAnnotationJsonToDomain(object? annotationJson)
+    {
+        if (annotationJson == null) return null;
+
+        // If it's a JsonElement (from deserialization), we need to parse it
+        if (annotationJson is System.Text.Json.JsonElement jsonElement)
+        {
+            if (jsonElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                // Check if it has "start" and "end" properties (TextSpan)
+                // Try lowercase first (JavaScript convention), then PascalCase (C# convention)
+                System.Text.Json.JsonElement startProp = default;
+                System.Text.Json.JsonElement endProp = default;
+                bool hasStart = jsonElement.TryGetProperty("start", out startProp) ||
+                                jsonElement.TryGetProperty("Start", out startProp);
+                bool hasEnd = jsonElement.TryGetProperty("end", out endProp) ||
+                              jsonElement.TryGetProperty("End", out endProp);
+
+                if (hasStart && hasEnd)
+                {
+                    // Get ID - try both cases
+                    string? id = null;
+                    if (jsonElement.TryGetProperty("id", out var idProp))
+                        id = idProp.GetString();
+                    else if (jsonElement.TryGetProperty("Id", out idProp))
+                        id = idProp.GetString();
+
+                    // Get Text - try both cases
+                    string? text = null;
+                    if (jsonElement.TryGetProperty("text", out var textProp))
+                        text = textProp.GetString();
+                    else if (jsonElement.TryGetProperty("Text", out textProp))
+                        text = textProp.GetString();
+
+                    return new TextSpan
+                    {
+                        Id = id,
+                        Start = startProp.GetInt32(),
+                        End = endProp.GetInt32(),
+                        Text = text ?? ""
+                    };
+                }
+
+                // Otherwise it's likely a page-indexed dictionary
+                var dict = new Dictionary<string, OpenContractsSinglePageAnnotation>();
+                foreach (var prop in jsonElement.EnumerateObject())
+                {
+                    if (int.TryParse(prop.Name, out _))
+                    {
+                        // Page index key
+                        dict[prop.Name] = ParseSinglePageAnnotation(prop.Value);
+                    }
+                }
+                return dict.Count > 0 ? dict : null;
+            }
+        }
+
+        // If it's already the right type, return as-is
+        if (annotationJson is TextSpan || annotationJson is Dictionary<string, OpenContractsSinglePageAnnotation>)
+        {
+            return annotationJson;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Parse a single page annotation from JsonElement.
+    /// </summary>
+    private static OpenContractsSinglePageAnnotation ParseSinglePageAnnotation(System.Text.Json.JsonElement element)
+    {
+        var spa = new OpenContractsSinglePageAnnotation();
+
+        if (element.TryGetProperty("bounds", out var bounds) || element.TryGetProperty("Bounds", out bounds))
+        {
+            spa.Bounds = new BoundingBox
+            {
+                Top = bounds.TryGetProperty("top", out var t) ? t.GetDouble() :
+                      bounds.TryGetProperty("Top", out t) ? t.GetDouble() : 0,
+                Bottom = bounds.TryGetProperty("bottom", out var b) ? b.GetDouble() :
+                         bounds.TryGetProperty("Bottom", out b) ? b.GetDouble() : 0,
+                Left = bounds.TryGetProperty("left", out var l) ? l.GetDouble() :
+                       bounds.TryGetProperty("Left", out l) ? l.GetDouble() : 0,
+                Right = bounds.TryGetProperty("right", out var r) ? r.GetDouble() :
+                        bounds.TryGetProperty("Right", out r) ? r.GetDouble() : 0
+            };
+        }
+
+        if (element.TryGetProperty("rawText", out var rawText) || element.TryGetProperty("RawText", out rawText))
+        {
+            spa.RawText = rawText.GetString() ?? "";
+        }
+
+        if (element.TryGetProperty("tokensJsons", out var tokens) || element.TryGetProperty("TokensJsons", out tokens))
+        {
+            spa.TokensJsons = new List<TokenId>();
+            foreach (var token in tokens.EnumerateArray())
+            {
+                spa.TokensJsons.Add(new TokenId
+                {
+                    PageIndex = token.TryGetProperty("pageIndex", out var pi) ? pi.GetInt32() :
+                                token.TryGetProperty("PageIndex", out pi) ? pi.GetInt32() : 0,
+                    TokenIndex = token.TryGetProperty("tokenIndex", out var ti) ? ti.GetInt32() :
+                                 token.TryGetProperty("TokenIndex", out ti) ? ti.GetInt32() : 0
+                });
+            }
+        }
+
+        return spa;
+    }
+
+    #endregion
+
     /// <summary>
     /// Convert a DOCX file to HTML with detailed profiling information.
     /// This method measures time spent in each major phase of conversion.

@@ -414,6 +414,31 @@ export interface DocxodusWasmExports {
     // Profiling methods
     ConvertDocxToHtmlProfiled: (bytes: Uint8Array) => string;
     ProfileConversionDetailed: (bytes: Uint8Array) => string;
+    // External annotation methods
+    ComputeDocumentHash: (bytes: Uint8Array) => string;
+    CreateExternalAnnotationSet: (
+      bytes: Uint8Array,
+      documentId: string
+    ) => string;
+    ValidateExternalAnnotations: (
+      bytes: Uint8Array,
+      annotationSetJson: string
+    ) => string;
+    ConvertDocxToHtmlWithExternalAnnotations: (
+      bytes: Uint8Array,
+      annotationSetJson: string,
+      pageTitle: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      additionalCss: string,
+      extAnnotCssClassPrefix: string,
+      extAnnotLabelMode: number
+    ) => string;
+    SearchTextOffsets: (
+      bytes: Uint8Array,
+      searchText: string,
+      maxResults: number
+    ) => string;
   };
   DocumentComparer: {
     CompareDocuments: (
@@ -1422,5 +1447,120 @@ export interface OpenContractsRelationship {
   targetAnnotationIds: string[];
   /** Whether this is a structural relationship */
   structural: boolean;
+}
+
+// ============================================================================
+// External Annotation Types (Issue #57)
+// ============================================================================
+
+/**
+ * Annotation label definition matching OpenContracts AnnotationLabelPythonType.
+ */
+export interface AnnotationLabel {
+  /** Unique label identifier */
+  id: string;
+  /** Color in hex format (e.g., "#FFEB3B") */
+  color: string;
+  /** Description of what this label represents */
+  description: string;
+  /** Optional icon name */
+  icon: string;
+  /** Display name for the label */
+  text: string;
+  /** Type of label: "text", "doc", or "metadata" */
+  labelType: "text" | "doc" | "metadata";
+}
+
+/**
+ * External annotation set - extends OpenContractDocExport with binding/validation.
+ * This allows storing annotations externally (in JSON/database) without modifying the DOCX.
+ *
+ * @example
+ * ```typescript
+ * // Create an annotation set from a document
+ * const set = await createExternalAnnotationSet(docxFile, "my-doc-123");
+ *
+ * // Add a label definition
+ * set.textLabels["IMPORTANT"] = {
+ *   id: "IMPORTANT",
+ *   text: "Important",
+ *   color: "#FF0000",
+ *   description: "Important text that needs attention",
+ *   icon: "",
+ *   labelType: "text"
+ * };
+ *
+ * // Create an annotation
+ * const annotation = createAnnotationFromSearch(
+ *   "ann-001", "IMPORTANT", set.content, "contract term"
+ * );
+ * if (annotation) {
+ *   set.labelledText.push(annotation);
+ * }
+ *
+ * // Validate and project onto HTML
+ * const result = await validateExternalAnnotations(docxFile, set);
+ * if (result.isValid) {
+ *   const html = await convertDocxToHtmlWithExternalAnnotations(docxFile, set);
+ * }
+ * ```
+ */
+export interface ExternalAnnotationSet extends OpenContractDocExport {
+  /** Unique identifier for the source document (filename, UUID, or external reference) */
+  documentId: string;
+  /** SHA256 hash of the source document for integrity validation */
+  documentHash: string;
+  /** ISO 8601 timestamp when this annotation set was created */
+  createdAt: string;
+  /** ISO 8601 timestamp when this annotation set was last modified */
+  updatedAt: string;
+  /** Version of the external annotation format (for future migrations) */
+  version: string;
+  /** Text label definitions keyed by label ID */
+  textLabels: Record<string, AnnotationLabel>;
+  /** Document label definitions keyed by label ID */
+  docLabelDefinitions: Record<string, AnnotationLabel>;
+}
+
+/**
+ * Result of validating an external annotation set against a document.
+ */
+export interface ExternalAnnotationValidationResult {
+  /** True if the annotation set is valid for the document */
+  isValid: boolean;
+  /** True if the document hash doesn't match, indicating the document may have been modified */
+  hashMismatch: boolean;
+  /** List of specific issues found during validation */
+  issues: ExternalAnnotationValidationIssue[];
+}
+
+/**
+ * A single validation issue found when validating an external annotation set.
+ */
+export interface ExternalAnnotationValidationIssue {
+  /** ID of the annotation with the issue */
+  annotationId: string;
+  /** Type of issue: "TextMismatch", "OutOfBounds", or "MissingLabel" */
+  issueType: "TextMismatch" | "OutOfBounds" | "MissingLabel";
+  /** Human-readable description of the issue */
+  description: string;
+  /** For TextMismatch: the text that was expected (stored in annotation) */
+  expectedText?: string;
+  /** For TextMismatch: the actual text found at the annotation's offsets */
+  actualText?: string;
+}
+
+/**
+ * Settings for projecting external annotations onto HTML.
+ */
+export interface ExternalAnnotationProjectionSettings {
+  /** CSS class prefix for annotation elements (default: "ext-annot-") */
+  cssClassPrefix?: string;
+  /** How to display annotation labels (default: Above) */
+  labelMode?: AnnotationLabelMode;
+  /** Whether to include annotation metadata as data attributes (default: true) */
+  includeMetadata?: boolean;
+  /** Whether to validate annotations before projection (default: true) */
+  validateBeforeProjection?: boolean;
 }
 

@@ -5,7 +5,9 @@ namespace DocxodusWasm;
 /// <summary>
 /// JSON serialization context for AOT/trimming-safe serialization.
 /// Uses source generators to avoid reflection.
+/// PropertyNameCaseInsensitive enables flexible deserialization (both PascalCase and camelCase).
 /// </summary>
+[JsonSourceGenerationOptions(PropertyNameCaseInsensitive = true)]
 [JsonSerializable(typeof(ErrorResponse))]
 [JsonSerializable(typeof(VersionInfo))]
 [JsonSerializable(typeof(RevisionsResponse))]
@@ -52,6 +54,16 @@ namespace DocxodusWasm;
 [JsonSerializable(typeof(TokenIdDto[]))]
 [JsonSerializable(typeof(OpenContractsSinglePageAnnotationDto))]
 [JsonSerializable(typeof(Dictionary<string, OpenContractsSinglePageAnnotationDto>))]
+// External annotation types
+[JsonSerializable(typeof(DocumentHashResponse))]
+[JsonSerializable(typeof(ExternalAnnotationSetDto))]
+[JsonSerializable(typeof(ExternalAnnotationValidationResultDto))]
+[JsonSerializable(typeof(ExternalAnnotationValidationIssueDto))]
+[JsonSerializable(typeof(ExternalAnnotationValidationIssueDto[]))]
+[JsonSerializable(typeof(AnnotationLabelDto))]
+[JsonSerializable(typeof(Dictionary<string, AnnotationLabelDto>))]
+[JsonSerializable(typeof(TextSearchResponse))]
+[JsonSerializable(typeof(HtmlConversionResponse))]
 internal partial class DocxodusJsonContext : JsonSerializerContext
 {
 }
@@ -958,6 +970,105 @@ public class OpenContractsRelationshipDto
     /// Whether this is a structural relationship.
     /// </summary>
     public bool Structural { get; set; }
+}
+
+#endregion
+
+#region External Annotation Types
+
+/// <summary>
+/// Response containing document hash.
+/// </summary>
+public class DocumentHashResponse
+{
+    /// <summary>
+    /// SHA256 hash of the document (lowercase hex).
+    /// </summary>
+    public string Hash { get; set; } = "";
+}
+
+/// <summary>
+/// Response containing HTML conversion result.
+/// </summary>
+public class HtmlConversionResponse
+{
+    /// <summary>
+    /// The generated HTML content.
+    /// </summary>
+    public string Html { get; set; } = "";
+}
+
+/// <summary>
+/// Response containing text search results.
+/// </summary>
+public class TextSearchResponse
+{
+    /// <summary>
+    /// Array of text spans with character offsets.
+    /// </summary>
+    public TextSpanDto[] Results { get; set; } = Array.Empty<TextSpanDto>();
+}
+
+/// <summary>
+/// External annotation set DTO extending OpenContractExportResponse.
+/// </summary>
+public class ExternalAnnotationSetDto
+{
+    // Document binding fields
+    public string DocumentId { get; set; } = "";
+    public string DocumentHash { get; set; } = "";
+    public string CreatedAt { get; set; } = "";
+    public string UpdatedAt { get; set; } = "";
+    public string Version { get; set; } = "1.0";
+
+    // Inherited from OpenContractExportResponse
+    public string Title { get; set; } = "";
+    public string Content { get; set; } = "";
+    public string? Description { get; set; }
+    public int PageCount { get; set; }
+    public PawlsPageDto[] PawlsFileContent { get; set; } = Array.Empty<PawlsPageDto>();
+    public string[] DocLabels { get; set; } = Array.Empty<string>();
+    public OpenContractsAnnotationDto[] LabelledText { get; set; } = Array.Empty<OpenContractsAnnotationDto>();
+    public OpenContractsRelationshipDto[]? Relationships { get; set; }
+
+    // Label definitions
+    public Dictionary<string, AnnotationLabelDto> TextLabels { get; set; } = new();
+    public Dictionary<string, AnnotationLabelDto> DocLabelDefinitions { get; set; } = new();
+}
+
+/// <summary>
+/// Annotation label definition DTO.
+/// </summary>
+public class AnnotationLabelDto
+{
+    public string Id { get; set; } = "";
+    public string Color { get; set; } = "#FFEB3B";
+    public string Description { get; set; } = "";
+    public string Icon { get; set; } = "";
+    public string Text { get; set; } = "";
+    public string LabelType { get; set; } = "text";
+}
+
+/// <summary>
+/// External annotation validation result DTO.
+/// </summary>
+public class ExternalAnnotationValidationResultDto
+{
+    public bool IsValid { get; set; }
+    public bool HashMismatch { get; set; }
+    public ExternalAnnotationValidationIssueDto[] Issues { get; set; } = Array.Empty<ExternalAnnotationValidationIssueDto>();
+}
+
+/// <summary>
+/// External annotation validation issue DTO.
+/// </summary>
+public class ExternalAnnotationValidationIssueDto
+{
+    public string AnnotationId { get; set; } = "";
+    public string IssueType { get; set; } = "";
+    public string Description { get; set; } = "";
+    public string? ExpectedText { get; set; }
+    public string? ActualText { get; set; }
 }
 
 #endregion

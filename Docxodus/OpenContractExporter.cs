@@ -294,6 +294,43 @@ public class OpenContractsRelationship
     public bool Structural { get; set; }
 }
 
+/// <summary>
+/// Label definition matching OpenContracts AnnotationLabelPythonType.
+/// Used to define annotation categories with styling and metadata.
+/// </summary>
+public class AnnotationLabel
+{
+    /// <summary>
+    /// Unique identifier for this label.
+    /// </summary>
+    public string Id { get; set; } = "";
+
+    /// <summary>
+    /// Color for this label (hex format, e.g., "#FFEB3B").
+    /// </summary>
+    public string Color { get; set; } = "#FFEB3B";
+
+    /// <summary>
+    /// Human-readable description of this label.
+    /// </summary>
+    public string Description { get; set; } = "";
+
+    /// <summary>
+    /// Icon name or identifier for UI display.
+    /// </summary>
+    public string Icon { get; set; } = "";
+
+    /// <summary>
+    /// Display text/name for this label.
+    /// </summary>
+    public string Text { get; set; } = "";
+
+    /// <summary>
+    /// Type of label: "text" for text annotations, "doc" for document-level, "metadata" for metadata.
+    /// </summary>
+    public string LabelType { get; set; } = "text";
+}
+
 #endregion
 
 #region Internal Structure Classes
