@@ -2089,78 +2089,85 @@ namespace Docxodus
                 .DefaultIfEmpty(0)
                 .Max();
 
-            // Dictionary to track abstractNumId remapping
+            // Dictionary to track abstractNumId remapping (source ID -> destination ID)
             var abstractNumIdMap = new Dictionary<int, int>();
 
-            // Copy abstractNum elements that don't exist in destination
+            // Copy abstractNum elements, reusing existing definitions with matching content
             foreach (var abstractNum in fromNumberingXDoc.Root.Elements(W.abstractNum))
             {
-                var fromAbstractNumId = (int)abstractNum.Attribute(W.abstractNumId);
+                var fromAbstractNumId = GetIntAttribute(abstractNum, W.abstractNumId);
+                if (fromAbstractNumId == null)
+                    continue; // Skip malformed elements
 
-                // Check if an abstractNum with the same ID and content already exists
-                var existingAbstractNum = toNumberingXDoc.Root
+                var normalizedFrom = NormalizeAbstractNumForComparison(abstractNum);
+
+                // First, check if ANY existing abstractNum has matching content (regardless of ID)
+                var matchingByContent = toNumberingXDoc.Root
                     .Elements(W.abstractNum)
-                    .FirstOrDefault(e => (int)e.Attribute(W.abstractNumId) == fromAbstractNumId);
+                    .FirstOrDefault(e => XNode.DeepEquals(NormalizeAbstractNumForComparison(e), normalizedFrom));
 
-                if (existingAbstractNum != null)
+                if (matchingByContent != null)
                 {
-                    // Compare content (excluding the abstractNumId attribute) to see if they're functionally equivalent
-                    var fromContent = NormalizeAbstractNumForComparison(abstractNum);
-                    var toContent = NormalizeAbstractNumForComparison(existingAbstractNum);
-
-                    if (XNode.DeepEquals(fromContent, toContent))
+                    // Reuse existing abstractNum with matching content
+                    var existingId = GetIntAttribute(matchingByContent, W.abstractNumId);
+                    if (existingId != null)
                     {
-                        // Same abstractNumId and same content, no need to copy
-                        abstractNumIdMap[fromAbstractNumId] = fromAbstractNumId;
+                        abstractNumIdMap[fromAbstractNumId.Value] = existingId.Value;
                         continue;
                     }
+                }
 
-                    // Same ID but different content - need to assign a new ID
+                // No matching content found - check if the ID is already taken
+                var existingWithSameId = toNumberingXDoc.Root
+                    .Elements(W.abstractNum)
+                    .FirstOrDefault(e => GetIntAttribute(e, W.abstractNumId) == fromAbstractNumId);
+
+                int targetId;
+                if (existingWithSameId != null)
+                {
+                    // ID conflict - assign a new ID
                     maxAbstractNumId++;
-                    var cloned = new XElement(abstractNum);
-                    cloned.SetAttributeValue(W.abstractNumId, maxAbstractNumId);
-                    abstractNumIdMap[fromAbstractNumId] = maxAbstractNumId;
-
-                    // Add the cloned element in the correct position (before w:num elements)
-                    var firstNum = toNumberingXDoc.Root.Element(W.num);
-                    if (firstNum != null)
-                        firstNum.AddBeforeSelf(cloned);
-                    else
-                        toNumberingXDoc.Root.Add(cloned);
+                    targetId = maxAbstractNumId;
                 }
                 else
                 {
-                    // No existing abstractNum with this ID, copy as-is
-                    var cloned = new XElement(abstractNum);
-                    abstractNumIdMap[fromAbstractNumId] = fromAbstractNumId;
-
-                    // Add in correct position
-                    var firstNum = toNumberingXDoc.Root.Element(W.num);
-                    if (firstNum != null)
-                        firstNum.AddBeforeSelf(cloned);
-                    else
-                        toNumberingXDoc.Root.Add(cloned);
+                    // ID is free, use it
+                    targetId = fromAbstractNumId.Value;
                 }
+
+                var cloned = new XElement(abstractNum);
+                cloned.SetAttributeValue(W.abstractNumId, targetId);
+                abstractNumIdMap[fromAbstractNumId.Value] = targetId;
+
+                // Add in correct position (before w:num elements per schema order)
+                var firstNum = toNumberingXDoc.Root.Elements(W.num).FirstOrDefault();
+                if (firstNum != null)
+                    firstNum.AddBeforeSelf(cloned);
+                else
+                    toNumberingXDoc.Root.Add(cloned);
             }
 
             // Copy num elements that don't exist in destination
             foreach (var num in fromNumberingXDoc.Root.Elements(W.num))
             {
-                var fromNumId = (int)num.Attribute(W.numId);
-                var fromAbstractNumIdRef = (int)num.Element(W.abstractNumId).Attribute(W.val);
+                var fromNumId = GetIntAttribute(num, W.numId);
+                var fromAbstractNumIdRef = GetIntAttribute(num.Element(W.abstractNumId), W.val);
+                if (fromNumId == null || fromAbstractNumIdRef == null)
+                    continue; // Skip malformed elements
+
+                // Determine the mapped abstractNumId for this num
+                int mappedAbstractNumId = abstractNumIdMap.TryGetValue(fromAbstractNumIdRef.Value, out var mapped)
+                    ? mapped
+                    : fromAbstractNumIdRef.Value;
 
                 var existingNum = toNumberingXDoc.Root
                     .Elements(W.num)
-                    .FirstOrDefault(e => (int)e.Attribute(W.numId) == fromNumId);
+                    .FirstOrDefault(e => GetIntAttribute(e, W.numId) == fromNumId);
 
                 if (existingNum != null)
                 {
-                    // Check if it references the same abstractNum
-                    var existingAbstractNumIdRef = (int)existingNum.Element(W.abstractNumId).Attribute(W.val);
-                    int mappedAbstractNumId = abstractNumIdMap.TryGetValue(fromAbstractNumIdRef, out var mapped)
-                        ? mapped
-                        : fromAbstractNumIdRef;
-
+                    // Check if it references the same (mapped) abstractNum
+                    var existingAbstractNumIdRef = GetIntAttribute(existingNum.Element(W.abstractNumId), W.val);
                     if (existingAbstractNumIdRef == mappedAbstractNumId)
                     {
                         // Same num with same abstractNum reference, skip
@@ -2171,35 +2178,55 @@ namespace Docxodus
                     maxNumId++;
                     var cloned = new XElement(num);
                     cloned.SetAttributeValue(W.numId, maxNumId);
-                    cloned.Element(W.abstractNumId).SetAttributeValue(W.val, mappedAbstractNumId);
+                    var abstractNumIdElement = cloned.Element(W.abstractNumId);
+                    if (abstractNumIdElement != null)
+                        abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
                     toNumberingXDoc.Root.Add(cloned);
                 }
                 else
                 {
-                    // No existing num with this ID, copy with potentially remapped abstractNumId
+                    // No existing num with this ID, copy with remapped abstractNumId
                     var cloned = new XElement(num);
-                    if (abstractNumIdMap.TryGetValue(fromAbstractNumIdRef, out var mappedId) && mappedId != fromAbstractNumIdRef)
+                    if (mappedAbstractNumId != fromAbstractNumIdRef.Value)
                     {
-                        cloned.Element(W.abstractNumId).SetAttributeValue(W.val, mappedId);
+                        var abstractNumIdElement = cloned.Element(W.abstractNumId);
+                        if (abstractNumIdElement != null)
+                            abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
                     }
                     toNumberingXDoc.Root.Add(cloned);
                 }
             }
 
-            toNumberingPart.PutXDocument();
+            toNumberingPart.PutXDocument(toNumberingXDoc);
         }
 
         /// <summary>
-        /// Normalizes an abstractNum element for comparison by removing ID-based attributes.
+        /// Safely extracts an integer value from an XAttribute.
+        /// </summary>
+        private static int? GetIntAttribute(XElement element, XName attributeName)
+        {
+            if (element == null)
+                return null;
+            var attr = element.Attribute(attributeName);
+            if (attr == null)
+                return null;
+            if (int.TryParse(attr.Value, out var result))
+                return result;
+            return null;
+        }
+
+        /// <summary>
+        /// Normalizes an abstractNum element for comparison by removing ID-based attributes
+        /// that don't affect the functional behavior of the numbering definition.
         /// </summary>
         private static XElement NormalizeAbstractNumForComparison(XElement abstractNum)
         {
             var normalized = new XElement(abstractNum);
-            // Remove attributes that shouldn't affect functional comparison
+            // Remove attributes/elements that shouldn't affect functional comparison
             normalized.Attribute(W.abstractNumId)?.Remove();
-            // Also remove nsid as it's a unique identifier that may differ
+            // nsid is a unique identifier that may differ between documents
             normalized.Element(W.nsid)?.Remove();
-            // Remove tmpl as it's generated
+            // tmpl is auto-generated and may differ
             normalized.Element(W.tmpl)?.Remove();
             return normalized;
         }
