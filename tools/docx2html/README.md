@@ -48,10 +48,13 @@ docx2html document.docx --inline-styles
 
 ## Limitations
 
-- Headers, footers, and page numbers are not included
 - Math equations (OMML) are not converted
 - Charts and diagrams appear as images (if embedded) or are omitted
 - Complex text boxes may not render perfectly
+
+## Environment Variables
+
+- `DOCX2HTML_DEBUG=1`: Show detailed error information including stack traces
 
 ## License
 

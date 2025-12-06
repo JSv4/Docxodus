@@ -53,6 +53,10 @@ The tool generates a Word document with tracked changes (revisions) showing:
 
 Open the output document in Microsoft Word or another compatible word processor to review and accept/reject changes.
 
+## Environment Variables
+
+- `REDLINE_DEBUG=1`: Show detailed error information including stack traces
+
 ## License
 
-MIT License - see [LICENSE](https://github.com/JSv4/DocxRedlines/blob/main/LICENSE) for details.
+MIT License - see [LICENSE](https://github.com/JSv4/Docxodus/blob/main/LICENSE) for details.

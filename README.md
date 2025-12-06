@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/JSv4/Redlines/actions/workflows/ci.yml"><img src="https://github.com/JSv4/Redlines/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/JSv4/Docxodus/actions/workflows/ci.yml"><img src="https://github.com/JSv4/Docxodus/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
@@ -20,14 +20,8 @@ Docxodus is a fork of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xm
 ### Install the Library
 
 ```bash
-# Add GitHub Packages source (one-time setup)
-dotnet nuget add source https://nuget.pkg.github.com/JSv4/index.json \
-  --name github \
-  --username YOUR_GITHUB_USERNAME \
-  --password YOUR_GITHUB_PAT
-
-# Add to your project
-dotnet add package Docxodus --source github
+# Install from NuGet
+dotnet add package Docxodus
 ```
 
 ### Using as a Library
@@ -69,7 +63,7 @@ Docxodus includes two command-line tools:
 
 ```bash
 # Install globally
-dotnet tool install -g Redline --source github
+dotnet tool install -g Redline
 
 # Usage
 redline original.docx modified.docx output.docx
@@ -88,7 +82,7 @@ redline original.docx modified.docx output.docx --author="Legal Review"
 
 ```bash
 # Install globally
-dotnet tool install -g Docx2Html --source github
+dotnet tool install -g Docx2Html
 
 # Basic conversion
 docx2html document.docx
@@ -114,7 +108,7 @@ docx2html document.docx --inline-styles
 
 ## Download Standalone Binaries
 
-Pre-built binaries are available on the [Releases](https://github.com/JSv4/Redlines/releases) page:
+Pre-built binaries are available on the [Releases](https://github.com/JSv4/Docxodus/releases) page:
 
 **redline** (Document Comparison):
 
@@ -138,8 +132,8 @@ Pre-built binaries are available on the [Releases](https://github.com/JSv4/Redli
 
 ```bash
 # Clone the repository
-git clone https://github.com/JSv4/Redlines.git
-cd Redlines
+git clone https://github.com/JSv4/Docxodus.git
+cd Docxodus
 
 # Build
 dotnet build Docxodus.sln
@@ -153,7 +147,7 @@ dotnet run --project tools/redline/redline.csproj -- --help
 ### .NET Unit Tests
 
 ```bash
-# Run all tests (~1,050 tests)
+# Run all tests (~1,100 tests)
 dotnet test Docxodus.Tests/Docxodus.Tests.csproj
 
 # Run specific test by name
@@ -193,14 +187,20 @@ npx tsc --noEmit
 
 - **WmlComparer** - Compare two DOCX files and generate redlines with tracked changes
   - **Move Detection** - Automatically detects when content is relocated (not just deleted and re-inserted)
+  - **Format Change Detection** - Detects formatting-only changes (bold, italic, font size, etc.)
   - Configurable similarity threshold and minimum word count
   - Links move pairs via `MoveGroupId` for easy tracking
 - **WmlToHtmlConverter** / **HtmlToWmlConverter** - Bidirectional DOCX ↔ HTML conversion
+  - Comment rendering (endnote-style, inline, or margin)
+  - Paginated output mode for PDF-like viewing
+  - Headers, footers, footnotes, and endnotes support
+  - Custom annotation rendering
 - **DocumentBuilder** - Merge and split DOCX files
 - **DocumentAssembler** - Template population from XML data
 - **PresentationBuilder** - Merge and split PPTX files
 - **SpreadsheetWriter** - Simplified XLSX creation API
 - **OpenXmlRegex** - Search/replace in DOCX/PPTX using regular expressions
+- **OpenContractExporter** - Export documents to OpenContracts format for NLP/document analysis
 - Supporting utilities for document manipulation
 
 ## Browser/JavaScript Usage (npm)
@@ -217,30 +217,43 @@ import {
   convertDocxToHtml,
   compareDocuments,
   getRevisions,
+  getDocumentMetadata,
   isMove,
   isMoveSource,
+  isFormatChange,
   findMovePair,
-  CommentRenderMode
+  CommentRenderMode,
+  PaginationMode
 } from 'docxodus';
 
 await initialize();
 
-// Convert DOCX to HTML with comments
+// Convert DOCX to HTML with comments and pagination
 const html = await convertDocxToHtml(docxFile, {
-  commentRenderMode: CommentRenderMode.EndnoteStyle
+  commentRenderMode: CommentRenderMode.EndnoteStyle,
+  paginationMode: PaginationMode.Paginated,
+  renderHeadersAndFooters: true
 });
 
 // Compare two documents
 const redlinedDocx = await compareDocuments(originalFile, modifiedFile);
 
-// Get revisions with move detection
+// Get revisions with move and format change detection
 const revisions = await getRevisions(redlinedDocx);
-for (const rev of revisions.filter(isMove)) {
-  const pair = findMovePair(rev, revisions);
-  if (isMoveSource(rev)) {
-    console.log(`Content moved from: "${rev.text}" to: "${pair?.text}"`);
+for (const rev of revisions) {
+  if (isMove(rev)) {
+    const pair = findMovePair(rev, revisions);
+    if (isMoveSource(rev)) {
+      console.log(`Content moved from: "${rev.text}" to: "${pair?.text}"`);
+    }
+  } else if (isFormatChange(rev)) {
+    console.log(`Format changed: ${rev.formatChange?.changedPropertyNames?.join(', ')}`);
   }
 }
+
+// Get document metadata for lazy loading
+const metadata = await getDocumentMetadata(docxFile);
+console.log(`${metadata.totalParagraphs} paragraphs, ${metadata.estimatedPageCount} pages`);
 ```
 
 See the [npm package documentation](docs/npm-package.md) for full API reference, React hooks, and usage examples.

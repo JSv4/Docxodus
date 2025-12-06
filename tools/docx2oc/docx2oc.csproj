@@ -17,8 +17,8 @@
     <Version>1.0.0</Version>
     <Authors>OpenXmlPowerTools Authors, JSv4</Authors>
     <Description>Export Word documents to OpenContracts format (JSON). A CLI tool powered by Docxodus.</Description>
-    <PackageProjectUrl>https://github.com/JSv4/DocxRedlines</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/JSv4/DocxRedlines</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/JSv4/Docxodus</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/JSv4/Docxodus</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>openxml;docx;word;opencontracts;export;json;nlp;document-analysis</PackageTags>

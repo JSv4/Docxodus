@@ -7,9 +7,19 @@ Docxodus brings professional-grade document comparison (redlining) to JavaScript
 ## Features
 
 - **Document Comparison**: Compare two DOCX files and generate a redlined document with tracked changes
+- **Move Detection**: Automatically identifies relocated content (not just deleted/re-inserted)
+- **Format Change Detection**: Detects formatting-only changes (bold, italic, font size, etc.)
 - **HTML Conversion**: Convert DOCX documents to HTML for display in the browser
+  - Comment rendering (endnote-style, inline, or margin)
+  - Paginated output mode for PDF-like viewing
+  - Headers, footers, footnotes, and endnotes support
+  - Custom annotation rendering
+- **Document Metadata**: Fast metadata extraction for lazy loading and pagination
 - **Revision Extraction**: Get structured data about all revisions in a compared document
+- **OpenContracts Export**: Export documents to OpenContracts format for NLP/document analysis
+- **External Annotations**: Store annotations externally without modifying the DOCX
 - **100% Client-Side**: All processing happens in the browser using WebAssembly
+- **Web Worker Support**: Non-blocking WASM execution via Web Workers
 - **React Hooks**: Ready-to-use hooks for React applications
 - **TypeScript Support**: Full type definitions included
 
@@ -109,7 +119,7 @@ Initialize the WASM runtime. Must be called before using any other functions.
 Convert a DOCX document to HTML.
 
 ```typescript
-import { CommentRenderMode } from 'docxodus';
+import { CommentRenderMode, PaginationMode, AnnotationLabelMode } from 'docxodus';
 
 interface ConversionOptions {
   pageTitle?: string;           // HTML document title
@@ -117,7 +127,14 @@ interface ConversionOptions {
   fabricateClasses?: boolean;   // Generate CSS classes (default: true)
   additionalCss?: string;       // Extra CSS to include
   commentRenderMode?: CommentRenderMode;  // How to render comments (default: Disabled)
-  commentCssClassPrefix?: string;         // CSS prefix for comments (default: "comment-")
+  commentCssClassPrefix?: string;         // CSS prefix for comments
+  paginationMode?: PaginationMode;        // None (0) or Paginated (1)
+  paginationScale?: number;               // Scale factor for pages (default: 1.0)
+  renderAnnotations?: boolean;            // Render custom annotations
+  annotationLabelMode?: AnnotationLabelMode;  // Above, Inline, Tooltip, or None
+  renderFootnotesAndEndnotes?: boolean;   // Include footnotes/endnotes sections
+  renderHeadersAndFooters?: boolean;      // Include headers and footers
+  renderTrackedChanges?: boolean;         // Show insertions/deletions visually
 }
 ```
 
@@ -170,44 +187,117 @@ interface CompareOptions {
 #### `compareDocumentsToHtml(original, modified, options?): Promise<string>`
 Compare documents and return the result as HTML.
 
-#### `getRevisions(document: File | Uint8Array): Promise<Revision[]>`
+#### `getRevisions(document: File | Uint8Array, options?): Promise<Revision[]>`
 Extract revision information from a compared document.
 
 ```typescript
-import { getRevisions, RevisionType, isInsertion, isDeletion } from 'docxodus';
-import type { Revision } from 'docxodus';
+import {
+  getRevisions,
+  RevisionType,
+  isInsertion,
+  isDeletion,
+  isMove,
+  isMoveSource,
+  isFormatChange,
+  findMovePair
+} from 'docxodus';
+import type { Revision, GetRevisionsOptions } from 'docxodus';
 
-// RevisionType enum - the only two types returned by the comparison engine
+// RevisionType enum
 enum RevisionType {
-  Inserted = "Inserted",  // Text or content that was added
-  Deleted = "Deleted",    // Text or content that was removed
+  Inserted = "Inserted",      // Text or content that was added
+  Deleted = "Deleted",        // Text or content that was removed
+  Moved = "Moved",            // Text relocated within the document
+  FormatChanged = "FormatChanged"  // Formatting-only change
 }
 
 // Revision interface with full documentation
 interface Revision {
-  /** Author who made the revision (may be empty string if not specified) */
   author: string;
-  /** ISO 8601 date string (e.g., "2024-01-15T10:30:00Z"), may be empty */
   date: string;
-  /** Type of revision - "Inserted" or "Deleted" */
   revisionType: RevisionType | string;
-  /** Text content (newline for paragraph breaks, empty for images/equations) */
   text: string;
+  moveGroupId?: number;      // Links move source/destination pairs
+  isMoveSource?: boolean;    // true = moved FROM here, false = moved TO here
+  formatChange?: {           // Details for FormatChanged revisions
+    oldProperties?: Record<string, string>;
+    newProperties?: Record<string, string>;
+    changedPropertyNames?: string[];
+  };
 }
 
-// Helper functions for type-safe filtering
-const revisions = await getRevisions(comparedDoc);
+// Get revisions with options
+const revisions = await getRevisions(comparedDoc, {
+  detectMoves: true,              // Enable move detection (default: true)
+  moveSimilarityThreshold: 0.8,   // Jaccard similarity for moves (default: 0.8)
+  moveMinimumWordCount: 3,        // Minimum words for move (default: 3)
+  caseInsensitive: false          // Case-insensitive matching (default: false)
+});
+
+// Filter by type using helper functions
 const insertions = revisions.filter(isInsertion);
 const deletions = revisions.filter(isDeletion);
+const moves = revisions.filter(isMove);
+const formatChanges = revisions.filter(isFormatChange);
 
-// Or use the enum directly
-revisions.forEach(rev => {
-  if (rev.revisionType === RevisionType.Inserted) {
-    console.log(`${rev.author} added: "${rev.text}"`);
-  } else if (rev.revisionType === RevisionType.Deleted) {
-    console.log(`${rev.author} removed: "${rev.text}"`);
-  }
-});
+// Find move pairs
+for (const rev of moves.filter(isMoveSource)) {
+  const destination = findMovePair(rev, revisions);
+  console.log(`"${rev.text}" moved to "${destination?.text}"`);
+}
+
+// Check format changes
+for (const rev of formatChanges) {
+  console.log(`Format changed: ${rev.formatChange?.changedPropertyNames?.join(', ')}`);
+}
+```
+
+#### `getDocumentMetadata(document: File | Uint8Array): Promise<DocumentMetadata>`
+Get document metadata for lazy loading and pagination without full HTML rendering.
+
+```typescript
+const metadata = await getDocumentMetadata(docxFile);
+
+console.log(`Sections: ${metadata.sections.length}`);
+console.log(`Total paragraphs: ${metadata.totalParagraphs}`);
+console.log(`Estimated pages: ${metadata.estimatedPageCount}`);
+console.log(`Has comments: ${metadata.hasComments}`);
+console.log(`Has tracked changes: ${metadata.hasTrackedChanges}`);
+
+// Section dimensions (in points, 1pt = 1/72 inch)
+const section = metadata.sections[0];
+console.log(`Page size: ${section.pageWidthPt} x ${section.pageHeightPt} pt`);
+```
+
+#### `exportToOpenContract(document: File | Uint8Array): Promise<OpenContractDocExport>`
+Export document to OpenContracts format for NLP/document analysis.
+
+```typescript
+const export = await exportToOpenContract(docxFile);
+console.log(`Title: ${export.title}`);
+console.log(`Content: ${export.content.length} characters`);
+console.log(`Pages: ${export.pageCount}`);
+console.log(`Structural annotations: ${export.labelledText.length}`);
+```
+
+### Web Worker API
+
+For non-blocking WASM execution, use the worker-based API:
+
+```typescript
+import { createWorkerDocxodus } from 'docxodus/worker';
+
+// Create a worker instance
+const docxodus = await createWorkerDocxodus({ wasmBasePath: '/wasm/' });
+
+// All operations run in a Web Worker - main thread stays responsive
+const html = await docxodus.convertDocxToHtml(docxFile, options);
+const redlined = await docxodus.compareDocuments(original, modified, options);
+const revisions = await docxodus.getRevisions(docxFile);
+const metadata = await docxodus.getDocumentMetadata(docxFile);
+
+// Terminate when done
+docxodus.terminate();
 ```
 
 ### React Hooks
@@ -223,12 +313,19 @@ Returns:
 - `compare()` - Compare documents
 - `compareToHtml()` - Compare and get HTML
 - `getRevisions()` - Get revision list
+- `getDocumentMetadata()` - Get document metadata
 
 #### `useConversion(wasmBasePath?: string)`
 Simplified hook for DOCX to HTML conversion with state management.
 
 #### `useComparison(wasmBasePath?: string)`
 Simplified hook for document comparison with state management.
+
+#### `useAnnotations(wasmBasePath?: string)`
+Hook for managing custom annotations on documents.
+
+#### `useDocumentStructure(wasmBasePath?: string)`
+Hook for document structure analysis and element-based targeting.
 
 ## Hosting WASM Files
 
@@ -273,4 +370,4 @@ MIT
 
 ## Credits
 
-Built on [Docxodus](https://github.com/JSv4/Redlines), a .NET library for document manipulation based on OpenXML-PowerTools.
+Built on [Docxodus](https://github.com/JSv4/Docxodus), a .NET library for document manipulation based on OpenXML-PowerTools.
