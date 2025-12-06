@@ -303,6 +303,12 @@ All notable changes to this project will be documented in this file.
 
 - **Pagination content overflow** - Fixed content overflowing page boundaries in the paginated view. The issue was caused by applying CSS transform scale to the content area while using inconsistent coordinate systems for positioning. The fix applies the scale transform to the entire page box instead, ensuring proper clipping and consistent scaling of all page elements.
 
+- **WmlComparer legal numbering preservation** ([Issue #1634](https://github.com/dotnet/Open-XML-SDK/issues/1634)) - Fixed comparison losing legal numbering (`w:isLgl`) when comparing documents with different numbering styles. The comparer now properly merges numbering definitions from the revised document into the result:
+  - Copies `abstractNum` and `num` elements from revised document when missing in original
+  - Reuses existing definitions when content matches (regardless of ID)
+  - Remaps IDs when conflicts occur to avoid duplicates
+  - Null-safe attribute extraction for robustness with malformed documents
+
 ### Changed
 - Replaced `FontPartType`/`ImagePartType` with `PartTypeInfo` pattern for SDK 3.x compatibility
 - Replaced `.Close()` calls with `Dispose()` pattern

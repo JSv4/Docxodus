@@ -13,8 +13,8 @@
     <Version>1.0.0</Version>
     <Authors>OpenXmlPowerTools Authors, JSv4</Authors>
     <Description>A powerful library for manipulating Open XML documents (DOCX, XLSX, PPTX). Fork of OpenXmlPowerTools upgraded to .NET 8.0.</Description>
-    <PackageProjectUrl>https://github.com/JSv4/Redliner</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/JSv4/Redliner</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/JSv4/Docxodus</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/JSv4/Docxodus</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>openxml;docx;word;xlsx;excel;pptx;powerpoint;document;compare;merge</PackageTags>

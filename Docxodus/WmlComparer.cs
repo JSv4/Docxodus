@@ -1844,6 +1844,7 @@ namespace Docxodus
                     FixUpShapeTypeIds(wDocWithRevisions);
                     AddFootnotesEndnotesStyles(wDocWithRevisions);
                     CopyMissingStylesFromOneDocToAnother(wDoc2, wDocWithRevisions);
+                    CopyMissingNumberingFromOneDocToAnother(wDoc2, wDocWithRevisions);
                     DeleteFootnotePropertiesInSettings(wDocWithRevisions);
                 }
                 foreach (var part in wDoc1.ContentParts())
@@ -2040,6 +2041,194 @@ namespace Docxodus
                 revisionsStylesXDoc.Root.Add(cloned);
             }
             wDocTo.MainDocumentPart.StyleDefinitionsPart.PutXDocument();
+        }
+
+        /// <summary>
+        /// Copies numbering definitions from one document to another, handling ID conflicts.
+        /// This ensures that when comparing documents with different numbering styles (e.g., legal numbering),
+        /// the numbering definitions from the revised document are preserved in the comparison result.
+        /// Fixes GitHub issue: https://github.com/dotnet/Open-XML-SDK/issues/1634
+        /// </summary>
+        private static void CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
+        {
+            var fromNumberingPart = wDocFrom.MainDocumentPart.NumberingDefinitionsPart;
+            if (fromNumberingPart == null)
+                return;
+
+            var toNumberingPart = wDocTo.MainDocumentPart.NumberingDefinitionsPart;
+            XDocument toNumberingXDoc;
+
+            if (toNumberingPart == null)
+            {
+                // Create a new NumberingDefinitionsPart if one doesn't exist
+                toNumberingPart = wDocTo.MainDocumentPart.AddNewPart<NumberingDefinitionsPart>();
+                toNumberingXDoc = new XDocument(
+                    new XDeclaration("1.0", "UTF-8", "yes"),
+                    new XElement(W.numbering,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w),
+                        new XAttribute(XNamespace.Xmlns + "r", R.r)));
+                toNumberingPart.PutXDocument(toNumberingXDoc);
+            }
+            else
+            {
+                toNumberingXDoc = toNumberingPart.GetXDocument();
+            }
+
+            var fromNumberingXDoc = fromNumberingPart.GetXDocument();
+
+            // Find the maximum IDs in the destination document to avoid conflicts
+            int maxAbstractNumId = toNumberingXDoc.Root
+                .Elements(W.abstractNum)
+                .Select(e => (int?)e.Attribute(W.abstractNumId) ?? 0)
+                .DefaultIfEmpty(0)
+                .Max();
+
+            int maxNumId = toNumberingXDoc.Root
+                .Elements(W.num)
+                .Select(e => (int?)e.Attribute(W.numId) ?? 0)
+                .DefaultIfEmpty(0)
+                .Max();
+
+            // Dictionary to track abstractNumId remapping (source ID -> destination ID)
+            var abstractNumIdMap = new Dictionary<int, int>();
+
+            // Copy abstractNum elements, reusing existing definitions with matching content
+            foreach (var abstractNum in fromNumberingXDoc.Root.Elements(W.abstractNum))
+            {
+                var fromAbstractNumId = GetIntAttribute(abstractNum, W.abstractNumId);
+                if (fromAbstractNumId == null)
+                    continue; // Skip malformed elements
+
+                var normalizedFrom = NormalizeAbstractNumForComparison(abstractNum);
+
+                // First, check if ANY existing abstractNum has matching content (regardless of ID)
+                var matchingByContent = toNumberingXDoc.Root
+                    .Elements(W.abstractNum)
+                    .FirstOrDefault(e => XNode.DeepEquals(NormalizeAbstractNumForComparison(e), normalizedFrom));
+
+                if (matchingByContent != null)
+                {
+                    // Reuse existing abstractNum with matching content
+                    var existingId = GetIntAttribute(matchingByContent, W.abstractNumId);
+                    if (existingId != null)
+                    {
+                        abstractNumIdMap[fromAbstractNumId.Value] = existingId.Value;
+                        continue;
+                    }
+                }
+
+                // No matching content found - check if the ID is already taken
+                var existingWithSameId = toNumberingXDoc.Root
+                    .Elements(W.abstractNum)
+                    .FirstOrDefault(e => GetIntAttribute(e, W.abstractNumId) == fromAbstractNumId);
+
+                int targetId;
+                if (existingWithSameId != null)
+                {
+                    // ID conflict - assign a new ID
+                    maxAbstractNumId++;
+                    targetId = maxAbstractNumId;
+                }
+                else
+                {
+                    // ID is free, use it
+                    targetId = fromAbstractNumId.Value;
+                }
+
+                var cloned = new XElement(abstractNum);
+                cloned.SetAttributeValue(W.abstractNumId, targetId);
+                abstractNumIdMap[fromAbstractNumId.Value] = targetId;
+
+                // Add in correct position (before w:num elements per schema order)
+                var firstNum = toNumberingXDoc.Root.Elements(W.num).FirstOrDefault();
+                if (firstNum != null)
+                    firstNum.AddBeforeSelf(cloned);
+                else
+                    toNumberingXDoc.Root.Add(cloned);
+            }
+
+            // Copy num elements that don't exist in destination
+            foreach (var num in fromNumberingXDoc.Root.Elements(W.num))
+            {
+                var fromNumId = GetIntAttribute(num, W.numId);
+                var fromAbstractNumIdRef = GetIntAttribute(num.Element(W.abstractNumId), W.val);
+                if (fromNumId == null || fromAbstractNumIdRef == null)
+                    continue; // Skip malformed elements
+
+                // Determine the mapped abstractNumId for this num
+                int mappedAbstractNumId = abstractNumIdMap.TryGetValue(fromAbstractNumIdRef.Value, out var mapped)
+                    ? mapped
+                    : fromAbstractNumIdRef.Value;
+
+                var existingNum = toNumberingXDoc.Root
+                    .Elements(W.num)
+                    .FirstOrDefault(e => GetIntAttribute(e, W.numId) == fromNumId);
+
+                if (existingNum != null)
+                {
+                    // Check if it references the same (mapped) abstractNum
+                    var existingAbstractNumIdRef = GetIntAttribute(existingNum.Element(W.abstractNumId), W.val);
+                    if (existingAbstractNumIdRef == mappedAbstractNumId)
+                    {
+                        // Same num with same abstractNum reference, skip
+                        continue;
+                    }
+
+                    // Different abstractNum reference - need a new numId
+                    maxNumId++;
+                    var cloned = new XElement(num);
+                    cloned.SetAttributeValue(W.numId, maxNumId);
+                    var abstractNumIdElement = cloned.Element(W.abstractNumId);
+                    if (abstractNumIdElement != null)
+                        abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
+                    toNumberingXDoc.Root.Add(cloned);
+                }
+                else
+                {
+                    // No existing num with this ID, copy with remapped abstractNumId
+                    var cloned = new XElement(num);
+                    if (mappedAbstractNumId != fromAbstractNumIdRef.Value)
+                    {
+                        var abstractNumIdElement = cloned.Element(W.abstractNumId);
+                        if (abstractNumIdElement != null)
+                            abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
+                    }
+                    toNumberingXDoc.Root.Add(cloned);
+                }
+            }
+
+            toNumberingPart.PutXDocument(toNumberingXDoc);
+        }
+
+        /// <summary>
+        /// Safely extracts an integer value from an XAttribute.
+        /// </summary>
+        private static int? GetIntAttribute(XElement element, XName attributeName)
+        {
+            if (element == null)
+                return null;
+            var attr = element.Attribute(attributeName);
+            if (attr == null)
+                return null;
+            if (int.TryParse(attr.Value, out var result))
+                return result;
+            return null;
+        }
+
+        /// <summary>
+        /// Normalizes an abstractNum element for comparison by removing ID-based attributes
+        /// that don't affect the functional behavior of the numbering definition.
+        /// </summary>
+        private static XElement NormalizeAbstractNumForComparison(XElement abstractNum)
+        {
+            var normalized = new XElement(abstractNum);
+            // Remove attributes/elements that shouldn't affect functional comparison
+            normalized.Attribute(W.abstractNumId)?.Remove();
+            // nsid is a unique identifier that may differ between documents
+            normalized.Element(W.nsid)?.Remove();
+            // tmpl is auto-generated and may differ
+            normalized.Element(W.tmpl)?.Remove();
+            return normalized;
         }
 
         private static void AddFootnotesEndnotesStyles(WordprocessingDocument wDocWithRevisions)
