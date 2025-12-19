@@ -4824,7 +4824,9 @@ namespace Docxodus
         {
             var style = new Dictionary<string, string>();
 
-            var rPr = run.Elements(W.rPr).First();
+            var rPr = run.Elements(W.rPr).FirstOrDefault();
+            if (rPr == null)
+                return style;
 
             var styleName = (string) run.Attribute(PtOpenXml.StyleName);
             if (styleName != null)
@@ -4976,7 +4978,9 @@ namespace Docxodus
         {
             const string defaultLanguage = "en-US"; // todo need to get defaultLanguage
 
-            var rPr = run.Elements(W.rPr).First();
+            var rPr = run.Elements(W.rPr).FirstOrDefault();
+            if (rPr == null)
+                return null;
             var languageType = (string)run.Attribute(PtOpenXml.LanguageType);
 
             string lang = null;

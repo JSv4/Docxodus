@@ -1,6 +1,26 @@
 # WmlToHtmlConverter.cs - Gaps and Deficiencies
 
+*Last updated: December 2025*
+
 This document catalogs known gaps, limitations, and areas for improvement in the WmlToHtmlConverter.
+
+## Quick Reference
+
+| Category | Gap | Severity |
+|----------|-----|----------|
+| ~~**Stability**~~ | ~~Null reference crashes in `DefineRunStyle`~~ | ~~High~~ FIXED |
+| **Stability** | Static caches not thread-safe | High |
+| **Rendering** | Tab width calculation disabled | High |
+| **Rendering** | Theme colors not resolved | Medium |
+| **Rendering** | Text box content lost | Medium |
+| **Rendering** | SVG images not supported | Medium |
+| **Rendering** | WMF/EMF images excluded | Low |
+| **Features** | Math equations (OMML) not rendered | Medium |
+| **Features** | Form fields not supported | Low |
+| **Features** | Pagination is CSS-only | Low |
+| **Accessibility** | No ARIA roles or lang attribute | Low |
+
+---
 
 ## 1. Missing Element Handling
 
@@ -123,11 +143,11 @@ OMML (`<m:oMath>`) elements are not handled at all - equations silently disappea
 
 Missing: highlight, caps, smallCaps, spacing, position, etc.
 
-## 13. Potential Null Reference Issues
+## 13. ~~Potential Null Reference Issues~~ (FIXED)
 
-Several places access `.First()` without null checks:
-- Line 3061: `var rPr = run.Elements(W.rPr).First();` - crashes if no `rPr`
-- Line 3213: `var rPr = run.Elements(W.rPr).First();`
+**Status:** Resolved
+
+Previously, `DefineRunStyle` and `GetLangAttribute` used `.First()` on `run.Elements(W.rPr)` which would crash with `InvalidOperationException` if a run had no `rPr` element. Now uses `.FirstOrDefault()` with null checks to return gracefully (empty style dictionary or null language attribute).
 
 ## 14. Font Fallback Limited
 
@@ -161,24 +181,49 @@ These are not thread-safe and will grow unbounded across multiple document conve
 
 `w:ffData`, `w:checkBox`, `w:textInput`, `w:ddList` are not converted to HTML form elements.
 
+## 19. Pagination Mode Limitations
+
+**Location:** `WmlToHtmlConverterSettings.PaginationMode`
+
+The `PaginationMode.Paginated` setting is architecturally implemented but has significant limitations:
+
+- **CSS only** - Generates PDF.js-style styling but content still flows continuously
+- **No actual page breaking** - No page-break logic or layout engine
+- **Headers/footers must be cloned per-page** - Dynamic fields like PAGE number don't work
+- **Section boundaries not detected** - Pagination engine doesn't track which section a page belongs to
+- **No page number calculation** - Cannot determine total page count
+
+This is essentially a styling mode rather than true pagination.
+
+## 20. Text Content in Shapes/DrawingML
+
+Beyond text boxes, content inside DrawingML shapes (`a:txBody`, `wps:txbx`) may not be fully extracted:
+
+- Shape text is handled differently than regular paragraph text
+- Nested text frames in complex drawings may be missed
+- No CSS positioning to reflect shape placement
+
 ---
 
 ## Summary of Priority Fixes
 
-### High Priority
+### High Priority (Stability/Correctness)
 
 1. ~~**Implement `CommentRenderMode.Margin`**~~ - FIXED
-2. **Handle null `rPr`** in `DefineRunStyle` and `GetLangAttribute` to prevent crashes
-3. **Add thread-safety** to static caches or make them instance-based
+2. ~~**Handle null `rPr`** in `DefineRunStyle` and `GetLangAttribute` to prevent crashes~~ - FIXED
+3. **Add thread-safety** to static caches or make them instance-based (memory leak in high-volume scenarios)
+4. **Fix tab width calculation** - currently hardcoded to 0, making tabulated content unreadable
 
-### Medium Priority
+### Medium Priority (Visual Fidelity)
 
-4. **Add SVG image support** - increasingly common in modern documents
-5. **Implement theme color resolution** for accurate color rendering
-6. **Fix tab width calculation** - currently disabled entirely
+5. **Implement theme color resolution** - colors appear wrong when documents use theme colors
+6. **Add SVG image support** - increasingly common in modern documents
+7. **Render text box content** - currently lost entirely from output
+8. **Improve font fallback** - unknown fonts should fall back to generic serif/sans-serif
 
 ### Low Priority (Feature Additions)
 
-7. **Consider OMML to MathML conversion** for equation support
-8. **Add form field support** for interactive documents
-9. **Improve accessibility** with ARIA roles and proper `lang` attributes
+9. **Consider OMML to MathML conversion** for equation support
+10. **Add form field support** for interactive documents
+11. **Improve accessibility** with ARIA roles and proper `lang` attributes
+12. **Add WMF/EMF conversion** or placeholder rendering for legacy images

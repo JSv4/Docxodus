@@ -1333,6 +1333,94 @@ namespace OxPt
                 }
             }
         }
+
+        [Fact]
+        public void HC016_RunWithoutRPr_DoesNotCrash()
+        {
+            // Test that runs without w:rPr elements are handled gracefully.
+            // Previously, DefineRunStyle and GetLangAttribute used .First() which
+            // would throw InvalidOperationException if no rPr element existed.
+            // This test verifies the fix using .FirstOrDefault() with null checks.
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                // Create a document with runs that have NO rPr elements
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required parts
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true }
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with runs that have no rPr at all
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                // Run with no rPr - just text
+                                new Run(
+                                    new Text("Plain text without formatting")
+                                ),
+                                // Another run with no rPr
+                                new Run(
+                                    new Text(" and more plain text")
+                                )
+                            ),
+                            new Paragraph(
+                                // Mixed: run without rPr followed by run with rPr
+                                new Run(
+                                    new Text("No formatting here")
+                                ),
+                                new Run(
+                                    new RunProperties(
+                                        new Bold()
+                                    ),
+                                    new Text(" but this is bold")
+                                )
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Null rPr Test",
+                        FabricateCssClasses = true,
+                        CssClassPrefix = "pt-",
+                    };
+
+                    // This should NOT throw - previously it would crash with:
+                    // System.InvalidOperationException: Sequence contains no elements
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify all content is present in the output
+                    Assert.Contains("Plain text without formatting", htmlString);
+                    Assert.Contains("and more plain text", htmlString);
+                    Assert.Contains("No formatting here", htmlString);
+                    Assert.Contains("but this is bold", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "NullRPr-Test.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
     }
 }
 

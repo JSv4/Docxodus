@@ -307,7 +307,8 @@ All notable changes to this project will be documented in this file.
   - Copies `abstractNum` and `num` elements from revised document when missing in original
   - Reuses existing definitions when content matches (regardless of ID)
   - Remaps IDs when conflicts occur to avoid duplicates
-  - Null-safe attribute extraction for robustness with malformed documents
+
+- **WmlToHtmlConverter null rPr crash** - Fixed `InvalidOperationException` crash in `DefineRunStyle` and `GetLangAttribute` when converting runs without `w:rPr` elements. Changed `.First()` to `.FirstOrDefault()` with null checks to handle runs that have no explicit run properties gracefully.
 
 ### Changed
 - Replaced `FontPartType`/`ImagePartType` with `PartTypeInfo` pattern for SDK 3.x compatibility
@@ -315,6 +316,9 @@ All notable changes to this project will be documented in this file.
 - Migrated all color handling from `System.Drawing.Color` to `SKColor`
 - Migrated font handling from `FontFamily`/`FontStyle` to `SKFontManager`/`SKTypeface`
 - Migrated image handling from `Bitmap`/`ImageFormat` to `SKBitmap`/`SKEncodedImageFormat`
+
+### Documentation
+- Updated `docs/architecture/wml_to_html_converter_gaps.md` with comprehensive gap analysis including pagination mode limitations, DrawingML text handling, and prioritized fix recommendations
 
 ### Test Status
 - 1051 passed, 0 failed, 1 skipped out of 1052 tests (~99.9% pass rate)
