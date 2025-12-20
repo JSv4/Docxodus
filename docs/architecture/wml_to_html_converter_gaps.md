@@ -10,11 +10,13 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 |----------|-----|----------|
 | ~~**Stability**~~ | ~~Null reference crashes in `DefineRunStyle`~~ | ~~High~~ FIXED |
 | ~~**Stability**~~ | ~~Static caches not thread-safe~~ | ~~High~~ FIXED |
-| **Rendering** | Tab width calculation disabled | High |
+| ~~**Rendering**~~ | ~~Tab width calculation disabled~~ | ~~High~~ FIXED |
 | **Rendering** | Theme colors not resolved | Medium |
 | **Rendering** | Text box content lost | Medium |
 | **Rendering** | SVG images not supported | Medium |
 | **Rendering** | WMF/EMF images excluded | Low |
+| **Rendering** | Tab leader count varies by platform | Low |
+| **Features** | Field code resolution (TOC page numbers) | Medium |
 | **Features** | Math equations (OMML) not rendered | Medium |
 | **Features** | Form fields not supported | Low |
 | **Features** | Pagination is CSS-only | Low |
@@ -94,17 +96,23 @@ Many documented but unimplemented:
 - `textDirection`
 - `widowControl`
 
-## 7. Tab Width Calculation Disabled
+## 7. ~~Tab Width Calculation Disabled~~ (FIXED)
 
-**Location:** Lines 3803-3823
+**Status:** Resolved
 
-```csharp
-// TODO: Revisit. This is a quick fix because it doesn't work on Azure.
-// ...
-const int widthOfText = 0;  // <-- Always zero!
-```
+Previously, tab width calculation for text elements was disabled with `const int widthOfText = 0;` at line 5591. This was disabled because "it doesn't work on Azure" (likely due to font unavailability).
 
-Tab width calculation for text content is completely disabled.
+Now uses estimation fallback when font measurement fails:
+- `MetricsGetter._getTextWidth()` returns character-based estimation when SkiaSharp measurement fails
+- Estimation formula: `charWidth = fontSize * 0.6 / 2` per character
+- Works in Azure, WASM, and environments without fonts installed
+- Tab positioning now properly accounts for preceding text width
+- Leader spans now have `display: inline-block` for proper width rendering
+
+**Note:** Leader character count may vary by platform due to font measurement differences:
+- Desktop (.NET): Uses SkiaSharp for actual font measurement - period characters may measure wider than expected, resulting in fewer dots
+- WASM: Uses character-based estimation - may produce different counts
+- The tab span width is correct; only the dot count filling that width varies
 
 ## 8. Hard-coded Default Language
 
@@ -134,7 +142,41 @@ OMML (`<m:oMath>`) elements are not handled at all - equations silently disappea
 - No visual separation or page-break CSS added
 - Headers/footers for different sections not differentiated
 
-## 12. Tracked Changes - Partial Property Support
+## 12. Field Code Resolution Not Implemented
+
+**Location:** Various field handling in `ConvertToHtmlTransform`
+
+Word documents use field codes for dynamic content like page numbers, table of contents, cross-references, and calculated values. These are stored as:
+- `w:fldSimple` - Simple fields with direct content
+- `w:fldChar` with `w:fldCharType="begin"/"separate"/"end"` - Complex fields with instruction and result parts
+- `w:instrText` - Field instruction text (e.g., `PAGE`, `TOC`, `HYPERLINK`)
+
+**Current behavior:**
+- Field instructions are ignored
+- Only the cached result (text between `separate` and `end`) is rendered
+- This works for static document snapshots but fails for:
+
+**Problematic scenarios:**
+1. **TOC page numbers** - Appear as `#x200e` (Unicode LRM) because the cached result is empty when document was never printed/updated
+2. **Cross-references** - May show stale or placeholder text
+3. **PAGE/NUMPAGES fields** - Cannot be resolved (would require actual pagination)
+4. **Calculated fields** - Results may be outdated
+
+**Example from Table of Contents:**
+```xml
+<w:fldSimple w:instr=" PAGEREF _Toc123 \h ">
+  <w:r><w:t>3</w:t></w:r>
+</w:fldSimple>
+```
+If the cached result is empty (common when document hasn't been printed), the page number simply doesn't appear.
+
+**Potential solutions:**
+1. **Warn when fields have no cached result** - Emit visible placeholder or console warning
+2. **Parse simple field types** - Resolve `HYPERLINK` fields to actual `<a>` tags
+3. **TOC-specific handling** - Detect TOC fields and warn about missing page numbers
+4. **Full field code parsing** - Complex; would require understanding all field types
+
+## 13. Tracked Changes - Partial Property Support
 
 **Location:** Lines 3003-3054
 
@@ -211,7 +253,7 @@ Beyond text boxes, content inside DrawingML shapes (`a:txBody`, `wps:txbx`) may 
 1. ~~**Implement `CommentRenderMode.Margin`**~~ - FIXED
 2. ~~**Handle null `rPr`** in `DefineRunStyle` and `GetLangAttribute` to prevent crashes~~ - FIXED
 3. ~~**Add thread-safety** to static caches or make them instance-based (memory leak in high-volume scenarios)~~ - FIXED
-4. **Fix tab width calculation** - currently hardcoded to 0, making tabulated content unreadable
+4. ~~**Fix tab width calculation**~~ - FIXED - now uses estimation fallback when fonts unavailable
 
 ### Medium Priority (Visual Fidelity)
 

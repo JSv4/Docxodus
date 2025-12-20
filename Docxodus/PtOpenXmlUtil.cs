@@ -5957,6 +5957,7 @@ listSeparator
         public static XName StyleName = pt + "StyleName";
         public static XName TabWidth = pt + "TabWidth";
         public static XName Leader = pt + "Leader";
+        public static XName TabAlignment = pt + "TabAlignment";
 
         public static XName ListItemRun = pt + "ListItemRun";
 

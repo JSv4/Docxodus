@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - .NET 8 / Open XML SDK 3.x Migration
 
 ### Fixed
+- **Tab width calculation** re-enabled in `WmlToHtmlConverter` for proper tab stop positioning
+  - Previously disabled due to Azure font measurement failures; now uses estimation fallback
+  - `MetricsGetter._getTextWidth()` returns character-based estimation when SkiaSharp measurement fails
+  - Estimation formula: `charWidth = fontSize * 0.6 / 2` per character (same as WASM builds)
+  - Tab positioning now properly accounts for preceding text width
+  - Works in Azure, WASM, and environments without fonts installed
+  - Added Playwright visual tests for tab rendering verification
 - **Thread-safety issues** in `WmlToHtmlConverter` and `FontFamilyHelper` that could cause corruption during concurrent document conversions
   - `ShadeCache` in `WmlToHtmlConverter` now uses `ConcurrentDictionary` for thread-safe shade color caching
   - `FontFamilyHelper._unknownFonts` now uses `ConcurrentDictionary` for thread-safe font tracking
