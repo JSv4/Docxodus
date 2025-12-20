@@ -15,8 +15,8 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 | **Rendering** | Theme colors not resolved | Medium |
 | **Rendering** | Text box content lost | Medium |
 | **Rendering** | Tab leader count varies by platform | Low |
-| **Accessibility** | No `lang` attribute on html/body | Medium |
-| **Accessibility** | No `lang` attribute on foreign text spans | Medium |
+| ~~**Accessibility**~~ | ~~No `lang` attribute on html/body~~ | ~~Medium~~ ✅ |
+| ~~**Accessibility**~~ | ~~No `lang` attribute on foreign text spans~~ | ~~Medium~~ ✅ |
 | **Accessibility** | No ARIA roles | Low |
 | **Fonts** | Limited font fallback (28 fonts) | Medium |
 | **Fonts** | No CJK font-family fallback chain | Medium |
@@ -184,41 +184,26 @@ The tab span width is correct; only the dot count filling that width varies.
 
 ## Accessibility Issues
 
-### 10. No Document Language Attribute
+### ~~10. No Document Language Attribute~~ ✅ RESOLVED
 
-**Severity:** Medium
+**Status:** Implemented in December 2025
 
-**Problem:** No `lang` attribute on `<html>` or `<body>` element.
-
-**LibreOffice:**
-```html
-<body lang="en-US">
-```
-
-**Ours:** No language attribute.
-
-**Impact:** Screen readers cannot determine document language; browsers cannot apply correct hyphenation.
-
-**Solution:** Read from `w:settings/w:themeFontLang` or `w:lang` on document default styles.
+**Solution Implemented:**
+- `<html>` element now includes `lang` attribute (e.g., `<html lang="en-US">`)
+- Language auto-detected from `w:themeFontLang` in document settings
+- Falls back to default paragraph style's language, then "en-US"
+- New `DocumentLanguage` setting allows manual override
 
 ---
 
-### 11. No Language Attributes on Foreign Text
+### ~~11. No Language Attributes on Foreign Text~~ ✅ RESOLVED
 
-**Severity:** Medium
+**Status:** Implemented in December 2025
 
-**Problem:** Text in different languages (CJK, etc.) lacks `lang` attribute.
-
-**LibreOffice:**
-```html
-<span lang="zh-CN">株式会社</span>
-```
-
-**Ours:** No `lang` attribute on runs with different language.
-
-**Impact:** Screen readers mispronounce foreign text; browsers use wrong fonts.
-
-**Solution:** Read `w:rPr/w:lang` attributes and add `lang` to corresponding `<span>` elements.
+**Solution Implemented:**
+- `GetLangAttribute()` now uses actual document default language (not hardcoded "en-US")
+- Foreign text spans get `lang` attribute when different from document default
+- Supports western, bidi (Arabic/Hebrew), and east Asian language detection
 
 ---
 
@@ -385,11 +370,11 @@ Missing: highlight, caps, smallCaps, spacing, position, etc.
 1. **Table width calculation** - Fix twips→points conversion accuracy
 2. **Borderless table detection** - For signature blocks and layout tables
 3. **Theme color resolution** - Colors appear wrong with theme colors
-4. **Add `lang` attribute** to `<html>` from document settings
+4. ~~**Add `lang` attribute** to `<html>` from document settings~~ ✅ Done
 
 ### Medium Priority (Accessibility/Standards)
 
-5. **Add `lang` attributes** to foreign language spans
+5. ~~**Add `lang` attributes** to foreign language spans~~ ✅ Done
 6. **Add `@page` CSS rule** for print media
 7. **CJK font-family fallback** chain
 8. **Improve generic font fallback** - unknown fonts need serif/sans-serif fallback

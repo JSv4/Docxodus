@@ -244,6 +244,14 @@ namespace Docxodus
         /// </summary>
         public bool IncludeUnsupportedContentMetadata;
 
+        /// <summary>
+        /// Override the document's default language for the HTML lang attribute.
+        /// If null (default), the language is extracted from document settings
+        /// (w:themeFontLang or default paragraph style).
+        /// Examples: "en-US", "fr-FR", "de-DE", "ja-JP"
+        /// </summary>
+        public string DocumentLanguage;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -275,6 +283,7 @@ namespace Docxodus
             RenderUnsupportedContentPlaceholders = false;
             UnsupportedContentCssClassPrefix = "unsupported-";
             IncludeUnsupportedContentMetadata = true;
+            DocumentLanguage = null;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -310,6 +319,7 @@ namespace Docxodus
             RenderUnsupportedContentPlaceholders = htmlConverterSettings.RenderUnsupportedContentPlaceholders;
             UnsupportedContentCssClassPrefix = htmlConverterSettings.UnsupportedContentCssClassPrefix;
             IncludeUnsupportedContentMetadata = htmlConverterSettings.IncludeUnsupportedContentMetadata;
+            DocumentLanguage = htmlConverterSettings.DocumentLanguage;
         }
     }
 
@@ -453,6 +463,14 @@ namespace Docxodus
         /// </summary>
         public bool IncludeUnsupportedContentMetadata;
 
+        /// <summary>
+        /// Override the document's default language for the HTML lang attribute.
+        /// If null (default), the language is extracted from document settings
+        /// (w:themeFontLang or default paragraph style).
+        /// Examples: "en-US", "fr-FR", "de-DE", "ja-JP"
+        /// </summary>
+        public string DocumentLanguage;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -484,6 +502,7 @@ namespace Docxodus
             RenderUnsupportedContentPlaceholders = false;
             UnsupportedContentCssClassPrefix = "unsupported-";
             IncludeUnsupportedContentMetadata = true;
+            DocumentLanguage = null;
         }
     }
 
@@ -793,6 +812,12 @@ namespace Docxodus
                 LoadAnnotations(wordDoc, annotationTracker);
             }
             rootElement.AddAnnotation(annotationTracker);
+
+            // Store document default language for GetLangAttribute to use
+            var docLang = !string.IsNullOrEmpty(htmlConverterSettings.DocumentLanguage)
+                ? htmlConverterSettings.DocumentLanguage
+                : GetDocumentDefaultLanguage(wordDoc);
+            rootElement.AddAnnotation(new DocumentLanguageAnnotation { DefaultLanguage = docLang });
 
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
                 rootElement, false, 0m);
@@ -2129,7 +2154,13 @@ namespace Docxodus
             // there but possibly empty), and other meta tags.
             if (element.Name == W.document)
             {
+                // Determine document language: setting override or auto-detect from document
+                var documentLang = !string.IsNullOrEmpty(settings.DocumentLanguage)
+                    ? settings.DocumentLanguage
+                    : GetDocumentDefaultLanguage(wordDoc);
+
                 return new XElement(Xhtml.html,
+                    new XAttribute("lang", documentLang),
                     new XElement(Xhtml.head,
                         new XElement(Xhtml.meta, new XAttribute("charset", "UTF-8")),
                         settings.PageTitle != null
@@ -5234,7 +5265,10 @@ namespace Docxodus
 
         private static XAttribute GetLangAttribute(XElement run)
         {
-            const string defaultLanguage = "en-US"; // todo need to get defaultLanguage
+            // Get document default language from annotation (set during preprocessing)
+            var docRoot = run.Document?.Root;
+            var langAnnotation = docRoot?.Annotation<DocumentLanguageAnnotation>();
+            var defaultLanguage = langAnnotation?.DefaultLanguage ?? "en-US";
 
             var rPr = run.Elements(W.rPr).FirstOrDefault();
             if (rPr == null)
@@ -5248,10 +5282,78 @@ namespace Docxodus
                 lang = (string) rPr.Elements(W.lang).Attributes(W.bidi).FirstOrDefault();
             else if (languageType == "eastAsia")
                 lang = (string) rPr.Elements(W.lang).Attributes(W.eastAsia).FirstOrDefault();
-            if (lang == null)
-                lang = defaultLanguage;
 
-            return lang != defaultLanguage ? new XAttribute("lang", lang) : null;
+            // Only add lang attribute if run's language differs from document default
+            if (string.IsNullOrEmpty(lang) || lang == defaultLanguage)
+                return null;
+
+            return new XAttribute("lang", lang);
+        }
+
+        /// <summary>
+        /// Annotation class to store document default language for use by GetLangAttribute.
+        /// </summary>
+        private class DocumentLanguageAnnotation
+        {
+            public string DefaultLanguage { get; set; }
+        }
+
+        /// <summary>
+        /// Extracts the document's default language from settings.
+        /// Priority: 1) themeFontLang, 2) default paragraph style lang, 3) "en-US"
+        /// </summary>
+        private static string GetDocumentDefaultLanguage(WordprocessingDocument wordDoc)
+        {
+            const string fallbackLanguage = "en-US";
+
+            // Try 1: themeFontLang in DocumentSettingsPart
+            var settingsPart = wordDoc.MainDocumentPart?.DocumentSettingsPart;
+            if (settingsPart != null)
+            {
+                var settingsXDoc = settingsPart.GetXDocument();
+                var themeFontLang = settingsXDoc.Descendants(W.themeFontLang).FirstOrDefault();
+                if (themeFontLang != null)
+                {
+                    // Prefer w:val (western), then w:eastAsia, then w:bidi
+                    var lang = (string)themeFontLang.Attribute(W.val);
+                    if (!string.IsNullOrEmpty(lang))
+                        return lang;
+
+                    lang = (string)themeFontLang.Attribute(W.eastAsia);
+                    if (!string.IsNullOrEmpty(lang))
+                        return lang;
+
+                    lang = (string)themeFontLang.Attribute(W.bidi);
+                    if (!string.IsNullOrEmpty(lang))
+                        return lang;
+                }
+            }
+
+            // Try 2: Default paragraph style's language
+            var stylesPart = wordDoc.MainDocumentPart?.StyleDefinitionsPart;
+            if (stylesPart != null)
+            {
+                var stylesXDoc = stylesPart.GetXDocument();
+                var defaultParaStyle = stylesXDoc.Root?
+                    .Elements(W.style)
+                    .FirstOrDefault(s =>
+                        (string)s.Attribute(W.type) == "paragraph" &&
+                        s.Attribute(W._default).ToBoolean() == true);
+
+                if (defaultParaStyle != null)
+                {
+                    var lang = (string)defaultParaStyle
+                        .Elements(W.rPr)
+                        .Elements(W.lang)
+                        .Attributes(W.val)
+                        .FirstOrDefault();
+
+                    if (!string.IsNullOrEmpty(lang))
+                        return lang;
+                }
+            }
+
+            return fallbackLanguage;
         }
 
         private static void AdjustTableBorders(WordprocessingDocument wordDoc)

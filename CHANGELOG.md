@@ -24,6 +24,16 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
+- **Document Language Attribute** - HTML output now includes `lang` attribute for improved accessibility
+  - New `DocumentLanguage` setting to manually override the language (default: auto-detect)
+  - `<html>` element now includes `lang` attribute (e.g., `<html lang="en-US">`)
+  - Language is auto-detected from:
+    1. `w:themeFontLang` in document settings
+    2. Default paragraph style's `w:rPr/w:lang`
+    3. Falls back to "en-US"
+  - Foreign text spans get `lang` attribute when different from document default
+  - Improves screen reader pronunciation and browser font selection
+  - Addresses converter gaps #10 (Document Language Attribute) and #11 (Foreign Text Spans)
 - **Unsupported Content Placeholders** - Visual indicators for content that cannot be fully converted to HTML
   - New `RenderUnsupportedContentPlaceholders` setting (default: false for backward compatibility)
   - Supports these unsupported content types:

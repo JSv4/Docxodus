@@ -223,6 +223,7 @@ public partial class DocumentConverter
     /// <param name="showDeletedContent">Whether to show deleted content with strikethrough (only when renderTrackedChanges=true)</param>
     /// <param name="renderMoveOperations">Whether to distinguish move operations from insert/delete (only when renderTrackedChanges=true)</param>
     /// <param name="renderUnsupportedContentPlaceholders">Whether to render placeholders for unsupported content (math, forms, WMF/EMF images)</param>
+    /// <param name="documentLanguage">Override the document's default language for the HTML lang attribute (null = auto-detect from document)</param>
     /// <returns>HTML string or JSON error object</returns>
     [JSExport]
     public static string ConvertDocxToHtmlComplete(
@@ -244,7 +245,8 @@ public partial class DocumentConverter
         bool renderTrackedChanges,
         bool showDeletedContent,
         bool renderMoveOperations,
-        bool renderUnsupportedContentPlaceholders = false)
+        bool renderUnsupportedContentPlaceholders = false,
+        string? documentLanguage = null)
     {
         if (docxBytes == null || docxBytes.Length == 0)
         {
@@ -289,6 +291,7 @@ public partial class DocumentConverter
                 RenderUnsupportedContentPlaceholders = renderUnsupportedContentPlaceholders,
                 UnsupportedContentCssClassPrefix = "unsupported-",
                 IncludeUnsupportedContentMetadata = true,
+                DocumentLanguage = documentLanguage,
                 // Embed images as base64 data URIs - no SkiaSharp needed
                 ImageHandler = CreateBase64ImageHandler()
             };
