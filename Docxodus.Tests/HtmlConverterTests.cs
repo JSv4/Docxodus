@@ -6,10 +6,12 @@
 // DO_CONVERSION_VIA_WORD is defined in the project Docxodus.Tests.OA.csproj, but not in the Docxodus.Tests.csproj
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
@@ -1420,6 +1422,264 @@ namespace OxPt
                     File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
                 }
             }
+        }
+
+        [Fact]
+        public void ConcurrentConversions_ShouldNotCorruptShadeCache()
+        {
+            // This test verifies that the ShadeCache (ConcurrentDictionary) handles
+            // concurrent access correctly during parallel document conversions.
+
+            // Create a proper document with all required parts and shading
+            byte[] docBytes;
+            using (var stream = new MemoryStream())
+            {
+                using (var wDoc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    // Add main document part
+                    var mainPart = wDoc.AddMainDocumentPart();
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(
+                                    new RunProperties(
+                                        new Shading { Val = ShadingPatternValues.Percent20, Color = "FF0000", Fill = "FFFFFF" }
+                                    ),
+                                    new Text("Red shading 20%")
+                                )
+                            ),
+                            new Paragraph(
+                                new Run(
+                                    new RunProperties(
+                                        new Shading { Val = ShadingPatternValues.Percent50, Color = "00FF00", Fill = "000000" }
+                                    ),
+                                    new Text("Green shading 50%")
+                                )
+                            ),
+                            new Paragraph(
+                                new Run(
+                                    new RunProperties(
+                                        new Shading { Val = ShadingPatternValues.Percent75, Color = "0000FF", Fill = "FFFFFF" }
+                                    ),
+                                    new Text("Blue shading 75%")
+                                )
+                            )
+                        )
+                    );
+
+                    // Add required StyleDefinitionsPart
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
+                                    new FontSize { Val = "22" }
+                                )
+                            )
+                        )
+                    );
+
+                    // Add DocumentSettingsPart
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
+                }
+                docBytes = stream.ToArray();
+            }
+
+            var exceptions = new ConcurrentBag<Exception>();
+            var tasks = new Task[20];
+
+            // Run 20 concurrent conversions (each gets its own copy of the doc bytes)
+            for (int i = 0; i < 20; i++)
+            {
+                int iteration = i;
+                tasks[i] = Task.Run(() =>
+                {
+                    try
+                    {
+                        // Each task needs its own copy since the converter may modify the document
+                        byte[] localDocBytes = (byte[])docBytes.Clone();
+                        using (var ms = new MemoryStream())
+                        {
+                            ms.Write(localDocBytes, 0, localDocBytes.Length);
+                            ms.Position = 0;
+                            using (var wDoc = WordprocessingDocument.Open(ms, true))
+                            {
+                                var settings = new WmlToHtmlConverterSettings
+                                {
+                                    PageTitle = $"Concurrent Test {iteration}",
+                                    FabricateCssClasses = true,
+                                    CssClassPrefix = $"pt{iteration}-",
+                                };
+                                XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                                string htmlString = html.ToString();
+
+                                // Verify content was converted
+                                Assert.Contains("Red shading 20%", htmlString);
+                                Assert.Contains("Green shading 50%", htmlString);
+                                Assert.Contains("Blue shading 75%", htmlString);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        exceptions.Add(ex);
+                    }
+                });
+            }
+
+            Task.WaitAll(tasks);
+
+            // No exceptions should have occurred
+            Assert.Empty(exceptions);
+        }
+
+        [Fact]
+        public void ClearShadeCache_ShouldNotThrowDuringConcurrentUse()
+        {
+            // This test verifies that clearing the cache while conversions are running
+            // doesn't cause exceptions (ConcurrentDictionary handles this safely).
+
+            byte[] docBytes;
+            using (var stream = new MemoryStream())
+            {
+                using (var wDoc = WordprocessingDocument.Create(stream, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(
+                                    new RunProperties(
+                                        new Shading { Val = ShadingPatternValues.Percent25, Color = "123456", Fill = "ABCDEF" }
+                                    ),
+                                    new Text("Shaded content")
+                                )
+                            )
+                        )
+                    );
+
+                    // Add required StyleDefinitionsPart
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
+                                    new FontSize { Val = "22" }
+                                )
+                            )
+                        )
+                    );
+
+                    // Add DocumentSettingsPart
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new DocumentFormat.OpenXml.Wordprocessing.Settings();
+                }
+                docBytes = stream.ToArray();
+            }
+
+            var cts = new CancellationTokenSource();
+            var exceptions = new ConcurrentBag<Exception>();
+
+            // Start a background task doing conversions
+            var conversionTask = Task.Run(() =>
+            {
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    try
+                    {
+                        // Each iteration needs its own copy since converter may modify document
+                        byte[] localDocBytes = (byte[])docBytes.Clone();
+                        using (var ms = new MemoryStream())
+                        {
+                            ms.Write(localDocBytes, 0, localDocBytes.Length);
+                            ms.Position = 0;
+                            using (var wDoc = WordprocessingDocument.Open(ms, true))
+                            {
+                                var settings = new WmlToHtmlConverterSettings();
+                                WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        exceptions.Add(ex);
+                    }
+                }
+            });
+
+            // Clear cache multiple times while conversions are running
+            for (int i = 0; i < 50; i++)
+            {
+                WmlToHtmlConverter.ClearShadeCache();
+                Thread.Sleep(1);
+            }
+
+            cts.Cancel();
+            try { conversionTask.Wait(TimeSpan.FromSeconds(5)); } catch { }
+
+            // No exceptions should have occurred from the concurrent access
+            Assert.Empty(exceptions);
+        }
+
+        [Fact]
+        public void FontFamilyHelper_ConcurrentMarkAsUnknown_ShouldNotCorrupt()
+        {
+            // This test verifies that FontFamilyHelper's ConcurrentDictionary-based
+            // unknown fonts cache handles concurrent access correctly.
+
+            // Clear any existing unknown fonts
+            FontFamilyHelper.ClearUnknownFontsCache();
+
+            var exceptions = new ConcurrentBag<Exception>();
+            var tasks = new Task[20];
+
+            // Run 20 concurrent tasks marking fonts as unknown
+            for (int i = 0; i < 20; i++)
+            {
+                int iteration = i;
+                tasks[i] = Task.Run(() =>
+                {
+                    try
+                    {
+                        for (int j = 0; j < 100; j++)
+                        {
+                            // Each task marks some unique fonts and some shared fonts
+                            FontFamilyHelper.MarkAsUnknown($"UniqueFont-{iteration}-{j}");
+                            FontFamilyHelper.MarkAsUnknown($"SharedFont-{j}");
+
+                            // Also check if fonts are marked
+                            FontFamilyHelper.IsMarkedUnknown($"SharedFont-{j}");
+                            FontFamilyHelper.IsMarkedUnknown($"UniqueFont-{iteration}-{j}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        exceptions.Add(ex);
+                    }
+                });
+            }
+
+            Task.WaitAll(tasks);
+
+            // No exceptions should have occurred
+            Assert.Empty(exceptions);
+
+            // Verify fonts were marked (each task marks 100 unique + 100 shared per iteration)
+            // Unique: 20 tasks * 100 = 2000
+            // Shared: 100 (deduplicated)
+            // Total: 2100
+            Assert.Equal(2100, FontFamilyHelper.UnknownFonts.Count);
+
+            // Verify specific fonts are marked
+            Assert.True(FontFamilyHelper.IsMarkedUnknown("UniqueFont-0-0"));
+            Assert.True(FontFamilyHelper.IsMarkedUnknown("SharedFont-50"));
+
+            // Clean up
+            FontFamilyHelper.ClearUnknownFontsCache();
+            Assert.Empty(FontFamilyHelper.UnknownFonts);
         }
     }
 }

@@ -9,7 +9,7 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 | Category | Gap | Severity |
 |----------|-----|----------|
 | ~~**Stability**~~ | ~~Null reference crashes in `DefineRunStyle`~~ | ~~High~~ FIXED |
-| **Stability** | Static caches not thread-safe | High |
+| ~~**Stability**~~ | ~~Static caches not thread-safe~~ | ~~High~~ FIXED |
 | **Rendering** | Tab width calculation disabled | High |
 | **Rendering** | Theme colors not resolved | Medium |
 | **Rendering** | Text box content lost | Medium |
@@ -155,16 +155,15 @@ Previously, `DefineRunStyle` and `GetLangAttribute` used `.First()` on `run.Elem
 
 Only 28 fonts have fallback definitions. Unknown fonts get no CSS `font-family` fallback to serif/sans-serif.
 
-## 15. Static Mutable State
+## 15. ~~Static Mutable State~~ (FIXED)
 
-**Location:** Lines 3883, 4410
+**Status:** Resolved
 
-```csharp
-private static readonly HashSet<string> UnknownFonts = new HashSet<string>();
-private static readonly Dictionary<string, string> ShadeCache = new Dictionary<string, string>();
-```
+Previously, static caches were not thread-safe:
+- `UnknownFonts` in `FontFamilyHelper.cs`
+- `ShadeCache` in `WmlToHtmlConverter.cs`
 
-These are not thread-safe and will grow unbounded across multiple document conversions.
+Now uses thread-safe `ConcurrentDictionary` for both caches, with `Lazy<T>` for font family initialization. Added `ClearShadeCache()` and `ClearUnknownFontsCache()` methods for memory management in long-running processes.
 
 ## 16. Complex Script (BiDi) Handling Incomplete
 
@@ -211,7 +210,7 @@ Beyond text boxes, content inside DrawingML shapes (`a:txBody`, `wps:txbx`) may 
 
 1. ~~**Implement `CommentRenderMode.Margin`**~~ - FIXED
 2. ~~**Handle null `rPr`** in `DefineRunStyle` and `GetLangAttribute` to prevent crashes~~ - FIXED
-3. **Add thread-safety** to static caches or make them instance-based (memory leak in high-volume scenarios)
+3. ~~**Add thread-safety** to static caches or make them instance-based (memory leak in high-volume scenarios)~~ - FIXED
 4. **Fix tab width calculation** - currently hardcoded to 0, making tabulated content unreadable
 
 ### Medium Priority (Visual Fidelity)
