@@ -66,7 +66,7 @@ jobs:
           dotnet pack tools/docx2oc/docx2oc.csproj -c Release -o ./artifacts -p:PackageVersion=${{ steps.version.outputs.VERSION }}
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: nuget-packages
           path: ./artifacts/*.nupkg
@@ -147,7 +147,7 @@ jobs:
         run: dotnet publish tools/redline/redline.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
 
       - name: Upload binary
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: ./publish/redline*
@@ -195,7 +195,7 @@ jobs:
         run: dotnet publish tools/docx2html/docx2html.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
 
       - name: Upload binary
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: ./publish/docx2html*
@@ -243,7 +243,7 @@ jobs:
         run: dotnet publish tools/docx2oc/docx2oc.csproj -c Release -r ${{ matrix.rid }} --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true -p:Version=${{ steps.version.outputs.VERSION }} -o ./publish
 
       - name: Upload binary
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
           path: ./publish/docx2oc*

@@ -40,7 +40,7 @@ jobs:
         run: dotnet test Docxodus.Tests/Docxodus.Tests.csproj -c Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
 
       - name: Upload test results
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         if: always()
         with:
           name: test-results
