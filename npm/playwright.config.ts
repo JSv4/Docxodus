@@ -12,6 +12,15 @@ export default defineConfig({
     baseURL: 'http://localhost:8082',
     trace: 'on-first-retry',
   },
+  // Snapshot configuration for visual testing
+  expect: {
+    toHaveScreenshot: {
+      maxDiffPixelRatio: 0.05,
+      threshold: 0.2,
+    },
+  },
+  snapshotDir: './tests/__snapshots__',
+  snapshotPathTemplate: '{snapshotDir}/{testFilePath}/{arg}{ext}',
   projects: [
     {
       name: 'chromium',

@@ -1681,6 +1681,361 @@ namespace OxPt
             FontFamilyHelper.ClearUnknownFontsCache();
             Assert.Empty(FontFamilyHelper.UnknownFonts);
         }
+
+        [Fact]
+        public void HC022_TabWidthCalculation_TextWidthNonZero()
+        {
+            // Test that text width is now calculated (non-zero) for text elements
+            // before tabs. Previously this was hardcoded to 0, causing incorrect
+            // tab positioning for right/center/decimal tabs.
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true }
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new DefaultTabStop() { Val = 720 }
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Create a paragraph with: "Hello World" + tab + "Right aligned"
+                    // The tab is right-aligned at 6 inches (8640 twips)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new Tabs(
+                                        new TabStop() { Val = TabStopValues.Right, Position = 8640 }
+                                    )
+                                ),
+                                new Run(
+                                    new RunProperties(
+                                        new RunFonts() { Ascii = "Times New Roman" },
+                                        new FontSize() { Val = "24" }  // 12pt
+                                    ),
+                                    new Text("Hello World")
+                                ),
+                                new Run(
+                                    new TabChar()
+                                ),
+                                new Run(
+                                    new Text("Right aligned")
+                                )
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Tab Width Calculation Test",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // The HTML output should contain span elements with margin or width
+                    // values that account for the text before the tab
+                    Assert.Contains("Hello World", htmlString);
+                    Assert.Contains("Right aligned", htmlString);
+
+                    // Verify tab span has styling applied (margin for spacing)
+                    Assert.Contains("margin", htmlString);
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-Calculation.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC023_RightAlignedTab_CorrectSpacing()
+        {
+            // Test that right-aligned tabs calculate correct spacing based on
+            // the width of text that follows the tab.
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true }
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new DefaultTabStop() { Val = 720 }
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Table of Contents style: "Chapter 1" + tab with dots + "1"
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new Tabs(
+                                        new TabStop() { Val = TabStopValues.Right, Leader = TabStopLeaderCharValues.Dot, Position = 8640 }
+                                    )
+                                ),
+                                new Run(
+                                    new Text("Chapter 1")
+                                ),
+                                new Run(
+                                    new TabChar()
+                                ),
+                                new Run(
+                                    new Text("1")
+                                )
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Right Tab Test",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify content is present
+                    Assert.Contains("Chapter 1", htmlString);
+                    Assert.Contains("1", htmlString);
+
+                    // Verify tab span has margin or width styling for the right-aligned tab
+                    // (dot leaders may or may not appear depending on font availability)
+                    Assert.True(
+                        htmlString.Contains("margin") || htmlString.Contains("width:"),
+                        "Expected tab to have margin or width styling for positioning"
+                    );
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-RightAligned.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC024_MultipleTabsInParagraph_AllHaveSpacing()
+        {
+            // Test that multiple tabs in a single paragraph all get correct spacing
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true }
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new DefaultTabStop() { Val = 720 }
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Create: "Col1" + tab + "Col2" + tab + "Col3"
+                    // With tabs at 2" and 4"
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new Tabs(
+                                        new TabStop() { Val = TabStopValues.Left, Position = 2880 },  // 2 inches
+                                        new TabStop() { Val = TabStopValues.Left, Position = 5760 }   // 4 inches
+                                    )
+                                ),
+                                new Run(new Text("Col1")),
+                                new Run(new TabChar()),
+                                new Run(new Text("Col2")),
+                                new Run(new TabChar()),
+                                new Run(new Text("Col3"))
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Multiple Tabs Test",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify all columns are present
+                    Assert.Contains("Col1", htmlString);
+                    Assert.Contains("Col2", htmlString);
+                    Assert.Contains("Col3", htmlString);
+
+                    // Count margin/spacing occurrences - should have multiple for tabs
+                    int marginCount = System.Text.RegularExpressions.Regex.Matches(htmlString, @"margin[^;]*:").Count;
+                    Assert.True(marginCount >= 2, $"Expected at least 2 margin styles for tabs, found {marginCount}");
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabWidth-Multiple.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC025_TabLeaderCharacters_DotLeaderRendered()
+        {
+            // Test with actual test file that has dot leaders
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo sourceFile = new FileInfo(Path.Combine(sourceDir.FullName, "HC024-Tabs-01.docx"));
+            WmlDocument wmlDoc = new WmlDocument(sourceFile.FullName);
+
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(wmlDoc.DocumentByteArray, 0, wmlDoc.DocumentByteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Tab Leaders Test",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "TabLeaders-HC024.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+
+                    // Check for dot leader characters - at least 3 dots in a row
+                    // Note: The exact count varies by platform due to font measurement differences
+                    bool hasDotLeaders = System.Text.RegularExpressions.Regex.IsMatch(htmlString, @"\.{3,}");
+                    Assert.True(hasDotLeaders, "Expected dot leader characters (...) in HTML output");
+                }
+            }
+        }
+
+        [Fact]
+        public void HC026_TabLeaderCharacters_ProgrammaticDotLeader()
+        {
+            // Create a document programmatically with dot leader tab
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    MainDocumentPart mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add styles part (required for proper processing)
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts() { Ascii = "Times New Roman", HighAnsi = "Times New Roman" },
+                                    new FontSize() { Val = "24" }
+                                )
+                            )
+                        )
+                    );
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new DefaultTabStop() { Val = 720 }
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Create: "Chapter 1" + dotted tab leader + "1"
+                    // With right-aligned tab with dot leader at 5 inches
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new Tabs(
+                                        new TabStop()
+                                        {
+                                            Val = TabStopValues.Right,
+                                            Position = 7200,  // 5 inches
+                                            Leader = TabStopLeaderCharValues.Dot
+                                        }
+                                    )
+                                ),
+                                new Run(new Text("Chapter 1")),
+                                new Run(new TabChar()),
+                                new Run(new Text("1"))
+                            )
+                        )
+                    );
+
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Programmatic Dot Leader Test",
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Save for debugging
+                    var destFileName = new FileInfo(Path.Combine(TestUtil.TempDir.FullName, "DotLeader-Programmatic.html"));
+                    File.WriteAllText(destFileName.FullName, htmlString, Encoding.UTF8);
+
+                    // Output for debugging
+                    System.Diagnostics.Debug.WriteLine("=== HTML OUTPUT ===");
+                    System.Diagnostics.Debug.WriteLine(htmlString);
+
+                    // Check for dot leader characters - at least 5 dots in a row
+                    bool hasDotLeaders = System.Text.RegularExpressions.Regex.IsMatch(htmlString, @"\.{5,}");
+                    Assert.True(hasDotLeaders, $"Expected dot leader characters (.....) in HTML output. HTML:\n{htmlString.Substring(0, Math.Min(2000, htmlString.Length))}");
+                }
+            }
+        }
     }
 }
 

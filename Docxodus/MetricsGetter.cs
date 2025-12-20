@@ -132,11 +132,24 @@ namespace Docxodus
                 paint.Typeface = typeface;
                 paint.TextSize = (float)sz / 2f;
 
-                return (int)paint.MeasureText(text);
+                var result = (int)paint.MeasureText(text);
+
+                // If measurement returns 0 (font unavailable), use estimation
+                if (result == 0 && !string.IsNullOrEmpty(text))
+                {
+                    float charWidth = (float)sz * 0.6f / 2f;
+                    return (int)(text.Length * charWidth);
+                }
+
+                return result;
             }
             catch
             {
-                return 0;
+                // Fallback to estimation on any error
+                if (string.IsNullOrEmpty(text))
+                    return 0;
+                float charWidth = (float)sz * 0.6f / 2f;
+                return (int)(text.Length * charWidth);
             }
 #endif
         }
@@ -171,7 +184,11 @@ namespace Docxodus
             catch (OverflowException)
             {
                 // This happened on Azure but interestingly enough not while testing locally.
-                return 0;
+                // Use estimation instead of returning 0
+                if (string.IsNullOrEmpty(text))
+                    return 0;
+                float charWidth = (float)sz * 0.6f / 2f;
+                return (int)(text.Length * charWidth);
             }
         }
 

@@ -3520,6 +3520,7 @@ namespace Docxodus
                     span = new XElement(Xhtml.span,
                         new XAttribute(XNamespace.Xml + "space", "preserve"),
                         " " + "".PadRight(numberOfLeaderChars, leaderChar[0]) + " ");
+                    style.Add("display", "inline-block");
                     style.Add("margin", "0 0 0 0");
                     style.Add("padding", "0 0 0 0");
                     style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
@@ -3530,6 +3531,7 @@ namespace Docxodus
                 else
                 {
                     span = new XElement(Xhtml.span, new XAttribute(XNamespace.Xml + "space", "preserve"), " ");
+                    style.Add("display", "inline-block");
                     style.Add("margin", "0 0 0 0");
                     style.Add("padding", "0 0 0 0");
                     style.Add("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.00}in", tabWidth));
@@ -4296,8 +4298,9 @@ namespace Docxodus
         private static List<object> TransformElementsPrecedingTab(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings,
             List<XElement> elementsPrecedingTab, XElement firstTabRun)
         {
-            var tabWidth = firstTabRun != null
-                ? (decimal?) firstTabRun.Elements(W.tab).Attributes(PtOpenXml.TabWidth).FirstOrDefault() ?? 0m
+            var tabElement = firstTabRun?.Elements(W.tab).FirstOrDefault();
+            var tabWidth = tabElement != null
+                ? (decimal?) tabElement.Attribute(PtOpenXml.TabWidth) ?? 0m
                 : 0m;
             var precedingElementsWidth = elementsPrecedingTab
                 .Elements()
@@ -4309,9 +4312,21 @@ namespace Docxodus
             var txElementsPrecedingTab = elementsPrecedingTab
                 .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
                 .ToList();
-            if (txElementsPrecedingTab.Count > 1)
+
+            // Process the tab element to get leader characters
+            object tabSpan = null;
+            if (tabElement != null)
             {
-                var span = new XElement(Xhtml.span, txElementsPrecedingTab);
+                tabSpan = ProcessTab(tabElement);
+            }
+
+            if (txElementsPrecedingTab.Count > 1 || (txElementsPrecedingTab.Count > 0 && tabSpan != null))
+            {
+                var contentList = new List<object>(txElementsPrecedingTab);
+                if (tabSpan != null)
+                    contentList.Add(tabSpan);
+
+                var span = new XElement(Xhtml.span, contentList);
                 // Use min-width instead of width so the container expands to fit content
                 // when text is wider than the calculated tab position. This fixes issues
                 // where list numbers (e.g., "2.3") overlap with heading text because the
@@ -4323,6 +4338,7 @@ namespace Docxodus
                     { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
                 };
                 span.AddAnnotation(spanStyle);
+                return new List<object> { span };
             }
             else if (txElementsPrecedingTab.Count == 1)
             {
@@ -4335,6 +4351,32 @@ namespace Docxodus
                     // Use min-width instead of width to allow content to expand naturally
                     spanStyle.AddIfMissing("min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth));
                 }
+                // If we have a tab span with leaders, add it after the element
+                if (tabSpan != null)
+                {
+                    var wrapperSpan = new XElement(Xhtml.span, element, tabSpan);
+                    var wrapperStyle = new Dictionary<string, string>
+                    {
+                        { "display", "inline-block" },
+                        { "text-indent", "0" },
+                        { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
+                    };
+                    wrapperSpan.AddAnnotation(wrapperStyle);
+                    return new List<object> { wrapperSpan };
+                }
+            }
+            else if (tabSpan != null)
+            {
+                // Only the tab, no preceding content
+                var wrapperSpan = new XElement(Xhtml.span, tabSpan);
+                var wrapperStyle = new Dictionary<string, string>
+                {
+                    { "display", "inline-block" },
+                    { "text-indent", "0" },
+                    { "min-width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}in", totalWidth) }
+                };
+                wrapperSpan.AddAnnotation(wrapperStyle);
+                return new List<object> { wrapperSpan };
             }
             return txElementsPrecedingTab;
         }
@@ -5415,6 +5457,7 @@ namespace Docxodus
                         currentElement.Add(
                             new XAttribute(PtOpenXml.TabWidth,
                                 string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                            new XAttribute(PtOpenXml.TabAlignment, "right"),
                             GetLeader(tabAfterText));
                         twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)), twipCounter + widthOfTextAfterTab);
 
@@ -5462,6 +5505,7 @@ namespace Docxodus
                             currentElement.Add(
                                 new XAttribute(PtOpenXml.TabWidth,
                                     string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                                new XAttribute(PtOpenXml.TabAlignment, "decimal"),
                                 GetLeader(tabAfterText));
 
                             var decims = textAfterTab.Substring(textAfterTab.IndexOf('.'));
@@ -5497,6 +5541,7 @@ namespace Docxodus
                             currentElement.Add(
                                 new XAttribute(PtOpenXml.TabWidth,
                                     string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                                new XAttribute(PtOpenXml.TabAlignment, "decimal"),
                                 GetLeader(tabAfterText));
                             twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)), twipCounter + widthOfTextAfterTab);
 
@@ -5541,6 +5586,7 @@ namespace Docxodus
                         currentElement.Add(
                             new XAttribute(PtOpenXml.TabWidth,
                                 string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta2 / 1440m)),
+                            new XAttribute(PtOpenXml.TabAlignment, "center"),
                             GetLeader(tabAfterText));
                         twipCounter = Math.Max(WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos)) + widthOfText / 2, twipCounter + widthOfText);
 
@@ -5560,6 +5606,7 @@ namespace Docxodus
                         currentElement.Add(
                             new XAttribute(PtOpenXml.TabWidth,
                                 string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal)delta / 1440m)),
+                            new XAttribute(PtOpenXml.TabAlignment, "left"),
                             GetLeader(tabAfterText));
                         twipCounter = WordprocessingMLUtil.StringToTwips((string)tabAfterText.Attribute(W.pos));
 
@@ -5573,22 +5620,20 @@ namespace Docxodus
 
                 if (currentElement.Name == W.t)
                 {
-                    // TODO: Revisit. This is a quick fix because it doesn't work on Azure.
-                    // Given the changes we've made elsewhere, though, this is not required
-                    // for the first tab at least. We could also enhance that other change
-                    // to deal with all tabs.
-                    //var runContainingTabToReplace = currentElement.Parent;
-                    //var paragraphForRun = runContainingTabToReplace.Ancestors(W.p).First();
-                    //var fontNameAtt = runContainingTabToReplace.Attribute(PtOpenXml.FontName) ??
-                    //                  paragraphForRun.Attribute(PtOpenXml.FontName);
-                    //var languageTypeAtt = runContainingTabToReplace.Attribute(PtOpenXml.LanguageType) ??
-                    //                      paragraphForRun.Attribute(PtOpenXml.LanguageType);
+                    // Measure text width to properly position subsequent tabs
+                    // Uses estimation fallback when fonts are unavailable (Azure, WASM)
+                    var runContainingTabToReplace = currentElement.Parent;
+                    var paragraphForRun = runContainingTabToReplace.Ancestors(W.p).First();
+                    var fontNameAtt = runContainingTabToReplace.Attribute(PtOpenXml.FontName) ??
+                                      paragraphForRun.Attribute(PtOpenXml.FontName);
+                    var languageTypeAtt = runContainingTabToReplace.Attribute(PtOpenXml.LanguageType) ??
+                                          paragraphForRun.Attribute(PtOpenXml.LanguageType);
 
-                    //var dummyRun3 = new XElement(W.r, fontNameAtt, languageTypeAtt,
-                    //    runContainingTabToReplace.Elements(W.rPr),
-                    //    currentElement);
-                    //var widthOfText = CalcWidthOfRunInTwips(dummyRun3);
-                    const int widthOfText = 0;
+                    var dummyRun3 = new XElement(W.r, fontNameAtt, languageTypeAtt,
+                        runContainingTabToReplace.Elements(W.rPr),
+                        currentElement);
+                    var widthOfText = CalcWidthOfRunInTwips(dummyRun3);
+
                     currentElement.Add(new XAttribute(PtOpenXml.TabWidth,
                         string.Format(NumberFormatInfo.InvariantInfo, "{0:0.000}", (decimal) widthOfText/1440m)));
                     twipCounter += widthOfText;
@@ -5659,18 +5704,12 @@ namespace Docxodus
                            (string)r.Ancestors(W.p).First().Attribute(PtOpenXml.pt + "FontName");
             if (fontName == null)
                 throw new DocxodusException("Internal Error, should have FontName attribute");
-            if (FontFamilyHelper.IsMarkedUnknown(fontName))
-                return 0;
 
             var rPr = r.Element(W.rPr);
             if (rPr == null)
                 throw new DocxodusException("Internal Error, should have run properties");
 
             var sz = GetFontSize(r) ?? 22m;
-
-            // unknown font families will throw ArgumentException, in which case just return 0
-            if (!KnownFamilies.Contains(fontName))
-                return 0;
 
             var bold = GetBoolProp(rPr, W.b) || GetBoolProp(rPr, W.bCs);
             var italic = GetBoolProp(rPr, W.i) || GetBoolProp(rPr, W.iCs);
@@ -5712,7 +5751,21 @@ namespace Docxodus
                 runText = sb.ToString();
             }
 
-            var w = MetricsGetter.GetTextWidth(fontName, bold, italic, sz, runText);
+            // For unknown fonts, use character-based estimation instead of returning 0.
+            // MetricsGetter.GetTextWidth now has estimation fallback for unavailable fonts.
+            // If font is completely unknown, use estimation directly.
+            int w;
+            if (FontFamilyHelper.IsMarkedUnknown(fontName) || !KnownFamilies.Contains(fontName))
+            {
+                // Character-based estimation: charWidth = fontSize * 0.6 / 2 per character
+                // This matches the estimation in MetricsGetter._getTextWidth
+                float charWidth = (float)sz * 0.6f / 2f;
+                w = (int)(runText.Length * charWidth);
+            }
+            else
+            {
+                w = MetricsGetter.GetTextWidth(fontName, bold, italic, sz, runText);
+            }
 
             return (int)(w / 96m * 1440m / multiplier + tabLength * 1440m);
         }
