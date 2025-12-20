@@ -400,7 +400,8 @@ export async function convertDocxToHtml(
     options?.renderHeadersAndFooters !== undefined ||
     options?.renderTrackedChanges !== undefined ||
     options?.showDeletedContent !== undefined ||
-    options?.renderMoveOperations !== undefined;
+    options?.renderMoveOperations !== undefined ||
+    options?.renderUnsupportedContentPlaceholders !== undefined;
 
   // Use complete method when any new options are specified (most comprehensive)
   if (needsCompleteMethod || options?.renderAnnotations) {
@@ -422,7 +423,8 @@ export async function convertDocxToHtml(
       options?.renderHeadersAndFooters ?? false,
       options?.renderTrackedChanges ?? false,
       options?.showDeletedContent ?? true,
-      options?.renderMoveOperations ?? true
+      options?.renderMoveOperations ?? true,
+      options?.renderUnsupportedContentPlaceholders ?? false
     );
   }
   // Use pagination-aware method when pagination is requested

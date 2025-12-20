@@ -2036,6 +2036,309 @@ namespace OxPt
                 }
             }
         }
+
+        #region Unsupported Content Placeholder Tests
+
+        [Fact]
+        public void HC028_UnsupportedContentPlaceholders_MathEquation()
+        {
+            // Test that math equations render as placeholders when enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required style definitions part
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+
+                    // Add document settings part
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+
+                    // Create document with math element
+                    var mathNs = XNamespace.Get("http://schemas.openxmlformats.org/officeDocument/2006/math");
+                    var body = new XElement(W.body,
+                        new XElement(W.p,
+                            new XElement(mathNs + "oMath",
+                                new XElement(mathNs + "r",
+                                    new XElement(mathNs + "t", "x + y = z")
+                                )
+                            )
+                        )
+                    );
+
+                    var document = new XElement(W.document,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        new XAttribute(XNamespace.Xmlns + "m", mathNs.NamespaceName),
+                        body);
+
+                    mainPart.PutXDocument(new XDocument(document));
+
+                    // Test with placeholders DISABLED (default - should be empty)
+                    var settingsOff = new WmlToHtmlConverterSettings
+                    {
+                        RenderUnsupportedContentPlaceholders = false,
+                    };
+
+                    XElement htmlOff = WmlToHtmlConverter.ConvertToHtml(wDoc, settingsOff);
+                    string htmlOffString = htmlOff.ToString();
+                    Assert.DoesNotContain("[MATH]", htmlOffString);
+                    Assert.DoesNotContain("unsupported-", htmlOffString);
+
+                    // Test with placeholders ENABLED
+                    var settingsOn = new WmlToHtmlConverterSettings
+                    {
+                        RenderUnsupportedContentPlaceholders = true,
+                        UnsupportedContentCssClassPrefix = "unsupported-",
+                        IncludeUnsupportedContentMetadata = true,
+                    };
+
+                    XElement htmlOn = WmlToHtmlConverter.ConvertToHtml(wDoc, settingsOn);
+                    string htmlOnString = htmlOn.ToString();
+
+                    // Should contain placeholder
+                    Assert.Contains("[MATH]", htmlOnString);
+                    Assert.Contains("unsupported-placeholder", htmlOnString);
+                    Assert.Contains("unsupported-math", htmlOnString);
+                    Assert.Contains("data-content-type=\"MathEquation\"", htmlOnString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC029_UnsupportedContentPlaceholders_FormField()
+        {
+            // Test that form fields render as placeholders when enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required style definitions part
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+
+                    // Add document settings part
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+
+                    // Create document with form field (checkbox)
+                    var body = new XElement(W.body,
+                        new XElement(W.p,
+                            new XElement(W.r,
+                                new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin")),
+                                new XElement(W.ffData,
+                                    new XElement(W.checkBox,
+                                        new XElement(W._default, new XAttribute(W.val, "0"))
+                                    )
+                                )
+                            ),
+                            new XElement(W.r,
+                                new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))
+                            )
+                        )
+                    );
+
+                    var document = new XElement(W.document,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        body);
+
+                    mainPart.PutXDocument(new XDocument(document));
+
+                    // Test with placeholders ENABLED
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        RenderUnsupportedContentPlaceholders = true,
+                        IncludeUnsupportedContentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Should contain form field placeholder
+                    Assert.Contains("[CHECKBOX]", htmlString);
+                    Assert.Contains("unsupported-form", htmlString);
+                    Assert.Contains("data-content-type=\"FormField\"", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC030_UnsupportedContentPlaceholders_RubyAnnotation()
+        {
+            // Test that ruby annotations render as placeholders when enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required style definitions part
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+
+                    // Add document settings part
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+
+                    // Create document with ruby annotation
+                    var body = new XElement(W.body,
+                        new XElement(W.p,
+                            new XElement(W.r,
+                                new XElement(W.ruby,
+                                    new XElement(W.rubyPr),
+                                    new XElement(W.rt,
+                                        new XElement(W.r,
+                                            new XElement(W.t, "とうきょう")
+                                        )
+                                    ),
+                                    new XElement(W.rubyBase,
+                                        new XElement(W.r,
+                                            new XElement(W.t, "東京")
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                    );
+
+                    var document = new XElement(W.document,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        body);
+
+                    mainPart.PutXDocument(new XDocument(document));
+
+                    // Test with placeholders ENABLED
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        RenderUnsupportedContentPlaceholders = true,
+                        IncludeUnsupportedContentMetadata = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Should contain ruby placeholder with base text
+                    Assert.Contains("東京", htmlString);  // Base text should be included
+                    Assert.Contains("unsupported-ruby", htmlString);
+                    Assert.Contains("data-content-type=\"RubyAnnotation\"", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC031_UnsupportedContentPlaceholders_CssGenerated()
+        {
+            // Test that CSS is generated for placeholders when enabled
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required style definitions part
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+
+                    // Add document settings part
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+
+                    // Create minimal document
+                    var body = new XElement(W.body,
+                        new XElement(W.p,
+                            new XElement(W.r,
+                                new XElement(W.t, "Test")
+                            )
+                        )
+                    );
+
+                    var document = new XElement(W.document,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        body);
+
+                    mainPart.PutXDocument(new XDocument(document));
+
+                    // Test with placeholders ENABLED
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        RenderUnsupportedContentPlaceholders = true,
+                        UnsupportedContentCssClassPrefix = "unsupported-",
+                        FabricateCssClasses = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Should contain CSS for placeholders
+                    Assert.Contains("/* Unsupported Content Placeholders CSS */", htmlString);
+                    Assert.Contains(".unsupported-placeholder", htmlString);
+                    Assert.Contains(".unsupported-image", htmlString);
+                    Assert.Contains(".unsupported-math", htmlString);
+                    Assert.Contains(".unsupported-form", htmlString);
+                    Assert.Contains(".unsupported-ruby", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC032_UnsupportedContentPlaceholders_BackwardCompatibility()
+        {
+            // Test that default settings preserve backward compatibility (no placeholders)
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add required style definitions part
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+
+                    // Add document settings part
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+
+                    // Create document with math element
+                    var mathNs = XNamespace.Get("http://schemas.openxmlformats.org/officeDocument/2006/math");
+                    var body = new XElement(W.body,
+                        new XElement(W.p,
+                            new XElement(mathNs + "oMath",
+                                new XElement(mathNs + "r",
+                                    new XElement(mathNs + "t", "x + y")
+                                )
+                            )
+                        )
+                    );
+
+                    var document = new XElement(W.document,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        new XAttribute(XNamespace.Xmlns + "m", mathNs.NamespaceName),
+                        body);
+
+                    mainPart.PutXDocument(new XDocument(document));
+
+                    // Test with DEFAULT settings (placeholders disabled)
+                    var settings = new WmlToHtmlConverterSettings();
+
+                    // Verify default is false
+                    Assert.False(settings.RenderUnsupportedContentPlaceholders);
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Should NOT contain any placeholder indicators
+                    Assert.DoesNotContain("[MATH]", htmlString);
+                    Assert.DoesNotContain("unsupported-placeholder", htmlString);
+                    Assert.DoesNotContain("Unsupported Content Placeholders CSS", htmlString);
+                }
+            }
+        }
+
+        #endregion
     }
 }
 

@@ -13,12 +13,12 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 | ~~**Rendering**~~ | ~~Tab width calculation disabled~~ | ~~High~~ FIXED |
 | **Rendering** | Theme colors not resolved | Medium |
 | **Rendering** | Text box content lost | Medium |
-| **Rendering** | SVG images not supported | Medium |
-| **Rendering** | WMF/EMF images excluded | Low |
+| ~~**Rendering**~~ | ~~SVG images not supported~~ | ~~Medium~~ PLACEHOLDER |
+| ~~**Rendering**~~ | ~~WMF/EMF images excluded~~ | ~~Low~~ PLACEHOLDER |
 | **Rendering** | Tab leader count varies by platform | Low |
 | **Features** | Field code resolution (TOC page numbers) | Medium |
-| **Features** | Math equations (OMML) not rendered | Medium |
-| **Features** | Form fields not supported | Low |
+| ~~**Features**~~ | ~~Math equations (OMML) not rendered~~ | ~~Medium~~ PLACEHOLDER |
+| ~~**Features**~~ | ~~Form fields not supported~~ | ~~Low~~ PLACEHOLDER |
 | **Features** | Pagination is CSS-only | Low |
 | **Accessibility** | No ARIA roles or lang attribute | Low |
 
@@ -258,13 +258,15 @@ Beyond text boxes, content inside DrawingML shapes (`a:txBody`, `wps:txbx`) may 
 ### Medium Priority (Visual Fidelity)
 
 5. **Implement theme color resolution** - colors appear wrong when documents use theme colors
-6. **Add SVG image support** - increasingly common in modern documents
+6. ~~**Add SVG image support**~~ - PLACEHOLDER - displays `[SVG IMAGE]` when `RenderUnsupportedContentPlaceholders = true`
 7. **Render text box content** - currently lost entirely from output
 8. **Improve font fallback** - unknown fonts should fall back to generic serif/sans-serif
 
 ### Low Priority (Feature Additions)
 
-9. **Consider OMML to MathML conversion** for equation support
-10. **Add form field support** for interactive documents
+9. ~~**Consider OMML to MathML conversion**~~ - PLACEHOLDER - displays `[MATH]` when `RenderUnsupportedContentPlaceholders = true`
+10. ~~**Add form field support**~~ - PLACEHOLDER - displays `[CHECKBOX]`, `[TEXT INPUT]`, `[DROPDOWN]` when `RenderUnsupportedContentPlaceholders = true`
 11. **Improve accessibility** with ARIA roles and proper `lang` attributes
-12. **Add WMF/EMF conversion** or placeholder rendering for legacy images
+12. ~~**Add WMF/EMF conversion**~~ - PLACEHOLDER - displays `[WMF IMAGE]`, `[EMF IMAGE]` when `RenderUnsupportedContentPlaceholders = true`
+
+See `docs/architecture/unsupported_content_placeholders.md` for full documentation on placeholder rendering.
