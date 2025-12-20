@@ -429,7 +429,8 @@ export interface DocxodusWasmExports {
       renderHeadersAndFooters: boolean,
       renderTrackedChanges: boolean,
       showDeletedContent: boolean,
-      renderMoveOperations: boolean
+      renderMoveOperations: boolean,
+      renderUnsupportedContentPlaceholders: boolean
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;
