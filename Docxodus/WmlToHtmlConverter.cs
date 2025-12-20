@@ -65,6 +65,29 @@ namespace Docxodus
         Paginated
     }
 
+    /// <summary>
+    /// Specifies types of content that cannot be fully converted to HTML.
+    /// </summary>
+    public enum UnsupportedContentType
+    {
+        /// <summary>Windows Metafile image format (legacy vector graphics)</summary>
+        WmfImage,
+        /// <summary>Enhanced Metafile image format (legacy vector graphics)</summary>
+        EmfImage,
+        /// <summary>SVG image format (not yet supported)</summary>
+        SvgImage,
+        /// <summary>Office Math Markup Language equations</summary>
+        MathEquation,
+        /// <summary>Form field elements (checkboxes, text inputs, dropdowns)</summary>
+        FormField,
+        /// <summary>Ruby annotations for East Asian text</summary>
+        RubyAnnotation,
+        /// <summary>Embedded OLE objects</summary>
+        OleObject,
+        /// <summary>Other unsupported content</summary>
+        Other
+    }
+
     public partial class WmlDocument
     {
         [SuppressMessage("ReSharper", "UnusedMember.Global")]
@@ -202,6 +225,25 @@ namespace Docxodus
         /// </summary>
         public bool IncludeAnnotationMetadata;
 
+        /// <summary>
+        /// If true, render placeholders for unsupported content (images, math, forms, etc.)
+        /// instead of silently dropping them.
+        /// Default: false (backward compatible - unsupported content is dropped)
+        /// </summary>
+        public bool RenderUnsupportedContentPlaceholders;
+
+        /// <summary>
+        /// CSS class prefix for unsupported content placeholders.
+        /// Default: "unsupported-"
+        /// </summary>
+        public string UnsupportedContentCssClassPrefix;
+
+        /// <summary>
+        /// If true, include metadata about unsupported content as data attributes.
+        /// Default: true
+        /// </summary>
+        public bool IncludeUnsupportedContentMetadata;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -230,6 +272,9 @@ namespace Docxodus
             AnnotationCssClassPrefix = "annot-";
             AnnotationLabelMode = AnnotationLabelMode.Above;
             IncludeAnnotationMetadata = true;
+            RenderUnsupportedContentPlaceholders = false;
+            UnsupportedContentCssClassPrefix = "unsupported-";
+            IncludeUnsupportedContentMetadata = true;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -262,6 +307,9 @@ namespace Docxodus
             AnnotationCssClassPrefix = htmlConverterSettings.AnnotationCssClassPrefix;
             AnnotationLabelMode = htmlConverterSettings.AnnotationLabelMode;
             IncludeAnnotationMetadata = htmlConverterSettings.IncludeAnnotationMetadata;
+            RenderUnsupportedContentPlaceholders = htmlConverterSettings.RenderUnsupportedContentPlaceholders;
+            UnsupportedContentCssClassPrefix = htmlConverterSettings.UnsupportedContentCssClassPrefix;
+            IncludeUnsupportedContentMetadata = htmlConverterSettings.IncludeUnsupportedContentMetadata;
         }
     }
 
@@ -386,6 +434,25 @@ namespace Docxodus
         /// </summary>
         public bool IncludeAnnotationMetadata;
 
+        /// <summary>
+        /// If true, render placeholders for unsupported content (images, math, forms, etc.)
+        /// instead of silently dropping them.
+        /// Default: false (backward compatible - unsupported content is dropped)
+        /// </summary>
+        public bool RenderUnsupportedContentPlaceholders;
+
+        /// <summary>
+        /// CSS class prefix for unsupported content placeholders.
+        /// Default: "unsupported-"
+        /// </summary>
+        public string UnsupportedContentCssClassPrefix;
+
+        /// <summary>
+        /// If true, include metadata about unsupported content as data attributes.
+        /// Default: true
+        /// </summary>
+        public bool IncludeUnsupportedContentMetadata;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -414,6 +481,9 @@ namespace Docxodus
             AnnotationCssClassPrefix = "annot-";
             AnnotationLabelMode = AnnotationLabelMode.Above;
             IncludeAnnotationMetadata = true;
+            RenderUnsupportedContentPlaceholders = false;
+            UnsupportedContentCssClassPrefix = "unsupported-";
+            IncludeUnsupportedContentMetadata = true;
         }
     }
 
@@ -1255,7 +1325,8 @@ namespace Docxodus
                 var commentCss = GenerateCommentCss(htmlConverterSettings);
                 var paginationCss = GeneratePaginationCss(htmlConverterSettings);
                 var annotationCss = GenerateAnnotationCss(htmlConverterSettings);
-                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + annotationCss + htmlConverterSettings.AdditionalCss;
+                var unsupportedCss = GenerateUnsupportedContentCss(htmlConverterSettings);
+                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss;
 
                 SetStyleElementValue(xhtml, styleValue);
             }
@@ -1269,7 +1340,8 @@ namespace Docxodus
                 var commentCss = GenerateCommentCss(htmlConverterSettings);
                 var paginationCss = GeneratePaginationCss(htmlConverterSettings);
                 var annotationCss = GenerateAnnotationCss(htmlConverterSettings);
-                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + annotationCss + htmlConverterSettings.AdditionalCss);
+                var unsupportedCss = GenerateUnsupportedContentCss(htmlConverterSettings);
+                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss);
 
                 foreach (var d in xhtml.DescendantsAndSelf())
                 {
@@ -1929,6 +2001,120 @@ namespace Docxodus
             return sb.ToString();
         }
 
+        private static string GenerateUnsupportedContentCss(WmlToHtmlConverterSettings settings)
+        {
+            if (!settings.RenderUnsupportedContentPlaceholders)
+                return string.Empty;
+
+            var prefix = settings.UnsupportedContentCssClassPrefix ?? "unsupported-";
+            var sb = new StringBuilder();
+
+            sb.AppendLine();
+            sb.AppendLine("/* Unsupported Content Placeholders CSS */");
+
+            // Base placeholder style
+            sb.AppendLine($".{prefix}placeholder {{");
+            sb.AppendLine("    display: inline-block;");
+            sb.AppendLine("    background-color: #fff3cd;");
+            sb.AppendLine("    border: 1px dashed #856404;");
+            sb.AppendLine("    border-radius: 3px;");
+            sb.AppendLine("    padding: 2px 6px;");
+            sb.AppendLine("    font-family: monospace;");
+            sb.AppendLine("    font-size: 0.85em;");
+            sb.AppendLine("    color: #856404;");
+            sb.AppendLine("    cursor: help;");
+            sb.AppendLine("    vertical-align: middle;");
+            sb.AppendLine("}");
+
+            // Image placeholders (green)
+            sb.AppendLine($".{prefix}image {{");
+            sb.AppendLine("    background-color: #d4edda;");
+            sb.AppendLine("    border-color: #28a745;");
+            sb.AppendLine("    color: #155724;");
+            sb.AppendLine("}");
+
+            // Math placeholders (blue)
+            sb.AppendLine($".{prefix}math {{");
+            sb.AppendLine("    background-color: #d1ecf1;");
+            sb.AppendLine("    border-color: #17a2b8;");
+            sb.AppendLine("    color: #0c5460;");
+            sb.AppendLine("}");
+
+            // Form field placeholders (gray)
+            sb.AppendLine($".{prefix}form {{");
+            sb.AppendLine("    background-color: #e2e3e5;");
+            sb.AppendLine("    border-color: #6c757d;");
+            sb.AppendLine("    color: #383d41;");
+            sb.AppendLine("}");
+
+            // Ruby annotation placeholders (light blue)
+            sb.AppendLine($".{prefix}ruby {{");
+            sb.AppendLine("    background-color: #cce5ff;");
+            sb.AppendLine("    border-color: #0d6efd;");
+            sb.AppendLine("    color: #084298;");
+            sb.AppendLine("}");
+
+            // OLE/embedded object placeholders (purple)
+            sb.AppendLine($".{prefix}object {{");
+            sb.AppendLine("    background-color: #e2d9f3;");
+            sb.AppendLine("    border-color: #6f42c1;");
+            sb.AppendLine("    color: #432874;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        private static XElement CreateUnsupportedContentPlaceholder(
+            WmlToHtmlConverterSettings settings,
+            XElement element,
+            UnsupportedContentType contentType,
+            string placeholderText)
+        {
+            if (!settings.RenderUnsupportedContentPlaceholders)
+                return null;
+
+            var prefix = settings.UnsupportedContentCssClassPrefix ?? "unsupported-";
+            var typeClass = contentType switch
+            {
+                UnsupportedContentType.WmfImage => "image",
+                UnsupportedContentType.EmfImage => "image",
+                UnsupportedContentType.SvgImage => "image",
+                UnsupportedContentType.MathEquation => "math",
+                UnsupportedContentType.FormField => "form",
+                UnsupportedContentType.RubyAnnotation => "ruby",
+                UnsupportedContentType.OleObject => "object",
+                _ => "other"
+            };
+
+            var span = new XElement(Xhtml.span,
+                new XAttribute("class", $"{prefix}placeholder {prefix}{typeClass}"),
+                new XText(placeholderText));
+
+            if (settings.IncludeUnsupportedContentMetadata)
+            {
+                span.Add(new XAttribute("data-content-type", contentType.ToString()));
+                span.Add(new XAttribute("data-element-name", element.Name.LocalName));
+                span.Add(new XAttribute("title", GetUnsupportedContentTooltip(contentType)));
+            }
+
+            return span;
+        }
+
+        private static string GetUnsupportedContentTooltip(UnsupportedContentType contentType)
+        {
+            return contentType switch
+            {
+                UnsupportedContentType.WmfImage => "Windows Metafile image - not supported in HTML output",
+                UnsupportedContentType.EmfImage => "Enhanced Metafile image - not supported in HTML output",
+                UnsupportedContentType.SvgImage => "SVG image - not yet supported",
+                UnsupportedContentType.MathEquation => "Math equation (Office Math Markup) - not supported in HTML output",
+                UnsupportedContentType.FormField => "Form field - not supported in HTML output",
+                UnsupportedContentType.RubyAnnotation => "Ruby annotation (East Asian text) - not fully supported",
+                UnsupportedContentType.OleObject => "Embedded OLE object - not supported in HTML output",
+                _ => "Unsupported content - not rendered in HTML output"
+            };
+        }
+
         private static object ConvertToHtmlTransform(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XNode node,
             bool suppressTrailingWhiteSpace,
@@ -2160,7 +2346,7 @@ namespace Docxodus
             // Transform images
             if (element.Name == W.drawing || element.Name == W.pict || element.Name == W._object)
             {
-                return ProcessImage(wordDoc, element, settings.ImageHandler);
+                return ProcessImage(wordDoc, element, settings.ImageHandler, settings);
             }
 
             // Transform content controls.
@@ -2237,6 +2423,35 @@ namespace Docxodus
             if (element.Name == W.commentReference)
             {
                 return ProcessCommentReference(settings, element);
+            }
+
+            // Handle math equations (OMML)
+            if (element.Name == M.oMath || element.Name == M.oMathPara)
+            {
+                return CreateUnsupportedContentPlaceholder(settings, element, UnsupportedContentType.MathEquation, "[MATH]");
+            }
+
+            // Handle form fields
+            if (element.Name == W.ffData)
+            {
+                // Determine form field type from child elements
+                var fieldType = "FORM FIELD";
+                if (element.Element(W.checkBox) != null)
+                    fieldType = "CHECKBOX";
+                else if (element.Element(W.textInput) != null)
+                    fieldType = "TEXT INPUT";
+                else if (element.Element(W.ddList) != null)
+                    fieldType = "DROPDOWN";
+                return CreateUnsupportedContentPlaceholder(settings, element, UnsupportedContentType.FormField, $"[{fieldType}]");
+            }
+
+            // Handle ruby annotations (East Asian text)
+            if (element.Name == W.ruby)
+            {
+                // Extract the base text if available
+                var baseText = element.Descendants(W.rubyBase).FirstOrDefault()?.Value ?? "";
+                var placeholderText = string.IsNullOrEmpty(baseText) ? "[RUBY]" : baseText;
+                return CreateUnsupportedContentPlaceholder(settings, element, UnsupportedContentType.RubyAnnotation, placeholderText);
             }
 
             // Ignore element.
@@ -6534,7 +6749,7 @@ namespace Docxodus
 
 
         public static XElement ProcessImage(WordprocessingDocument wordDoc,
-            XElement element, Func<ImageInfo, XElement> imageHandler)
+            XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
         {
             if (imageHandler == null)
             {
@@ -6542,17 +6757,17 @@ namespace Docxodus
             }
             if (element.Name == W.drawing)
             {
-                return ProcessDrawing(wordDoc, element, imageHandler);
+                return ProcessDrawing(wordDoc, element, imageHandler, settings);
             }
             if (element.Name == W.pict || element.Name == W._object)
             {
-                return ProcessPictureOrObject(wordDoc, element, imageHandler);
+                return ProcessPictureOrObject(wordDoc, element, imageHandler, settings);
             }
             return null;
         }
 
         private static XElement ProcessDrawing(WordprocessingDocument wordDoc,
-            XElement element, Func<ImageInfo, XElement> imageHandler)
+            XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
         {
             var containerElement = element.Elements()
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
@@ -6610,7 +6825,28 @@ namespace Docxodus
 
             var contentType = imagePart.ContentType;
             if (!ImageContentTypes.Contains(contentType))
+            {
+                // Create placeholder for unsupported image types
+                if (settings != null)
+                {
+                    var imageType = contentType switch
+                    {
+                        "image/x-wmf" => UnsupportedContentType.WmfImage,
+                        "image/x-emf" => UnsupportedContentType.EmfImage,
+                        "image/svg+xml" => UnsupportedContentType.SvgImage,
+                        _ => UnsupportedContentType.Other
+                    };
+                    var placeholderText = imageType switch
+                    {
+                        UnsupportedContentType.WmfImage => "[WMF IMAGE]",
+                        UnsupportedContentType.EmfImage => "[EMF IMAGE]",
+                        UnsupportedContentType.SvgImage => "[SVG IMAGE]",
+                        _ => "[UNSUPPORTED IMAGE]"
+                    };
+                    return CreateUnsupportedContentPlaceholder(settings, element, imageType, placeholderText);
+                }
                 return null;
+            }
 
             using (var partStream = imagePart.GetStream())
             using (var memoryStream = new System.IO.MemoryStream())
@@ -6689,7 +6925,7 @@ namespace Docxodus
         }
 
         private static XElement ProcessPictureOrObject(WordprocessingDocument wordDoc,
-            XElement element, Func<ImageInfo, XElement> imageHandler)
+            XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
         {
             var imageRid = (string)element.Elements(VML.shape).Elements(VML.imagedata).Attributes(R.id).FirstOrDefault();
             if (imageRid == null) return null;
@@ -6704,7 +6940,28 @@ namespace Docxodus
 
                 var contentType = imagePart.ContentType;
                 if (!ImageContentTypes.Contains(contentType))
+                {
+                    // Create placeholder for unsupported image types
+                    if (settings != null)
+                    {
+                        var imageType = contentType switch
+                        {
+                            "image/x-wmf" => UnsupportedContentType.WmfImage,
+                            "image/x-emf" => UnsupportedContentType.EmfImage,
+                            "image/svg+xml" => UnsupportedContentType.SvgImage,
+                            _ => UnsupportedContentType.Other
+                        };
+                        var placeholderText = imageType switch
+                        {
+                            UnsupportedContentType.WmfImage => "[WMF IMAGE]",
+                            UnsupportedContentType.EmfImage => "[EMF IMAGE]",
+                            UnsupportedContentType.SvgImage => "[SVG IMAGE]",
+                            _ => "[UNSUPPORTED IMAGE]"
+                        };
+                        return CreateUnsupportedContentPlaceholder(settings, element, imageType, placeholderText);
+                    }
                     return null;
+                }
 
                 using (var partStream = imagePart.GetStream())
                 using (var memoryStream = new System.IO.MemoryStream())

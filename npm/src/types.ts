@@ -56,6 +56,29 @@ export enum AnnotationLabelMode {
 }
 
 /**
+ * Types of content that cannot be fully converted to HTML.
+ * Used for placeholder rendering when unsupported content is encountered.
+ */
+export enum UnsupportedContentType {
+  /** Windows Metafile image format (legacy vector graphics) */
+  WmfImage = "WmfImage",
+  /** Enhanced Metafile image format (legacy vector graphics) */
+  EmfImage = "EmfImage",
+  /** SVG image format (not yet supported) */
+  SvgImage = "SvgImage",
+  /** Office Math Markup Language equations */
+  MathEquation = "MathEquation",
+  /** Form field elements (checkboxes, text inputs, dropdowns) */
+  FormField = "FormField",
+  /** Ruby annotations for East Asian text */
+  RubyAnnotation = "RubyAnnotation",
+  /** Embedded OLE objects */
+  OleObject = "OleObject",
+  /** Other unsupported content */
+  Other = "Other",
+}
+
+/**
  * Options for DOCX to HTML conversion
  */
 export interface ConversionOptions {
@@ -93,6 +116,12 @@ export interface ConversionOptions {
   showDeletedContent?: boolean;
   /** Whether to distinguish move operations from regular insert/delete (only when renderTrackedChanges=true, default: true) */
   renderMoveOperations?: boolean;
+  /**
+   * Whether to render placeholders for unsupported content (default: false)
+   * When enabled, unsupported content (WMF/EMF images, math equations, form fields, etc.)
+   * will display as styled placeholder spans instead of being silently dropped.
+   */
+  renderUnsupportedContentPlaceholders?: boolean;
 }
 
 /**
@@ -400,7 +429,8 @@ export interface DocxodusWasmExports {
       renderHeadersAndFooters: boolean,
       renderTrackedChanges: boolean,
       showDeletedContent: boolean,
-      renderMoveOperations: boolean
+      renderMoveOperations: boolean,
+      renderUnsupportedContentPlaceholders: boolean
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;

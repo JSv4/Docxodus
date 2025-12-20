@@ -24,6 +24,20 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
+- **Unsupported Content Placeholders** - Visual indicators for content that cannot be fully converted to HTML
+  - New `RenderUnsupportedContentPlaceholders` setting (default: false for backward compatibility)
+  - Supports these unsupported content types:
+    - **WMF/EMF images**: Legacy Windows Metafile formats display `[WMF IMAGE]` / `[EMF IMAGE]`
+    - **SVG images**: Scalable Vector Graphics display `[SVG IMAGE]`
+    - **Math equations (OMML)**: Office Math Markup displays `[MATH]`
+    - **Form fields**: Checkboxes, text inputs, dropdowns display `[CHECKBOX]`, `[TEXT INPUT]`, `[DROPDOWN]`
+    - **Ruby annotations**: East Asian text annotations display base text with `[RUBY]` marker
+  - Placeholders are styled with CSS (color-coded by type) and include:
+    - `data-content-type` attribute for the content type
+    - `data-element-name` attribute for the XML element name
+    - `title` attribute with descriptive tooltip
+  - New TypeScript enum `UnsupportedContentType` for type-safe placeholder identification
+  - See `docs/architecture/unsupported_content_placeholders.md` for full documentation
 - **External Annotation System** (Issue #57) - Store annotations externally without modifying the DOCX file
   - New `ExternalAnnotationSet` type extends `OpenContractDocExport` with document binding:
     - `documentId`: Unique identifier for the source document
