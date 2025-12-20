@@ -122,6 +122,13 @@ export interface ConversionOptions {
    * will display as styled placeholder spans instead of being silently dropped.
    */
   renderUnsupportedContentPlaceholders?: boolean;
+  /**
+   * Override the document's default language for the HTML lang attribute.
+   * If not specified, the language is auto-detected from document settings
+   * (w:themeFontLang or default paragraph style), falling back to "en-US".
+   * Examples: "en-US", "fr-FR", "de-DE", "ja-JP"
+   */
+  documentLanguage?: string;
 }
 
 /**
@@ -430,7 +437,8 @@ export interface DocxodusWasmExports {
       renderTrackedChanges: boolean,
       showDeletedContent: boolean,
       renderMoveOperations: boolean,
-      renderUnsupportedContentPlaceholders: boolean
+      renderUnsupportedContentPlaceholders: boolean,
+      documentLanguage: string | null
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;

@@ -124,7 +124,8 @@ function handleConvert(
       options?.renderTrackedChanges !== undefined ||
       options?.showDeletedContent !== undefined ||
       options?.renderMoveOperations !== undefined ||
-      options?.renderUnsupportedContentPlaceholders !== undefined;
+      options?.renderUnsupportedContentPlaceholders !== undefined ||
+      options?.documentLanguage !== undefined;
 
     if (needsCompleteMethod || options?.renderAnnotations) {
       result = exports.DocumentConverter.ConvertDocxToHtmlComplete(
@@ -146,7 +147,8 @@ function handleConvert(
         options?.renderTrackedChanges ?? false,
         options?.showDeletedContent ?? true,
         options?.renderMoveOperations ?? true,
-        options?.renderUnsupportedContentPlaceholders ?? false
+        options?.renderUnsupportedContentPlaceholders ?? false,
+        options?.documentLanguage ?? null
       );
     } else if (
       options?.paginationMode !== undefined &&

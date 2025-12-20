@@ -2349,6 +2349,150 @@ namespace OxPt
         }
 
         #endregion
+
+        #region Language Attribute Tests
+
+        [Fact]
+        public void HC033_HtmlElementHasLangAttribute_FromThemeFontLang()
+        {
+            // Test that <html> element gets lang attribute from themeFontLang
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add settings with themeFontLang set to French
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new ThemeFontLanguages() { Val = "fr-FR" }
+                    );
+                    settingsPart.Settings.Save();
+
+                    // Add minimal styles
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text("Bonjour")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings();
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    var langAttr = html.Attribute("lang");
+                    Assert.NotNull(langAttr);
+                    Assert.Equal("fr-FR", langAttr.Value);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC034_DocumentLanguageSetting_OverridesDocument()
+        {
+            // Test that DocumentLanguage setting overrides document settings
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add settings with French language
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings(
+                        new ThemeFontLanguages() { Val = "fr-FR" }
+                    );
+                    settingsPart.Settings.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text("Test")))));
+                    mainPart.Document.Save();
+
+                    // Override with German
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        DocumentLanguage = "de-DE"
+                    };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    var langAttr = html.Attribute("lang");
+                    Assert.NotNull(langAttr);
+                    Assert.Equal("de-DE", langAttr.Value);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC035_FallbackLanguage_WhenNotSpecified()
+        {
+            // Test that language falls back to "en-US" when not specified in document
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // No themeFontLang - empty settings
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text("Hello")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings();
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+
+                    var langAttr = html.Attribute("lang");
+                    Assert.NotNull(langAttr);
+                    Assert.Equal("en-US", langAttr.Value);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC036_HtmlConverterSettings_DocumentLanguage()
+        {
+            // Test that HtmlConverterSettings also supports DocumentLanguage
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text("Test")))));
+                    mainPart.Document.Save();
+
+                    // Use HtmlConverterSettings (the alternate settings class)
+                    var htmlSettings = new HtmlConverterSettings
+                    {
+                        DocumentLanguage = "ja-JP"
+                    };
+                    var html = HtmlConverter.ConvertToHtml(wDoc, htmlSettings);
+
+                    var langAttr = html.Attribute("lang");
+                    Assert.NotNull(langAttr);
+                    Assert.Equal("ja-JP", langAttr.Value);
+                }
+            }
+        }
+
+        #endregion
     }
 }
 
