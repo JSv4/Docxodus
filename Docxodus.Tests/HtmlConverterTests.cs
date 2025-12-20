@@ -2052,10 +2052,12 @@ namespace OxPt
                     // Add required style definitions part
                     var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
                     stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
 
                     // Add document settings part
                     var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
                     settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
 
                     // Create document with math element
                     var mathNs = XNamespace.Get("http://schemas.openxmlformats.org/officeDocument/2006/math");
@@ -2120,10 +2122,12 @@ namespace OxPt
                     // Add required style definitions part
                     var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
                     stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
 
                     // Add document settings part
                     var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
                     settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
 
                     // Create document with form field (checkbox)
                     var body = new XElement(W.body,
@@ -2179,10 +2183,12 @@ namespace OxPt
                     // Add required style definitions part
                     var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
                     stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
 
                     // Add document settings part
                     var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
                     settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
 
                     // Create document with ruby annotation
                     var body = new XElement(W.body,
@@ -2242,10 +2248,12 @@ namespace OxPt
                     // Add required style definitions part
                     var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
                     stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
 
                     // Add document settings part
                     var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
                     settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
 
                     // Create minimal document
                     var body = new XElement(W.body,
@@ -2297,10 +2305,12 @@ namespace OxPt
                     // Add required style definitions part
                     var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
                     stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
 
                     // Add document settings part
                     var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
                     settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
 
                     // Create document with math element
                     var mathNs = XNamespace.Get("http://schemas.openxmlformats.org/officeDocument/2006/math");
