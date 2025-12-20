@@ -8,175 +8,366 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 
 | Category | Gap | Severity |
 |----------|-----|----------|
-| ~~**Stability**~~ | ~~Null reference crashes in `DefineRunStyle`~~ | ~~High~~ FIXED |
-| ~~**Stability**~~ | ~~Static caches not thread-safe~~ | ~~High~~ FIXED |
-| ~~**Rendering**~~ | ~~Tab width calculation disabled~~ | ~~High~~ FIXED |
+| **Layout** | No `@page` CSS rule for print/PDF | Medium |
+| **Layout** | Table width calculation inconsistent | Medium |
+| **Layout** | Wrapper divs for simple borders | Low |
+| **Layout** | Empty paragraphs verbose | Low |
 | **Rendering** | Theme colors not resolved | Medium |
 | **Rendering** | Text box content lost | Medium |
-| ~~**Rendering**~~ | ~~SVG images not supported~~ | ~~Medium~~ PLACEHOLDER |
-| ~~**Rendering**~~ | ~~WMF/EMF images excluded~~ | ~~Low~~ PLACEHOLDER |
 | **Rendering** | Tab leader count varies by platform | Low |
+| **Accessibility** | No `lang` attribute on html/body | Medium |
+| **Accessibility** | No `lang` attribute on foreign text spans | Medium |
+| **Accessibility** | No ARIA roles | Low |
+| **Fonts** | Limited font fallback (28 fonts) | Medium |
+| **Fonts** | No CJK font-family fallback chain | Medium |
 | **Features** | Field code resolution (TOC page numbers) | Medium |
-| ~~**Features**~~ | ~~Math equations (OMML) not rendered~~ | ~~Medium~~ PLACEHOLDER |
-| ~~**Features**~~ | ~~Form fields not supported~~ | ~~Low~~ PLACEHOLDER |
 | **Features** | Pagination is CSS-only | Low |
-| **Accessibility** | No ARIA roles or lang attribute | Low |
 
 ---
 
-## 1. Missing Element Handling
+## Layout Issues
 
-Several Word elements are not handled in `ConvertToHtmlTransform`:
+### 1. No Page/Document Setup CSS
 
-| Element | Purpose | Impact |
-|---------|---------|--------|
-| `W.softHyphen` | Soft hyphen | Silently ignored, loses word-wrap hints |
-| `W.yearLong`, `W.yearShort`, `W.monthLong`, `W.monthShort`, `W.dayLong`, `W.dayShort` | Date/time fields | No output |
-| `W.pgNum`, `W.fldChar`, `W.fldSimple` (partially) | Page numbers, field codes | Incomplete field support |
-| `W.ruby` | Ruby annotations (CJK) | No support for East Asian text annotations |
-| `W.separator`, `W.continuationSeparator` | Footnote separators | Ignored |
+**Severity:** Medium
 
-## 2. ~~Comment Rendering Mode Incomplete~~ (FIXED)
+**Problem:** The converter does not generate `@page` CSS rules for print media or document-level settings.
 
-**Status:** Resolved
+**LibreOffice generates:**
+```css
+@page { size: 8.5in 11in; margin: 1in }
+```
 
-`CommentRenderMode.Margin` is now fully implemented with:
-- Flexbox-based layout with main content and margin column
-- CSS styling for margin notes with author, date, and back-reference links
-- Print media query for responsive behavior
+**Ours:** Nothing.
 
-See `docs/architecture/comment_rendering.md` for full documentation.
+**Impact:** Print output and PDF generation lack proper page dimensions and margins.
 
-## 3. Text Box Content Not Fully Rendered
+**Solution:** Read page size from `w:sectPr/w:pgSz` and margins from `w:sectPr/w:pgMar`, generate `@page` CSS rule.
 
+---
+
+### 2. Table Width Calculation Inconsistent
+
+**Severity:** Medium
+
+**Problem:** Table and cell widths may not match the original document layout.
+
+**Comparison:**
+| Aspect | LibreOffice | Ours |
+|--------|-------------|------|
+| Units | Pixels (`width="480"`) | Points (`width: 360pt`) |
+| Column widths | Proportional to content | Fixed from `tcW` |
+
+**Impact:** Tables may appear wider or narrower than intended.
+
+**Solution:** Review twips→points conversion in `ProcessTable` and ensure `tblW` percentage widths are handled correctly.
+
+---
+
+### 3. Borderless Table Detection Missing
+
+**Severity:** Medium
+
+**Problem:** Tables used for layout (like signature blocks) should be borderless, but borders may still appear.
+
+**LibreOffice:**
+```html
+<td style="border: none; padding: 0in">
+```
+
+**Impact:** Signature blocks and multi-column layouts have unwanted borders.
+
+**Solution:** Detect `w:tblBorders` with `w:val="nil"` or missing borders and render without CSS borders.
+
+---
+
+### 4. Wrapper Divs for Simple Borders
+
+**Severity:** Low
+
+**Problem:** Horizontal rules are rendered with unnecessary wrapper `<div>` elements.
+
+**LibreOffice:**
+```html
+<p style="border-bottom: 1px solid #cccccc">...</p>
+```
+
+**Ours:**
+```html
+<div class="pt-000007"><p>...</p></div>
+```
+
+**Impact:** More complex DOM, harder to style/select.
+
+**Solution:** Apply paragraph borders directly to `<p>` element when possible.
+
+---
+
+### 5. Empty Paragraphs Verbose
+
+**Severity:** Low
+
+**Problem:** Empty paragraphs generate unnecessary markup.
+
+**LibreOffice:**
+```html
+<p><br/></p>
+```
+
+**Ours:**
+```html
+<p dir="ltr" class="pt-Normal"><span class="pt-000000"></span></p>
+```
+
+**Impact:** Bloated HTML output.
+
+**Solution:** Simplify empty paragraphs to `<p><br/></p>` or just `<br/>` where appropriate.
+
+---
+
+## Rendering Issues
+
+### 6. Theme Colors Not Resolved
+
+**Severity:** Medium
+**Location:** Lines 3468-3472
+
+While `w:themeColor` and `w:themeTint` are copied during border overrides, **theme colors are never resolved to actual RGB values** from the document's theme (`theme1.xml`).
+
+**Impact:** Colors appear wrong when documents use theme colors instead of explicit RGB.
+
+**Solution:** Read theme from `/word/theme/theme1.xml`, resolve `w:themeColor` values like `accent1`, `dark1`, etc. to RGB.
+
+---
+
+### 7. Text Box Content Not Fully Rendered
+
+**Severity:** Medium
 **Location:** Line 2041
 
-Text boxes (`w:txbxContent`) are explicitly trimmed in multiple places:
+Text boxes (`w:txbxContent`) are explicitly trimmed:
 - `DescendantsTrimmed(W.txbxContent)` is used throughout
 - Text box content is preserved but not transformed to proper HTML `<div>` or `<aside>` elements
 
-## 4. Limited Drawing/Image Support
+**Impact:** Content inside text boxes is lost in HTML output.
 
-**Location:** Lines 4617-4856
+---
 
-- Only handles these content types: `png`, `gif`, `tiff`, `jpeg`
-- **WMF and EMF files are explicitly excluded** (line 4619 comment)
-- SVG images not supported
-- **No fallback or placeholder** for unsupported image types - they just disappear
+### 8. Tab Leader Count Varies by Platform
 
-## 5. Incomplete Run Properties
+**Severity:** Low
 
-**Location:** Lines 2835-2865
+Leader character count may vary by platform due to font measurement differences:
+- Desktop (.NET): Uses SkiaSharp for actual font measurement
+- WASM: Uses character-based estimation
 
-The code documents unsupported properties:
-```csharp
-// Don't handle:
-// - em (emphasis mark)
-// - emboss
-// - fitText
-// - imprint
-// - kern (kerning)
-// - outline
-// - shadow
-// - w (character width expansion)
+The tab span width is correct; only the dot count filling that width varies.
+
+---
+
+### 9. Line Height Calculation
+
+**Severity:** Low
+
+**Problem:** Line height values differ from LibreOffice output.
+
+| Content Type | LibreOffice | Ours |
+|--------------|-------------|------|
+| Body text | `115%` | `115.0%` (extra decimal) |
+| Default | `100%` | `108%` |
+
+**Impact:** Minor spacing differences.
+
+**Solution:** Review `w:spacing/@w:line` conversion and remove unnecessary decimal places.
+
+---
+
+## Accessibility Issues
+
+### 10. No Document Language Attribute
+
+**Severity:** Medium
+
+**Problem:** No `lang` attribute on `<html>` or `<body>` element.
+
+**LibreOffice:**
+```html
+<body lang="en-US">
 ```
 
-## 6. Paragraph Properties Not Handled
+**Ours:** No language attribute.
 
-**Location:** Lines 2508-2555
+**Impact:** Screen readers cannot determine document language; browsers cannot apply correct hyphenation.
 
-Many documented but unimplemented:
-- `contextualSpacing` - partially handled
-- `framePr` (frames)
-- `keepLines`, `keepNext` (pagination control)
-- `mirrorIndents`
-- `pageBreakBefore`
-- `suppressAutoHyphens`
-- `tabs` - only partially implemented
-- `textDirection`
-- `widowControl`
+**Solution:** Read from `w:settings/w:themeFontLang` or `w:lang` on document default styles.
 
-## 7. ~~Tab Width Calculation Disabled~~ (FIXED)
+---
 
-**Status:** Resolved
+### 11. No Language Attributes on Foreign Text
 
-Previously, tab width calculation for text elements was disabled with `const int widthOfText = 0;` at line 5591. This was disabled because "it doesn't work on Azure" (likely due to font unavailability).
+**Severity:** Medium
 
-Now uses estimation fallback when font measurement fails:
-- `MetricsGetter._getTextWidth()` returns character-based estimation when SkiaSharp measurement fails
-- Estimation formula: `charWidth = fontSize * 0.6 / 2` per character
-- Works in Azure, WASM, and environments without fonts installed
-- Tab positioning now properly accounts for preceding text width
-- Leader spans now have `display: inline-block` for proper width rendering
+**Problem:** Text in different languages (CJK, etc.) lacks `lang` attribute.
 
-**Note:** Leader character count may vary by platform due to font measurement differences:
-- Desktop (.NET): Uses SkiaSharp for actual font measurement - period characters may measure wider than expected, resulting in fewer dots
-- WASM: Uses character-based estimation - may produce different counts
-- The tab span width is correct; only the dot count filling that width varies
-
-## 8. Hard-coded Default Language
-
-**Location:** Line 3211
-
-```csharp
-const string defaultLanguage = "en-US"; // todo need to get defaultLanguage
+**LibreOffice:**
+```html
+<span lang="zh-CN">株式会社</span>
 ```
 
-Should read from document settings (`w:settings/w:themeFontLang`).
+**Ours:** No `lang` attribute on runs with different language.
 
-## 9. Theme Colors Not Resolved
+**Impact:** Screen readers mispronounce foreign text; browsers use wrong fonts.
 
-**Location:** Lines 3468-3472
+**Solution:** Read `w:rPr/w:lang` attributes and add `lang` to corresponding `<span>` elements.
 
-While `w:themeColor` and `w:themeTint` are copied during border overrides, **theme colors are never resolved to actual RGB values** from the document's theme.
+---
 
-## 10. No Math Equation Support
+### 12. No ARIA Roles
 
-OMML (`<m:oMath>`) elements are not handled at all - equations silently disappear from output.
+**Severity:** Low
 
-## 11. Section Break Handling
+- Images get `alt` text from `descr` attribute (good)
+- No ARIA roles on semantic elements like tables, lists
+- No `role="presentation"` on layout tables
 
+---
+
+## Font Issues
+
+### 13. Limited Font Fallback
+
+**Severity:** Medium
+**Location:** Lines 4514-4547
+
+Only 28 fonts have fallback definitions. Unknown fonts get no CSS `font-family` fallback to generic serif/sans-serif.
+
+**Solution:** Add catch-all fallback: unknown fonts should fall back to `serif` or `sans-serif` based on font characteristics.
+
+---
+
+### 14. No CJK Font-Family Fallback Chain
+
+**Severity:** Medium
+
+**Problem:** CJK (Chinese, Japanese, Korean) text doesn't have proper font fallback.
+
+**LibreOffice:**
+```html
+<font face="Noto Serif CJK SC">株式会社</font>
+```
+
+**Ours:** Generic serif fallback only.
+
+**Solution:** Add CJK font-family fallback chain when CJK language detected:
+```css
+font-family: 'Original Font', 'Noto Serif CJK SC', 'Noto Sans CJK', 'Microsoft YaHei', 'SimSun', 'Malgun Gothic', serif;
+```
+
+---
+
+## Feature Gaps
+
+### 15. Field Code Resolution Not Implemented
+
+**Severity:** Medium
+**Location:** Various field handling in `ConvertToHtmlTransform`
+
+Word documents use field codes for dynamic content. Current behavior:
+- Field instructions are ignored
+- Only the cached result (text between `separate` and `end`) is rendered
+
+**Problematic scenarios:**
+1. **TOC page numbers** - Empty when document was never printed/updated
+2. **Cross-references** - May show stale text
+3. **PAGE/NUMPAGES fields** - Cannot be resolved
+4. **HYPERLINK fields** - Could be converted to `<a>` tags
+
+---
+
+### 16. Pagination Mode Limitations
+
+**Severity:** Low
+**Location:** `WmlToHtmlConverterSettings.PaginationMode`
+
+The `PaginationMode.Paginated` setting is CSS-only:
+- No actual page breaking logic
+- Headers/footers not cloned per-page
+- No page number calculation
+
+---
+
+### 17. Section Break Handling
+
+**Severity:** Low
 **Location:** Lines 2461-2500
 
 - Section breaks are conflated if formatting is identical
 - No visual separation or page-break CSS added
 - Headers/footers for different sections not differentiated
 
-## 12. Field Code Resolution Not Implemented
+---
 
-**Location:** Various field handling in `ConvertToHtmlTransform`
+## Other Issues
 
-Word documents use field codes for dynamic content like page numbers, table of contents, cross-references, and calculated values. These are stored as:
-- `w:fldSimple` - Simple fields with direct content
-- `w:fldChar` with `w:fldCharType="begin"/"separate"/"end"` - Complex fields with instruction and result parts
-- `w:instrText` - Field instruction text (e.g., `PAGE`, `TOC`, `HYPERLINK`)
+### 18. Missing Element Handling
 
-**Current behavior:**
-- Field instructions are ignored
-- Only the cached result (text between `separate` and `end`) is rendered
-- This works for static document snapshots but fails for:
+Several Word elements are not handled in `ConvertToHtmlTransform`:
 
-**Problematic scenarios:**
-1. **TOC page numbers** - Appear as `#x200e` (Unicode LRM) because the cached result is empty when document was never printed/updated
-2. **Cross-references** - May show stale or placeholder text
-3. **PAGE/NUMPAGES fields** - Cannot be resolved (would require actual pagination)
-4. **Calculated fields** - Results may be outdated
+| Element | Purpose | Impact |
+|---------|---------|--------|
+| `W.softHyphen` | Soft hyphen | Loses word-wrap hints |
+| `W.yearLong`, `W.monthLong`, etc. | Date/time fields | No output |
+| `W.pgNum` | Page numbers | Cannot resolve |
+| `W.separator`, `W.continuationSeparator` | Footnote separators | Ignored |
 
-**Example from Table of Contents:**
-```xml
-<w:fldSimple w:instr=" PAGEREF _Toc123 \h ">
-  <w:r><w:t>3</w:t></w:r>
-</w:fldSimple>
-```
-If the cached result is empty (common when document hasn't been printed), the page number simply doesn't appear.
+---
 
-**Potential solutions:**
-1. **Warn when fields have no cached result** - Emit visible placeholder or console warning
-2. **Parse simple field types** - Resolve `HYPERLINK` fields to actual `<a>` tags
-3. **TOC-specific handling** - Detect TOC fields and warn about missing page numbers
-4. **Full field code parsing** - Complex; would require understanding all field types
+### 19. Incomplete Run Properties
 
-## 13. Tracked Changes - Partial Property Support
+**Location:** Lines 2835-2865
+
+Unsupported run properties:
+- `em` (emphasis mark)
+- `emboss`, `imprint`
+- `fitText`
+- `kern` (kerning)
+- `outline`, `shadow`
+- `w` (character width expansion)
+
+---
+
+### 20. Paragraph Properties Not Handled
+
+**Location:** Lines 2508-2555
+
+Unimplemented paragraph properties:
+- `framePr` (frames)
+- `keepLines`, `keepNext` (pagination control)
+- `mirrorIndents`
+- `pageBreakBefore`
+- `suppressAutoHyphens`
+- `textDirection`
+- `widowControl`
+
+---
+
+### 21. Complex Script (BiDi) Handling Incomplete
+
+- RTL marks added but complex script font sizing (`w:szCs`) only used when `languageType == "bidi"`
+- No proper handling of mixed LTR/RTL content in tables
+
+---
+
+### 22. Text Content in Shapes/DrawingML
+
+Content inside DrawingML shapes (`a:txBody`, `wps:txbx`) may not be fully extracted:
+- Shape text handled differently than regular paragraph text
+- Nested text frames in complex drawings may be missed
+- No CSS positioning to reflect shape placement
+
+---
+
+### 23. Tracked Changes - Partial Property Support
 
 **Location:** Lines 3003-3054
 
@@ -185,88 +376,34 @@ If the cached result is empty (common when document hasn't been printed), the pa
 
 Missing: highlight, caps, smallCaps, spacing, position, etc.
 
-## 13. ~~Potential Null Reference Issues~~ (FIXED)
-
-**Status:** Resolved
-
-Previously, `DefineRunStyle` and `GetLangAttribute` used `.First()` on `run.Elements(W.rPr)` which would crash with `InvalidOperationException` if a run had no `rPr` element. Now uses `.FirstOrDefault()` with null checks to return gracefully (empty style dictionary or null language attribute).
-
-## 14. Font Fallback Limited
-
-**Location:** Lines 4514-4547
-
-Only 28 fonts have fallback definitions. Unknown fonts get no CSS `font-family` fallback to serif/sans-serif.
-
-## 15. ~~Static Mutable State~~ (FIXED)
-
-**Status:** Resolved
-
-Previously, static caches were not thread-safe:
-- `UnknownFonts` in `FontFamilyHelper.cs`
-- `ShadeCache` in `WmlToHtmlConverter.cs`
-
-Now uses thread-safe `ConcurrentDictionary` for both caches, with `Lazy<T>` for font family initialization. Added `ClearShadeCache()` and `ClearUnknownFontsCache()` methods for memory management in long-running processes.
-
-## 16. Complex Script (BiDi) Handling Incomplete
-
-- RTL marks added but complex script font sizing (`w:szCs`) is only used when `languageType == "bidi"`
-- No proper handling of mixed LTR/RTL content in tables
-
-## 17. No Accessibility Attributes
-
-- Images get `alt` text from `descr` attribute
-- No ARIA roles on semantic elements
-- No `lang` attribute on the `<html>` element itself
-
-## 18. Form Fields Not Supported
-
-`w:ffData`, `w:checkBox`, `w:textInput`, `w:ddList` are not converted to HTML form elements.
-
-## 19. Pagination Mode Limitations
-
-**Location:** `WmlToHtmlConverterSettings.PaginationMode`
-
-The `PaginationMode.Paginated` setting is architecturally implemented but has significant limitations:
-
-- **CSS only** - Generates PDF.js-style styling but content still flows continuously
-- **No actual page breaking** - No page-break logic or layout engine
-- **Headers/footers must be cloned per-page** - Dynamic fields like PAGE number don't work
-- **Section boundaries not detected** - Pagination engine doesn't track which section a page belongs to
-- **No page number calculation** - Cannot determine total page count
-
-This is essentially a styling mode rather than true pagination.
-
-## 20. Text Content in Shapes/DrawingML
-
-Beyond text boxes, content inside DrawingML shapes (`a:txBody`, `wps:txbx`) may not be fully extracted:
-
-- Shape text is handled differently than regular paragraph text
-- Nested text frames in complex drawings may be missed
-- No CSS positioning to reflect shape placement
-
 ---
 
 ## Summary of Priority Fixes
 
-### High Priority (Stability/Correctness)
+### High Priority (Visual/Layout Impact)
 
-1. ~~**Implement `CommentRenderMode.Margin`**~~ - FIXED
-2. ~~**Handle null `rPr`** in `DefineRunStyle` and `GetLangAttribute` to prevent crashes~~ - FIXED
-3. ~~**Add thread-safety** to static caches or make them instance-based (memory leak in high-volume scenarios)~~ - FIXED
-4. ~~**Fix tab width calculation**~~ - FIXED - now uses estimation fallback when fonts unavailable
+1. **Table width calculation** - Fix twips→points conversion accuracy
+2. **Borderless table detection** - For signature blocks and layout tables
+3. **Theme color resolution** - Colors appear wrong with theme colors
+4. **Add `lang` attribute** to `<html>` from document settings
 
-### Medium Priority (Visual Fidelity)
+### Medium Priority (Accessibility/Standards)
 
-5. **Implement theme color resolution** - colors appear wrong when documents use theme colors
-6. ~~**Add SVG image support**~~ - PLACEHOLDER - displays `[SVG IMAGE]` when `RenderUnsupportedContentPlaceholders = true`
-7. **Render text box content** - currently lost entirely from output
-8. **Improve font fallback** - unknown fonts should fall back to generic serif/sans-serif
+5. **Add `lang` attributes** to foreign language spans
+6. **Add `@page` CSS rule** for print media
+7. **CJK font-family fallback** chain
+8. **Improve generic font fallback** - unknown fonts need serif/sans-serif fallback
 
-### Low Priority (Feature Additions)
+### Low Priority (Polish)
 
-9. ~~**Consider OMML to MathML conversion**~~ - PLACEHOLDER - displays `[MATH]` when `RenderUnsupportedContentPlaceholders = true`
-10. ~~**Add form field support**~~ - PLACEHOLDER - displays `[CHECKBOX]`, `[TEXT INPUT]`, `[DROPDOWN]` when `RenderUnsupportedContentPlaceholders = true`
-11. **Improve accessibility** with ARIA roles and proper `lang` attributes
-12. ~~**Add WMF/EMF conversion**~~ - PLACEHOLDER - displays `[WMF IMAGE]`, `[EMF IMAGE]` when `RenderUnsupportedContentPlaceholders = true`
+9. **Remove wrapper divs for borders** - Apply border directly to elements
+10. **Empty paragraph simplification** - Reduce HTML verbosity
+11. **Line-height decimal cleanup** - `115.0%` → `115%`
+12. **Render text box content** - Currently lost entirely
 
-See `docs/architecture/unsupported_content_placeholders.md` for full documentation on placeholder rendering.
+---
+
+## Related Documentation
+
+- [Unsupported Content Placeholders](./unsupported_content_placeholders.md) - Visual indicators for math, forms, WMF/EMF images
+- [Comment Rendering](./comment_rendering.md) - Margin, inline, and endnote-style comment rendering
