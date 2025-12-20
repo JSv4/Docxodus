@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - .NET 8 / Open XML SDK 3.x Migration
 
+### Fixed
+- **Thread-safety issues** in `WmlToHtmlConverter` and `FontFamilyHelper` that could cause corruption during concurrent document conversions
+  - `ShadeCache` in `WmlToHtmlConverter` now uses `ConcurrentDictionary` for thread-safe shade color caching
+  - `FontFamilyHelper._unknownFonts` now uses `ConcurrentDictionary` for thread-safe font tracking
+  - `FontFamilyHelper.KnownFamilies` now uses `Lazy<T>` for thread-safe lazy initialization
+  - Added `WmlToHtmlConverter.ClearShadeCache()` and `FontFamilyHelper.ClearUnknownFontsCache()` methods for memory management in long-running processes
+
 ### Breaking Changes
 - **Target Framework**: Changed from net45/net46/netstandard2.0 to .NET 8.0
 - **Open XML SDK**: Upgraded from 2.8.1 to 3.2.0

@@ -2,6 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 #if !WASM_BUILD
@@ -6251,7 +6252,8 @@ namespace Docxodus
             { "thinVertStripe", (c, f) => ConvertColorFillPct(c, f, .25) },
         };
 
-        private static readonly Dictionary<string, string> ShadeCache = new Dictionary<string, string>();
+        // Thread-safe cache for shade color calculations
+        private static readonly ConcurrentDictionary<string, string> ShadeCache = new ConcurrentDictionary<string, string>();
 
         // fill is the background, color is the foreground
         private static string ConvertColorFillPct(string color, string fill, double pct)
@@ -6261,20 +6263,29 @@ namespace Docxodus
             if (fill == "auto")
                 fill = "ffffff";
             var key = color + fill + pct.ToString(CultureInfo.InvariantCulture);
-            if (ShadeCache.ContainsKey(key))
-                return ShadeCache[key];
-            var fillRed = Convert.ToInt32(fill.Substring(0, 2), 16);
-            var fillGreen = Convert.ToInt32(fill.Substring(2, 2), 16);
-            var fillBlue = Convert.ToInt32(fill.Substring(4, 2), 16);
-            var colorRed = Convert.ToInt32(color.Substring(0, 2), 16);
-            var colorGreen = Convert.ToInt32(color.Substring(2, 2), 16);
-            var colorBlue = Convert.ToInt32(color.Substring(4, 2), 16);
-            var finalRed = (int)(fillRed - (fillRed - colorRed) * pct);
-            var finalGreen = (int)(fillGreen - (fillGreen - colorGreen) * pct);
-            var finalBlue = (int)(fillBlue - (fillBlue - colorBlue) * pct);
-            var returnValue = string.Format("{0:x2}{1:x2}{2:x2}", finalRed, finalGreen, finalBlue);
-            ShadeCache.Add(key, returnValue);
-            return returnValue;
+
+            return ShadeCache.GetOrAdd(key, _ =>
+            {
+                var fillRed = Convert.ToInt32(fill.Substring(0, 2), 16);
+                var fillGreen = Convert.ToInt32(fill.Substring(2, 2), 16);
+                var fillBlue = Convert.ToInt32(fill.Substring(4, 2), 16);
+                var colorRed = Convert.ToInt32(color.Substring(0, 2), 16);
+                var colorGreen = Convert.ToInt32(color.Substring(2, 2), 16);
+                var colorBlue = Convert.ToInt32(color.Substring(4, 2), 16);
+                var finalRed = (int)(fillRed - (fillRed - colorRed) * pct);
+                var finalGreen = (int)(fillGreen - (fillGreen - colorGreen) * pct);
+                var finalBlue = (int)(fillBlue - (fillBlue - colorBlue) * pct);
+                return string.Format("{0:x2}{1:x2}{2:x2}", finalRed, finalGreen, finalBlue);
+            });
+        }
+
+        /// <summary>
+        /// Clears the shade color cache.
+        /// Useful for long-running processes to free memory.
+        /// </summary>
+        public static void ClearShadeCache()
+        {
+            ShadeCache.Clear();
         }
 
         private static void CreateStyleFromShd(Dictionary<string, string> style, XElement shd)
