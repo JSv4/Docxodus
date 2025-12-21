@@ -2,6 +2,8 @@
 
 *Last updated: December 2025*
 
+*Verified: December 2025 - All resolved features confirmed working via automated test suite (`FeatureVerificationTests.cs`)*
+
 This document catalogs known gaps, limitations, and areas for improvement in the WmlToHtmlConverter.
 
 ## Quick Reference
@@ -367,6 +369,30 @@ Missing: highlight, caps, smallCaps, spacing, position, etc.
 10. **Empty paragraph simplification** - Reduce HTML verbosity
 11. **Line-height decimal cleanup** - `115.0%` → `115%`
 12. **Render text box content** - Currently lost entirely
+
+---
+
+## Verification Summary
+
+All features marked as ✅ RESOLVED have been verified working via the automated test suite in `Docxodus.Tests/FeatureVerificationTests.cs`. The tests create programmatic Word documents with each feature and verify the HTML output contains the expected elements:
+
+| Test | Feature Verified | Validation |
+|------|-----------------|------------|
+| FV001 | @page CSS rule | Contains `@page { size: 8.50in 11.00in; ... }` |
+| FV002 | Table DXA width | 8640 twips → `width: 432pt` |
+| FV003 | Borderless table | `data-borderless="true"` attribute present |
+| FV004 | Theme color resolution | `#4472C4` resolved from accent1 |
+| FV005 | Theme color disable | Falls back to explicit Val when disabled |
+| FV006 | Document language | `<html lang="fr-FR">` from ThemeFontLang |
+| FV007 | Language override | Settings.DocumentLanguage overrides document |
+| FV008 | Foreign text span | `lang="es"` on Spanish text |
+| FV009 | Japanese text span | `lang="ja-JP"` on Japanese text |
+| FV010 | Unknown font fallback | `'MyFont', serif` fallback |
+| FV011 | Sans font fallback | `'CustomSansFont', sans-serif` fallback |
+| FV012 | Courier New fallback | `'Courier New', monospace` fallback |
+| FV013 | Japanese CJK fallback | Contains `Noto Serif CJK JP` in font chain |
+| FV014 | Chinese CJK fallback | Contains `Noto Serif CJK SC` in font chain |
+| FV099 | All features together | Comprehensive test of all features in one document |
 
 ---
 
