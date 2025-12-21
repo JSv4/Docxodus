@@ -2493,6 +2493,572 @@ namespace OxPt
         }
 
         #endregion
+
+        #region Table Layout Tests
+
+        [Fact]
+        public void HC037_TableDxaWidth_RendersAsPoints()
+        {
+            // Test that table widths specified in DXA (twips) are converted to points
+            // DXA to points: divide by 20 (1 point = 20 twips)
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a table with DXA width (7200 twips = 360 points = 5 inches)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(
+                                    new TableWidth { Width = "7200", Type = TableWidthUnitValues.Dxa }),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new TableCellProperties(
+                                            new TableCellWidth { Width = "3600", Type = TableWidthUnitValues.Dxa }),
+                                        new Paragraph(
+                                            new Run(new Text("Cell 1"))))),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new TableCellProperties(
+                                            new TableCellWidth { Width = "3600", Type = TableWidthUnitValues.Dxa }),
+                                        new Paragraph(
+                                            new Run(new Text("Cell 2"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Table DXA Width Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // 7200 twips / 20 = 360 points
+                    Assert.Contains("width: 360pt", htmlString);
+                    Assert.Contains("Cell 1", htmlString);
+                    Assert.Contains("Cell 2", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC038_BorderlessTable_HasDataAttribute()
+        {
+            // Test that tables with nil/none borders get data-borderless="true" attribute
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a table with nil borders (borderless layout table)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(
+                                    new TableBorders(
+                                        new TopBorder { Val = BorderValues.Nil },
+                                        new BottomBorder { Val = BorderValues.Nil },
+                                        new LeftBorder { Val = BorderValues.Nil },
+                                        new RightBorder { Val = BorderValues.Nil },
+                                        new InsideHorizontalBorder { Val = BorderValues.Nil },
+                                        new InsideVerticalBorder { Val = BorderValues.Nil })),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new Paragraph(
+                                            new Run(new Text("Borderless Cell"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Borderless Table Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    Assert.Contains("data-borderless=\"true\"", htmlString);
+                    Assert.Contains("Borderless Cell", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC039_TableWithBorders_NoDataBorderlessAttribute()
+        {
+            // Test that tables with visible borders do NOT get data-borderless attribute
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a table with single-line borders
+                    mainPart.Document = new Document(
+                        new Body(
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(
+                                    new TableBorders(
+                                        new TopBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                                        new BottomBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                                        new LeftBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                                        new RightBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                                        new InsideHorizontalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" },
+                                        new InsideVerticalBorder { Val = BorderValues.Single, Size = 4, Color = "000000" })),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new Paragraph(
+                                            new Run(new Text("Bordered Cell"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Table With Borders Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    Assert.DoesNotContain("data-borderless", htmlString);
+                    Assert.Contains("Bordered Cell", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC040_TableWithoutTblBorders_IsBorderless()
+        {
+            // Test that tables without any tblBorders element are treated as borderless
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a table without any border properties
+                    mainPart.Document = new Document(
+                        new Body(
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(),  // No borders specified
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new Paragraph(
+                                            new Run(new Text("No Border Props Cell"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "No Border Props Table Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    Assert.Contains("data-borderless=\"true\"", htmlString);
+                    Assert.Contains("No Border Props Cell", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC041_TablePercentageWidth_RendersCorrectly()
+        {
+            // Test that table widths specified as percentage render correctly
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a table with percentage width (5000 = 100%, so 2500 = 50%)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new TableProperties(
+                                    new TableWidth { Width = "2500", Type = TableWidthUnitValues.Pct }),
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new Paragraph(
+                                            new Run(new Text("50% Width Cell"))))))));
+
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Table Percentage Width Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // 2500 / 50 = 50%
+                    Assert.Contains("width: 50%", htmlString);
+                    Assert.Contains("50% Width Cell", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC042_UnknownSerifFont_GetsSerifFallback()
+        {
+            // Test that unknown fonts without "sans" or "mono" patterns get serif fallback
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "MyCustomFont" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Custom font text")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Unknown font should get serif fallback
+                    Assert.Contains("'MyCustomFont', serif", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC043_UnknownSansFont_GetsSansSerifFallback()
+        {
+            // Test that fonts with "sans" pattern get sans-serif fallback
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "CustomSansFont" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Sans font text")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Font with "sans" should get sans-serif fallback
+                    Assert.Contains("'CustomSansFont', sans-serif", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC044_UnknownMonoFont_GetsMonospaceFallback()
+        {
+            // Test that fonts with "mono" or "code" patterns get monospace fallback
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "MyCodeFont" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Mono font text")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Font with "code" should get monospace fallback
+                    Assert.Contains("'MyCodeFont', monospace", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC045_KnownFont_UsesKnownFallback()
+        {
+            // Test that known fonts (like Arial) use their predefined fallback
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Arial" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Arial text")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Known font Arial should get sans-serif fallback
+                    Assert.Contains("'Arial', sans-serif", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC046_CourierNew_GetsMonospaceFallback()
+        {
+            // Test that Courier New now gets proper monospace fallback (was missing before)
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Courier New" },
+                                    new FontSize { Val = "24" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new Run(new Text("Courier text")))));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Courier New should now get monospace fallback
+                    Assert.Contains("'Courier New', monospace", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC047_JapaneseText_GetsCjkFallback()
+        {
+            // Test that East Asian text with Japanese language gets CJK fallback chain
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman", EastAsia = "MS Mincho" },
+                                    new FontSize { Val = "24" },
+                                    new Languages { Val = "en-US", EastAsia = "ja-JP" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a run with Japanese text (hiragana character)
+                    var run = new Run(
+                        new RunProperties(
+                            new RunFonts { EastAsia = "MS Mincho" },
+                            new Languages { EastAsia = "ja-JP" }),
+                        new Text("あ"));  // Hiragana 'a'
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(run)));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "CJK Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain CJK JP fallback chain fonts
+                    Assert.Contains("Noto Serif CJK JP", htmlString);
+                    Assert.Contains("MS Mincho", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC048_ChineseSimplified_GetsCjkScFallback()
+        {
+            // Test that Simplified Chinese text gets CJK SC fallback chain
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman", EastAsia = "SimSun" },
+                                    new FontSize { Val = "24" },
+                                    new Languages { Val = "en-US", EastAsia = "zh-hans" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a run with Chinese text
+                    var run = new Run(
+                        new RunProperties(
+                            new RunFonts { EastAsia = "SimSun" },
+                            new Languages { EastAsia = "zh-hans" }),
+                        new Text("中"));  // Chinese character
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(run)));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { PageTitle = "CJK Font Fallback Test" };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain CJK SC fallback chain fonts
+                    Assert.Contains("Noto Serif CJK SC", htmlString);
+                    Assert.Contains("Microsoft YaHei", htmlString);
+                }
+            }
+        }
+
+        #endregion
     }
 }
 

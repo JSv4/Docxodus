@@ -24,6 +24,16 @@ All notable changes to this project will be documented in this file.
 - **Graphics Library**: Replaced System.Drawing with SkiaSharp 2.88.9
 
 ### Added
+- **Table Width DXA Support** - Tables with DXA (twips) widths now render correctly
+  - Previously, only percentage widths were handled; DXA widths were ignored
+  - Tables with `w:tblW[@w:type="dxa"]` now render with proper `width: XXpt` CSS
+  - Conversion uses standard formula: `dxa / 20 = points`
+  - Addresses converter gaps #1 (Table Width Calculation)
+- **Borderless Table Detection** - Tables without borders now get semantic markup
+  - Tables with `w:tblBorders` set to `nil`/`none` or missing get `data-borderless="true"` attribute
+  - Useful for identifying layout tables vs data tables
+  - Enables CSS-based styling for signature blocks and multi-column layouts
+  - Addresses converter gaps #3 (Borderless Table Detection)
 - **Document Language Attribute** - HTML output now includes `lang` attribute for improved accessibility
   - New `DocumentLanguage` setting to manually override the language (default: auto-detect)
   - `<html>` element now includes `lang` attribute (e.g., `<html lang="en-US">`)
@@ -34,6 +44,18 @@ All notable changes to this project will be documented in this file.
   - Foreign text spans get `lang` attribute when different from document default
   - Improves screen reader pronunciation and browser font selection
   - Addresses converter gaps #10 (Document Language Attribute) and #11 (Foreign Text Spans)
+- **Improved Font Fallback** - Unknown fonts now get appropriate generic fallback, and CJK text gets language-specific font chains
+  - Unknown fonts are classified by name patterns and get proper fallback:
+    - Fonts with "sans" pattern → `font-family: 'FontName', sans-serif`
+    - Fonts with "mono", "code", "courier" patterns → `font-family: 'FontName', monospace`
+    - Other fonts default to serif fallback
+  - Fixed Courier New and Lucida Console to include `monospace` fallback (was missing)
+  - CJK (Chinese, Japanese, Korean) text gets language-specific font fallback chains:
+    - Japanese (ja-JP): `'Noto Serif CJK JP', 'Yu Mincho', 'MS Mincho', ...`
+    - Simplified Chinese (zh-hans): `'Noto Serif CJK SC', 'Microsoft YaHei', 'SimSun', ...`
+    - Traditional Chinese (zh-hant): `'Noto Serif CJK TC', 'Microsoft JhengHei', 'PMingLiU', ...`
+    - Korean (ko): `'Noto Serif CJK KR', 'Malgun Gothic', 'Batang', ...`
+  - Addresses converter gaps #13 (Limited Font Fallback) and #14 (No CJK Font-Family Fallback Chain)
 - **Unsupported Content Placeholders** - Visual indicators for content that cannot be fully converted to HTML
   - New `RenderUnsupportedContentPlaceholders` setting (default: false for backward compatibility)
   - Supports these unsupported content types:
