@@ -8,12 +8,12 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 
 | Category | Gap | Severity |
 |----------|-----|----------|
-| **Layout** | No `@page` CSS rule for print/PDF | Medium |
+| ~~**Layout**~~ | ~~No `@page` CSS rule for print/PDF~~ | ~~Medium~~ ✅ |
 | ~~**Layout**~~ | ~~Table width calculation inconsistent~~ | ~~Medium~~ ✅ |
 | ~~**Layout**~~ | ~~Borderless table detection missing~~ | ~~Medium~~ ✅ |
 | **Layout** | Wrapper divs for simple borders | Low |
 | **Layout** | Empty paragraphs verbose | Low |
-| **Rendering** | Theme colors not resolved | Medium |
+| ~~**Rendering**~~ | ~~Theme colors not resolved~~ | ~~Medium~~ ✅ |
 | **Rendering** | Text box content lost | Medium |
 | **Rendering** | Tab leader count varies by platform | Low |
 | ~~**Accessibility**~~ | ~~No `lang` attribute on html/body~~ | ~~Medium~~ ✅ |
@@ -28,22 +28,16 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 
 ## Layout Issues
 
-### 1. No Page/Document Setup CSS
+### ~~1. No Page/Document Setup CSS~~ ✅ RESOLVED
 
-**Severity:** Medium
+**Status:** Implemented in December 2025
 
-**Problem:** The converter does not generate `@page` CSS rules for print media or document-level settings.
-
-**LibreOffice generates:**
-```css
-@page { size: 8.5in 11in; margin: 1in }
-```
-
-**Ours:** Nothing.
-
-**Impact:** Print output and PDF generation lack proper page dimensions and margins.
-
-**Solution:** Read page size from `w:sectPr/w:pgSz` and margins from `w:sectPr/w:pgMar`, generate `@page` CSS rule.
+**Solution Implemented:**
+- New `GeneratePageCss` setting enables `@page` CSS rule generation
+- Reads page dimensions from `w:sectPr/w:pgSz` and margins from `w:sectPr/w:pgMar`
+- Generates proper `@page { size: Xin Yin; margin: ... }` CSS rules
+- Supports US Letter, A4, and custom page sizes
+- Disabled by default for backward compatibility
 
 ---
 
@@ -117,16 +111,17 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 
 ## Rendering Issues
 
-### 6. Theme Colors Not Resolved
+### ~~6. Theme Colors Not Resolved~~ ✅ RESOLVED
 
-**Severity:** Medium
-**Location:** Lines 3468-3472
+**Status:** Implemented in December 2025
 
-While `w:themeColor` and `w:themeTint` are copied during border overrides, **theme colors are never resolved to actual RGB values** from the document's theme (`theme1.xml`).
-
-**Impact:** Colors appear wrong when documents use theme colors instead of explicit RGB.
-
-**Solution:** Read theme from `/word/theme/theme1.xml`, resolve `w:themeColor` values like `accent1`, `dark1`, etc. to RGB.
+**Solution Implemented:**
+- New `ResolveThemeColors` setting enables theme color resolution (default: true)
+- Reads color scheme from `theme1.xml` (`a:clrScheme` element)
+- Supports all 12 theme colors: dk1, lt1, dk2, lt2, accent1-6, hlink, folHlink
+- Applies `w:themeTint` (lighten) and `w:themeShade` (darken) modifiers
+- Resolves `w:themeColor` in run colors, paragraph/cell shading, and fills
+- Falls back to explicit color value if theme color not found
 
 ---
 
@@ -356,13 +351,13 @@ Missing: highlight, caps, smallCaps, spacing, position, etc.
 
 1. ~~**Table width calculation** - Fix twips→points conversion accuracy~~ ✅ Done
 2. ~~**Borderless table detection** - For signature blocks and layout tables~~ ✅ Done
-3. **Theme color resolution** - Colors appear wrong with theme colors
+3. ~~**Theme color resolution** - Colors appear wrong with theme colors~~ ✅ Done
 4. ~~**Add `lang` attribute** to `<html>` from document settings~~ ✅ Done
 
 ### Medium Priority (Accessibility/Standards)
 
 5. ~~**Add `lang` attributes** to foreign language spans~~ ✅ Done
-6. **Add `@page` CSS rule** for print media
+6. ~~**Add `@page` CSS rule** for print media~~ ✅ Done
 7. ~~**CJK font-family fallback** chain~~ ✅ Done
 8. ~~**Improve generic font fallback** - unknown fonts need serif/sans-serif fallback~~ ✅ Done
 
