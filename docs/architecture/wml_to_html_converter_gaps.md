@@ -9,7 +9,8 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 | Category | Gap | Severity |
 |----------|-----|----------|
 | **Layout** | No `@page` CSS rule for print/PDF | Medium |
-| **Layout** | Table width calculation inconsistent | Medium |
+| ~~**Layout**~~ | ~~Table width calculation inconsistent~~ | ~~Medium~~ ✅ |
+| ~~**Layout**~~ | ~~Borderless table detection missing~~ | ~~Medium~~ ✅ |
 | **Layout** | Wrapper divs for simple borders | Low |
 | **Layout** | Empty paragraphs verbose | Low |
 | **Rendering** | Theme colors not resolved | Medium |
@@ -18,8 +19,8 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 | ~~**Accessibility**~~ | ~~No `lang` attribute on html/body~~ | ~~Medium~~ ✅ |
 | ~~**Accessibility**~~ | ~~No `lang` attribute on foreign text spans~~ | ~~Medium~~ ✅ |
 | **Accessibility** | No ARIA roles | Low |
-| **Fonts** | Limited font fallback (28 fonts) | Medium |
-| **Fonts** | No CJK font-family fallback chain | Medium |
+| ~~**Fonts**~~ | ~~Limited font fallback (28 fonts)~~ | ~~Medium~~ ✅ |
+| ~~**Fonts**~~ | ~~No CJK font-family fallback chain~~ | ~~Medium~~ ✅ |
 | **Features** | Field code resolution (TOC page numbers) | Medium |
 | **Features** | Pagination is CSS-only | Low |
 
@@ -46,38 +47,27 @@ This document catalogs known gaps, limitations, and areas for improvement in the
 
 ---
 
-### 2. Table Width Calculation Inconsistent
+### ~~2. Table Width Calculation Inconsistent~~ ✅ RESOLVED
 
-**Severity:** Medium
+**Status:** Implemented in December 2025
 
-**Problem:** Table and cell widths may not match the original document layout.
-
-**Comparison:**
-| Aspect | LibreOffice | Ours |
-|--------|-------------|------|
-| Units | Pixels (`width="480"`) | Points (`width: 360pt`) |
-| Column widths | Proportional to content | Fixed from `tcW` |
-
-**Impact:** Tables may appear wider or narrower than intended.
-
-**Solution:** Review twips→points conversion in `ProcessTable` and ensure `tblW` percentage widths are handled correctly.
+**Solution Implemented:**
+- `ProcessTable` now handles DXA widths in addition to percentage widths
+- Tables with `w:tblW[@w:type="dxa"]` render with proper `width: XXpt` CSS
+- Conversion formula: `dxa / 20 = points` (standard twips conversion)
+- Percentage widths continue to work as before
 
 ---
 
-### 3. Borderless Table Detection Missing
+### ~~3. Borderless Table Detection Missing~~ ✅ RESOLVED
 
-**Severity:** Medium
+**Status:** Implemented in December 2025
 
-**Problem:** Tables used for layout (like signature blocks) should be borderless, but borders may still appear.
-
-**LibreOffice:**
-```html
-<td style="border: none; padding: 0in">
-```
-
-**Impact:** Signature blocks and multi-column layouts have unwanted borders.
-
-**Solution:** Detect `w:tblBorders` with `w:val="nil"` or missing borders and render without CSS borders.
+**Solution Implemented:**
+- New `IsTableBorderless()` helper detects tables with nil/none/missing borders
+- Borderless tables get `data-borderless="true"` attribute on the `<table>` element
+- Checks all border sides: top, left, bottom, right, insideH, insideV
+- Enables CSS-based styling: `table[data-borderless="true"] td { border: none !important; }`
 
 ---
 
@@ -219,34 +209,31 @@ The tab span width is correct; only the dot count filling that width varies.
 
 ## Font Issues
 
-### 13. Limited Font Fallback
+### ~~13. Limited Font Fallback~~ ✅ RESOLVED
 
-**Severity:** Medium
-**Location:** Lines 4514-4547
+**Status:** Implemented in December 2025
 
-Only 28 fonts have fallback definitions. Unknown fonts get no CSS `font-family` fallback to generic serif/sans-serif.
-
-**Solution:** Add catch-all fallback: unknown fonts should fall back to `serif` or `sans-serif` based on font characteristics.
+**Solution Implemented:**
+- Unknown fonts now get appropriate generic fallback (serif, sans-serif, or monospace)
+- `FontClassifier` helper uses pattern matching on font names to determine fallback
+- Fonts with "sans" pattern → sans-serif
+- Fonts with "mono", "code", "courier" patterns → monospace
+- Other fonts default to serif
+- Fixed Courier New and Lucida Console to include monospace fallback
 
 ---
 
-### 14. No CJK Font-Family Fallback Chain
+### ~~14. No CJK Font-Family Fallback Chain~~ ✅ RESOLVED
 
-**Severity:** Medium
+**Status:** Implemented in December 2025
 
-**Problem:** CJK (Chinese, Japanese, Korean) text doesn't have proper font fallback.
-
-**LibreOffice:**
-```html
-<font face="Noto Serif CJK SC">株式会社</font>
-```
-
-**Ours:** Generic serif fallback only.
-
-**Solution:** Add CJK font-family fallback chain when CJK language detected:
-```css
-font-family: 'Original Font', 'Noto Serif CJK SC', 'Noto Sans CJK', 'Microsoft YaHei', 'SimSun', 'Malgun Gothic', serif;
-```
+**Solution Implemented:**
+- CJK text now gets language-specific font fallback chains
+- Japanese (ja-JP): `'Noto Serif CJK JP', 'Noto Sans CJK JP', 'Yu Mincho', 'MS Mincho', ...`
+- Simplified Chinese (zh-hans): `'Noto Serif CJK SC', 'Microsoft YaHei', 'SimSun', ...`
+- Traditional Chinese (zh-hant): `'Noto Serif CJK TC', 'Microsoft JhengHei', 'PMingLiU', ...`
+- Korean (ko): `'Noto Serif CJK KR', 'Malgun Gothic', 'Batang', ...`
+- Generic CJK fallback for unknown East Asian languages
 
 ---
 
@@ -367,8 +354,8 @@ Missing: highlight, caps, smallCaps, spacing, position, etc.
 
 ### High Priority (Visual/Layout Impact)
 
-1. **Table width calculation** - Fix twips→points conversion accuracy
-2. **Borderless table detection** - For signature blocks and layout tables
+1. ~~**Table width calculation** - Fix twips→points conversion accuracy~~ ✅ Done
+2. ~~**Borderless table detection** - For signature blocks and layout tables~~ ✅ Done
 3. **Theme color resolution** - Colors appear wrong with theme colors
 4. ~~**Add `lang` attribute** to `<html>` from document settings~~ ✅ Done
 
@@ -376,8 +363,8 @@ Missing: highlight, caps, smallCaps, spacing, position, etc.
 
 5. ~~**Add `lang` attributes** to foreign language spans~~ ✅ Done
 6. **Add `@page` CSS rule** for print media
-7. **CJK font-family fallback** chain
-8. **Improve generic font fallback** - unknown fonts need serif/sans-serif fallback
+7. ~~**CJK font-family fallback** chain~~ ✅ Done
+8. ~~**Improve generic font fallback** - unknown fonts need serif/sans-serif fallback~~ ✅ Done
 
 ### Low Priority (Polish)
 

@@ -4027,16 +4027,29 @@ namespace Docxodus
             var style = new Dictionary<string, string>();
             style.AddIfMissing("border-collapse", "collapse");
             style.AddIfMissing("border", "none");
+
+            // Check if the table is explicitly borderless (all borders nil/none or missing)
+            var isBorderless = IsTableBorderless(element);
+
             var bidiVisual = element.Elements(W.tblPr).Elements(W.bidiVisual).FirstOrDefault();
             var tblW = element.Elements(W.tblPr).Elements(W.tblW).FirstOrDefault();
             if (tblW != null)
             {
                 var type = (string)tblW.Attribute(W.type);
-                if (type != null && type == "pct")
+                if (type == "pct")
                 {
                     var w = (int)tblW.Attribute(W._w);
                     style.AddIfMissing("width", (w / 50) + "%");
                 }
+                else if (type == "dxa")
+                {
+                    var w = (decimal?)tblW.Attribute(W._w);
+                    if (w != null && w > 0)
+                    {
+                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", w / 20m));
+                    }
+                }
+                // type == "auto" or type == "nil" means no fixed width (browser default)
             }
             var tblInd = element.Elements(W.tblPr).Elements(W.tblInd).FirstOrDefault();
             if (tblInd != null)
@@ -4065,6 +4078,7 @@ namespace Docxodus
                 // new XAttribute("cellspacing", 0),
                 // new XAttribute("cellpadding", 0),
                 tableDirection,
+                isBorderless ? new XAttribute("data-borderless", "true") : null,
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
             table.AddAnnotation(style);
             var jc = (string)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
@@ -4089,6 +4103,37 @@ namespace Docxodus
                 jcToUse,
                 table);
             return tableDiv;
+        }
+
+        /// <summary>
+        /// Determines if a table is borderless by checking w:tblBorders.
+        /// A table is considered borderless if tblBorders is missing entirely,
+        /// or if all present border sides have val="nil" or val="none".
+        /// </summary>
+        private static bool IsTableBorderless(XElement tableElement)
+        {
+            var tblBorders = tableElement.Elements(W.tblPr).Elements(W.tblBorders).FirstOrDefault();
+
+            // No tblBorders element means no explicit borders defined
+            if (tblBorders == null)
+                return true;
+
+            // Check each border side - if any has a visible border, the table is not borderless
+            var borderSides = new[] { W.top, W.left, W.bottom, W.right, W.insideH, W.insideV };
+            foreach (var side in borderSides)
+            {
+                var border = tblBorders.Element(side);
+                if (border != null)
+                {
+                    var val = (string)border.Attribute(W.val);
+                    // If border value is something other than nil/none, table has borders
+                    if (!string.IsNullOrEmpty(val) && val != "nil" && val != "none")
+                        return false;
+                }
+            }
+
+            // All borders are nil/none or missing
+            return true;
         }
 
         [SuppressMessage("ReSharper", "PossibleNullReferenceException")]
@@ -4657,7 +4702,7 @@ namespace Docxodus
             // Pt.FontName
             var font = (string) paragraph.Attributes(PtOpenXml.FontName).FirstOrDefault();
             if (font != null)
-                CreateFontCssProperty(font, style);
+                CreateFontCssProperty(font, null, null, style);
 
             DefineFontSize(style, paragraph);
             DefineLineHeight(style, paragraph);
@@ -5143,16 +5188,26 @@ namespace Docxodus
             if (shade != null)
                 CreateColorProperty("background", shade, style);
 
+            // Get language type first (needed for font and font size)
+            var languageType = (string)run.Attribute(PtOpenXml.LanguageType);
+
             // Pt.FontName
             var sym = run.Element(W.sym);
             var font = sym != null
                 ? (string) sym.Attributes(W.font).FirstOrDefault()
                 : (string) run.Attributes(PtOpenXml.FontName).FirstOrDefault();
             if (font != null)
-                CreateFontCssProperty(font, style);
+            {
+                // For CJK text, get the east Asian language code for font fallback chain
+                string langCode = null;
+                if (languageType == "eastAsia")
+                {
+                    langCode = (string)rPr.Elements(W.lang).Attributes(W.eastAsia).FirstOrDefault();
+                }
+                CreateFontCssProperty(font, languageType, langCode, style);
+            }
 
             // W.sz
-            var languageType = (string)run.Attribute(PtOpenXml.LanguageType);
             var sz = GetFontSize(languageType, rPr);
             if (sz != null)
                 style.AddIfMissing("font-size", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", sz/2.0m));
@@ -6736,6 +6791,118 @@ namespace Docxodus
             return "#" + color;
         }
 
+        #region Font Fallback
+
+        private enum GenericFontFamily
+        {
+            Serif,
+            SansSerif,
+            Monospace
+        }
+
+        private static readonly string[] MonospacePatterns =
+        {
+            "mono", "courier", "consolas", "code", "terminal", "fixed",
+            "typewriter", "menlo", "inconsolata", "fira code", "source code",
+            "dejavu mono", "ubuntu mono", "roboto mono", "sf mono", "cascadia"
+        };
+
+        private static readonly string[] SansSerifPatterns =
+        {
+            "sans", "arial", "helvetica", "verdana", "tahoma", "calibri",
+            "segoe", "trebuchet", "gill", "gothic", "grotesk", "grotesque",
+            "futura", "avenir", "open sans", "roboto", "lato", "montserrat",
+            "proxima", "nunito", "poppins", "inter", "source sans", "noto sans"
+        };
+
+        private static readonly string[] SerifPatterns =
+        {
+            "times", "georgia", "palatino", "garamond", "baskerville",
+            "bookman", "cambria", "constantia", "minion", "caslon", "bembo",
+            "bodoni", "century", "cochin", "didot", "antiqua", "roman",
+            "noto serif", "source serif", "pt serif", "libre baskerville"
+        };
+
+        private static GenericFontFamily ClassifyFont(string fontName)
+        {
+            if (string.IsNullOrWhiteSpace(fontName))
+                return GenericFontFamily.Serif;
+
+            var lowerName = fontName.ToLowerInvariant();
+
+            // Check monospace first (most specific patterns)
+            foreach (var pattern in MonospacePatterns)
+            {
+                if (lowerName.Contains(pattern))
+                    return GenericFontFamily.Monospace;
+            }
+
+            // Check sans-serif patterns
+            foreach (var pattern in SansSerifPatterns)
+            {
+                if (lowerName.Contains(pattern))
+                    return GenericFontFamily.SansSerif;
+            }
+
+            // Check serif patterns
+            foreach (var pattern in SerifPatterns)
+            {
+                if (lowerName.Contains(pattern))
+                    return GenericFontFamily.Serif;
+            }
+
+            // Default to serif (most common for body text)
+            return GenericFontFamily.Serif;
+        }
+
+        private static string GetGenericFallback(GenericFontFamily family)
+        {
+            return family switch
+            {
+                GenericFontFamily.Monospace => "monospace",
+                GenericFontFamily.SansSerif => "sans-serif",
+                _ => "serif"
+            };
+        }
+
+        // CJK font fallback chains by language
+        private static readonly Dictionary<string, string> CjkFontChains = new Dictionary<string, string>()
+        {
+            // Japanese - prioritize fonts with Japanese glyphs
+            { "ja", "'Noto Serif CJK JP', 'Noto Sans CJK JP', 'Yu Mincho', 'Yu Gothic', 'Hiragino Mincho ProN', 'Hiragino Sans', 'MS Mincho', 'MS Gothic', 'Meiryo'" },
+
+            // Simplified Chinese
+            { "zh-hans", "'Noto Serif CJK SC', 'Noto Sans CJK SC', 'Microsoft YaHei', 'SimSun', 'SimHei', 'PingFang SC', 'Hiragino Sans GB'" },
+
+            // Traditional Chinese
+            { "zh-hant", "'Noto Serif CJK TC', 'Noto Sans CJK TC', 'Microsoft JhengHei', 'PMingLiU', 'PingFang TC', 'Heiti TC'" },
+
+            // Korean
+            { "ko", "'Noto Serif CJK KR', 'Noto Sans CJK KR', 'Malgun Gothic', 'Batang', 'Gulim', 'AppleGothic', 'Apple SD Gothic Neo'" },
+
+            // Generic CJK fallback (when specific language not known)
+            { "cjk", "'Noto Serif CJK SC', 'Noto Sans CJK SC', 'Noto Sans CJK JP', 'Noto Sans CJK KR', 'Microsoft YaHei', 'SimSun', 'MS Gothic', 'Malgun Gothic'" }
+        };
+
+        private static string NormalizeCjkLanguage(string langCode)
+        {
+            if (string.IsNullOrEmpty(langCode))
+                return null;
+
+            var lower = langCode.ToLowerInvariant();
+
+            if (lower.StartsWith("ja"))
+                return "ja";
+            if (lower == "zh-hans" || lower.StartsWith("zh-cn") || lower == "zh-sg")
+                return "zh-hans";
+            if (lower == "zh-hant" || lower.StartsWith("zh-tw") || lower.StartsWith("zh-hk") || lower.StartsWith("zh-mo"))
+                return "zh-hant";
+            if (lower.StartsWith("ko"))
+                return "ko";
+
+            return null;
+        }
+
         private static readonly Dictionary<string, string> FontFallback = new Dictionary<string, string>()
         {
             { "Arial", @"'{0}', 'sans-serif'" },
@@ -6767,19 +6934,57 @@ namespace Docxodus
             { "Palatino Linotype", @"'{0}', 'serif'" },
             { "Times New Roman", @"'{0}', 'serif'" },
             { "Wide Latin", @"'{0}', 'serif'" },
-            { "Courier New", @"'{0}'" },
-            { "Lucida Console", @"'{0}'" },
+            { "Courier New", @"'{0}', 'monospace'" },
+            { "Lucida Console", @"'{0}', 'monospace'" },
         };
 
-        private static void CreateFontCssProperty(string font, Dictionary<string, string> style)
+        private static void CreateFontCssProperty(string font, string languageType, string langCode, Dictionary<string, string> style)
         {
-            if (FontFallback.ContainsKey(font))
-            {
-                style.AddIfMissing("font-family", string.Format(FontFallback[font], font));
+            if (string.IsNullOrEmpty(font))
                 return;
+
+            var fontParts = new List<string> { $"'{font}'" };
+
+            // Add CJK fallback chain for East Asian content
+            if (languageType == "eastAsia")
+            {
+                var normalizedLang = NormalizeCjkLanguage(langCode);
+                var cjkKey = normalizedLang ?? "cjk";
+
+                if (CjkFontChains.TryGetValue(cjkKey, out var cjkChain))
+                {
+                    fontParts.Add(cjkChain);
+                }
             }
-            style.AddIfMissing("font-family", font);
+
+            // Add generic fallback based on known fonts or classification
+            string genericFallback;
+            if (FontFallback.TryGetValue(font, out var template))
+            {
+                // Extract fallback from existing template (e.g., "'sans-serif'" from "'{0}', 'sans-serif'")
+                var lastComma = template.LastIndexOf(',');
+                if (lastComma > 0)
+                {
+                    genericFallback = template.Substring(lastComma + 1).Trim().Trim('\'');
+                }
+                else
+                {
+                    genericFallback = "serif";
+                }
+            }
+            else
+            {
+                // Classify unknown font
+                var classification = ClassifyFont(font);
+                genericFallback = GetGenericFallback(classification);
+            }
+
+            fontParts.Add(genericFallback);
+
+            style.AddIfMissing("font-family", string.Join(", ", fontParts));
         }
+
+        #endregion
 
         private static bool GetBoolProp(XElement runProps, XName xName)
         {
