@@ -3059,6 +3059,453 @@ namespace OxPt
         }
 
         #endregion
+
+        #region Theme Color Tests
+
+        [Fact]
+        public void HC049_ThemeColor_ResolvesAccentColor()
+        {
+            // Test that theme colors like accent1 are resolved to actual hex values
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add theme part with color scheme
+                    var themePart = mainPart.AddNewPart<ThemePart>();
+                    themePart.Theme = new DocumentFormat.OpenXml.Drawing.Theme(
+                        new DocumentFormat.OpenXml.Drawing.ThemeElements(
+                            new DocumentFormat.OpenXml.Drawing.ColorScheme(
+                                new DocumentFormat.OpenXml.Drawing.Dark1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Light1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFFFFF" }),
+                                new DocumentFormat.OpenXml.Drawing.Dark2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "1F4E78" }),
+                                new DocumentFormat.OpenXml.Drawing.Light2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "EEECE1" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "4472C4" }),  // Blue
+                                new DocumentFormat.OpenXml.Drawing.Accent2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "ED7D31" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent3Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "A5A5A5" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent4Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFC000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent5Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "5B9BD5" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent6Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "70AD47" }),
+                                new DocumentFormat.OpenXml.Drawing.Hyperlink(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "0563C1" }),
+                                new DocumentFormat.OpenXml.Drawing.FollowedHyperlinkColor(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "954F72" }))
+                            { Name = "Office" },
+                            new DocumentFormat.OpenXml.Drawing.FontScheme(
+                                new DocumentFormat.OpenXml.Drawing.MajorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri Light" }),
+                                new DocumentFormat.OpenXml.Drawing.MinorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri" }))
+                            { Name = "Office" },
+                            new DocumentFormat.OpenXml.Drawing.FormatScheme(
+                                new DocumentFormat.OpenXml.Drawing.FillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()),
+                                new DocumentFormat.OpenXml.Drawing.LineStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.Outline()),
+                                new DocumentFormat.OpenXml.Drawing.EffectStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.EffectStyle()),
+                                new DocumentFormat.OpenXml.Drawing.BackgroundFillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()))
+                            { Name = "Office" }))
+                    { Name = "Office Theme" };
+                    themePart.Theme.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Calibri" },
+                                    new FontSize { Val = "22" }))));
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a run with theme color (accent1 = #4472C4)
+                    var run = new Run(
+                        new RunProperties(
+                            new Color { Val = "4472C4", ThemeColor = ThemeColorValues.Accent1 }),
+                        new Text("Theme colored text"));
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(run)));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { ResolveThemeColors = true };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain the resolved color #4472C4
+                    Assert.Contains("#4472C4", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC050_ThemeColor_AppliesTintModifier()
+        {
+            // Test that tint modifier lightens the theme color
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add theme part with accent1 = pure blue (0000FF)
+                    var themePart = mainPart.AddNewPart<ThemePart>();
+                    themePart.Theme = new DocumentFormat.OpenXml.Drawing.Theme(
+                        new DocumentFormat.OpenXml.Drawing.ThemeElements(
+                            new DocumentFormat.OpenXml.Drawing.ColorScheme(
+                                new DocumentFormat.OpenXml.Drawing.Dark1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Light1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFFFFF" }),
+                                new DocumentFormat.OpenXml.Drawing.Dark2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Light2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFFFFF" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "0000FF" }),  // Pure blue
+                                new DocumentFormat.OpenXml.Drawing.Accent2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent3Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent4Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent5Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent6Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Hyperlink(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.FollowedHyperlinkColor(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }))
+                            { Name = "Test" },
+                            new DocumentFormat.OpenXml.Drawing.FontScheme(
+                                new DocumentFormat.OpenXml.Drawing.MajorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri" }),
+                                new DocumentFormat.OpenXml.Drawing.MinorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri" }))
+                            { Name = "Test" },
+                            new DocumentFormat.OpenXml.Drawing.FormatScheme(
+                                new DocumentFormat.OpenXml.Drawing.FillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()),
+                                new DocumentFormat.OpenXml.Drawing.LineStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.Outline()),
+                                new DocumentFormat.OpenXml.Drawing.EffectStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.EffectStyle()),
+                                new DocumentFormat.OpenXml.Drawing.BackgroundFillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()))
+                            { Name = "Test" }))
+                    { Name = "Test Theme" };
+                    themePart.Theme.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a run with theme color + 50% tint (7F = 127, so tint factor = 127/255 ≈ 0.5)
+                    // Blue with 50% tint toward white should be around #8080FF
+                    var run = new Run(
+                        new RunProperties(
+                            new Color { Val = "0000FF", ThemeColor = ThemeColorValues.Accent1, ThemeTint = "7F" }),
+                        new Text("Tinted theme color"));
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(run)));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { ResolveThemeColors = true };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // The color should be lightened - blue component stays at FF, others increase
+                    // Should NOT be the original blue #0000FF
+                    Assert.DoesNotContain("#0000FF", htmlString);
+                    // Should contain a lightened color (somewhere between blue and white)
+                    Assert.Contains("color:", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC051_ThemeColor_DisabledWhenSettingFalse()
+        {
+            // Test that theme colors are not resolved when ResolveThemeColors = false
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add theme part
+                    var themePart = mainPart.AddNewPart<ThemePart>();
+                    themePart.Theme = new DocumentFormat.OpenXml.Drawing.Theme(
+                        new DocumentFormat.OpenXml.Drawing.ThemeElements(
+                            new DocumentFormat.OpenXml.Drawing.ColorScheme(
+                                new DocumentFormat.OpenXml.Drawing.Dark1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Light1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFFFFF" }),
+                                new DocumentFormat.OpenXml.Drawing.Dark2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Light2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "FFFFFF" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent1Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "4472C4" }),  // Theme blue
+                                new DocumentFormat.OpenXml.Drawing.Accent2Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent3Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent4Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent5Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Accent6Color(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.Hyperlink(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }),
+                                new DocumentFormat.OpenXml.Drawing.FollowedHyperlinkColor(
+                                    new DocumentFormat.OpenXml.Drawing.RgbColorModelHex { Val = "000000" }))
+                            { Name = "Test" },
+                            new DocumentFormat.OpenXml.Drawing.FontScheme(
+                                new DocumentFormat.OpenXml.Drawing.MajorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri" }),
+                                new DocumentFormat.OpenXml.Drawing.MinorFont(
+                                    new DocumentFormat.OpenXml.Drawing.LatinFont { Typeface = "Calibri" }))
+                            { Name = "Test" },
+                            new DocumentFormat.OpenXml.Drawing.FormatScheme(
+                                new DocumentFormat.OpenXml.Drawing.FillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()),
+                                new DocumentFormat.OpenXml.Drawing.LineStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.Outline()),
+                                new DocumentFormat.OpenXml.Drawing.EffectStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.EffectStyle()),
+                                new DocumentFormat.OpenXml.Drawing.BackgroundFillStyleList(
+                                    new DocumentFormat.OpenXml.Drawing.SolidFill()))
+                            { Name = "Test" }))
+                    { Name = "Test Theme" };
+                    themePart.Theme.Save();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create a run with theme color AND explicit fallback val (FF0000 = red)
+                    var run = new Run(
+                        new RunProperties(
+                            new Color { Val = "FF0000", ThemeColor = ThemeColorValues.Accent1 }),
+                        new Text("Explicit color fallback"));
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(run)));
+                    mainPart.Document.Save();
+
+                    // Disable theme color resolution
+                    var settings = new WmlToHtmlConverterSettings { ResolveThemeColors = false };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should use the explicit val (red), not the theme color (blue)
+                    Assert.Contains("#FF0000", htmlString);
+                }
+            }
+        }
+
+        #endregion
+
+        #region Page CSS Tests
+
+        [Fact]
+        public void HC052_PageCss_GeneratesAtPageRule()
+        {
+            // Test that @page CSS rule is generated when GeneratePageCss = true
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with US Letter page size (12240 x 15840 twips = 8.5 x 11 inches)
+                    // and 1 inch margins (1440 twips each)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(new Run(new Text("Test content"))),
+                            new SectionProperties(
+                                new PageSize { Width = 12240, Height = 15840 },
+                                new PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { GeneratePageCss = true };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain @page rule
+                    Assert.Contains("@page", htmlString);
+                    // Should contain size declaration (8.5 x 11 inches)
+                    Assert.Contains("size:", htmlString);
+                    Assert.Contains("8.50in", htmlString);
+                    Assert.Contains("11.00in", htmlString);
+                    // Should contain margin declaration (1 inch each)
+                    Assert.Contains("margin:", htmlString);
+                    Assert.Contains("1.00in", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC053_PageCss_A4PageSize()
+        {
+            // Test that A4 page size generates correct dimensions
+            // A4 = 210mm x 297mm = 595.3pt x 841.9pt = 11906 x 16838 twips
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with A4 page size (11906 x 16838 twips)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(new Run(new Text("A4 content"))),
+                            new SectionProperties(
+                                new PageSize { Width = 11906, Height = 16838 },
+                                new PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { GeneratePageCss = true };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain @page rule with A4 dimensions
+                    Assert.Contains("@page", htmlString);
+                    // A4 width ≈ 8.27in, height ≈ 11.69in
+                    Assert.Contains("8.27in", htmlString);
+                    Assert.Contains("11.69in", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC054_PageCss_DisabledByDefault()
+        {
+            // Test that @page CSS is NOT generated by default
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(new Run(new Text("Default settings"))),
+                            new SectionProperties(
+                                new PageSize { Width = 12240, Height = 15840 })));
+                    mainPart.Document.Save();
+
+                    // Use default settings (GeneratePageCss = false)
+                    var settings = new WmlToHtmlConverterSettings();
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should NOT contain @page rule
+                    Assert.DoesNotContain("@page", htmlString);
+                }
+            }
+        }
+
+        [Fact]
+        public void HC055_PageCss_CustomMargins()
+        {
+            // Test that custom margins are correctly converted
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles();
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Create document with custom margins:
+                    // Top: 0.5in (720 twips), Right: 0.75in (1080 twips)
+                    // Bottom: 1.5in (2160 twips), Left: 1.25in (1800 twips)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(new Run(new Text("Custom margins"))),
+                            new SectionProperties(
+                                new PageSize { Width = 12240, Height = 15840 },
+                                new PageMargin { Top = 720, Right = 1080, Bottom = 2160, Left = 1800 })));
+                    mainPart.Document.Save();
+
+                    var settings = new WmlToHtmlConverterSettings { GeneratePageCss = true };
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain @page rule with custom margins
+                    Assert.Contains("@page", htmlString);
+                    Assert.Contains("0.50in", htmlString);  // Top
+                    Assert.Contains("0.75in", htmlString);  // Right
+                    Assert.Contains("1.50in", htmlString);  // Bottom
+                    Assert.Contains("1.25in", htmlString);  // Left
+                }
+            }
+        }
+
+        #endregion
     }
 }
 

@@ -252,6 +252,19 @@ namespace Docxodus
         /// </summary>
         public string DocumentLanguage;
 
+        /// <summary>
+        /// If true, resolve theme colors from document theme to actual color values.
+        /// Theme colors like "accent1", "dk1" will be converted to their RGB equivalents.
+        /// Tint and shade modifiers are also applied. Default: true
+        /// </summary>
+        public bool ResolveThemeColors;
+
+        /// <summary>
+        /// If true, generate @page CSS rule with document page dimensions and margins.
+        /// Useful for print stylesheets and PDF generation. Default: false
+        /// </summary>
+        public bool GeneratePageCss;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -284,6 +297,8 @@ namespace Docxodus
             UnsupportedContentCssClassPrefix = "unsupported-";
             IncludeUnsupportedContentMetadata = true;
             DocumentLanguage = null;
+            ResolveThemeColors = true;
+            GeneratePageCss = false;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -320,6 +335,8 @@ namespace Docxodus
             UnsupportedContentCssClassPrefix = htmlConverterSettings.UnsupportedContentCssClassPrefix;
             IncludeUnsupportedContentMetadata = htmlConverterSettings.IncludeUnsupportedContentMetadata;
             DocumentLanguage = htmlConverterSettings.DocumentLanguage;
+            ResolveThemeColors = htmlConverterSettings.ResolveThemeColors;
+            GeneratePageCss = htmlConverterSettings.GeneratePageCss;
         }
     }
 
@@ -471,6 +488,19 @@ namespace Docxodus
         /// </summary>
         public string DocumentLanguage;
 
+        /// <summary>
+        /// If true, resolve theme colors from document theme to actual color values.
+        /// Theme colors like "accent1", "dk1" will be converted to their RGB equivalents.
+        /// Tint and shade modifiers are also applied. Default: true
+        /// </summary>
+        public bool ResolveThemeColors;
+
+        /// <summary>
+        /// If true, generate @page CSS rule with document page dimensions and margins.
+        /// Useful for print stylesheets and PDF generation. Default: false
+        /// </summary>
+        public bool GeneratePageCss;
+
         public HtmlConverterSettings()
         {
             PageTitle = "";
@@ -503,6 +533,8 @@ namespace Docxodus
             UnsupportedContentCssClassPrefix = "unsupported-";
             IncludeUnsupportedContentMetadata = true;
             DocumentLanguage = null;
+            ResolveThemeColors = true;
+            GeneratePageCss = false;
         }
     }
 
@@ -819,10 +851,17 @@ namespace Docxodus
                 : GetDocumentDefaultLanguage(wordDoc);
             rootElement.AddAnnotation(new DocumentLanguageAnnotation { DefaultLanguage = docLang });
 
+            // Load theme color scheme if resolution is enabled
+            if (htmlConverterSettings.ResolveThemeColors)
+            {
+                var themeColorScheme = LoadThemeColorScheme(wordDoc);
+                rootElement.AddAnnotation(themeColorScheme);
+            }
+
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
                 rootElement, false, 0m);
 
-            ReifyStylesAndClasses(htmlConverterSettings, xhtml);
+            ReifyStylesAndClasses(htmlConverterSettings, xhtml, wordDoc);
 
             // Note: the xhtml returned by ConvertToHtmlTransform contains objects of type
             // XEntity.  PtOpenXmlUtil.cs define the XEntity class.  See
@@ -1280,7 +1319,7 @@ namespace Docxodus
             }
         }
 
-        private static void ReifyStylesAndClasses(WmlToHtmlConverterSettings htmlConverterSettings, XElement xhtml)
+        private static void ReifyStylesAndClasses(WmlToHtmlConverterSettings htmlConverterSettings, XElement xhtml, WordprocessingDocument wordDoc)
         {
             if (htmlConverterSettings.FabricateCssClasses)
             {
@@ -1349,9 +1388,10 @@ namespace Docxodus
                 var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
                 var commentCss = GenerateCommentCss(htmlConverterSettings);
                 var paginationCss = GeneratePaginationCss(htmlConverterSettings);
+                var pageCss = GeneratePageCss(htmlConverterSettings, wordDoc);
                 var annotationCss = GenerateAnnotationCss(htmlConverterSettings);
                 var unsupportedCss = GenerateUnsupportedContentCss(htmlConverterSettings);
-                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss;
+                var styleValue = htmlConverterSettings.GeneralCss + sb + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + pageCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss;
 
                 SetStyleElementValue(xhtml, styleValue);
             }
@@ -1364,9 +1404,10 @@ namespace Docxodus
                 var headerFooterCss = GenerateHeaderFooterCss(htmlConverterSettings);
                 var commentCss = GenerateCommentCss(htmlConverterSettings);
                 var paginationCss = GeneratePaginationCss(htmlConverterSettings);
+                var pageCss = GeneratePageCss(htmlConverterSettings, wordDoc);
                 var annotationCss = GenerateAnnotationCss(htmlConverterSettings);
                 var unsupportedCss = GenerateUnsupportedContentCss(htmlConverterSettings);
-                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss);
+                SetStyleElementValue(xhtml, htmlConverterSettings.GeneralCss + revisionCss + footnoteCss + headerFooterCss + commentCss + paginationCss + pageCss + annotationCss + unsupportedCss + htmlConverterSettings.AdditionalCss);
 
                 foreach (var d in xhtml.DescendantsAndSelf())
                 {
@@ -1929,6 +1970,52 @@ namespace Docxodus
             // Column break marker
             sb.AppendLine($".{prefix}column-break {{");
             sb.AppendLine("    display: none;");
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Generates @page CSS rule with document page dimensions and margins.
+        /// Uses the first section's settings for page size and margins.
+        /// </summary>
+        private static string GeneratePageCss(WmlToHtmlConverterSettings settings, WordprocessingDocument wordDoc)
+        {
+            if (!settings.GeneratePageCss)
+                return string.Empty;
+
+            // Get the document body
+            var body = wordDoc.MainDocumentPart?.GetXDocument()?.Root?.Element(W.body);
+            if (body == null)
+                return string.Empty;
+
+            // Find section properties (body-level sectPr or last paragraph's sectPr)
+            var sectPr = body.Element(W.sectPr) ??
+                         body.Elements(W.p).LastOrDefault()?.Element(W.pPr)?.Element(W.sectPr);
+
+            // Extract page dimensions
+            var dims = ExtractPageDimensions(sectPr);
+
+            var sb = new StringBuilder();
+            sb.AppendLine();
+            sb.AppendLine("/* Page CSS for print */");
+            sb.AppendLine("@page {");
+
+            // Convert points to inches for CSS (72pt = 1in)
+            double widthIn = dims.PageWidthPt / 72.0;
+            double heightIn = dims.PageHeightPt / 72.0;
+            sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
+                "    size: {0:0.00}in {1:0.00}in;", widthIn, heightIn));
+
+            // Generate margin (top right bottom left)
+            double marginTopIn = dims.MarginTopPt / 72.0;
+            double marginRightIn = dims.MarginRightPt / 72.0;
+            double marginBottomIn = dims.MarginBottomPt / 72.0;
+            double marginLeftIn = dims.MarginLeftPt / 72.0;
+            sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
+                "    margin: {0:0.00}in {1:0.00}in {2:0.00}in {3:0.00}in;",
+                marginTopIn, marginRightIn, marginBottomIn, marginLeftIn));
+
             sb.AppendLine("}");
 
             return sb.ToString();
@@ -4206,7 +4293,7 @@ namespace Docxodus
                 GenerateBorderStyle(tcBorders, W.bottom, style, BorderType.Cell);
                 GenerateBorderStyle(tcBorders, W.left, style, BorderType.Cell);
 
-                CreateStyleFromShd(style, tcPr.Element(W.shd));
+                CreateStyleFromShd(style, tcPr.Element(W.shd), element);
 
                 var gridSpan = tcPr.Elements(W.gridSpan).Attributes(W.val).Select(a => (int?) a).FirstOrDefault();
                 if (gridSpan != null)
@@ -4697,7 +4784,7 @@ namespace Docxodus
             // - thaiDistribute
 
             CreateStyleFromJc(style, pPr.Element(W.jc), isBidi);
-            CreateStyleFromShd(style, pPr.Element(W.shd));
+            CreateStyleFromShd(style, pPr.Element(W.shd), paragraph);
 
             // Pt.FontName
             var font = (string) paragraph.Attributes(PtOpenXml.FontName).FirstOrDefault();
@@ -5173,20 +5260,30 @@ namespace Docxodus
                 style.AddIfMissing("padding", "0");
             }
 
-            // W.color
-            var color = (string) rPr.Elements(W.color).Attributes(W.val).FirstOrDefault();
-            if (color != null)
-                CreateColorProperty("color", color, style);
+            // W.color - with theme color support
+            var colorElement = rPr.Element(W.color);
+            if (colorElement != null)
+            {
+                var themeScheme = GetThemeColorScheme(run);
+                var color = ResolveThemeColor(colorElement, W.val, W.themeColor, W.themeTint, W.themeShade, themeScheme);
+                if (color != null)
+                    CreateColorProperty("color", color, style);
+            }
 
             // W.highlight
             var highlight = (string) rPr.Elements(W.highlight).Attributes(W.val).FirstOrDefault();
             if (highlight != null)
                 CreateColorProperty("background", highlight, style);
 
-            // W.shd
-            var shade = (string) rPr.Elements(W.shd).Attributes(W.fill).FirstOrDefault();
-            if (shade != null)
-                CreateColorProperty("background", shade, style);
+            // W.shd - with theme fill support
+            var shdElement = rPr.Element(W.shd);
+            if (shdElement != null)
+            {
+                var themeScheme = GetThemeColorScheme(run);
+                var shade = ResolveThemeColor(shdElement, W.fill, W.themeFill, W.themeFillTint, W.themeFillShade, themeScheme);
+                if (shade != null)
+                    CreateColorProperty("background", shade, style);
+            }
 
             // Get language type first (needed for font and font size)
             var languageType = (string)run.Attribute(PtOpenXml.LanguageType);
@@ -5351,6 +5448,190 @@ namespace Docxodus
         private class DocumentLanguageAnnotation
         {
             public string DefaultLanguage { get; set; }
+        }
+
+        /// <summary>
+        /// Cache for resolved theme color scheme from the document's theme.
+        /// Maps theme color names (e.g., "accent1", "dk1") to hex color values.
+        /// </summary>
+        private class ThemeColorScheme
+        {
+            public Dictionary<string, string> Colors { get; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Loads the theme color scheme from the document's ThemePart.
+        /// </summary>
+        private static ThemeColorScheme LoadThemeColorScheme(WordprocessingDocument wordDoc)
+        {
+            var cache = new ThemeColorScheme();
+
+            var themePart = wordDoc.MainDocumentPart?.ThemePart;
+            if (themePart == null)
+                return cache;
+
+            var themeXDoc = themePart.GetXDocument();
+            var clrScheme = themeXDoc.Root?.Element(A.themeElements)?.Element(A.clrScheme);
+            if (clrScheme == null)
+                return cache;
+
+            // Theme color element names
+            var colorNames = new[] { "dk1", "lt1", "dk2", "lt2",
+                "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+                "hlink", "folHlink" };
+
+            foreach (var colorName in colorNames)
+            {
+                var colorElement = clrScheme.Element(A.a + colorName);
+                if (colorElement == null) continue;
+
+                // Try srgbClr first (explicit hex color)
+                var srgbClr = colorElement.Element(A.srgbClr);
+                if (srgbClr != null)
+                {
+                    var val = (string)srgbClr.Attribute("val");
+                    if (!string.IsNullOrEmpty(val))
+                    {
+                        cache.Colors[colorName] = val;
+                        continue;
+                    }
+                }
+
+                // Try sysClr (system color reference)
+                var sysClr = colorElement.Element(A.sysClr);
+                if (sysClr != null)
+                {
+                    // Use lastClr if available (the saved color value)
+                    var lastClr = (string)sysClr.Attribute("lastClr");
+                    if (!string.IsNullOrEmpty(lastClr))
+                    {
+                        cache.Colors[colorName] = lastClr;
+                        continue;
+                    }
+
+                    // Fall back to system color name mapping
+                    var sysColorName = (string)sysClr.Attribute("val");
+                    if (!string.IsNullOrEmpty(sysColorName))
+                    {
+                        cache.Colors[colorName] = MapSystemColor(sysColorName);
+                    }
+                }
+            }
+
+            return cache;
+        }
+
+        /// <summary>
+        /// Maps Windows system color names to hex values.
+        /// </summary>
+        private static string MapSystemColor(string sysColorName)
+        {
+            return sysColorName.ToLowerInvariant() switch
+            {
+                "windowtext" => "000000",
+                "window" => "FFFFFF",
+                "highlight" => "0078D7",
+                "highlighttext" => "FFFFFF",
+                "graytext" => "6D6D6D",
+                "btnface" => "F0F0F0",
+                "btntext" => "000000",
+                "captiontext" => "000000",
+                "inactivecaptiontext" => "000000",
+                _ => "000000" // Default to black
+            };
+        }
+
+        /// <summary>
+        /// Applies tint or shade modifier to a color.
+        /// Tint lightens toward white, shade darkens toward black.
+        /// Values are hex strings (00-FF) where FF = no change, 00 = full effect.
+        /// </summary>
+        private static string ApplyTintShade(string hexColor, string tintHex, string shadeHex)
+        {
+            if (string.IsNullOrEmpty(hexColor) || hexColor.Length != 6)
+                return hexColor;
+
+            if (!int.TryParse(hexColor.Substring(0, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int r) ||
+                !int.TryParse(hexColor.Substring(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int g) ||
+                !int.TryParse(hexColor.Substring(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int b))
+                return hexColor;
+
+            // Apply tint (lighten toward white)
+            // OOXML tint formula: newVal = val + (255 - val) * (1 - tint/255)
+            // When tint=FF (255), no change. When tint=00 (0), full white.
+            if (!string.IsNullOrEmpty(tintHex) &&
+                int.TryParse(tintHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int tint))
+            {
+                double tintFactor = tint / 255.0;
+                r = (int)(r + (255 - r) * (1 - tintFactor));
+                g = (int)(g + (255 - g) * (1 - tintFactor));
+                b = (int)(b + (255 - b) * (1 - tintFactor));
+            }
+
+            // Apply shade (darken toward black)
+            // OOXML shade formula: newVal = val * (shade/255)
+            // When shade=FF (255), no change. When shade=00 (0), full black.
+            if (!string.IsNullOrEmpty(shadeHex) &&
+                int.TryParse(shadeHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int shade))
+            {
+                double shadeFactor = shade / 255.0;
+                r = (int)(r * shadeFactor);
+                g = (int)(g * shadeFactor);
+                b = (int)(b * shadeFactor);
+            }
+
+            // Clamp values
+            r = Math.Max(0, Math.Min(255, r));
+            g = Math.Max(0, Math.Min(255, g));
+            b = Math.Max(0, Math.Min(255, b));
+
+            return $"{r:X2}{g:X2}{b:X2}";
+        }
+
+        /// <summary>
+        /// Resolves a theme color to its hex value, applying tint/shade modifiers.
+        /// Falls back to explicit color if theme color is not found.
+        /// </summary>
+        private static string ResolveThemeColor(
+            XElement element,
+            XName colorAttr,
+            XName themeColorAttr,
+            XName themeTintAttr,
+            XName themeShadeAttr,
+            ThemeColorScheme scheme)
+        {
+            if (element == null)
+                return null;
+
+            // Get explicit color value as fallback
+            var explicitColor = (string)element.Attribute(colorAttr);
+
+            // If no theme scheme or no themeColor attribute, return explicit color
+            if (scheme == null || scheme.Colors.Count == 0)
+                return explicitColor;
+
+            var themeColorName = (string)element.Attribute(themeColorAttr);
+            if (string.IsNullOrEmpty(themeColorName))
+                return explicitColor;
+
+            // Look up theme color
+            if (!scheme.Colors.TryGetValue(themeColorName, out string themeColor))
+                return explicitColor; // Fall back to explicit if theme color not found
+
+            // Apply tint/shade modifiers
+            var tint = (string)element.Attribute(themeTintAttr);
+            var shade = (string)element.Attribute(themeShadeAttr);
+
+            return ApplyTintShade(themeColor, tint, shade);
+        }
+
+        /// <summary>
+        /// Gets the ThemeColorScheme annotation from the root element.
+        /// </summary>
+        private static ThemeColorScheme GetThemeColorScheme(XElement element)
+        {
+            var root = element.AncestorsAndSelf().Last();
+            return root.Annotation<ThemeColorScheme>();
         }
 
         /// <summary>
@@ -6713,13 +6994,17 @@ namespace Docxodus
             ShadeCache.Clear();
         }
 
-        private static void CreateStyleFromShd(Dictionary<string, string> style, XElement shd)
+        private static void CreateStyleFromShd(Dictionary<string, string> style, XElement shd, XElement contextElement)
         {
             if (shd == null)
                 return;
             var shadeType = (string)shd.Attribute(W.val);
-            var color = (string)shd.Attribute(W.color);
-            var fill = (string)shd.Attribute(W.fill);
+
+            // Resolve color and fill with theme support
+            var themeScheme = contextElement != null ? GetThemeColorScheme(contextElement) : null;
+            var color = ResolveThemeColor(shd, W.color, W.themeColor, W.themeTint, W.themeShade, themeScheme);
+            var fill = ResolveThemeColor(shd, W.fill, W.themeFill, W.themeFillTint, W.themeFillShade, themeScheme);
+
             if (ShadeMapper.ContainsKey(shadeType))
             {
                 color = ShadeMapper[shadeType](color, fill);

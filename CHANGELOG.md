@@ -56,6 +56,21 @@ All notable changes to this project will be documented in this file.
     - Traditional Chinese (zh-hant): `'Noto Serif CJK TC', 'Microsoft JhengHei', 'PMingLiU', ...`
     - Korean (ko): `'Noto Serif CJK KR', 'Malgun Gothic', 'Batang', ...`
   - Addresses converter gaps #13 (Limited Font Fallback) and #14 (No CJK Font-Family Fallback Chain)
+- **Theme Color Resolution** - Document theme colors are now resolved to actual RGB values
+  - New `ResolveThemeColors` setting (default: true) enables theme color resolution
+  - Reads color scheme from `theme1.xml` (`a:clrScheme` element)
+  - Supports all 12 theme colors: dk1, lt1, dk2, lt2, accent1-6, hlink, folHlink
+  - Applies `w:themeTint` (lighten toward white) and `w:themeShade` (darken toward black) modifiers
+  - Resolves `w:themeColor` in run colors, paragraph shading, cell shading, and fills
+  - Falls back to explicit color value if theme color not found
+  - Addresses converter gap #6 (Theme Colors Not Resolved)
+- **@page CSS Rule** - Optional CSS `@page` rule generation for print stylesheets
+  - New `GeneratePageCss` setting (default: false) enables `@page` rule generation
+  - Reads page dimensions from `w:sectPr/w:pgSz` and margins from `w:sectPr/w:pgMar`
+  - Generates CSS `@page { size: Xin Yin; margin: ... }` rules
+  - Supports US Letter, A4, and custom page sizes with proper inch conversions
+  - Useful for print stylesheets and PDF generation
+  - Addresses converter gap #1 (No Page/Document Setup CSS)
 - **Unsupported Content Placeholders** - Visual indicators for content that cannot be fully converted to HTML
   - New `RenderUnsupportedContentPlaceholders` setting (default: false for backward compatibility)
   - Supports these unsupported content types:
