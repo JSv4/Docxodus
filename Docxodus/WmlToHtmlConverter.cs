@@ -2865,20 +2865,14 @@ namespace Docxodus
             if (footnoteId == null)
                 return null;
 
-            var style = new Dictionary<string, string>
-            {
-                { "vertical-align", "super" },
-                { "font-size", "smaller" }
-            };
-
+            // Put <sup> inside anchor like LibreOffice does for clean inline rendering
             var anchor = new XElement(Xhtml.a,
                 new XAttribute("href", $"#footnote-{footnoteId}"),
                 new XAttribute("id", $"footnote-ref-{footnoteId}"),
                 new XAttribute("class", "footnote-ref"),
                 new XAttribute("data-footnote-id", footnoteId), // For pagination engine to track footnotes per page
-                new XText($"[{footnoteId}]"));
+                new XElement(Xhtml.sup, footnoteId));
 
-            anchor.AddAnnotation(style);
             return anchor;
         }
 
@@ -2894,19 +2888,13 @@ namespace Docxodus
             if (endnoteId == null)
                 return null;
 
-            var style = new Dictionary<string, string>
-            {
-                { "vertical-align", "super" },
-                { "font-size", "smaller" }
-            };
-
+            // Put <sup> inside anchor like LibreOffice does for clean inline rendering
             var anchor = new XElement(Xhtml.a,
                 new XAttribute("href", $"#endnote-{endnoteId}"),
                 new XAttribute("id", $"endnote-ref-{endnoteId}"),
                 new XAttribute("class", "endnote-ref"),
-                new XText($"[{endnoteId}]"));
+                new XElement(Xhtml.sup, endnoteId));
 
-            anchor.AddAnnotation(style);
             return anchor;
         }
 
@@ -2980,15 +2968,34 @@ namespace Docxodus
                 .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
                 .ToList();
 
+            // Create the backref anchor
+            var backref = new XElement(Xhtml.a,
+                new XAttribute("href", $"#{noteType}-ref-{noteId}"),
+                new XAttribute("class", $"{noteType}-backref"),
+                new XText("↩"));
+
+            // Find the last paragraph element and append backref inside it
+            // This prevents the backref from appearing on a new line
+            var lastParagraph = content
+                .OfType<XElement>()
+                .LastOrDefault(e => e.Name == Xhtml.p);
+
+            if (lastParagraph != null)
+            {
+                // Add space and backref inside the last paragraph
+                lastParagraph.Add(new XText(" "), backref);
+            }
+
             var li = new XElement(Xhtml.li,
                 new XAttribute("id", $"{noteType}-{noteId}"),
                 new XAttribute("value", noteId),
-                content,
-                new XText(" "),
-                new XElement(Xhtml.a,
-                    new XAttribute("href", $"#{noteType}-ref-{noteId}"),
-                    new XAttribute("class", $"{noteType}-backref"),
-                    new XText("↩")));
+                content);
+
+            // If no paragraph found, append backref directly to li (fallback)
+            if (lastParagraph == null)
+            {
+                li.Add(new XText(" "), backref);
+            }
 
             return li;
         }
@@ -4981,6 +4988,28 @@ namespace Docxodus
         private static object ConvertRun(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement run)
         {
             var rPr = run.Element(W.rPr);
+
+            // Skip runs that only contain w:footnoteRef or w:endnoteRef.
+            // These are placeholder elements in footnote/endnote text that Word uses to display
+            // the note number. Since we add the note number separately (via footnote-number span
+            // in paginated mode, or via <ol> value attribute in non-paginated mode), we skip
+            // these runs to avoid creating empty styled spans.
+            var contentElements = run.Elements().Where(e => e.Name != W.rPr).ToList();
+            if (contentElements.Count == 1 &&
+                (contentElements[0].Name == W.footnoteRef || contentElements[0].Name == W.endnoteRef))
+            {
+                return null;
+            }
+
+            // For runs containing only w:footnoteReference or w:endnoteReference,
+            // return just the anchor without span wrapper (like LibreOffice does).
+            // This prevents whitespace issues from nested elements.
+            if (contentElements.Count == 1 &&
+                (contentElements[0].Name == W.footnoteReference || contentElements[0].Name == W.endnoteReference))
+            {
+                return ConvertToHtmlTransform(wordDoc, settings, contentElements[0], false, 0m);
+            }
+
             if (rPr == null)
                 return run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
 
