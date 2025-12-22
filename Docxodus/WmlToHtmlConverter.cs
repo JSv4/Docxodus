@@ -4981,6 +4981,19 @@ namespace Docxodus
         private static object ConvertRun(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement run)
         {
             var rPr = run.Element(W.rPr);
+
+            // Skip runs that only contain w:footnoteRef or w:endnoteRef.
+            // These are placeholder elements in footnote/endnote text that Word uses to display
+            // the note number. Since we add the note number separately (via footnote-number span
+            // in paginated mode, or via <ol> value attribute in non-paginated mode), we skip
+            // these runs to avoid creating empty styled spans.
+            var contentElements = run.Elements().Where(e => e.Name != W.rPr).ToList();
+            if (contentElements.Count == 1 &&
+                (contentElements[0].Name == W.footnoteRef || contentElements[0].Name == W.endnoteRef))
+            {
+                return null;
+            }
+
             if (rPr == null)
                 return run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
 

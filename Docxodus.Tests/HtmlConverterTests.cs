@@ -622,6 +622,141 @@ namespace OxPt
         }
 
         [Fact]
+        public void HC008b_FootnoteContent_NoEmptySpansFromFootnoteRef()
+        {
+            // Test that runs containing only w:footnoteRef are skipped and don't produce empty spans.
+            // When rendering footnotes, the original Word document has a run with w:footnoteRef that
+            // displays the footnote number inside the footnote text. Since we add our own number
+            // (via footnote-number span or <ol> value), we should not render the footnoteRef run.
+            // This test creates a document with a footnote and verifies no empty spans are generated.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC034-Footnotes-Before.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Footnote Content Test",
+                        FabricateCssClasses = true,
+                        RenderFootnotesAndEndnotes = true,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // Verify footnotes section is generated
+                    Assert.Contains("section class=\"footnotes\"", htmlString);
+
+                    // Check that the FootnoteText paragraphs don't have empty spans at the beginning
+                    // An empty span would indicate the footnoteRef run was not properly filtered
+                    // Look for the pattern: span with FootnoteText class followed by another span with no text
+                    var htmlDoc = XElement.Parse(htmlString);
+                    var footnotesSection = htmlDoc.Descendants()
+                        .FirstOrDefault(e => e.Name.LocalName == "section" &&
+                            (string)e.Attribute("class") == "footnotes");
+
+                    Assert.NotNull(footnotesSection);
+
+                    // Get all spans inside the footnotes section
+                    var spansInFootnotes = footnotesSection.Descendants()
+                        .Where(e => e.Name.LocalName == "span")
+                        .ToList();
+
+                    // Verify no empty spans exist (spans that have no text content and no meaningful children)
+                    foreach (var span in spansInFootnotes)
+                    {
+                        // Skip spans that intentionally may be empty (like markers)
+                        var className = (string)span.Attribute("class");
+                        if (className != null &&
+                            (className.Contains("marker") || className.Contains("backref")))
+                            continue;
+
+                        // An empty footnoteRef run would produce a span with only whitespace or no content
+                        var textContent = string.Concat(span.DescendantNodes()
+                            .OfType<XText>()
+                            .Select(t => t.Value.Trim()));
+                        var hasChildren = span.Elements().Any();
+
+                        // Either has text content or has child elements (both are valid)
+                        bool hasContent = !string.IsNullOrWhiteSpace(textContent) || hasChildren;
+                        Assert.True(hasContent,
+                            $"Found empty span in footnotes section with class '{className}'");
+                    }
+                }
+            }
+        }
+
+        [Fact]
+        public void HC008c_FootnoteContent_PaginatedMode_NoEmptySpansFromFootnoteRef()
+        {
+            // Test that runs containing only w:footnoteRef are skipped in paginated mode.
+            // In paginated mode, footnotes are rendered with explicit footnote-number spans,
+            // so skipping footnoteRef runs is even more important to avoid duplication.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/WC");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "WC034-Footnotes-Before.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Footnote Paginated Test",
+                        FabricateCssClasses = true,
+                        RenderFootnotesAndEndnotes = true,
+                        RenderPagination = PaginationMode.Paginated,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    string htmlString = html.ToString();
+
+                    // In paginated mode, there should be a footnote registry
+                    Assert.Contains("pagination-footnote-registry", htmlString);
+
+                    var htmlDoc = XElement.Parse(htmlString);
+                    var footnoteRegistry = htmlDoc.Descendants()
+                        .FirstOrDefault(e => e.Name.LocalName == "div" &&
+                            (string)e.Attribute("id") == "pagination-footnote-registry");
+
+                    Assert.NotNull(footnoteRegistry);
+
+                    // Check footnote-content spans for empty children
+                    var footnoteContentSpans = footnoteRegistry.Descendants()
+                        .Where(e => e.Name.LocalName == "span" &&
+                            (string)e.Attribute("class") == "footnote-content")
+                        .ToList();
+
+                    foreach (var contentSpan in footnoteContentSpans)
+                    {
+                        // Get all spans inside the footnote content
+                        var innerSpans = contentSpan.Descendants()
+                            .Where(e => e.Name.LocalName == "span")
+                            .ToList();
+
+                        foreach (var span in innerSpans)
+                        {
+                            // An empty footnoteRef run would produce a span with only whitespace
+                            var textContent = string.Concat(span.DescendantNodes()
+                                .OfType<XText>()
+                                .Select(t => t.Value.Trim()));
+                            var hasChildren = span.Elements().Any();
+
+                            bool hasContent = !string.IsNullOrWhiteSpace(textContent) || hasChildren;
+                            Assert.True(hasContent,
+                                $"Found empty span in footnote registry content with class '{(string)span.Attribute("class")}'");
+                        }
+                    }
+                }
+            }
+        }
+
+        [Fact]
         public void HC009_HeadersAndFooters_CssEnabled()
         {
             // Test that header/footer CSS is generated when RenderHeadersAndFooters is true
