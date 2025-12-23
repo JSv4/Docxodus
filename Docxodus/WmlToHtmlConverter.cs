@@ -270,7 +270,7 @@ namespace Docxodus
             PageTitle = "";
             CssClassPrefix = "pt-";
             FabricateCssClasses = true;
-            GeneralCss = "span { white-space: pre-wrap; }";
+            GeneralCss = "";
             AdditionalCss = "";
             RestrictToSupportedLanguages = false;
             RestrictToSupportedNumberingFormats = false;
@@ -506,7 +506,7 @@ namespace Docxodus
             PageTitle = "";
             CssClassPrefix = "pt-";
             FabricateCssClasses = true;
-            GeneralCss = "span { white-space: pre-wrap; }";
+            GeneralCss = "";
             AdditionalCss = "";
             RestrictToSupportedLanguages = false;
             RestrictToSupportedNumberingFormats = false;
@@ -761,6 +761,39 @@ namespace Docxodus
 
     public static class WmlToHtmlConverter
     {
+        /// <summary>
+        /// Converts the HTML XElement to a string, removing whitespace between inline elements
+        /// to match LibreOffice's output behavior. This prevents HTML formatting from creating
+        /// visible spaces between adjacent spans/anchors in the rendered output.
+        /// </summary>
+        /// <param name="html">The HTML XElement returned by ConvertToHtml</param>
+        /// <param name="indent">Whether to format the output with indentation (default: true)</param>
+        /// <returns>HTML string with properly handled whitespace</returns>
+        public static string ToHtmlString(XElement html, bool indent = true)
+        {
+            // First serialize with formatting
+            var serialized = html.ToString(indent ? SaveOptions.None : SaveOptions.DisableFormatting);
+
+            if (!indent)
+                return serialized;
+
+            // Remove whitespace between inline elements within block elements
+            // This regex matches: >(whitespace)</tag or >(whitespace)<tag
+            // where the whitespace should not render
+            serialized = System.Text.RegularExpressions.Regex.Replace(
+                serialized,
+                @"(</(span|a|b|i|u|s|sub|sup|ins|del)>)\s+(<(span|a|b|i|u|s|sub|sup|ins|del|/h[1-6]|/p|/li|/td|/div)[\s>])",
+                "$1$3");
+
+            // Also handle: </tag>(whitespace)<tag at start
+            serialized = System.Text.RegularExpressions.Regex.Replace(
+                serialized,
+                @"(<(h[1-6]|p|li|td|div)[^>]*>)\s+(<(span|a|b|i|u|s|sub|sup|ins|del)[\s>])",
+                "$1$3");
+
+            return serialized;
+        }
+
         public static XElement ConvertToHtml(WmlDocument doc, WmlToHtmlConverterSettings htmlConverterSettings)
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(doc))
@@ -862,6 +895,11 @@ namespace Docxodus
                 rootElement, false, 0m);
 
             ReifyStylesAndClasses(htmlConverterSettings, xhtml, wordDoc);
+
+            // Remove insignificant whitespace between inline elements in paragraphs.
+            // This matches LibreOffice's output behavior and ensures that HTML formatting
+            // (newlines/indentation) doesn't create visible spaces between adjacent elements.
+            NormalizeInlineWhitespace(xhtml);
 
             // Note: the xhtml returned by ConvertToHtmlTransform contains objects of type
             // XEntity.  PtOpenXmlUtil.cs define the XEntity class.  See
@@ -1315,6 +1353,65 @@ namespace Docxodus
                             right);
                         tcBorders.ReplaceWith(newTcBorders);
                     }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Normalizes whitespace in paragraph-like elements to prevent formatting whitespace
+        /// from rendering as visible spaces between inline elements.
+        /// This matches LibreOffice's HTML output behavior.
+        /// </summary>
+        private static void NormalizeInlineWhitespace(XElement root)
+        {
+            // Elements that contain inline content where whitespace between children matters
+            var paragraphElements = new HashSet<XName>
+            {
+                Xhtml.p, Xhtml.h1, Xhtml.h2, Xhtml.h3, Xhtml.h4, Xhtml.h5, Xhtml.h6,
+                Xhtml.li, Xhtml.td, Xhtml.div
+            };
+
+            // Inline elements where whitespace between siblings should be removed
+            var inlineElements = new HashSet<XName>
+            {
+                Xhtml.span, Xhtml.a, Xhtml.b, Xhtml.i, Xhtml.u, Xhtml.s,
+                Xhtml.sub, Xhtml.sup, Xhtml.ins, Xhtml.del
+            };
+
+            foreach (var para in root.DescendantsAndSelf().Where(e => paragraphElements.Contains(e.Name)))
+            {
+                var nodes = para.Nodes().ToList();
+                var nodesToRemove = new List<XText>();
+
+                for (int i = 0; i < nodes.Count; i++)
+                {
+                    var textNode = nodes[i] as XText;
+                    if (textNode == null) continue;
+
+                    // Check if this text node is only whitespace
+                    if (!string.IsNullOrWhiteSpace(textNode.Value)) continue;
+
+                    // Check if it's between two inline elements
+                    var prevNode = i > 0 ? nodes[i - 1] as XElement : null;
+                    var nextNode = i < nodes.Count - 1 ? nodes[i + 1] as XElement : null;
+
+                    bool prevIsInline = prevNode != null && inlineElements.Contains(prevNode.Name);
+                    bool nextIsInline = nextNode != null && inlineElements.Contains(nextNode.Name);
+
+                    // Remove whitespace-only text nodes between inline elements
+                    // Also remove leading whitespace before first inline element
+                    // And trailing whitespace after last inline element
+                    if ((prevIsInline && nextIsInline) ||
+                        (prevIsInline && nextNode == null) ||
+                        (prevNode == null && nextIsInline))
+                    {
+                        nodesToRemove.Add(textNode);
+                    }
+                }
+
+                foreach (var node in nodesToRemove)
+                {
+                    node.Remove();
                 }
             }
         }
@@ -2410,11 +2507,10 @@ namespace Docxodus
             // Transform every w:t element to a text node.
             if (element.Name == W.t)
             {
-                // We don't need to convert characters to entities in a UTF-8 document.
-                // Further, we don't need &nbsp; entities for significant whitespace
-                // because we are wrapping the text nodes in <span> elements within
-                // which all whitespace is significant.
-                return new XText(element.Value);
+                // Convert significant whitespace to &nbsp; entities to match LibreOffice behavior.
+                // This allows HTML to be formatted (with newlines/indentation) without affecting
+                // the rendered output, since whitespace between elements will collapse normally.
+                return ConvertTextWithNbsp(element.Value);
             }
 
             // Transform symbols to spans
@@ -2574,6 +2670,79 @@ namespace Docxodus
 
             // Ignore element.
             return null;
+        }
+
+        /// <summary>
+        /// Converts text content to use &amp;nbsp; entities for significant whitespace.
+        /// This matches LibreOffice's approach and allows HTML to be formatted without
+        /// affecting the rendered output.
+        /// </summary>
+        private static object ConvertTextWithNbsp(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return new XText("");
+
+            var result = new List<object>();
+            int i = 0;
+            int len = text.Length;
+
+            while (i < len)
+            {
+                // Find the start of the next space sequence
+                int spaceStart = i;
+                while (spaceStart < len && text[spaceStart] != ' ')
+                    spaceStart++;
+
+                // Add any non-space text before this point
+                if (spaceStart > i)
+                {
+                    result.Add(new XText(text.Substring(i, spaceStart - i)));
+                }
+
+                if (spaceStart >= len)
+                    break;
+
+                // Count consecutive spaces
+                int spaceEnd = spaceStart;
+                while (spaceEnd < len && text[spaceEnd] == ' ')
+                    spaceEnd++;
+
+                int spaceCount = spaceEnd - spaceStart;
+
+                // Convert spaces: use &nbsp; for preservation
+                // For multiple spaces, alternate nbsp and regular space to allow some flexibility
+                // For single spaces at start/end of text, use nbsp to prevent collapse
+                bool atStart = spaceStart == 0;
+                bool atEnd = spaceEnd == len;
+
+                if (spaceCount == 1 && !atStart && !atEnd)
+                {
+                    // Single space in the middle - keep as regular space
+                    result.Add(new XText(" "));
+                }
+                else
+                {
+                    // Multiple spaces, or space at boundary - use nbsp
+                    for (int j = 0; j < spaceCount; j++)
+                    {
+                        // Alternate between nbsp and regular space for runs of spaces
+                        // This preserves the spacing while allowing some flexibility
+                        if (j % 2 == 0 || spaceCount == 1)
+                            result.Add(new XEntity("nbsp"));
+                        else
+                            result.Add(new XText(" "));
+                    }
+                }
+
+                i = spaceEnd;
+            }
+
+            // If only one item, return it directly; otherwise return the list
+            if (result.Count == 0)
+                return new XText("");
+            if (result.Count == 1)
+                return result[0];
+            return result;
         }
 
         private static object ProcessHyperlinkToBookmark(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element)
