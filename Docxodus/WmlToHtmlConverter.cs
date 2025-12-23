@@ -2673,7 +2673,7 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Converts text content to use &amp;nbsp; entities for significant whitespace.
+        /// Converts text content to use non-breaking space characters for significant whitespace.
         /// This matches LibreOffice's approach and allows HTML to be formatted without
         /// affecting the rendered output.
         /// </summary>
@@ -2722,13 +2722,14 @@ namespace Docxodus
                 }
                 else
                 {
-                    // Multiple spaces, or space at boundary - use nbsp
+                    // Multiple spaces, or space at boundary - use non-breaking space
+                    // Use Unicode character \u00A0 instead of &nbsp; entity for XML compatibility
                     for (int j = 0; j < spaceCount; j++)
                     {
                         // Alternate between nbsp and regular space for runs of spaces
                         // This preserves the spacing while allowing some flexibility
                         if (j % 2 == 0 || spaceCount == 1)
-                            result.Add(new XEntity("nbsp"));
+                            result.Add(new XText("\u00A0"));
                         else
                             result.Add(new XText(" "));
                     }
