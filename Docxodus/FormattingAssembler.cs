@@ -2247,6 +2247,9 @@ namespace Docxodus
                 }
                 else
                 {
+                    // Clone before modifying to avoid mutating the numbering definition
+                    // (which would affect subsequent list items using the same numbering level)
+                    numberingParaProps = new XElement(numberingParaProps);
                     numberingParaProps
                         .Elements()
                         .Where(e => e.Name != W.ind)
@@ -2438,6 +2441,7 @@ namespace Docxodus
                         if (lipPr == null)
                             lipPr = new XElement(W.pPr);
                         XElement lirPr = listItemInfo.Lvl(effectiveLevel).Element(W.rPr);
+
                         var elementToYield2 = new XElement(W.pPr,
                             lipPr.Attributes(),
                             lipPr.Elements(),
