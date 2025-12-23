@@ -44,6 +44,7 @@ When implementing new features or significant changes, follow this workflow:
 - **CHANGELOG.md** - Add entry under `[Unreleased]` section describing the feature/fix
 - **CLAUDE.md** - Update if the feature adds new settings, modules, or changes architecture
 - **docs/architecture/** - Create or update architecture docs for significant features (e.g., `comment_rendering.md`, `comparison_engine.md`)
+- **docs/ooxml_corner_cases.md** - Document any OOXML edge cases where Word's behavior differs from spec or our implementation (see below)
 
 ### 2. Test Updates
 
@@ -263,3 +264,29 @@ Test files are in `TestFiles/` directory with prefixes indicating their purpose:
 - `PresentationBuilder.cs` - Package access fixes
 - `DocumentBuilder.cs` - Fixed relationship copying bugs in `CopyRelatedImage`, `CopyRelatedPartsForContentParts`, and related functions
 - `SpreadsheetWriter.cs` - Fixed date cell handling to use Excel serial date format
+
+## OOXML Corner Cases
+
+When investigating bugs where our output differs from Word/LibreOffice rendering, **always document findings** in `docs/ooxml_corner_cases.md`. This is critical because:
+
+1. **Word doesn't always follow the spec** - Microsoft Word sometimes implements undocumented behavior or interprets ambiguous spec sections differently than expected
+2. **Future reference** - These edge cases are hard to rediscover; documenting them saves hours of debugging later
+3. **Test coverage** - Each documented case should eventually have a corresponding test
+
+### What to Document
+
+- Any case where Word renders differently than a literal reading of the OOXML spec would suggest
+- Behaviors that differ between Word, LibreOffice, and our implementation
+- Numbering/list formatting edge cases (especially legal numbering, multi-level formats)
+- Style inheritance quirks
+- Table layout anomalies
+- Character/paragraph property interactions
+
+### Documentation Format
+
+For each corner case, include:
+1. **Minimal XML reproducer** - The smallest XML snippet that demonstrates the issue
+2. **Renderer comparison table** - What Word, LibreOffice, and Docxodus each produce
+3. **Analysis** - Your hypothesis about why the difference exists
+4. **Relevant code** - Which Docxodus files/functions are involved
+5. **Proposed fix** - If known, how to align with Word's behavior

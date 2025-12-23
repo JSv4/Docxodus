@@ -6177,7 +6177,10 @@ namespace Docxodus
             var leftInTwips = 0;
             var firstInTwips = 0;
 
-            var ind = clonedPara.Elements(W.pPr).Elements(W.ind).FirstOrDefault();
+            // Check both accumulated properties (pt:pPr) and original properties (w:pPr)
+            // Accumulated properties take priority as they include merged styles from numbering levels
+            var ind = clonedPara.Elements(PtOpenXml.pPr).Elements(W.ind).FirstOrDefault()
+                ?? clonedPara.Elements(W.pPr).Elements(W.ind).FirstOrDefault();
             if (ind != null)
             {
                 // todo need to handle start and end attributes
@@ -6199,10 +6202,15 @@ namespace Docxodus
             }
 
             // calculate the tab stops, in twips
+            // Check accumulated properties (pt:pPr) first as they include tabs from numbering levels
             var tabs = clonedPara
-                .Elements(W.pPr)
+                .Elements(PtOpenXml.pPr)
                 .Elements(W.tabs)
-                .FirstOrDefault();
+                .FirstOrDefault()
+                ?? clonedPara
+                    .Elements(W.pPr)
+                    .Elements(W.tabs)
+                    .FirstOrDefault();
 
             if (tabs == null)
             {

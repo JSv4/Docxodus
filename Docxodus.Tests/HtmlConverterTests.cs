@@ -3641,6 +3641,261 @@ namespace OxPt
         }
 
         #endregion
+
+        #region Legal Numbering Continuation Pattern Tests
+
+        /// <summary>
+        /// Tests that a list with items at ilvl=0 (1., 2., 3.) followed by an item at ilvl=1
+        /// with start=4 renders as "4." instead of "3.4" (continuation pattern).
+        /// </summary>
+        [Fact]
+        public void HC050_ContinuationPattern_RendersCorrectNumber()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add styles
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "22" }))),
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true },
+                        new Style(
+                            new StyleName() { Val = "List Number" }
+                        ) { Type = StyleValues.Paragraph, StyleId = "ListNumber" });
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Add numbering
+                    var numberingPart = mainPart.AddNewPart<NumberingDefinitionsPart>();
+                    numberingPart.Numbering = new Numbering(
+                        new AbstractNum(
+                            new Level(
+                                new StartNumberingValue { Val = 1 },
+                                new NumberingFormat { Val = NumberFormatValues.Decimal },
+                                new LevelText { Val = "%1." },
+                                new LevelJustification { Val = LevelJustificationValues.Left },
+                                new PreviousParagraphProperties(new Indentation { Left = "360", Hanging = "360" }),
+                                new NumberingSymbolRunProperties(new Spacing { Val = 0 })
+                            ) { LevelIndex = 0 },
+                            new Level(
+                                new StartNumberingValue { Val = 4 },  // Start at 4 - key for continuation
+                                new IsLegalNumberingStyle(),  // Legal numbering
+                                new NumberingFormat { Val = NumberFormatValues.Decimal },
+                                new LevelText { Val = "%1.%2" },  // Format would normally produce "3.4"
+                                new LevelJustification { Val = LevelJustificationValues.Left },
+                                new PreviousParagraphProperties(new Indentation { Left = "1560", Hanging = "480" }),
+                                new NumberingSymbolRunProperties(new Underline { Val = UnderlineValues.Single })
+                            ) { LevelIndex = 1 }
+                        ) { AbstractNumberId = 1, MultiLevelType = new MultiLevelType { Val = MultiLevelValues.HybridMultilevel } },
+                        new NumberingInstance(
+                            new AbstractNumId { Val = 1 }
+                        ) { NumberID = 1 });
+                    numberingPart.Numbering.Save();
+
+                    // Create paragraphs: 3 at ilvl=0, then 1 at ilvl=1
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("First item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Second item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Third item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 1 },  // ilvl=1, but start=4
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Fourth item (should render as 4. not 3.4)")))));
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (var wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Continuation Pattern Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Should contain list numbers 1., 2., 3., 4.
+                    Assert.Contains(">1.<", htmlString);
+                    Assert.Contains(">2.<", htmlString);
+                    Assert.Contains(">3.<", htmlString);
+                    Assert.Contains(">4.<", htmlString);
+
+                    // Should NOT contain "3.4" which would be the incorrect rendering
+                    Assert.DoesNotContain(">3.4<", htmlString);
+                    Assert.DoesNotContain(">3.4", htmlString);  // Also check without closing bracket
+                }
+            }
+        }
+
+        /// <summary>
+        /// Tests that continuation pattern items use level 0's run properties (no underline)
+        /// even when level 1 has underline in its rPr.
+        /// </summary>
+        [Fact]
+        public void HC051_ContinuationPattern_UsesLevel0Formatting()
+        {
+            using (MemoryStream ms = new MemoryStream())
+            {
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+
+                    // Add styles
+                    var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                    stylesPart.Styles = new Styles(
+                        new DocDefaults(
+                            new RunPropertiesDefault(
+                                new RunPropertiesBaseStyle(
+                                    new RunFonts { Ascii = "Times New Roman" },
+                                    new FontSize { Val = "22" }))),
+                        new Style(
+                            new StyleName() { Val = "Normal" },
+                            new PrimaryStyle()
+                        ) { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true },
+                        new Style(
+                            new StyleName() { Val = "List Number" }
+                        ) { Type = StyleValues.Paragraph, StyleId = "ListNumber" });
+                    stylesPart.Styles.Save();
+
+                    var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.Settings = new Settings();
+                    settingsPart.Settings.Save();
+
+                    // Add numbering with underline on level 1 but not level 0
+                    var numberingPart = mainPart.AddNewPart<NumberingDefinitionsPart>();
+                    numberingPart.Numbering = new Numbering(
+                        new AbstractNum(
+                            new Level(
+                                new StartNumberingValue { Val = 1 },
+                                new NumberingFormat { Val = NumberFormatValues.Decimal },
+                                new LevelText { Val = "%1." },
+                                new LevelJustification { Val = LevelJustificationValues.Left },
+                                new PreviousParagraphProperties(new Indentation { Left = "360", Hanging = "360" }),
+                                new NumberingSymbolRunProperties(new Spacing { Val = 0 })  // No underline
+                            ) { LevelIndex = 0 },
+                            new Level(
+                                new StartNumberingValue { Val = 4 },
+                                new IsLegalNumberingStyle(),
+                                new NumberingFormat { Val = NumberFormatValues.Decimal },
+                                new LevelText { Val = "%1.%2" },
+                                new LevelJustification { Val = LevelJustificationValues.Left },
+                                new PreviousParagraphProperties(new Indentation { Left = "1560", Hanging = "480" }),
+                                new NumberingSymbolRunProperties(new Underline { Val = UnderlineValues.Single })  // HAS underline
+                            ) { LevelIndex = 1 }
+                        ) { AbstractNumberId = 1, MultiLevelType = new MultiLevelType { Val = MultiLevelValues.HybridMultilevel } },
+                        new NumberingInstance(
+                            new AbstractNumId { Val = 1 }
+                        ) { NumberID = 1 });
+                    numberingPart.Numbering.Save();
+
+                    // Create paragraphs: 3 at ilvl=0, then 1 at ilvl=1 (continuation)
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("First item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Second item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 0 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Third item"))),
+                            new Paragraph(
+                                new ParagraphProperties(
+                                    new ParagraphStyleId { Val = "ListNumber" },
+                                    new NumberingProperties(
+                                        new NumberingLevelReference { Val = 1 },
+                                        new NumberingId { Val = 1 })),
+                                new Run(new Text("Fourth item (should NOT have underline)")))));
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                using (var wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    var settings = new WmlToHtmlConverterSettings
+                    {
+                        PageTitle = "Continuation Formatting Test"
+                    };
+
+                    var html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    var htmlString = html.ToString();
+
+                    // Find the CSS classes used for list item numbers
+                    // All four list numbers (1., 2., 3., 4.) should use the same CSS class
+                    // because continuation items should use level 0's formatting
+
+                    // The list number spans should NOT have text-decoration: underline
+                    // for any of the items if they're all using level 0's rPr
+
+                    // Count occurrences of the list number pattern - should be 4
+                    int listNumberCount = 0;
+                    int pos = 0;
+                    while ((pos = htmlString.IndexOf(">1.<", pos)) >= 0) { listNumberCount++; pos++; }
+                    pos = 0;
+                    while ((pos = htmlString.IndexOf(">2.<", pos)) >= 0) { listNumberCount++; pos++; }
+                    pos = 0;
+                    while ((pos = htmlString.IndexOf(">3.<", pos)) >= 0) { listNumberCount++; pos++; }
+                    pos = 0;
+                    while ((pos = htmlString.IndexOf(">4.<", pos)) >= 0) { listNumberCount++; pos++; }
+
+                    Assert.Equal(4, listNumberCount);
+
+                    // Verify no "3.4" in output
+                    Assert.DoesNotContain("3.4", htmlString);
+                }
+            }
+        }
+
+        #endregion
     }
 }
 
