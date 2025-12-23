@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - .NET 8 / Open XML SDK 3.x Migration
 
 ### Fixed
+- **Legal numbering continuation pattern** - Fixed incorrect multi-level list numbering when items continue a flat sequence at different indentation levels
+  - Documents with items like 1., 2., 3. at level 0 followed by item at level 1 (with start=4) now render as "4." instead of "3.4"
+  - Added "continuation pattern" detection in `ListItemRetriever.cs` that recognizes when a deeper-level item continues a flat list
+  - When detected, uses level 0's format string with the current counter value
+  - See `docs/ooxml_corner_cases.md` for detailed documentation of this edge case
 - **Tab width calculation** re-enabled in `WmlToHtmlConverter` for proper tab stop positioning
   - Previously disabled due to Azure font measurement failures; now uses estimation fallback
   - `MetricsGetter._getTextWidth()` returns character-based estimation when SkiaSharp measurement fails

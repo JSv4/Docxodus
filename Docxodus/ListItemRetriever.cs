@@ -726,6 +726,16 @@ namespace Docxodus
             public XElement PreviousParagraph;
         }
 
+        /// <summary>
+        /// Tracks whether a paragraph is part of a "continuation pattern" where a deeper-level
+        /// item is effectively a continuation of a flat list rather than true nesting.
+        /// Word uses level 0's format string for such items instead of the declared level's format.
+        /// </summary>
+        private class ContinuationInfo
+        {
+            public bool IsContinuation;
+        }
+
         public static string RetrieveListItem(WordprocessingDocument wordDoc, XElement paragraph)
         {
             return RetrieveListItem(wordDoc, paragraph, null);
@@ -773,8 +783,26 @@ namespace Docxodus
                 throw new DocxodusException("Internal error");
 
             int[] levelNumbers = levelNumbersAnnotation.LevelNumbersArray;
+            int effectiveLevel = paragraphLevel;
+
+            // Check for continuation pattern - when a deeper-level item effectively continues
+            // a flat list (e.g., items 1., 2., 3. at level 0, then 4. at level 1 should show "4." not "3.4")
+            // Word uses level 0's format string for these items
+            var continuationInfo = paragraph.Annotation<ContinuationInfo>();
+            if (continuationInfo != null && continuationInfo.IsContinuation)
+            {
+                // Use level 0's format string with current level's counter
+                var lvl0 = listItemInfo.Lvl(0);
+                lvlText = (string)lvl0.Elements(W.lvlText).Attributes(W.val).FirstOrDefault();
+                if (lvlText == null)
+                    return null;
+                // Create single-element array with current level's counter value
+                levelNumbers = new int[] { levelNumbers[paragraphLevel] };
+                effectiveLevel = 0;
+            }
+
             string languageIdentifier = GetLanguageIdentifier(paragraph, stylesXDoc);
-            string listItem = FormatListItem(listItemInfo, levelNumbers, GetParagraphLevel(paragraph), 
+            string listItem = FormatListItem(listItemInfo, levelNumbers, effectiveLevel,
                 lvlText, stylesXDoc, languageIdentifier, settings);
             return listItem;
         }
@@ -967,6 +995,10 @@ namespace Docxodus
                     null,
                     null,
                 };
+                // Track continuation pattern per level - when a deeper-level item continues
+                // a flat list sequence rather than being truly nested
+                bool[] continuationByLevel = new bool[10];
+
                 foreach (var paragraph in listItems)
                 {
                     var listItemInfo = paragraph.Annotation<ListItemInfo>();
@@ -1076,6 +1108,41 @@ namespace Docxodus
                         LevelNumbersArray = levelNumbers.ToArray()
                     };
                     paragraph.AddAnnotation(levelNumbersAnno);
+
+                    // Detect continuation pattern: a deeper-level item that effectively continues
+                    // a flat list rather than being truly nested (e.g., 1., 2., 3. at level 0,
+                    // then 4. at level 1 with start=4 should display as "4." not "3.4")
+                    bool isContinuation = false;
+                    if (ilvl > 0)
+                    {
+                        if (continuationByLevel[ilvl])
+                        {
+                            // Inherit continuation status from previous paragraph at this level
+                            isContinuation = true;
+                        }
+                        else
+                        {
+                            // Check if this starts a continuation pattern:
+                            // - Current counter equals the level's start value (first item at this level)
+                            // - Start value equals parent level's counter + 1 (continues the sequence)
+                            var lvlDef = listItemInfo.Lvl(ilvl);
+                            int? startValue = (int?)lvlDef.Elements(W.start).Attributes(W.val).FirstOrDefault();
+                            if (startValue != null &&
+                                levelNumbers[ilvl] == startValue &&
+                                startValue == levelNumbers[ilvl - 1] + 1)
+                            {
+                                isContinuation = true;
+                            }
+                        }
+                    }
+
+                    // Reset continuation tracking for deeper levels when going to a shallower level
+                    for (int l = ilvl + 1; l < 10; l++)
+                        continuationByLevel[l] = false;
+
+                    continuationByLevel[ilvl] = isContinuation;
+                    paragraph.AddAnnotation(new ContinuationInfo { IsContinuation = isContinuation });
+
                     previous = levelNumbers;
                 }
             }
