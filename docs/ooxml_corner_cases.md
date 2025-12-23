@@ -114,34 +114,35 @@ A paragraph at `ilvl > 0` is in a "continuation pattern" when:
 OR it inherits continuation status from a previous paragraph at the same level.
 
 **What the fix does**:
-When a continuation pattern is detected, the converter uses level 0's format string (e.g., `%1.`) with the current level's counter value, instead of the declared level's format string (e.g., `%1.%2`).
+When a continuation pattern is detected, the converter uses level 0's properties instead of the declared level's:
+- Format string (e.g., `%1.` instead of `%1.%2`)
+- Run properties (e.g., no underline instead of underline)
+- Paragraph properties (e.g., tab stops and indentation)
 
-**Code changes** (`Docxodus/ListItemRetriever.cs`):
+**Code changes**:
 
-1. Added `ContinuationInfo` annotation class to track continuation state per paragraph
+1. **`Docxodus/ListItemRetriever.cs`**:
+   - Added `ContinuationInfo` annotation class to track continuation state per paragraph
+   - Added `GetEffectiveLevel()` helper method that returns 0 for continuation patterns
+   - In `InitializeListItemRetriever`, after calculating `levelNumbers`:
+     ```csharp
+     // Detection logic
+     if (levelNumbers[ilvl] == startValue && startValue == levelNumbers[ilvl - 1] + 1)
+     {
+         isContinuation = true;
+     }
+     ```
+   - In `RetrieveListItem`, uses level 0's format string with current level's counter
 
-2. In `InitializeListItemRetriever`, after calculating `levelNumbers`:
-   ```csharp
-   // Detection logic
-   if (levelNumbers[ilvl] == startValue && startValue == levelNumbers[ilvl - 1] + 1)
-   {
-       isContinuation = true;
-   }
-   ```
+2. **`Docxodus/FormattingAssembler.cs`**:
+   - `NormalizeListItemsTransform`: Uses `GetEffectiveLevel()` to get list item level's rPr
+   - `ParaStyleParaPropsStack`: Uses `GetEffectiveLevel()` to yield correct level's pPr and rPr
+   - `AnnotateParagraph`: Uses `GetEffectiveLevel()` for numbering paragraph properties
 
-3. In `RetrieveListItem`, when formatting:
-   ```csharp
-   if (continuationInfo != null && continuationInfo.IsContinuation)
-   {
-       // Use level 0's format string with current level's counter
-       var lvl0 = listItemInfo.Lvl(0);
-       lvlText = (string)lvl0.Elements(W.lvlText).Attributes(W.val).FirstOrDefault();
-       levelNumbers = new int[] { levelNumbers[paragraphLevel] };
-       effectiveLevel = 0;
-   }
-   ```
-
-**Result**: Items that continue a flat list sequence now render correctly (e.g., "4." instead of "3.4").
+**Result**:
+- Items that continue a flat list sequence now render correctly (e.g., "4." instead of "3.4")
+- Formatting (underline, bold, etc.) from the effective level is applied consistently
+- Tab stops and indentation match the effective level's paragraph properties
 
 #### Test Cases Needed
 

@@ -8,7 +8,10 @@ All notable changes to this project will be documented in this file.
 - **Legal numbering continuation pattern** - Fixed incorrect multi-level list numbering when items continue a flat sequence at different indentation levels
   - Documents with items like 1., 2., 3. at level 0 followed by item at level 1 (with start=4) now render as "4." instead of "3.4"
   - Added "continuation pattern" detection in `ListItemRetriever.cs` that recognizes when a deeper-level item continues a flat list
-  - When detected, uses level 0's format string with the current counter value
+  - When detected, uses level 0's format string, run properties, and paragraph properties with the current counter value
+  - Fixes underline appearing on continuation items when level 1's rPr has underline but level 0's doesn't
+  - Fixes tab/indentation spacing to use level 0's tab stops and indentation for consistency
+  - Updated `FormattingAssembler.cs` to use `GetEffectiveLevel()` in paragraph property stack and annotation functions
   - See `docs/ooxml_corner_cases.md` for detailed documentation of this edge case
 - **Tab width calculation** re-enabled in `WmlToHtmlConverter` for proper tab stop positioning
   - Previously disabled due to Azure font measurement failures; now uses estimation fallback

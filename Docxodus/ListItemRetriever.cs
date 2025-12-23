@@ -731,9 +731,21 @@ namespace Docxodus
         /// item is effectively a continuation of a flat list rather than true nesting.
         /// Word uses level 0's format string for such items instead of the declared level's format.
         /// </summary>
-        private class ContinuationInfo
+        internal class ContinuationInfo
         {
             public bool IsContinuation;
+        }
+
+        /// <summary>
+        /// Gets the effective level for formatting purposes. When a paragraph is in a continuation
+        /// pattern, returns 0 (to use level 0's formatting). Otherwise returns the paragraph's declared level.
+        /// </summary>
+        public static int GetEffectiveLevel(XElement paragraph)
+        {
+            var continuationInfo = paragraph.Annotation<ContinuationInfo>();
+            if (continuationInfo != null && continuationInfo.IsContinuation)
+                return 0;
+            return GetParagraphLevel(paragraph);
         }
 
         public static string RetrieveListItem(WordprocessingDocument wordDoc, XElement paragraph)
