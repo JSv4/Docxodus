@@ -653,6 +653,34 @@ namespace Docxodus
     }
 
     /// <summary>
+    /// Tracks footnote and endnote numbering for correct sequential display.
+    /// XML IDs are reference identifiers, not display numbers. This tracker
+    /// maps XML IDs to sequential display numbers based on document order.
+    /// </summary>
+    internal class FootnoteNumberingTracker
+    {
+        /// <summary>
+        /// Maps footnote XML ID to sequential display number (1, 2, 3...).
+        /// </summary>
+        public Dictionary<string, int> FootnoteIdToDisplayNumber { get; } = new Dictionary<string, int>();
+
+        /// <summary>
+        /// Maps endnote XML ID to sequential display number (1, 2, 3...).
+        /// </summary>
+        public Dictionary<string, int> EndnoteIdToDisplayNumber { get; } = new Dictionary<string, int>();
+
+        /// <summary>
+        /// Footnote XML IDs in document order (for rendering footnotes section).
+        /// </summary>
+        public List<string> FootnoteIdsInOrder { get; } = new List<string>();
+
+        /// <summary>
+        /// Endnote XML IDs in document order (for rendering endnotes section).
+        /// </summary>
+        public List<string> EndnoteIdsInOrder { get; } = new List<string>();
+    }
+
+    /// <summary>
     /// Metadata for a single section in the document (for lazy loading).
     /// All dimension values are in points (1/72 inch).
     /// </summary>
@@ -890,6 +918,14 @@ namespace Docxodus
                 var themeColorScheme = LoadThemeColorScheme(wordDoc);
                 rootElement.AddAnnotation(themeColorScheme);
             }
+
+            // Build footnote/endnote numbering tracker for sequential display numbers
+            var footnoteTracker = new FootnoteNumberingTracker();
+            if (htmlConverterSettings.RenderFootnotesAndEndnotes)
+            {
+                BuildFootnoteNumberingTracker(rootElement, footnoteTracker);
+            }
+            rootElement.AddAnnotation(footnoteTracker);
 
             XElement xhtml = (XElement)ConvertToHtmlTransform(wordDoc, htmlConverterSettings,
                 rootElement, false, 0m);
@@ -3035,13 +3071,20 @@ namespace Docxodus
             if (footnoteId == null)
                 return null;
 
+            // Get display number from tracker (sequential 1, 2, 3... based on document order)
+            var root = element.AncestorsAndSelf().Last();
+            var tracker = root.Annotation<FootnoteNumberingTracker>();
+            var displayNumber = tracker?.FootnoteIdToDisplayNumber.TryGetValue(footnoteId, out var num) == true
+                ? num.ToString()
+                : footnoteId; // Fallback to XML ID if not found
+
             // Put <sup> inside anchor like LibreOffice does for clean inline rendering
             var anchor = new XElement(Xhtml.a,
-                new XAttribute("href", $"#footnote-{footnoteId}"),
-                new XAttribute("id", $"footnote-ref-{footnoteId}"),
+                new XAttribute("href", $"#fn-{footnoteId}"),
+                new XAttribute("id", $"fn-ref-{footnoteId}"),
                 new XAttribute("class", "footnote-ref"),
                 new XAttribute("data-footnote-id", footnoteId), // For pagination engine to track footnotes per page
-                new XElement(Xhtml.sup, footnoteId));
+                new XElement(Xhtml.sup, displayNumber));
 
             return anchor;
         }
@@ -3058,12 +3101,19 @@ namespace Docxodus
             if (endnoteId == null)
                 return null;
 
+            // Get display number from tracker (sequential 1, 2, 3... based on document order)
+            var root = element.AncestorsAndSelf().Last();
+            var tracker = root.Annotation<FootnoteNumberingTracker>();
+            var displayNumber = tracker?.EndnoteIdToDisplayNumber.TryGetValue(endnoteId, out var num) == true
+                ? num.ToString()
+                : endnoteId; // Fallback to XML ID if not found
+
             // Put <sup> inside anchor like LibreOffice does for clean inline rendering
             var anchor = new XElement(Xhtml.a,
-                new XAttribute("href", $"#endnote-{endnoteId}"),
-                new XAttribute("id", $"endnote-ref-{endnoteId}"),
+                new XAttribute("href", $"#en-{endnoteId}"),
+                new XAttribute("id", $"en-ref-{endnoteId}"),
                 new XAttribute("class", "endnote-ref"),
-                new XElement(Xhtml.sup, endnoteId));
+                new XElement(Xhtml.sup, displayNumber));
 
             return anchor;
         }
@@ -3076,23 +3126,40 @@ namespace Docxodus
                 return null;
 
             var footnotesXDoc = footnotesPart.GetXDocument();
-            var footnotes = footnotesXDoc.Root?.Elements(W.footnote)
+            var allFootnotes = footnotesXDoc.Root?.Elements(W.footnote)
                 .Where(fn =>
                 {
                     var typeAttr = (string)fn.Attribute(W.type);
                     // Skip separator and continuationSeparator footnotes
                     return typeAttr != "separator" && typeAttr != "continuationSeparator";
                 })
-                .ToList();
+                .ToDictionary(fn => (string)fn.Attribute(W.id), fn => fn);
 
-            if (footnotes == null || !footnotes.Any())
+            if (allFootnotes == null || !allFootnotes.Any())
                 return null;
+
+            // Get tracker for ordering and display numbers
+            var mainXDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var tracker = mainXDoc.Root?.Annotation<FootnoteNumberingTracker>();
+
+            // Order footnotes by document order using tracker, with fallback to XML order
+            IEnumerable<XElement> orderedFootnotes;
+            if (tracker != null && tracker.FootnoteIdsInOrder.Any())
+            {
+                orderedFootnotes = tracker.FootnoteIdsInOrder
+                    .Where(id => allFootnotes.ContainsKey(id))
+                    .Select(id => allFootnotes[id]);
+            }
+            else
+            {
+                orderedFootnotes = allFootnotes.Values;
+            }
 
             var footnotesSection = new XElement(Xhtml.section,
                 new XAttribute("class", "footnotes"),
                 new XElement(Xhtml.hr),
                 new XElement(Xhtml.ol,
-                    footnotes.Select(fn => RenderFootnoteItem(wordDoc, settings, fn, "footnote"))));
+                    orderedFootnotes.Select(fn => RenderFootnoteItem(wordDoc, settings, fn, "fn", tracker))));
 
             return footnotesSection;
         }
@@ -3105,33 +3172,66 @@ namespace Docxodus
                 return null;
 
             var endnotesXDoc = endnotesPart.GetXDocument();
-            var endnotes = endnotesXDoc.Root?.Elements(W.endnote)
+            var allEndnotes = endnotesXDoc.Root?.Elements(W.endnote)
                 .Where(en =>
                 {
                     var typeAttr = (string)en.Attribute(W.type);
                     // Skip separator and continuationSeparator endnotes
                     return typeAttr != "separator" && typeAttr != "continuationSeparator";
                 })
-                .ToList();
+                .ToDictionary(en => (string)en.Attribute(W.id), en => en);
 
-            if (endnotes == null || !endnotes.Any())
+            if (allEndnotes == null || !allEndnotes.Any())
                 return null;
+
+            // Get tracker for ordering and display numbers
+            var mainXDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var tracker = mainXDoc.Root?.Annotation<FootnoteNumberingTracker>();
+
+            // Order endnotes by document order using tracker, with fallback to XML order
+            IEnumerable<XElement> orderedEndnotes;
+            if (tracker != null && tracker.EndnoteIdsInOrder.Any())
+            {
+                orderedEndnotes = tracker.EndnoteIdsInOrder
+                    .Where(id => allEndnotes.ContainsKey(id))
+                    .Select(id => allEndnotes[id]);
+            }
+            else
+            {
+                orderedEndnotes = allEndnotes.Values;
+            }
 
             var endnotesSection = new XElement(Xhtml.section,
                 new XAttribute("class", "endnotes"),
                 new XElement(Xhtml.hr),
                 new XElement(Xhtml.ol,
-                    endnotes.Select(en => RenderFootnoteItem(wordDoc, settings, en, "endnote"))));
+                    orderedEndnotes.Select(en => RenderFootnoteItem(wordDoc, settings, en, "en", tracker))));
 
             return endnotesSection;
         }
 
         private static XElement RenderFootnoteItem(WordprocessingDocument wordDoc,
-            WmlToHtmlConverterSettings settings, XElement noteElement, string noteType)
+            WmlToHtmlConverterSettings settings, XElement noteElement, string noteType,
+            FootnoteNumberingTracker tracker)
         {
             var noteId = (string)noteElement.Attribute(W.id);
             if (noteId == null)
                 return null;
+
+            // Get display number from tracker (sequential 1, 2, 3... based on document order)
+            int displayNumber;
+            if (noteType == "fn")
+            {
+                displayNumber = tracker?.FootnoteIdToDisplayNumber.TryGetValue(noteId, out var num) == true
+                    ? num
+                    : int.TryParse(noteId, out var fallback) ? fallback : 1;
+            }
+            else // "en" for endnotes
+            {
+                displayNumber = tracker?.EndnoteIdToDisplayNumber.TryGetValue(noteId, out var num) == true
+                    ? num
+                    : int.TryParse(noteId, out var fallback) ? fallback : 1;
+            }
 
             // Convert the content of the footnote/endnote
             var content = noteElement.Elements()
@@ -3158,7 +3258,7 @@ namespace Docxodus
 
             var li = new XElement(Xhtml.li,
                 new XAttribute("id", $"{noteType}-{noteId}"),
-                new XAttribute("value", noteId),
+                new XAttribute("value", displayNumber),
                 content);
 
             // If no paragraph found, append backref directly to li (fallback)
@@ -3184,27 +3284,49 @@ namespace Docxodus
                 return null;
 
             var footnotesXDoc = footnotesPart.GetXDocument();
-            var footnotes = footnotesXDoc.Root?.Elements(W.footnote)
+            var allFootnotes = footnotesXDoc.Root?.Elements(W.footnote)
                 .Where(fn =>
                 {
                     var typeAttr = (string)fn.Attribute(W.type);
                     // Skip separator and continuationSeparator footnotes
                     return typeAttr != "separator" && typeAttr != "continuationSeparator";
                 })
-                .ToList();
+                .ToDictionary(fn => (string)fn.Attribute(W.id), fn => fn);
 
-            if (footnotes == null || !footnotes.Any())
+            if (allFootnotes == null || !allFootnotes.Any())
                 return null;
+
+            // Get tracker for ordering and display numbers
+            var mainXDoc = wordDoc.MainDocumentPart.GetXDocument();
+            var tracker = mainXDoc.Root?.Annotation<FootnoteNumberingTracker>();
+
+            // Order footnotes by document order using tracker, with fallback to XML order
+            IEnumerable<XElement> orderedFootnotes;
+            if (tracker != null && tracker.FootnoteIdsInOrder.Any())
+            {
+                orderedFootnotes = tracker.FootnoteIdsInOrder
+                    .Where(id => allFootnotes.ContainsKey(id))
+                    .Select(id => allFootnotes[id]);
+            }
+            else
+            {
+                orderedFootnotes = allFootnotes.Values;
+            }
 
             var registry = new XElement(Xhtml.div,
                 new XAttribute("id", "pagination-footnote-registry"),
                 new XAttribute("style", "display:none"));
 
-            foreach (var fn in footnotes)
+            foreach (var fn in orderedFootnotes)
             {
                 var footnoteId = (string)fn.Attribute(W.id);
                 if (footnoteId == null)
                     continue;
+
+                // Get display number from tracker
+                var displayNumber = tracker?.FootnoteIdToDisplayNumber.TryGetValue(footnoteId, out var num) == true
+                    ? num.ToString()
+                    : footnoteId;
 
                 // Convert the content of the footnote
                 var content = fn.Elements()
@@ -3214,16 +3336,17 @@ namespace Docxodus
                 // Create a footnote item div with data attribute for lookup
                 var footnoteItem = new XElement(Xhtml.div,
                     new XAttribute("data-footnote-id", footnoteId),
+                    new XAttribute("data-display-number", displayNumber),
                     new XAttribute("class", "footnote-item"),
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-number"),
-                        new XText($"{footnoteId}. ")),
+                        new XText($"{displayNumber}. ")),
                     new XElement(Xhtml.span,
                         new XAttribute("class", "footnote-content"),
                         content),
                     new XText(" "),
                     new XElement(Xhtml.a,
-                        new XAttribute("href", $"#footnote-ref-{footnoteId}"),
+                        new XAttribute("href", $"#fn-ref-{footnoteId}"),
                         new XAttribute("class", "footnote-backref"),
                         new XText("↩")));
 
@@ -3590,6 +3713,13 @@ namespace Docxodus
             // Walk up to the document root to find the annotation
             var root = element.AncestorsAndSelf().LastOrDefault();
             return root?.Annotation<CommentTracker>();
+        }
+
+        private static FootnoteNumberingTracker GetFootnoteNumberingTracker(XElement element)
+        {
+            // Walk up to the document root to find the annotation
+            var root = element.AncestorsAndSelf().LastOrDefault();
+            return root?.Annotation<FootnoteNumberingTracker>();
         }
 
         private static void LoadAnnotations(WordprocessingDocument wordDoc, AnnotationTracker tracker)
@@ -5716,6 +5846,41 @@ namespace Docxodus
             }
 
             return cache;
+        }
+
+        /// <summary>
+        /// Builds the footnote and endnote numbering tracker by scanning
+        /// the document for references in document order.
+        /// </summary>
+        private static void BuildFootnoteNumberingTracker(XElement rootElement, FootnoteNumberingTracker tracker)
+        {
+            int footnoteNumber = 0;
+            int endnoteNumber = 0;
+
+            // Scan for footnote and endnote references in document order
+            foreach (var element in rootElement.Descendants())
+            {
+                if (element.Name == W.footnoteReference)
+                {
+                    var id = (string)element.Attribute(W.id);
+                    if (id != null && !tracker.FootnoteIdToDisplayNumber.ContainsKey(id))
+                    {
+                        footnoteNumber++;
+                        tracker.FootnoteIdToDisplayNumber[id] = footnoteNumber;
+                        tracker.FootnoteIdsInOrder.Add(id);
+                    }
+                }
+                else if (element.Name == W.endnoteReference)
+                {
+                    var id = (string)element.Attribute(W.id);
+                    if (id != null && !tracker.EndnoteIdToDisplayNumber.ContainsKey(id))
+                    {
+                        endnoteNumber++;
+                        tracker.EndnoteIdToDisplayNumber[id] = endnoteNumber;
+                        tracker.EndnoteIdsInOrder.Add(id);
+                    }
+                }
+            }
         }
 
         /// <summary>

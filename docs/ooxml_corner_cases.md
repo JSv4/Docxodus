@@ -6,7 +6,9 @@ This document tracks edge cases and quirks in Open XML document processing where
 
 1. [Numbering and Lists](#numbering-and-lists)
    - [Legal Numbering with Multi-Level Format Strings](#legal-numbering-with-multi-level-format-strings)
-2. [Contributing](#contributing)
+2. [Footnotes](#footnotes)
+   - [Footnote Count Discrepancy in Legal Templates](#footnote-count-discrepancy-in-legal-templates)
+3. [Contributing](#contributing)
 
 ---
 
@@ -155,6 +157,70 @@ When a continuation pattern is detected, the converter uses level 0's properties
 
 - [ECMA-376 Part 1, Section 17.9.10 - lvlText](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)
 - [ECMA-376 Part 1, Section 17.9.9 - isLgl](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)
+
+---
+
+## Footnotes
+
+### Footnote Numbering Uses Raw XML IDs Instead of Sequential Display Numbers
+
+**Status:** Fixed (December 2024)
+**Discovered:** 2024-12-23
+**Test File:** `Model-COI-10-24-2024.docx` (NVCA model legal document)
+
+#### The Problem
+
+Docxodus was displaying footnote numbers using raw XML `w:id` attribute values instead of sequential display numbers. Per ECMA-376, the `w:id` is a reference identifier (linking `footnoteReference` to footnote definitions), not the display number. Display numbers should be calculated sequentially based on the order footnotes appear in the document.
+
+**Example:**
+- Document has 91 footnotes with XML IDs 2-92 (IDs 0, 1 are reserved for separator types)
+- Word/LibreOffice display: 1, 2, 3, ..., 91 (sequential)
+- Docxodus (before fix): 2, 3, 4, ..., 92 (raw XML IDs)
+
+#### ECMA-376 Specification
+
+The ECMA-376 specification clarifies how footnote numbering works:
+
+1. **`w:id` is a reference identifier, NOT the display number**
+   - The `w:id` attribute on `<w:footnoteReference>` links to the footnote definition in `footnotes.xml`
+   - IDs 0 and 1 are reserved for `separator` and `continuationSeparator` types
+   - Content footnotes typically start at ID 2
+
+2. **Display number is determined by document order**
+   - The first `<w:footnoteReference>` in document flow displays as "1"
+   - The second displays as "2", and so on
+   - This is independent of the `w:id` value
+
+3. **`w:customMarkFollows` attribute**
+   - When present, suppresses automatic numbering
+   - Used for custom footnote marks (symbols, letters, etc.)
+
+#### The Fix
+
+**Implementation**: Added `FootnoteNumberingTracker` class in `WmlToHtmlConverter.cs`.
+
+**How it works**:
+1. Before conversion, scan the document for all `footnoteReference` and `endnoteReference` elements in document order
+2. Build a mapping from XML ID to sequential display number (1, 2, 3...)
+3. Store the mapping as an annotation on the root element
+4. Use the mapping when rendering footnote references (superscripts) and footnote list items
+
+**Code changes in `Docxodus/WmlToHtmlConverter.cs`**:
+- Added `FootnoteNumberingTracker` class (lines 655-681)
+- Added `BuildFootnoteNumberingTracker()` method to scan document and build mapping
+- Added `GetFootnoteNumberingTracker()` helper method
+- Updated `ProcessFootnoteReference()` to use display numbers instead of XML IDs
+- Updated `ProcessEndnoteReference()` similarly
+- Updated `RenderFootnotesSection()` to order footnotes by document order and use display numbers
+- Updated `RenderEndnotesSection()` similarly
+- Updated `RenderPaginatedFootnoteRegistry()` for pagination mode
+
+**Result**: Footnotes now display with correct sequential numbers (1, 2, 3...) matching Word/LibreOffice behavior.
+
+#### References
+
+- [ECMA-376 Part 1, Section 17.11.7 - footnoteReference](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)
+- [ECMA-376 Part 1, Section 17.11.10 - footnotes part](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)
 
 ---
 
