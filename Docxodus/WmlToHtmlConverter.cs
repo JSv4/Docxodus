@@ -5114,13 +5114,11 @@ namespace Docxodus
 
         private static void DefineLineHeight(Dictionary<string, string> style, XElement paragraph)
         {
-            var allRunsAreUniDirectional = paragraph
-                .DescendantsTrimmed(W.txbxContent)
-                .Where(e => e.Name == W.r)
-                .Select(run => (string)run.Attribute(PtOpenXml.LanguageType))
-                .All(lt => lt != "bidi");
-            if (allRunsAreUniDirectional)
-                style.AddIfMissing("line-height", "108%");
+            // Don't set a default line-height. LibreOffice doesn't set explicit line-height,
+            // and browser defaults (~1.2) provide reasonable spacing. The previous 108% default
+            // made text too tight compared to LibreOffice's HTML output.
+            // Line-height is only set explicitly when w:lineRule is specified in the document
+            // (handled by CreateStyleFromSpacing).
         }
 
         /*
