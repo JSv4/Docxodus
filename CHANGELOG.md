@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - .NET 8 / Open XML SDK 3.x Migration
 
 ### Fixed
+- **Footnote/endnote numbering** - Fixed footnotes and endnotes displaying raw XML IDs instead of sequential display numbers
+  - Per ECMA-376, `w:id` is a reference identifier, not the display number
+  - Added `FootnoteNumberingTracker` class to scan document and build XML ID → display number mapping
+  - Footnotes/endnotes now render with sequential numbers (1, 2, 3...) based on document order
+  - Also fixed footnote ordering in the footnotes section to match document order
+  - Updated both regular and paginated rendering modes
+  - See `docs/ooxml_corner_cases.md` for detailed documentation
 - **Legal numbering continuation pattern** - Fixed incorrect multi-level list numbering when items continue a flat sequence at different indentation levels
   - Documents with items like 1., 2., 3. at level 0 followed by item at level 1 (with start=4) now render as "4." instead of "3.4"
   - Added "continuation pattern" detection in `ListItemRetriever.cs` that recognizes when a deeper-level item continues a flat list
