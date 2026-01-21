@@ -139,10 +139,16 @@ DocumentBuilder.BuildDocument(sources, outputPath);
 - `AuthorForRevisions` - Author name for tracked changes
 - `DetailThreshold` - 0.0-1.0, lower = more detailed comparison (default: 0.15)
 - `CaseInsensitive` - Case-insensitive comparison
-- `DetectMoves` - Enable move detection in `GetRevisions()` (default: true)
+- `DetectMoves` - Enable move detection in `GetRevisions()` (default: false - see warning below)
+- `SimplifyMoveMarkup` - Convert move markup to del/ins for Word compatibility (default: false)
 - `MoveSimilarityThreshold` - Jaccard similarity threshold for moves (default: 0.8)
 - `MoveMinimumWordCount` - Minimum words for move detection (default: 3)
 - `DetectFormatChanges` - Enable format change detection (default: true)
+
+**WARNING: Move Detection Known Issue (Issue #96)** - Move markup can cause Word to display "unreadable content" warnings due to an ID collision bug. Until Phase II of the fix is complete:
+- `DetectMoves` defaults to `false` to avoid the issue
+- If you need move detection, set both `DetectMoves = true` AND `SimplifyMoveMarkup = true`
+- With `SimplifyMoveMarkup = true`, moves are converted to regular del/ins (loses green move styling but ensures Word compatibility)
 
 Move detection produces **native Word move markup** (`w:moveFrom`/`w:moveTo`) when `DetectMoves` is enabled:
 - The comparer analyzes deleted/inserted content blocks for similarity after LCS comparison

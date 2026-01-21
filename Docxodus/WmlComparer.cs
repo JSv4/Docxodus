@@ -63,10 +63,26 @@ namespace Docxodus
         public DirectoryInfo DebugTempFileDi;
 
         /// <summary>
-        /// Whether to detect and mark moved content in GetRevisions(). Default: true.
-        /// When enabled, deletion/insertion pairs with similar text are marked as moves.
+        /// Whether to detect and mark moved content in GetRevisions(). Default: false.
+        /// When enabled, deletion/insertion pairs with similar text are marked as moves
+        /// using native w:moveFrom/w:moveTo markup.
+        ///
+        /// WARNING: Move markup can cause Word to display "unreadable content" warnings
+        /// due to a known ID collision bug (Issue #96). Until this is fixed in Phase II,
+        /// it is recommended to either keep this false, or set SimplifyMoveMarkup = true
+        /// when enabling move detection.
         /// </summary>
-        public bool DetectMoves = true;
+        public bool DetectMoves = false;
+
+        /// <summary>
+        /// When true, converts native move markup (w:moveFrom/w:moveTo) to simple
+        /// delete/insert markup (w:del/w:ins) after comparison. This ensures Word
+        /// compatibility at the cost of losing the visual "moved" distinction.
+        ///
+        /// Use this setting when DetectMoves = true but Word compatibility is required.
+        /// Default: false.
+        /// </summary>
+        public bool SimplifyMoveMarkup = false;
 
         /// <summary>
         /// Minimum Jaccard similarity (0.0 to 1.0) to consider content as moved.
@@ -1839,6 +1855,14 @@ namespace Docxodus
                     wDocWithRevisions.MainDocumentPart.PutXDocument();
                     FixUpFootnotesEndnotesWithCustomMarkers(wDocWithRevisions);
                     FixUpRevMarkIds(wDocWithRevisions);
+
+                    // Convert move markup to simple del/ins if requested (Issue #96 workaround)
+                    // This runs after all ID fixups to ensure proper conversion
+                    if (settings.SimplifyMoveMarkup)
+                    {
+                        SimplifyMoveMarkupToDelIns(wDocWithRevisions);
+                    }
+
                     FixUpDocPrIds(wDocWithRevisions);
                     FixUpShapeIds(wDocWithRevisions);
                     FixUpShapeTypeIds(wDocWithRevisions);
@@ -2736,6 +2760,68 @@ namespace Docxodus
                 wDocWithRevisions.MainDocumentPart.FootnotesPart.PutXDocument();
             if (wDocWithRevisions.MainDocumentPart.EndnotesPart != null)
                 wDocWithRevisions.MainDocumentPart.EndnotesPart.PutXDocument();
+        }
+
+        /// <summary>
+        /// Converts native move markup (w:moveFrom/w:moveTo) to simple delete/insert markup
+        /// (w:del/w:ins) for Word compatibility. This is a workaround for Issue #96 where
+        /// move markup causes Word to display "unreadable content" warnings.
+        ///
+        /// The conversion:
+        /// - w:moveFrom elements become w:del elements
+        /// - w:moveTo elements become w:ins elements
+        /// - All move range markers (moveFromRangeStart/End, moveToRangeStart/End) are removed
+        /// </summary>
+        private static void SimplifyMoveMarkupToDelIns(WordprocessingDocument wDoc)
+        {
+            foreach (var part in wDoc.ContentParts())
+            {
+                var xDoc = part.GetXDocument();
+                var root = xDoc.Root;
+                if (root == null)
+                    continue;
+
+                bool modified = false;
+
+                // Convert w:moveFrom to w:del
+                foreach (var moveFrom in root.Descendants(W.moveFrom).ToList())
+                {
+                    var del = new XElement(W.del,
+                        moveFrom.Attribute(W.author),
+                        moveFrom.Attribute(W.date),
+                        moveFrom.Attribute(W.id),
+                        moveFrom.Nodes());
+                    moveFrom.ReplaceWith(del);
+                    modified = true;
+                }
+
+                // Convert w:moveTo to w:ins
+                foreach (var moveTo in root.Descendants(W.moveTo).ToList())
+                {
+                    var ins = new XElement(W.ins,
+                        moveTo.Attribute(W.author),
+                        moveTo.Attribute(W.date),
+                        moveTo.Attribute(W.id),
+                        moveTo.Nodes());
+                    moveTo.ReplaceWith(ins);
+                    modified = true;
+                }
+
+                // Remove all move range markers
+                foreach (var rangeElement in root.Descendants()
+                    .Where(e => e.Name == W.moveFromRangeStart ||
+                                e.Name == W.moveFromRangeEnd ||
+                                e.Name == W.moveToRangeStart ||
+                                e.Name == W.moveToRangeEnd)
+                    .ToList())
+                {
+                    rangeElement.Remove();
+                    modified = true;
+                }
+
+                if (modified)
+                    part.PutXDocument();
+            }
         }
 
         private static void IgnorePt14Namespace(XElement root)

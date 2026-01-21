@@ -40,3 +40,6 @@ TestResults/
 # JetBrains
 .idea/
 _ReSharper.Caches/
+
+# Plans (internal working documents)
+docs/plans/
