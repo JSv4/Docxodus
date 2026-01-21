@@ -1827,12 +1827,6 @@ namespace Docxodus
 
                     FixUpRevisionIds(wDocWithRevisions, newXDoc);
 
-                    // Convert move markup to simple del/ins if requested (Issue #96 workaround)
-                    if (settings.SimplifyMoveMarkup)
-                    {
-                        SimplifyMoveMarkupToDelIns(wDocWithRevisions);
-                    }
-
                     // little bit of cleanup
                     MoveLastSectPrToChildOfBody(newXDoc);
                     XElement newXDoc2Root = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(newXDoc.Root);
@@ -1861,6 +1855,14 @@ namespace Docxodus
                     wDocWithRevisions.MainDocumentPart.PutXDocument();
                     FixUpFootnotesEndnotesWithCustomMarkers(wDocWithRevisions);
                     FixUpRevMarkIds(wDocWithRevisions);
+
+                    // Convert move markup to simple del/ins if requested (Issue #96 workaround)
+                    // This runs after all ID fixups to ensure proper conversion
+                    if (settings.SimplifyMoveMarkup)
+                    {
+                        SimplifyMoveMarkupToDelIns(wDocWithRevisions);
+                    }
+
                     FixUpDocPrIds(wDocWithRevisions);
                     FixUpShapeIds(wDocWithRevisions);
                     FixUpShapeTypeIds(wDocWithRevisions);

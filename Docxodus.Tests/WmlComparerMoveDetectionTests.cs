@@ -946,5 +946,254 @@ namespace OxPt
         }
 
         #endregion
+
+        #region SimplifyMoveMarkup Tests
+
+        /// <summary>
+        /// Verifies that SimplifyMoveMarkup converts moveFrom to del elements.
+        /// </summary>
+        [Fact]
+        public void SimplifyMoveMarkup_ShouldConvertMoveFromToDel()
+        {
+            // Arrange
+            var doc1 = CreateDocumentWithParagraphs(
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph B with sufficient content here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph A with enough words for move detection."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                SimplifyMoveMarkup = true,  // Enable simplification
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+
+            // Extract the document XML
+            using var stream = new MemoryStream(compared.DocumentByteArray);
+            using var doc = WordprocessingDocument.Open(stream, false);
+            var bodyXml = doc.MainDocumentPart.Document.Body.OuterXml;
+            var bodyElement = XElement.Parse(bodyXml);
+
+            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+            // Assert: Should NOT contain move elements
+            var moveFromElements = bodyElement.Descendants(w + "moveFrom").ToList();
+            var moveToElements = bodyElement.Descendants(w + "moveTo").ToList();
+
+            Assert.Empty(moveFromElements);
+            Assert.Empty(moveToElements);
+
+            // Should have del elements instead
+            var delElements = bodyElement.Descendants(w + "del").ToList();
+            Assert.True(delElements.Count > 0, "Should have w:del elements after simplification");
+        }
+
+        /// <summary>
+        /// Verifies that SimplifyMoveMarkup converts moveTo to ins elements.
+        /// </summary>
+        [Fact]
+        public void SimplifyMoveMarkup_ShouldConvertMoveToToIns()
+        {
+            // Arrange
+            var doc1 = CreateDocumentWithParagraphs(
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph B with sufficient content here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph A with enough words for move detection."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                SimplifyMoveMarkup = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+
+            // Extract the document XML
+            using var stream = new MemoryStream(compared.DocumentByteArray);
+            using var doc = WordprocessingDocument.Open(stream, false);
+            var bodyXml = doc.MainDocumentPart.Document.Body.OuterXml;
+            var bodyElement = XElement.Parse(bodyXml);
+
+            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+            // Should have ins elements
+            var insElements = bodyElement.Descendants(w + "ins").ToList();
+            Assert.True(insElements.Count > 0, "Should have w:ins elements after simplification");
+        }
+
+        /// <summary>
+        /// Verifies that SimplifyMoveMarkup removes all move range markers.
+        /// </summary>
+        [Fact]
+        public void SimplifyMoveMarkup_ShouldRemoveRangeMarkers()
+        {
+            // Arrange
+            var doc1 = CreateDocumentWithParagraphs(
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph B with sufficient content here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph A with enough words for move detection."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                SimplifyMoveMarkup = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+
+            // Extract the document XML
+            using var stream = new MemoryStream(compared.DocumentByteArray);
+            using var doc = WordprocessingDocument.Open(stream, false);
+            var bodyXml = doc.MainDocumentPart.Document.Body.OuterXml;
+            var bodyElement = XElement.Parse(bodyXml);
+
+            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+            // Assert: Should NOT contain any range markers
+            Assert.Empty(bodyElement.Descendants(w + "moveFromRangeStart").ToList());
+            Assert.Empty(bodyElement.Descendants(w + "moveFromRangeEnd").ToList());
+            Assert.Empty(bodyElement.Descendants(w + "moveToRangeStart").ToList());
+            Assert.Empty(bodyElement.Descendants(w + "moveToRangeEnd").ToList());
+        }
+
+        /// <summary>
+        /// Verifies that SimplifyMoveMarkup preserves author and date attributes.
+        /// </summary>
+        [Fact]
+        public void SimplifyMoveMarkup_ShouldPreserveAttributes()
+        {
+            // Arrange
+            var doc1 = CreateDocumentWithParagraphs(
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph B with sufficient content here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph A with enough words for move detection."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                SimplifyMoveMarkup = true,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3,
+                AuthorForRevisions = "TestAuthor"
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+
+            // Extract the document XML
+            using var stream = new MemoryStream(compared.DocumentByteArray);
+            using var doc = WordprocessingDocument.Open(stream, false);
+            var bodyXml = doc.MainDocumentPart.Document.Body.OuterXml;
+            var bodyElement = XElement.Parse(bodyXml);
+
+            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+            // Check that del/ins elements have the expected attributes
+            var delElements = bodyElement.Descendants(w + "del").ToList();
+            var insElements = bodyElement.Descendants(w + "ins").ToList();
+
+            foreach (var del in delElements)
+            {
+                Assert.NotNull(del.Attribute(w + "author"));
+                Assert.NotNull(del.Attribute(w + "id"));
+            }
+
+            foreach (var ins in insElements)
+            {
+                Assert.NotNull(ins.Attribute(w + "author"));
+                Assert.NotNull(ins.Attribute(w + "id"));
+            }
+        }
+
+        /// <summary>
+        /// Verifies that SimplifyMoveMarkup = false (default) preserves move elements.
+        /// </summary>
+        [Fact]
+        public void SimplifyMoveMarkup_WhenFalse_ShouldPreserveMoveElements()
+        {
+            // Arrange
+            var doc1 = CreateDocumentWithParagraphs(
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph B with sufficient content here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph A with enough words for move detection."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                SimplifyMoveMarkup = false,  // Explicitly false (default)
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+
+            // Extract the document XML
+            using var stream = new MemoryStream(compared.DocumentByteArray);
+            using var doc = WordprocessingDocument.Open(stream, false);
+            var bodyXml = doc.MainDocumentPart.Document.Body.OuterXml;
+            var bodyElement = XElement.Parse(bodyXml);
+
+            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+            // Assert: Should contain move elements
+            var moveFromElements = bodyElement.Descendants(w + "moveFrom").ToList();
+            var moveToElements = bodyElement.Descendants(w + "moveTo").ToList();
+
+            Assert.True(moveFromElements.Count > 0, "Should have w:moveFrom elements when SimplifyMoveMarkup is false");
+            Assert.True(moveToElements.Count > 0, "Should have w:moveTo elements when SimplifyMoveMarkup is false");
+        }
+
+        /// <summary>
+        /// Verifies that DetectMoves defaults to false for safety.
+        /// </summary>
+        [Fact]
+        public void DetectMoves_ShouldDefaultToFalse()
+        {
+            var settings = new WmlComparerSettings();
+            Assert.False(settings.DetectMoves, "DetectMoves should default to false until Phase II fix is complete");
+        }
+
+        /// <summary>
+        /// Verifies that SimplifyMoveMarkup defaults to false.
+        /// </summary>
+        [Fact]
+        public void SimplifyMoveMarkup_ShouldDefaultToFalse()
+        {
+            var settings = new WmlComparerSettings();
+            Assert.False(settings.SimplifyMoveMarkup, "SimplifyMoveMarkup should default to false");
+        }
+
+        #endregion
     }
 }
