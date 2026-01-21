@@ -1175,13 +1175,13 @@ namespace OxPt
         }
 
         /// <summary>
-        /// Verifies that DetectMoves defaults to false for safety.
+        /// Verifies that DetectMoves defaults to true.
         /// </summary>
         [Fact]
-        public void DetectMoves_ShouldDefaultToFalse()
+        public void DetectMoves_ShouldDefaultToTrue()
         {
             var settings = new WmlComparerSettings();
-            Assert.False(settings.DetectMoves, "DetectMoves should default to false until Phase II fix is complete");
+            Assert.True(settings.DetectMoves, "DetectMoves should default to true");
         }
 
         /// <summary>
@@ -1192,6 +1192,222 @@ namespace OxPt
         {
             var settings = new WmlComparerSettings();
             Assert.False(settings.SimplifyMoveMarkup, "SimplifyMoveMarkup should default to false");
+        }
+
+        #endregion
+
+        #region ID Uniqueness Tests (Issue #96 Phase II)
+
+        /// <summary>
+        /// Verifies that all revision IDs are unique across the document when moves are present.
+        /// This is the core test for Issue #96 - duplicate IDs cause Word "unreadable content" warnings.
+        /// </summary>
+        [Fact]
+        public void MoveMarkup_AllRevisionIdsShouldBeUnique()
+        {
+            // Arrange: Create documents with moved content
+            var doc1 = CreateDocumentWithParagraphs(
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph C that stays in place.",
+                "This is paragraph D with additional content."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph C that stays in place but modified slightly.",
+                "This is paragraph D with additional content."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                SimplifyMoveMarkup = false,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+
+            // Extract all revision IDs from all content parts
+            using var stream = new MemoryStream(compared.DocumentByteArray);
+            using var doc = WordprocessingDocument.Open(stream, false);
+
+            var allIds = new List<string>();
+            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            var revisionElements = new[] { "ins", "del", "moveFrom", "moveTo",
+                "moveFromRangeStart", "moveFromRangeEnd", "moveToRangeStart", "moveToRangeEnd", "rPrChange" };
+
+            // Check main document
+            var mainXDoc = doc.MainDocumentPart.GetXDocument();
+            foreach (var elemName in revisionElements)
+            {
+                allIds.AddRange(mainXDoc.Descendants(w + elemName)
+                    .Select(e => e.Attribute(w + "id")?.Value)
+                    .Where(id => id != null));
+            }
+
+            // Check footnotes if present
+            if (doc.MainDocumentPart.FootnotesPart != null)
+            {
+                var fnXDoc = doc.MainDocumentPart.FootnotesPart.GetXDocument();
+                foreach (var elemName in revisionElements)
+                {
+                    allIds.AddRange(fnXDoc.Descendants(w + elemName)
+                        .Select(e => e.Attribute(w + "id")?.Value)
+                        .Where(id => id != null));
+                }
+            }
+
+            // Check endnotes if present
+            if (doc.MainDocumentPart.EndnotesPart != null)
+            {
+                var enXDoc = doc.MainDocumentPart.EndnotesPart.GetXDocument();
+                foreach (var elemName in revisionElements)
+                {
+                    allIds.AddRange(enXDoc.Descendants(w + elemName)
+                        .Select(e => e.Attribute(w + "id")?.Value)
+                        .Where(id => id != null));
+                }
+            }
+
+            // Assert: No duplicate IDs (excluding range start/end pairs which intentionally share IDs)
+            // For range elements, start and end share the same ID by design
+            // But NO other element should share an ID with any other element
+            var duplicates = allIds.GroupBy(x => x)
+                .Where(g => g.Count() > 2)  // Allow pairs (start/end) but not more
+                .Select(g => new { Id = g.Key, Count = g.Count() })
+                .ToList();
+
+            Assert.True(duplicates.Count == 0,
+                $"Found revision IDs used more than twice (only range pairs should share IDs): " +
+                $"{string.Join(", ", duplicates.Select(d => $"id={d.Id} count={d.Count}"))}");
+        }
+
+        /// <summary>
+        /// Verifies that move names properly pair moveFrom and moveTo elements.
+        /// Each move name should appear exactly once in moveFromRangeStart and once in moveToRangeStart.
+        /// Note: Consecutive paragraphs may be grouped as a single move block.
+        /// </summary>
+        [Fact]
+        public void MoveMarkup_MoveNamesShouldProperlyPairSourceAndDestination()
+        {
+            // Arrange: Create documents with moved content
+            var doc1 = CreateDocumentWithParagraphs(
+                "This is paragraph A with enough words for move detection.",
+                "This is paragraph B with sufficient content here."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "This is paragraph B with sufficient content here.",
+                "This is paragraph A with enough words for move detection."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                SimplifyMoveMarkup = false,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+
+            // Extract move names
+            using var stream = new MemoryStream(compared.DocumentByteArray);
+            using var doc = WordprocessingDocument.Open(stream, false);
+
+            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            var mainXDoc = doc.MainDocumentPart.GetXDocument();
+
+            var moveFromNames = mainXDoc.Descendants(w + "moveFromRangeStart")
+                .Select(e => e.Attribute(w + "name")?.Value)
+                .Where(n => n != null)
+                .ToList();
+
+            var moveToNames = mainXDoc.Descendants(w + "moveToRangeStart")
+                .Select(e => e.Attribute(w + "name")?.Value)
+                .Where(n => n != null)
+                .ToList();
+
+            // Assert: Should have at least one move detected
+            Assert.True(moveFromNames.Count > 0, "Expected at least one moveFromRangeStart with w:name");
+            Assert.True(moveToNames.Count > 0, "Expected at least one moveToRangeStart with w:name");
+
+            // Assert: moveFrom and moveTo names should match (same names, same count)
+            Assert.True(moveFromNames.OrderBy(x => x).SequenceEqual(moveToNames.OrderBy(x => x)),
+                $"Move names should match between moveFrom and moveTo. " +
+                $"From: [{string.Join(", ", moveFromNames)}], To: [{string.Join(", ", moveToNames)}]");
+
+            // Assert: No empty or null move names
+            Assert.DoesNotContain("", moveFromNames);
+            Assert.DoesNotContain("", moveToNames);
+            Assert.True(moveFromNames.All(n => n.StartsWith("move")),
+                "All move names should follow the 'moveN' pattern");
+        }
+
+        /// <summary>
+        /// Verifies that a document with moves and other changes has unique IDs.
+        /// This specifically tests the scenario that caused Issue #96.
+        /// </summary>
+        [Fact]
+        public void MoveMarkup_WithMixedChanges_ShouldHaveUniqueIds()
+        {
+            // Arrange: Create documents with moves AND other ins/del changes
+            var doc1 = CreateDocumentWithParagraphs(
+                "This paragraph will be moved to a new location.",
+                "This paragraph stays but will be modified here.",
+                "This paragraph will be deleted entirely from doc.",
+                "This is static content that does not change."
+            );
+            var doc2 = CreateDocumentWithParagraphs(
+                "This paragraph stays but has been changed now.",
+                "This is static content that does not change.",
+                "This paragraph will be moved to a new location.",
+                "This is a completely new paragraph inserted."
+            );
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                SimplifyMoveMarkup = false,
+                MoveSimilarityThreshold = 0.8,
+                MoveMinimumWordCount = 3
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+
+            // Extract all revision IDs
+            using var stream = new MemoryStream(compared.DocumentByteArray);
+            using var doc = WordprocessingDocument.Open(stream, false);
+
+            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            var mainXDoc = doc.MainDocumentPart.GetXDocument();
+
+            // Get IDs from different element types
+            var insIds = mainXDoc.Descendants(w + "ins")
+                .Select(e => e.Attribute(w + "id")?.Value).Where(id => id != null).ToList();
+            var delIds = mainXDoc.Descendants(w + "del")
+                .Select(e => e.Attribute(w + "id")?.Value).Where(id => id != null).ToList();
+            var moveFromIds = mainXDoc.Descendants(w + "moveFrom")
+                .Select(e => e.Attribute(w + "id")?.Value).Where(id => id != null).ToList();
+            var moveToIds = mainXDoc.Descendants(w + "moveTo")
+                .Select(e => e.Attribute(w + "id")?.Value).Where(id => id != null).ToList();
+
+            // Combine non-range IDs (these should all be unique)
+            var nonRangeIds = insIds.Concat(delIds).Concat(moveFromIds).Concat(moveToIds).ToList();
+
+            // Check for duplicates
+            var duplicates = nonRangeIds.GroupBy(x => x)
+                .Where(g => g.Count() > 1)
+                .ToList();
+
+            Assert.True(duplicates.Count == 0,
+                $"Found duplicate IDs among ins/del/moveFrom/moveTo elements: " +
+                $"{string.Join(", ", duplicates.Select(g => $"id={g.Key}"))}. " +
+                $"This is the Issue #96 bug - FixUpRevMarkIds was overwriting IDs.");
         }
 
         #endregion
