@@ -8,6 +8,7 @@ using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using Xunit;
@@ -1408,6 +1409,198 @@ namespace OxPt
                 $"Found duplicate IDs among ins/del/moveFrom/moveTo elements: " +
                 $"{string.Join(", ", duplicates.Select(g => $"id={g.Key}"))}. " +
                 $"This is the Issue #96 bug - FixUpRevMarkIds was overwriting IDs.");
+        }
+
+        #endregion
+
+        #region Stress Tests (Issue #96)
+
+        /// <summary>
+        /// Generates a paragraph with unique content for stress testing.
+        /// </summary>
+        private static string GenerateStressTestParagraph(int index)
+        {
+            var templates = new[]
+            {
+                "Paragraph {0}: This document section contains important information about the project requirements and specifications. Reference ID: {1}",
+                "Section {0}: The following content describes the technical implementation details for the proposed system architecture. Doc: {1}",
+                "Item {0}: According to the agreement dated herein, the parties shall comply with all terms and conditions specified. Contract: {1}",
+                "Clause {0}: The licensee agrees to use the software only for purposes permitted under this license agreement. License: {1}",
+                "Article {0}: This paragraph establishes the fundamental principles governing the relationship between the entities. Ref: {1}",
+                "Point {0}: The data processing activities shall be conducted in accordance with applicable privacy regulations. GDPR: {1}",
+                "Note {0}: All modifications to this document must be tracked and approved by the designated review committee. Rev: {1}",
+                "Entry {0}: The financial statements have been prepared in accordance with generally accepted accounting principles. GAAP: {1}",
+                "Record {0}: This memorandum summarizes the key decisions made during the executive committee meeting. Minutes: {1}",
+                "Statement {0}: The undersigned hereby certifies that all information provided is true and accurate. Cert: {1}",
+                "Provision {0}: Notwithstanding the foregoing, the obligations set forth herein shall survive termination. Legal: {1}",
+                "Stipulation {0}: The contractor shall deliver all work products by the specified deadline. Deadline: {1}",
+                "Requirement {0}: The system shall support concurrent users and maintain response times under load. Perf: {1}",
+                "Specification {0}: All API endpoints must implement proper authentication and authorization. Security: {1}",
+                "Definition {0}: For purposes of this agreement, the following terms shall have the meanings ascribed. Terms: {1}",
+            };
+
+            var template = templates[index % templates.Length];
+            return string.Format(template, index, $"DOC-{index:D4}-{Guid.NewGuid().ToString().Substring(0, 8).ToUpper()}");
+        }
+
+        /// <summary>
+        /// Stress test for Issue #96: Validates that revision IDs remain unique even with
+        /// dozens of moves and hundreds of other changes. Uses fixed seed for reproducibility.
+        /// </summary>
+        [Theory]
+        [InlineData(50, 15, 30, "Small")]      // 50 paragraphs, ~15 moves, ~30 other changes
+        [InlineData(100, 25, 50, "Medium")]    // 100 paragraphs, ~25 moves, ~50 other changes
+        [InlineData(200, 40, 100, "Large")]    // 200 paragraphs, ~40 moves, ~100 other changes
+        public void StressTest_ManyMovesAndChanges_ShouldHaveUniqueIds(
+            int paragraphCount, int moveCount, int changeCount, string testName)
+        {
+            // Arrange: Use fixed seed for reproducibility
+            var rng = new Random(42);
+
+            // Generate original document with numbered paragraphs
+            var originalParagraphs = Enumerable.Range(1, paragraphCount)
+                .Select(i => GenerateStressTestParagraph(i))
+                .ToList();
+
+            // Create modified version with moves and changes
+            var modifiedParagraphs = new List<string>(originalParagraphs);
+
+            // Apply moves: pick random paragraphs and move them to new positions
+            var availableForMove = Enumerable.Range(0, modifiedParagraphs.Count).ToList();
+            for (int i = 0; i < moveCount && availableForMove.Count > 2; i++)
+            {
+                int fromIdx = availableForMove[rng.Next(availableForMove.Count)];
+                availableForMove.Remove(fromIdx);
+
+                var para = modifiedParagraphs[fromIdx];
+                modifiedParagraphs.RemoveAt(fromIdx);
+
+                // Adjust available indices after removal
+                availableForMove = availableForMove.Select(x => x > fromIdx ? x - 1 : x).ToList();
+
+                int toIdx = rng.Next(modifiedParagraphs.Count + 1);
+                modifiedParagraphs.Insert(toIdx, para);
+
+                // Adjust available indices after insertion
+                availableForMove = availableForMove.Select(x => x >= toIdx ? x + 1 : x).ToList();
+            }
+
+            // Apply deletions
+            int deleteCount = changeCount / 3;
+            for (int i = 0; i < deleteCount && modifiedParagraphs.Count > paragraphCount / 2; i++)
+            {
+                int idx = rng.Next(modifiedParagraphs.Count);
+                modifiedParagraphs.RemoveAt(idx);
+            }
+
+            // Apply insertions
+            int insertCount = changeCount / 3;
+            for (int i = 0; i < insertCount; i++)
+            {
+                int idx = rng.Next(modifiedParagraphs.Count + 1);
+                modifiedParagraphs.Insert(idx, $"[NEW-{i + 1}] This is a newly inserted paragraph with enough words to be meaningful. " +
+                    $"It contains various content including technical terms, legal jargon, and general prose. " +
+                    $"The purpose is to test the comparison engine with substantial insertions. Reference: INS-{Guid.NewGuid():N}");
+            }
+
+            // Apply modifications (change words in existing paragraphs)
+            int modifyCount = changeCount / 3;
+            for (int i = 0; i < modifyCount && modifiedParagraphs.Count > 0; i++)
+            {
+                int idx = rng.Next(modifiedParagraphs.Count);
+                var para = modifiedParagraphs[idx];
+                para = para.Replace("paragraph", "section")
+                           .Replace("content", "material")
+                           .Replace("document", "file");
+                if (!para.Contains("[MODIFIED]"))
+                {
+                    para = "[MODIFIED] " + para;
+                }
+                modifiedParagraphs[idx] = para;
+            }
+
+            // Create documents
+            var doc1 = CreateDocumentWithParagraphs(originalParagraphs.ToArray());
+            var doc2 = CreateDocumentWithParagraphs(modifiedParagraphs.ToArray());
+
+            var settings = new WmlComparerSettings
+            {
+                DetectMoves = true,
+                SimplifyMoveMarkup = false,
+                MoveSimilarityThreshold = 0.75,
+                MoveMinimumWordCount = 5,
+                AuthorForRevisions = "StressTest"
+            };
+
+            // Act
+            var compared = WmlComparer.Compare(doc1, doc2, settings);
+
+            // Assert: Analyze results
+            using var stream = new MemoryStream(compared.DocumentByteArray);
+            using var wDoc = WordprocessingDocument.Open(stream, false);
+            var mainXDoc = wDoc.MainDocumentPart.GetXDocument();
+
+            XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+            // Collect all revision IDs
+            var revisionElements = new[] { "ins", "del", "moveFrom", "moveTo", "rPrChange" };
+            var allIds = new List<(string Id, string Type)>();
+
+            foreach (var elemName in revisionElements)
+            {
+                foreach (var elem in mainXDoc.Descendants(w + elemName))
+                {
+                    var id = elem.Attribute(w + "id")?.Value;
+                    if (id != null)
+                    {
+                        allIds.Add((id, elemName));
+                    }
+                }
+            }
+
+            // Check for duplicates - THE CRITICAL TEST
+            var duplicates = allIds.GroupBy(x => x.Id)
+                .Where(g => g.Count() > 1)
+                .ToList();
+
+            Assert.True(duplicates.Count == 0,
+                $"StressTest {testName}: Found {duplicates.Count} duplicate revision IDs. " +
+                $"First duplicates: {string.Join(", ", duplicates.Take(5).Select(d => $"id={d.Key}:[{string.Join(",", d.Select(x => x.Type))}]"))}. " +
+                $"Total elements: {allIds.Count}");
+
+            // Check move name pairing
+            var moveFromNames = mainXDoc.Descendants(w + "moveFromRangeStart")
+                .Select(e => e.Attribute(w + "name")?.Value)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToList();
+
+            var moveToNames = mainXDoc.Descendants(w + "moveToRangeStart")
+                .Select(e => e.Attribute(w + "name")?.Value)
+                .Where(n => !string.IsNullOrEmpty(n))
+                .ToList();
+
+            // Validate all names are paired
+            var unpairedFrom = moveFromNames.Except(moveToNames).ToList();
+            var unpairedTo = moveToNames.Except(moveFromNames).ToList();
+
+            Assert.True(!unpairedFrom.Any() && !unpairedTo.Any(),
+                $"StressTest {testName}: Unpaired move names found. " +
+                $"From without To: [{string.Join(", ", unpairedFrom)}], " +
+                $"To without From: [{string.Join(", ", unpairedTo)}]");
+
+            // OpenXML validation
+            var validator = new OpenXmlValidator(FileFormatVersions.Office2019);
+            var errors = validator.Validate(wDoc).ToList();
+
+            // Note: Some validation errors may be acceptable (e.g., missing optional parts)
+            // We focus on ensuring no critical structural errors
+            var criticalErrors = errors
+                .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
+                .ToList();
+
+            Assert.True(criticalErrors.Count == 0,
+                $"StressTest {testName}: OpenXML schema validation failed with {criticalErrors.Count} errors. " +
+                $"First errors: {string.Join("; ", criticalErrors.Take(3).Select(e => e.Description))}");
         }
 
         #endregion
