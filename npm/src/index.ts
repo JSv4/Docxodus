@@ -37,6 +37,10 @@ import type {
   ExternalAnnotationValidationResult,
   ExternalAnnotationValidationIssue,
   ExternalAnnotationProjectionSettings,
+  // Comparison log types
+  ComparisonLogEntry,
+  CompareResultWithLog,
+  CompareToHtmlResultWithLog,
 } from "./types.js";
 
 import {
@@ -45,6 +49,8 @@ import {
   AnnotationLabelMode,
   RevisionType,
   DocumentElementType,
+  ComparisonLogLevel,
+  ComparisonLogCodes,
   isInsertion,
   isDeletion,
   isMove,
@@ -119,6 +125,10 @@ export type {
   ExternalAnnotationValidationResult,
   ExternalAnnotationValidationIssue,
   ExternalAnnotationProjectionSettings,
+  // Comparison log types
+  ComparisonLogEntry,
+  CompareResultWithLog,
+  CompareToHtmlResultWithLog,
 };
 
 export {
@@ -127,6 +137,8 @@ export {
   AnnotationLabelMode,
   RevisionType,
   DocumentElementType,
+  ComparisonLogLevel,
+  ComparisonLogCodes,
   isInsertion,
   isDeletion,
   isMove,
@@ -532,15 +544,28 @@ export async function compareDocumentsToHtml(
   // Yield to browser before heavy WASM work - allows loading states to render
   await yieldToMain();
 
-  // Use the new options method if renderTrackedChanges is explicitly set
   const renderTrackedChanges = options?.renderTrackedChanges ?? true;
 
-  const result = exports.DocumentComparer.CompareDocumentsToHtmlWithOptions(
-    originalBytes,
-    modifiedBytes,
-    options?.authorName ?? "Docxodus",
-    renderTrackedChanges
-  );
+  let result: string;
+
+  // Use full method when detailThreshold or caseInsensitive are specified
+  if (options?.detailThreshold !== undefined || options?.caseInsensitive !== undefined) {
+    result = exports.DocumentComparer.CompareDocumentsToHtmlFull(
+      originalBytes,
+      modifiedBytes,
+      options?.authorName ?? "Docxodus",
+      options?.detailThreshold ?? 0.15,
+      options?.caseInsensitive ?? false,
+      renderTrackedChanges
+    );
+  } else {
+    result = exports.DocumentComparer.CompareDocumentsToHtmlWithOptions(
+      originalBytes,
+      modifiedBytes,
+      options?.authorName ?? "Docxodus",
+      renderTrackedChanges
+    );
+  }
 
   if (isErrorResponse(result)) {
     const error = parseError(result);
@@ -548,6 +573,139 @@ export async function compareDocumentsToHtml(
   }
 
   return result;
+}
+
+/**
+ * Compare two DOCX documents with logging enabled.
+ * Returns both the redlined document and a log of any warnings/errors encountered.
+ * This allows the comparison to continue past recoverable issues (like orphaned footnotes)
+ * while providing visibility into what was fixed or skipped.
+ *
+ * @param original - Original DOCX document
+ * @param modified - Modified DOCX document
+ * @param options - Comparison options
+ * @returns Result with document bytes and log entries
+ *
+ * @example
+ * ```typescript
+ * const result = await compareDocumentsWithLog(original, modified, {
+ *   authorName: "Reviewer",
+ *   detailThreshold: 0.15
+ * });
+ *
+ * if (result.success) {
+ *   // Use result.document (Uint8Array)
+ *   if (result.hasWarnings) {
+ *     console.log("Warnings during comparison:");
+ *     for (const entry of result.log) {
+ *       console.log(`  [${entry.level}] ${entry.code}: ${entry.message}`);
+ *     }
+ *   }
+ * } else {
+ *   console.error(`Comparison failed: ${result.error}`);
+ * }
+ * ```
+ */
+export async function compareDocumentsWithLog(
+  original: File | Uint8Array,
+  modified: File | Uint8Array,
+  options?: CompareOptions
+): Promise<CompareResultWithLog> {
+  const exports = ensureInitialized();
+  const originalBytes = await toBytes(original);
+  const modifiedBytes = await toBytes(modified);
+
+  await yieldToMain();
+
+  const result = exports.DocumentComparer.CompareDocumentsWithLog(
+    originalBytes,
+    modifiedBytes,
+    options?.authorName ?? "Docxodus",
+    options?.detailThreshold ?? 0.15,
+    options?.caseInsensitive ?? false
+  );
+
+  const parsed = JSON.parse(result);
+
+  return {
+    success: parsed.Success ?? parsed.success ?? false,
+    document: parsed.DocumentBase64 || parsed.documentBase64
+      ? Uint8Array.from(atob(parsed.DocumentBase64 || parsed.documentBase64), c => c.charCodeAt(0))
+      : undefined,
+    error: parsed.Error ?? parsed.error,
+    log: convertLogEntries(parsed.Log || parsed.log || []),
+    hasWarnings: parsed.HasWarnings ?? parsed.hasWarnings ?? false,
+    hasErrors: parsed.HasErrors ?? parsed.hasErrors ?? false,
+  };
+}
+
+/**
+ * Compare two DOCX documents to HTML with logging enabled.
+ * Returns both the HTML output and a log of any warnings/errors encountered.
+ *
+ * @param original - Original DOCX document
+ * @param modified - Modified DOCX document
+ * @param options - Comparison options
+ * @returns Result with HTML and log entries
+ *
+ * @example
+ * ```typescript
+ * const result = await compareDocumentsToHtmlWithLog(original, modified, {
+ *   authorName: "Reviewer",
+ *   renderTrackedChanges: true
+ * });
+ *
+ * if (result.success) {
+ *   document.getElementById("viewer").innerHTML = result.html;
+ *   if (result.hasWarnings) {
+ *     console.log(`${result.log.length} warnings during comparison`);
+ *   }
+ * }
+ * ```
+ */
+export async function compareDocumentsToHtmlWithLog(
+  original: File | Uint8Array,
+  modified: File | Uint8Array,
+  options?: CompareOptions
+): Promise<CompareToHtmlResultWithLog> {
+  const exports = ensureInitialized();
+  const originalBytes = await toBytes(original);
+  const modifiedBytes = await toBytes(modified);
+
+  await yieldToMain();
+
+  const result = exports.DocumentComparer.CompareDocumentsToHtmlWithLog(
+    originalBytes,
+    modifiedBytes,
+    options?.authorName ?? "Docxodus",
+    options?.detailThreshold ?? 0.15,
+    options?.caseInsensitive ?? false,
+    options?.renderTrackedChanges ?? true
+  );
+
+  const parsed = JSON.parse(result);
+
+  return {
+    success: parsed.Success ?? parsed.success ?? false,
+    html: parsed.Html ?? parsed.html,
+    error: parsed.Error ?? parsed.error,
+    log: convertLogEntries(parsed.Log || parsed.log || []),
+    hasWarnings: parsed.HasWarnings ?? parsed.hasWarnings ?? false,
+    hasErrors: parsed.HasErrors ?? parsed.hasErrors ?? false,
+  };
+}
+
+/**
+ * Convert log entries from PascalCase to camelCase.
+ */
+function convertLogEntries(entries: any[]): ComparisonLogEntry[] {
+  return entries.map((e: any) => ({
+    level: e.Level ?? e.level ?? "Info",
+    code: e.Code ?? e.code ?? "",
+    message: e.Message ?? e.message ?? "",
+    details: e.Details ?? e.details,
+    location: e.Location ?? e.location,
+  }));
 }
 
 /**

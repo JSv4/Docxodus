@@ -495,6 +495,14 @@ export interface DocxodusWasmExports {
       authorName: string,
       renderTrackedChanges: boolean
     ) => string;
+    CompareDocumentsToHtmlFull: (
+      originalBytes: Uint8Array,
+      modifiedBytes: Uint8Array,
+      authorName: string,
+      detailThreshold: number,
+      caseInsensitive: boolean,
+      renderTrackedChanges: boolean
+    ) => string;
     CompareDocumentsWithOptions: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
@@ -510,8 +518,115 @@ export interface DocxodusWasmExports {
       moveMinimumWordCount: number,
       caseInsensitive: boolean
     ) => string;
+    CompareDocumentsWithLog: (
+      originalBytes: Uint8Array,
+      modifiedBytes: Uint8Array,
+      authorName: string,
+      detailThreshold: number,
+      caseInsensitive: boolean
+    ) => string;
+    CompareDocumentsToHtmlWithLog: (
+      originalBytes: Uint8Array,
+      modifiedBytes: Uint8Array,
+      authorName: string,
+      detailThreshold: number,
+      caseInsensitive: boolean,
+      renderTrackedChanges: boolean
+    ) => string;
   };
 }
+
+/**
+ * Severity level for comparison log entries.
+ */
+export enum ComparisonLogLevel {
+  /** Informational message about the comparison process */
+  Info = "Info",
+  /** Warning about a potential issue that didn't prevent comparison */
+  Warning = "Warning",
+  /** Error that may affect comparison results but didn't stop processing */
+  Error = "Error",
+}
+
+/**
+ * A single log entry from the comparison process.
+ */
+export interface ComparisonLogEntry {
+  /** Severity level: "Info", "Warning", or "Error" */
+  level: ComparisonLogLevel | string;
+  /**
+   * Machine-readable code identifying the type of issue.
+   * Examples: "ORPHANED_FOOTNOTE_REFERENCE", "MISSING_STYLE"
+   */
+  code: string;
+  /** Human-readable description of the issue */
+  message: string;
+  /** Additional context or technical details (optional) */
+  details?: string;
+  /**
+   * Location in the document where the issue occurred (optional).
+   * Format: "part/xpath" e.g., "document.xml/w:footnoteReference[@w:id='3']"
+   */
+  location?: string;
+}
+
+/**
+ * Result from comparison operations that includes a log of warnings/errors.
+ */
+export interface CompareResultWithLog {
+  /** Whether the comparison succeeded */
+  success: boolean;
+  /** The redlined document as a Uint8Array (only if success is true) */
+  document?: Uint8Array;
+  /** Error message if success is false */
+  error?: string;
+  /** Log entries from the comparison process */
+  log: ComparisonLogEntry[];
+  /** Whether the log contains any warnings */
+  hasWarnings: boolean;
+  /** Whether the log contains any errors */
+  hasErrors: boolean;
+}
+
+/**
+ * Result from HTML comparison operations that includes a log of warnings/errors.
+ */
+export interface CompareToHtmlResultWithLog {
+  /** Whether the comparison succeeded */
+  success: boolean;
+  /** The HTML output (only if success is true) */
+  html?: string;
+  /** Error message if success is false */
+  error?: string;
+  /** Log entries from the comparison process */
+  log: ComparisonLogEntry[];
+  /** Whether the log contains any warnings */
+  hasWarnings: boolean;
+  /** Whether the log contains any errors */
+  hasErrors: boolean;
+}
+
+/**
+ * Well-known log entry codes used by the comparison engine.
+ */
+export const ComparisonLogCodes = {
+  /** A footnote reference in the document body has no corresponding footnote definition */
+  OrphanedFootnoteReference: "ORPHANED_FOOTNOTE_REFERENCE",
+  /** An endnote reference in the document body has no corresponding endnote definition */
+  OrphanedEndnoteReference: "ORPHANED_ENDNOTE_REFERENCE",
+  /** A style referenced in the document is not defined in styles.xml */
+  MissingStyle: "MISSING_STYLE",
+  /** A numbering definition referenced in the document is missing */
+  MissingNumberingDefinition: "MISSING_NUMBERING_DEFINITION",
+  /** A relationship referenced in the document is missing */
+  MissingRelationship: "MISSING_RELATIONSHIP",
+  /** An image or media file referenced in the document is missing */
+  MissingMedia: "MISSING_MEDIA",
+  /** The document structure contains unexpected or malformed XML */
+  MalformedXml: "MALFORMED_XML",
+  /** A bookmark reference has no corresponding bookmark start/end */
+  OrphanedBookmark: "ORPHANED_BOOKMARK",
+} as const;
 
 /**
  * Options for revision extraction with move detection configuration.

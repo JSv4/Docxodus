@@ -219,6 +219,263 @@ public partial class DocumentComparer
     }
 
     /// <summary>
+    /// Compare two DOCX documents and return the result as HTML with full options.
+    /// Supports all comparison settings (detailThreshold, caseInsensitive) plus HTML rendering options.
+    /// </summary>
+    /// <param name="originalBytes">The original DOCX file as a byte array</param>
+    /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
+    /// <param name="authorName">Author name for tracked changes</param>
+    /// <param name="detailThreshold">Detail threshold (0.0 to 1.0, default 0.15)</param>
+    /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
+    /// <param name="renderTrackedChanges">If true, show insertions/deletions visually. If false, accept all changes (clean output).</param>
+    /// <returns>HTML string, or JSON error object</returns>
+    [JSExport]
+    public static string CompareDocumentsToHtmlFull(
+        byte[] originalBytes,
+        byte[] modifiedBytes,
+        string authorName,
+        double detailThreshold,
+        bool caseInsensitive,
+        bool renderTrackedChanges)
+    {
+        if (originalBytes == null || originalBytes.Length == 0 ||
+            modifiedBytes == null || modifiedBytes.Length == 0)
+        {
+            return DocumentConverter.SerializeError("Missing document data");
+        }
+
+        try
+        {
+            var original = new WmlDocument("original.docx", originalBytes);
+            var modified = new WmlDocument("modified.docx", modifiedBytes);
+
+            var comparerSettings = new WmlComparerSettings
+            {
+                AuthorForRevisions = authorName ?? "Docxodus",
+                DateTimeForRevisions = DateTime.UtcNow.ToString("o"),
+                DetailThreshold = detailThreshold,
+                CaseInsensitive = caseInsensitive
+            };
+
+            var result = WmlComparer.Compare(original, modified, comparerSettings);
+
+            // Convert the redlined document to HTML
+            // Must use writable stream - WmlToHtmlConverter may call RevisionAccepter internally
+            using var memoryStream = new MemoryStream();
+            memoryStream.Write(result.DocumentByteArray, 0, result.DocumentByteArray.Length);
+            memoryStream.Position = 0;
+            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
+
+            var htmlSettings = new WmlToHtmlConverterSettings
+            {
+                PageTitle = "Document Comparison",
+                CssClassPrefix = "redline-",
+                FabricateCssClasses = true,
+                RenderTrackedChanges = renderTrackedChanges,
+                IncludeRevisionMetadata = renderTrackedChanges,
+                ShowDeletedContent = true,
+                RenderMoveOperations = true,
+            };
+
+            // Add author color if rendering tracked changes
+            if (renderTrackedChanges)
+            {
+                htmlSettings.AuthorColors = new Dictionary<string, string>
+                {
+                    { authorName ?? "Docxodus", "#007bff" }
+                };
+            }
+
+            var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, htmlSettings);
+            return htmlElement.ToString();
+        }
+        catch (Exception ex)
+        {
+            return DocumentConverter.SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Compare two DOCX documents with logging enabled.
+    /// Returns both the redlined document and a log of any warnings/errors encountered.
+    /// </summary>
+    /// <param name="originalBytes">The original DOCX file as a byte array</param>
+    /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
+    /// <param name="authorName">Author name for tracked changes</param>
+    /// <param name="detailThreshold">Detail threshold (0.0 to 1.0, default 0.15)</param>
+    /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
+    /// <returns>JSON response with document bytes (base64) and log entries</returns>
+    [JSExport]
+    public static string CompareDocumentsWithLog(
+        byte[] originalBytes,
+        byte[] modifiedBytes,
+        string authorName,
+        double detailThreshold,
+        bool caseInsensitive)
+    {
+        if (originalBytes == null || originalBytes.Length == 0 ||
+            modifiedBytes == null || modifiedBytes.Length == 0)
+        {
+            return JsonSerializer.Serialize(new CompareDocumentsWithLogResponse
+            {
+                Success = false,
+                Error = "Missing document data"
+            }, DocxodusJsonContext.Default.CompareDocumentsWithLogResponse);
+        }
+
+        var log = new ComparisonLog();
+
+        try
+        {
+            var original = new WmlDocument("original.docx", originalBytes);
+            var modified = new WmlDocument("modified.docx", modifiedBytes);
+
+            var settings = new WmlComparerSettings
+            {
+                AuthorForRevisions = authorName ?? "Docxodus",
+                DateTimeForRevisions = DateTime.UtcNow.ToString("o"),
+                DetailThreshold = detailThreshold,
+                CaseInsensitive = caseInsensitive,
+                Log = log
+            };
+
+            var result = WmlComparer.Compare(original, modified, settings);
+
+            return JsonSerializer.Serialize(new CompareDocumentsWithLogResponse
+            {
+                Success = true,
+                DocumentBase64 = Convert.ToBase64String(result.DocumentByteArray),
+                Log = ConvertLogEntries(log),
+                HasWarnings = log.HasWarnings,
+                HasErrors = log.HasErrors
+            }, DocxodusJsonContext.Default.CompareDocumentsWithLogResponse);
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new CompareDocumentsWithLogResponse
+            {
+                Success = false,
+                Error = $"{ex.GetType().Name}: {ex.Message}",
+                Log = ConvertLogEntries(log),
+                HasWarnings = log.HasWarnings,
+                HasErrors = log.HasErrors
+            }, DocxodusJsonContext.Default.CompareDocumentsWithLogResponse);
+        }
+    }
+
+    /// <summary>
+    /// Compare two DOCX documents to HTML with logging enabled.
+    /// Returns both the HTML output and a log of any warnings/errors encountered.
+    /// </summary>
+    /// <param name="originalBytes">The original DOCX file as a byte array</param>
+    /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
+    /// <param name="authorName">Author name for tracked changes</param>
+    /// <param name="detailThreshold">Detail threshold (0.0 to 1.0, default 0.15)</param>
+    /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
+    /// <param name="renderTrackedChanges">If true, show insertions/deletions visually</param>
+    /// <returns>JSON response with HTML and log entries</returns>
+    [JSExport]
+    public static string CompareDocumentsToHtmlWithLog(
+        byte[] originalBytes,
+        byte[] modifiedBytes,
+        string authorName,
+        double detailThreshold,
+        bool caseInsensitive,
+        bool renderTrackedChanges)
+    {
+        if (originalBytes == null || originalBytes.Length == 0 ||
+            modifiedBytes == null || modifiedBytes.Length == 0)
+        {
+            return JsonSerializer.Serialize(new CompareDocumentsToHtmlWithLogResponse
+            {
+                Success = false,
+                Error = "Missing document data"
+            }, DocxodusJsonContext.Default.CompareDocumentsToHtmlWithLogResponse);
+        }
+
+        var log = new ComparisonLog();
+
+        try
+        {
+            var original = new WmlDocument("original.docx", originalBytes);
+            var modified = new WmlDocument("modified.docx", modifiedBytes);
+
+            var comparerSettings = new WmlComparerSettings
+            {
+                AuthorForRevisions = authorName ?? "Docxodus",
+                DateTimeForRevisions = DateTime.UtcNow.ToString("o"),
+                DetailThreshold = detailThreshold,
+                CaseInsensitive = caseInsensitive,
+                Log = log
+            };
+
+            var result = WmlComparer.Compare(original, modified, comparerSettings);
+
+            // Convert the redlined document to HTML
+            using var memoryStream = new MemoryStream();
+            memoryStream.Write(result.DocumentByteArray, 0, result.DocumentByteArray.Length);
+            memoryStream.Position = 0;
+            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
+
+            var htmlSettings = new WmlToHtmlConverterSettings
+            {
+                PageTitle = "Document Comparison",
+                CssClassPrefix = "redline-",
+                FabricateCssClasses = true,
+                RenderTrackedChanges = renderTrackedChanges,
+                IncludeRevisionMetadata = renderTrackedChanges,
+                ShowDeletedContent = true,
+                RenderMoveOperations = true,
+            };
+
+            if (renderTrackedChanges)
+            {
+                htmlSettings.AuthorColors = new Dictionary<string, string>
+                {
+                    { authorName ?? "Docxodus", "#007bff" }
+                };
+            }
+
+            var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, htmlSettings);
+
+            return JsonSerializer.Serialize(new CompareDocumentsToHtmlWithLogResponse
+            {
+                Success = true,
+                Html = htmlElement.ToString(),
+                Log = ConvertLogEntries(log),
+                HasWarnings = log.HasWarnings,
+                HasErrors = log.HasErrors
+            }, DocxodusJsonContext.Default.CompareDocumentsToHtmlWithLogResponse);
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new CompareDocumentsToHtmlWithLogResponse
+            {
+                Success = false,
+                Error = $"{ex.GetType().Name}: {ex.Message}",
+                Log = ConvertLogEntries(log),
+                HasWarnings = log.HasWarnings,
+                HasErrors = log.HasErrors
+            }, DocxodusJsonContext.Default.CompareDocumentsToHtmlWithLogResponse);
+        }
+    }
+
+    /// <summary>
+    /// Convert ComparisonLog entries to DTOs for serialization.
+    /// </summary>
+    private static ComparisonLogEntryDto[] ConvertLogEntries(ComparisonLog log)
+    {
+        return log.Entries.Select(e => new ComparisonLogEntryDto
+        {
+            Level = e.Level.ToString(),
+            Code = e.Code,
+            Message = e.Message,
+            Details = e.Details,
+            Location = e.Location
+        }).ToArray();
+    }
+
+    /// <summary>
     /// Compare documents with detailed options.
     /// </summary>
     /// <param name="originalBytes">The original DOCX file</param>

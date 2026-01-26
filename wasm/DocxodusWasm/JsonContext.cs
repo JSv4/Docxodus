@@ -64,6 +64,11 @@ namespace DocxodusWasm;
 [JsonSerializable(typeof(Dictionary<string, AnnotationLabelDto>))]
 [JsonSerializable(typeof(TextSearchResponse))]
 [JsonSerializable(typeof(HtmlConversionResponse))]
+// Comparison log types
+[JsonSerializable(typeof(ComparisonLogEntryDto))]
+[JsonSerializable(typeof(ComparisonLogEntryDto[]))]
+[JsonSerializable(typeof(CompareDocumentsWithLogResponse))]
+[JsonSerializable(typeof(CompareDocumentsToHtmlWithLogResponse))]
 internal partial class DocxodusJsonContext : JsonSerializerContext
 {
 }
@@ -1069,6 +1074,116 @@ public class ExternalAnnotationValidationIssueDto
     public string Description { get; set; } = "";
     public string? ExpectedText { get; set; }
     public string? ActualText { get; set; }
+}
+
+#endregion
+
+#region Comparison Log Types
+
+/// <summary>
+/// A single log entry from the comparison process.
+/// </summary>
+public class ComparisonLogEntryDto
+{
+    /// <summary>
+    /// Severity level: "Info", "Warning", or "Error"
+    /// </summary>
+    public string Level { get; set; } = "Info";
+
+    /// <summary>
+    /// Machine-readable code identifying the type of issue.
+    /// Examples: "ORPHANED_FOOTNOTE_REFERENCE", "MISSING_STYLE"
+    /// </summary>
+    public string Code { get; set; } = "";
+
+    /// <summary>
+    /// Human-readable description of the issue.
+    /// </summary>
+    public string Message { get; set; } = "";
+
+    /// <summary>
+    /// Additional context or technical details (optional).
+    /// </summary>
+    public string? Details { get; set; }
+
+    /// <summary>
+    /// Location in the document where the issue occurred (optional).
+    /// Format: "part/xpath" e.g., "document.xml/w:footnoteReference[@w:id='3']"
+    /// </summary>
+    public string? Location { get; set; }
+}
+
+/// <summary>
+/// Response from comparison operations that includes a log of warnings/errors.
+/// </summary>
+public class CompareDocumentsWithLogResponse
+{
+    /// <summary>
+    /// Whether the comparison succeeded.
+    /// </summary>
+    public bool Success { get; set; }
+
+    /// <summary>
+    /// The redlined document as base64-encoded bytes (only if Success is true).
+    /// </summary>
+    public string? DocumentBase64 { get; set; }
+
+    /// <summary>
+    /// Error message if Success is false.
+    /// </summary>
+    public string? Error { get; set; }
+
+    /// <summary>
+    /// Log entries from the comparison process.
+    /// Contains warnings about document issues that were handled gracefully.
+    /// </summary>
+    public ComparisonLogEntryDto[] Log { get; set; } = Array.Empty<ComparisonLogEntryDto>();
+
+    /// <summary>
+    /// Whether the log contains any warnings.
+    /// </summary>
+    public bool HasWarnings { get; set; }
+
+    /// <summary>
+    /// Whether the log contains any errors.
+    /// </summary>
+    public bool HasErrors { get; set; }
+}
+
+/// <summary>
+/// Response from HTML comparison operations that includes a log of warnings/errors.
+/// </summary>
+public class CompareDocumentsToHtmlWithLogResponse
+{
+    /// <summary>
+    /// Whether the comparison succeeded.
+    /// </summary>
+    public bool Success { get; set; }
+
+    /// <summary>
+    /// The HTML output (only if Success is true).
+    /// </summary>
+    public string? Html { get; set; }
+
+    /// <summary>
+    /// Error message if Success is false.
+    /// </summary>
+    public string? Error { get; set; }
+
+    /// <summary>
+    /// Log entries from the comparison process.
+    /// </summary>
+    public ComparisonLogEntryDto[] Log { get; set; } = Array.Empty<ComparisonLogEntryDto>();
+
+    /// <summary>
+    /// Whether the log contains any warnings.
+    /// </summary>
+    public bool HasWarnings { get; set; }
+
+    /// <summary>
+    /// Whether the log contains any errors.
+    /// </summary>
+    public bool HasErrors { get; set; }
 }
 
 #endregion
