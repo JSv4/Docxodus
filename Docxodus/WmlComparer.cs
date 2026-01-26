@@ -105,6 +105,24 @@ namespace Docxodus
         /// </summary>
         public bool DetectFormatChanges = true;
 
+        /// <summary>
+        /// Optional log to collect warnings and errors during comparison.
+        /// When provided, the comparison will attempt to continue past recoverable errors
+        /// (like orphaned footnote references) and log them instead of throwing exceptions.
+        /// When null (default), behavior is unchanged and exceptions are thrown for invalid documents.
+        /// </summary>
+        /// <example>
+        /// <code>
+        /// var log = new ComparisonLog();
+        /// var settings = new WmlComparerSettings { Log = log };
+        /// var result = WmlComparer.Compare(doc1, doc2, settings);
+        ///
+        /// foreach (var warning in log.Warnings)
+        ///     Console.WriteLine($"{warning.Code}: {warning.Message}");
+        /// </code>
+        /// </example>
+        public ComparisonLog Log = null;
+
         public WmlComparerSettings()
         {
             // note that , and . are processed explicitly to handle cases where they are in a number or word
@@ -139,8 +157,8 @@ namespace Docxodus
             bool preProcessMarkupInOriginal)
         {
             if (preProcessMarkupInOriginal)
-                source1 = PreProcessMarkup(source1, settings.StartingIdForFootnotesEndnotes + 1000);
-            source2 = PreProcessMarkup(source2, settings.StartingIdForFootnotesEndnotes + 2000);
+                source1 = PreProcessMarkup(source1, settings.StartingIdForFootnotesEndnotes + 1000, settings.Log);
+            source2 = PreProcessMarkup(source2, settings.StartingIdForFootnotesEndnotes + 2000, settings.Log);
 
             if (s_SaveIntermediateFilesForDebugging && settings.DebugTempFileDi != null)
             {
@@ -419,7 +437,7 @@ namespace Docxodus
             }
         }
 
-        private static WmlDocument PreProcessMarkup(WmlDocument source, int startingIdForFootnotesEndnotes)
+        private static WmlDocument PreProcessMarkup(WmlDocument source, int startingIdForFootnotesEndnotes, ComparisonLog log = null)
         {
             // open and close to get rid of MC content
             using (MemoryStream ms = new MemoryStream())
@@ -472,7 +490,7 @@ namespace Docxodus
                         RemoveHyperlinks = true,
                     };
                     MarkupSimplifier.SimplifyMarkup(wDoc, msSettings);
-                    ChangeFootnoteEndnoteReferencesToUniqueRange(wDoc, startingIdForFootnotesEndnotes);
+                    ChangeFootnoteEndnoteReferencesToUniqueRange(wDoc, startingIdForFootnotesEndnotes, log);
                     AddUnidsToMarkupInContentParts(wDoc);
                     AddFootnotesEndnotesParts(wDoc);
                     FillInEmptyFootnotesEndnotes(wDoc);
@@ -687,7 +705,7 @@ namespace Docxodus
             //         insert at beginning of document
 
             settings.StartingIdForFootnotesEndnotes = 3000;
-            var originalWithUnids = PreProcessMarkup(original, settings.StartingIdForFootnotesEndnotes);
+            var originalWithUnids = PreProcessMarkup(original, settings.StartingIdForFootnotesEndnotes, settings.Log);
             WmlDocument consolidated = new WmlDocument(originalWithUnids);
 
             if (s_SaveIntermediateFilesForDebugging && settings.DebugTempFileDi != null)
@@ -1605,7 +1623,7 @@ namespace Docxodus
             }
         }
 
-        private static void ChangeFootnoteEndnoteReferencesToUniqueRange(WordprocessingDocument wDoc, int startingIdForFootnotesEndnotes)
+        private static void ChangeFootnoteEndnoteReferencesToUniqueRange(WordprocessingDocument wDoc, int startingIdForFootnotesEndnotes, ComparisonLog log = null)
         {
             var mainDocPart = wDoc.MainDocumentPart;
             var footnotesPart = wDoc.MainDocumentPart.FootnotesPart;
@@ -1622,35 +1640,77 @@ namespace Docxodus
             var references = mainDocumentXDoc
                 .Root
                 .Descendants()
-                .Where(d => d.Name == W.footnoteReference || d.Name == W.endnoteReference);
+                .Where(d => d.Name == W.footnoteReference || d.Name == W.endnoteReference)
+                .ToList(); // Materialize to allow modification during iteration
 
-            var rnd = new Random();
+            var orphanedReferences = new List<XElement>();
+
             foreach (var r in references)
             {
                 var oldId = (string)r.Attribute(W.id);
                 var newId = startingIdForFootnotesEndnotes.ToString();
                 startingIdForFootnotesEndnotes++;
-                r.Attribute(W.id).Value = newId;
+
                 if (r.Name == W.footnoteReference)
                 {
-                    var fn = footnotesPartXDoc
-                        .Root
+                    var fn = footnotesPartXDoc?
+                        .Root?
                         .Elements()
                         .FirstOrDefault(e => (string)e.Attribute(W.id) == oldId);
                     if (fn == null)
-                        throw new DocxodusException("Invalid document");
+                    {
+                        // Orphaned footnote reference - no corresponding footnote definition
+                        if (log != null)
+                        {
+                            log.AddWarning(
+                                ComparisonLogCodes.OrphanedFootnoteReference,
+                                $"Footnote reference with id '{oldId}' has no corresponding footnote definition",
+                                "The orphaned reference will be removed from the document",
+                                $"document.xml/w:footnoteReference[@w:id='{oldId}']");
+                            orphanedReferences.Add(r);
+                            continue;
+                        }
+                        else
+                        {
+                            throw new DocxodusException($"Invalid document: footnote reference with id '{oldId}' has no corresponding footnote definition");
+                        }
+                    }
+                    r.Attribute(W.id).Value = newId;
                     fn.Attribute(W.id).Value = newId;
                 }
                 else
                 {
-                    var en = endnotesPartXDoc
-                        .Root
+                    var en = endnotesPartXDoc?
+                        .Root?
                         .Elements()
                         .FirstOrDefault(e => (string)e.Attribute(W.id) == oldId);
                     if (en == null)
-                        throw new DocxodusException("Invalid document");
+                    {
+                        // Orphaned endnote reference - no corresponding endnote definition
+                        if (log != null)
+                        {
+                            log.AddWarning(
+                                ComparisonLogCodes.OrphanedEndnoteReference,
+                                $"Endnote reference with id '{oldId}' has no corresponding endnote definition",
+                                "The orphaned reference will be removed from the document",
+                                $"document.xml/w:endnoteReference[@w:id='{oldId}']");
+                            orphanedReferences.Add(r);
+                            continue;
+                        }
+                        else
+                        {
+                            throw new DocxodusException($"Invalid document: endnote reference with id '{oldId}' has no corresponding endnote definition");
+                        }
+                    }
+                    r.Attribute(W.id).Value = newId;
                     en.Attribute(W.id).Value = newId;
                 }
+            }
+
+            // Remove orphaned references from the document
+            foreach (var orphan in orphanedReferences)
+            {
+                orphan.Remove();
             }
 
             mainDocPart.PutXDocument();
