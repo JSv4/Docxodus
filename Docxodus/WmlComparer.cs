@@ -63,23 +63,17 @@ namespace Docxodus
         public DirectoryInfo DebugTempFileDi;
 
         /// <summary>
-        /// Whether to detect and mark moved content in GetRevisions(). Default: false.
+        /// Whether to detect and mark moved content in GetRevisions(). Default: true.
         /// When enabled, deletion/insertion pairs with similar text are marked as moves
         /// using native w:moveFrom/w:moveTo markup.
-        ///
-        /// WARNING: Move markup can cause Word to display "unreadable content" warnings
-        /// due to a known ID collision bug (Issue #96). Until this is fixed in Phase II,
-        /// it is recommended to either keep this false, or set SimplifyMoveMarkup = true
-        /// when enabling move detection.
         /// </summary>
-        public bool DetectMoves = false;
+        public bool DetectMoves = true;
 
         /// <summary>
         /// When true, converts native move markup (w:moveFrom/w:moveTo) to simple
-        /// delete/insert markup (w:del/w:ins) after comparison. This ensures Word
-        /// compatibility at the cost of losing the visual "moved" distinction.
+        /// delete/insert markup (w:del/w:ins) after comparison. This trades the
+        /// visual "moved" distinction for simpler markup.
         ///
-        /// Use this setting when DetectMoves = true but Word compatibility is required.
         /// Default: false.
         /// </summary>
         public bool SimplifyMoveMarkup = false;
@@ -1914,7 +1908,8 @@ namespace Docxodus
 
                     wDocWithRevisions.MainDocumentPart.PutXDocument();
                     FixUpFootnotesEndnotesWithCustomMarkers(wDocWithRevisions);
-                    FixUpRevMarkIds(wDocWithRevisions);
+                    // Note: FixUpRevMarkIds was removed here - it was causing ID collisions with move
+                    // elements (Issue #96). FixUpRevisionIds already handles all revision IDs properly.
 
                     // Convert move markup to simple del/ins if requested (Issue #96 workaround)
                     // This runs after all ID fixups to ensure proper conversion

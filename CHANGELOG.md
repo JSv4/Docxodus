@@ -6,11 +6,11 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - **Move markup Word compatibility (Issue #96)** - Documents with move operations no longer cause Word "unreadable content" warnings
-  - Added `SimplifyMoveMarkup` setting to convert native move markup (`w:moveFrom`/`w:moveTo`) to simple `w:del`/`w:ins`
-  - Changed `DetectMoves` default from `true` to `false` until the underlying ID collision bug is fixed in Phase II
-  - Root cause identified: `FixUpRevMarkIds()` was overwriting IDs of `w:del`/`w:ins` after `FixUpRevisionIds()` had assigned unique IDs, causing collisions with move element IDs
-  - Users who want move detection with Word compatibility should set both `DetectMoves = true` and `SimplifyMoveMarkup = true`
-  - Trade-off: With `SimplifyMoveMarkup = true`, users lose the visual "moved" distinction (green double-underline) but get guaranteed Word compatibility
+  - Root cause: `FixUpRevMarkIds()` was overwriting IDs of `w:del`/`w:ins` after `FixUpRevisionIds()` had already assigned unique IDs, causing collisions with move element IDs
+  - Fix: Removed redundant `FixUpRevMarkIds()` call - `FixUpRevisionIds()` already handles all revision element IDs correctly
+  - Added `SimplifyMoveMarkup` setting to optionally convert move markup to simple `w:del`/`w:ins` if desired
+  - Added comprehensive ID uniqueness tests to prevent regression
+  - `DetectMoves` now defaults to `true` (move detection is safe to use)
 - **Footnote/endnote numbering** - Fixed footnotes and endnotes displaying raw XML IDs instead of sequential display numbers
   - Per ECMA-376, `w:id` is a reference identifier, not the display number
   - Added `FootnoteNumberingTracker` class to scan document and build XML ID → display number mapping
