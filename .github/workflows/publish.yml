@@ -82,7 +82,7 @@ jobs:
 
     steps:
       - name: Download NuGet packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: nuget-packages
           path: ./artifacts
