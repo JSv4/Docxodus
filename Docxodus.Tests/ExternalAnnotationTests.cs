@@ -710,15 +710,22 @@ namespace OxPt
         [Fact]
         public void EA025_ProjectAnnotationsOntoHtml_ThenRemove_PreservesText()
         {
-            // Arrange
-            var doc = CreateSimpleTestDocument("Alpha Beta Gamma Delta");
+            // Arrange - use two separate paragraphs to avoid text splitting issues
+            var doc = CreateTestDocument(body =>
+            {
+                body.AppendChild(new Paragraph(new Run(new Text("Alpha paragraph"))));
+                body.AppendChild(new Paragraph(new Run(new Text("Beta paragraph"))));
+            });
             var set = ExternalAnnotationManager.CreateAnnotationSet(doc, "test");
 
             set.TextLabels["LABEL_A"] = new AnnotationLabel { Id = "LABEL_A", Text = "A", Color = "#FF0000" };
             set.TextLabels["LABEL_B"] = new AnnotationLabel { Id = "LABEL_B", Text = "B", Color = "#00FF00" };
 
-            var ann1 = ExternalAnnotationManager.CreateAnnotation("ann-a", "LABEL_A", set.Content, 0, 5);
-            var ann2 = ExternalAnnotationManager.CreateAnnotation("ann-b", "LABEL_B", set.Content, 6, 10);
+            // Use text search to create annotations (more reliable than offset-based)
+            var ann1 = ExternalAnnotationManager.CreateAnnotationFromSearch(
+                "ann-a", "LABEL_A", set.Content, "Alpha", 1);
+            var ann2 = ExternalAnnotationManager.CreateAnnotationFromSearch(
+                "ann-b", "LABEL_B", set.Content, "Beta", 1);
             Assert.NotNull(ann1);
             Assert.NotNull(ann2);
             set.LabelledText.Add(ann1);
