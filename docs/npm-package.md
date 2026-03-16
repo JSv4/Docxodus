@@ -18,6 +18,8 @@ npm install docxodus
 - **Headers & Footers**: Render document headers and footers in HTML output
 - **Tracked Changes Rendering**: Render insertions, deletions, and move operations in HTML
 - **Custom Annotations**: Add, remove, and render custom highlights with labels on document content
+- **External Annotations**: Store annotations externally (in JSON/database) without modifying the DOCX
+- **Incremental Annotation Overlay**: Project, add, or remove annotations on pre-converted HTML without re-converting the DOCX
 - **Document Structure API**: Analyze documents and get navigable element trees for precise targeting
 - **Revision Extraction**: Get structured data about all revisions in a compared document
 - **100% Client-Side**: All processing happens in the browser using WebAssembly
@@ -575,6 +577,178 @@ const result4 = await addAnnotationWithTarget(docxBytes, {
 | `targetTableCell(tableIndex, rowIndex, cellIndex)` | Target table cell |
 | `targetTableColumn(tableIndex, columnIndex)` | Target column (metadata only) |
 | `targetTextSearch(text, occurrence)` | Global text search |
+
+### External Annotations (Incremental Overlay API)
+
+The incremental overlay API decouples annotation projection from DOCX conversion. Instead of re-converting the entire document every time annotations change, you convert once and then project annotations onto the cached HTML. This produces dramatically better performance for interactive annotation workflows.
+
+> **Performance comparison (benchmark on a typical legal document):**
+>
+> | Operation | Time |
+> |-----------|------|
+> | Full DOCX-to-HTML re-conversion with annotations | ~892 ms |
+> | `projectAnnotationsOntoHtml` (full set projection) | ~56 ms (15.9x faster) |
+> | `addAnnotationToHtml` (single annotation add) | ~0.3 ms |
+
+**Convert-once-then-project pattern:**
+
+```typescript
+import {
+  initialize,
+  convertDocxToHtml,
+  createExternalAnnotationSet,
+  createAnnotationFromSearch,
+  projectAnnotationsOntoHtml,
+  addAnnotationToHtml,
+  removeAnnotationFromHtml,
+  generateAnnotationVisibilityCss,
+  generateAnnotationCss,
+} from 'docxodus';
+
+await initialize();
+
+// Step 1: Convert DOCX to HTML once (expensive, ~892ms)
+const baseHtml = await convertDocxToHtml(docxFile);
+
+// Step 2: Build your annotation set
+const annotationSet = await createExternalAnnotationSet(docxFile, "doc-123");
+annotationSet.textLabels["CLAUSE"] = {
+  id: "CLAUSE", text: "Clause", color: "#FF5722",
+  description: "Contract clause", icon: "", labelType: "text"
+};
+const ann = createAnnotationFromSearch(
+  "ann-001", "CLAUSE", annotationSet.content, "shall not be liable"
+);
+if (ann) annotationSet.labelledText.push(ann);
+
+// Step 3: Project annotations onto cached HTML (fast, ~56ms)
+let html = await projectAnnotationsOntoHtml(baseHtml, annotationSet);
+
+// Step 4: Incrementally add/remove without re-projecting the full set
+const newAnn = createAnnotationFromSearch(
+  "ann-002", "CLAUSE", annotationSet.content, "indemnify"
+);
+if (newAnn) {
+  const label = annotationSet.textLabels["CLAUSE"];
+  html = await addAnnotationToHtml(html, newAnn, label);  // ~0.3ms
+}
+
+html = await removeAnnotationFromHtml(html, "ann-001");  // ~0.3ms
+```
+
+#### `projectAnnotationsOntoHtml(html, annotationSet, options?): Promise<string>`
+
+Project a full annotation set onto pre-converted HTML. Use this when you have a complete set of annotations to render at once.
+
+```typescript
+const annotatedHtml = await projectAnnotationsOntoHtml(baseHtml, annotationSet, {
+  cssClassPrefix: 'ext-annot-',
+  labelMode: AnnotationLabelMode.Above
+});
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `html` | `string` | Yes | HTML string previously produced by `convertDocxToHtml` |
+| `annotationSet` | `ExternalAnnotationSet` | Yes | The external annotation set to project |
+| `options` | `ExternalAnnotationProjectionSettings` | No | Projection settings (see table below) |
+
+**ExternalAnnotationProjectionSettings:**
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `cssClassPrefix` | `string` | `"ext-annot-"` | CSS class prefix for annotation elements |
+| `labelMode` | `AnnotationLabelMode` | `Above` | How to display annotation labels |
+| `includeMetadata` | `boolean` | `true` | Include annotation metadata as data attributes |
+| `validateBeforeProjection` | `boolean` | `true` | Validate annotations before projection |
+
+#### `addAnnotationToHtml(html, annotation, label?, options?): Promise<string>`
+
+Add a single annotation to existing HTML. This is the fastest way to add one annotation to already-rendered HTML (~0.3ms per operation).
+
+```typescript
+const annotation = createAnnotation("ann-new", "CLAUSE", set.content, 100, 150);
+const label = { id: "CLAUSE", text: "Clause", color: "#FF5722",
+                description: "", icon: "", labelType: "text" as const };
+const updatedHtml = await addAnnotationToHtml(currentHtml, annotation, label);
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `html` | `string` | Yes | HTML string (with or without existing annotations) |
+| `annotation` | `OpenContractsAnnotation` | Yes | The annotation to add |
+| `label` | `AnnotationLabel` | No | Label definition for the annotation (color, display text) |
+| `options` | `ExternalAnnotationProjectionSettings` | No | Projection settings |
+
+#### `removeAnnotationFromHtml(html, annotationId, cssClassPrefix?): Promise<string>`
+
+Remove a single annotation by ID. Unwraps annotation spans back to plain text.
+
+```typescript
+const updatedHtml = await removeAnnotationFromHtml(currentHtml, "ann-001");
+
+// With a custom CSS prefix
+const updatedHtml2 = await removeAnnotationFromHtml(currentHtml, "ann-001", "my-annot-");
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `html` | `string` | Yes | HTML string containing annotations |
+| `annotationId` | `string` | Yes | ID of the annotation to remove |
+| `cssClassPrefix` | `string` | No | CSS class prefix used for annotations (default: `"ext-annot-"`) |
+
+#### `generateAnnotationVisibilityCss(hiddenLabelIds, cssClassPrefix?): Promise<string>`
+
+Generate CSS to hide/show annotations by label. Apply the returned CSS to a `<style>` element for instant toggling without re-rendering HTML.
+
+```typescript
+// Hide annotations with label "DRAFT" and "INTERNAL"
+const css = await generateAnnotationVisibilityCss(["DRAFT", "INTERNAL"]);
+
+// Apply to the DOM
+const styleEl = document.getElementById("visibility-overrides");
+styleEl.textContent = css;
+
+// To show all annotations again, clear the style:
+styleEl.textContent = "";
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `hiddenLabelIds` | `string[]` | Yes | Array of label IDs to hide |
+| `cssClassPrefix` | `string` | No | CSS class prefix (default: `"ext-annot-"`) |
+
+#### `generateAnnotationCss(labels, options?): Promise<string>`
+
+Generate annotation CSS independently from HTML content. Useful when managing CSS separately or pre-generating stylesheets.
+
+```typescript
+const labels = {
+  "CLAUSE": { id: "CLAUSE", text: "Clause", color: "#FF5722",
+              description: "", icon: "", labelType: "text" as const },
+  "TERM":   { id: "TERM", text: "Term", color: "#2196F3",
+              description: "", icon: "", labelType: "text" as const },
+};
+const css = await generateAnnotationCss(labels, {
+  cssClassPrefix: 'ext-annot-',
+  labelMode: AnnotationLabelMode.Above
+});
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `labels` | `Record<string, AnnotationLabel>` | Yes | Label definitions keyed by label ID |
+| `options` | `ExternalAnnotationProjectionSettings` | No | Projection settings |
 
 ### React Hooks
 

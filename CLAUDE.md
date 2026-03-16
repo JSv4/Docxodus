@@ -198,6 +198,17 @@ See `docs/architecture/comment_rendering.md` for detailed comment rendering docu
 - Structural annotations (sections, paragraphs, tables) with relationships
 - See `docs/architecture/opencontracts_export.md` for detailed documentation
 
+**ExternalAnnotationProjector.cs** - Incremental annotation overlay API (Issue #106). Decouples annotation projection from DOCX conversion for dramatically better performance when annotations change:
+- `ProjectAnnotationsOntoHtml(html, set, settings)` - Project a full annotation set onto pre-converted HTML (~56ms vs ~892ms for full re-conversion, 15.9x faster)
+- `AddAnnotationToHtml(html, annotation, label, settings)` - Add a single annotation (~0.3ms, 2972x faster than full re-conversion)
+- `RemoveAnnotationFromHtml(html, annotationId, cssPrefix)` - Remove a single annotation by ID (~18ms)
+- `GenerateVisibilityCss(hiddenLabelIds, cssPrefix)` - Generate CSS to hide/show annotations by label (instant toggling)
+- `GenerateAnnotationCssString(labels, settings)` - Generate annotation CSS independently
+- Works by building a text map of the HTML, finding annotation text via string search, and wrapping matches with styled `<span>` elements
+- `GetTextNodes` skips already-projected annotation wrappers to prevent offset drift from label text
+- Available in .NET, WASM (JSExport), and npm TypeScript wrapper
+- See `docs/architecture/incremental_annotation_overlay.md` for detailed documentation
+
 ### Target Frameworks
 
 Library targets: `net8.0`
