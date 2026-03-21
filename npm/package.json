@@ -8,16 +8,22 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     },
     "./react": {
-      "import": "./dist/react.js",
-      "types": "./dist/react.d.ts"
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
     },
     "./worker": {
-      "import": "./dist/worker-proxy.js",
-      "types": "./dist/worker-proxy.d.ts"
+      "types": "./dist/worker-proxy.d.ts",
+      "import": "./dist/worker-proxy.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "react": ["./dist/react.d.ts"],
+      "worker": ["./dist/worker-proxy.d.ts"]
     }
   },
   "files": [

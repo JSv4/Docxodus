@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - .NET 8 / Open XML SDK 3.x Migration
 
+### Fixed (npm)
+- **TypeScript subpath exports not resolving under `moduleResolution: "node"` (Issue #113)** - Added `typesVersions` fallback to npm package.json so `docxodus/react` and `docxodus/worker` subpath imports resolve types correctly under all TypeScript module resolution modes. Also reordered export conditions to put `types` before `import` per TypeScript requirements.
+
 ### Added
 - **Incremental annotation overlay API (Issue #106)** - Decouple HTML conversion from annotation projection to avoid full WASM re-conversion
   - `ProjectAnnotationsOntoHtml()` - Project a full annotation set onto already-converted HTML
