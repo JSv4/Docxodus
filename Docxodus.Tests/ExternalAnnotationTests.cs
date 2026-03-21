@@ -917,6 +917,188 @@ namespace OxPt
             Assert.Contains("data-annotation-id=\"ann-single-root\"", result);
         }
 
+        [Fact]
+        public void EA036_ProjectAnnotationsOntoHtml_PageIndexedAnnotation_RendersHighlight()
+        {
+            // Arrange - annotation spanning page boundaries uses Dictionary<string, OpenContractsSinglePageAnnotation> format
+            var html = "<html><head></head><body><p>End of page two content. Start of page three content here.</p></body></html>";
+            var set = new ExternalAnnotationSet
+            {
+                DocumentId = "test",
+                DocumentHash = "abc",
+                Content = "End of page two content. Start of page three content here.",
+                LabelledText = new List<OpenContractsAnnotation>(),
+                TextLabels = new Dictionary<string, AnnotationLabel>()
+            };
+
+            set.TextLabels["CLAUSE"] = new AnnotationLabel
+            {
+                Id = "CLAUSE",
+                Text = "Clause",
+                Color = "#2196F3"
+            };
+
+            // Page-indexed dictionary format (annotation spans pages 2→3)
+            var pageDict = new Dictionary<string, OpenContractsSinglePageAnnotation>
+            {
+                ["2"] = new OpenContractsSinglePageAnnotation { RawText = "page two content. " },
+                ["3"] = new OpenContractsSinglePageAnnotation { RawText = "Start of page three" }
+            };
+
+            var annotation = new OpenContractsAnnotation
+            {
+                Id = "ann-cross-page",
+                AnnotationLabel = "CLAUSE",
+                RawText = "page two content. Start of page three",
+                Page = 2,
+                AnnotationJson = pageDict,
+                Structural = false
+            };
+            set.LabelledText.Add(annotation);
+
+            // Act
+            var result = ExternalAnnotationProjector.ProjectAnnotationsOntoHtml(html, set);
+
+            // Assert - the annotation should be rendered despite using page-indexed format
+            Assert.Contains("data-annotation-id=\"ann-cross-page\"", result);
+            Assert.Contains("ext-annot-highlight", result);
+        }
+
+        [Fact]
+        public void EA037_AddAnnotationToHtml_PageIndexedAnnotation_RendersHighlight()
+        {
+            // Arrange
+            var html = "<html><head></head><body><p>Some text spanning multiple pages in the document.</p></body></html>";
+
+            var pageDict = new Dictionary<string, OpenContractsSinglePageAnnotation>
+            {
+                ["1"] = new OpenContractsSinglePageAnnotation { RawText = "spanning " },
+                ["2"] = new OpenContractsSinglePageAnnotation { RawText = "multiple pages" }
+            };
+
+            var annotation = new OpenContractsAnnotation
+            {
+                Id = "ann-add-cross",
+                AnnotationLabel = "TERM",
+                RawText = "spanning multiple pages",
+                Page = 1,
+                AnnotationJson = pageDict,
+                Structural = false
+            };
+
+            var label = new AnnotationLabel
+            {
+                Id = "TERM",
+                Text = "Term",
+                Color = "#FF5722"
+            };
+
+            // Act
+            var result = ExternalAnnotationProjector.AddAnnotationToHtml(html, annotation, label);
+
+            // Assert
+            Assert.Contains("data-annotation-id=\"ann-add-cross\"", result);
+            Assert.Contains("ext-annot-highlight", result);
+        }
+
+        [Fact]
+        public void EA038_ProjectAnnotationsOntoHtml_PageIndexedFallsBackToRawText()
+        {
+            // Arrange - page-indexed annotation where per-page RawText is empty,
+            // should fall back to annotation-level RawText
+            var html = "<html><head></head><body><p>Fallback text here.</p></body></html>";
+            var set = new ExternalAnnotationSet
+            {
+                DocumentId = "test",
+                DocumentHash = "abc",
+                Content = "Fallback text here.",
+                LabelledText = new List<OpenContractsAnnotation>(),
+                TextLabels = new Dictionary<string, AnnotationLabel>()
+            };
+
+            set.TextLabels["NOTE"] = new AnnotationLabel
+            {
+                Id = "NOTE",
+                Text = "Note",
+                Color = "#4CAF50"
+            };
+
+            var pageDict = new Dictionary<string, OpenContractsSinglePageAnnotation>
+            {
+                ["0"] = new OpenContractsSinglePageAnnotation { RawText = "" },
+                ["1"] = new OpenContractsSinglePageAnnotation { RawText = "" }
+            };
+
+            var annotation = new OpenContractsAnnotation
+            {
+                Id = "ann-fallback",
+                AnnotationLabel = "NOTE",
+                RawText = "Fallback text",
+                Page = 0,
+                AnnotationJson = pageDict,
+                Structural = false
+            };
+            set.LabelledText.Add(annotation);
+
+            // Act
+            var result = ExternalAnnotationProjector.ProjectAnnotationsOntoHtml(html, set);
+
+            // Assert
+            Assert.Contains("data-annotation-id=\"ann-fallback\"", result);
+        }
+
+        [Fact]
+        public void EA039_ProjectAnnotationsOntoHtml_SkipsPaginationRegistries()
+        {
+            // Arrange - paginated HTML with hidden registries that contain text
+            // The registry text should NOT pollute the text map
+            var html = @"<html><head></head><body>
+<div id=""pagination-staging"" class=""page-staging"">
+<div id=""pagination-hf-registry"" style=""display:none""><div>Header: Hello world</div></div>
+<div id=""pagination-footnote-registry"" style=""display:none""><div>1. Hello world footnote</div></div>
+<div data-section-index=""0""><p>Hello world document content.</p></div>
+</div>
+<div id=""pagination-container"" class=""page-container""></div>
+</body></html>";
+
+            var set = new ExternalAnnotationSet
+            {
+                DocumentId = "test",
+                DocumentHash = "abc",
+                Content = "Hello world document content.",
+                LabelledText = new List<OpenContractsAnnotation>(),
+                TextLabels = new Dictionary<string, AnnotationLabel>()
+            };
+
+            set.TextLabels["GREETING"] = new AnnotationLabel
+            {
+                Id = "GREETING",
+                Text = "Greeting",
+                Color = "#FFEB3B"
+            };
+
+            var annotation = new OpenContractsAnnotation
+            {
+                Id = "ann-paginated",
+                AnnotationLabel = "GREETING",
+                RawText = "Hello world",
+                Page = 0,
+                AnnotationJson = new TextSpan { Id = "ann-paginated", Start = 0, End = 11, Text = "Hello world" },
+                Structural = false
+            };
+            set.LabelledText.Add(annotation);
+
+            // Act
+            var result = ExternalAnnotationProjector.ProjectAnnotationsOntoHtml(html, set);
+
+            // Assert - annotation should be projected onto document content, not hidden registry
+            Assert.Contains("data-annotation-id=\"ann-paginated\"", result);
+            // The annotation should be inside the section div, not in the registry
+            var annIndex = result.IndexOf("data-annotation-id=\"ann-paginated\"");
+            var sectionIndex = result.IndexOf("data-section-index=\"0\"");
+            Assert.True(annIndex > sectionIndex, "Annotation should be in document content, not in hidden registry");
+        }
+
         #endregion
     }
 }

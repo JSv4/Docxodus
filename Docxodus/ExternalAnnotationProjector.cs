@@ -36,12 +36,15 @@ public static class ExternalAnnotationProjector
         // Clone the document to avoid modifying the original
         var result = new XElement(htmlDocument);
 
-        // Sort annotations by start offset for correct nesting
+        // Extract text data from annotations, handling both TextSpan and
+        // page-indexed dictionary formats (for annotations spanning page boundaries)
         var sortedAnnotations = annotationSet.LabelledText
-            .Where(a => !a.Structural && a.AnnotationJson is TextSpan)
-            .Select(a => (Annotation: a, Span: (TextSpan)a.AnnotationJson!))
-            .OrderBy(x => x.Span.Start)
-            .ThenByDescending(x => x.Span.End) // Longer spans first for nesting
+            .Where(a => !a.Structural)
+            .Select(a => (Annotation: a, TextData: GetAnnotationTextData(a)))
+            .Where(x => x.TextData != null)
+            .Select(x => (x.Annotation, x.TextData!.Value.searchText, x.TextData!.Value.span))
+            .OrderBy(x => x.span.Start)
+            .ThenByDescending(x => x.span.End) // Longer spans first for nesting
             .ToList();
 
         // Project each annotation using text search (not offsets).
@@ -49,14 +52,10 @@ public static class ExternalAnnotationProjector
         // modifies the tree (adds wrapper + label spans), which shifts offsets.
         // GetTextNodes skips already-projected annotation wrappers so their label
         // text doesn't pollute the offset calculation.
-        foreach (var (annotation, span) in sortedAnnotations)
+        foreach (var (annotation, searchText, span) in sortedAnnotations)
         {
             var label = annotationSet.TextLabels.TryGetValue(annotation.AnnotationLabel, out var l)
                 ? l : null;
-
-            // Use the annotation's raw text to find it in the HTML
-            var searchText = span.Text ?? annotation.RawText;
-            if (string.IsNullOrEmpty(searchText)) continue;
 
             // Rebuild text map from current tree state (skipping already-projected spans)
             var textMap = BuildTextMap(result);
@@ -113,6 +112,67 @@ public static class ExternalAnnotationProjector
 
         return annotatedHtml.ToString();
     }
+
+    #region Annotation Helpers
+
+    /// <summary>
+    /// Extract search text and a synthetic TextSpan from an annotation,
+    /// handling both TextSpan and page-indexed dictionary formats.
+    /// Returns null if the annotation has no usable text data.
+    /// </summary>
+    private static (string searchText, TextSpan span)? GetAnnotationTextData(OpenContractsAnnotation annotation)
+    {
+        if (annotation.AnnotationJson is TextSpan textSpan)
+        {
+            var text = textSpan.Text ?? annotation.RawText;
+            if (string.IsNullOrEmpty(text)) return null;
+            return (text, textSpan);
+        }
+
+        if (annotation.AnnotationJson is Dictionary<string, OpenContractsSinglePageAnnotation> pageDict)
+        {
+            // Prefer annotation-level RawText (canonical full text across all pages).
+            // Fall back to concatenating per-page RawText in page-index order.
+            var combinedText = annotation.RawText;
+            if (string.IsNullOrEmpty(combinedText))
+            {
+                var orderedTexts = pageDict
+                    .OrderBy(kvp => int.TryParse(kvp.Key, out var idx) ? idx : int.MaxValue)
+                    .Select(kvp => kvp.Value.RawText)
+                    .Where(t => !string.IsNullOrEmpty(t));
+                combinedText = string.Join("", orderedTexts);
+            }
+            if (string.IsNullOrEmpty(combinedText)) return null;
+
+            // Create a synthetic TextSpan for projection (offsets don't matter,
+            // since we use text search, not offset-based matching)
+            var span = new TextSpan
+            {
+                Id = annotation.Id,
+                Start = 0,
+                End = combinedText.Length,
+                Text = combinedText
+            };
+            return (combinedText, span);
+        }
+
+        // Last resort: use RawText directly if present
+        if (!string.IsNullOrEmpty(annotation.RawText))
+        {
+            var span = new TextSpan
+            {
+                Id = annotation.Id,
+                Start = 0,
+                End = annotation.RawText.Length,
+                Text = annotation.RawText
+            };
+            return (annotation.RawText, span);
+        }
+
+        return null;
+    }
+
+    #endregion
 
     #region Text Mapping
 
@@ -214,6 +274,12 @@ public static class ExternalAnnotationProjector
                 // Skip already-projected annotation wrappers so their label
                 // text doesn't shift offsets during subsequent projections
                 if (child.Attribute("data-annotation-id") != null)
+                    continue;
+
+                // Skip hidden pagination registries (header/footer and footnote)
+                // whose text content would pollute the text map
+                var id = (string?)child.Attribute("id");
+                if (id == "pagination-hf-registry" || id == "pagination-footnote-registry")
                     continue;
 
                 foreach (var childText in GetTextNodes(child))
@@ -421,25 +487,23 @@ public static class ExternalAnnotationProjector
         var htmlText = GetHtmlText(textMap);
         var usedOffsets = new HashSet<int>();
 
-        if (annotation.AnnotationJson is TextSpan span)
+        var textData = GetAnnotationTextData(annotation);
+        if (textData != null)
         {
-            var searchText = span.Text ?? annotation.RawText;
-            if (!string.IsNullOrEmpty(searchText))
+            var (searchText, span) = textData.Value;
+            var htmlLocation = FindTextInHtml(htmlText, searchText, usedOffsets);
+            if (htmlLocation != null)
             {
-                var htmlLocation = FindTextInHtml(htmlText, searchText, usedOffsets);
-                if (htmlLocation != null)
+                var htmlSpan = new TextSpan
                 {
-                    var htmlSpan = new TextSpan
-                    {
-                        Id = span.Id,
-                        Start = htmlLocation.Value.start,
-                        End = htmlLocation.Value.end,
-                        Text = searchText
-                    };
+                    Id = span.Id,
+                    Start = htmlLocation.Value.start,
+                    End = htmlLocation.Value.end,
+                    Text = searchText
+                };
 
-                    textMap = BuildTextMap(htmlDoc);
-                    ProjectSingleAnnotation(htmlDoc, textMap, annotation, htmlSpan, label, settings);
-                }
+                textMap = BuildTextMap(htmlDoc);
+                ProjectSingleAnnotation(htmlDoc, textMap, annotation, htmlSpan, label, settings);
             }
         }
 
