@@ -748,6 +748,176 @@ namespace OxPt
         }
 
         #endregion
+
+        #region HTML Fragment Tests (Issue #110)
+
+        [Fact]
+        public void EA030_ProjectAnnotationsOntoHtml_MultipleRoots_DoesNotThrow()
+        {
+            // Arrange - simulate DOMPurify-sanitized HTML with multiple root elements
+            var sanitizedHtml = "<style>.test { color: red; }</style><div><p>Hello, world!</p></div>";
+            var set = new ExternalAnnotationSet
+            {
+                DocumentId = "test",
+                DocumentHash = "abc",
+                Content = "Hello, world!",
+                LabelledText = new List<OpenContractsAnnotation>(),
+                TextLabels = new Dictionary<string, AnnotationLabel>()
+            };
+
+            set.TextLabels["GREETING"] = new AnnotationLabel
+            {
+                Id = "GREETING",
+                Text = "Greeting",
+                Color = "#FFEB3B"
+            };
+
+            var annotation = new OpenContractsAnnotation
+            {
+                Id = "ann-frag",
+                AnnotationLabel = "GREETING",
+                RawText = "Hello",
+                Page = 0,
+                AnnotationJson = new TextSpan { Id = "ann-frag", Start = 0, End = 5, Text = "Hello" },
+                Structural = false
+            };
+            set.LabelledText.Add(annotation);
+
+            // Act - should not throw Xml_MultipleRoots
+            var result = ExternalAnnotationProjector.ProjectAnnotationsOntoHtml(sanitizedHtml, set);
+
+            // Assert
+            Assert.Contains("Hello", result);
+            Assert.Contains("data-annotation-id=\"ann-frag\"", result);
+            // Should not contain the synthetic wrapper element
+            Assert.DoesNotContain("docxodus-fragment-root", result);
+        }
+
+        [Fact]
+        public void EA031_AddAnnotationToHtml_MultipleRoots_DoesNotThrow()
+        {
+            // Arrange
+            var sanitizedHtml = "<style>.x{}</style><div><p>Test content here.</p></div>";
+            var annotation = new OpenContractsAnnotation
+            {
+                Id = "ann-add",
+                AnnotationLabel = "CLAUSE",
+                RawText = "Test",
+                Page = 0,
+                AnnotationJson = new TextSpan { Id = "ann-add", Start = 0, End = 4, Text = "Test" },
+                Structural = false
+            };
+            var label = new AnnotationLabel { Id = "CLAUSE", Text = "Clause", Color = "#FF5722" };
+
+            // Act
+            var result = ExternalAnnotationProjector.AddAnnotationToHtml(
+                sanitizedHtml, annotation, label);
+
+            // Assert
+            Assert.Contains("data-annotation-id=\"ann-add\"", result);
+            Assert.DoesNotContain("docxodus-fragment-root", result);
+        }
+
+        [Fact]
+        public void EA032_RemoveAnnotationFromHtml_MultipleRoots_DoesNotThrow()
+        {
+            // Arrange - HTML fragment with an annotation already projected
+            var htmlWithAnnotation = "<style>.x{}</style><div><p>" +
+                "<span class=\"ext-annot-highlight ext-annot-single\" data-annotation-id=\"ann-rm\" data-label-id=\"LABEL\">" +
+                "Hello</span>, world!</p></div>";
+
+            // Act
+            var result = ExternalAnnotationProjector.RemoveAnnotationFromHtml(
+                htmlWithAnnotation, "ann-rm");
+
+            // Assert
+            Assert.DoesNotContain("data-annotation-id=\"ann-rm\"", result);
+            Assert.Contains("Hello", result);
+            Assert.DoesNotContain("docxodus-fragment-root", result);
+        }
+
+        [Fact]
+        public void EA033_ProjectAnnotationsOntoHtml_HtmlEntities_DoesNotThrow()
+        {
+            // Arrange - HTML with named entities that are invalid in XML
+            var htmlWithEntities = "<div><p>Price is 5&#160;dollars &#8211; cheap!</p></div>";
+            var set = new ExternalAnnotationSet
+            {
+                DocumentId = "test",
+                DocumentHash = "abc",
+                Content = "Price is 5\u00A0dollars \u2013 cheap!",
+                LabelledText = new List<OpenContractsAnnotation>(),
+                TextLabels = new Dictionary<string, AnnotationLabel>()
+            };
+
+            // Act - should not throw Xml_UndeclaredEntity
+            var result = ExternalAnnotationProjector.ProjectAnnotationsOntoHtml(htmlWithEntities, set);
+
+            // Assert
+            Assert.Contains("dollars", result);
+        }
+
+        [Fact]
+        public void EA034_ProjectAnnotationsOntoHtml_NbspEntity_DoesNotThrow()
+        {
+            // Arrange - HTML with &nbsp; entity (most common case)
+            var htmlWithNbsp = "<div><p>Hello&nbsp;world!</p></div>";
+            var set = new ExternalAnnotationSet
+            {
+                DocumentId = "test",
+                DocumentHash = "abc",
+                Content = "Hello\u00A0world!",
+                LabelledText = new List<OpenContractsAnnotation>(),
+                TextLabels = new Dictionary<string, AnnotationLabel>()
+            };
+
+            // Act
+            var result = ExternalAnnotationProjector.ProjectAnnotationsOntoHtml(htmlWithNbsp, set);
+
+            // Assert
+            Assert.Contains("world", result);
+        }
+
+        [Fact]
+        public void EA035_ProjectAnnotationsOntoHtml_SingleRoot_StillWorks()
+        {
+            // Arrange - standard single-root HTML should still work
+            var html = "<html><head></head><body><p>Hello, world!</p></body></html>";
+            var set = new ExternalAnnotationSet
+            {
+                DocumentId = "test",
+                DocumentHash = "abc",
+                Content = "Hello, world!",
+                LabelledText = new List<OpenContractsAnnotation>(),
+                TextLabels = new Dictionary<string, AnnotationLabel>()
+            };
+
+            set.TextLabels["GREETING"] = new AnnotationLabel
+            {
+                Id = "GREETING",
+                Text = "Greeting",
+                Color = "#FFEB3B"
+            };
+
+            var annotation = new OpenContractsAnnotation
+            {
+                Id = "ann-single-root",
+                AnnotationLabel = "GREETING",
+                RawText = "Hello",
+                Page = 0,
+                AnnotationJson = new TextSpan { Id = "ann-single-root", Start = 0, End = 5, Text = "Hello" },
+                Structural = false
+            };
+            set.LabelledText.Add(annotation);
+
+            // Act
+            var result = ExternalAnnotationProjector.ProjectAnnotationsOntoHtml(html, set);
+
+            // Assert
+            Assert.Contains("data-annotation-id=\"ann-single-root\"", result);
+        }
+
+        #endregion
     }
 }
 

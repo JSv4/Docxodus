@@ -15,6 +15,9 @@ All notable changes to this project will be documented in this file.
   - CSS-based label filtering enables responsive toggle without any re-rendering
 
 ### Fixed
+- **Annotation projection fails on sanitized HTML (Issue #110)** - `ProjectAnnotationsOntoHtml`, `AddAnnotationToHtml`, and `RemoveAnnotationFromHtml` now handle HTML fragments with multiple root elements (e.g., DOMPurify-sanitized output) and HTML named entities (`&nbsp;`, `&ndash;`, etc.)
+  - Root cause: `XElement.Parse()` requires valid XML with a single root element; sanitized HTML strips `<html>`/`<body>` wrappers leaving multiple roots
+  - Fix: Auto-wraps multi-root HTML in a synthetic container for parsing, unwraps on serialization; replaces common HTML entities with numeric XML equivalents
 - **Table container missing top margin (Issue #108)** - Tables preceded by paragraphs with no after-spacing now get a default `margin-top: 7.5pt` for visual separation
   - Also handles floating table spacing from `w:tblpPr` (`topFromText`/`bottomFromText` attributes)
   - Tables preceded by paragraphs with explicit after-spacing correctly skip the default margin

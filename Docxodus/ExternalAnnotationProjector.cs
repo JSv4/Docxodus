@@ -390,9 +390,9 @@ public static class ExternalAnnotationProjector
         if (annotationSet == null) throw new ArgumentNullException(nameof(annotationSet));
         settings ??= new ExternalAnnotationProjectionSettings();
 
-        var htmlDoc = XElement.Parse(html);
+        var htmlDoc = ParseHtmlString(html, out var wasWrapped);
         var result = ProjectAnnotations(htmlDoc, annotationSet, settings);
-        return result.ToString();
+        return SerializeHtmlString(result, wasWrapped);
     }
 
     /// <summary>
@@ -414,7 +414,7 @@ public static class ExternalAnnotationProjector
         if (annotation == null) throw new ArgumentNullException(nameof(annotation));
         settings ??= new ExternalAnnotationProjectionSettings();
 
-        var htmlDoc = XElement.Parse(html);
+        var htmlDoc = ParseHtmlString(html, out var wasWrapped);
 
         // Build text map and find annotation location
         var textMap = BuildTextMap(htmlDoc);
@@ -449,7 +449,7 @@ public static class ExternalAnnotationProjector
             AddSingleAnnotationCss(htmlDoc, annotation, label, settings);
         }
 
-        return htmlDoc.ToString();
+        return SerializeHtmlString(htmlDoc, wasWrapped);
     }
 
     /// <summary>
@@ -468,7 +468,7 @@ public static class ExternalAnnotationProjector
         if (string.IsNullOrEmpty(html)) throw new ArgumentNullException(nameof(html));
         if (string.IsNullOrEmpty(annotationId)) throw new ArgumentNullException(nameof(annotationId));
 
-        var htmlDoc = XElement.Parse(html);
+        var htmlDoc = ParseHtmlString(html, out var wasWrapped);
 
         // Find all spans with data-annotation-id matching
         var annotationSpans = htmlDoc.Descendants("span")
@@ -504,7 +504,7 @@ public static class ExternalAnnotationProjector
             }
         }
 
-        return htmlDoc.ToString();
+        return SerializeHtmlString(htmlDoc, wasWrapped);
     }
 
     /// <summary>
@@ -586,6 +586,99 @@ public static class ExternalAnnotationProjector
                 new XText(css.ToString()));
             head.Add(style);
         }
+    }
+
+    #endregion
+
+    #region HTML Fragment Parsing
+
+    // Synthetic wrapper element used to handle HTML fragments with multiple root elements.
+    // XElement.Parse() requires a single root, but sanitized HTML (e.g., DOMPurify output)
+    // often has multiple top-level elements like <style>...<div>...
+    private const string FragmentWrapper = "docxodus-fragment-root";
+
+    /// <summary>
+    /// Common HTML named entities mapped to their numeric XML equivalents.
+    /// XML only supports &amp; &lt; &gt; &quot; &apos; natively.
+    /// </summary>
+    private static readonly Dictionary<string, string> HtmlEntities = new(StringComparer.Ordinal)
+    {
+        { "&nbsp;", "&#160;" },
+        { "&ndash;", "&#8211;" },
+        { "&mdash;", "&#8212;" },
+        { "&lsquo;", "&#8216;" },
+        { "&rsquo;", "&#8217;" },
+        { "&ldquo;", "&#8220;" },
+        { "&rdquo;", "&#8221;" },
+        { "&bull;", "&#8226;" },
+        { "&hellip;", "&#8230;" },
+        { "&trade;", "&#8482;" },
+        { "&copy;", "&#169;" },
+        { "&reg;", "&#174;" },
+        { "&deg;", "&#176;" },
+        { "&plusmn;", "&#177;" },
+        { "&times;", "&#215;" },
+        { "&divide;", "&#247;" },
+        { "&laquo;", "&#171;" },
+        { "&raquo;", "&#187;" },
+        { "&cent;", "&#162;" },
+        { "&pound;", "&#163;" },
+        { "&euro;", "&#8364;" },
+        { "&sect;", "&#167;" },
+        { "&para;", "&#182;" },
+        { "&micro;", "&#181;" },
+        { "&frac12;", "&#189;" },
+        { "&frac14;", "&#188;" },
+        { "&frac34;", "&#190;" },
+    };
+
+    /// <summary>
+    /// Parse an HTML string that may contain multiple root elements or HTML named entities.
+    /// Wraps in a synthetic root and replaces HTML entities with numeric equivalents.
+    /// </summary>
+    /// <param name="html">HTML string to parse.</param>
+    /// <param name="wasWrapped">True if a synthetic wrapper was added (i.e., input had multiple roots).</param>
+    /// <returns>Parsed XElement.</returns>
+    private static XElement ParseHtmlString(string html, out bool wasWrapped)
+    {
+        // Replace HTML named entities with numeric equivalents for XML compatibility
+        var xmlSafe = html;
+        foreach (var (entity, numeric) in HtmlEntities)
+        {
+            if (xmlSafe.Contains(entity))
+                xmlSafe = xmlSafe.Replace(entity, numeric);
+        }
+
+        // Try parsing as-is first (single root element)
+        try
+        {
+            var result = XElement.Parse(xmlSafe);
+            wasWrapped = false;
+            return result;
+        }
+        catch (System.Xml.XmlException)
+        {
+            // Multiple roots or other XML issue - wrap in synthetic root
+            wasWrapped = true;
+            return XElement.Parse($"<{FragmentWrapper}>{xmlSafe}</{FragmentWrapper}>");
+        }
+    }
+
+    /// <summary>
+    /// Serialize an XElement back to string, removing the synthetic wrapper if one was added.
+    /// </summary>
+    private static string SerializeHtmlString(XElement element, bool wasWrapped)
+    {
+        if (!wasWrapped)
+            return element.ToString();
+
+        // Remove the synthetic wrapper - return just the inner content
+        var sb = new StringBuilder();
+        foreach (var node in element.Nodes())
+        {
+            sb.Append(node.ToString());
+        }
+        return sb.ToString();
     }
 
     #endregion
