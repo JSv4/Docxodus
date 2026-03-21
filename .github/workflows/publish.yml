@@ -108,6 +108,8 @@ jobs:
   build-binaries:
     needs: build-test-publish
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       matrix:
         include:
@@ -156,6 +158,8 @@ jobs:
   build-docx2html-binaries:
     needs: build-test-publish
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       matrix:
         include:
@@ -204,6 +208,8 @@ jobs:
   build-docx2oc-binaries:
     needs: build-test-publish
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     strategy:
       matrix:
         include:
