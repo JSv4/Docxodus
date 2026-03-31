@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Docxodus — Redline &amp; Tickets</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Docxodus</h1>
+    <nav>
+      <button class="tab active" data-tab="redline">Redline</button>
+      <button class="tab" data-tab="tickets">Tickets</button>
+      <button class="tab" data-tab="submit">Submit Ticket</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- ── Redline Tab ── -->
+    <section id="redline" class="panel active">
+      <h2>Compare Documents</h2>
+      <p>Upload two Word documents to generate a redline with tracked changes.</p>
+      <form id="redline-form">
+        <div class="file-row">
+          <label>
+            Original (.docx)
+            <input type="file" name="original" accept=".docx" required>
+          </label>
+          <label>
+            Modified (.docx)
+            <input type="file" name="modified" accept=".docx" required>
+          </label>
+        </div>
+        <details>
+          <summary>Options</summary>
+          <div class="options-grid">
+            <label>Author <input type="text" name="author" value="Docxodus" placeholder="Author name"></label>
+            <label>Detail threshold <input type="number" name="detailThreshold" value="0" min="0" max="1" step="0.05"></label>
+          </div>
+        </details>
+        <div class="actions">
+          <button type="submit" id="btn-compare">Generate Redline (.docx)</button>
+          <button type="button" id="btn-preview">Preview as HTML</button>
+        </div>
+      </form>
+      <div id="redline-status" class="status" hidden></div>
+      <div id="html-preview" hidden></div>
+    </section>
+
+    <!-- ── Tickets Tab ── -->
+    <section id="tickets" class="panel">
+      <h2>Rendering Issue Tickets</h2>
+      <div class="toolbar">
+        <select id="ticket-filter">
+          <option value="">All statuses</option>
+          <option value="Open">Open</option>
+          <option value="InProgress">In Progress</option>
+          <option value="Resolved">Resolved</option>
+          <option value="WontFix">Won't Fix</option>
+          <option value="Duplicate">Duplicate</option>
+        </select>
+        <button id="btn-refresh">Refresh</button>
+      </div>
+      <table id="ticket-table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Title</th><th>Status</th><th>Revisions</th><th>Created</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div id="ticket-paging" class="paging"></div>
+    </section>
+
+    <!-- ── Submit Ticket Tab ── -->
+    <section id="submit" class="panel">
+      <h2>Submit a Rendering Issue</h2>
+      <p>Upload two documents that produce incorrect redline output, along with a description of the issue.
+         The comparison will run automatically and the result will be stored for review.</p>
+      <form id="ticket-form">
+        <label>Title <input type="text" name="title" required placeholder="Brief description of the issue"></label>
+        <label>Description
+          <textarea name="description" rows="4" placeholder="What's wrong with the redline output? What did you expect?"></textarea>
+        </label>
+        <label>Your email (optional) <input type="email" name="email" placeholder="so we can follow up"></label>
+        <div class="file-row">
+          <label>
+            Original (.docx)
+            <input type="file" name="original" accept=".docx" required>
+          </label>
+          <label>
+            Modified (.docx)
+            <input type="file" name="modified" accept=".docx" required>
+          </label>
+        </div>
+        <div class="actions">
+          <button type="submit" id="btn-submit-ticket">Submit Ticket</button>
+        </div>
+      </form>
+      <div id="submit-status" class="status" hidden></div>
+    </section>
+  </main>
+
+  <!-- ── Ticket Detail Modal ── -->
+  <dialog id="ticket-modal">
+    <div class="modal-content">
+      <h3 id="modal-title"></h3>
+      <div id="modal-body"></div>
+      <div class="modal-actions">
+        <select id="modal-status">
+          <option value="Open">Open</option>
+          <option value="InProgress">In Progress</option>
+          <option value="Resolved">Resolved</option>
+          <option value="WontFix">Won't Fix</option>
+          <option value="Duplicate">Duplicate</option>
+        </select>
+        <button id="btn-update-status">Update Status</button>
+        <button id="btn-close-modal">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

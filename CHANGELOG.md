@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - .NET 8 / Open XML SDK 3.x Migration
 
+### Added
+- **DocxodusWeb — serverless redline & ticket web app** - ASP.NET Minimal API app for Cloud Run / serverless deployment
+  - `POST /api/compare` — Upload two DOCX files, receive a redlined DOCX with tracked changes
+  - `POST /api/compare/html` — Upload two DOCX files, receive HTML redline preview
+  - Rendering issue ticket system with SQLite storage — submit two DOCX files + description to report comparison bugs
+  - Tickets automatically run the Docxodus comparison and store original, modified, and redlined documents
+  - Simple HTML/CSS/JS frontend with redline tool, ticket list, and ticket submission tabs
+  - Dockerfile for containerized deployment (Google Cloud Run, AWS Fargate, etc.)
+  - Configurable via `DATA_DIR` environment variable for persistent storage
+
 ### Fixed (npm)
 - **TypeScript subpath exports not resolving under `moduleResolution: "node"` (Issue #113)** - Added `typesVersions` fallback to npm package.json so `docxodus/react` and `docxodus/worker` subpath imports resolve types correctly under all TypeScript module resolution modes. Also reordered export conditions to put `types` before `import` per TypeScript requirements.
 
