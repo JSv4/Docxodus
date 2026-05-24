@@ -18,6 +18,7 @@ All notable changes to this project will be documented in this file.
   - CSS-based label filtering enables responsive toggle without any re-rendering
 
 ### Fixed
+- **NullReferenceException in FindIndexOfNextParaMark when comparing documents with body-level bookmarks** - `FindIndexOfNextParaMark` assumed all elements in the comparison unit array were `ComparisonUnitWord`, but documents with `bookmarkStart`/`bookmarkEnd` as direct children of `w:body` produce other `ComparisonUnit` types. Now handles any `ComparisonUnit` with `Contents` (including `ComparisonUnitGroup`) and adds a null guard for the `LastOrDefault()` call.
 - **Paginated rendering: text clipped at page bottom + inconsistent paragraph spacing (Issue #114)**
   - Fixed `lineRule` default handling: when `w:lineRule` is absent but `w:line` is present, treat as "auto" per OOXML spec (ISO/IEC 29500). Previously the line value was ignored, causing accumulated line-height mismatches that clipped the last line on pages.
   - Fixed `contextualSpacing` handling: now suppresses both `spacingAfter` (margin-bottom) AND `spacingBefore` (margin-top) for consecutive same-style paragraphs. Previously only `spacingAfter` was suppressed, leaving inconsistent inter-paragraph gaps.

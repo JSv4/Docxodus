@@ -7676,9 +7676,12 @@ namespace Docxodus
         {
             for (int i = 0; i < cul.Length; i++)
             {
-                var cuw = cul[i] as ComparisonUnitWord;
-                var lastAtom = cuw.DescendantContentAtoms().LastOrDefault();
-                if (lastAtom.ContentElement.Name == W.pPr)
+                var comparisonUnit = cul[i];
+                if (comparisonUnit == null || comparisonUnit.Contents == null)
+                    continue;
+
+                var lastAtom = comparisonUnit.DescendantContentAtoms().LastOrDefault();
+                if (lastAtom != null && lastAtom.ContentElement.Name == W.pPr)
                     return i;
             }
             return cul.Length;
