@@ -215,4 +215,109 @@ public class WmlToMarkdownConverterTests
         Assert.DoesNotContain("{#p:", p.Markdown);
         Assert.Contains("Hello world", p.Markdown);
     }
+
+    // ----- Phase 3: inline runs -----
+
+    private static WmlDocument BuildRunsDoc(params (string text, bool bold, bool italic, bool code, bool strike)[] runs) =>
+        BuildDoc(body =>
+        {
+            var paragraph = new Paragraph();
+            foreach (var (text, bold, italic, code, strike) in runs)
+            {
+                var rPr = new RunProperties();
+                if (bold) rPr.Append(new Bold());
+                if (italic) rPr.Append(new Italic());
+                if (code) rPr.Append(new RunStyle { Val = "Code" });
+                if (strike) rPr.Append(new Strike());
+                paragraph.Append(new Run(rPr, new Text(text) { Space = SpaceProcessingModeValues.Preserve }));
+            }
+            body.Append(paragraph);
+        });
+
+    private static string MarkdownOf(WmlDocument doc) =>
+        WmlToMarkdownConverter.Convert(doc, new WmlToMarkdownConverterSettings()).Markdown;
+
+    [Fact]
+    public void MD020_BoldRun()
+    {
+        var md = MarkdownOf(BuildRunsDoc(("hello", true, false, false, false)));
+        Assert.Contains("**hello**", md);
+    }
+
+    [Fact]
+    public void MD021_ItalicRun()
+    {
+        var md = MarkdownOf(BuildRunsDoc(("hello", false, true, false, false)));
+        Assert.Contains("*hello*", md);
+    }
+
+    [Fact]
+    public void MD022_CodeRun()
+    {
+        var md = MarkdownOf(BuildRunsDoc(("x", false, false, true, false)));
+        Assert.Contains("`x`", md);
+    }
+
+    [Fact]
+    public void MD023_StrikeRun()
+    {
+        var md = MarkdownOf(BuildRunsDoc(("x", false, false, false, true)));
+        Assert.Contains("~~x~~", md);
+    }
+
+    [Fact]
+    public void MD024_CombinedBoldItalic()
+    {
+        var md = MarkdownOf(BuildRunsDoc(("hi", true, true, false, false)));
+        Assert.Contains("***hi***", md);
+    }
+
+    [Fact]
+    public void MD025_BoldCancelsAcrossAdjacentRuns()
+    {
+        var md = MarkdownOf(BuildRunsDoc(
+            ("a", true, false, false, false),
+            ("b", true, false, false, false)));
+        Assert.Contains("**ab**", md);
+        Assert.DoesNotContain("**a****b**", md);
+    }
+
+    [Fact]
+    public void MD026_HyperlinkRendersAsLink()
+    {
+        var doc = BuildHyperlinkDoc("click here", "https://example.com");
+        var md = MarkdownOf(doc);
+        // Uri canonicalizes "https://example.com" to "https://example.com/"; assert either form.
+        Assert.Matches(@"\[click here\]\(https://example\.com/?\)", md);
+    }
+
+    [Fact]
+    public void MD027_EscapesMarkdownMetacharacters()
+    {
+        // Use a character set that doesn't include the leading "{#" pattern (anchor) the
+        // emitter writes for us. The point of MD027 is that user content can't smuggle markup.
+        var md = MarkdownOf(BuildRunsDoc(("a*b_c[d]", false, false, false, false)));
+        Assert.Contains(@"a\*b\_c\[d\]", md);
+    }
+
+    private static WmlDocument BuildHyperlinkDoc(string text, string url)
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = wDoc.AddMainDocumentPart();
+            mainPart.Document = new Document();
+            var body = new Body();
+            mainPart.Document.Body = body;
+            mainPart.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var rel = mainPart.AddHyperlinkRelationship(new Uri(url, UriKind.Absolute), true);
+            var paragraph = new Paragraph(
+                new Hyperlink(new Run(new Text(text))) { Id = rel.Id });
+            body.Append(paragraph);
+            mainPart.Document.Save();
+        }
+        return new WmlDocument("test.docx", ms.ToArray());
+    }
 }

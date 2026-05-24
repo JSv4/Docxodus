@@ -280,6 +280,10 @@ public static class WmlToMarkdownConverter
         foreach (var scope in scopes)
         {
             UnidHelper.AssignToAllElements(scope.Root);
+            // Stash the owning part on the root so downstream emitters (hyperlinks, etc.)
+            // can resolve relationship-bound URIs without threading the part through every call.
+            if (scope.Root.Annotation<OpenXmlPart>() == null)
+                scope.Root.AddAnnotation(scope.Part);
             foreach (var el in scope.Root.DescendantsAndSelf())
             {
                 var kind = KindFor(el);
@@ -422,14 +426,202 @@ public static class WmlToMarkdownConverter
         return int.TryParse(digits, out var n) && n >= 1 && n <= 6 ? n : 1;
     }
 
-    // Phase 3 will replace this placeholder with the inline-run grouping logic. For Phase 2
-    // we emit raw text from each w:r/w:t so paragraphs and headings render their content.
+    // ------------------------------------------------------------------
+    // Phase 3: inline runs. Adjacent runs sharing the same formatting are
+    // merged into one delimiter pair so "**a****b**" becomes "**ab**". Each
+    // run's text is escaped before delimiters are wrapped around it.
+    // ------------------------------------------------------------------
+
+    private readonly record struct RunFormatting(
+        bool Bold,
+        bool Italic,
+        bool Code,
+        bool Strike,
+        string? HyperlinkUrl);
+
     private static void EmitInlineRuns(XElement p, EmitContext ctx)
     {
-        foreach (var r in p.Elements(W.r))
-            foreach (var t in r.Elements(W.t))
-                ctx.Sb.Append((string)t);
+        foreach (var (fmt, runs) in GroupInlineRuns(p))
+        {
+            if (fmt.HyperlinkUrl != null)
+            {
+                ctx.Sb.Append('[');
+                foreach (var r in runs) AppendRunText(r, ctx);
+                ctx.Sb.Append("](").Append(fmt.HyperlinkUrl).Append(')');
+                continue;
+            }
+
+            var (open, close) = MarkdownDelimiters(fmt);
+            ctx.Sb.Append(open);
+            foreach (var r in runs) AppendRunText(r, ctx);
+            ctx.Sb.Append(close);
+        }
     }
+
+    /// <summary>
+    /// Walk the inline children of a paragraph (runs and hyperlinks containing runs) and
+    /// return groups of adjacent runs that share the same formatting. Hyperlinks always form
+    /// their own group regardless of neighbours so delimiter merging never crosses a link.
+    /// </summary>
+    private static List<(RunFormatting Fmt, List<XElement> Runs)> GroupInlineRuns(XElement p)
+    {
+        var groups = new List<(RunFormatting, List<XElement>)>();
+        var buf = new List<XElement>();
+        RunFormatting bufFmt = default;
+        var primed = false;
+
+        void Flush()
+        {
+            if (primed && buf.Count > 0)
+                groups.Add((bufFmt, new List<XElement>(buf)));
+            buf.Clear();
+            primed = false;
+        }
+
+        void Add(XElement run, RunFormatting fmt)
+        {
+            if (!primed)
+            {
+                bufFmt = fmt;
+                buf.Add(run);
+                primed = true;
+                return;
+            }
+            // Hyperlinks never merge across adjacent runs even if formatting matches —
+            // each hyperlink is its own [text](url) span.
+            if (fmt.HyperlinkUrl == null && bufFmt.HyperlinkUrl == null && fmt.Equals(bufFmt))
+            {
+                buf.Add(run);
+                return;
+            }
+            Flush();
+            bufFmt = fmt;
+            buf.Add(run);
+            primed = true;
+        }
+
+        foreach (var child in p.Elements())
+        {
+            if (child.Name == W.r)
+            {
+                Add(child, ReadRunFormatting(child, hyperlinkUrl: null));
+            }
+            else if (child.Name == W.hyperlink)
+            {
+                var url = ResolveHyperlinkUrl(child);
+                // Hyperlink always forms its own group.
+                Flush();
+                foreach (var r in child.Elements(W.r))
+                    Add(r, ReadRunFormatting(r, hyperlinkUrl: url));
+                Flush();
+            }
+        }
+        Flush();
+        return groups;
+    }
+
+    private static RunFormatting ReadRunFormatting(XElement run, string? hyperlinkUrl)
+    {
+        var rPr = run.Element(W.rPr);
+        return new RunFormatting(
+            Bold: HasToggle(rPr, W.b),
+            Italic: HasToggle(rPr, W.i),
+            Code: IsCodeRun(rPr),
+            Strike: HasToggle(rPr, W.strike),
+            HyperlinkUrl: hyperlinkUrl);
+    }
+
+    private static bool HasToggle(XElement? rPr, XName name)
+    {
+        if (rPr == null) return false;
+        var el = rPr.Element(name);
+        if (el == null) return false;
+        var val = (string?)el.Attribute(W.val);
+        // OOXML toggle properties: absent => default (false), present-with-no-val => true,
+        // present with val="0"/"false" => false, otherwise true.
+        return val == null || (val != "0" && !val.Equals("false", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsCodeRun(XElement? rPr)
+    {
+        if (rPr == null) return false;
+        var styleId = (string?)rPr.Element(W.rStyle)?.Attribute(W.val);
+        if (styleId != null &&
+            (styleId.Equals("Code", StringComparison.OrdinalIgnoreCase)
+             || styleId.Equals("HTMLCode", StringComparison.OrdinalIgnoreCase)
+             || styleId.Equals("VerbatimChar", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        // Heuristic: monospace ascii font.
+        var ascii = (string?)rPr.Element(W.rFonts)?.Attribute(W.ascii);
+        if (ascii != null && (ascii.Contains("Mono", StringComparison.OrdinalIgnoreCase)
+            || ascii.Contains("Courier", StringComparison.OrdinalIgnoreCase)
+            || ascii.Contains("Consolas", StringComparison.OrdinalIgnoreCase)))
+            return true;
+        return false;
+    }
+
+    private static (string Open, string Close) MarkdownDelimiters(RunFormatting fmt)
+    {
+        if (fmt.Code) return ("`", "`"); // GFM: code is exclusive with bold/italic markup.
+        var open = new StringBuilder();
+        var close = new StringBuilder();
+        if (fmt.Strike) { open.Append("~~"); close.Insert(0, "~~"); }
+        if (fmt.Bold) { open.Append("**"); close.Insert(0, "**"); }
+        if (fmt.Italic) { open.Append('*'); close.Insert(0, '*'); }
+        return (open.ToString(), close.ToString());
+    }
+
+    private static string? ResolveHyperlinkUrl(XElement hyperlink)
+    {
+        // External: w:hyperlink with r:id pointing at a HyperlinkRelationship.
+        var relId = (string?)hyperlink.Attribute(R.id);
+        if (relId != null)
+        {
+            // Walk up to the containing part by finding the document root and chasing the
+            // matching relationship from any ancestor; the relationship is on the part that
+            // owns the XDocument, so we have to resolve at emit time.
+            // We stash the part reference on the XDocument's annotations earlier? Simpler:
+            // find the doc-level _parentPart by scanning ancestors of `hyperlink` until the
+            // root element, then look up the relationship from the document via Annotations.
+            var url = LookupRelationshipUrl(hyperlink, relId);
+            if (url != null) return url;
+        }
+        // Internal: w:anchor for bookmark navigation.
+        var anchor = (string?)hyperlink.Attribute(W.anchor);
+        if (anchor != null) return $"#{anchor}";
+        return null;
+    }
+
+    private static string? LookupRelationshipUrl(XElement el, string relId)
+    {
+        // BuildAnchorIndex stashes the owning OpenXmlPart on the root via XElement.AddAnnotation.
+        var root = el.AncestorsAndSelf().Last();
+        var part = root.Annotation<OpenXmlPart>();
+        if (part == null) return null;
+        foreach (var rel in part.HyperlinkRelationships)
+        {
+            if (rel.Id == relId) return rel.Uri.ToString();
+        }
+        return null;
+    }
+
+    private static void AppendRunText(XElement r, EmitContext ctx)
+    {
+        foreach (var node in r.Elements())
+        {
+            if (node.Name == W.t)
+                ctx.Sb.Append(EscapeMarkdown((string)node));
+            else if (node.Name == W.br)
+                ctx.Sb.Append("  \n"); // hard line break in markdown
+            else if (node.Name == W.tab)
+                ctx.Sb.Append("    ");
+        }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex MarkdownMetaPattern =
+        new(@"([\\`*_{}\[\]()#+\-!|>~])", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static string EscapeMarkdown(string s) => MarkdownMetaPattern.Replace(s, @"\$1");
 
     // Phase 4 placeholders — fleshed out later.
     private static void EmitListItem(XElement p, EmitContext ctx)
