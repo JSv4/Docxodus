@@ -1,4 +1,92 @@
 /**
+ * Which parts of the OOXML package to include in the markdown projection.
+ * Bitflags mirroring the .NET `Docxodus.ProjectionScopes` enum.
+ */
+export enum ProjectionScopes {
+  Body = 1,
+  Headers = 2,
+  Footers = 4,
+  Footnotes = 8,
+  Endnotes = 16,
+  Comments = 32,
+  All = 63,
+}
+
+/**
+ * How anchor markers are rendered in the markdown projection.
+ * Mirrors the .NET `Docxodus.AnchorRenderMode` enum.
+ */
+export enum AnchorRenderMode {
+  /** Anchor appears on its own line before each block element (default). */
+  Block = 0,
+  /** Block anchors plus inline `{#…}` markers for spans (comments, hyperlinks). */
+  BlockAndInline = 1,
+  /** No anchor markers in the output (projection only, no addressing). */
+  None = 2,
+}
+
+/**
+ * Strategy for rendering `w:tbl` elements that don't fit GFM pipe-table constraints.
+ * Mirrors the .NET `Docxodus.TableRenderMode` enum.
+ */
+export enum TableRenderMode {
+  /** Emit GFM pipe tables when possible, opaque anchor blocks otherwise (default). */
+  GfmWithOpaqueFallback = 0,
+  /** Always emit GFM pipe tables, flattening complex structure with possible loss. */
+  AlwaysGfm = 1,
+  /** Always emit opaque anchor blocks. */
+  AlwaysOpaque = 2,
+}
+
+/**
+ * How tracked changes are handled in the markdown projection.
+ * Mirrors the .NET `Docxodus.TrackedChangeMode` enum.
+ */
+export enum TrackedChangeMode {
+  /** Accept all revisions before conversion (default). */
+  Accept = 0,
+  /** Render insertions and deletions inline as `{+ins+}` / `{-del-}`. */
+  RenderInline = 1,
+  /** Accept insertions, drop deletions. */
+  StripDeletions = 2,
+}
+
+/**
+ * Settings controlling the markdown projection. Mirrors the .NET
+ * `WmlToMarkdownConverterSettings` class — see `docs/architecture/markdown_projection.md`.
+ */
+export interface MarkdownProjectionSettings {
+  scopes?: ProjectionScopes;
+  headingLevelOffset?: number;
+  anchorMode?: AnchorRenderMode;
+  tableMode?: TableRenderMode;
+  tableInlineCellMax?: number;
+  trackedChanges?: TrackedChangeMode;
+  resolveNumbering?: boolean;
+}
+
+/**
+ * Resolved location of an anchor in the underlying OOXML package — sufficient to walk
+ * back to the source element via the .NET API.
+ */
+export interface MarkdownAnchorTarget {
+  id: string;
+  kind: string;
+  scope: string;
+  unid: string;
+  partUri: string;
+}
+
+/**
+ * Output of the markdown projection: rendered text plus the anchor index mapping
+ * each `{#…}` token back to a location in the OOXML package.
+ */
+export interface MarkdownProjection {
+  markdown: string;
+  anchorIndex: Record<string, MarkdownAnchorTarget>;
+}
+
+/**
  * Revision type enum matching the .NET WmlComparerRevisionType
  */
 export enum RevisionType {
@@ -448,6 +536,7 @@ export interface DocxodusWasmExports {
     GetDocumentStructure: (bytes: Uint8Array) => string;
     GetDocumentMetadata: (bytes: Uint8Array) => string;
     ExportToOpenContract: (bytes: Uint8Array) => string;
+    ConvertWmlToMarkdown: (bytes: Uint8Array, settingsJson: string) => string;
     GetVersion: () => string;
     // Profiling methods
     ConvertDocxToHtmlProfiled: (bytes: Uint8Array) => string;

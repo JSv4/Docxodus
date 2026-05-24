@@ -555,6 +555,31 @@
                 }
                 const { start, end } = offsets[occurrence - 1];
                 return this.createAnnotationFromOffsets(id, labelId, documentText, start, end);
+            },
+
+            /**
+             * Convert DOCX to anchor-addressed Markdown projection. Returns parsed JSON
+             * with `Markdown` (string) and `AnchorIndex` (record).
+             */
+            convertToMarkdown: function(bytes, settings = {}) {
+                try {
+                    const settingsJson = JSON.stringify({
+                        Scopes: settings.scopes ?? 63,
+                        HeadingLevelOffset: settings.headingLevelOffset ?? 0,
+                        AnchorMode: settings.anchorMode ?? 0,
+                        TableMode: settings.tableMode ?? 0,
+                        TableInlineCellMax: settings.tableInlineCellMax ?? 80,
+                        TrackedChanges: settings.trackedChanges ?? 0,
+                        ResolveNumbering: settings.resolveNumbering ?? true,
+                    });
+                    const result = window.Docxodus.DocumentConverter.ConvertWmlToMarkdown(bytes, settingsJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return JSON.parse(result);
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
             }
         };
 

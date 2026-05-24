@@ -72,6 +72,11 @@ namespace DocxodusWasm;
 [JsonSerializable(typeof(ComparisonLogEntryDto[]))]
 [JsonSerializable(typeof(CompareDocumentsWithLogResponse))]
 [JsonSerializable(typeof(CompareDocumentsToHtmlWithLogResponse))]
+// Markdown projection types
+[JsonSerializable(typeof(MarkdownProjectionSettingsDto))]
+[JsonSerializable(typeof(MarkdownProjectionResponse))]
+[JsonSerializable(typeof(MarkdownAnchorTargetDto))]
+[JsonSerializable(typeof(Dictionary<string, MarkdownAnchorTargetDto>))]
 internal partial class DocxodusJsonContext : JsonSerializerContext
 {
 }
@@ -1198,6 +1203,49 @@ public class CompareDocumentsToHtmlWithLogResponse
     /// Whether the log contains any errors.
     /// </summary>
     public bool HasErrors { get; set; }
+}
+
+#endregion
+
+#region Markdown Projection Types
+
+/// <summary>
+/// Mirrors <c>Docxodus.WmlToMarkdownConverterSettings</c> for transport over the WASM
+/// JSON boundary. Numeric enum values match the .NET enum positions so callers can use
+/// the TypeScript enum constants in <c>npm/src/types.ts</c> without manual mapping.
+/// </summary>
+public class MarkdownProjectionSettingsDto
+{
+    public int Scopes { get; set; } = 63; // ProjectionScopes.All
+    public int HeadingLevelOffset { get; set; }
+    public int AnchorMode { get; set; } // AnchorRenderMode.Block = 0
+    public int TableMode { get; set; } // TableRenderMode.GfmWithOpaqueFallback = 0
+    public int TableInlineCellMax { get; set; } = 80;
+    public int TrackedChanges { get; set; } // TrackedChangeMode.Accept = 0
+    public bool ResolveNumbering { get; set; } = true;
+}
+
+/// <summary>
+/// Transport shape for <c>MarkdownProjection</c>. The <see cref="AnchorIndex"/> is keyed
+/// by anchor id (e.g. <c>p:body:UNID</c>) just like the .NET dictionary.
+/// </summary>
+public class MarkdownProjectionResponse
+{
+    public string Markdown { get; set; } = string.Empty;
+    public Dictionary<string, MarkdownAnchorTargetDto> AnchorIndex { get; set; } = new();
+}
+
+/// <summary>
+/// Transport shape for <c>AnchorTarget</c>. Flattens <c>Anchor</c> into the parent so
+/// callers can address an entry without re-shaping it.
+/// </summary>
+public class MarkdownAnchorTargetDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Kind { get; set; } = string.Empty;
+    public string Scope { get; set; } = string.Empty;
+    public string Unid { get; set; } = string.Empty;
+    public string PartUri { get; set; } = string.Empty;
 }
 
 #endregion

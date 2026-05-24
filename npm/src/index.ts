@@ -41,6 +41,10 @@ import type {
   ComparisonLogEntry,
   CompareResultWithLog,
   CompareToHtmlResultWithLog,
+  // Markdown projection types
+  MarkdownProjectionSettings,
+  MarkdownAnchorTarget,
+  MarkdownProjection,
 } from "./types.js";
 
 import {
@@ -48,6 +52,10 @@ import {
   PaginationMode,
   AnnotationLabelMode,
   RevisionType,
+  ProjectionScopes,
+  AnchorRenderMode,
+  TableRenderMode,
+  TrackedChangeMode,
   DocumentElementType,
   ComparisonLogLevel,
   ComparisonLogCodes,
@@ -129,6 +137,10 @@ export type {
   ComparisonLogEntry,
   CompareResultWithLog,
   CompareToHtmlResultWithLog,
+  // Markdown projection types
+  MarkdownProjectionSettings,
+  MarkdownAnchorTarget,
+  MarkdownProjection,
 };
 
 export {
@@ -136,6 +148,10 @@ export {
   PaginationMode,
   AnnotationLabelMode,
   RevisionType,
+  ProjectionScopes,
+  AnchorRenderMode,
+  TableRenderMode,
+  TrackedChangeMode,
   DocumentElementType,
   ComparisonLogLevel,
   ComparisonLogCodes,
@@ -1299,6 +1315,74 @@ export async function exportToOpenContract(
     docLabels: parsed.DocLabels ?? parsed.docLabels ?? [],
     labelledText: (parsed.LabelledText || parsed.labelledText || []).map(convertAnnotation),
     relationships: (parsed.Relationships || parsed.relationships)?.map(convertRelationship),
+  };
+}
+
+/**
+ * Convert a DOCX file to an anchor-addressed Markdown projection.
+ *
+ * The projection is a deterministic, anchor-keyed Markdown rendering of the document,
+ * suitable for LLM editing pipelines, structured search indexers, and diff/review UIs.
+ * Every paragraph, heading, list item, table, table cell, footnote, endnote, and
+ * comment is addressable by an `{#kind:scope:unid}` anchor that survives reformatting.
+ *
+ * See `docs/architecture/markdown_projection.md` for the projection spec.
+ *
+ * @param document - DOCX file as `File` or `Uint8Array`
+ * @param settings - Optional projection settings (defaults: all scopes, anchor blocks, accept tracked changes)
+ * @throws Error if conversion fails
+ *
+ * @example
+ * ```typescript
+ * const result = await convertWmlToMarkdown(docxFile);
+ * console.log(result.markdown);
+ * for (const [id, target] of Object.entries(result.anchorIndex)) {
+ *   console.log(id, target.partUri);
+ * }
+ * ```
+ */
+export async function convertWmlToMarkdown(
+  document: File | Uint8Array,
+  settings: MarkdownProjectionSettings = {}
+): Promise<MarkdownProjection> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+
+  await yieldToMain();
+
+  const settingsJson = JSON.stringify({
+    Scopes: settings.scopes ?? ProjectionScopes.All,
+    HeadingLevelOffset: settings.headingLevelOffset ?? 0,
+    AnchorMode: settings.anchorMode ?? AnchorRenderMode.Block,
+    TableMode: settings.tableMode ?? TableRenderMode.GfmWithOpaqueFallback,
+    TableInlineCellMax: settings.tableInlineCellMax ?? 80,
+    TrackedChanges: settings.trackedChanges ?? TrackedChangeMode.Accept,
+    ResolveNumbering: settings.resolveNumbering ?? true,
+  });
+
+  const result = exports.DocumentConverter.ConvertWmlToMarkdown(bytes, settingsJson);
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to convert document to markdown: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  const rawIndex = parsed.AnchorIndex ?? parsed.anchorIndex ?? {};
+  const anchorIndex: Record<string, MarkdownAnchorTarget> = {};
+  for (const [key, value] of Object.entries(rawIndex)) {
+    const v = value as any;
+    anchorIndex[key] = {
+      id: v.Id ?? v.id,
+      kind: v.Kind ?? v.kind,
+      scope: v.Scope ?? v.scope,
+      unid: v.Unid ?? v.unid,
+      partUri: v.PartUri ?? v.partUri,
+    };
+  }
+  return {
+    markdown: parsed.Markdown ?? parsed.markdown ?? "",
+    anchorIndex,
   };
 }
 

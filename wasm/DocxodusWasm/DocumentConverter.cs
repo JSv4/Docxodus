@@ -855,6 +855,64 @@ public partial class DocumentConverter
     }
 
     /// <summary>
+    /// Convert a DOCX file to an anchor-addressed Markdown projection. The returned JSON
+    /// has two top-level keys: <c>Markdown</c> (the rendered text) and <c>AnchorIndex</c>
+    /// (a dictionary mapping anchor ids like <c>p:body:UNID</c> to their location in the
+    /// underlying OOXML package). See <c>docs/architecture/markdown_projection.md</c>.
+    /// </summary>
+    /// <param name="docxBytes">The DOCX file as a byte array.</param>
+    /// <param name="settingsJson">Optional JSON-serialized <see cref="MarkdownProjectionSettingsDto"/>; pass empty for defaults.</param>
+    [JSExport]
+    public static string ConvertWmlToMarkdown(byte[] docxBytes, string settingsJson)
+    {
+        if (!ValidateInput(docxBytes, out var errorMessage))
+        {
+            return SerializeError(errorMessage!);
+        }
+
+        try
+        {
+            var dto = string.IsNullOrWhiteSpace(settingsJson)
+                ? new MarkdownProjectionSettingsDto()
+                : JsonSerializer.Deserialize(settingsJson, DocxodusJsonContext.Default.MarkdownProjectionSettingsDto)
+                    ?? new MarkdownProjectionSettingsDto();
+
+            var settings = new WmlToMarkdownConverterSettings
+            {
+                Scopes = (ProjectionScopes)dto.Scopes,
+                HeadingLevelOffset = dto.HeadingLevelOffset,
+                AnchorMode = (AnchorRenderMode)dto.AnchorMode,
+                TableMode = (TableRenderMode)dto.TableMode,
+                TableInlineCellMax = dto.TableInlineCellMax,
+                TrackedChanges = (TrackedChangeMode)dto.TrackedChanges,
+                ResolveNumbering = dto.ResolveNumbering,
+            };
+
+            var wmlDoc = new WmlDocument("document.docx", docxBytes);
+            var projection = WmlToMarkdownConverter.Convert(wmlDoc, settings);
+
+            var response = new MarkdownProjectionResponse { Markdown = projection.Markdown };
+            foreach (var (id, target) in projection.AnchorIndex)
+            {
+                response.AnchorIndex[id] = new MarkdownAnchorTargetDto
+                {
+                    Id = target.Anchor.Id,
+                    Kind = target.Anchor.Kind,
+                    Scope = target.Anchor.Scope,
+                    Unid = target.Anchor.Unid,
+                    PartUri = target.PartUri,
+                };
+            }
+
+            return JsonSerializer.Serialize(response, DocxodusJsonContext.Default.MarkdownProjectionResponse);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
     /// Get library version information.
     /// </summary>
     [JSExport]
