@@ -134,4 +134,116 @@ public class DocxSessionTests
         var p2 = session.Project();
         Assert.Same(p1, p2);
     }
+
+    // ─── Phase 3: text CRUD + undo/redo ──────────────────────────────────
+
+    [Fact]
+    public void DS030_ReplaceTextSimple()
+    {
+        using var session = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var firstAnchor = session.Project().AnchorIndex.Keys.First();
+
+        var result = session.ReplaceText(firstAnchor, "Replaced text.");
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Contains(result.Modified, a => a.Id == firstAnchor);
+        Assert.NotNull(result.Patch);
+        Assert.Contains("Replaced text.", result.Patch!.Markdown);
+
+        Assert.Contains("Replaced text.", session.Project().Markdown);
+        Assert.DoesNotContain("First paragraph.", session.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS031_ReplaceText_AnchorNotFound()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var r = s.ReplaceText("p:body:deadbeef", "x");
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.AnchorNotFound, r.Error!.Code);
+    }
+
+    [Fact]
+    public void DS032_ReplaceText_MalformedMarkdownNull()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.ReplaceText(anchor, null!);
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.MalformedMarkdown, r.Error!.Code);
+    }
+
+    [Fact]
+    public void DS033_ReplaceText_RejectsTableSyntax()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.ReplaceText(anchor, "| a | b |\n|---|---|\n| 1 | 2 |");
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.TableInsertNotSupported, r.Error!.Code);
+    }
+
+    [Fact]
+    public void DS034_ReplaceText_FailureLeavesDocUnchanged()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var before = s.Project().Markdown;
+        s.ReplaceText("p:body:deadbeef", "x");
+        Assert.Equal(before, s.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS035_DeleteBlock()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchors = s.Project().AnchorIndex.Keys.ToList();
+        Assert.True(anchors.Count >= 2);
+        var toDelete = anchors[0];
+
+        var r = s.DeleteBlock(toDelete);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains(r.Removed, a => a.Id == toDelete);
+        Assert.False(s.Exists(toDelete));
+        Assert.DoesNotContain("First paragraph.", s.Project().Markdown);
+        Assert.Contains("Second paragraph.", s.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS036_UndoReplaceText()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var before = s.Project().Markdown;
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        s.ReplaceText(anchor, "Replaced.");
+        Assert.True(s.Undo());
+        Assert.Equal(before, s.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS037_RedoAfterUndo()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        s.ReplaceText(anchor, "Replaced.");
+        var afterEdit = s.Project().Markdown;
+        s.Undo();
+        Assert.True(s.Redo());
+        Assert.Equal(afterEdit, s.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS038_NothingToUndo()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        Assert.False(s.Undo());
+    }
+
+    [Fact]
+    public void DS039_ReplaceText_WithHyperlink()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.ReplaceText(anchor, "See [Docxodus](https://example.com/d).");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains("[Docxodus](https://example.com/d)", s.Project().Markdown);
+    }
 }
