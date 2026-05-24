@@ -2,6 +2,8 @@
 
 This document describes the custom annotation system for marking and highlighting arbitrary text ranges in DOCX documents with metadata that persists in the document and renders in HTML output.
 
+> **For agentic editing pipelines:** annotations are also how an agent locates *semantically named* regions of a document for surgical edits ("the indemnification clause," "the governing-law paragraph") without having to text-recognize them. See [`docx_mutation_api.md` § Finding anchors via tagged annotations](docx_mutation_api.md#finding-anchors-via-tagged-annotations) for the read-side bridge and [#132](https://github.com/JSv4/Docxodus/issues/132) for the planned first-class `DocxSession.FindByAnnotation` / `FindByLabel` API.
+
 ## Overview
 
 The annotation system enables:

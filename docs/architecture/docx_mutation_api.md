@@ -154,6 +154,50 @@ What am I editing?
           session.Undo() restores prior state.
 ```
 
+## Finding anchors via tagged annotations
+
+The session addresses content by anchor id, but real workflows don't start with anchor ids — they start with intent ("edit the indemnification provision," "tighten the termination clause"). The clean way to bridge intent to anchors is to **annotate the regions ahead of time**, then resolve the annotation to its anchor(s) at edit time.
+
+Docxodus's `AnnotationManager` already persists annotations into the docx itself: each annotation creates a `w:bookmark` named `_Docxodus_Ann_<id>` covering the range, and a custom XML part stores the metadata (`LabelId`, `Label`, `Color`, `Metadata` key/value bag). See [`custom_annotations.md`](custom_annotations.md) for the full mechanism and lifecycle. Annotations survive save/reopen and travel with the document.
+
+A first-class `DocxSession.FindByAnnotation(id)` / `FindByLabel(labelId)` API is planned (tracked in [#132](https://github.com/JSv4/Docxodus/issues/132)). Until that lands, the bridge is straightforward enough to do in two steps with the existing surface:
+
+```csharp
+// Step 1 — read annotations from the DOCX (round-trip through bytes).
+//   AnnotationManager takes WmlDocument, so save the session first.
+var saved = session.Save();
+var wmlDoc = new WmlDocument("session.docx", saved);
+var annotations = AnnotationManager.GetAnnotations(wmlDoc);
+var target = annotations.First(a => a.LabelId == "INDEMNIFICATION");
+
+// Step 2 — walk the bookmark to find the OOXML elements it covers,
+//   then map their Unids back to AnchorTargets in the live projection.
+using var probe = new DocxSession(saved);  // matches the saved state
+var bookmarkName = target.BookmarkName;     // "_Docxodus_Ann_<id>"
+var index = probe.Project().AnchorIndex;
+
+// Find the bookmarkStart / bookmarkEnd in the body. (Pseudocode — the
+// AnchorTarget.Resolve walk is private; copy the W.bookmarkStart match
+// logic from AnnotationManager.GetAnnotationsInternal until the helper
+// API lands.)
+var anchors = index.Values
+    .Where(t => /* element ancestry contains a w:bookmarkStart
+                   with the matching name and a preceding w:bookmarkEnd
+                   sibling within the body */)
+    .ToList();
+
+// Step 3 — hand anchors to the mutation surface.
+foreach (var a in anchors)
+    session.ReplaceText(a.Anchor.Id, "Revised indemnification language…");
+```
+
+Two caveats to internalize while [#132](https://github.com/JSv4/Docxodus/issues/132) is open:
+
+- **`AnnotationManager` operates on `WmlDocument`, not the long-lived session.** The round-trip costs a save + reopen. Acceptable for low-frequency lookups; not acceptable to do per-mutation.
+- **Bookmarks can span partial paragraphs.** A bookmark that starts mid-run will still return the enclosing block's anchor. That's usually what an agent wants ("edit this paragraph"), but for surgical character-range edits you'll need to combine `FindByAnnotation` with `ApplyFormat(anchor, CharSpan, op)` after computing the offset by walking the bookmark range yourself.
+
+The agent's prompt should also be aware: it can call `AnnotationManager.GetAnnotations(doc)` once at the start of a session to enumerate available labels (e.g., "you can target: INDEMNIFICATION, TERMINATION, GOVERNING_LAW") and present those as tools rather than asking the LLM to discover them from text.
+
 ## The Raw escape hatch
 
 `session.Raw` exposes three operations: `GetXml(anchorId)` returns the element's OOXML as a string (useful as a template), `InsertXml(anchor, position, xml)` inserts a sibling fragment, `ReplaceXml(anchor, xml)` swaps the element for a fragment. Newly-inserted elements automatically get Unids and become addressable on the next projection.
