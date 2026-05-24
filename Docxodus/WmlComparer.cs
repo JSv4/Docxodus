@@ -8657,30 +8657,7 @@ namespace Docxodus
 
         private static void AssignUnidToAllElements(XElement contentParent)
         {
-            // For footnotes and endnotes, also assign a Unid to the contentParent itself
-            // This is needed so that multiple paragraphs in the same footnote/endnote
-            // share the same AncestorUnids[0], allowing CoalesceRecurse to properly
-            // reconstruct the footnote/endnote element
-            if (contentParent.Name == W.footnote || contentParent.Name == W.endnote)
-            {
-                if (contentParent.Attribute(PtOpenXml.Unid) == null)
-                {
-                    string unid = Guid.NewGuid().ToString().Replace("-", "");
-                    var newAtt = new XAttribute(PtOpenXml.Unid, unid);
-                    contentParent.Add(newAtt);
-                }
-            }
-
-            var content = contentParent.Descendants();
-            foreach (var d in content)
-            {
-                if (d.Attribute(PtOpenXml.Unid) == null)
-                {
-                    string unid = Guid.NewGuid().ToString().Replace("-", "");
-                    var newAtt = new XAttribute(PtOpenXml.Unid, unid);
-                    d.Add(newAtt);
-                }
-            }
+            UnidHelper.AssignToAllElements(contentParent);
         }
     }
 
