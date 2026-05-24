@@ -246,4 +246,102 @@ public class DocxSessionTests
         Assert.True(r.Success, r.Error?.Message);
         Assert.Contains("[Docxodus](https://example.com/d)", s.Project().Markdown);
     }
+
+    // ─── Phase 4: structural ops ─────────────────────────────────────────
+
+    [Fact]
+    public void DS040_InsertParagraphAfter()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        var r = s.InsertParagraph(anchor, Position.After, "Inserted paragraph.");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Single(r.Created);
+        var newAnchor = r.Created[0];
+        Assert.Equal("p", newAnchor.Kind);
+        Assert.Contains("Inserted paragraph.", s.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS041_InsertParagraphBefore()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.InsertParagraph(anchor, Position.Before, "First inserted.");
+        Assert.True(r.Success);
+        Assert.Contains("First inserted.", s.Project().Markdown);
+        // The inserted paragraph should appear before the original first paragraph
+        var md = s.Project().Markdown;
+        Assert.True(md.IndexOf("First inserted.") < md.IndexOf("First paragraph."));
+    }
+
+    [Fact]
+    public void DS041b_InsertMultiBlockPayload()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.InsertParagraph(anchor, Position.After,
+            "# New Heading\n\nA normal paragraph beneath it.");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal(2, r.Created.Count);
+        Assert.Equal("h", r.Created[0].Kind);
+        Assert.Equal("p", r.Created[1].Kind);
+        Assert.Contains("# New Heading", s.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS042_SplitParagraph()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        // "First paragraph." → split at offset 5 ("First" | " paragraph.")
+        var r = s.SplitParagraph(anchor, 5);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains(r.Modified, a => a.Id == anchor);
+        Assert.Single(r.Created);
+
+        var md = s.Project().Markdown;
+        Assert.Contains("First", md);
+        Assert.Contains("paragraph.", md);
+    }
+
+    [Fact]
+    public void DS042b_SplitParagraph_OffsetOutOfRange()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.SplitParagraph(anchor, 9999);
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.OffsetOutOfRange, r.Error!.Code);
+    }
+
+    [Fact]
+    public void DS043_MergeParagraphs()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchors = s.Project().AnchorIndex.Keys.ToList();
+        var first = anchors[0];
+        var second = anchors[1];
+
+        var r = s.MergeParagraphs(first, second);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains(r.Modified, a => a.Id == first);
+        Assert.Contains(r.Removed, a => a.Id == second);
+        Assert.False(s.Exists(second));
+        Assert.Contains("First paragraph.Second paragraph.", s.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS044_MergeParagraphs_NotAdjacent()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchors = s.Project().AnchorIndex.Keys.ToList();
+        // Insert a paragraph between the two, then try to merge first + original second
+        s.InsertParagraph(anchors[0], Position.After, "Middle paragraph.");
+        var r = s.MergeParagraphs(anchors[0], anchors[1]);
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.AnchorsNotAdjacent, r.Error!.Code);
+    }
 }

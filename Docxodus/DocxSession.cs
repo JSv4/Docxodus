@@ -254,6 +254,175 @@ public sealed class DocxSession : IDisposable
         }
     }
 
+    // ─── Tier B: structural ops ──────────────────────────────────────────
+
+    public EditResult InsertParagraph(string anchorId, Position pos, string markdownPayload)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (!Project().AnchorIndex.TryGetValue(anchorId, out var target))
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+
+        var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
+        if (!parsed.Success)
+            return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
+        if (parsed.Blocks.Count == 0)
+            return EditResult.Fail(EditErrorCode.MalformedMarkdown, "empty payload", anchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var created = new List<Anchor>();
+            var newElements = new List<XElement>();
+            foreach (var block in parsed.Blocks)
+            {
+                var p = BuildParagraphFromParsedBlock(block);
+                UnidHelper.AssignToAllElements(p);
+                newElements.Add(p);
+                var unid = (string)p.Attribute(PtOpenXml.Unid)!;
+                var kind = ParserBlockKindToAnchorKind(block.Kind);
+                created.Add(new Anchor($"{kind}:{target.Anchor.Scope}:{unid}", kind, target.Anchor.Scope, unid));
+            }
+
+            if (pos == Position.Before)
+            {
+                foreach (var n in newElements) element.AddBeforeSelf(n);
+            }
+            else
+            {
+                XElement after = element;
+                foreach (var n in newElements) { after.AddAfterSelf(n); after = n; }
+            }
+
+            foreach (var n in newElements) PromoteHyperlinkRelationships(n);
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Created = created,
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    public EditResult SplitParagraph(string anchorId, int characterOffset)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (!Project().AnchorIndex.TryGetValue(anchorId, out var target))
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "SplitParagraph requires a paragraph anchor", anchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+
+        var totalText = ParagraphText(element);
+        if (characterOffset < 0 || characterOffset > totalText.Length)
+            return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                $"offset {characterOffset} out of [0, {totalText.Length}]", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var pPr = element.Element(W.pPr);
+            var second = new XElement(W.p);
+            if (pPr is not null) second.Add(new XElement(pPr));
+
+            // Split the run at the boundary, then move all runs at-or-past offset to `second`.
+            SplitRunsAtOffset(element, characterOffset);
+            int consumed = 0;
+            var runsToMove = new List<XElement>();
+            foreach (var run in element.Elements(W.r).ToList())
+            {
+                var runText = RunText(run);
+                if (consumed >= characterOffset) runsToMove.Add(run);
+                consumed += runText.Length;
+            }
+            foreach (var run in runsToMove)
+            {
+                run.Remove();
+                second.Add(run);
+            }
+
+            UnidHelper.AssignToAllElements(second);
+            element.AddAfterSelf(second);
+
+            var secondUnid = (string)second.Attribute(PtOpenXml.Unid)!;
+            var secondAnchor = new Anchor(
+                $"{target.Anchor.Kind}:{target.Anchor.Scope}:{secondUnid}",
+                target.Anchor.Kind, target.Anchor.Scope, secondUnid);
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { target.Anchor },
+                Created = new[] { secondAnchor },
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    public EditResult MergeParagraphs(string firstAnchorId, string secondAnchorId)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var idx = Project().AnchorIndex;
+        if (!idx.TryGetValue(firstAnchorId, out var firstTarget))
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "first anchor not found", firstAnchorId);
+        if (!idx.TryGetValue(secondAnchorId, out var secondTarget))
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "second anchor not found", secondAnchorId);
+
+        var firstEl = firstTarget.Resolve(_doc!);
+        var secondEl = secondTarget.Resolve(_doc!);
+        if (firstEl is null || secondEl is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null");
+
+        if (!ReferenceEquals(firstEl.NextNode, secondEl))
+            return EditResult.Fail(EditErrorCode.AnchorsNotAdjacent,
+                "MergeParagraphs requires second anchor to be the immediate next sibling of first");
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            foreach (var run in secondEl.Elements(W.r).ToList())
+            {
+                run.Remove();
+                firstEl.Add(run);
+            }
+            secondEl.Remove();
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { firstTarget.Anchor },
+                Removed = new[] { secondTarget.Anchor },
+                Patch = ProjectScope(firstTarget),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
+        }
+    }
+
     // ─── Undo / Redo ─────────────────────────────────────────────────────
 
     public bool Undo()
@@ -410,6 +579,92 @@ public sealed class DocxSession : IDisposable
                 new Uri(hrefAttr.Value, UriKind.RelativeOrAbsolute), true);
             link.SetAttributeValue(R.id, rel.Id);
             hrefAttr.Remove();
+        }
+    }
+
+    internal static XElement BuildParagraphFromParsedBlock(Internal.ParsedBlock block)
+    {
+        var p = new XElement(W.p);
+        var pPr = new XElement(W.pPr);
+
+        switch (block.Kind)
+        {
+            case Internal.ParserBlockKind.Heading1:
+            case Internal.ParserBlockKind.Heading2:
+            case Internal.ParserBlockKind.Heading3:
+            case Internal.ParserBlockKind.Heading4:
+            case Internal.ParserBlockKind.Heading5:
+            case Internal.ParserBlockKind.Heading6:
+                {
+                    int level = (int)block.Kind - (int)Internal.ParserBlockKind.Heading1 + 1;
+                    pPr.Add(new XElement(W.pStyle, new XAttribute(W.val, $"Heading{level}")));
+                    break;
+                }
+            case Internal.ParserBlockKind.Quote:
+                pPr.Add(new XElement(W.pStyle, new XAttribute(W.val, "Quote")));
+                break;
+            case Internal.ParserBlockKind.Code:
+                pPr.Add(new XElement(W.pStyle, new XAttribute(W.val, "Code")));
+                break;
+            // List items: numPr inheritance not auto-injected in v1 — caller can use
+            // SetListLevel afterwards if needed. The bare paragraph will project as a
+            // normal paragraph until numbering is added.
+        }
+
+        if (pPr.HasElements) p.Add(pPr);
+        foreach (var run in block.RunElements)
+            p.Add(new XElement(run));
+        return p;
+    }
+
+    internal static string ParserBlockKindToAnchorKind(Internal.ParserBlockKind kind) => kind switch
+    {
+        Internal.ParserBlockKind.Heading1
+            or Internal.ParserBlockKind.Heading2
+            or Internal.ParserBlockKind.Heading3
+            or Internal.ParserBlockKind.Heading4
+            or Internal.ParserBlockKind.Heading5
+            or Internal.ParserBlockKind.Heading6 => "h",
+        Internal.ParserBlockKind.BulletItem
+            or Internal.ParserBlockKind.OrderedItem => "li",
+        _ => "p",
+    };
+
+    internal static string ParagraphText(XElement paragraph) =>
+        string.Concat(paragraph.Elements(W.r).Select(RunText));
+
+    internal static string RunText(XElement run) =>
+        string.Concat(run.Elements(W.t).Select(t => (string)t));
+
+    /// <summary>
+    /// If a run straddles <paramref name="offset"/>, split it into two adjacent runs
+    /// at that offset. After this call, no run will straddle the offset.
+    /// </summary>
+    internal static void SplitRunsAtOffset(XElement paragraph, int offset)
+    {
+        int consumed = 0;
+        foreach (var run in paragraph.Elements(W.r).ToList())
+        {
+            var runText = RunText(run);
+            if (consumed == offset) return;
+            if (consumed + runText.Length <= offset) { consumed += runText.Length; continue; }
+            int splitAt = offset - consumed;
+            if (splitAt <= 0) return;
+
+            var keep = runText.Substring(0, splitAt);
+            var move = runText.Substring(splitAt);
+
+            foreach (var t in run.Elements(W.t).ToList()) t.Remove();
+            run.Add(new XElement(W.t,
+                new XAttribute(XNamespace.Xml + "space", "preserve"), keep));
+
+            var rPr = run.Element(W.rPr);
+            var newRun = new XElement(W.r);
+            if (rPr is not null) newRun.Add(new XElement(rPr));
+            newRun.Add(new XElement(W.t,
+                new XAttribute(XNamespace.Xml + "space", "preserve"), move));
+            run.AddAfterSelf(newRun);
+            return;
         }
     }
 }
