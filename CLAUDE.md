@@ -88,24 +88,71 @@ dotnet build Docxodus.sln
 
 # Build specific project
 dotnet build Docxodus/Docxodus.csproj
+
+# Release build — warnings are errors (Directory.Build.props)
+dotnet build -c Release Docxodus.sln
+
+# Build the WASM target (sets WASM_BUILD; excludes SkiaSharp)
+./scripts/build-wasm.sh
+
+# Build the npm package end-to-end (runs build-wasm.sh + tsc + esbuild bundles)
+cd npm && npm run build
 ```
+
+`TreatWarningsAsErrors=true` is set for Release config only (`Directory.Build.props`). Debug builds tolerate the ~9,000 legacy nullable warnings; do not regress Release.
 
 ## Test Commands
 
 ```bash
-# Run all tests
+# Run all .NET tests
 dotnet test Docxodus.Tests/Docxodus.Tests.csproj
 
-# Run a specific test by name
+# Run a specific test by name (test IDs are prefixed by feature, e.g. WC001, DB001)
 dotnet test --filter "FullyQualifiedName~DB001_DocumentBuilderKeepSections"
 
 # Run tests for a specific test class
 dotnet test --filter "FullyQualifiedName~DbTests"
+
+# Browser/WASM tests (Playwright) — must rebuild npm package first
+cd npm
+npm install                       # first time only
+npx playwright install chromium   # first time only
+npm run build                     # produces dist/ which the harness loads
+npm test                          # run all Playwright specs
+npx playwright test --grep "Document Structure"  # single test by name
+npx playwright test --headed      # see the browser
+npx tsc --noEmit                  # TS type-check only
 ```
+
+Playwright tests serve from `npm/dist/wasm/` — if you edit C#, .ts, or the harness HTML, re-run `npm run build` (or at minimum the relevant `build:*` script) before re-running tests, or you will test stale artifacts.
 
 ## Architecture Overview
 
 Docxodus is a library for manipulating Open XML documents (DOCX, XLSX, PPTX) built on top of the Open XML SDK. It is a fork of OpenXmlPowerTools upgraded to .NET 8.0. All code is in the `Docxodus` namespace.
+
+### Repository Layout
+
+This repo is not just a .NET library — it ships a four-layer stack. Changes to public surface usually need to ripple through all of them:
+
+| Layer | Path | Purpose |
+|-------|------|---------|
+| Core library | `Docxodus/` | The .NET library — all OOXML logic lives here. NuGet package `Docxodus`. |
+| Unit tests | `Docxodus.Tests/` | xUnit tests for the core library (~1,000+ tests). |
+| CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool`-installable wrappers over the library. |
+| WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` methods (`DocumentConverter.cs`, `DocumentComparer.cs`) exposing the library to JS via .NET WASM. |
+| npm/TypeScript | `npm/` | Wrapper around the WASM bridge — `src/index.ts` is the public API, `src/react.ts` is the React hook layer, `src/docxodus.worker.ts`/`worker-proxy.ts` run WASM off the main thread. |
+| Web demo | `web/DocxodusWeb/` | Blazor/web demo app (separate workflow). |
+
+When the core library changes a public method or setting, update **all four** of: core, tests, `wasm/DocxodusWasm/`, and `npm/src/types.ts` + `npm/src/index.ts`. The table in "Feature Development Workflow" below summarizes when each is required.
+
+### WASM Conditional Compilation
+
+The core library compiles in two modes controlled by the `WASM_BUILD` MSBuild property (set by `scripts/build-wasm.sh`):
+
+- **Default build**: includes `SkiaSharp` + `SkiaSharp.NativeAssets.Linux.NoDependencies` for image/font work.
+- **`WASM_BUILD=true`**: defines the `WASM_BUILD` constant, excludes SkiaSharp (no native deps in the browser). Code that needs SkiaSharp must be guarded with `#if !WASM_BUILD` or routed through a no-op fallback. See `docs/architecture/skiasharp-removal-plan.md`.
+
+When touching image/font/color code, check whether your change compiles under `WASM_BUILD` before shipping — the npm build will fail loudly if it doesn't.
 
 ### Document Wrapper Classes
 
@@ -224,58 +271,27 @@ Test files are in `TestFiles/` directory with prefixes indicating their purpose:
 - `SH*` - Spreadsheet tests
 - `CU*` - Chart Updater tests
 
-## Migration Status (November 2025)
+## Legacy Migration Notes
 
-### Completed
+Docxodus is a fork of OpenXmlPowerTools, upgraded from net45/net46/netstandard2.0 → .NET 8.0 and from Open XML SDK 2.8.1 → 3.x. A few artifacts of that migration are worth knowing when reading code:
 
-1. **Framework Migration**: Upgraded from net45/net46/netstandard2.0 to .NET 8.0
-2. **Open XML SDK 3.x**: Upgraded from 2.8.1 to 3.2.0
-   - Replaced `.Close()` with `Dispose()` pattern
-   - Added `GetPackage()` extension in `PtOpenXmlUtil.cs` for internal Package access (via reflection)
-   - Changed `FontPartType`/`ImagePartType` to `PartTypeInfo` pattern
-3. **SkiaSharp Migration**: Replaced System.Drawing with SkiaSharp 2.88.9
-   - `SKColor` replaces `Color`
-   - `SKBitmap` replaces `Bitmap`
-   - `SKFontManager`/`SKTypeface` replaces `FontFamily`/`FontStyle`
-   - `SKEncodedImageFormat` replaces `ImageFormat`
-   - Created `SkiaSharpHelpers.cs` with `ColorHelper` class for color name mapping
-   - Added `SkiaSharp.NativeAssets.Linux.NoDependencies` for Linux runtime support
-4. **Test Project**: Updated to .NET 8.0, fixed SkiaSharp usage
-5. **WmlComparer Fixes**: Fixed null Unid attribute handling that caused "Internal error" exceptions
-6. **Rebranding**: Renamed library from OpenXmlPowerTools to Docxodus
-   - Renamed all namespaces to `Docxodus`
-   - Renamed `OpenXmlPowerToolsDocument` to `DocxodusDocument`
-   - Renamed `OpenXmlPowerToolsException` to `DocxodusException`
-   - Archived example projects to `archived-examples/`
+- **`GetPackage()` extension in `PtOpenXmlUtil.cs`** — Open XML SDK 3.x made the internal `Package` private; we access it via reflection. Use this extension rather than reaching for `OpenXmlPackage.Package` directly.
+- **`PartTypeInfo` pattern** — replaces SDK 2.x's `FontPartType`/`ImagePartType` enums when adding parts.
+- **`Dispose()` not `.Close()`** — SDK 3.x dropped `Close()`; always use `using` blocks or `Dispose()`.
+- **SkiaSharp replaces System.Drawing** — `SKColor`/`SKBitmap`/`SKTypeface`/`SKEncodedImageFormat`. Helpers in `SkiaSharpHelpers.cs` (notably `ColorHelper` for color name mapping). Remember the WASM build excludes SkiaSharp entirely — see WASM Conditional Compilation above.
+- **Rebranded namespaces** — everything is `Docxodus`; old `OpenXmlPowerTools*` types are `Docxodus*` (e.g. `DocxodusDocument`, `DocxodusException`). Legacy example projects live in `archived-examples/` (not in the solution).
+- **Preprocessor cleanup pending** — `NET35` and `ELIDE_XUNIT_TESTS` directives still appear in some files; safe to remove when you touch a file (Phase 4 of the migration plan).
 
-### Current Test Status
+For specific bugfix history (e.g. relationship copying in `DocumentBuilder`, footnote/endnote Unid assignment, LCS-based table row matching), use `git log` rather than maintaining a list here.
 
-- **995 passed**, 0 failed, 1 skipped out of 996 tests (~99.9% pass rate)
+## Architecture Documentation
 
-### Fixed Test Failures (18 tests fixed)
+Detailed design docs for the major subsystems live in `docs/architecture/`. Read the relevant doc before making non-trivial changes to:
 
-1. **DocumentBuilder relationship tests** (10 tests) - Fixed bug where relationship IDs from source documents could incorrectly match existing IDs in target parts, causing "relationship not found" validation errors
-2. **SpreadsheetWriter date handling** (1 test) - Fixed date values being written as ISO 8601 strings instead of Excel serial date numbers
-3. **WmlComparer footnote/endnote tests** (6 tests: WC-1660, WC-1670, WC-1710, WC-1720, WC-1750, WC-1760) - Fixed `AssignUnidToAllElements` to assign Unid to footnote/endnote elements themselves, enabling proper reconstruction of multi-paragraph footnotes/endnotes
-4. **WmlComparer table row comparison** (1 test: WC-1500) - Added LCS-based row matching for large tables (7+ rows) when content differs significantly, preventing cascading false differences from insertions/deletions in the middle of tables
-
-### Remaining Work
-
-1. **Phase 4**: Remove preprocessor directives (`NET35`, `ELIDE_XUNIT_TESTS`) from source and test files
-2. **Phase 6**: Final cleanup and documentation
-
-### Key Files Changed
-
-- `Docxodus.csproj` - Framework and dependency updates
-- `Docxodus.Tests.csproj` - Test framework updates
-- `PtOpenXmlUtil.cs` - Added `GetPackage()` extension method with SDK 3.x reflection workaround
-- `SkiaSharpHelpers.cs` - New file with color utilities
-- `ColorParser.cs`, `HtmlToWmlCssParser.cs` - SKColor migration
-- `MetricsGetter.cs`, `WmlToHtmlConverter.cs`, `HtmlToWmlConverterCore.cs` - Font/image handling
-- `WmlComparer.cs` - Fixed null Unid handling, Package access fixes, footnote/endnote Unid assignment, LCS-based table row matching
-- `PresentationBuilder.cs` - Package access fixes
-- `DocumentBuilder.cs` - Fixed relationship copying bugs in `CopyRelatedImage`, `CopyRelatedPartsForContentParts`, and related functions
-- `SpreadsheetWriter.cs` - Fixed date cell handling to use Excel serial date format
+- `comparison_engine.md`, `wml_comparer_gaps.md`, `native_move_markup.md`, `move_detection_implementation_plan.md`, `format_change_detection.md`, `tracked_changes.md` — WmlComparer internals
+- `docx_converter.md`, `comment_rendering.md`, `paginated_headers_footers.md`, `custom_annotations.md`, `unsupported_content_placeholders.md`, `wml_to_html_converter_gaps.md` — WmlToHtmlConverter internals
+- `opencontracts_export.md` — OpenContractExporter format
+- `skiasharp-removal-plan.md`, `wasm-optimization-plan.md`, `ui_responsiveness.md`, `profiling-results.md` — WASM/browser work
 
 ## OOXML Corner Cases
 
