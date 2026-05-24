@@ -65,7 +65,7 @@ public class WmlToMarkdownConverterTests
             var styles = new Styles();
             if (addHeadingStyles)
             {
-                for (var i = 1; i <= 6; i++)
+                for (var i = 1; i <= 9; i++)
                 {
                     styles.Append(new Style
                     {
@@ -209,6 +209,34 @@ public class WmlToMarkdownConverterTests
         Assert.Matches(@"\{#h:body:[0-9a-f]{32}\} ## Title", p.Markdown);
     }
 
+    [Theory]
+    [InlineData(7, "#######")]
+    [InlineData(8, "########")]
+    [InlineData(9, "#########")]
+    public void MD017_HeadingLevelsBeyond6PreserveDepth(int wordLevel, string expectedPrefix)
+    {
+        // Legal/clause-numbered DOCX files routinely use Word's Heading7-9 styles for
+        // sub-sub-clauses; silently clamping to ###### loses the outline depth that callers
+        // (LLMs, ToC builders, diff renderers) rely on. Emit 7-9 hashes verbatim so depth
+        // survives, even though strict CommonMark caps ATX headings at 6.
+        var doc = BuildHeadingDoc("Deep clause", wordLevel);
+        var md = WmlToMarkdownConverter.Convert(doc, new WmlToMarkdownConverterSettings()).Markdown;
+        Assert.Matches(@"\{#h:body:[0-9a-f]{32}\} " + expectedPrefix + @" Deep clause", md);
+    }
+
+    [Fact]
+    public void MD018_EmptyParagraphAnchorHasNoTrailingSpace()
+    {
+        // The anchor prefix carries a trailing space so it doesn't collide with inline
+        // content, but for paragraphs that have no runs (visual spacers in Word) that
+        // leaves a stray `{#p:body:UNID} ` line ending in whitespace. Strip the trailing
+        // space when there's no inline content to separate from.
+        var doc = BuildDoc(body => body.Append(new Paragraph()));
+        var md = MarkdownOf(doc);
+        Assert.Matches(@"\{#p:body:[0-9a-f]{32}\}\n", md);
+        Assert.DoesNotMatch(@"\{#p:body:[0-9a-f]{32}\} \n", md);
+    }
+
     [Fact]
     public void MD014_AnchorModeNoneOmitsTokens()
     {
@@ -217,6 +245,72 @@ public class WmlToMarkdownConverterTests
             new WmlToMarkdownConverterSettings { AnchorMode = AnchorRenderMode.None });
         Assert.DoesNotContain("{#p:", p.Markdown);
         Assert.Contains("Hello world", p.Markdown);
+    }
+
+    [Fact]
+    public void MD015_NumberedHeadingResolvesNumPrefix()
+    {
+        // Legal docs frequently style each clause as Heading2/3/etc AND attach w:numPr so
+        // Word renders "FIRST: …", "1.1 …", etc. The auto-number must survive projection;
+        // otherwise the markdown shows only the trailing text and loses ordinal context.
+        var doc = BuildNumberedHeadingDoc("The name of this corporation is X.");
+        var md = WmlToMarkdownConverter.Convert(doc, new WmlToMarkdownConverterSettings()).Markdown;
+        Assert.Matches(
+            @"\{#h:body:[0-9a-f]{32}\} ## 1\.\s+The name of this corporation is X\.",
+            md);
+    }
+
+    [Fact]
+    public void MD016_NumberedHeadingNumberingPrefixHiddenWhenResolveDisabled()
+    {
+        // With ResolveNumbering=false we treat the paragraph as a plain heading — no
+        // resolved number prefix. The markdown is what's authored, no Word-side math.
+        var doc = BuildNumberedHeadingDoc("Body text");
+        var md = WmlToMarkdownConverter.Convert(doc,
+            new WmlToMarkdownConverterSettings { ResolveNumbering = false }).Markdown;
+        Assert.Matches(@"\{#h:body:[0-9a-f]{32}\} ## Body text", md);
+        Assert.DoesNotMatch(@"## 1\.\s+Body text", md);
+    }
+
+    private static WmlDocument BuildNumberedHeadingDoc(string text)
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = wDoc.AddMainDocumentPart();
+            mainPart.Document = new Document();
+            var body = new Body();
+            mainPart.Document.Body = body;
+
+            // Styles part with Heading2 declared.
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(
+                new Style { Type = StyleValues.Paragraph, StyleId = "Heading2", StyleName = new StyleName { Val = "heading 2" } });
+
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            // Numbering definition with a single ordered level.
+            var numPart = mainPart.AddNewPart<NumberingDefinitionsPart>();
+            numPart.Numbering = new Numbering(
+                new AbstractNum(
+                    new Level(
+                        new NumberingFormat { Val = NumberFormatValues.Decimal },
+                        new LevelText { Val = "%1." },
+                        new StartNumberingValue { Val = 1 })
+                    { LevelIndex = 0 })
+                { AbstractNumberId = 1 },
+                new NumberingInstance(new AbstractNumId { Val = 1 }) { NumberID = 1 });
+
+            // Heading2 paragraph with both Heading2 style AND numPr.
+            var pPr = new ParagraphProperties(
+                new ParagraphStyleId { Val = "Heading2" },
+                new NumberingProperties(
+                    new NumberingLevelReference { Val = 0 },
+                    new NumberingId { Val = 1 }));
+            body.Append(new Paragraph(pPr, new Run(new Text(text))));
+            mainPart.Document.Save();
+        }
+        return new WmlDocument("test.docx", ms.ToArray());
     }
 
     // ----- Phase 3: inline runs -----
@@ -517,6 +611,97 @@ public class WmlToMarkdownConverterTests
         // Definitions section.
         Assert.Contains("# Footnotes", md);
         Assert.Contains("This is a footnote.", md);
+    }
+
+    [Fact]
+    public void MD054_InterScopeSeparatorEmittedBetweenSections()
+    {
+        // The projection-spec example shows `---` between # Document / # Headers / # Footers /
+        // # Footnotes scope sections — those breaks let downstream parsers cleanly split the
+        // markdown stream into per-scope chunks without inspecting heading text.
+        var doc = BuildHeaderFooterDoc(headerText: "H", footerText: "F");
+        var md = MarkdownOf(doc);
+        // The body section ends, then `---` precedes # Headers.
+        Assert.Matches(@"(?ms)^---\s*\n\s*\n# Headers", md);
+        // The headers section ends, then `---` precedes # Footers.
+        Assert.Matches(@"(?ms)^---\s*\n\s*\n# Footers", md);
+    }
+
+    [Fact]
+    public void MD055_InterScopeSeparatorOmittedWhenOnlyOneScope()
+    {
+        // No header or footer parts — no scope dividers needed. Avoid emitting trailing `---`.
+        var doc = BuildSimpleDoc("Hello");
+        var md = WmlToMarkdownConverter.Convert(doc,
+            new WmlToMarkdownConverterSettings { Scopes = ProjectionScopes.Body }).Markdown;
+        Assert.DoesNotContain("\n---\n", md);
+    }
+
+    [Fact]
+    public void MD056_SectPrEmitsThematicBreakWithSectionAnchor()
+    {
+        // A w:sectPr inside a paragraph's pPr marks a section break at that paragraph.
+        // The projection should emit `---` preceded by a {#sec:body:UNID} anchor so callers
+        // can navigate section boundaries.
+        var doc = BuildTwoSectionDoc("first section", "second section");
+        var p = WmlToMarkdownConverter.Convert(doc, new WmlToMarkdownConverterSettings());
+        Assert.Matches(@"\{#sec:body:[0-9a-f]{32}\}\s*\n---", p.Markdown);
+        // The AnchorIndex includes a kind=sec entry that resolves to a sectPr element.
+        Assert.Contains(p.AnchorIndex.Values, t => t.Anchor.Kind == "sec" && t.Anchor.Scope == "body");
+    }
+
+    private static WmlDocument BuildTwoSectionDoc(string first, string second)
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = wDoc.AddMainDocumentPart();
+            mainPart.Document = new Document();
+            var body = new Body();
+            mainPart.Document.Body = body;
+            mainPart.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            // First paragraph ends with a section break in its pPr.
+            var firstSect = new SectionProperties();
+            var firstPara = new Paragraph(
+                new ParagraphProperties(firstSect),
+                new Run(new Text(first)));
+            body.Append(firstPara);
+
+            // Second paragraph; body ends with a final sectPr (standard OOXML).
+            body.Append(new Paragraph(new Run(new Text(second))));
+            body.Append(new SectionProperties());
+
+            mainPart.Document.Save();
+        }
+        return new WmlDocument("test.docx", ms.ToArray());
+    }
+
+    [Fact]
+    public void MD057_EmptyHeaderScopeIsOmitted()
+    {
+        // A real DOCX often defines 6+ header/footer parts for first-page / even-page /
+        // default variants, leaving the unused ones blank. Emitting "## hdrN" titles for
+        // empty parts pads the projection with noise; skip scopes whose only content is
+        // whitespace.
+        var doc = BuildHeaderFooterDoc(headerText: "   ", footerText: "real footer");
+        var md = MarkdownOf(doc);
+        Assert.DoesNotContain("# Headers", md);
+        Assert.DoesNotContain("## hdr1", md);
+        Assert.Contains("# Footers", md);
+        Assert.Contains("real footer", md);
+    }
+
+    [Fact]
+    public void MD058_NonEmptyHeaderScopeStillEmitsTitle()
+    {
+        // Sanity check the inverse — the suppression must NOT eat populated scopes.
+        var doc = BuildHeaderFooterDoc(headerText: "CONFIDENTIAL", footerText: null);
+        var md = MarkdownOf(doc);
+        Assert.Contains("# Headers", md);
+        Assert.Contains("## hdr1", md);
+        Assert.Contains("CONFIDENTIAL", md);
     }
 
     private static WmlDocument BuildHeaderFooterDoc(string? headerText, string? footerText)

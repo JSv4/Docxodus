@@ -317,6 +317,7 @@ public static class WmlToMarkdownConverter
         if (n == W.tbl) return "tbl";
         if (n == W.tr) return "tr";
         if (n == W.tc) return "tc";
+        if (n == W.sectPr) return "sec";
         if (n == W.footnote) return "fn";
         if (n == W.endnote) return "en";
         if (n == W.comment) return "cmt";
@@ -358,6 +359,12 @@ public static class WmlToMarkdownConverter
     {
         var ctx = new EmitContext { Settings = settings, Document = document };
 
+        // Each scope's emitter appends to ctx.Sb. After each scope, we record whether anything
+        // was actually written; a divider is emitted between two non-empty scopes so
+        // downstream parsers can split the markdown into per-scope chunks without inspecting
+        // heading text.
+        var anyScopeEmitted = false;
+
         var bodyScope = scopes.FirstOrDefault(s => s.Name == "body");
         if (bodyScope != null)
         {
@@ -366,11 +373,18 @@ public static class WmlToMarkdownConverter
             ctx.Scope = "body";
             var body = bodyScope.Root.Element(W.body);
             if (body != null) EmitBlocks(body.Elements(), ctx);
+            anyScopeEmitted = true;
         }
 
-        var headerScopes = scopes.Where(s => s.Name.StartsWith("hdr", StringComparison.Ordinal)).ToList();
+        // Many DOCXs declare 6+ header/footer parts for first-page/even-page/default variants
+        // and leave the unused ones blank. Suppress scopes with no text content so the
+        // projection isn't padded with empty "## hdrN" titles.
+        var headerScopes = scopes
+            .Where(s => s.Name.StartsWith("hdr", StringComparison.Ordinal) && ScopeHasContent(s))
+            .ToList();
         if (headerScopes.Count > 0)
         {
+            if (anyScopeEmitted) AppendScopeDivider(ctx.Sb);
             ctx.Sb.AppendLine("# Headers");
             ctx.Sb.AppendLine();
             foreach (var s in headerScopes)
@@ -380,11 +394,15 @@ public static class WmlToMarkdownConverter
                 ctx.Scope = s.Name;
                 EmitBlocks(s.Root.Elements(), ctx);
             }
+            anyScopeEmitted = true;
         }
 
-        var footerScopes = scopes.Where(s => s.Name.StartsWith("ftr", StringComparison.Ordinal)).ToList();
+        var footerScopes = scopes
+            .Where(s => s.Name.StartsWith("ftr", StringComparison.Ordinal) && ScopeHasContent(s))
+            .ToList();
         if (footerScopes.Count > 0)
         {
+            if (anyScopeEmitted) AppendScopeDivider(ctx.Sb);
             ctx.Sb.AppendLine("# Footers");
             ctx.Sb.AppendLine();
             foreach (var s in footerScopes)
@@ -394,30 +412,56 @@ public static class WmlToMarkdownConverter
                 ctx.Scope = s.Name;
                 EmitBlocks(s.Root.Elements(), ctx);
             }
+            anyScopeEmitted = true;
         }
 
         var fnScope = scopes.FirstOrDefault(s => s.Name == "fn");
         if (fnScope != null)
         {
-            EmitNoteDefinitions(fnScope, ctx, "Footnotes", "fn", W.footnote);
+            var before = ctx.Sb.Length;
+            EmitNoteDefinitions(fnScope, ctx, "Footnotes", "fn", W.footnote, anyScopeEmitted);
+            if (ctx.Sb.Length > before) anyScopeEmitted = true;
         }
 
         var enScope = scopes.FirstOrDefault(s => s.Name == "en");
         if (enScope != null)
         {
-            EmitNoteDefinitions(enScope, ctx, "Endnotes", "en", W.endnote);
+            var before = ctx.Sb.Length;
+            EmitNoteDefinitions(enScope, ctx, "Endnotes", "en", W.endnote, anyScopeEmitted);
+            if (ctx.Sb.Length > before) anyScopeEmitted = true;
         }
 
         var cmtScope = scopes.FirstOrDefault(s => s.Name == "cmt");
         if (cmtScope != null)
         {
-            EmitComments(cmtScope, ctx);
+            var before = ctx.Sb.Length;
+            EmitComments(cmtScope, ctx, anyScopeEmitted);
+            if (ctx.Sb.Length > before) anyScopeEmitted = true;
         }
 
         return ctx.Sb.ToString();
     }
 
-    private static void EmitNoteDefinitions(ScopeInfo scope, EmitContext ctx, string header, string kindPrefix, XName elementName)
+    private static void AppendScopeDivider(StringBuilder sb)
+    {
+        sb.AppendLine("---");
+        sb.AppendLine();
+    }
+
+    /// <summary>
+    /// True when a header/footer scope has any non-whitespace text. Used to suppress
+    /// scope sections that exist in the package but carry no user-visible content.
+    /// </summary>
+    private static bool ScopeHasContent(ScopeInfo scope)
+    {
+        foreach (var t in scope.Root.Descendants(W.t))
+        {
+            if (!string.IsNullOrWhiteSpace(t.Value)) return true;
+        }
+        return false;
+    }
+
+    private static void EmitNoteDefinitions(ScopeInfo scope, EmitContext ctx, string header, string kindPrefix, XName elementName, bool precedingContent)
     {
         // The footnotes/endnotes parts always carry the separator/continuationSeparator
         // boilerplate notes with type="separator"/type="continuationSeparator". Filter those
@@ -428,6 +472,7 @@ public static class WmlToMarkdownConverter
             .ToList();
         if (notes.Count == 0) return;
 
+        if (precedingContent) AppendScopeDivider(ctx.Sb);
         ctx.Sb.Append("# ").AppendLine(header);
         ctx.Sb.AppendLine();
         ctx.Scope = scope.Name;
@@ -455,11 +500,12 @@ public static class WmlToMarkdownConverter
         return type is "separator" or "continuationSeparator";
     }
 
-    private static void EmitComments(ScopeInfo scope, EmitContext ctx)
+    private static void EmitComments(ScopeInfo scope, EmitContext ctx, bool precedingContent)
     {
         var comments = scope.Root.Elements(W.comment).ToList();
         if (comments.Count == 0) return;
 
+        if (precedingContent) AppendScopeDivider(ctx.Sb);
         ctx.Sb.AppendLine("# Comments");
         ctx.Sb.AppendLine();
         ctx.Scope = "cmt";
@@ -517,25 +563,69 @@ public static class WmlToMarkdownConverter
 
         if (IsHeading(p))
         {
-            var level = Math.Clamp(HeadingLevel(p) + ctx.Settings.HeadingLevelOffset, 1, 6);
+            // Clamp upper bound is 9 (Word's outline depth), not 6: silently collapsing
+            // Heading7-9 to ###### loses outline depth that callers (LLMs, ToC builders,
+            // diff renderers) rely on. ATX headings beyond 6 are not standard CommonMark,
+            // but downstream parsers and LLM consumers handle 7-9 hashes naturally; strict
+            // renderers degrade to literal text, which is still better than silent collapse.
+            var level = Math.Clamp(HeadingLevel(p) + ctx.Settings.HeadingLevelOffset, 1, 9);
             ctx.Sb.Append(anchor);
             ctx.Sb.Append(new string('#', level));
             ctx.Sb.Append(' ');
+            // Legal-style headings often style each clause Heading{N} AND attach w:numPr so
+            // Word renders "FIRST: …" / "1.1 …". Resolve that prefix here so it survives
+            // projection — without it, callers see "## : The name…" with the auto-number gone.
+            if (ctx.Settings.ResolveNumbering)
+            {
+                var numberPrefix = ResolveHeadingNumberPrefix(p, ctx);
+                if (numberPrefix != null) ctx.Sb.Append(numberPrefix).Append(' ');
+            }
             EmitInlineRuns(p, ctx);
             ctx.Sb.AppendLine();
             ctx.Sb.AppendLine();
+            EmitInlineSectionBreak(p, ctx);
             return;
         }
 
         if (IsListItem(p))
         {
             EmitListItem(p, ctx);
+            EmitInlineSectionBreak(p, ctx);
             return;
         }
 
+        var beforeContent = ctx.Sb.Length;
         ctx.Sb.Append(anchor);
+        var afterAnchor = ctx.Sb.Length;
         EmitInlineRuns(p, ctx);
+        // If the paragraph had no visible runs, the anchor's trailing separator space is
+        // dangling — strip it so the line is `{#anchor}\n` instead of `{#anchor} \n`.
+        if (ctx.Sb.Length == afterAnchor && afterAnchor > beforeContent && ctx.Sb[ctx.Sb.Length - 1] == ' ')
+        {
+            ctx.Sb.Length--;
+        }
         ctx.Sb.AppendLine();
+        ctx.Sb.AppendLine();
+        EmitInlineSectionBreak(p, ctx);
+    }
+
+    /// <summary>
+    /// Emit a thematic break (with the section's anchor) when this paragraph carries a
+    /// <c>w:sectPr</c> in its <c>w:pPr</c> — that marks an in-document section transition.
+    /// The trailing top-level <c>w:sectPr</c> at the end of the body is metadata for the last
+    /// section, not a transition, so it is handled by <see cref="EmitBlocks"/> instead.
+    /// </summary>
+    private static void EmitInlineSectionBreak(XElement p, EmitContext ctx)
+    {
+        var sectPr = p.Element(W.pPr)?.Element(W.sectPr);
+        if (sectPr == null) return;
+        var unid = (string?)sectPr.Attribute(PtOpenXml.Unid);
+        if (unid == null) return;
+        if (ctx.Settings.AnchorMode != AnchorRenderMode.None)
+        {
+            ctx.Sb.Append("{#sec:").Append(ctx.Scope).Append(':').Append(unid).AppendLine("}");
+        }
+        ctx.Sb.AppendLine("---");
         ctx.Sb.AppendLine();
     }
 
@@ -554,7 +644,7 @@ public static class WmlToMarkdownConverter
         if (styleId.Equals("Title", StringComparison.OrdinalIgnoreCase)) return 1;
         if (styleId.Equals("Subtitle", StringComparison.OrdinalIgnoreCase)) return 2;
         var digits = new string(styleId.Where(char.IsDigit).ToArray());
-        return int.TryParse(digits, out var n) && n >= 1 && n <= 6 ? n : 1;
+        return int.TryParse(digits, out var n) && n >= 1 && n <= 9 ? n : 1;
     }
 
     // ------------------------------------------------------------------
@@ -827,6 +917,28 @@ public static class WmlToMarkdownConverter
         ctx.Sb.AppendLine();
         // The trailing blank line that separates list blocks from following content is
         // emitted by EmitBlocks once the run of list items ends.
+    }
+
+    /// <summary>
+    /// Resolve the numbering prefix for a Heading paragraph that carries <c>w:numPr</c>.
+    /// Returns <c>null</c> when the paragraph has no resolvable number, or when the resolved
+    /// marker is a plain bullet glyph (bullets aren't a meaningful heading prefix).
+    /// </summary>
+    private static string? ResolveHeadingNumberPrefix(XElement p, EmitContext ctx)
+    {
+        if (p.Element(W.pPr)?.Element(W.numPr) == null) return null;
+        try
+        {
+            var resolved = ListItemRetriever.RetrieveListItem(ctx.Document, p, ctx.ListItemRetrieverSettings);
+            if (string.IsNullOrWhiteSpace(resolved)) return null;
+            var trimmed = resolved.TrimEnd();
+            if (trimmed.Length == 1 && !char.IsLetterOrDigit(trimmed, 0)) return null;
+            return trimmed;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static string ResolveListMarker(XElement p, EmitContext ctx)
