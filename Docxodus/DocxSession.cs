@@ -423,6 +423,162 @@ public sealed class DocxSession : IDisposable
         }
     }
 
+    // ─── Tier C: formatting ──────────────────────────────────────────────
+
+    public EditResult ApplyFormat(string anchorId, CharSpan? span, FormatOp op)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (op is null) return EditResult.Fail(EditErrorCode.MalformedMarkdown, "null format op", anchorId);
+        if (!Project().AnchorIndex.TryGetValue(anchorId, out var target))
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "ApplyFormat requires a paragraph anchor", anchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+
+        var totalText = ParagraphText(element);
+        var actualSpan = span ?? new CharSpan(0, totalText.Length);
+        if (actualSpan.Start < 0 || actualSpan.Length < 0 ||
+            actualSpan.Start + actualSpan.Length > totalText.Length)
+            return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                $"span [{actualSpan.Start},{actualSpan.Start + actualSpan.Length}) out of [0,{totalText.Length})", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            SplitRunsAtOffset(element, actualSpan.Start);
+            SplitRunsAtOffset(element, actualSpan.Start + actualSpan.Length);
+
+            int consumed = 0;
+            foreach (var run in element.Elements(W.r))
+            {
+                var runText = RunText(run);
+                int runStart = consumed;
+                int runEnd = consumed + runText.Length;
+                consumed = runEnd;
+                if (runEnd <= actualSpan.Start || runStart >= actualSpan.Start + actualSpan.Length) continue;
+                ApplyFormatToRun(run, op);
+            }
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { target.Anchor },
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    public EditResult SetParagraphStyle(string anchorId, string styleId)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (!Project().AnchorIndex.TryGetValue(anchorId, out var target))
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "SetParagraphStyle requires a paragraph anchor", anchorId);
+
+        var stylesPart = _doc!.MainDocumentPart!.StyleDefinitionsPart;
+        var stylesXml = stylesPart?.GetXDocument().Root;
+        bool exists = stylesXml?.Elements(W.style)
+            .Any(st => (string?)st.Attribute(W.styleId) == styleId) ?? false;
+        if (!exists)
+            return EditResult.Fail(EditErrorCode.UnknownStyle, $"style id not found: {styleId}", anchorId);
+
+        var element = target.Resolve(_doc);
+        if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var pPr = element.Element(W.pPr);
+            if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+            pPr.Element(W.pStyle)?.Remove();
+            pPr.AddFirst(new XElement(W.pStyle, new XAttribute(W.val, styleId)));
+
+            InvalidateProjectionCache();
+            // Anchor kind may have flipped (e.g., p → h); look it up in the fresh index.
+            var freshIndex = Project().AnchorIndex;
+            var updated = freshIndex.Values.FirstOrDefault(t => t.Unid == target.Unid)?.Anchor ?? target.Anchor;
+
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { updated },
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    public EditResult SetListLevel(string anchorId, int levelDelta)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (!Project().AnchorIndex.TryGetValue(anchorId, out var target))
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
+        if (target.Anchor.Kind != "li")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "SetListLevel requires a list-item anchor", anchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+        var numPr = element.Element(W.pPr)?.Element(W.numPr);
+        if (numPr is null)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "no numPr on this paragraph", anchorId);
+
+        var ilvl = numPr.Element(W.ilvl);
+        int current = ilvl is null ? 0 : int.Parse((string?)ilvl.Attribute(W.val) ?? "0");
+        int next = current + levelDelta;
+        if (next < 0 || next > 8)
+            return EditResult.Fail(EditErrorCode.InvalidListLevel,
+                $"resulting list level {next} out of [0,8]", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        ilvl?.Remove();
+        numPr.Add(new XElement(W.ilvl, new XAttribute(W.val, next)));
+        InvalidateProjectionCache();
+        return new EditResult
+        {
+            Success = true,
+            Modified = new[] { target.Anchor },
+            Patch = ProjectScope(target),
+        };
+    }
+
+    public EditResult RemoveListMembership(string anchorId)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (!Project().AnchorIndex.TryGetValue(anchorId, out var target))
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
+        if (target.Anchor.Kind != "li")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "RemoveListMembership requires list-item anchor", anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        element.Element(W.pPr)?.Element(W.numPr)?.Remove();
+        InvalidateProjectionCache();
+        var fresh = Project().AnchorIndex;
+        var updated = fresh.Values.FirstOrDefault(t => t.Unid == target.Unid)?.Anchor ?? target.Anchor;
+        return new EditResult
+        {
+            Success = true,
+            Modified = new[] { updated },
+            Patch = ProjectScope(target),
+        };
+    }
+
     // ─── Undo / Redo ─────────────────────────────────────────────────────
 
     public bool Undo()
@@ -579,6 +735,52 @@ public sealed class DocxSession : IDisposable
                 new Uri(hrefAttr.Value, UriKind.RelativeOrAbsolute), true);
             link.SetAttributeValue(R.id, rel.Id);
             hrefAttr.Remove();
+        }
+    }
+
+    private static void ApplyFormatToRun(XElement run, FormatOp op)
+    {
+        var rPr = run.Element(W.rPr);
+        if (rPr is null) { rPr = new XElement(W.rPr); run.AddFirst(rPr); }
+
+        static void Toggle(XElement rPr, XName name, bool? set)
+        {
+            if (set is null) return;
+            var existing = rPr.Element(name);
+            if (set.Value && existing is null) rPr.Add(new XElement(name));
+            else if (!set.Value) existing?.Remove();
+        }
+
+        Toggle(rPr, W.b, op.Bold);
+        Toggle(rPr, W.i, op.Italic);
+        Toggle(rPr, W.strike, op.Strike);
+
+        if (op.Underline is true)
+        {
+            rPr.Element(W.u)?.Remove();
+            rPr.Add(new XElement(W.u, new XAttribute(W.val, "single")));
+        }
+        else if (op.Underline is false) rPr.Element(W.u)?.Remove();
+
+        if (op.Code is true)
+        {
+            rPr.Element(W.rStyle)?.Remove();
+            rPr.Add(new XElement(W.rStyle, new XAttribute(W.val, "Code")));
+        }
+        else if (op.Code is false) rPr.Element(W.rStyle)?.Remove();
+
+        if (op.Color is not null)
+        {
+            rPr.Element(W.color)?.Remove();
+            if (op.Color.Length > 0)
+                rPr.Add(new XElement(W.color, new XAttribute(W.val, op.Color)));
+        }
+
+        if (op.RunStyle is not null)
+        {
+            rPr.Element(W.rStyle)?.Remove();
+            if (op.RunStyle.Length > 0)
+                rPr.Add(new XElement(W.rStyle, new XAttribute(W.val, op.RunStyle)));
         }
     }
 

@@ -54,6 +54,62 @@ public class DocxSessionTests
         return ms.ToArray();
     }
 
+    /// <summary>
+    /// Two-item bulleted list (nested). Includes a NumberingDefinitionsPart
+    /// with a single abstractNum (bullets at all levels) and a numId mapping.
+    /// </summary>
+    internal static byte[] BuildDS002_BulletedList()
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.Document = new Document();
+            var body = new Body();
+            main.Document.Body = body;
+
+            main.AddNewPart<StyleDefinitionsPart>().Styles = BuildHeadingStyles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var numberingPart = main.AddNewPart<NumberingDefinitionsPart>();
+            numberingPart.Numbering = BuildBulletNumbering();
+
+            body.Append(MakeListItem("Top-level item", level: 0, numId: 1));
+            body.Append(MakeListItem("Nested item", level: 1, numId: 1));
+            body.Append(MakeListItem("Another top", level: 0, numId: 1));
+
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
+    private static Paragraph MakeListItem(string text, int level, int numId)
+    {
+        var pPr = new ParagraphProperties(
+            new NumberingProperties(
+                new NumberingLevelReference { Val = level },
+                new NumberingId { Val = numId }));
+        return new Paragraph(pPr, new Run(new Text(text)));
+    }
+
+    private static DocumentFormat.OpenXml.Wordprocessing.Numbering BuildBulletNumbering()
+    {
+        var n = new DocumentFormat.OpenXml.Wordprocessing.Numbering();
+        var abs = new AbstractNum { AbstractNumberId = 0 };
+        for (int i = 0; i < 9; i++)
+        {
+            abs.Append(new Level(
+                new NumberingFormat { Val = NumberFormatValues.Bullet },
+                new LevelText { Val = "·" })
+            {
+                LevelIndex = i,
+            });
+        }
+        n.Append(abs);
+        n.Append(new NumberingInstance(new AbstractNumId { Val = 0 }) { NumberID = 1 });
+        return n;
+    }
+
     internal static Styles BuildHeadingStyles()
     {
         var styles = new Styles();
@@ -338,10 +394,74 @@ public class DocxSessionTests
     {
         using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
         var anchors = s.Project().AnchorIndex.Keys.ToList();
-        // Insert a paragraph between the two, then try to merge first + original second
         s.InsertParagraph(anchors[0], Position.After, "Middle paragraph.");
         var r = s.MergeParagraphs(anchors[0], anchors[1]);
         Assert.False(r.Success);
         Assert.Equal(EditErrorCode.AnchorsNotAdjacent, r.Error!.Code);
+    }
+
+    // ─── Phase 5: formatting ──────────────────────────────────────────────
+
+    [Fact]
+    public void DS050_SetParagraphStyle()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        var r = s.SetParagraphStyle(anchor, "Heading2");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Single(r.Modified);
+        Assert.Equal("h", r.Modified[0].Kind);
+        Assert.Contains("## ", s.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS051_SetParagraphStyle_UnknownStyle()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.SetParagraphStyle(anchor, "NotARealStyle1234");
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.UnknownStyle, r.Error!.Code);
+    }
+
+    [Fact]
+    public void DS052_ApplyFormat_WholeParagraphBold()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.ApplyFormat(anchor, span: null, new FormatOp { Bold = true });
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains("**First paragraph.**", s.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS053_ApplyFormat_Span()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        // "First paragraph." → bold characters 0..5 ("First")
+        var r = s.ApplyFormat(anchor, new CharSpan(0, 5), new FormatOp { Bold = true });
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains("**First**", s.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS054_SetListLevelIndent()
+    {
+        using var s = new DocxSession(BuildDS002_BulletedList());
+        var firstLi = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("li:"));
+        var r = s.SetListLevel(firstLi, +1);
+        Assert.True(r.Success, r.Error?.Message);
+    }
+
+    [Fact]
+    public void DS055_RemoveListMembership()
+    {
+        using var s = new DocxSession(BuildDS002_BulletedList());
+        var firstLi = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("li:"));
+        var r = s.RemoveListMembership(firstLi);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains(r.Modified, a => a.Kind == "p");
     }
 }
