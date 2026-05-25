@@ -52,6 +52,24 @@ internal static class DocxSessionOps
     public static string ListAnnotations(int handle) =>
         DocxSessionJson.SerializeAnnotations(SessionRegistry.Get(handle).ListAnnotations());
 
+    public static bool Exists(int handle, string anchorId) =>
+        SessionRegistry.Get(handle).Exists(anchorId);
+
+    public static string GetAnchorInfo(int handle, string anchorId) =>
+        DocxSessionJson.SerializeAnchorInfoOrNull(SessionRegistry.Get(handle).GetAnchorInfo(anchorId));
+
+    public static string FindByText(int handle, string needle, FindOptions? options) =>
+        DocxSessionJson.SerializeAnchorTargetOrNull(SessionRegistry.Get(handle).FindByText(needle, options));
+
+    public static string FindAllByText(int handle, string needle, FindOptions? options) =>
+        DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindAllByText(needle, options));
+
+    public static string FindByRegex(int handle, string pattern, RegexOptions regexOptions, FindOptions? options) =>
+        DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByRegex(pattern, regexOptions, options));
+
+    public static string FindByKind(int handle, string kind, string? scope) =>
+        DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByKind(kind, scope));
+
     // ─── Tier A: text mutations ─────────────────────────────────────────
 
     public static string ReplaceText(int handle, string anchorId, string markdown) =>

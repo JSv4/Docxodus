@@ -207,6 +207,53 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string ListAnnotations(int h) => DocxSessionOps.ListAnnotations(h);
 
+    /// <summary>Bridge for <see cref="DocxSession.Exists"/>. Returns true/false.</summary>
+    [JSExport]
+    public static bool Exists(int h, string anchorId) => DocxSessionOps.Exists(h, anchorId);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.GetAnchorInfo"/>. Returns a JSON object
+    /// <c>{id, kind, scope, textPreview}</c> or the literal <c>null</c> if the
+    /// anchor is not found.
+    /// </summary>
+    [JSExport]
+    public static string GetAnchorInfo(int h, string anchorId) => DocxSessionOps.GetAnchorInfo(h, anchorId);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindByText"/>. Returns a single AnchorTarget
+    /// JSON object (first match in document order) or the literal <c>null</c> if no
+    /// anchor contains the needle. <paramref name="optionsJson"/> accepts
+    /// <c>{ignoreCase?, ignoreWhitespace?, kindFilter?, scopeFilter?}</c>.
+    /// </summary>
+    [JSExport]
+    public static string FindByText(int h, string needle, string optionsJson) =>
+        DocxSessionOps.FindByText(h, needle, ParseFindOptions(optionsJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindAllByText"/>. Same options shape as
+    /// <see cref="FindByText"/>; returns the full AnchorTarget array in document order.
+    /// </summary>
+    [JSExport]
+    public static string FindAllByText(int h, string needle, string optionsJson) =>
+        DocxSessionOps.FindAllByText(h, needle, ParseFindOptions(optionsJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindByRegex"/>. <paramref name="regexOptions"/>
+    /// uses the numeric layout of <see cref="System.Text.RegularExpressions.RegexOptions"/>;
+    /// <paramref name="optionsJson"/> matches the <see cref="FindByText"/> shape.
+    /// </summary>
+    [JSExport]
+    public static string FindByRegex(int h, string pattern, int regexOptions, string optionsJson) =>
+        DocxSessionOps.FindByRegex(h, pattern, (RegexOptions)regexOptions, ParseFindOptions(optionsJson));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.FindByKind"/>. <paramref name="scope"/> may be
+    /// empty/null to match all scopes. No text scan — reads the AnchorIndex directly.
+    /// </summary>
+    [JSExport]
+    public static string FindByKind(int h, string kind, string scope) =>
+        DocxSessionOps.FindByKind(h, kind, string.IsNullOrEmpty(scope) ? null : scope);
+
     [JSExport]
     public static bool Undo(int h) => DocxSessionOps.Undo(h);
 
@@ -217,6 +264,13 @@ public static partial class DocxSessionBridge
     public static byte[] Save(int h) => DocxSessionOps.Save(h);
 
     // ─── Helpers ────────────────────────────────────────────────────────
+
+    private static FindOptions? ParseFindOptions(string optionsJson)
+    {
+        if (string.IsNullOrEmpty(optionsJson)) return null;
+        using var doc = JsonDocument.Parse(optionsJson);
+        return DocxSessionJson.ParseFindOptions(doc.RootElement);
+    }
 
     private static void ParseGrepOptions(string optionsJson, out RegexOptions regexOpts,
         out ProjectionScopes scope, out int contextChars, out WhitespaceMode whitespace)

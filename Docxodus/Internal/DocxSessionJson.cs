@@ -65,6 +65,18 @@ internal static class DocxSessionJson
         };
     }
 
+    public static FindOptions? ParseFindOptions(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        return new FindOptions
+        {
+            IgnoreCase = TryGetBool(root, "ignoreCase", false),
+            IgnoreWhitespace = TryGetBool(root, "ignoreWhitespace", false),
+            KindFilter = TryGetString(root, "kindFilter", null),
+            ScopeFilter = TryGetString(root, "scopeFilter", null),
+        };
+    }
+
     public static int TryGetInt(JsonElement root, string name, int fallback) =>
         root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : fallback;
 
@@ -401,6 +413,26 @@ internal static class DocxSessionJson
           .Append(",\"unid\":").Append(JsonString(t.Unid))
           .Append(",\"partUri\":").Append(JsonString(t.PartUri))
           .Append('}');
+    }
+
+    public static string SerializeAnchorTargetOrNull(AnchorTarget? target)
+    {
+        if (target is null) return "null";
+        var sb = new StringBuilder(128);
+        AppendAnchorTarget(sb, target);
+        return sb.ToString();
+    }
+
+    public static string SerializeAnchorInfoOrNull(AnchorInfo? info)
+    {
+        if (info is null) return "null";
+        var sb = new StringBuilder(128);
+        sb.Append("{\"id\":").Append(JsonString(info.Id))
+          .Append(",\"kind\":").Append(JsonString(info.Kind))
+          .Append(",\"scope\":").Append(JsonString(info.Scope))
+          .Append(",\"textPreview\":").Append(JsonString(info.TextPreview))
+          .Append('}');
+        return sb.ToString();
     }
 
     public static string SerializeAnnotations(IReadOnlyList<DocumentAnnotation> anns)

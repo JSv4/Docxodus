@@ -76,6 +76,19 @@ internal static class Dispatcher
         "find_by_bookmark" => DocxSessionOps.FindByBookmark(Handle(args), Str(args, "bookmarkName")),
         "list_annotations" => DocxSessionOps.ListAnnotations(Handle(args)),
 
+        "exists" => DocxSessionOps.Exists(Handle(args), Str(args, "anchorId")) ? "true" : "false",
+        "get_anchor_info" => DocxSessionOps.GetAnchorInfo(Handle(args), Str(args, "anchorId")),
+        "find_by_text" => DocxSessionOps.FindByText(Handle(args), Str(args, "needle"), ParseFindOptions(args)),
+        "find_all_by_text" => DocxSessionOps.FindAllByText(Handle(args), Str(args, "needle"), ParseFindOptions(args)),
+        "find_by_regex" => DocxSessionOps.FindByRegex(
+            Handle(args), Str(args, "pattern"),
+            (RegexOptions)IntOptional(args, "regexOptions", 0),
+            ParseFindOptions(args)),
+        "find_by_kind" => DocxSessionOps.FindByKind(
+            Handle(args), Str(args, "kind"),
+            args.ValueKind == JsonValueKind.Object && args.TryGetProperty("scope", out var sc) && sc.ValueKind == JsonValueKind.String
+                ? sc.GetString() : null),
+
         "undo" => DocxSessionOps.Undo(Handle(args)) ? "true" : "false",
         "redo" => DocxSessionOps.Redo(Handle(args)) ? "true" : "false",
 
@@ -179,6 +192,13 @@ internal static class Dispatcher
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var op) || op.ValueKind != JsonValueKind.Object)
             return new FormatOp();
         return DocxSessionJson.ParseFormatOp(op.GetRawText());
+    }
+
+    private static FindOptions? ParseFindOptions(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty("options", out var o) || o.ValueKind != JsonValueKind.Object)
+            return null;
+        return DocxSessionJson.ParseFindOptions(o);
     }
 
     private static ReplaceOptions? ParseReplaceOptions(JsonElement args)
