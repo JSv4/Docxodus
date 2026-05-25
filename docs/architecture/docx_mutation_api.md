@@ -228,7 +228,14 @@ Edit text without losing formatting → Grep + a fragment-aware rewrite (see #13
 
 ### Known limits
 
-- **Each block is grep'd in isolation.** Grep iterates paragraphs/headings/list-items and runs the regex against each one's flat text independently — there's no document-wide text stream that flows across paragraph boundaries. So `session.Grep("Hello world")` won't match if `"Hello "` is in one paragraph and `"world"` is in the next, even though they appear adjacent in the rendered doc. This is by design: every `TextMatch` carries a single `EnclosingAnchor` for the caller to hand back to `ReplaceText`/`Raw.ReplaceXml`, and matches that crossed block boundaries would have no single enclosing anchor.
+- **Each block is grep'd in isolation.** Grep iterates paragraphs/headings/list-items and runs the regex against each one's flat text independently — there's no document-wide text stream that flows across paragraph boundaries. So `session.Grep("Hello world")` won't match if `"Hello "` is in one paragraph and `"world"` is in the next, even though they appear adjacent in the rendered doc. This is by design: every `TextMatch` carries a single `EnclosingAnchor` for the caller to hand back to `ReplaceText`/`Raw.ReplaceXml`, and matches that crossed block boundaries would have no single enclosing anchor. If you actually need cross-block search (legal clauses split for readability, multi-paragraph regions, etc.), the workaround until [#146](https://github.com/JSv4/Docxodus/issues/146) lands is to regex against the full markdown projection and walk `{#kind:scope:unid}` tokens back to anchors:
+    ```csharp
+    var proj = session.Project();
+    foreach (Match m in Regex.Matches(proj.Markdown, multiLinePattern, RegexOptions.Singleline))
+    {
+        // m.Index / m.Length point into proj.Markdown; surrounding anchor tokens identify the blocks involved.
+    }
+    ```
 - `RegexOptions` is the .NET enum; the npm wrapper passes its numeric value through (see `GrepOptions` in `npm/src/types.ts`).
 - Tracked-change content currently follows the projector's accepted/rendered text — `Settings.TrackedChanges = StripDeletions` won't filter `<w:del>` content out of Grep yet. Worth opening as a follow-up if it matters.
 
