@@ -112,6 +112,54 @@ public sealed record TextMatch
     public IReadOnlyList<string> Groups { get; init; } = Array.Empty<string>();
 }
 
+/// <summary>
+/// One block's contribution to a <see cref="CrossBlockMatch"/>. Each slice names the
+/// block it came from, the offset+length of the matched substring within that block,
+/// and the run-level fragment breakdown for that slice. A slice's <see cref="Fragments"/>
+/// list is empty when the match touches an empty paragraph (e.g. the blank line between
+/// two clauses) — the slice is still recorded so callers can see that the match
+/// crossed the empty block.
+/// </summary>
+public sealed record BlockSlice
+{
+    /// <summary>The block-level anchor this slice belongs to.</summary>
+    required public AnchorTarget Anchor { get; init; }
+
+    /// <summary>Character offset + length of the slice within the block's own flat text.</summary>
+    required public CharSpan SpanInBlock { get; init; }
+
+    /// <summary>The run fragments contributing to this slice, in document order.</summary>
+    required public IReadOnlyList<RunFragment> Fragments { get; init; }
+}
+
+/// <summary>
+/// A single match returned by <see cref="DocxSession.GrepCrossBlock"/>. Unlike
+/// <see cref="TextMatch"/>, the match may span multiple adjacent block-level elements
+/// (paragraphs/headings/list items) under the same parent container. <see cref="Slices"/>
+/// breaks the match down by block; <see cref="EnclosingAnchors"/> lists every block the
+/// match touches, in document order.
+/// </summary>
+public sealed record CrossBlockMatch
+{
+    /// <summary>The matched text, including any block-boundary separators (<c>\n</c>) the regex matched across.</summary>
+    required public string Text { get; init; }
+
+    /// <summary>Every block-level anchor the match touches, in document order. Always non-empty.</summary>
+    required public IReadOnlyList<AnchorTarget> EnclosingAnchors { get; init; }
+
+    /// <summary>Per-block breakdown of the match, in document order. Always non-empty.</summary>
+    required public IReadOnlyList<BlockSlice> Slices { get; init; }
+
+    /// <summary>Up to <c>contextChars</c> chars from the surrounding concatenated text immediately before the match.</summary>
+    required public string ContextBefore { get; init; }
+
+    /// <summary>Up to <c>contextChars</c> chars from the surrounding concatenated text immediately after the match.</summary>
+    required public string ContextAfter { get; init; }
+
+    /// <summary>Regex capture groups (index 0 is always the whole match; named groups appear at their numeric index).</summary>
+    public IReadOnlyList<string> Groups { get; init; } = Array.Empty<string>();
+}
+
 /// <summary>Options that tune the <c>FindBy*</c> helpers on <see cref="DocxSession"/>.</summary>
 public sealed record FindOptions
 {
@@ -439,6 +487,166 @@ public sealed class DocxSession : IDisposable
                     ContextBefore = ctxBefore,
                     ContextAfter = ctxAfter,
                     Groups = groups,
+                });
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Searches the flat text of every block-level element in <paramref name="scope"/>, like
+    /// <see cref="Grep"/>, but lets a single match span <em>adjacent</em> block-level siblings
+    /// (paragraphs/headings/list items) sharing the same direct parent. Returns matches in
+    /// document order, each with a per-block <see cref="BlockSlice"/> breakdown. See issue #146.
+    ///
+    /// Block boundaries are represented in the concatenated text by a single <c>\n</c>, so
+    /// <c>^</c>/<c>$</c> with <see cref="System.Text.RegularExpressions.RegexOptions.Multiline"/>
+    /// anchor at boundaries; <c>.</c> won't cross unless
+    /// <see cref="System.Text.RegularExpressions.RegexOptions.Singleline"/> is set.
+    ///
+    /// Matches never cross:
+    /// <list type="bullet">
+    ///   <item><description>OOXML package parts (e.g. body → footnote, header → body).</description></item>
+    ///   <item><description>Container boundaries (e.g. body paragraph → table-cell paragraph).</description></item>
+    ///   <item><description>Non-paragraph siblings (a <c>w:tbl</c> or section property between two paragraphs breaks the run).</description></item>
+    /// </list>
+    ///
+    /// Superset of <see cref="Grep"/>: single-block matches are still returned (with one
+    /// <see cref="BlockSlice"/>). Callers that want only cross-block hits can filter
+    /// <c>Slices.Count &gt; 1</c>.
+    /// </summary>
+    public IReadOnlyList<CrossBlockMatch> GrepCrossBlock(
+        string pattern,
+        System.Text.RegularExpressions.RegexOptions options = System.Text.RegularExpressions.RegexOptions.None,
+        ProjectionScopes scope = ProjectionScopes.Body,
+        int contextChars = 40,
+        WhitespaceMode whitespace = WhitespaceMode.Preserve)
+    {
+        ThrowIfDisposed();
+        if (string.IsNullOrEmpty(pattern)) return Array.Empty<CrossBlockMatch>();
+
+        var regex = new System.Text.RegularExpressions.Regex(pattern, options);
+        var results = new List<CrossBlockMatch>();
+
+        // Build groups of consecutive block-level siblings under the same parent.
+        // Document order comes from AnchorIndex iteration; the parent check ensures
+        // we don't bridge a body paragraph to a table-cell paragraph or a header to a
+        // body paragraph. Any non-eligible anchor (kind != p/h/li, or out of scope,
+        // or unresolved) breaks the run.
+        var index = Project().AnchorIndex;
+        var groups = new List<List<(AnchorTarget Target, XElement Element)>>();
+        List<(AnchorTarget, XElement)>? current = null;
+        XElement? currentParent = null;
+
+        foreach (var target in index.Values)
+        {
+            if (!ScopeMatches(target.Anchor.Scope, scope)) { current = null; continue; }
+            if (target.Anchor.Kind is not ("p" or "h" or "li")) { current = null; continue; }
+
+            var element = target.Resolve(_doc!);
+            if (element is null) { current = null; continue; }
+
+            if (current is not null && ReferenceEquals(element.Parent, currentParent))
+            {
+                current.Add((target, element));
+            }
+            else
+            {
+                current = new List<(AnchorTarget, XElement)> { (target, element) };
+                currentParent = element.Parent;
+                groups.Add(current);
+            }
+        }
+
+        foreach (var group in groups)
+        {
+            // Build per-block maps + a parallel boundary array (start offset of each
+            // block in the concatenated text, length of the block's flat text). A
+            // single '\n' between blocks acts as the sentinel.
+            var maps = new List<Internal.RunTextMap.Map>(group.Count);
+            var starts = new int[group.Count];
+            var sb = new System.Text.StringBuilder();
+            for (int i = 0; i < group.Count; i++)
+            {
+                if (i > 0) sb.Append('\n');
+                starts[i] = sb.Length;
+                var map = Internal.RunTextMap.Build(group[i].Element);
+                maps.Add(map);
+                sb.Append(map.FlatText);
+            }
+            var concat = sb.ToString();
+            if (concat.Length == 0) continue;
+
+            var matchText = whitespace == WhitespaceMode.Normalize
+                ? NormalizeWhitespace(concat)
+                : concat;
+
+            // Cache owner-part lookup per group; every block in a group lives in the
+            // same package part (siblings share a parent), so one lookup suffices.
+            var ownerPart = ResolvePart(group[0].Target.PartUri);
+
+            foreach (System.Text.RegularExpressions.Match m in regex.Matches(matchText))
+            {
+                if (!m.Success || m.Length == 0) continue;
+
+                var slices = new List<BlockSlice>();
+                var anchors = new List<AnchorTarget>();
+                for (int i = 0; i < group.Count; i++)
+                {
+                    var blockStart = starts[i];
+                    var blockEnd = blockStart + maps[i].FlatText.Length;
+                    if (blockEnd <= m.Index) continue;
+                    if (blockStart >= m.Index + m.Length) break;
+
+                    var overlapStart = Math.Max(m.Index, blockStart) - blockStart;
+                    var overlapLen = Math.Min(m.Index + m.Length, blockEnd) - blockStart - overlapStart;
+
+                    var pieces = overlapLen > 0
+                        ? Internal.RunTextMap.ResolveRange(maps[i], overlapStart, overlapLen)
+                        : new List<(Internal.RunTextMap.RunSegment, int, int)>();
+
+                    var fragments = new List<RunFragment>(pieces.Count);
+                    foreach (var (seg, offsetInRun, len) in pieces)
+                    {
+                        var runUnid = (string?)seg.Run.Attribute(PtOpenXml.Unid) ?? string.Empty;
+                        var runText = RunText(seg.Run);
+                        fragments.Add(new RunFragment
+                        {
+                            Unid = runUnid,
+                            Text = runText.Substring(offsetInRun, len),
+                            SpanInElement = new CharSpan(offsetInRun, len),
+                            Formatting = ExtractFormatting(seg.Run, ownerPart),
+                        });
+                    }
+
+                    slices.Add(new BlockSlice
+                    {
+                        Anchor = group[i].Target,
+                        SpanInBlock = new CharSpan(overlapStart, overlapLen),
+                        Fragments = fragments,
+                    });
+                    anchors.Add(group[i].Target);
+                }
+
+                if (slices.Count == 0) continue;
+
+                var ctxStart = Math.Max(0, m.Index - contextChars);
+                var ctxBefore = concat.Substring(ctxStart, m.Index - ctxStart);
+                var ctxEnd = Math.Min(concat.Length, m.Index + m.Length + contextChars);
+                var ctxAfter = concat.Substring(m.Index + m.Length, ctxEnd - (m.Index + m.Length));
+
+                var groups2 = new string[m.Groups.Count];
+                for (int i = 0; i < m.Groups.Count; i++) groups2[i] = m.Groups[i].Value;
+
+                results.Add(new CrossBlockMatch
+                {
+                    Text = m.Value,
+                    EnclosingAnchors = anchors,
+                    Slices = slices,
+                    ContextBefore = ctxBefore,
+                    ContextAfter = ctxAfter,
+                    Groups = groups2,
                 });
             }
         }

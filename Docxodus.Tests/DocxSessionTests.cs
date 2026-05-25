@@ -1803,4 +1803,193 @@ public class DocxSessionTests
         Assert.Contains(anchors, a => a.Anchor.Kind == "tc");
         Assert.Contains(anchors, a => a.Anchor.Kind == "tbl");
     }
+
+    // ─── Phase: GrepCrossBlock (#146) ──────────────────────────────────────
+    //
+    // Fixture layout (body paragraphs in order):
+    //   P0: "Section 1.1. Hello "
+    //   P1: "world! Trailing text."
+    //   P2: ""                                  (empty paragraph between clauses)
+    //   P3: "Indemnification. The Company "
+    //   P4: "shall indemnify all officers."
+    //   [Table here] — interrupts the run; body paragraphs after table
+    //                  belong to a separate group.
+    //   P5: "Post-table paragraph."
+    // The table cell contains two paragraphs of its own so cross-block can be
+    // tested inside a cell, and confirms body→cell never bridges.
+
+    internal static byte[] BuildDS200_CrossBlockFixture()
+    {
+        XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = BuildHeadingStyles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            XElement Para(params XElement[] runs) => new XElement(W + "p", runs);
+            XElement Run(string text, bool bold = false)
+            {
+                var r = new XElement(W + "r");
+                if (bold) r.Add(new XElement(W + "rPr", new XElement(W + "b")));
+                r.Add(new XElement(W + "t", new XAttribute(XNamespace.Xml + "space", "preserve"), text));
+                return r;
+            }
+
+            var cellPara1 = Para(Run("Cell line one. "));
+            var cellPara2 = Para(Run("Cell line two."));
+
+            var table = new XElement(W + "tbl",
+                new XElement(W + "tr",
+                    new XElement(W + "tc", cellPara1, cellPara2)));
+
+            var body = new XElement(W + "body",
+                Para(Run("Section 1.1. Hello ")),
+                Para(Run("world! Trailing text.")),
+                Para(), // empty paragraph
+                Para(Run("Indemnification. The Company ")),
+                Para(Run("shall ", bold: true), Run("indemnify all officers.")),
+                table,
+                Para(Run("Post-table paragraph.")));
+
+            var doc = new XElement(W + "document",
+                new XAttribute(XNamespace.Xmlns + "w", W.NamespaceName),
+                body);
+            main.PutXDocument(new XDocument(doc));
+        }
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public void DS200_GrepCrossBlock_MatchSpanningTwoAdjacentParagraphs()
+    {
+        // "Hello \nworld!" with a single-newline separator between adjacent blocks.
+        using var s = new DocxSession(BuildDS200_CrossBlockFixture());
+        var matches = s.GrepCrossBlock("Hello \nworld!");
+        Assert.Single(matches);
+
+        var m = matches[0];
+        Assert.Equal(2, m.Slices.Count);
+        Assert.Equal(2, m.EnclosingAnchors.Count);
+        Assert.NotEqual(m.EnclosingAnchors[0].Anchor.Id, m.EnclosingAnchors[1].Anchor.Id);
+
+        Assert.Equal("Hello ", m.Slices[0].Fragments.Single().Text);
+        Assert.Equal("world!", m.Slices[1].Fragments.Single().Text);
+        Assert.Equal(13, m.Slices[0].SpanInBlock.Start); // "Section 1.1. " = 13 chars
+        Assert.Equal(6, m.Slices[0].SpanInBlock.Length);
+        Assert.Equal(0, m.Slices[1].SpanInBlock.Start);
+        Assert.Equal(6, m.Slices[1].SpanInBlock.Length);
+    }
+
+    [Fact]
+    public void DS201_GrepCrossBlock_DotDoesNotCrossBoundaryByDefault()
+    {
+        // Without Singleline, "." does not match the '\n' boundary character.
+        using var s = new DocxSession(BuildDS200_CrossBlockFixture());
+        var noFlag = s.GrepCrossBlock(@"Hello.*world");
+        Assert.Empty(noFlag);
+
+        var withSingleline = s.GrepCrossBlock(@"Hello.*world", System.Text.RegularExpressions.RegexOptions.Singleline);
+        Assert.Single(withSingleline);
+        Assert.Equal(2, withSingleline[0].Slices.Count);
+    }
+
+    [Fact]
+    public void DS202_GrepCrossBlock_IncludesSingleBlockMatchesAsSuperset()
+    {
+        // A purely intra-block match still surfaces, with exactly one slice.
+        using var s = new DocxSession(BuildDS200_CrossBlockFixture());
+        var m = s.GrepCrossBlock("Section 1.1").Single();
+        Assert.Single(m.Slices);
+        Assert.Single(m.EnclosingAnchors);
+    }
+
+    [Fact]
+    public void DS203_GrepCrossBlock_PreservesFormattingPerSlice()
+    {
+        // Match crosses bold + non-bold runs within P4, AND extends back into P3.
+        using var s = new DocxSession(BuildDS200_CrossBlockFixture());
+        var matches = s.GrepCrossBlock(@"Company \nshall indemnify");
+        Assert.Single(matches);
+
+        var m = matches[0];
+        Assert.Equal(2, m.Slices.Count);
+
+        // P3 slice: "Company " trailing — single run, not bold.
+        Assert.Equal("Company ", m.Slices[0].Fragments.Single().Text);
+        Assert.False(m.Slices[0].Fragments.Single().Formatting.Bold);
+
+        // P4 slice: "shall indemnify" — spans the bold "shall " and the plain "indemnify".
+        Assert.Equal(2, m.Slices[1].Fragments.Count);
+        Assert.Equal("shall ", m.Slices[1].Fragments[0].Text);
+        Assert.True(m.Slices[1].Fragments[0].Formatting.Bold);
+        Assert.Equal("indemnify", m.Slices[1].Fragments[1].Text);
+        Assert.False(m.Slices[1].Fragments[1].Formatting.Bold);
+    }
+
+    [Fact]
+    public void DS204_GrepCrossBlock_DoesNotBridgeAcrossTable()
+    {
+        // P4 ends with "officers." and P5 (after the table) starts with "Post-table".
+        // The table interrupts the run, so a cross-block match across them is impossible.
+        using var s = new DocxSession(BuildDS200_CrossBlockFixture());
+        var matches = s.GrepCrossBlock(@"officers\.\nPost-table", System.Text.RegularExpressions.RegexOptions.Singleline);
+        Assert.Empty(matches);
+    }
+
+    [Fact]
+    public void DS205_GrepCrossBlock_DoesNotBridgeBodyAndCellParagraphs()
+    {
+        // The body paragraph before the table and the first cell paragraph share no
+        // direct parent — a match across them must not appear.
+        using var s = new DocxSession(BuildDS200_CrossBlockFixture());
+        var matches = s.GrepCrossBlock(@"officers\.\nCell line", System.Text.RegularExpressions.RegexOptions.Singleline);
+        Assert.Empty(matches);
+    }
+
+    [Fact]
+    public void DS206_GrepCrossBlock_MatchesAcrossEmptyParagraph()
+    {
+        // P1 → P2 (empty) → P3: the empty paragraph contributes a recorded slice
+        // (with zero fragments) so the agent sees the boundary the match crossed.
+        using var s = new DocxSession(BuildDS200_CrossBlockFixture());
+        var matches = s.GrepCrossBlock(@"Trailing text\.\n\nIndemnification", System.Text.RegularExpressions.RegexOptions.Singleline);
+        Assert.Single(matches);
+
+        var m = matches[0];
+        Assert.Equal(3, m.Slices.Count);
+        Assert.Equal("Trailing text.", m.Slices[0].Fragments.Single().Text);
+        Assert.Empty(m.Slices[1].Fragments); // empty paragraph contributed nothing
+        Assert.Equal(0, m.Slices[1].SpanInBlock.Length);
+        Assert.Equal("Indemnification", m.Slices[2].Fragments.Single().Text);
+    }
+
+    [Fact]
+    public void DS207_GrepCrossBlock_MatchesWithinTableCell()
+    {
+        // Two paragraphs inside the same cell are siblings — cross-block within
+        // the cell must work.
+        using var s = new DocxSession(BuildDS200_CrossBlockFixture());
+        var matches = s.GrepCrossBlock(@"Cell line one\. \nCell line two");
+        Assert.Single(matches);
+        Assert.Equal(2, matches[0].Slices.Count);
+    }
+
+    [Fact]
+    public void DS208_GrepCrossBlock_ContextSurroundsTheMatch()
+    {
+        using var s = new DocxSession(BuildDS200_CrossBlockFixture());
+        var m = s.GrepCrossBlock("Hello \nworld!").Single();
+        Assert.EndsWith("Section 1.1. ", m.ContextBefore);
+        Assert.StartsWith(" Trailing text.", m.ContextAfter);
+    }
+
+    [Fact]
+    public void DS209_GrepCrossBlock_EmptyPatternReturnsEmpty()
+    {
+        using var s = new DocxSession(BuildDS200_CrossBlockFixture());
+        Assert.Empty(s.GrepCrossBlock(""));
+    }
 }
