@@ -226,6 +226,19 @@ public class DocxSessionTests
         return ms.ToArray();
     }
 
+    internal static byte[] BuildDocWithLongClauseBlank()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(
+                new Paragraph(new Run(new Text(
+                    "[that would result in at least $_______ in gross proceeds, including or excluding proceeds previously received]")))));
+        }
+        return ms.ToArray();
+    }
+
     // ─── Phase 1: Skeleton tests ─────────────────────────────────────────
 
     [Fact]
@@ -376,6 +389,30 @@ public class DocxSessionTests
         var r = session.ReplaceInner(bogus, "anything");
         Assert.False(r.Success);
         Assert.Equal(EditErrorCode.MalformedMarkdown, r.Error?.Code);
+    }
+
+    [Fact]
+    public void DS232_Classifier_LongClauseWithUnderscoresExposesAlternativeKinds()
+    {
+        // Long bracketed clauses that contain embedded underscores are ambiguous —
+        // strictly speaking they're an AlternativeClause (a real clause), but the
+        // current classifier rule fires BlankFill because >= 2 underscores are present.
+        // Surface BOTH classifications so callers can decide.
+        using var session = new DocxSession(BuildDocWithLongClauseBlank());
+
+        var p = session.FindPlaceholders().Single();
+        Assert.Equal(PlaceholderKind.BlankFill, p.Kind);              // primary stays BlankFill (back-compat)
+        Assert.Contains(PlaceholderKind.AlternativeClause, p.AlternativeKinds);
+    }
+
+    [Fact]
+    public void DS233_Classifier_SimpleBlankFillEmptyAlternativeKinds()
+    {
+        // Plain "[_____]" placeholders are unambiguous — AlternativeKinds should be empty.
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var simpleBlankFill = session.FindPlaceholders(PlaceholderKinds.BlankFill)
+            .Single(p => p.Match.Text == "[_____]");
+        Assert.Empty(simpleBlankFill.AlternativeKinds);
     }
 
     // ─── Phase 3: text CRUD + undo/redo ──────────────────────────────────

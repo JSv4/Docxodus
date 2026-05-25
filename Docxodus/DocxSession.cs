@@ -229,6 +229,18 @@ public sealed record TemplatePlaceholder
     /// <c>"insert percentage"</c>; <c>"[*specify name*]"</c> → <c>"specify name"</c>).
     /// <c>null</c> for other kinds.</summary>
     public string? Hint { get; init; }
+
+    /// <summary>
+    /// Additional plausible classifications when the primary <see cref="Kind"/> is
+    /// borderline. Empty by default; populated when a secondary heuristic also
+    /// matches the placeholder text. The classic case is a long bracketed clause
+    /// that happens to contain a <c>_______</c> blank: primary <see cref="Kind"/>
+    /// is <see cref="PlaceholderKind.BlankFill"/> for back-compat, with
+    /// <see cref="PlaceholderKind.AlternativeClause"/> in <c>AlternativeKinds</c>
+    /// so callers can detect the ambiguity and treat the placeholder as a clause
+    /// (strip brackets, then fill the inner blank).
+    /// </summary>
+    public IReadOnlyList<PlaceholderKind> AlternativeKinds { get; init; } = Array.Empty<PlaceholderKind>();
 }
 
 public sealed record AnchorInfo(string Id, string Kind, string Scope, string TextPreview);
@@ -1119,7 +1131,7 @@ public sealed class DocxSession : IDisposable
         var results = new List<TemplatePlaceholder>(matches.Count);
         foreach (var m in matches)
         {
-            var classified = Classify(m.Text);
+            var (classified, alternatives) = Classify(m.Text);
             if (classified is not PlaceholderKind kind) continue;
             if (!kinds.HasFlag(KindToFlag(kind))) continue;
             results.Add(new TemplatePlaceholder
@@ -1127,11 +1139,12 @@ public sealed class DocxSession : IDisposable
                 Match = m,
                 Kind = kind,
                 Hint = kind == PlaceholderKind.Instruction ? ExtractHint(m.Text) : null,
+                AlternativeKinds = alternatives,
             });
         }
         return results;
 
-        static PlaceholderKind? Classify(string text)
+        static (PlaceholderKind? Primary, IReadOnlyList<PlaceholderKind> Alternatives) Classify(string text)
         {
             var inner = text.StartsWith('$') ? text[2..^1] : text[1..^1];
 
@@ -1140,17 +1153,37 @@ public sealed class DocxSession : IDisposable
             // slots all qualify). Tighter than "any underscore" to avoid false positives
             // on quoted identifiers like "[a_b]". Trade-off in writeup at the FindPlaceholders
             // section of docs/architecture/docx_mutation_api.md.
-            if (inner.Count(c => c == '_') >= 2) return PlaceholderKind.BlankFill;
+            bool isBlankFill = inner.Count(c => c == '_') >= 2;
 
             // Instruction: italicized (asterisk-wrapped) text, or starts with the
             // drafter verbs "insert" / "specify". Conservative leading-word check
             // so general prose in brackets doesn't mis-classify.
-            if (inner.StartsWith('*') && inner.EndsWith('*') && inner.Length > 2) return PlaceholderKind.Instruction;
-            var firstWord = inner.TakeWhile(char.IsLetter).ToArray();
-            var w = new string(firstWord).ToLowerInvariant();
-            if (w is "insert" or "specify") return PlaceholderKind.Instruction;
+            bool isInstruction = false;
+            if (inner.StartsWith('*') && inner.EndsWith('*') && inner.Length > 2) isInstruction = true;
+            else
+            {
+                var firstWord = inner.TakeWhile(char.IsLetter).ToArray();
+                var w = new string(firstWord).ToLowerInvariant();
+                if (w is "insert" or "specify") isInstruction = true;
+            }
 
-            return PlaceholderKind.AlternativeClause;
+            // Secondary classification: long-clause-with-blanks. When BlankFill fires but
+            // the inner text reads like a multi-word clause (4+ spaces between words),
+            // the placeholder is plausibly an AlternativeClause with an embedded blank.
+            // Caller can detect via AlternativeKinds and strip the outer brackets, then
+            // separately fill the inner _______ run.
+            bool looksClause = inner.Count(c => c == ' ') >= 4;
+
+            // Primary classification keeps the original priority order:
+            //   BlankFill → Instruction → AlternativeClause
+            if (isBlankFill)
+            {
+                var alts = looksClause ? new[] { PlaceholderKind.AlternativeClause } : Array.Empty<PlaceholderKind>();
+                return (PlaceholderKind.BlankFill, alts);
+            }
+            if (isInstruction)
+                return (PlaceholderKind.Instruction, Array.Empty<PlaceholderKind>());
+            return (PlaceholderKind.AlternativeClause, Array.Empty<PlaceholderKind>());
         }
 
         static string ExtractHint(string text)
