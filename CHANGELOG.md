@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`Docxodus.Internal.{SessionRegistry, DocxSessionOps, DocxSessionJson}` — shared bridge core for `DocxSession` transports.** Lifts the integer-handle pool, the per-op session-lookup + serialization facade, and the StringBuilder JSON helpers that previously lived inside `wasm/DocxodusWasm/DocxSessionBridge.cs` into the core library under `Docxodus/Internal/`. The WASM bridge is now a thin `[JSExport]`-attributed shell over `DocxSessionOps`; a new stdio NDJSON host at `tools/python-host/` (assembly `docxodus-pyhost`) consumes the same facade, so the WASM/TypeScript and stdio/Python clients see byte-for-byte identical JSON wire shapes. `InternalsVisibleTo` for `DocxodusWasm`, `docxodus-pyhost`, and `Docxodus.Tests`. Pure refactor — all 1411 existing tests pass unchanged.
+- **`tools/python-host/` — .NET 8 console host for the upcoming python-docxodus wrapper.** Reads NDJSON requests on stdin, dispatches to `DocxSessionOps`, writes NDJSON responses on stdout (diagnostics on stderr). One host process serves many concurrent sessions via the shared handle pool, so an agentic Python pipeline pays the .NET startup cost once and gets µs-to-low-ms per-op latency thereafter. Distinguishes transport-level failures (`ok: false` envelope) from business `EditResult.Success = false` outcomes (`ok: true` envelope carrying the `EditError`). Built for self-contained single-file `dotnet publish` so the eventual pip wheel ships with zero system dependencies.
+
 ## [6.0.0] - 2026-05-25
 
 ### Fixed

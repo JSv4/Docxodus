@@ -137,13 +137,15 @@ This repo is not just a .NET library — it ships a four-layer stack. Changes to
 | Layer | Path | Purpose |
 |-------|------|---------|
 | Core library | `Docxodus/` | The .NET library — all OOXML logic lives here. NuGet package `Docxodus`. |
+| Bridge core | `Docxodus/Internal/{SessionRegistry,DocxSessionOps,DocxSessionJson}.cs` | Shared handle pool + per-op session-lookup-and-serialize facade + JSON helpers. Both the WASM bridge and the stdio host route through these — wire shapes live in exactly one place. |
 | Unit tests | `Docxodus.Tests/` | xUnit tests for the core library (~1,000+ tests). |
 | CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool`-installable wrappers over the library. |
-| WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` methods (`DocumentConverter.cs`, `DocumentComparer.cs`) exposing the library to JS via .NET WASM. |
+| WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` shells (`DocumentConverter.cs`, `DocumentComparer.cs`, `DocxSessionBridge.cs`) exposing the library to JS via .NET WASM. `DocxSessionBridge` is now a thin passthrough to `DocxSessionOps`. |
+| Stdio host | `tools/python-host/` | .NET 8 console binary (`docxodus-pyhost`) that reads NDJSON requests on stdin and dispatches to `DocxSessionOps`. The upcoming python-docxodus pip package will subprocess this. |
 | npm/TypeScript | `npm/` | Wrapper around the WASM bridge — `src/index.ts` is the public API, `src/react.ts` is the React hook layer, `src/docxodus.worker.ts`/`worker-proxy.ts` run WASM off the main thread. |
 | Web demo | `web/DocxodusWeb/` | Blazor/web demo app (separate workflow). |
 
-When the core library changes a public method or setting, update **all four** of: core, tests, `wasm/DocxodusWasm/`, and `npm/src/types.ts` + `npm/src/index.ts`. The table in "Feature Development Workflow" below summarizes when each is required.
+When the core library changes a public method or setting on `DocxSession`, update **`Docxodus/Internal/DocxSessionOps.cs` first** — both bridges and both clients pick up the change automatically. Then ripple through: tests, the WASM `[JSExport]` shell in `DocxSessionBridge.cs`, the stdio dispatcher in `tools/python-host/Dispatcher.cs`, `npm/src/types.ts` + `npm/src/index.ts`. The table in "Feature Development Workflow" below summarizes when each is required.
 
 ### WASM Conditional Compilation
 
