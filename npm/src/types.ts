@@ -88,6 +88,8 @@ export interface MarkdownAnchorTarget {
   scope: string;
   unid: string;
   partUri: string;
+  /** First ~80 characters of the element's flat text — for previewing/picking anchors. */
+  textPreview: string;
 }
 
 /**
@@ -690,6 +692,8 @@ export interface DocxodusWasmExports {
     FindByAnnotation: (handle: number, annotationId: string) => string;
     FindByLabel: (handle: number, labelId: string) => string;
     FindByBookmark: (handle: number, bookmarkName: string) => string;
+    GetAnchorInfo: (handle: number, anchorId: string) => string;
+    GetAnchorInfos: (handle: number, anchorIdsJson: string) => string;
     ListAnnotations: (handle: number) => string;
     Undo: (handle: number) => boolean;
     Redo: (handle: number) => boolean;
@@ -939,6 +943,20 @@ export interface GrepOptions {
  */
 export interface AnchorTargetRef extends AnchorRef {
   partUri: string;
+  /** First ~80 characters of the element's flat text — for previewing/picking anchors. */
+  textPreview: string;
+}
+
+/**
+ * The shape returned by {@link DocxSession.getAnchorInfo}.
+ * Use {@link MarkdownAnchorTarget} when iterating a full projection — it
+ * includes the same fields plus `unid` and `partUri`.
+ */
+export interface AnchorInfo {
+  id: string;
+  kind: string;
+  scope: string;
+  textPreview: string;
 }
 
 /**

@@ -2,6 +2,7 @@
 // Licensed under the MIT license. See LICENSE file in the project root for full license information.
 
 import type {
+  AnchorInfo,
   AnchorRef,
   AnchorTargetRef,
   CharSpan,
@@ -250,6 +251,28 @@ export class DocxSession {
   }
 
   /**
+   * Look up a single anchor's preview info — `{ id, kind, scope, textPreview }`.
+   * Returns null when the anchor id is unknown.
+   *
+   * For iterating many anchors at once, prefer reading `textPreview` directly
+   * off the {@link MarkdownProjection.anchorIndex} entries (cheaper — no extra
+   * WASM round trip), or use {@link getAnchorInfos} for batched lookups.
+   */
+  getAnchorInfo(anchorId: string): AnchorInfo | null {
+    const raw = this.wasm.GetAnchorInfo(this.handle, anchorId);
+    return JSON.parse(raw) as AnchorInfo | null;
+  }
+
+  /**
+   * Bulk variant of {@link getAnchorInfo}: takes an array of anchor ids,
+   * returns a record where each unknown id maps to `null`.
+   */
+  getAnchorInfos(anchorIds: readonly string[]): Record<string, AnchorInfo | null> {
+    const raw = this.wasm.GetAnchorInfos(this.handle, JSON.stringify(anchorIds));
+    return JSON.parse(raw) as Record<string, AnchorInfo | null>;
+  }
+
+  /**
    * Enumerates every annotation persisted in the document. Lets an agent prime
    * itself with "here are the labeled regions you can target" before committing
    * to a specific id.
@@ -297,5 +320,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
 export { PlaceholderKinds } from "./types.js";

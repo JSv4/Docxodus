@@ -53,6 +53,7 @@ import { DocxSession, openDocxSession as openDocxSessionImpl } from "./session.j
 
 export { DocxSession } from "./session.js";
 export type {
+  AnchorInfo,
   AnchorRef,
   AnchorTargetRef,
   CharSpan,
@@ -1416,6 +1417,7 @@ export async function convertWmlToMarkdown(
       scope: v.Scope ?? v.scope,
       unid: v.Unid ?? v.unid,
       partUri: v.PartUri ?? v.partUri,
+      textPreview: v.TextPreview ?? v.textPreview ?? "",
     };
   }
   return {
