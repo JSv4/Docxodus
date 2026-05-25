@@ -203,6 +203,30 @@ public static partial class DocxSessionBridge
         Serialize(Get(h).ReplaceTextAtSpan(anchor, spanStart, spanLength, replace));
 
     /// <summary>
+    /// Bridge for <see cref="DocxSession.ReplaceInner"/>. Takes the match's text
+    /// (to locate the brackets) plus anchor+span (to dispatch to the underlying
+    /// ReplaceTextAtSpan). The bracket parsing happens here so the npm side only
+    /// has to pass the existing TextMatch fields rather than serializing the full
+    /// TextMatch (with Fragments, ContextBefore, etc.) back across the wire.
+    /// </summary>
+    [JSExport]
+    public static string ReplaceInner(int h, string matchText, string anchor, int spanStart, int spanLength, string newInner)
+    {
+        int lb = matchText.IndexOf('[');
+        int rb = matchText.LastIndexOf(']');
+        if (lb < 0 || rb <= lb)
+            return Serialize(new EditResult
+            {
+                Success = false,
+                Error = new EditError(EditErrorCode.MalformedMarkdown,
+                    $"match text has no balanced brackets: '{matchText}'", anchor),
+            });
+        var prefix = matchText[..lb];
+        var suffix = matchText[(rb + 1)..];
+        return Serialize(Get(h).ReplaceTextAtSpan(anchor, spanStart, spanLength, prefix + newInner + suffix));
+    }
+
+    /// <summary>
     /// Bridge for <see cref="DocxSession.FindPlaceholders"/>. <paramref name="kinds"/>
     /// uses the numeric layout of <see cref="PlaceholderKinds"/> (BlankFill=1,
     /// AlternativeClause=2, Instruction=4, All=7); 0 returns nothing. <paramref name="scope"/>
@@ -432,19 +456,28 @@ public static partial class DocxSessionBridge
 
     private static string SerializePlaceholders(System.Collections.Generic.IReadOnlyList<TemplatePlaceholder> placeholders)
     {
+        static string KindToString(PlaceholderKind k) => k switch
+        {
+            PlaceholderKind.BlankFill => "blank_fill",
+            PlaceholderKind.AlternativeClause => "alternative_clause",
+            PlaceholderKind.Instruction => "instruction",
+            _ => "unknown",
+        };
+
         var sb = new StringBuilder(512);
         sb.Append('[');
         for (int i = 0; i < placeholders.Count; i++)
         {
             if (i > 0) sb.Append(',');
             var p = placeholders[i];
-            sb.Append("{\"kind\":\"").Append(p.Kind switch
+            sb.Append("{\"kind\":\"").Append(KindToString(p.Kind)).Append('"');
+            sb.Append(",\"alternativeKinds\":[");
+            for (int a = 0; a < p.AlternativeKinds.Count; a++)
             {
-                PlaceholderKind.BlankFill => "blank_fill",
-                PlaceholderKind.AlternativeClause => "alternative_clause",
-                PlaceholderKind.Instruction => "instruction",
-                _ => "unknown",
-            }).Append('"');
+                if (a > 0) sb.Append(',');
+                sb.Append(JsonString(KindToString(p.AlternativeKinds[a])));
+            }
+            sb.Append(']');
             if (p.Hint is not null)
                 sb.Append(",\"hint\":").Append(JsonString(p.Hint));
             sb.Append(",\"match\":");
