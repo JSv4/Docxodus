@@ -162,6 +162,16 @@ var target = projection.AnchorIndex["p:body:a1b2c3d4"];
 
 This is the contract that makes the projection useful for editing: callers receive the projection *and* a way to walk back to the source for any anchor.
 
+The `AnchorTarget` also exposes a `TextPreview` field — the first ~80 characters
+of the element's flat text — computed during projection. Agents iterating
+`AnchorIndex` for a UI list or LLM context window can read previews directly
+without re-walking each element via `session.GetAnchorInfo`.
+
+Word-reserved footnote/endnote separators (`type="separator"` /
+`type="continuationSeparator"`) are excluded from `AnchorIndex` — they're
+structural plumbing for Word's separator-line rendering, have no editorial
+content, and cannot be deleted. They do not appear in the projection text either.
+
 ## Settings (Planned)
 
 ```csharp

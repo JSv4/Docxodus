@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Anchor introspection ergonomics — `TextPreview` on `AnchorTarget`, boilerplate footnote filter, `GetAnchorInfos` bulk lookup** (issue #162). `WmlToMarkdownConverter` now computes the first ~80 chars of each block element's flat text during projection and exposes it as `AnchorTarget.TextPreview` — agents no longer need an N-anchor walk via `session.GetAnchorInfo` to surface previews when iterating the `AnchorIndex`. Word-reserved `w:footnote`/`w:endnote` separators (`type="separator"` / `type="continuationSeparator"`) no longer appear in the projection's `AnchorIndex` (they were internal Word plumbing surfaced as un-deletable `fn:fn:*` anchors). New `DocxSession.GetAnchorInfos(IEnumerable<string>)` returns a dictionary mapping each requested id to its `AnchorInfo?` in a single pass; unknown ids map to `null`. WASM bridge surfaces `textPreview` on `MarkdownAnchorTargetDto`, on session `Project()` responses, and on `FindBy*` results; adds `GetAnchorInfo` / `GetAnchorInfos` JSExports. npm wrapper: new `textPreview` field on `MarkdownAnchorTarget`, `AnchorTargetRef`, and `DocxSessionProjection.anchorIndex`; `session.getAnchorInfo(id)` and `session.getAnchorInfos(ids[])` methods. Tests: `MD005` (anchor TextPreview), `MD006` (boilerplate filter), `DS220`–`DS221` (bulk lookup), Playwright `anchor-introspection.spec.ts`.
+
 ## [6.0.0] - 2026-05-25
 
 ### Fixed

@@ -409,6 +409,11 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | Stop, reopen, or accept "no more history" | `SessionDisposed`, `NothingToUndo`, `NothingToRedo` |
 | Should not happen; treat as a bug. Op is rolled back, safe to retry once or report. Full exception is on `session.LastInternalError` | `InternalError` |
 
+For batched lookups (an agent that just enumerated 50 anchors and wants
+previews for all of them), use `session.GetAnchorInfos(ids)` — a single pass
+over the AnchorIndex instead of one walk per id. Returns
+`IReadOnlyDictionary<string, AnchorInfo?>` — unknown ids map to null.
+
 **Failure is transactional.** On any error, no mutation was applied. The pre-op snapshot was taken but is discarded without restoring (because nothing landed in the first place). Failed ops do not consume an undo slot. This holds for both pre-apply validation failures and runtime failures caught and rolled back.
 
 ## Recipes
