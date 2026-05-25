@@ -5,6 +5,7 @@ import type {
   AnchorRef,
   AnchorTargetRef,
   CharSpan,
+  CrossBlockMatch,
   DocumentAnnotation,
   DocxodusWasmExports,
   DocxSessionProjection,
@@ -138,6 +139,26 @@ export class DocxSession {
    */
   grep(pattern: string, options?: GrepOptions): TextMatch[] {
     return JSON.parse(this.wasm.Grep(this.handle, pattern, options ? JSON.stringify(options) : "")) as TextMatch[];
+  }
+
+  /**
+   * Like {@link grep}, but lets a single match span adjacent block-level
+   * siblings (paragraphs/headings/list items) under the same parent. Block
+   * boundaries appear in the matched text as `\n`, so `^`/`$` with the
+   * Multiline flag anchor at boundaries and `.` won't cross unless Singleline
+   * is set.
+   *
+   * Matches never cross OOXML package parts, container boundaries (body →
+   * table cell), or non-paragraph siblings (a table between two paragraphs
+   * breaks the run). Returned superset of {@link grep}: single-block matches
+   * still appear with one slice. Filter `slices.length > 1` for cross-block only.
+   *
+   * @see docs/architecture/docx_mutation_api.md#grepcrossblock
+   */
+  grepCrossBlock(pattern: string, options?: GrepOptions): CrossBlockMatch[] {
+    return JSON.parse(
+      this.wasm.GrepCrossBlock(this.handle, pattern, options ? JSON.stringify(options) : "")
+    ) as CrossBlockMatch[];
   }
 
   /**
@@ -276,5 +297,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorRef, AnchorTargetRef, CharSpan, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
+export type { AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
 export { PlaceholderKinds } from "./types.js";

@@ -683,6 +683,7 @@ export interface DocxodusWasmExports {
     RawInsertXml: (handle: number, anchor: string, pos: string, xml: string) => string;
     RawReplaceXml: (handle: number, anchor: string, xml: string) => string;
     Grep: (handle: number, pattern: string, optionsJson: string) => string;
+    GrepCrossBlock: (handle: number, pattern: string, optionsJson: string) => string;
     ReplaceTextRange: (handle: number, anchor: string, find: string, replace: string, optionsJson: string) => string;
     ReplaceTextAtSpan: (handle: number, anchor: string, spanStart: number, spanLength: number, replace: string) => string;
     FindPlaceholders: (handle: number, kinds: number, scope: number) => string;
@@ -833,6 +834,38 @@ export interface TextMatch {
   enclosingAnchor: AnchorRef;
   span: CharSpan;
   fragments: RunFragment[];
+  contextBefore: string;
+  contextAfter: string;
+  /** Regex capture groups; index 0 is always the whole match. */
+  groups: string[];
+}
+
+/**
+ * One block's contribution to a {@link CrossBlockMatch}. The slice's `fragments`
+ * list is empty when the match touches an empty paragraph — the slice is still
+ * recorded so callers can see the match crossed the empty block.
+ */
+export interface BlockSlice {
+  anchor: AnchorRef;
+  /** Character offset + length of the slice within the block's own flat text. */
+  spanInBlock: CharSpan;
+  /** Run fragments contributing to this slice, in document order. */
+  fragments: RunFragment[];
+}
+
+/**
+ * A single match returned by {@link DocxSession.grepCrossBlock}. The match may
+ * span multiple adjacent block-level elements (paragraphs/headings/list items)
+ * under the same parent container. `slices` is the per-block breakdown;
+ * `enclosingAnchors` lists every block the match touches, in document order.
+ *
+ * Block boundaries appear in `text` / `contextBefore` / `contextAfter` as
+ * single `\n` characters.
+ */
+export interface CrossBlockMatch {
+  text: string;
+  enclosingAnchors: AnchorRef[];
+  slices: BlockSlice[];
   contextBefore: string;
   contextAfter: string;
   /** Regex capture groups; index 0 is always the whole match. */

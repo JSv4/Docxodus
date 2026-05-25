@@ -328,4 +328,46 @@ test.describe('DocxSession (WASM bridge)', () => {
     expect(result.bookmarkAnchorCount).toBe(result.ann1AnchorCount);
     expect(result.missingIsEmpty).toBe(true);
   });
+
+  test('GrepCrossBlock returns matches spanning adjacent paragraphs (#146)', async ({ page }) => {
+    // The Word file's projection joins paragraphs with `\n`, so a pattern that
+    // includes a literal `\n` between two known fragments must match cross-block.
+    // HC001 contains adjacent intro paragraphs; we search for any pattern that
+    // straddles a paragraph boundary by anchoring on a real run of text from
+    // the template — but to keep this stable across template edits, just use a
+    // permissive `.+\n.+` regex that must produce at least one cross-block hit
+    // in any non-empty doc with two paragraphs.
+    const bytes = readTestFile('HC001-5DayTourPlanTemplate.docx');
+
+    const result = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const bridge = (window as any).Docxodus.DocxSessionBridge;
+      const handle = bridge.OpenSession(bin, '');
+      try {
+        // RegexOptions.None = 0. Pattern: any non-whitespace character, the
+        // block-boundary separator `\n`, then any non-whitespace — must match
+        // the gap between any two adjacent non-empty paragraphs in the doc.
+        const opts = JSON.stringify({ regexOptions: 0, scope: 1, contextChars: 10 });
+        const matches = JSON.parse(bridge.GrepCrossBlock(handle, '\\S\\n\\S', opts));
+        const cross = (matches as any[]).filter(m => m.slices.length > 1);
+        const first = cross[0];
+        return {
+          total: matches.length,
+          crossCount: cross.length,
+          firstSliceCount: first?.slices.length,
+          firstAnchorsCount: first?.enclosingAnchors.length,
+          firstTextHasNewline: typeof first?.text === 'string' && first.text.includes('\n'),
+          firstSliceHasFragments: Array.isArray(first?.slices?.[0]?.fragments),
+        };
+      } finally {
+        bridge.CloseSession(handle);
+      }
+    }, Array.from(bytes));
+
+    expect(result.crossCount).toBeGreaterThan(0);
+    expect(result.firstSliceCount).toBeGreaterThanOrEqual(2);
+    expect(result.firstAnchorsCount).toBe(result.firstSliceCount);
+    expect(result.firstTextHasNewline).toBe(true);
+    expect(result.firstSliceHasFragments).toBe(true);
+  });
 });

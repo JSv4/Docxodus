@@ -317,6 +317,7 @@ Find every literal/regex pattern in the doc → Grep
 Find one anchor whose text contains X → Grep, take .First().EnclosingAnchor
 Enumerate template placeholders → Grep(@"\[_+\]") or similar
 Edit text without losing formatting → Grep + a fragment-aware rewrite (see #139 for the planned ReplaceTextRange built on this)
+Find a multi-paragraph clause or pattern that straddles a paragraph break → GrepCrossBlock
 ```
 
 ### Performance
@@ -325,16 +326,49 @@ Edit text without losing formatting → Grep + a fragment-aware rewrite (see #13
 
 ### Known limits
 
-- **Each block is grep'd in isolation.** Grep iterates paragraphs/headings/list-items and runs the regex against each one's flat text independently — there's no document-wide text stream that flows across paragraph boundaries. So `session.Grep("Hello world")` won't match if `"Hello "` is in one paragraph and `"world"` is in the next, even though they appear adjacent in the rendered doc. This is by design: every `TextMatch` carries a single `EnclosingAnchor` for the caller to hand back to `ReplaceText`/`Raw.ReplaceXml`, and matches that crossed block boundaries would have no single enclosing anchor. If you actually need cross-block search (legal clauses split for readability, multi-paragraph regions, etc.), the workaround until [#146](https://github.com/JSv4/Docxodus/issues/146) lands is to regex against the full markdown projection and walk `{#kind:scope:unid}` tokens back to anchors:
-    ```csharp
-    var proj = session.Project();
-    foreach (Match m in Regex.Matches(proj.Markdown, multiLinePattern, RegexOptions.Singleline))
-    {
-        // m.Index / m.Length point into proj.Markdown; surrounding anchor tokens identify the blocks involved.
-    }
-    ```
+- **Each block is grep'd in isolation.** Grep iterates paragraphs/headings/list-items and runs the regex against each one's flat text independently. `session.Grep("Hello world")` won't match if `"Hello "` is in one paragraph and `"world"` is in the next, even though they appear adjacent in the rendered doc. This is by design: every `TextMatch` carries a single `EnclosingAnchor` for the caller to hand back to `ReplaceText`/`Raw.ReplaceXml`. For cross-block search (legal clauses split for readability, multi-paragraph regions, etc.) use **`GrepCrossBlock`** (see next section).
 - `RegexOptions` is the .NET enum; the npm wrapper passes its numeric value through (see `GrepOptions` in `npm/src/types.ts`).
 - Tracked-change content currently follows the projector's accepted/rendered text — `Settings.TrackedChanges = StripDeletions` won't filter `<w:del>` content out of Grep yet. Worth opening as a follow-up if it matters.
+
+## GrepCrossBlock — cross-block text search
+
+`session.GrepCrossBlock(pattern, options?, scope?, contextChars?, whitespace?)` is the variant of [`Grep`](#grep--cross-run-text-search) for matches that legitimately span multiple paragraphs — legal clauses split across paragraphs for readability, multi-paragraph indemnification blocks, or `Section \d+\.\d+\b` straddling a paragraph break.
+
+Each `CrossBlockMatch` carries:
+
+- `Text` — the matched text, with single `\n` characters at each block boundary the match crossed.
+- `EnclosingAnchors` — every block-level anchor the match touches, in document order. Always non-empty.
+- `Slices` — per-block breakdown. Each `BlockSlice` names its `Anchor`, the `SpanInBlock` (offset+length within that block's own flat text), and a `Fragments` list with the same shape as `Grep`'s.
+- `ContextBefore` / `ContextAfter` — surrounding text from the concatenated stream; may include block-boundary `\n` characters.
+- `Groups` — regex capture groups.
+
+### Separator and regex behavior
+
+Adjacent blocks in the searched text are joined with a single `\n`. That means:
+
+- `^` and `$` with `RegexOptions.Multiline` anchor at block boundaries.
+- `.` does not match across boundaries unless `RegexOptions.Singleline` is set.
+- `\s`, `\n`, and explicit `\n` patterns in your regex see the boundary.
+
+### What it never crosses
+
+Matches are scoped strictly to keep them meaningful for downstream editing:
+
+- **Package parts** — body → footnote, header → body, etc. Different package parts are searched independently.
+- **Container boundaries** — a body paragraph cannot bridge into a table-cell paragraph. Table cells form their own groups (`w:tc` is the parent).
+- **Non-paragraph siblings** — a `w:tbl`, `sectPr`, or any non-`w:p` element between two paragraphs breaks the run; matches don't bridge across it.
+
+### Superset of `Grep`
+
+A single-block match still appears in the results with one `Slice`. Filter `Slices.Count > 1` if you only want cross-block hits. The naming reflects "the variant that also handles cross-block," not "only cross-block."
+
+### Edit semantics — deferred
+
+Replace on a cross-block match has at least three reasonable behaviors (merge into one block, per-slice independent rewrites, boundary-preserve), none obviously right. Edit primitives are deliberately out of scope until a concrete consumer surfaces the right semantics. Today, callers can read the slice list and apply slice-by-slice edits via `ReplaceTextAtSpan` themselves.
+
+### Performance
+
+Same order of magnitude as `Grep`: one concatenation pass + one regex pass per sibling group, with `RunTextMap` shared for fragment resolution. Memory grows with the largest group's concatenated text, not the whole document.
 
 ## The Raw escape hatch
 

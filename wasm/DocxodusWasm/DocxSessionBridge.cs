@@ -142,6 +142,34 @@ public static partial class DocxSessionBridge
     }
 
     /// <summary>
+    /// Bridge for <see cref="DocxSession.GrepCrossBlock"/>. Same <paramref name="optionsJson"/>
+    /// shape as <see cref="Grep"/>; returns a JSON array of CrossBlockMatch records (each
+    /// carries <c>enclosingAnchors[]</c> + <c>slices[]</c>).
+    /// </summary>
+    [JSExport]
+    public static string GrepCrossBlock(int h, string pattern, string optionsJson)
+    {
+        var regexOpts = System.Text.RegularExpressions.RegexOptions.None;
+        var scope = ProjectionScopes.Body;
+        var contextChars = 40;
+        var whitespace = WhitespaceMode.Preserve;
+        if (!string.IsNullOrEmpty(optionsJson))
+        {
+            using var doc = JsonDocument.Parse(optionsJson);
+            var root = doc.RootElement;
+            if (root.TryGetProperty("regexOptions", out var ro) && ro.ValueKind == JsonValueKind.Number)
+                regexOpts = (System.Text.RegularExpressions.RegexOptions)ro.GetInt32();
+            if (root.TryGetProperty("scope", out var s) && s.ValueKind == JsonValueKind.Number)
+                scope = (ProjectionScopes)s.GetInt32();
+            if (root.TryGetProperty("contextChars", out var c) && c.ValueKind == JsonValueKind.Number)
+                contextChars = c.GetInt32();
+            if (root.TryGetProperty("whitespace", out var w) && w.ValueKind == JsonValueKind.Number)
+                whitespace = (WhitespaceMode)w.GetInt32();
+        }
+        return SerializeCrossBlockMatches(Get(h).GrepCrossBlock(pattern, regexOpts, scope, contextChars, whitespace));
+    }
+
+    /// <summary>
     /// Bridge for <see cref="DocxSession.ReplaceTextRange"/>. <paramref name="optionsJson"/>
     /// accepts <c>{ignoreCase?: boolean, maxReplacements?: number}</c>. Returns a
     /// JSON array of EditResult — one per attempted match.
@@ -424,49 +452,105 @@ public static partial class DocxSessionBridge
             if (i > 0) sb.Append(',');
             var m = matches[i];
             sb.Append("{\"text\":").Append(JsonString(m.Text))
-              .Append(",\"enclosingAnchor\":{")
-              .Append("\"id\":").Append(JsonString(m.EnclosingAnchor.Anchor.Id))
-              .Append(",\"kind\":").Append(JsonString(m.EnclosingAnchor.Anchor.Kind))
-              .Append(",\"scope\":").Append(JsonString(m.EnclosingAnchor.Anchor.Scope))
-              .Append(",\"unid\":").Append(JsonString(m.EnclosingAnchor.Anchor.Unid))
-              .Append('}')
-              .Append(",\"span\":{\"start\":").Append(m.Span.Start).Append(",\"length\":").Append(m.Span.Length).Append('}')
+              .Append(",\"enclosingAnchor\":");
+            AppendAnchor(sb, m.EnclosingAnchor);
+            sb.Append(",\"span\":{\"start\":").Append(m.Span.Start).Append(",\"length\":").Append(m.Span.Length).Append('}')
               .Append(",\"contextBefore\":").Append(JsonString(m.ContextBefore))
               .Append(",\"contextAfter\":").Append(JsonString(m.ContextAfter))
-              .Append(",\"groups\":[");
-            for (int g = 0; g < m.Groups.Count; g++)
-            {
-                if (g > 0) sb.Append(',');
-                sb.Append(JsonString(m.Groups[g]));
-            }
-            sb.Append(']')
-              .Append(",\"fragments\":[");
-            for (int f = 0; f < m.Fragments.Count; f++)
-            {
-                if (f > 0) sb.Append(',');
-                var fr = m.Fragments[f];
-                sb.Append("{\"unid\":").Append(JsonString(fr.Unid))
-                  .Append(",\"text\":").Append(JsonString(fr.Text))
-                  .Append(",\"spanInElement\":{\"start\":").Append(fr.SpanInElement.Start)
-                  .Append(",\"length\":").Append(fr.SpanInElement.Length).Append('}')
-                  .Append(",\"formatting\":{")
-                  .Append("\"bold\":").Append(fr.Formatting.Bold ? "true" : "false")
-                  .Append(",\"italic\":").Append(fr.Formatting.Italic ? "true" : "false")
-                  .Append(",\"underline\":").Append(fr.Formatting.Underline ? "true" : "false")
-                  .Append(",\"strike\":").Append(fr.Formatting.Strike ? "true" : "false")
-                  .Append(",\"code\":").Append(fr.Formatting.Code ? "true" : "false");
-                if (fr.Formatting.Color is not null)
-                    sb.Append(",\"color\":").Append(JsonString(fr.Formatting.Color));
-                if (fr.Formatting.HyperlinkUrl is not null)
-                    sb.Append(",\"hyperlinkUrl\":").Append(JsonString(fr.Formatting.HyperlinkUrl));
-                if (fr.Formatting.RunStyle is not null)
-                    sb.Append(",\"runStyle\":").Append(JsonString(fr.Formatting.RunStyle));
-                sb.Append("}}");
-            }
-            sb.Append("]}");
+              .Append(",\"groups\":");
+            AppendStringArray(sb, m.Groups);
+            sb.Append(",\"fragments\":");
+            AppendFragments(sb, m.Fragments);
+            sb.Append('}');
         }
         sb.Append(']');
         return sb.ToString();
+    }
+
+    private static string SerializeCrossBlockMatches(System.Collections.Generic.IReadOnlyList<CrossBlockMatch> matches)
+    {
+        var sb = new StringBuilder(512);
+        sb.Append('[');
+        for (int i = 0; i < matches.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var m = matches[i];
+            sb.Append("{\"text\":").Append(JsonString(m.Text))
+              .Append(",\"enclosingAnchors\":[");
+            for (int a = 0; a < m.EnclosingAnchors.Count; a++)
+            {
+                if (a > 0) sb.Append(',');
+                AppendAnchor(sb, m.EnclosingAnchors[a]);
+            }
+            sb.Append(']')
+              .Append(",\"slices\":[");
+            for (int sIdx = 0; sIdx < m.Slices.Count; sIdx++)
+            {
+                if (sIdx > 0) sb.Append(',');
+                var slice = m.Slices[sIdx];
+                sb.Append("{\"anchor\":");
+                AppendAnchor(sb, slice.Anchor);
+                sb.Append(",\"spanInBlock\":{\"start\":").Append(slice.SpanInBlock.Start)
+                  .Append(",\"length\":").Append(slice.SpanInBlock.Length).Append('}')
+                  .Append(",\"fragments\":");
+                AppendFragments(sb, slice.Fragments);
+                sb.Append('}');
+            }
+            sb.Append(']')
+              .Append(",\"contextBefore\":").Append(JsonString(m.ContextBefore))
+              .Append(",\"contextAfter\":").Append(JsonString(m.ContextAfter))
+              .Append(",\"groups\":");
+            AppendStringArray(sb, m.Groups);
+            sb.Append('}');
+        }
+        sb.Append(']');
+        return sb.ToString();
+    }
+
+    private static void AppendAnchor(StringBuilder sb, AnchorTarget t) =>
+        sb.Append("{\"id\":").Append(JsonString(t.Anchor.Id))
+          .Append(",\"kind\":").Append(JsonString(t.Anchor.Kind))
+          .Append(",\"scope\":").Append(JsonString(t.Anchor.Scope))
+          .Append(",\"unid\":").Append(JsonString(t.Anchor.Unid))
+          .Append('}');
+
+    private static void AppendStringArray(StringBuilder sb, System.Collections.Generic.IReadOnlyList<string> items)
+    {
+        sb.Append('[');
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(JsonString(items[i]));
+        }
+        sb.Append(']');
+    }
+
+    private static void AppendFragments(StringBuilder sb, System.Collections.Generic.IReadOnlyList<RunFragment> fragments)
+    {
+        sb.Append('[');
+        for (int f = 0; f < fragments.Count; f++)
+        {
+            if (f > 0) sb.Append(',');
+            var fr = fragments[f];
+            sb.Append("{\"unid\":").Append(JsonString(fr.Unid))
+              .Append(",\"text\":").Append(JsonString(fr.Text))
+              .Append(",\"spanInElement\":{\"start\":").Append(fr.SpanInElement.Start)
+              .Append(",\"length\":").Append(fr.SpanInElement.Length).Append('}')
+              .Append(",\"formatting\":{")
+              .Append("\"bold\":").Append(fr.Formatting.Bold ? "true" : "false")
+              .Append(",\"italic\":").Append(fr.Formatting.Italic ? "true" : "false")
+              .Append(",\"underline\":").Append(fr.Formatting.Underline ? "true" : "false")
+              .Append(",\"strike\":").Append(fr.Formatting.Strike ? "true" : "false")
+              .Append(",\"code\":").Append(fr.Formatting.Code ? "true" : "false");
+            if (fr.Formatting.Color is not null)
+                sb.Append(",\"color\":").Append(JsonString(fr.Formatting.Color));
+            if (fr.Formatting.HyperlinkUrl is not null)
+                sb.Append(",\"hyperlinkUrl\":").Append(JsonString(fr.Formatting.HyperlinkUrl));
+            if (fr.Formatting.RunStyle is not null)
+                sb.Append(",\"runStyle\":").Append(JsonString(fr.Formatting.RunStyle));
+            sb.Append("}}");
+        }
+        sb.Append(']');
     }
 
     private static string SerializeProjection(MarkdownProjection p)
