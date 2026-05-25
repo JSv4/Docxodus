@@ -255,6 +255,32 @@ public class DocxSessionTests
         return ms.ToArray();
     }
 
+    internal static byte[] BuildDocWithSentences()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(
+                new Paragraph(new Run(new Text(
+                    "This is the first sentence. Here is some text with a [FILL] placeholder. And a third sentence after.")))));
+        }
+        return ms.ToArray();
+    }
+
+    internal static byte[] BuildDocWithCommaSeparatedItems()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(
+                new Paragraph(new Run(new Text(
+                    "Item one is [A], item two is [B], and item three is [C].")))));
+        }
+        return ms.ToArray();
+    }
+
     // ─── Phase 1: Skeleton tests ─────────────────────────────────────────
 
     [Fact]
@@ -601,6 +627,35 @@ public class DocxSessionTests
 
         Assert.Equal(", in the City of ", m.ContextBefore);
         Assert.Equal(", County of ", m.ContextAfter);
+    }
+
+    [Fact]
+    public void DS253_Grep_BoundarySentenceStopsAtTerminator()
+    {
+        // Sentence mode stops at . ! ? : ;
+        // Multi-sentence paragraph; assert ContextBefore stops at the previous '.'.
+        using var session = new DocxSession(BuildDocWithSentences());
+        var matches = session.Grep(@"\[FILL\]",
+            scope: ProjectionScopes.Body, contextChars: 200, boundary: ContextBoundary.Sentence);
+        var m = Assert.Single(matches);
+
+        Assert.DoesNotContain('.', m.ContextBefore);
+        Assert.DoesNotContain('.', m.ContextAfter);
+        Assert.DoesNotContain(';', m.ContextBefore);
+        Assert.DoesNotContain(';', m.ContextAfter);
+    }
+
+    [Fact]
+    public void DS254_Grep_BoundaryCommaStopsAtComma()
+    {
+        // Comma mode for matches inside enumerations.
+        using var session = new DocxSession(BuildDocWithCommaSeparatedItems());
+        var matches = session.Grep(@"\[B\]",
+            scope: ProjectionScopes.Body, contextChars: 200, boundary: ContextBoundary.Comma);
+        var m = Assert.Single(matches);
+
+        Assert.DoesNotContain(',', m.ContextBefore);
+        Assert.DoesNotContain(',', m.ContextAfter);
     }
 
     // ─── Phase 3: text CRUD + undo/redo ──────────────────────────────────
