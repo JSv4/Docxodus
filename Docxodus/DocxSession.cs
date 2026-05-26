@@ -1720,11 +1720,14 @@ public sealed class DocxSession : IDisposable
 
     /// <summary>
     /// Diffs the projection captured at session construction against the current projection
-    /// and returns an anchor-keyed change list. Keyed by <see cref="AnchorTarget.Unid"/>
-    /// (stable across mutations) rather than the anchor id (which can flip kind prefix
-    /// when a paragraph is promoted to a heading, etc.). Requires
-    /// <see cref="DocxSessionSettings.CaptureInitialProjection"/> to have been <c>true</c>
-    /// at construction time.
+    /// and returns an anchor-keyed change list. Keyed by <c>(scope, Unid)</c> — the Unid
+    /// is stable across mutations and kind flips (a paragraph promoted to a heading keeps
+    /// its Unid while its anchor kind goes from "p" to "h"), and the scope qualifier guards
+    /// against cross-part Unid collisions (the deterministic Unid scheme seeds each scope's
+    /// root with the root element's local name, so two header parts whose first paragraph
+    /// has identical structure end up with the same raw Unid in different scopes — see
+    /// issue #187). Requires <see cref="DocxSessionSettings.CaptureInitialProjection"/>
+    /// to have been <c>true</c> at construction time.
     /// </summary>
     /// <param name="format">Output shape. Only <see cref="DiffFormat.Json"/> is supported
     /// in v1; <see cref="DiffFormat.Unified"/> and <see cref="DiffFormat.SideBySide"/>
@@ -1756,15 +1759,30 @@ public sealed class DocxSession : IDisposable
 
     private static List<DiffEntry> ComputeDiff(MarkdownProjection initial, MarkdownProjection current)
     {
-        var initialByUnid = initial.AnchorIndex.Values.ToDictionary(t => t.Unid, t => t);
-        var currentByUnid = current.AnchorIndex.Values.ToDictionary(t => t.Unid, t => t);
+        // Key by (scope, Unid). Two reasons we cannot use Unid alone:
+        //   1. AnchorIndex is dual-keyed under non-FullUnid rendering (the same
+        //      AnchorTarget is reachable via its full Unid key and its rendered
+        //      alias key), so AnchorIndex.Values enumerates the same target twice.
+        //   2. The deterministic Unid scheme seeds each scope's root with the root
+        //      element's local name ("hdr" for every header part, "ftr" for every
+        //      footer part), so two header parts whose first paragraph has the
+        //      same content + position end up with identical raw Unids in
+        //      different scopes (reproduced on the NVCA Model COI — issue #187).
+        // DistinctBy collapses duplicates from case (1); the composite key
+        // separates legitimately distinct targets from case (2).
+        var initialByKey = initial.AnchorIndex.Values
+            .DistinctBy(t => (t.Anchor.Scope, t.Unid))
+            .ToDictionary(t => (t.Anchor.Scope, t.Unid));
+        var currentByKey = current.AnchorIndex.Values
+            .DistinctBy(t => (t.Anchor.Scope, t.Unid))
+            .ToDictionary(t => (t.Anchor.Scope, t.Unid));
 
         var entries = new List<DiffEntry>();
 
         // Deletes: in initial, missing from current.
-        foreach (var (unid, target) in initialByUnid)
+        foreach (var (key, target) in initialByKey)
         {
-            if (currentByUnid.ContainsKey(unid)) continue;
+            if (currentByKey.ContainsKey(key)) continue;
             entries.Add(new DiffEntry
             {
                 Op = "delete",
@@ -1777,9 +1795,9 @@ public sealed class DocxSession : IDisposable
         // Kind can flip without a text change (e.g., SetParagraphStyle promoting
         // a paragraph to a heading flips Anchor.Kind from "p" to "h" while
         // preserving the Unid and TextPreview).
-        foreach (var (unid, initialTarget) in initialByUnid)
+        foreach (var (key, initialTarget) in initialByKey)
         {
-            if (!currentByUnid.TryGetValue(unid, out var currentTarget)) continue;
+            if (!currentByKey.TryGetValue(key, out var currentTarget)) continue;
             if (initialTarget.TextPreview == currentTarget.TextPreview
                 && initialTarget.Anchor.Kind == currentTarget.Anchor.Kind) continue;
             entries.Add(new DiffEntry
@@ -1792,9 +1810,9 @@ public sealed class DocxSession : IDisposable
         }
 
         // Inserts: in current, missing from initial.
-        foreach (var (unid, target) in currentByUnid)
+        foreach (var (key, target) in currentByKey)
         {
-            if (initialByUnid.ContainsKey(unid)) continue;
+            if (initialByKey.ContainsKey(key)) continue;
             entries.Add(new DiffEntry
             {
                 Op = "insert",

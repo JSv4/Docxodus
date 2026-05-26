@@ -3126,6 +3126,127 @@ public class DocxSessionTests
         Assert.Throws<NotSupportedException>(() => session.GetDiff(DiffFormat.SideBySide));
     }
 
+    /// <summary>
+    /// Build a doc whose three header parts each contain a single empty paragraph.
+    /// The deterministic Unid scheme seeds each scope's root with the root element's
+    /// local name ("hdr" for every header part), so the first-paragraph children of
+    /// these structurally-identical headers all hash to the same raw Unid — across
+    /// scopes. Reproduces issue #187 on a minimal in-memory fixture.
+    /// </summary>
+    private static byte[] BuildDocWithCollidingHeaderUnids()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body());
+            var body = mainPart.Document.Body!;
+            mainPart.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            body.Append(new Paragraph(new Run(new Text("Body content"))));
+
+            // Three header parts, each with an identically-structured empty paragraph.
+            // Same parent-root local name ("hdr") + same child tag (p) + same content
+            // signature (empty paragraph) + same dup index (0, only child) ⇒ identical
+            // deterministic Unid across all three parts.
+            HeaderReference? firstRef = null;
+            for (var i = 0; i < 3; i++)
+            {
+                var hp = mainPart.AddNewPart<HeaderPart>();
+                hp.Header = new Header(new Paragraph());
+                var hRef = new HeaderReference
+                {
+                    Id = mainPart.GetIdOfPart(hp),
+                    Type = i == 0 ? HeaderFooterValues.First : i == 1 ? HeaderFooterValues.Default : HeaderFooterValues.Even,
+                };
+                firstRef ??= hRef;
+                body.Append(new SectionProperties(hRef));
+            }
+        }
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public void DS289a_GetDiff_DoesNotThrowOnCrossScopeUnidCollision()
+    {
+        // Regression for #187: ComputeDiff used to ToDictionary(t => t.Unid) which
+        // threw ArgumentException when two scopes legitimately produced the same
+        // raw Unid for paragraphs at the same position in identically-structured
+        // header parts. Reproduced on the NVCA Model COI; this synthetic fixture
+        // triggers the same hash collision deterministically.
+        using var session = new DocxSession(BuildDocWithCollidingHeaderUnids());
+
+        // Sanity: confirm the fixture actually produces a Unid collision across scopes.
+        var hdrTargets = session.Project().AnchorIndex.Values
+            .Where(t => t.Anchor.Scope.StartsWith("hdr"))
+            .ToList();
+        Assert.True(hdrTargets.Count >= 2, "Fixture must have multiple header anchors.");
+        Assert.True(hdrTargets.Select(t => t.Unid).Distinct().Count() < hdrTargets.Count,
+            "Fixture must produce at least one Unid collision across header scopes.");
+
+        // The bug: GetDiff() used to throw ArgumentException here. Must return "[]"
+        // (no mutations) without throwing.
+        var diff = session.GetDiff();
+        Assert.Equal("[]", diff);
+    }
+
+    [Fact]
+    public void DS289b_GetDiff_MutationOnCollidingScope_IsolatesToEditedScope()
+    {
+        // Correctness companion to DS289a: when several anchors share a raw Unid
+        // across scopes and we edit only one, the diff must surface exactly that
+        // one anchor — not silently miss the change because another scope still
+        // matches the Unid, and not flag unedited siblings as modified.
+        using var session = new DocxSession(BuildDocWithCollidingHeaderUnids());
+        var hdrTargets = session.Project().AnchorIndex.Values
+            .Where(t => t.Anchor.Scope.StartsWith("hdr") && t.Anchor.Kind == "p")
+            .ToList();
+        // Pick two distinct scopes that share the same Unid.
+        var collidingPair = hdrTargets
+            .GroupBy(t => t.Unid).First(g => g.Count() >= 2).ToList();
+        var edited = collidingPair[0];
+        var untouched = collidingPair[1];
+
+        var r = session.ReplaceText(edited.Anchor.Id, "edited header line");
+        Assert.True(r.Success);
+
+        var diff = session.GetDiff();
+        Assert.Contains("\"modify\"", diff);
+        Assert.Contains(edited.Anchor.Id, diff);
+        Assert.DoesNotContain(untouched.Anchor.Id, diff);
+    }
+
+    [Fact]
+    public void DS289c_GetDiff_DoesNotThrowUnderAbbreviatedRendering()
+    {
+        // Defense-in-depth for #187: the AnchorIndex is dual-keyed under
+        // Abbreviated/Sequential rendering — the same AnchorTarget is reachable
+        // via its full Unid key and its rendered alias key, so AnchorIndex.Values
+        // enumerates each target twice. ComputeDiff must dedupe before building
+        // its lookup or ToDictionary throws on every call under these modes.
+        var settings = new DocxSessionSettings
+        {
+            CaptureInitialProjection = true,
+            ProjectionSettings = new WmlToMarkdownConverterSettings
+            {
+                AnchorIdRendering = AnchorIdRendering.Abbreviated,
+            },
+        };
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders(), settings);
+
+        // Unedited: must return "[]" without throwing.
+        Assert.Equal("[]", session.GetDiff());
+
+        // Edited: must produce a well-formed diff (no duplicate-key crash).
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        session.ReplaceText(firstP.Anchor.Id, "rendered-id diff path works");
+        var diff = session.GetDiff();
+        Assert.Contains("\"modify\"", diff);
+        Assert.Contains("rendered-id diff path works", diff);
+    }
+
     // ─── CompactRuns ─────────────────────────────────────────────────────
 
     /// <summary>
