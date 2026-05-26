@@ -21,7 +21,7 @@ import type {
   TemplatePlaceholder,
   TextMatch,
 } from "./types.js";
-import { PlaceholderKinds } from "./types.js";
+import { ContextBoundary, PlaceholderKinds } from "./types.js";
 
 /**
  * Stateful in-memory DOCX editing session keyed by markdown-projection anchor ids.
@@ -239,6 +239,8 @@ export class DocxSession {
     const scope = opts.scope ?? 1; // Body
     const maxPasses = opts.maxPasses ?? 8;
     const preserveDollarPrefix = opts.preserveDollarPrefix ?? true;
+    const contextChars = opts.contextChars ?? 80;
+    const boundary = opts.boundary ?? ContextBoundary.Char;
 
     if (maxPasses <= 0) {
       throw new RangeError("FillOptions.maxPasses must be > 0");
@@ -251,7 +253,7 @@ export class DocxSession {
     const seenSkipKeys = new Set<string>();
 
     for (let pass = 1; pass <= maxPasses; pass++) {
-      const placeholders = this.findPlaceholders(kinds, scope)
+      const placeholders = this.findPlaceholders(kinds, scope, contextChars, boundary)
         .sort((a, b) => {
           const cmp = b.match.enclosingAnchor.id.localeCompare(a.match.enclosingAnchor.id);
           if (cmp !== 0) return cmp;
@@ -312,8 +314,12 @@ export class DocxSession {
   findPlaceholders(
     kinds: number = PlaceholderKinds.All,
     scope: number = 1,
+    contextChars: number = 80,
+    boundary: number = ContextBoundary.Char,
   ): TemplatePlaceholder[] {
-    return JSON.parse(this.wasm.FindPlaceholders(this.handle, kinds, scope)) as TemplatePlaceholder[];
+    return JSON.parse(
+      this.wasm.FindPlaceholders(this.handle, kinds, scope, contextChars, boundary),
+    ) as TemplatePlaceholder[];
   }
 
   // ─── Annotation-based anchor discovery (#132) ────────────────────────
@@ -428,4 +434,4 @@ export function openDocxSession(
 }
 
 export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
-export { PlaceholderKinds } from "./types.js";
+export { ContextBoundary, PlaceholderKinds } from "./types.js";

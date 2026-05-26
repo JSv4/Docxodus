@@ -366,6 +366,30 @@ Find a multi-paragraph clause or pattern that straddles a paragraph break → Gr
 - `RegexOptions` is the .NET enum; the npm wrapper passes its numeric value through (see `GrepOptions` in `npm/src/types.ts`).
 - Tracked-change content currently follows the projector's accepted/rendered text — `Settings.TrackedChanges = StripDeletions` won't filter `<w:del>` content out of Grep yet. Worth opening as a follow-up if it matters.
 
+### Context boundary modes
+
+`Grep` / `GrepCrossBlock` / `FindPlaceholders` accept a `ContextBoundary` parameter
+that decides where the context-computation walker stops:
+
+| Mode | Stops at | Use when |
+|---|---|---|
+| `Char` (default) | nothing — truncate at `contextChars` | legacy callers, free-form text where boundaries are noisy |
+| `Bracket` | `[`, `]` | template fills with adjacent placeholders — each `ContextBefore`/`ContextAfter` is guaranteed to belong to this match only |
+| `Sentence` | `.`, `!`, `?`, `:`, `;` | LLM prompt-building where each snippet should be a self-contained sentence |
+| `Comma` | `,` | matches inside enumerations |
+
+The default `contextChars` widened from 40 → 80 in #164. Combined with `Bracket`
+mode this lets a template-fill picker use plain `.Contains` / `EndsWith` checks
+without cross-pollution from adjacent placeholders:
+
+```csharp
+var matches = session.Grep(@"\[CITY\]",
+    scope: ProjectionScopes.Body,
+    contextChars: 80,
+    boundary: ContextBoundary.Bracket);
+// matches[0].ContextBefore guaranteed bracket-free
+```
+
 ## GrepCrossBlock — cross-block text search
 
 `session.GrepCrossBlock(pattern, options?, scope?, contextChars?, whitespace?)` is the variant of [`Grep`](#grep--cross-run-text-search) for matches that legitimately span multiple paragraphs — legal clauses split across paragraphs for readability, multi-paragraph indemnification blocks, or `Section \d+\.\d+\b` straddling a paragraph break.

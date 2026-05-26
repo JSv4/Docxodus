@@ -163,7 +163,7 @@ test.describe('DocxSession (WASM bridge)', () => {
       const handle = bridge.OpenSession(bin, '');
       try {
         // Pick a paragraph with bracketed text we know exists.
-        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 7, 1));
+        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 7, 1, 80, 0));
         if (placeholders.length === 0) return { error: 'no placeholders' };
         const target = placeholders[0];
 
@@ -190,7 +190,7 @@ test.describe('DocxSession (WASM bridge)', () => {
       const handle = bridge.OpenSession(bin, '');
       try {
         // PlaceholderKinds.All = 7, body scope = 1.
-        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 7, 1));
+        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 7, 1, 80, 0));
         const kinds = new Set(placeholders.map((p: any) => p.kind));
         return {
           total: placeholders.length,

@@ -31,6 +31,34 @@ public enum WhitespaceMode
     Normalize,
 }
 
+/// <summary>
+/// Controls where <see cref="DocxSession.Grep"/> stops walking outward when
+/// computing <see cref="TextMatch.ContextBefore"/> / <see cref="TextMatch.ContextAfter"/>.
+/// The default <see cref="Char"/> just truncates at <c>contextChars</c>; the other
+/// modes additionally stop at a natural-language boundary so the returned context
+/// is unambiguously *this* match's surroundings, not text that belongs to an
+/// adjacent placeholder or sibling sentence.
+/// </summary>
+public enum ContextBoundary
+{
+    /// <summary>No natural boundary; truncate at <c>contextChars</c> chars in each direction.
+    /// Matches legacy behavior. This is the default.</summary>
+    Char = 0,
+
+    /// <summary>Stop at the nearest <c>'['</c> or <c>']'</c>. The dominant
+    /// template-fill case: each placeholder's context is unambiguously its own,
+    /// even when multiple placeholders crowd into one sentence.</summary>
+    Bracket = 1,
+
+    /// <summary>Stop at the nearest sentence-terminator (<c>. ! ? : ;</c>). Useful
+    /// for callers building LLM prompts that want a self-contained snippet per match.</summary>
+    Sentence = 2,
+
+    /// <summary>Stop at the nearest comma. Useful for matches inside enumerations
+    /// (<c>"X, Y, Z"</c>) where adjacent items are unambiguous siblings.</summary>
+    Comma = 3,
+}
+
 public readonly record struct CharSpan(int Start, int Length);
 
 public sealed record FormatOp
@@ -212,6 +240,16 @@ public sealed record FillOptions
     /// is preserved by prepending it to the replacement. Set to <c>false</c> if
     /// you want full control over the replacement and to overwrite the <c>$</c>.</summary>
     public bool PreserveDollarPrefix { get; init; } = true;
+
+    /// <summary>Threaded through to <see cref="DocxSession.FindPlaceholders"/> calls
+    /// inside the multi-pass loop. Default 80 (matches the new Grep default).</summary>
+    public int ContextChars { get; init; } = 80;
+
+    /// <summary>Boundary mode for the per-match context windows the picker sees.
+    /// Default <see cref="ContextBoundary.Char"/> (legacy truncate-at-contextChars).
+    /// Pickers that rely on bracket-bounded context can opt into
+    /// <see cref="ContextBoundary.Bracket"/> for unambiguous per-placeholder context.</summary>
+    public ContextBoundary Boundary { get; init; } = ContextBoundary.Char;
 }
 
 /// <summary>
@@ -490,8 +528,9 @@ public sealed class DocxSession : IDisposable
         string pattern,
         System.Text.RegularExpressions.RegexOptions options = System.Text.RegularExpressions.RegexOptions.None,
         ProjectionScopes scope = ProjectionScopes.Body,
-        int contextChars = 40,
-        WhitespaceMode whitespace = WhitespaceMode.Preserve)
+        int contextChars = 80,
+        WhitespaceMode whitespace = WhitespaceMode.Preserve,
+        ContextBoundary boundary = ContextBoundary.Char)
     {
         ThrowIfDisposed();
         if (string.IsNullOrEmpty(pattern)) return Array.Empty<TextMatch>();
@@ -559,10 +598,7 @@ public sealed class DocxSession : IDisposable
                     });
                 }
 
-                var ctxStart = Math.Max(0, m.Index - contextChars);
-                var ctxBefore = map.FlatText.Substring(ctxStart, m.Index - ctxStart);
-                var ctxEnd = Math.Min(map.FlatText.Length, m.Index + m.Length + contextChars);
-                var ctxAfter = map.FlatText.Substring(m.Index + m.Length, ctxEnd - (m.Index + m.Length));
+                var (ctxBefore, ctxAfter) = WalkContext(map.FlatText, m.Index, m.Length, contextChars, boundary);
 
                 var groups = new string[m.Groups.Count];
                 for (int i = 0; i < m.Groups.Count; i++) groups[i] = m.Groups[i].Value;
@@ -609,8 +645,9 @@ public sealed class DocxSession : IDisposable
         string pattern,
         System.Text.RegularExpressions.RegexOptions options = System.Text.RegularExpressions.RegexOptions.None,
         ProjectionScopes scope = ProjectionScopes.Body,
-        int contextChars = 40,
-        WhitespaceMode whitespace = WhitespaceMode.Preserve)
+        int contextChars = 80,
+        WhitespaceMode whitespace = WhitespaceMode.Preserve,
+        ContextBoundary boundary = ContextBoundary.Char)
     {
         ThrowIfDisposed();
         if (string.IsNullOrEmpty(pattern)) return Array.Empty<CrossBlockMatch>();
@@ -720,10 +757,7 @@ public sealed class DocxSession : IDisposable
 
                 if (slices.Count == 0) continue;
 
-                var ctxStart = Math.Max(0, m.Index - contextChars);
-                var ctxBefore = concat.Substring(ctxStart, m.Index - ctxStart);
-                var ctxEnd = Math.Min(concat.Length, m.Index + m.Length + contextChars);
-                var ctxAfter = concat.Substring(m.Index + m.Length, ctxEnd - (m.Index + m.Length));
+                var (ctxBefore, ctxAfter) = WalkContext(concat, m.Index, m.Length, contextChars, boundary);
 
                 var groups2 = new string[m.Groups.Count];
                 for (int i = 0; i < m.Groups.Count; i++) groups2[i] = m.Groups[i].Value;
@@ -1175,7 +1209,9 @@ public sealed class DocxSession : IDisposable
     /// </remarks>
     public IReadOnlyList<TemplatePlaceholder> FindPlaceholders(
         PlaceholderKinds kinds = PlaceholderKinds.All,
-        ProjectionScopes scope = ProjectionScopes.Body)
+        ProjectionScopes scope = ProjectionScopes.Body,
+        int contextChars = 80,
+        ContextBoundary boundary = ContextBoundary.Char)
     {
         ThrowIfDisposed();
         if (kinds == 0) return Array.Empty<TemplatePlaceholder>();
@@ -1183,7 +1219,9 @@ public sealed class DocxSession : IDisposable
         // Single bracket-or-dollar-bracket scan; classify by content after the match.
         // Non-greedy inner content + negated character class keeps the regex from
         // crossing into a sibling bracket pair on the same line.
-        var matches = Grep(@"\$?\[[^\[\]]+\]", System.Text.RegularExpressions.RegexOptions.None, scope);
+        var matches = Grep(@"\$?\[[^\[\]]+\]",
+            System.Text.RegularExpressions.RegexOptions.None, scope,
+            contextChars, WhitespaceMode.Preserve, boundary);
         var results = new List<TemplatePlaceholder>(matches.Count);
         foreach (var m in matches)
         {
@@ -1293,7 +1331,7 @@ public sealed class DocxSession : IDisposable
 
         for (int pass = 1; pass <= opts.MaxPasses; pass++)
         {
-            var placeholders = FindPlaceholders(opts.Kinds, opts.Scope)
+            var placeholders = FindPlaceholders(opts.Kinds, opts.Scope, opts.ContextChars, opts.Boundary)
                 .OrderByDescending(p => p.Match.EnclosingAnchor.Anchor.Id, StringComparer.Ordinal)
                 .ThenByDescending(p => p.Match.Span.Start)
                 .ToList();
@@ -1440,6 +1478,46 @@ public sealed class DocxSession : IDisposable
         }
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Walks outward from a match span by character, stopping at either the
+    /// <c>contextChars</c> cap or the nearest character that qualifies as a
+    /// boundary under <paramref name="boundary"/>. Returns the <c>(before, after)</c>
+    /// text slices. Used by both <see cref="Grep"/> and <see cref="GrepCrossBlock"/>.
+    /// </summary>
+    private static (string Before, string After) WalkContext(
+        string text, int matchStart, int matchLength, int contextChars, ContextBoundary boundary)
+    {
+        int matchEnd = matchStart + matchLength;
+
+        int leftCap = Math.Max(0, matchStart - contextChars);
+        int leftStop = matchStart;
+        while (leftStop > leftCap)
+        {
+            if (IsBoundary(text[leftStop - 1], boundary)) break;
+            leftStop--;
+        }
+
+        int rightCap = Math.Min(text.Length, matchEnd + contextChars);
+        int rightStop = matchEnd;
+        while (rightStop < rightCap)
+        {
+            if (IsBoundary(text[rightStop], boundary)) break;
+            rightStop++;
+        }
+
+        return (text.Substring(leftStop, matchStart - leftStop),
+                text.Substring(matchEnd, rightStop - matchEnd));
+    }
+
+    private static bool IsBoundary(char c, ContextBoundary mode) => mode switch
+    {
+        ContextBoundary.Char => false,
+        ContextBoundary.Bracket => c is '[' or ']',
+        ContextBoundary.Sentence => c is '.' or '!' or '?' or ':' or ';',
+        ContextBoundary.Comma => c is ',',
+        _ => false,
+    };
 
     private static bool ScopeMatches(string anchorScope, ProjectionScopes filter)
     {

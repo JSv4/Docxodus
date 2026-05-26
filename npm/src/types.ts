@@ -696,7 +696,7 @@ export interface DocxodusWasmExports {
       spanLength: number,
       newInner: string,
     ) => string;
-    FindPlaceholders: (handle: number, kinds: number, scope: number) => string;
+    FindPlaceholders: (handle: number, kinds: number, scope: number, contextChars: number, boundary: number) => string;
     FindByAnnotation: (handle: number, annotationId: string) => string;
     FindByLabel: (handle: number, labelId: string) => string;
     FindByBookmark: (handle: number, bookmarkName: string) => string;
@@ -914,6 +914,25 @@ export const PlaceholderKinds = {
   All: 7,
 } as const;
 
+/**
+ * Numeric flag layout matching the .NET `ContextBoundary` enum. Controls
+ * how `Grep` / `GrepCrossBlock` / `FindPlaceholders` decide where to stop
+ * walking outward when computing `TextMatch.contextBefore` / `contextAfter`.
+ *
+ * - `Char` (default) — truncate at `contextChars`. Matches legacy behavior.
+ * - `Bracket` — stop at `[` or `]`. Use for template fills: each placeholder's
+ *   context is unambiguously its own even when multiple placeholders crowd
+ *   into one sentence.
+ * - `Sentence` — stop at `.`, `!`, `?`, `:`, `;`.
+ * - `Comma` — stop at `,`. For matches inside enumerations.
+ */
+export const ContextBoundary = {
+  Char: 0,
+  Bracket: 1,
+  Sentence: 2,
+  Comma: 3,
+} as const;
+
 export interface TemplatePlaceholder {
   kind: PlaceholderKind;
   /** For `instruction` placeholders: the inner text with surrounding brackets/asterisks stripped. */
@@ -941,6 +960,11 @@ export interface FillOptions {
   /** When the match starts with `$` and the picker's return value doesn't,
    *  preserve the `$` by prepending it. Default true. */
   preserveDollarPrefix?: boolean;
+  /** Cap on `contextBefore` / `contextAfter` length on each side. Default 80. */
+  contextChars?: number;
+  /** Where to stop walking outward when computing context. Numeric layout
+   *  matching {@link ContextBoundary}. Default `Char` (0). */
+  boundary?: number;
 }
 
 /**
@@ -975,6 +999,13 @@ export interface GrepOptions {
    *   - 1 = Normalize (fold NBSP / narrow-NBSP / thin-space to ASCII space before matching)
    */
   whitespace?: number;
+  /**
+   * Where to stop walking outward when computing `TextMatch.contextBefore` /
+   * `contextAfter`. Numeric layout matching the .NET `ContextBoundary` enum;
+   * use the {@link ContextBoundary} const. Default `Char` (0) — truncate at
+   * `contextChars`.
+   */
+  boundary?: number;
 }
 
 /**

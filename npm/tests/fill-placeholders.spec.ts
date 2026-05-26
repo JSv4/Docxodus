@@ -57,7 +57,7 @@ test.describe('fill-placeholders (WASM bridge — Issue #163)', () => {
         let filled = 0;
         let passes = 0;
         for (let pass = 1; pass <= 8; pass++) {
-          const placeholders = (JSON.parse(bridge.FindPlaceholders(handle, 1, 1)) as any[])
+          const placeholders = (JSON.parse(bridge.FindPlaceholders(handle, 1, 1, 80, 0)) as any[])
             .sort((a, b) => {
               const c = b.match.enclosingAnchor.id.localeCompare(a.match.enclosingAnchor.id);
               if (c !== 0) return c;
@@ -96,7 +96,7 @@ test.describe('fill-placeholders (WASM bridge — Issue #163)', () => {
       const handle = bridge.OpenSession(bin, '');
       try {
         // Default kinds in the TS wrapper = BlankFill | Instruction = 5.
-        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 5, 1)) as any[];
+        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 5, 1, 80, 0)) as any[];
         const unfilled: any[] = [];
         let filled = 0;
         for (const p of placeholders) {
@@ -123,7 +123,7 @@ test.describe('fill-placeholders (WASM bridge — Issue #163)', () => {
       const handle = bridge.OpenSession(bin, '');
       try {
         // BlankFill kind only.
-        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 1, 1)) as any[];
+        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 1, 1, 80, 0)) as any[];
         let filled = 0;
         for (const p of placeholders) {
           if (!p.match.text.includes('$[___]')) continue;
@@ -163,7 +163,7 @@ test.describe('fill-placeholders (WASM bridge — Issue #163)', () => {
         let passes = 0;
         let filled = 0;
         for (let pass = 1; pass <= 8; pass++) {
-          const placeholders = (JSON.parse(bridge.FindPlaceholders(handle, kinds, scope)) as any[])
+          const placeholders = (JSON.parse(bridge.FindPlaceholders(handle, kinds, scope, 80, 0)) as any[])
             .sort((a, b) => {
               const c = b.match.enclosingAnchor.id.localeCompare(a.match.enclosingAnchor.id);
               if (c !== 0) return c;
@@ -186,7 +186,7 @@ test.describe('fill-placeholders (WASM bridge — Issue #163)', () => {
           if (changes > 0) passes = pass;
           if (changes === 0) break;
         }
-        const leftover = JSON.parse(bridge.FindPlaceholders(handle, kinds, scope)) as any[];
+        const leftover = JSON.parse(bridge.FindPlaceholders(handle, kinds, scope, 80, 0)) as any[];
         return { passes, filled, leftoverCount: leftover.length };
       } finally {
         bridge.CloseSession(handle);
@@ -206,7 +206,7 @@ test.describe('fill-placeholders (WASM bridge — Issue #163)', () => {
       const handle = bridge.OpenSession(bin, '');
       try {
         // BlankFill kind, body scope.
-        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 1, 1)) as any[];
+        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 1, 1, 80, 0)) as any[];
         const target = placeholders.find((p: any) => p.match.text.startsWith('$['));
         if (!target) return { error: 'no $[...] placeholder found' };
 
@@ -240,7 +240,7 @@ test.describe('fill-placeholders (WASM bridge — Issue #163)', () => {
       const handle = bridge.OpenSession(bin, '');
       try {
         // PlaceholderKinds.All = 7.
-        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 7, 1)) as any[];
+        const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 7, 1, 80, 0)) as any[];
         return {
           count: placeholders.length,
           first: placeholders[0] ?? null,
