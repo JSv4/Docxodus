@@ -1821,7 +1821,53 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>
-    /// Shared core for <see cref="DeleteRange"/> and (in a future PR) <c>DeleteSection</c>.
+    /// Deletes a heading and every block-level sibling under it, up to (but not including)
+    /// the next heading at the same or higher level. If no such next heading exists, the
+    /// section extends to the end of the parent (the heading and everything after it).
+    /// </summary>
+    /// <param name="headingAnchorId">Anchor id of the heading paragraph (kind must be <c>h</c>).</param>
+    /// <remarks>
+    /// "Level" is the same notion <see cref="WmlToMarkdownConverter"/> uses for the projection:
+    /// <c>Heading1</c> = 1, <c>Heading2</c> = 2, etc.; <c>Title</c> = 1, <c>Subtitle</c> = 2.
+    /// Tracked-change mode applies the same v1 limitation as <see cref="DeleteRange"/>:
+    /// structural delete regardless of <see cref="DocxSessionSettings.TrackedChanges"/>.
+    /// </remarks>
+    public EditResult DeleteSection(string headingAnchorId)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var headingTarget = FindAnchor(headingAnchorId);
+        if (headingTarget is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"heading anchor not found: {headingAnchorId}", headingAnchorId);
+        if (headingTarget.Anchor.Kind != "h")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"DeleteSection requires a heading anchor (kind=h); got kind={headingTarget.Anchor.Kind}",
+                headingAnchorId);
+
+        var headingElement = headingTarget.Resolve(_doc!);
+        if (headingElement is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "heading element resolved null", headingAnchorId);
+
+        int level = WmlToMarkdownConverter.HeadingLevel(headingElement);
+
+        // Scan forward siblings for the next heading at level <= ours. If none, toElement
+        // stays null and DeleteSiblingRangeCore will delete to the end of the parent.
+        XElement? toElement = null;
+        foreach (var sibling in headingElement.ElementsAfterSelf())
+        {
+            if (sibling.Name == W.p && WmlToMarkdownConverter.IsHeading(sibling)
+                && WmlToMarkdownConverter.HeadingLevel(sibling) <= level)
+            {
+                toElement = sibling;
+                break;
+            }
+        }
+
+        return DeleteSiblingRangeCore(headingTarget, headingElement, toElement);
+    }
+
+    /// <summary>
+    /// Shared core for <see cref="DeleteRange"/> and <see cref="DeleteSection"/>.
     /// Takes resolved XElement endpoints — <paramref name="toElementExclusive"/> may be
     /// <c>null</c> to mean "delete to the end of the parent". Records one snapshot and
     /// returns a single <see cref="EditResult"/> aggregating every removed anchor.

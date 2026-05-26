@@ -2589,4 +2589,117 @@ public class DocxSessionTests
         Assert.True(WmlToMarkdownConverter.IsHeading(p));
         Assert.Equal(2, WmlToMarkdownConverter.HeadingLevel(p));
     }
+
+    // ─── DeleteSection (issue #165 — DS267-DS270) ─────────────────────────
+
+    internal static byte[] BuildDocWithHeadingSections()
+    {
+        // Two top-level sections under Heading1, with a Heading2 inside each.
+        //
+        //   # Section One
+        //   para 1.1
+        //   ## Section One.A
+        //   para 1.A.1
+        //   # Section Two
+        //   para 2.1
+        //
+        // DeleteSection on "Section One" should remove the heading and everything down
+        // to (but not including) "Section Two". DeleteSection on "Section Two"
+        // (the last heading) should remove "Section Two" + "para 2.1".
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var stylesPart = main.AddNewPart<StyleDefinitionsPart>();
+            var stylesXml = """
+                <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style>
+                  <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/></w:style>
+                </w:styles>
+                """;
+            using (var s = stylesPart.GetStream(FileMode.Create))
+            using (var w = new StreamWriter(s)) w.Write(stylesXml);
+
+            Paragraph H(string text, string styleId) => new(
+                new ParagraphProperties(new ParagraphStyleId { Val = styleId }),
+                new Run(new Text(text)));
+            Paragraph P(string text) => new(new Run(new Text(text)));
+
+            main.Document = new Document(new Body(
+                H("Section One", "Heading1"),
+                P("para 1.1"),
+                H("Section One.A", "Heading2"),
+                P("para 1.A.1"),
+                H("Section Two", "Heading1"),
+                P("para 2.1")));
+        }
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public void DS267_DeleteSection_RemovesHeadingThroughNextSameOrHigherLevel()
+    {
+        using var session = new DocxSession(BuildDocWithHeadingSections());
+        var sectionOne = session.Project().AnchorIndex.Values
+            .Single(t => session.GetAnchorInfo(t.Anchor.Id)?.TextPreview == "Section One");
+        var r = session.DeleteSection(sectionOne.Anchor.Id);
+        Assert.True(r.Success);
+        // Removed: "Section One", "para 1.1", "Section One.A", "para 1.A.1" = 4 blocks.
+        Assert.True(r.Removed.Count >= 4);
+
+        var afterMd = session.Project().Markdown;
+        Assert.DoesNotContain("Section One.A", afterMd);
+        Assert.DoesNotContain("para 1.A.1", afterMd);
+        Assert.DoesNotContain("para 1.1", afterMd);
+        Assert.Contains("Section Two", afterMd);
+        Assert.Contains("para 2.1", afterMd);
+    }
+
+    [Fact]
+    public void DS268_DeleteSection_LastSectionExtendsToEndOfParent()
+    {
+        using var session = new DocxSession(BuildDocWithHeadingSections());
+        var sectionTwo = session.Project().AnchorIndex.Values
+            .Single(t => session.GetAnchorInfo(t.Anchor.Id)?.TextPreview == "Section Two");
+        var r = session.DeleteSection(sectionTwo.Anchor.Id);
+        Assert.True(r.Success);
+
+        var afterMd = session.Project().Markdown;
+        Assert.Contains("Section One", afterMd);
+        Assert.Contains("para 1.1", afterMd);
+        Assert.DoesNotContain("Section Two", afterMd);
+        Assert.DoesNotContain("para 2.1", afterMd);
+    }
+
+    [Fact]
+    public void DS269_DeleteSection_NonHeadingAnchorReturnsAnchorWrongKind()
+    {
+        using var session = new DocxSession(BuildDocWithHeadingSections());
+        var nonHeading = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        var r = session.DeleteSection(nonHeading.Anchor.Id);
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.AnchorWrongKind, r.Error?.Code);
+    }
+
+    [Fact]
+    public void DS270_DeleteSection_NestedHeadingDoesNotEatNextSameLevelSection()
+    {
+        // Deleting "Section One.A" (Heading2) should remove ONLY the H2 and its child
+        // ("para 1.A.1"), not bleed into the next Heading1 ("Section Two") which is a
+        // higher-level boundary.
+        using var session = new DocxSession(BuildDocWithHeadingSections());
+        var sectionOneA = session.Project().AnchorIndex.Values
+            .Single(t => session.GetAnchorInfo(t.Anchor.Id)?.TextPreview == "Section One.A");
+        var r = session.DeleteSection(sectionOneA.Anchor.Id);
+        Assert.True(r.Success);
+
+        var afterMd = session.Project().Markdown;
+        Assert.Contains("Section One", afterMd);
+        Assert.Contains("para 1.1", afterMd);
+        Assert.DoesNotContain("Section One.A", afterMd);
+        Assert.DoesNotContain("para 1.A.1", afterMd);
+        Assert.Contains("Section Two", afterMd);
+        Assert.Contains("para 2.1", afterMd);
+    }
 }
