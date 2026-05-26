@@ -390,6 +390,24 @@ public sealed record EditSummary
     public int CommentCount { get; init; }
 }
 
+/// <summary>How far below the target anchor to include in <see cref="DocxSession.ProjectAnchor"/>.</summary>
+public enum ProjectionDepth
+{
+    /// <summary>Just the target block itself (its anchor + its own text). For headings,
+    /// returns only the heading paragraph, not the section under it.</summary>
+    SelfOnly = 0,
+
+    /// <summary>Self + descendants. Most useful for <c>tbl</c> anchors (returns the whole
+    /// table); for paragraphs it's the same as <see cref="SelfOnly"/>.</summary>
+    Subtree = 1,
+
+    /// <summary>Self + descendants + following siblings up to (but not including) the
+    /// next sibling at the same or higher heading level. For non-heading anchors,
+    /// equivalent to <see cref="Subtree"/>. This is the dominant "give me this section"
+    /// case for headings and is the default.</summary>
+    SubtreeAndFollowingSiblings = 2,
+}
+
 /// <summary>
 /// Output format for <see cref="DocxSession.GetDiff(DiffFormat)"/>.
 /// </summary>
@@ -551,6 +569,129 @@ public sealed class DocxSession : IDisposable
         ThrowIfDisposed();
         return _cachedProjection ??=
             WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
+    }
+
+    /// <summary>
+    /// Project a sub-region of the document anchored at <paramref name="anchorId"/>.
+    /// Returns a <see cref="MarkdownProjection"/> whose <c>Markdown</c> contains only
+    /// the blocks in scope (per <paramref name="depth"/>) and whose <c>AnchorIndex</c>
+    /// is filtered to those blocks plus their descendants.
+    /// </summary>
+    /// <param name="anchorId">The anchor to project. Must exist in the current
+    /// <see cref="Project"/>'s AnchorIndex.</param>
+    /// <param name="depth">How far below the target to include. Default
+    /// <see cref="ProjectionDepth.SubtreeAndFollowingSiblings"/> — for headings, returns
+    /// the full section bounded by the next same-or-higher heading.</param>
+    /// <returns>A <see cref="MarkdownProjection"/> scoped to the requested region.</returns>
+    /// <exception cref="InvalidOperationException">If <paramref name="anchorId"/> isn't in the AnchorIndex.</exception>
+    public MarkdownProjection ProjectAnchor(
+        string anchorId,
+        ProjectionDepth depth = ProjectionDepth.SubtreeAndFollowingSiblings)
+    {
+        ThrowIfDisposed();
+        ArgumentNullException.ThrowIfNull(anchorId);
+
+        var fullProjection = Project();
+        var target = FindAnchor(anchorId)
+            ?? throw new InvalidOperationException($"anchor not found: {anchorId}");
+
+        var startElement = target.Resolve(_doc!)
+            ?? throw new InvalidOperationException($"anchor element resolved null: {anchorId}");
+
+        // Compute the set of Unids in scope.
+        var inRange = new HashSet<string>(StringComparer.Ordinal);
+        CollectUnids(startElement, inRange);
+
+        if (depth == ProjectionDepth.SubtreeAndFollowingSiblings && target.Anchor.Kind == "h")
+        {
+            // For headings, also include forward siblings up to next same-or-higher heading.
+            int targetLevel = WmlToMarkdownConverter.HeadingLevel(startElement);
+            foreach (var sibling in startElement.ElementsAfterSelf())
+            {
+                if (sibling.Name == W.p
+                    && WmlToMarkdownConverter.IsHeading(sibling)
+                    && WmlToMarkdownConverter.HeadingLevel(sibling) <= targetLevel)
+                {
+                    break;  // hit the section boundary
+                }
+                CollectUnids(sibling, inRange);
+            }
+        }
+        else if (depth == ProjectionDepth.Subtree)
+        {
+            // CollectUnids already added self + descendants; nothing more to do.
+        }
+
+        // SelfOnly: descendants shouldn't be in scope — keep just the starting element's Unid.
+        if (depth == ProjectionDepth.SelfOnly)
+        {
+            inRange.Clear();
+            var selfUnid = (string?)startElement.Attribute(PtOpenXml.Unid);
+            if (selfUnid is not null) inRange.Add(selfUnid);
+        }
+
+        // Filter the full markdown to blocks whose anchor token is in-range.
+        // Blocks are separated by blank lines; each in-range block starts with {#kind:scope:unid}.
+        var sb = new System.Text.StringBuilder();
+        foreach (var block in fullProjection.Markdown.Split("\n\n"))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(block, @"\{#[^:]+:[^:]+:([^\s}]+)\}");
+            if (!match.Success) continue;  // skip scope markers / dividers / etc.
+            // The rendered id might be the abbreviated or sequential form — translate back
+            // to the full Unid via the dual-keyed AnchorIndex.
+            if (TryResolveToUnid(match, fullProjection, out var fullUnid)
+                && inRange.Contains(fullUnid))
+            {
+                sb.Append(block).Append("\n\n");
+            }
+        }
+
+        // Filter the AnchorIndex too — keep only entries whose Unid is in scope.
+        var filteredIndex = new Dictionary<string, AnchorTarget>(StringComparer.Ordinal);
+        foreach (var (key, value) in fullProjection.AnchorIndex)
+        {
+            if (inRange.Contains(value.Unid))
+                filteredIndex[key] = value;
+        }
+
+        return new MarkdownProjection
+        {
+            Markdown = sb.ToString().TrimEnd('\n'),
+            AnchorIndex = filteredIndex,
+        };
+    }
+
+    private static void CollectUnids(XElement el, HashSet<string> sink)
+    {
+        var unid = (string?)el.Attribute(PtOpenXml.Unid);
+        if (unid is not null) sink.Add(unid);
+        foreach (var d in el.Descendants())
+        {
+            var dUnid = (string?)d.Attribute(PtOpenXml.Unid);
+            if (dUnid is not null) sink.Add(dUnid);
+        }
+    }
+
+    /// <summary>
+    /// Resolve a rendered anchor id (full Unid, abbreviation, or sequential) back to
+    /// the underlying full Unid by looking it up in the projection's AnchorIndex
+    /// (which is dual-keyed when AnchorIdRendering is Abbreviated/Sequential).
+    /// </summary>
+    private static bool TryResolveToUnid(
+        System.Text.RegularExpressions.Match match,
+        MarkdownProjection projection,
+        out string fullUnid)
+    {
+        // The full key is the content between {# and } — works for FullUnid and as an
+        // alias key for Abbreviated/Sequential modes (BuildAnchorIndex dual-keys the index).
+        var fullKey = match.Value.Substring(2, match.Value.Length - 3);
+        if (projection.AnchorIndex.TryGetValue(fullKey, out var target))
+        {
+            fullUnid = target.Unid;
+            return true;
+        }
+        fullUnid = match.Groups[1].Value;
+        return false;
     }
 
     /// <summary>
