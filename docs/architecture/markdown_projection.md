@@ -21,6 +21,15 @@ The markdown projection is a deterministic, **anchor-addressed** rendering of a 
 
 Anchors derive from the `Unid` system Docxodus already maintains on paragraphs and runs (see `AssignUnidToAllElements` / the legacy migration notes in `CLAUDE.md`). They are stable across edits unless the underlying element is removed.
 
+**Deterministic across sessions.** The projector uses a content-addressable Unid derivation (`UnidHelper.AssignToAllElementsDeterministic`): a Unid is a SHA-256 hash of `parent_unid : tag : content_signature : duplicate_index`, truncated to 32 hex chars. Properties:
+
+- Two opens of the same bytes produce identical Unids on every element — anchor ids captured in one `DocxSession` resolve in any fresh session over the same bytes (no need for `PersistAnchorIds = true`).
+- Editing a paragraph's text changes only that paragraph's Unid; siblings stay stable.
+- Inserting a unique-content paragraph anywhere does not shift any other Unid.
+- Inserting / editing a duplicate-content paragraph between duplicates shifts the `duplicate_index` of later duplicates of the same content. Rare in practice.
+
+`WmlComparer` continues to use a random-Guid Unid path (`UnidHelper.AssignToAllElements`) — its matching heuristics expect content-independent Unids within each version it compares. Don't change WmlComparer's call site to the deterministic path; the comparer's accuracy regresses if you do (see the class-level remarks on `UnidHelper`).
+
 **Format:** `{#kind:scope:unid}` where:
 
 | Field | Values | Meaning |

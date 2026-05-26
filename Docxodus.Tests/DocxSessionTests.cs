@@ -2702,4 +2702,129 @@ public class DocxSessionTests
         Assert.Contains("Section Two", afterMd);
         Assert.Contains("para 2.1", afterMd);
     }
+
+    // ─── Deterministic Unids ──────────────────────────────────────────────
+
+    [Fact]
+    public void DS300_DeterministicUnids_SameBytesProduceSameAnchorIds()
+    {
+        // Two independent sessions over the same bytes must observe the same
+        // anchor ids on the same content. Closes the cross-session non-determinism
+        // foot-gun where a CLI script's anchor ids from run 1 wouldn't resolve in run 2.
+        var bytes = BuildDS001_SimpleTwoParagraphs();
+
+        using var s1 = new DocxSession(bytes);
+        using var s2 = new DocxSession(bytes);
+
+        var ids1 = s1.Project().AnchorIndex.Keys.OrderBy(k => k).ToArray();
+        var ids2 = s2.Project().AnchorIndex.Keys.OrderBy(k => k).ToArray();
+
+        Assert.Equal(ids1, ids2);
+        Assert.NotEmpty(ids1);
+    }
+
+    [Fact]
+    public void DS301_DeterministicUnids_DuplicateContentSiblingsGetDistinctIds()
+    {
+        // Two paragraphs with identical text must still get distinct Unids — the
+        // dup_index disambiguator handles same-content siblings.
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(
+                new Paragraph(new Run(new Text("Hello world"))),
+                new Paragraph(new Run(new Text("Hello world")))));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+        }
+        using var session = new DocxSession(ms.ToArray());
+        var ids = session.Project().AnchorIndex.Values
+            .Where(t => t.Anchor.Kind == "p" && t.Anchor.Scope == "body")
+            .Select(t => t.Anchor.Id)
+            .ToList();
+        Assert.Equal(2, ids.Count);
+        Assert.NotEqual(ids[0], ids[1]);
+    }
+
+    [Fact]
+    public void DS302_DeterministicUnids_UniqueContentInsertionDoesNotShiftSiblings()
+    {
+        // Build a doc with three paragraphs: A, B, C. Capture their Unids.
+        // Then build a sibling doc with A, NEW, B, C — A's, B's, and C's Unids
+        // should be identical to the first doc. The inserted NEW has unique
+        // content so it shouldn't shift dup_indices.
+        byte[] BuildDoc(params string[] paras)
+        {
+            using var ms = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                var body = new Body();
+                foreach (var p in paras) body.Append(new Paragraph(new Run(new Text(p))));
+                main.Document = new Document(body);
+                main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            }
+            return ms.ToArray();
+        }
+
+        using var s1 = new DocxSession(BuildDoc("A", "B", "C"));
+        using var s2 = new DocxSession(BuildDoc("A", "NEW", "B", "C"));
+
+        Dictionary<string, string> TextToId(DocxSession s) =>
+            s.Project().AnchorIndex.Values
+                .Where(t => t.Anchor.Kind == "p" && t.Anchor.Scope == "body")
+                .ToDictionary(t => t.TextPreview, t => t.Anchor.Id);
+
+        var map1 = TextToId(s1);
+        var map2 = TextToId(s2);
+
+        Assert.Equal(map1["A"], map2["A"]);
+        Assert.Equal(map1["B"], map2["B"]);
+        Assert.Equal(map1["C"], map2["C"]);
+        Assert.Contains("NEW", map2.Keys);
+    }
+
+    [Fact]
+    public void DS303_DeterministicUnids_LooksLike32HexString()
+    {
+        // The Unid format hasn't changed — still 32 lowercase hex characters.
+        using var session = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        foreach (var t in session.Project().AnchorIndex.Values)
+        {
+            Assert.Equal(32, t.Unid.Length);
+            Assert.Matches("^[0-9a-f]{32}$", t.Unid);
+        }
+    }
+
+    [Fact]
+    public void DS304_DeterministicUnids_EditingTextChangesItsIdButNotSiblings()
+    {
+        // Two paragraphs A and B. Open session 1, capture both Unids.
+        // Build session 2 over a doc with A and B' (B's text edited) — A's Unid
+        // should be unchanged; B's must differ.
+        byte[] BuildDoc(string second)
+        {
+            using var ms = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                main.Document = new Document(new Body(
+                    new Paragraph(new Run(new Text("A"))),
+                    new Paragraph(new Run(new Text(second)))));
+                main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            }
+            return ms.ToArray();
+        }
+
+        using var s1 = new DocxSession(BuildDoc("B"));
+        using var s2 = new DocxSession(BuildDoc("B-edited"));
+
+        var s1A = s1.Project().AnchorIndex.Values.Single(t => t.TextPreview == "A").Anchor.Id;
+        var s1B = s1.Project().AnchorIndex.Values.Single(t => t.TextPreview == "B").Anchor.Id;
+        var s2A = s2.Project().AnchorIndex.Values.Single(t => t.TextPreview == "A").Anchor.Id;
+        var s2B = s2.Project().AnchorIndex.Values.Single(t => t.TextPreview == "B-edited").Anchor.Id;
+
+        Assert.Equal(s1A, s2A);    // A unchanged → same id
+        Assert.NotEqual(s1B, s2B); // B's text changed → new id
+    }
 }
