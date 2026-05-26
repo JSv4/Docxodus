@@ -32,6 +32,10 @@ internal static class Dispatcher
 
         "replace_text" => DocxSessionOps.ReplaceText(Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
         "delete_block" => DocxSessionOps.DeleteBlock(Handle(args), Str(args, "anchorId")),
+        "delete_range" => DocxSessionOps.DeleteRange(
+            Handle(args), Str(args, "fromAnchorId"), Str(args, "toAnchorIdExclusive")),
+        "delete_section" => DocxSessionOps.DeleteSection(
+            Handle(args), Str(args, "headingAnchorId")),
         "replace_text_range" => DocxSessionOps.ReplaceTextRange(
             Handle(args), Str(args, "anchorId"), Str(args, "find"), Str(args, "replace"), ParseReplaceOptions(args)),
         "replace_text_at_span" => DocxSessionOps.ReplaceTextAtSpan(

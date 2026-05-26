@@ -83,6 +83,12 @@ internal static class DocxSessionOps
     public static string DeleteBlock(int handle, string anchorId) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteBlock(anchorId));
 
+    public static string DeleteRange(int handle, string fromAnchorId, string toAnchorIdExclusive) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteRange(fromAnchorId, toAnchorIdExclusive));
+
+    public static string DeleteSection(int handle, string headingAnchorId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteSection(headingAnchorId));
+
     public static string ReplaceTextRange(int handle, string anchorId, string find, string replace,
         ReplaceOptions? options) =>
         DocxSessionJson.SerializeEditResults(

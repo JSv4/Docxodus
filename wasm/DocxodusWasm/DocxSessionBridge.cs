@@ -41,6 +41,26 @@ public static partial class DocxSessionBridge
     public static string DeleteBlock(int h, string anchor) =>
         DocxSessionOps.DeleteBlock(h, anchor);
 
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.DeleteRange"/>. Deletes every top-level
+    /// block-level sibling between <paramref name="fromAnchorId"/> (inclusive) and
+    /// <paramref name="toAnchorIdExclusive"/> (exclusive). Both anchors must share a
+    /// direct parent and live in the same package part. Returns a single EditResult.
+    /// </summary>
+    [JSExport]
+    public static string DeleteRange(int h, string fromAnchorId, string toAnchorIdExclusive) =>
+        DocxSessionOps.DeleteRange(h, fromAnchorId, toAnchorIdExclusive);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.DeleteSection"/>. Deletes a heading and
+    /// every sibling below it up to (but not including) the next heading at the
+    /// same or higher level. <paramref name="headingAnchorId"/> must address a
+    /// heading-kind anchor (<c>h</c>).
+    /// </summary>
+    [JSExport]
+    public static string DeleteSection(int h, string headingAnchorId) =>
+        DocxSessionOps.DeleteSection(h, headingAnchorId);
+
     [JSExport]
     public static string InsertParagraph(int h, string anchor, string posStr, string md) =>
         DocxSessionOps.InsertParagraph(h, anchor, DocxSessionJson.ParsePos(posStr), md);
