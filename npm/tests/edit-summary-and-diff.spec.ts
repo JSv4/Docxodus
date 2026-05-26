@@ -145,6 +145,28 @@ test.describe('edit-summary-and-diff (WASM bridge — Issue #166)', () => {
     expect(result.diffJson).toContain(result.firstId);
   });
 
+  test('getDiff throws when captureInitialProjection is disabled (opt-out path)', async ({ page }) => {
+    const bytes = bytesFromBase64(FIXTURE_BRACKET_B64);
+
+    const errorMessage = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const bridge = (window as any).Docxodus.DocxSessionBridge;
+      const settings = JSON.stringify({ captureInitialProjection: false });
+      const handle = bridge.OpenSession(bin, settings);
+      try {
+        bridge.GetDiff(handle, 0);
+        return null; // expected throw didn't happen
+      } catch (e: any) {
+        return e?.message ?? String(e);
+      } finally {
+        bridge.CloseSession(handle);
+      }
+    }, bytes);
+
+    expect(errorMessage).not.toBeNull();
+    expect(errorMessage).toContain('CaptureInitialProjection');
+  });
+
   test('getDiff after ReplaceText shows a "modify" entry with new content', async ({ page }) => {
     const bytes = bytesFromBase64(FIXTURE_BRACKET_B64);
 

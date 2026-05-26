@@ -37,6 +37,7 @@ internal static class DocxSessionJson
         var revisionAuthor = TryGetString(root, "revisionAuthor", null);
         bool persistAnchorIds = TryGetBool(root, "persistAnchorIds", false);
         bool smartQuotes = TryGetBool(root, "smartQuotes", false);
+        bool captureInitialProjection = TryGetBool(root, "captureInitialProjection", true);
         return new DocxSessionSettings
         {
             UndoDepth = undoDepth,
@@ -45,6 +46,7 @@ internal static class DocxSessionJson
             RevisionAuthor = revisionAuthor,
             PersistAnchorIds = persistAnchorIds,
             SmartQuotes = smartQuotes,
+            CaptureInitialProjection = captureInitialProjection,
         };
     }
 

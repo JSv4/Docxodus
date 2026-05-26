@@ -337,7 +337,7 @@ existing primitives:
 |---|---|
 | `TotalAnchors` | `Project().AnchorIndex.Count` |
 | `RemainingPlaceholders` | `FindPlaceholders(All, All)` |
-| `BareUnderscoreRuns` | `Grep(@"(?<!\[)_{3,}(?!\])")` |
+| `BareUnderscoreRuns` | `Grep(@"(?<![\[_])_{3,}(?![\]_])")` (underscore-aware lookarounds bound the maximal run so the count matches the visible underline groups — see DS280b/c) |
 | `FootnoteCount` | `AnchorIndex` filter on `kind=fn, scope=fn` (excludes reserved separators per #162) |
 | `InlineFootnoteRefCount` | Body part's `w:footnoteReference` count |
 | `CommentCount` | `AnchorIndex` filter on `kind=cmt` |
