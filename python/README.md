@@ -15,9 +15,12 @@ with open("contract.docx", "rb") as f:
     docx_bytes = f.read()
 
 with open_session(docx_bytes) as session:
-    # Walk template placeholders and fill them.
-    for placeholder in session.find_placeholders():
-        session.replace_match(placeholder.match, "filled value")
+    # Walk template placeholders and fill them. The picker returns a string to
+    # replace, or None to skip. fill_placeholders handles reverse-offset
+    # ordering, $-prefix preservation, and multi-pass nested-bracket convergence
+    # in one call.
+    result = session.fill_placeholders(lambda p: "filled value")
+    print(f"filled {result.filled} placeholders in {result.passes} passes")
 
     # Add a heading after the first body paragraph.
     proj = session.project()

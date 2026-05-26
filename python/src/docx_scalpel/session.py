@@ -21,7 +21,7 @@ not run at all during interpreter shutdown.
 from __future__ import annotations
 
 import base64
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from ._transport import call as _call
 from .enums import (
@@ -37,12 +37,15 @@ from .enums import (
 from .types import (
     AnchorInfo,
     AnchorTarget,
+    BulkEditResult,
     CharSpan,
     CrossBlockMatch,
     DocumentAnnotation,
     DocxSessionSettings,
+    EditError,
     EditResult,
     EditSummary,
+    FillOptions,
     FindOptions,
     FormatOp,
     MarkdownProjection,
@@ -148,7 +151,7 @@ class DocxSession:
 
     def project(self) -> MarkdownProjection:
         """Full-document anchor-addressed markdown projection."""
-        return MarkdownProjection.from_wire(self._call("project", {}))
+        return MarkdownProjection._from_wire(self._call("project", {}))
 
     def project_anchor(
         self,
@@ -156,7 +159,7 @@ class DocxSession:
         depth: ProjectionDepth = ProjectionDepth.SUBTREE_AND_FOLLOWING_SIBLINGS,
     ) -> MarkdownProjection:
         """Scoped re-projection rooted at ``anchor_id``."""
-        return MarkdownProjection.from_wire(
+        return MarkdownProjection._from_wire(
             self._call(
                 "project_anchor",
                 {"anchorId": anchor_id, "depth": int(depth)},
@@ -185,7 +188,7 @@ class DocxSession:
                 "boundary": int(boundary),
             },
         )
-        return tuple(TextMatch.from_wire(m) for m in result)
+        return tuple(TextMatch._from_wire(m) for m in result)
 
     def grep_cross_block(
         self,
@@ -207,7 +210,7 @@ class DocxSession:
                 "boundary": int(boundary),
             },
         )
-        return tuple(CrossBlockMatch.from_wire(m) for m in result)
+        return tuple(CrossBlockMatch._from_wire(m) for m in result)
 
     def find_placeholders(
         self,
@@ -225,20 +228,120 @@ class DocxSession:
                 "boundary": int(boundary),
             },
         )
-        return tuple(TemplatePlaceholder.from_wire(p) for p in result)
+        return tuple(TemplatePlaceholder._from_wire(p) for p in result)
 
     def remaining_placeholders(
         self, kinds: PlaceholderKinds = PlaceholderKinds.ALL
     ) -> tuple[TemplatePlaceholder, ...]:
         result = self._call("remaining_placeholders", {"kinds": int(kinds)})
-        return tuple(TemplatePlaceholder.from_wire(p) for p in result)
+        return tuple(TemplatePlaceholder._from_wire(p) for p in result)
+
+    def fill_placeholders(
+        self,
+        picker: Callable[[TemplatePlaceholder], str | None],
+        options: FillOptions | None = None,
+    ) -> BulkEditResult:
+        """Picker-driven template fill — Python mirror of C# ``DocxSession.FillPlaceholders``.
+
+        For every placeholder matching ``options.kinds``, invokes ``picker`` and,
+        if the picker returns a non-``None`` string, replaces the placeholder
+        (with optional ``$``-prefix preservation per ``options.preserve_dollar_prefix``).
+        Iterates until no more placeholders match (or until ``options.max_passes``
+        is reached, or a pass makes zero state changes).
+
+        Bundles the three foot-guns every template-fill agent re-implements:
+
+        - **Reverse-offset ordering** across matches within the same paragraph so
+          earlier-offset spans stay valid after later edits land.
+        - **``$``-prefix preservation** — when a match starts with ``$`` and the
+          picker's return value doesn't, the ``$`` is prepended (so ``$[___]`` →
+          ``$0.20`` instead of ``0.20``). Disable via ``preserve_dollar_prefix=False``.
+        - **Multi-pass convergence** — ``find_placeholders`` returns innermost
+          brackets only; stripping one layer can surface a previously-nested outer
+          layer. The loop iterates up to ``max_passes`` (default 8) until a pass
+          makes no changes.
+
+        The loop runs entirely in Python (no new wire op) — same primitives the
+        TypeScript wrapper uses. The picker may be invoked more than once for the
+        same logical placeholder when ``options.kinds`` includes
+        :attr:`PlaceholderKinds.ALTERNATIVE_CLAUSE` and inner brackets are
+        stripped between passes; pickers must therefore be deterministic on
+        ``p.match.text`` (return the same result for the same input text).
+        Non-deterministic pickers can produce inconsistent fills.
+
+        Returns a :class:`BulkEditResult` with ``filled`` / ``skipped`` / ``passes``
+        counts plus ``unfilled`` (placeholders the picker said ``None`` to,
+        deduplicated across passes) and ``errors`` (per-replacement failures).
+        Raises ``ValueError`` if ``options.max_passes <= 0`` — matches the
+        ``ArgumentOutOfRangeException`` the C# API throws.
+
+        See ``docs/architecture/docx_mutation_api.md#fillplaceholders``.
+        """
+        opts = options or FillOptions()
+        if opts.max_passes <= 0:
+            raise ValueError("FillOptions.max_passes must be > 0")
+
+        filled = 0
+        work_passes = 0
+        errors: list[EditError] = []
+        unfilled: list[TemplatePlaceholder] = []
+        seen_skip_keys: set[tuple[str, int, int]] = set()
+
+        for pass_num in range(1, opts.max_passes + 1):
+            placeholders = sorted(
+                self.find_placeholders(
+                    opts.kinds, opts.scope, opts.context_chars, opts.boundary
+                ),
+                key=lambda p: (p.match.enclosing_anchor.id, p.match.span.start),
+                reverse=True,
+            )
+            if not placeholders:
+                break
+
+            pass_changes = 0
+            for p in placeholders:
+                pick = picker(p)
+                if pick is None:
+                    key = (p.match.enclosing_anchor.id, p.match.span.start, p.match.span.length)
+                    if key not in seen_skip_keys:
+                        seen_skip_keys.add(key)
+                        unfilled.append(p)
+                    continue
+
+                replacement = pick
+                if (
+                    opts.preserve_dollar_prefix
+                    and p.match.text.startswith("$")
+                    and not replacement.startswith("$")
+                ):
+                    replacement = "$" + replacement
+
+                r = self.replace_match(p.match, replacement)
+                if r.success:
+                    filled += 1
+                    pass_changes += 1
+                elif r.error is not None:
+                    errors.append(r.error)
+
+            if pass_changes > 0:
+                work_passes = pass_num
+            if pass_changes == 0:
+                break
+
+        return BulkEditResult(
+            filled=filled,
+            skipped=len(unfilled),
+            passes=work_passes,
+            unfilled=tuple(unfilled),
+            errors=tuple(errors),
+        )
 
     def find_by_text(self, needle: str, options: FindOptions | None = None) -> AnchorTarget | None:
         args: dict[str, Any] = {"needle": needle}
         if options is not None:
             args["options"] = options.to_wire()
         result = self._call("find_by_text", args)
-        return AnchorTarget.from_wire(result) if result else None
+        return AnchorTarget._from_wire(result) if result else None
 
     def find_all_by_text(
         self, needle: str, options: FindOptions | None = None
@@ -247,7 +350,7 @@ class DocxSession:
         if options is not None:
             args["options"] = options.to_wire()
         result = self._call("find_all_by_text", args)
-        return tuple(AnchorTarget.from_wire(a) for a in result)
+        return tuple(AnchorTarget._from_wire(a) for a in result)
 
     def find_by_regex(
         self,
@@ -259,33 +362,33 @@ class DocxSession:
         if options is not None:
             args["options"] = options.to_wire()
         result = self._call("find_by_regex", args)
-        return tuple(AnchorTarget.from_wire(a) for a in result)
+        return tuple(AnchorTarget._from_wire(a) for a in result)
 
     def find_by_kind(self, kind: str, scope: str | None = None) -> tuple[AnchorTarget, ...]:
         args: dict[str, Any] = {"kind": kind}
         if scope is not None:
             args["scope"] = scope
         result = self._call("find_by_kind", args)
-        return tuple(AnchorTarget.from_wire(a) for a in result)
+        return tuple(AnchorTarget._from_wire(a) for a in result)
 
     def find_by_annotation(self, annotation_id: str) -> tuple[AnchorTarget, ...]:
         result = self._call("find_by_annotation", {"annotationId": annotation_id})
-        return tuple(AnchorTarget.from_wire(a) for a in result)
+        return tuple(AnchorTarget._from_wire(a) for a in result)
 
     def find_by_label(self, label_id: str) -> Mapping[str, tuple[AnchorTarget, ...]]:
         result = self._call("find_by_label", {"labelId": label_id})
         return {
-            ann_id: tuple(AnchorTarget.from_wire(a) for a in anchors)
+            ann_id: tuple(AnchorTarget._from_wire(a) for a in anchors)
             for ann_id, anchors in result.items()
         }
 
     def find_by_bookmark(self, bookmark_name: str) -> tuple[AnchorTarget, ...]:
         result = self._call("find_by_bookmark", {"bookmarkName": bookmark_name})
-        return tuple(AnchorTarget.from_wire(a) for a in result)
+        return tuple(AnchorTarget._from_wire(a) for a in result)
 
     def list_annotations(self) -> tuple[DocumentAnnotation, ...]:
         result = self._call("list_annotations", {})
-        return tuple(DocumentAnnotation.from_wire(a) for a in result)
+        return tuple(DocumentAnnotation._from_wire(a) for a in result)
 
     # -- discovery: anchor existence + info -------------------------------
 
@@ -294,21 +397,21 @@ class DocxSession:
 
     def get_anchor_info(self, anchor_id: str) -> AnchorInfo | None:
         result = self._call("get_anchor_info", {"anchorId": anchor_id})
-        return AnchorInfo.from_wire(result) if result else None
+        return AnchorInfo._from_wire(result) if result else None
 
     def get_anchor_infos(self, anchor_ids: Iterable[str]) -> dict[str, AnchorInfo | None]:
         result = self._call(
             "get_anchor_infos", {"anchorIds": list(anchor_ids)}
         )
         return {
-            aid: AnchorInfo.from_wire(info) if info else None
+            aid: AnchorInfo._from_wire(info) if info else None
             for aid, info in result.items()
         }
 
     # -- discovery: summaries ---------------------------------------------
 
     def get_edit_summary(self) -> EditSummary:
-        return EditSummary.from_wire(self._call("get_edit_summary", {}))
+        return EditSummary._from_wire(self._call("get_edit_summary", {}))
 
     def get_diff(self, format: DiffFormat = DiffFormat.JSON) -> str:
         return str(self._call("get_diff", {"format": int(format)}))
@@ -316,14 +419,14 @@ class DocxSession:
     # -- Tier A: text mutations -------------------------------------------
 
     def replace_text(self, anchor_id: str, markdown: str) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call("replace_text", {"anchorId": anchor_id, "markdown": markdown})
         )
 
     def replace_text_at_span(
         self, anchor_id: str, span_start: int, span_length: int, replace: str
     ) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call(
                 "replace_text_at_span",
                 {
@@ -346,7 +449,7 @@ class DocxSession:
         if options is not None:
             args["options"] = options.to_wire()
         result = self._call("replace_text_range", args)
-        return tuple(EditResult.from_wire(r) for r in result)
+        return tuple(EditResult._from_wire(r) for r in result)
 
     def replace_inner(
         self,
@@ -356,7 +459,7 @@ class DocxSession:
         span_length: int,
         new_inner: str,
     ) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call(
                 "replace_inner",
                 {
@@ -380,10 +483,10 @@ class DocxSession:
         )
 
     def delete_block(self, anchor_id: str) -> EditResult:
-        return EditResult.from_wire(self._call("delete_block", {"anchorId": anchor_id}))
+        return EditResult._from_wire(self._call("delete_block", {"anchorId": anchor_id}))
 
     def delete_range(self, from_anchor_id: str, to_anchor_id_exclusive: str) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call(
                 "delete_range",
                 {
@@ -394,7 +497,7 @@ class DocxSession:
         )
 
     def delete_section(self, heading_anchor_id: str) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call("delete_section", {"headingAnchorId": heading_anchor_id})
         )
 
@@ -403,7 +506,7 @@ class DocxSession:
     def insert_paragraph(
         self, anchor_id: str, position: Position, markdown: str
     ) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call(
                 "insert_paragraph",
                 {"anchorId": anchor_id, "position": position.value, "markdown": markdown},
@@ -411,7 +514,7 @@ class DocxSession:
         )
 
     def split_paragraph(self, anchor_id: str, character_offset: int) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call(
                 "split_paragraph",
                 {"anchorId": anchor_id, "characterOffset": character_offset},
@@ -419,7 +522,7 @@ class DocxSession:
         )
 
     def merge_paragraphs(self, first_anchor_id: str, second_anchor_id: str) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call(
                 "merge_paragraphs",
                 {"firstAnchorId": first_anchor_id, "secondAnchorId": second_anchor_id},
@@ -434,12 +537,12 @@ class DocxSession:
         args: dict[str, Any] = {"anchorId": anchor_id, "op": op.to_wire()}
         if span is not None:
             args["span"] = span.to_wire()
-        return EditResult.from_wire(self._call("apply_format", args))
+        return EditResult._from_wire(self._call("apply_format", args))
 
     def apply_format_by_substring(
         self, anchor_id: str, substring: str, op: FormatOp
     ) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call(
                 "apply_format_by_substring",
                 {"anchorId": anchor_id, "substring": substring, "op": op.to_wire()},
@@ -447,7 +550,7 @@ class DocxSession:
         )
 
     def set_paragraph_style(self, anchor_id: str, style_id: str) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call(
                 "set_paragraph_style",
                 {"anchorId": anchor_id, "styleId": style_id},
@@ -455,7 +558,7 @@ class DocxSession:
         )
 
     def set_list_level(self, anchor_id: str, level_delta: int) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call(
                 "set_list_level",
                 {"anchorId": anchor_id, "levelDelta": level_delta},
@@ -463,14 +566,14 @@ class DocxSession:
         )
 
     def remove_list_membership(self, anchor_id: str) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call("remove_list_membership", {"anchorId": anchor_id})
         )
 
     # -- Tier D: tables ---------------------------------------------------
 
     def replace_cell_content(self, cell_anchor_id: str, markdown: str) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._call(
                 "replace_cell_content",
                 {"cellAnchorId": cell_anchor_id, "markdown": markdown},
@@ -505,7 +608,7 @@ class _RawOps:
         return str(self._s._call("raw_get_xml", {"anchorId": anchor_id}))
 
     def insert_xml(self, anchor_id: str, position: Position, xml: str) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._s._call(
                 "raw_insert_xml",
                 {"anchorId": anchor_id, "position": position.value, "xml": xml},
@@ -513,6 +616,6 @@ class _RawOps:
         )
 
     def replace_xml(self, anchor_id: str, xml: str) -> EditResult:
-        return EditResult.from_wire(
+        return EditResult._from_wire(
             self._s._call("raw_replace_xml", {"anchorId": anchor_id, "xml": xml})
         )

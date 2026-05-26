@@ -4,9 +4,12 @@ Wire keys are camelCase (matching the WASM bridge so the JSON shapes are
 interchangeable between TypeScript and Python clients). Decoders translate to
 snake_case Python fields.
 
-Each type exposes a ``from_wire(d)`` classmethod that takes the parsed JSON
-dict and returns an instance. Encoders are simple dict-builders on the
-encode side (``to_wire()``) and live where they're used in ``session.py``.
+Each type exposes a private ``_from_wire(d)`` classmethod that takes the parsed
+JSON dict and returns an instance. The leading underscore marks these as
+transport-internal: callers should never need to invoke them — every public
+``DocxSession`` method that returns one of these types already decodes for you.
+Encoders are simple dict-builders on the encode side (``to_wire()``) and live
+where they're used in ``session.py``.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ from .enums import (
     EditErrorCode,
     EmptyParagraphMode,
     PlaceholderKind,
+    PlaceholderKinds,
     ProjectionScopes,
     TableRenderMode,
     TrackedChangeMode,
@@ -49,6 +53,8 @@ __all__ = [
     "EditSummary",
     "FindOptions",
     "ReplaceOptions",
+    "FillOptions",
+    "BulkEditResult",
 ]
 
 
@@ -72,7 +78,7 @@ class Anchor:
     unid: str
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "Anchor":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "Anchor":
         return cls(id=d["id"], kind=d["kind"], scope=d["scope"], unid=d["unid"])
 
 
@@ -88,7 +94,7 @@ class AnchorTarget:
     text_preview: str
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "AnchorTarget":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "AnchorTarget":
         return cls(
             id=d["id"],
             kind=d["kind"],
@@ -109,7 +115,7 @@ class AnchorInfo:
     text_preview: str
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "AnchorInfo":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "AnchorInfo":
         return cls(
             id=d["id"],
             kind=d["kind"],
@@ -131,7 +137,7 @@ class CharSpan:
     length: int
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "CharSpan":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "CharSpan":
         return cls(start=int(d["start"]), length=int(d["length"]))
 
     def to_wire(self) -> dict[str, int]:
@@ -181,7 +187,7 @@ class RunFormatting:
     run_style: str | None = None
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "RunFormatting":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RunFormatting":
         return cls(
             bold=bool(d.get("bold", False)),
             italic=bool(d.get("italic", False)),
@@ -204,12 +210,12 @@ class RunFragment:
     formatting: RunFormatting
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "RunFragment":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RunFragment":
         return cls(
             unid=d["unid"],
             text=d["text"],
-            span_in_element=CharSpan.from_wire(d["spanInElement"]),
-            formatting=RunFormatting.from_wire(d["formatting"]),
+            span_in_element=CharSpan._from_wire(d["spanInElement"]),
+            formatting=RunFormatting._from_wire(d["formatting"]),
         )
 
 
@@ -231,12 +237,12 @@ class TextMatch:
     groups: tuple[str, ...] = ()
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "TextMatch":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TextMatch":
         return cls(
             text=d["text"],
-            enclosing_anchor=Anchor.from_wire(d["enclosingAnchor"]),
-            span=CharSpan.from_wire(d["span"]),
-            fragments=tuple(RunFragment.from_wire(f) for f in d.get("fragments", ())),
+            enclosing_anchor=Anchor._from_wire(d["enclosingAnchor"]),
+            span=CharSpan._from_wire(d["span"]),
+            fragments=tuple(RunFragment._from_wire(f) for f in d.get("fragments", ())),
             context_before=d.get("contextBefore", ""),
             context_after=d.get("contextAfter", ""),
             groups=tuple(d.get("groups", ())),
@@ -252,11 +258,11 @@ class BlockSlice:
     fragments: tuple[RunFragment, ...] = ()
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "BlockSlice":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "BlockSlice":
         return cls(
-            anchor=Anchor.from_wire(d["anchor"]),
-            span_in_block=CharSpan.from_wire(d["spanInBlock"]),
-            fragments=tuple(RunFragment.from_wire(f) for f in d.get("fragments", ())),
+            anchor=Anchor._from_wire(d["anchor"]),
+            span_in_block=CharSpan._from_wire(d["spanInBlock"]),
+            fragments=tuple(RunFragment._from_wire(f) for f in d.get("fragments", ())),
         )
 
 
@@ -272,11 +278,11 @@ class CrossBlockMatch:
     groups: tuple[str, ...] = ()
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "CrossBlockMatch":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "CrossBlockMatch":
         return cls(
             text=d["text"],
-            enclosing_anchors=tuple(Anchor.from_wire(a) for a in d.get("enclosingAnchors", ())),
-            slices=tuple(BlockSlice.from_wire(s) for s in d.get("slices", ())),
+            enclosing_anchors=tuple(Anchor._from_wire(a) for a in d.get("enclosingAnchors", ())),
+            slices=tuple(BlockSlice._from_wire(s) for s in d.get("slices", ())),
             context_before=d.get("contextBefore", ""),
             context_after=d.get("contextAfter", ""),
             groups=tuple(d.get("groups", ())),
@@ -298,10 +304,10 @@ class TemplatePlaceholder:
     hint: str | None = None
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "TemplatePlaceholder":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "TemplatePlaceholder":
         return cls(
             kind=PlaceholderKind(d["kind"]),
-            match=TextMatch.from_wire(d["match"]),
+            match=TextMatch._from_wire(d["match"]),
             alternative_kinds=tuple(
                 PlaceholderKind(k) for k in d.get("alternativeKinds", ())
             ),
@@ -323,7 +329,7 @@ class EditError:
     anchor_id: str | None = None
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "EditError":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "EditError":
         return cls(
             code=EditErrorCode(d["code"]),
             message=d.get("message", ""),
@@ -339,7 +345,7 @@ class MarkdownPatch:
     markdown: str
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "MarkdownPatch":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "MarkdownPatch":
         return cls(
             scope_anchor_id=d["scopeAnchorId"],
             markdown=d.get("markdown", ""),
@@ -363,16 +369,16 @@ class EditResult:
     error: EditError | None = None
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "EditResult":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "EditResult":
         patch_d = d.get("patch")
         err_d = d.get("error")
         return cls(
             success=bool(d.get("success", False)),
-            created=tuple(Anchor.from_wire(a) for a in d.get("created", ())),
-            removed=tuple(Anchor.from_wire(a) for a in d.get("removed", ())),
-            modified=tuple(Anchor.from_wire(a) for a in d.get("modified", ())),
-            patch=MarkdownPatch.from_wire(patch_d) if patch_d else None,
-            error=EditError.from_wire(err_d) if err_d else None,
+            created=tuple(Anchor._from_wire(a) for a in d.get("created", ())),
+            removed=tuple(Anchor._from_wire(a) for a in d.get("removed", ())),
+            modified=tuple(Anchor._from_wire(a) for a in d.get("modified", ())),
+            patch=MarkdownPatch._from_wire(patch_d) if patch_d else None,
+            error=EditError._from_wire(err_d) if err_d else None,
         )
 
 
@@ -389,7 +395,7 @@ class MarkdownProjection:
     anchor_index: Mapping[str, AnchorTarget]
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "MarkdownProjection":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "MarkdownProjection":
         idx = d.get("anchorIndex", {}) or {}
         # The wire entries don't repeat the id key (it's the dict key); rebuild
         # the AnchorTarget by injecting the id from the surrounding key.
@@ -425,7 +431,7 @@ class DocumentAnnotation:
     annotated_text: str | None = None
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "DocumentAnnotation":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DocumentAnnotation":
         return cls(
             id=d["id"],
             label_id=d.get("labelId", ""),
@@ -460,11 +466,11 @@ class EditSummary:
     comment_count: int = 0
 
     @classmethod
-    def from_wire(cls, d: Mapping[str, Any]) -> "EditSummary":
+    def _from_wire(cls, d: Mapping[str, Any]) -> "EditSummary":
         return cls(
             total_anchors=int(d.get("totalAnchors", 0)),
             remaining_placeholders=tuple(
-                TemplatePlaceholder.from_wire(p) for p in d.get("remainingPlaceholders", ())
+                TemplatePlaceholder._from_wire(p) for p in d.get("remainingPlaceholders", ())
             ),
             bare_underscore_runs=tuple(d.get("bareUnderscoreRuns", ())),
             footnote_count=int(d.get("footnoteCount", 0)),
@@ -508,6 +514,47 @@ class ReplaceOptions:
         if self.ignore_case: out["ignoreCase"] = True
         if self.max_replacements is not None: out["maxReplacements"] = self.max_replacements
         return out
+
+
+# ---------------------------------------------------------------------------
+# Fill placeholders (client-side multi-pass loop; see DocxSession.fill_placeholders)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class FillOptions:
+    """Options for :meth:`DocxSession.fill_placeholders`.
+
+    Mirrors the C# ``FillOptions`` record; the multi-pass loop runs client-side
+    in Python (no new wire op), so these are consumed locally rather than
+    serialized.
+    """
+
+    kinds: PlaceholderKinds = PlaceholderKinds.ALL
+    scope: ProjectionScopes = ProjectionScopes.BODY
+    max_passes: int = 8
+    preserve_dollar_prefix: bool = True
+    context_chars: int = 80
+    boundary: ContextBoundary = ContextBoundary.CHAR
+
+
+@dataclass(frozen=True, slots=True)
+class BulkEditResult:
+    """Aggregate result returned by :meth:`DocxSession.fill_placeholders`.
+
+    ``filled`` is the count of picker-returned replacements applied;
+    ``skipped`` counts placeholders the picker returned ``None`` for (deduped
+    across passes — counted once per placeholder lifetime). ``passes`` is the
+    highest iteration pass that actually filled something (``0`` = nothing
+    filled, ``1`` = one-shot convergence, higher = multi-pass nested-bracket
+    convergence). ``unfilled`` and ``errors`` mirror the C# shape.
+    """
+
+    filled: int
+    skipped: int
+    passes: int
+    unfilled: tuple["TemplatePlaceholder", ...] = ()
+    errors: tuple["EditError", ...] = ()
 
 
 # ---------------------------------------------------------------------------

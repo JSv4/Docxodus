@@ -161,7 +161,24 @@ A few methods exist as syntactic sugar over already-exposed wire ops; the Python
 - `session.replace_match(match: TextMatch, replace: str) -> EditResult` →
   `session.replace_text_at_span(match.enclosing_anchor.id, match.span.start, match.span.length, replace)`
 
-Avoids parsing a full `TextMatch` on the C# side (~80 lines of parser per transport).
+  Avoids parsing a full `TextMatch` on the C# side (~80 lines of parser per transport).
+
+- `session.fill_placeholders(picker, options?) -> BulkEditResult` — multi-pass
+  template-fill loop mirroring the C# `DocxSession.FillPlaceholders` and the
+  TypeScript `session.fillPlaceholders`. Bundles the three foot-guns every
+  template-fill agent re-implements: reverse-offset ordering within a paragraph,
+  `$`-prefix preservation (`$[___]` → `$0.20` instead of `0.20`), and multi-pass
+  iteration for nested AlternativeClause brackets. Runs entirely in Python over
+  the existing `find_placeholders` + `replace_match` primitives, matching the TS
+  wrapper's no-extra-wire-op design.
+
+## Wire-only internals
+
+Decode helpers (`Anchor._from_wire(d)`, `EditResult._from_wire(d)`, etc.) live on
+each value type but are deliberately leading-underscore: they are the JSON-to-dataclass
+adapter for the stdio NDJSON transport and never need to be called by package
+users. Every public `DocxSession` method that returns one of these types decodes
+the response itself.
 
 ## Distribution
 
