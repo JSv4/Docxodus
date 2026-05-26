@@ -306,6 +306,8 @@ What `FillPlaceholders` does internally that the recipe doesn't:
 - **`$`-prefix preservation.** The placeholder regex `\$?\[…\]` captures `$[___]` including the leading `$`. With `FillOptions.PreserveDollarPrefix = true` (default), the picker's return value gets `$` prepended when needed so `"0.20"` lands as `$0.20`, not `0.20`.
 - **Multi-pass iteration.** `FindPlaceholders` returns innermost brackets only; stripping the inner can surface a previously-nested outer. The loop re-finds placeholders each pass and stops when a pass makes zero changes (or `MaxPasses` — default 8 — is hit).
 
+The picker is invoked for every kind in `FillOptions.Kinds`, which defaults to `PlaceholderKinds.All` — so a picker that wants to ignore alternative-clause brackets should return `null` for them rather than relying on the option to filter them out. Set `Kinds = BlankFill | Instruction` if you want the prior behavior of leaving alternative clauses untouched.
+
 The picker is invoked once per placeholder per pass; return `null` to skip. `BulkEditResult.Unfilled` lists every placeholder the picker said `null` to (deduplicated across passes). `BulkEditResult.Passes` is the highest iteration pass that actually filled at least one placeholder (so a single-fill convergence reports `Passes = 1`, not 2).
 
 ### `ReplaceInner` — strip brackets while preserving prefix/suffix

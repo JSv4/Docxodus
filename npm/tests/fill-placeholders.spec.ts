@@ -95,7 +95,9 @@ test.describe('fill-placeholders (WASM bridge — Issue #163)', () => {
       const bridge = (window as any).Docxodus.DocxSessionBridge;
       const handle = bridge.OpenSession(bin, '');
       try {
-        // Default kinds in the TS wrapper = BlankFill | Instruction = 5.
+        // Test narrows to BlankFill | Instruction = 5 explicitly (the TS wrapper's
+        // default is now PlaceholderKinds.All = 7; we keep 5 here so this test
+        // measures the same surface area it always did).
         const placeholders = JSON.parse(bridge.FindPlaceholders(handle, 5, 1, 80, 0)) as any[];
         const unfilled: any[] = [];
         let filled = 0;

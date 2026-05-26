@@ -219,10 +219,17 @@ public sealed record ReplaceOptions
 /// </summary>
 public sealed record FillOptions
 {
-    /// <summary>Which placeholder kinds to fill. Defaults to <c>BlankFill | Instruction</c>
-    /// — the kinds with a single replacement value. Add <c>AlternativeClause</c> to
-    /// run the picker on bracketed clauses too (e.g. for bracket-stripping).</summary>
-    public PlaceholderKinds Kinds { get; init; } = PlaceholderKinds.BlankFill | PlaceholderKinds.Instruction;
+    /// <summary>Which placeholder kinds to fill. Defaults to
+    /// <see cref="PlaceholderKinds.All"/> so the picker is invoked for every kind
+    /// the doc contains — <c>BlankFill</c>, <c>Instruction</c>, *and*
+    /// <c>AlternativeClause</c>. Narrow with e.g. <c>BlankFill | Instruction</c>
+    /// if you only want value-slot fills and intend to ignore bracketed clauses.</summary>
+    /// <remarks>The previous default (<c>BlankFill | Instruction</c>) silently
+    /// excluded <c>AlternativeClause</c> placeholders, which caused pickers with
+    /// bracket-stripping rules to appear to do nothing on those matches. The new
+    /// default lets the picker see everything; pickers that don't recognize a
+    /// kind should simply return <c>null</c> for it.</remarks>
+    public PlaceholderKinds Kinds { get; init; } = PlaceholderKinds.All;
 
     /// <summary>Which package parts to scan. Defaults to body.</summary>
     public ProjectionScopes Scope { get; init; } = ProjectionScopes.Body;

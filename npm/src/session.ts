@@ -264,7 +264,10 @@ export class DocxSession {
     options?: FillOptions,
   ): BulkEditResult {
     const opts = options ?? {};
-    const kinds = opts.kinds ?? (PlaceholderKinds.BlankFill | PlaceholderKinds.Instruction);
+    // Default Kinds = All so the picker is invoked for every kind the doc contains.
+    // Callers that want to ignore AlternativeClause matches should narrow this to
+    // `PlaceholderKinds.BlankFill | PlaceholderKinds.Instruction`.
+    const kinds = opts.kinds ?? PlaceholderKinds.All;
     const scope = opts.scope ?? 1; // Body
     const maxPasses = opts.maxPasses ?? 8;
     const preserveDollarPrefix = opts.preserveDollarPrefix ?? true;

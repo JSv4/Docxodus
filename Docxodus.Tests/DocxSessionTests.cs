@@ -539,6 +539,24 @@ public class DocxSessionTests
     }
 
     [Fact]
+    public void DS244a_FillPlaceholders_DefaultKindsVisitsAlternativeClauses()
+    {
+        // After the FillOptions.Kinds default change, the picker should be invoked
+        // for AlternativeClause placeholders too — without the caller needing to
+        // opt in via Kinds = All. Picker that unwraps every bracketed match should
+        // strip every alternative in one pass over BuildDocWithBracketPlaceholders.
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var result = session.FillPlaceholders(p => p.Kind == PlaceholderKind.AlternativeClause
+            ? p.Match.Text.Trim('[', ']')
+            : null);
+        Assert.True(result.Filled >= 1, "Expected at least one AlternativeClause unwrapped");
+
+        // No AlternativeClause matches should remain after convergence.
+        var leftover = session.FindPlaceholders(PlaceholderKinds.AlternativeClause);
+        Assert.Empty(leftover);
+    }
+
+    [Fact]
     public void DS244_FillPlaceholders_AlternativeClauseMultiPassStripsNestedBrackets()
     {
         // The "[outer [inner] clause]" placeholder is nested; FindPlaceholders returns

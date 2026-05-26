@@ -1001,7 +1001,10 @@ export interface TemplatePlaceholder {
  * Options for {@link DocxSession.fillPlaceholders}.
  */
 export interface FillOptions {
-  /** Which placeholder kinds to fill. Defaults to `BlankFill | Instruction`. */
+  /** Which placeholder kinds to fill. Defaults to `PlaceholderKinds.All` so the
+   *  picker is invoked for every kind in the doc. Narrow with e.g.
+   *  `PlaceholderKinds.BlankFill | PlaceholderKinds.Instruction` to ignore
+   *  bracketed alternative clauses. */
   kinds?: number;
   /** Which package parts to scan. Defaults to body (1). */
   scope?: number;
