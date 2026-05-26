@@ -326,6 +326,51 @@ When the primary classification is borderline, secondary classifications are exp
 
 Nested brackets (e.g. `[under the name [Bluth, Inc.]]`) resolve to the INNERMOST bracket only — usually what the agent cares about, since the inner is the value slot and the outer is the optional-clause wrapper. If you need both, use `Grep` directly with a balanced-bracket pattern.
 
+## Edit-state introspection — `GetEditSummary` and `GetDiff`
+
+### `GetEditSummary` — "am I done?"
+
+`session.GetEditSummary()` returns a single `EditSummary` record composing
+existing primitives:
+
+| Field | Source |
+|---|---|
+| `TotalAnchors` | `Project().AnchorIndex.Count` |
+| `RemainingPlaceholders` | `FindPlaceholders(All, All)` |
+| `BareUnderscoreRuns` | `Grep(@"(?<!\[)_{3,}(?!\])")` |
+| `FootnoteCount` | `AnchorIndex` filter on `kind=fn, scope=fn` (excludes reserved separators per #162) |
+| `InlineFootnoteRefCount` | Body part's `w:footnoteReference` count |
+| `CommentCount` | `AnchorIndex` filter on `kind=cmt` |
+
+Designed to make verification logic declarative:
+
+```csharp
+var summary = session.GetEditSummary();
+Assert.Empty(summary.RemainingPlaceholders);
+Assert.Empty(summary.BareUnderscoreRuns);
+Assert.Equal(0, summary.FootnoteCount);  // commentary stripped
+```
+
+### `GetDiff` — "show me what I changed"
+
+`session.GetDiff(DiffFormat.Json)` (default) returns an anchor-keyed JSON
+array of `DiffEntry` records comparing the projection captured at session
+construction time against the current state.
+
+```json
+[
+  { "op": "delete", "anchorId": "p:body:abc…", "before": "Drafting Note..." },
+  { "op": "modify", "anchorId": "p:body:def…", "before": "[___]", "after": "ACME, INC." },
+  { "op": "insert", "anchorId": "p:body:ghi…", "after": "New paragraph text" }
+]
+```
+
+Initial-projection capture is on by default (`DocxSessionSettings.CaptureInitialProjection = true`)
+and costs ~200ms at construction. Turn it off if you don't plan to diff.
+
+`DiffFormat.Unified` and `DiffFormat.SideBySide` are reserved for v2 (line-based diff)
+— they throw `NotSupportedException` in v1. See issue #178.
+
 ## ReplaceTextRange — surgical text edits
 
 `session.ReplaceTextRange(anchorId, find, replace, options?)` finds every literal occurrence of `find` in one paragraph/heading/list-item's flat text and substitutes `replace` for each, returning an `EditResult` per attempted match. Built on `Grep` — same fragment walker, opposite direction.
