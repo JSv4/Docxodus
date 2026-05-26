@@ -105,16 +105,18 @@ public static partial class DocxSessionBridge
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.Grep"/>. <paramref name="optionsJson"/>
-    /// accepts <c>{regexOptions?: number, scope?: number, contextChars?: number}</c>;
-    /// numeric values follow the .NET <see cref="System.Text.RegularExpressions.RegexOptions"/>
-    /// and <see cref="ProjectionScopes"/> flag layouts. Missing fields use sensible
-    /// defaults (no options, body-only, 40 chars of context).
+    /// accepts <c>{regexOptions?: number, scope?: number, contextChars?: number,
+    /// whitespace?: number, boundary?: number}</c>; numeric values follow the .NET
+    /// <see cref="System.Text.RegularExpressions.RegexOptions"/>, <see cref="ProjectionScopes"/>,
+    /// <see cref="WhitespaceMode"/>, and <see cref="ContextBoundary"/> flag layouts.
+    /// Missing fields use sensible defaults (no options, body-only, 80 chars of
+    /// context, preserve whitespace, char-boundary).
     /// </summary>
     [JSExport]
     public static string Grep(int h, string pattern, string optionsJson)
     {
-        ParseGrepOptions(optionsJson, out var regexOpts, out var scope, out var contextChars, out var whitespace);
-        return DocxSessionOps.Grep(h, pattern, regexOpts, scope, contextChars, whitespace);
+        ParseGrepOptions(optionsJson, out var regexOpts, out var scope, out var contextChars, out var whitespace, out var boundary);
+        return DocxSessionOps.Grep(h, pattern, regexOpts, scope, contextChars, whitespace, boundary);
     }
 
     /// <summary>
@@ -125,8 +127,8 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string GrepCrossBlock(int h, string pattern, string optionsJson)
     {
-        ParseGrepOptions(optionsJson, out var regexOpts, out var scope, out var contextChars, out var whitespace);
-        return DocxSessionOps.GrepCrossBlock(h, pattern, regexOpts, scope, contextChars, whitespace);
+        ParseGrepOptions(optionsJson, out var regexOpts, out var scope, out var contextChars, out var whitespace, out var boundary);
+        return DocxSessionOps.GrepCrossBlock(h, pattern, regexOpts, scope, contextChars, whitespace, boundary);
     }
 
     /// <summary>
@@ -180,8 +182,8 @@ public static partial class DocxSessionBridge
     /// uses the <see cref="ProjectionScopes"/> flag layout. Returns a JSON array of placeholders.
     /// </summary>
     [JSExport]
-    public static string FindPlaceholders(int h, int kinds, int scope) =>
-        DocxSessionOps.FindPlaceholders(h, (PlaceholderKinds)kinds, (ProjectionScopes)scope);
+    public static string FindPlaceholders(int h, int kinds, int scope, int contextChars, int boundary) =>
+        DocxSessionOps.FindPlaceholders(h, (PlaceholderKinds)kinds, (ProjectionScopes)scope, contextChars, (ContextBoundary)boundary);
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.FindByAnnotation"/>. Returns a JSON array of
@@ -306,12 +308,14 @@ public static partial class DocxSessionBridge
     }
 
     private static void ParseGrepOptions(string optionsJson, out RegexOptions regexOpts,
-        out ProjectionScopes scope, out int contextChars, out WhitespaceMode whitespace)
+        out ProjectionScopes scope, out int contextChars, out WhitespaceMode whitespace,
+        out ContextBoundary boundary)
     {
         regexOpts = RegexOptions.None;
         scope = ProjectionScopes.Body;
-        contextChars = 40;
+        contextChars = 80;
         whitespace = WhitespaceMode.Preserve;
+        boundary = ContextBoundary.Char;
         if (string.IsNullOrEmpty(optionsJson)) return;
         using var doc = JsonDocument.Parse(optionsJson);
         var root = doc.RootElement;
@@ -323,5 +327,7 @@ public static partial class DocxSessionBridge
             contextChars = c.GetInt32();
         if (root.TryGetProperty("whitespace", out var w) && w.ValueKind == JsonValueKind.Number)
             whitespace = (WhitespaceMode)w.GetInt32();
+        if (root.TryGetProperty("boundary", out var b) && b.ValueKind == JsonValueKind.Number)
+            boundary = (ContextBoundary)b.GetInt32();
     }
 }

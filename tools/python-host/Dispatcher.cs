@@ -73,7 +73,9 @@ internal static class Dispatcher
         "find_placeholders" => DocxSessionOps.FindPlaceholders(
             Handle(args),
             (PlaceholderKinds)IntOptional(args, "kinds", (int)PlaceholderKinds.All),
-            (ProjectionScopes)IntOptional(args, "scope", (int)ProjectionScopes.Body)),
+            (ProjectionScopes)IntOptional(args, "scope", (int)ProjectionScopes.Body),
+            IntOptional(args, "contextChars", 80),
+            (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char)),
         "find_by_annotation" => DocxSessionOps.FindByAnnotation(Handle(args), Str(args, "annotationId")),
         "find_by_label" => DocxSessionOps.FindByLabel(Handle(args), Str(args, "labelId")),
         "find_by_bookmark" => DocxSessionOps.FindByBookmark(Handle(args), Str(args, "bookmarkName")),
@@ -143,11 +145,12 @@ internal static class Dispatcher
         var pattern = Str(args, "pattern");
         var regexOpts = (RegexOptions)IntOptional(args, "regexOptions", 0);
         var scope = (ProjectionScopes)IntOptional(args, "scope", (int)ProjectionScopes.Body);
-        var contextChars = IntOptional(args, "contextChars", 40);
+        var contextChars = IntOptional(args, "contextChars", 80);
         var whitespace = (WhitespaceMode)IntOptional(args, "whitespace", (int)WhitespaceMode.Preserve);
+        var boundary = (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char);
         return crossBlock
-            ? DocxSessionOps.GrepCrossBlock(Handle(args), pattern, regexOpts, scope, contextChars, whitespace)
-            : DocxSessionOps.Grep(Handle(args), pattern, regexOpts, scope, contextChars, whitespace);
+            ? DocxSessionOps.GrepCrossBlock(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary)
+            : DocxSessionOps.Grep(Handle(args), pattern, regexOpts, scope, contextChars, whitespace, boundary);
     }
 
     // ─── Arg helpers ────────────────────────────────────────────────────

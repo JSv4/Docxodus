@@ -28,17 +28,19 @@ internal static class DocxSessionOps
         DocxSessionJson.SerializeProjection(SessionRegistry.Get(handle).Project());
 
     public static string Grep(int handle, string pattern, RegexOptions regexOpts,
-        ProjectionScopes scope, int contextChars, WhitespaceMode whitespace) =>
+        ProjectionScopes scope, int contextChars, WhitespaceMode whitespace, ContextBoundary boundary) =>
         DocxSessionJson.SerializeMatches(
-            SessionRegistry.Get(handle).Grep(pattern, regexOpts, scope, contextChars, whitespace));
+            SessionRegistry.Get(handle).Grep(pattern, regexOpts, scope, contextChars, whitespace, boundary));
 
     public static string GrepCrossBlock(int handle, string pattern, RegexOptions regexOpts,
-        ProjectionScopes scope, int contextChars, WhitespaceMode whitespace) =>
+        ProjectionScopes scope, int contextChars, WhitespaceMode whitespace, ContextBoundary boundary) =>
         DocxSessionJson.SerializeCrossBlockMatches(
-            SessionRegistry.Get(handle).GrepCrossBlock(pattern, regexOpts, scope, contextChars, whitespace));
+            SessionRegistry.Get(handle).GrepCrossBlock(pattern, regexOpts, scope, contextChars, whitespace, boundary));
 
-    public static string FindPlaceholders(int handle, PlaceholderKinds kinds, ProjectionScopes scope) =>
-        DocxSessionJson.SerializePlaceholders(SessionRegistry.Get(handle).FindPlaceholders(kinds, scope));
+    public static string FindPlaceholders(int handle, PlaceholderKinds kinds, ProjectionScopes scope,
+        int contextChars, ContextBoundary boundary) =>
+        DocxSessionJson.SerializePlaceholders(
+            SessionRegistry.Get(handle).FindPlaceholders(kinds, scope, contextChars, boundary));
 
     public static string FindByAnnotation(int handle, string annotationId) =>
         DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByAnnotation(annotationId));
