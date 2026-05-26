@@ -84,11 +84,12 @@ The workflow ships one wheel per RID plus a single sdist:
 |---|---|---|---|
 | `linux-x64` | `ubuntu-latest` | `manylinux_2_28_x86_64` | `docxodus-pyhost` |
 | `linux-arm64` | `ubuntu-22.04-arm` | `manylinux_2_28_aarch64` | `docxodus-pyhost` |
-| `osx-x64` | `macos-13` | `macosx_11_0_x86_64` | `docxodus-pyhost` |
 | `osx-arm64` | `macos-14` | `macosx_11_0_arm64` | `docxodus-pyhost` |
 | `win-x64` | `windows-latest` | `win_amd64` | `docxodus-pyhost.exe` |
 
 The matrix is in `.github/workflows/python-publish.yml` under `build-wheel`. Each entry runs the same step sequence (publish .NET host → stage → smoke-test → build wheel → retag → lifecycle-test from a fresh-venv install). `fail-fast: false` so all RID failures surface at once, but `publish` still gates on every matrix entry succeeding.
+
+**No `osx-x64` wheel.** GitHub's `macos-13` Intel-runner pool was retired for public repos in 2026, and cross-publishing osx-x64 from `macos-14` via Rosetta proved fragile. Intel Mac users can install the sdist (`pip install docx-scalpel --no-binary docx-scalpel`) and point `DOCXODUS_HOST` at a locally-built host, or run on Rosetta-emulated Python against the osx-arm64 wheel.
 
 `docx_scalpel-${VER}.tar.gz` (the sdist) has **no bundled binary** — install requires `DOCXODUS_HOST` set or a Docxodus monorepo clone with the host built locally.
 
