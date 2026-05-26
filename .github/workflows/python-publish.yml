@@ -90,8 +90,12 @@ jobs:
             wheel-platform: manylinux_2_28_aarch64
             binary: docxodus-pyhost
           - rid: osx-x64
-            # Intel Mac runner — being deprecated in 2026 but still works.
-            runner: macos-13
+            # macos-13 Intel runners were retired for public repos in 2026;
+            # cross-publish from the Apple Silicon runner instead. The .NET 8
+            # SDK supports cross-rid publish out of the box, and the
+            # smoke-test step installs Rosetta so the x86_64 binary executes
+            # on the arm64 host.
+            runner: macos-14
             wheel-platform: macosx_11_0_x86_64
             binary: docxodus-pyhost
           - rid: osx-arm64
@@ -155,6 +159,13 @@ jobs:
           # and harmless to run unconditionally inside Git Bash.
           chmod +x "python/src/docx_scalpel/_bin/${{ matrix.binary }}" || true
           ls -la python/src/docx_scalpel/_bin/
+
+      - name: Install Rosetta (osx-x64 cross-publish from arm64 host)
+        # macos-14 is Apple Silicon; the freshly-cross-published osx-x64 binary
+        # is x86_64 and can only execute on this host through Rosetta 2. Skipped
+        # for every other matrix entry (each runs on its native arch).
+        if: matrix.rid == 'osx-x64'
+        run: softwareupdate --install-rosetta --agree-to-license
 
       - name: Smoke-test the bundled host
         run: |
