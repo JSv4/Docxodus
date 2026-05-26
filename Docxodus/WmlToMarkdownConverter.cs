@@ -119,6 +119,11 @@ public class WmlToMarkdownConverterSettings
     /// entirely (and from the anchor index) for callers that want a denser projection.
     /// </summary>
     public EmptyParagraphMode EmptyParagraphs { get; set; } = EmptyParagraphMode.AnchorOnly;
+
+    /// <summary>How anchor ids are rendered in <c>{#…}</c> tokens and keyed in
+    /// the resulting <see cref="MarkdownProjection.AnchorIndex"/>. Default
+    /// <see cref="AnchorIdRendering.FullUnid"/> matches legacy behavior.</summary>
+    public AnchorIdRendering AnchorIdRendering { get; set; } = AnchorIdRendering.FullUnid;
 }
 
 /// <summary>How empty paragraphs are rendered by <see cref="WmlToMarkdownConverter"/>.</summary>
@@ -132,6 +137,30 @@ public enum EmptyParagraphMode
 
     /// <summary>Skip empty paragraphs entirely — they don't appear in the markdown or the anchor index.</summary>
     Suppress,
+}
+
+/// <summary>How anchor ids are rendered inside <c>{#…}</c> tokens and keyed in
+/// <see cref="MarkdownProjection.AnchorIndex"/>.</summary>
+public enum AnchorIdRendering
+{
+    /// <summary>Full 32-char hex Unid (e.g. <c>{#h:body:a1b2c3d4e5f6789012345678901234ab}</c>).
+    /// Default; matches the projection's existing behavior.</summary>
+    FullUnid = 0,
+
+    /// <summary>Shortest unique prefix per (kind, scope) bucket, with a 4-char
+    /// floor (e.g. <c>{#h:body:a1b2}</c>). Saves 5-10% of projection-token
+    /// budget for LLM consumption. The <see cref="MarkdownProjection.AnchorIndex"/>
+    /// is dual-keyed — lookups by either full Unid or abbreviated form work.</summary>
+    Abbreviated = 1,
+
+    /// <summary>Sequential numeric ids per (kind, scope) bucket, in document
+    /// order (e.g. <c>{#h:body:1} {#h:body:2}</c>). Maximally token-efficient
+    /// for one-shot LLM contexts where anchor stability across sessions is
+    /// unnecessary. These ids are NOT stable across <c>Project()</c> calls and
+    /// must NOT be persisted; the dual-keyed <c>AnchorIndex</c> contains the
+    /// numeric form too, but the canonical <see cref="Anchor.Id"/> on each
+    /// <c>AnchorTarget</c> still carries the full Unid.</summary>
+    Sequential = 2,
 }
 
 /// <summary>
@@ -263,8 +292,8 @@ public static class WmlToMarkdownConverter
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(settings);
 
-        var (index, scopes) = BuildAnchorIndex(document, settings);
-        var markdown = EmitMarkdown(document, settings, scopes);
+        var (index, scopes, renderMap) = BuildAnchorIndex(document, settings);
+        var markdown = EmitMarkdown(document, settings, scopes, renderMap);
         return new MarkdownProjection { Markdown = markdown, AnchorIndex = index };
     }
 
@@ -279,6 +308,24 @@ public static class WmlToMarkdownConverter
         required public XElement Root { get; init; }
     }
 
+    /// <summary>
+    /// Per-projection map from full Unid → rendered id. Used by every <c>{#…}</c>
+    /// emission site so the projection's anchor tokens consistently use the
+    /// caller-requested rendering. The <see cref="Render"/> method returns the full
+    /// Unid unchanged when the rendering is <see cref="AnchorIdRendering.FullUnid"/>
+    /// or when an unknown Unid is passed (defensive fallback).
+    /// </summary>
+    internal sealed class AnchorIdMap
+    {
+        private readonly Dictionary<string, string> _map = new(StringComparer.Ordinal);
+
+        public string Render(string fullUnid) => _map.TryGetValue(fullUnid, out var r) ? r : fullUnid;
+
+        internal void Set(string fullUnid, string renderedUnid) => _map[fullUnid] = renderedUnid;
+
+        internal IReadOnlyDictionary<string, string> Map => _map;
+    }
+
     private const int TextPreviewMaxLength = 80;
 
     private static string ComputeTextPreview(XElement element)
@@ -289,7 +336,7 @@ public static class WmlToMarkdownConverter
             : text;
     }
 
-    private static (IReadOnlyDictionary<string, AnchorTarget> Index, List<ScopeInfo> Scopes)
+    private static (IReadOnlyDictionary<string, AnchorTarget> Index, List<ScopeInfo> Scopes, AnchorIdMap RenderMap)
         BuildAnchorIndex(WordprocessingDocument doc, WmlToMarkdownConverterSettings settings)
     {
         var main = doc.MainDocumentPart
@@ -373,7 +420,54 @@ public static class WmlToMarkdownConverter
             scope.Part.PutXDocument();
         }
 
-        return (index, scopes);
+        // Build the AnchorIdMap based on the requested rendering mode.
+        var renderMap = new AnchorIdMap();
+        if (settings.AnchorIdRendering == AnchorIdRendering.Abbreviated)
+        {
+            // Group anchors by (kind, scope). Within each group, find the shortest
+            // prefix length n >= 4 such that every member's Unid[..n] is unique.
+            foreach (var bucket in index.Values.GroupBy(t => (t.Anchor.Kind, t.Anchor.Scope)))
+            {
+                var members = bucket.ToList();
+                if (members.Count == 0) continue;
+                int n = 4;
+                while (true)
+                {
+                    var prefixes = new HashSet<string>(StringComparer.Ordinal);
+                    bool unique = true;
+                    foreach (var t in members)
+                    {
+                        var prefix = t.Unid.Length >= n ? t.Unid.Substring(0, n) : t.Unid;
+                        if (!prefixes.Add(prefix)) { unique = false; break; }
+                    }
+                    if (unique) break;
+                    n++;
+                    if (n >= 32) break;   // fall back to full Unid
+                }
+                foreach (var t in members)
+                {
+                    var prefix = t.Unid.Length >= n ? t.Unid.Substring(0, n) : t.Unid;
+                    renderMap.Set(t.Unid, prefix);
+                }
+            }
+        }
+
+        // Dual-key the index: add alias entries with the rendered id substituted.
+        if (settings.AnchorIdRendering != AnchorIdRendering.FullUnid)
+        {
+            var aliases = new Dictionary<string, AnchorTarget>(StringComparer.Ordinal);
+            foreach (var (key, target) in index)
+            {
+                var rendered = renderMap.Render(target.Unid);
+                if (rendered == target.Unid) continue;
+                var aliasKey = $"{target.Anchor.Kind}:{target.Anchor.Scope}:{rendered}";
+                aliases[aliasKey] = target;
+            }
+            foreach (var (key, target) in aliases)
+                index[key] = target;
+        }
+
+        return (index, scopes, renderMap);
     }
 
     /// <summary>
@@ -417,6 +511,7 @@ public static class WmlToMarkdownConverter
         public StringBuilder Sb { get; } = new();
         required public WmlToMarkdownConverterSettings Settings { get; init; }
         required public WordprocessingDocument Document { get; init; }
+        required public AnchorIdMap AnchorIdMap { get; init; }
         public string Scope { get; set; } = "body";
         public ListItemRetrieverSettings ListItemRetrieverSettings { get; } = new();
         public bool InsideListBlock { get; set; }
@@ -425,9 +520,10 @@ public static class WmlToMarkdownConverter
     private static string EmitMarkdown(
         WordprocessingDocument document,
         WmlToMarkdownConverterSettings settings,
-        List<ScopeInfo> scopes)
+        List<ScopeInfo> scopes,
+        AnchorIdMap renderMap)
     {
-        var ctx = new EmitContext { Settings = settings, Document = document };
+        var ctx = new EmitContext { Settings = settings, Document = document, AnchorIdMap = renderMap };
 
         // Each scope's emitter appends to ctx.Sb. After each scope, we record whether anything
         // was actually written; a divider is emitted between two non-empty scopes so
@@ -549,7 +645,7 @@ public static class WmlToMarkdownConverter
         foreach (var note in notes)
         {
             var unid = (string?)note.Attribute(PtOpenXml.Unid) ?? "0";
-            var label = $"{kindPrefix}-{ShortUnid(unid)}";
+            var label = $"{kindPrefix}-{NoteLabelSuffix(unid, ctx)}";
             ctx.Sb.Append("[^").Append(label).Append("]: ");
             // Notes contain paragraphs; flatten their text inline for the definition.
             var first = true;
@@ -584,7 +680,8 @@ public static class WmlToMarkdownConverter
             var unid = (string?)c.Attribute(PtOpenXml.Unid) ?? "0";
             var author = (string?)c.Attribute(W.author) ?? "unknown";
             var date = (string?)c.Attribute(W.date);
-            ctx.Sb.Append($"- {{#cmt:cmt:{unid}}} **{author}**");
+            var renderedUnid = ctx.AnchorIdMap.Render(unid);
+            ctx.Sb.Append($"- {{#cmt:cmt:{renderedUnid}}} **{author}**");
             if (!string.IsNullOrEmpty(date)) ctx.Sb.Append(" (").Append(date).Append(')');
             ctx.Sb.Append(": ");
             foreach (var p in c.Elements(W.p))
@@ -599,6 +696,17 @@ public static class WmlToMarkdownConverter
 
     private static string ShortUnid(string unid) =>
         unid.Length >= 8 ? unid.Substring(0, 8) : unid;
+
+    /// <summary>
+    /// Compute the suffix used in <c>[^fn-…]</c> / <c>[^en-…]</c> footnote/endnote labels.
+    /// In FullUnid mode we keep the legacy 8-char truncation (the full Unid is too long to
+    /// embed in a label); in Abbreviated/Sequential modes we route through the AnchorIdMap
+    /// so the rendered form is consistent with the corresponding <c>{#fn:…}</c> anchor token.
+    /// </summary>
+    private static string NoteLabelSuffix(string unid, EmitContext ctx) =>
+        ctx.Settings.AnchorIdRendering == AnchorIdRendering.FullUnid
+            ? ShortUnid(unid)
+            : ctx.AnchorIdMap.Render(unid);
 
     private static void EmitBlocks(IEnumerable<XElement> blocks, EmitContext ctx)
     {
@@ -726,7 +834,8 @@ public static class WmlToMarkdownConverter
         if (unid == null) return;
         if (ctx.Settings.AnchorMode != AnchorRenderMode.None)
         {
-            ctx.Sb.Append("{#sec:").Append(ctx.Scope).Append(':').Append(unid).AppendLine("}");
+            var rendered = ctx.AnchorIdMap.Render(unid);
+            ctx.Sb.Append("{#sec:").Append(ctx.Scope).Append(':').Append(rendered).AppendLine("}");
         }
         ctx.Sb.AppendLine("---");
         ctx.Sb.AppendLine();
@@ -738,7 +847,8 @@ public static class WmlToMarkdownConverter
         if (ctx.Settings.AnchorMode == AnchorRenderMode.None) return string.Empty;
         var kind = KindFor(el) ?? "unk";
         var unid = (string?)el.Attribute(PtOpenXml.Unid) ?? "0";
-        return $"{{#{kind}:{ctx.Scope}:{unid}}} ";
+        var rendered = ctx.AnchorIdMap.Render(unid);
+        return $"{{#{kind}:{ctx.Scope}:{rendered}}} ";
     }
 
     internal static int HeadingLevel(XElement p)
@@ -994,7 +1104,7 @@ public static class WmlToMarkdownConverter
             .FirstOrDefault(n => (string?)n.Attribute(W.id) == id);
         var unid = (string?)note?.Attribute(PtOpenXml.Unid);
         if (unid == null) return;
-        ctx.Sb.Append("[^").Append(prefix).Append('-').Append(ShortUnid(unid)).Append(']');
+        ctx.Sb.Append("[^").Append(prefix).Append('-').Append(NoteLabelSuffix(unid, ctx)).Append(']');
     }
 
     private static readonly System.Text.RegularExpressions.Regex MarkdownMetaPattern =

@@ -1003,6 +1003,82 @@ public class WmlToMarkdownConverterTests
     }
 
     [Fact]
+    public void MD080_AnchorIdRendering_FullUnid_IsExistingBehavior()
+    {
+        // Default rendering — anchor tokens carry the full 32-char hex Unid.
+        var bytes = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        var wml = new WmlDocument("test.docx", bytes);
+        var settings = new WmlToMarkdownConverterSettings();   // AnchorIdRendering defaults to FullUnid
+        var projection = WmlToMarkdownConverter.Convert(wml, settings);
+
+        // Every {#…} token uses the full 32-char hex form (matched by regex {#kind:scope:UNID}).
+        var match = System.Text.RegularExpressions.Regex.Match(
+            projection.Markdown, @"\{#[^:]+:[^:]+:([a-f0-9]+)\}");
+        Assert.True(match.Success, "expected at least one anchor token in the projection");
+        Assert.Equal(32, match.Groups[1].Length);
+    }
+
+    [Fact]
+    public void MD081_AnchorIdRendering_Abbreviated_UsesShortestUniquePrefixPerScope()
+    {
+        // Abbreviated mode picks the shortest prefix per (kind, scope) bucket
+        // that uniquely identifies each anchor, with a 4-char floor.
+        var bytes = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        var wml = new WmlDocument("test.docx", bytes);
+        var settings = new WmlToMarkdownConverterSettings
+        {
+            AnchorIdRendering = AnchorIdRendering.Abbreviated,
+        };
+        var projection = WmlToMarkdownConverter.Convert(wml, settings);
+
+        // All emitted tokens are < 32 chars in their unid portion, and >= 4.
+        foreach (System.Text.RegularExpressions.Match m in
+                 System.Text.RegularExpressions.Regex.Matches(projection.Markdown, @"\{#[^:]+:[^:]+:([a-f0-9]+)\}"))
+        {
+            var unid = m.Groups[1].Value;
+            Assert.True(unid.Length >= 4, $"abbreviation '{unid}' shorter than 4-char floor");
+            Assert.True(unid.Length < 32, $"abbreviation '{unid}' wasn't actually abbreviated");
+        }
+    }
+
+    [Fact]
+    public void MD082_AnchorIdRendering_Abbreviated_AnchorIndexHasDualKeys()
+    {
+        // The AnchorIndex must contain entries keyed by BOTH the full Unid and
+        // the abbreviated id, both pointing at the same AnchorTarget. Callers
+        // can use whichever form they have in hand.
+        var bytes = DocxSessionTests.BuildDS001_SimpleTwoParagraphs();
+        var wml = new WmlDocument("test.docx", bytes);
+        var settings = new WmlToMarkdownConverterSettings
+        {
+            AnchorIdRendering = AnchorIdRendering.Abbreviated,
+        };
+        var projection = WmlToMarkdownConverter.Convert(wml, settings);
+
+        // Find any anchor — extract its full Unid from the underlying AnchorTarget,
+        // and the abbreviated form from a token in the markdown.
+        var firstTarget = projection.AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h");
+        var fullKey = firstTarget.Anchor.Id;
+        Assert.True(projection.AnchorIndex.ContainsKey(fullKey),
+            $"full key '{fullKey}' missing from index");
+
+        // The matching abbreviated key is somewhere in the markdown — extract any one.
+        var abbreviatedToken = System.Text.RegularExpressions.Regex.Match(
+            projection.Markdown, @"\{#([^:]+:[^:]+:[a-f0-9]+)\}");
+        Assert.True(abbreviatedToken.Success);
+        var abbreviatedKey = abbreviatedToken.Groups[1].Value;
+        Assert.NotEqual(fullKey, abbreviatedKey);  // it's actually abbreviated, not the full Unid
+        Assert.True(projection.AnchorIndex.ContainsKey(abbreviatedKey),
+            $"abbreviated key '{abbreviatedKey}' missing from index");
+
+        // Both keys resolve to AnchorTarget whose underlying Unid matches.
+        var fromFull = projection.AnchorIndex[fullKey];
+        var fromAbbreviated = projection.AnchorIndex[abbreviatedKey];
+        Assert.Equal(fromFull.Unid, fromAbbreviated.Unid);
+    }
+
+    [Fact]
     public void MD006_BoilerplateFootnotesNotInAnchorIndex()
     {
         // Every DOCX with a FootnotesPart includes two Word-reserved boilerplate
