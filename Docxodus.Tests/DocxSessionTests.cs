@@ -2772,4 +2772,74 @@ public class DocxSessionTests
         Assert.Equal(1, summary.FootnoteCount);
         Assert.Equal(1, summary.InlineFootnoteRefCount);
     }
+
+    // ─── GetDiff (issue #166 — DS284-DS289) ───────────────────────────────
+
+    [Fact]
+    public void DS284_GetDiff_OnUneditedDoc_IsEmptyArray()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var diffJson = session.GetDiff();
+        // JSON empty array (no mutations have happened).
+        Assert.Equal("[]", diffJson);
+    }
+
+    [Fact]
+    public void DS285_GetDiff_AfterDelete_ShowsDeleteOp()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        var r = session.DeleteBlock(firstP.Anchor.Id);
+        Assert.True(r.Success);
+
+        var diffJson = session.GetDiff();
+        // Expect at least one entry with op=delete pointing at firstP's anchor id.
+        Assert.Contains("\"delete\"", diffJson);
+        Assert.Contains(firstP.Anchor.Id, diffJson);
+    }
+
+    [Fact]
+    public void DS286_GetDiff_AfterReplaceText_ShowsModifyOp()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        session.ReplaceText(firstP.Anchor.Id, "NEW TEXT");
+
+        var diffJson = session.GetDiff();
+        Assert.Contains("\"modify\"", diffJson);
+        Assert.Contains("NEW TEXT", diffJson);
+    }
+
+    [Fact]
+    public void DS287_GetDiff_AfterInsertParagraph_ShowsInsertOp()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        var r = session.InsertParagraph(firstP.Anchor.Id, Position.After, "Inserted text");
+        Assert.True(r.Success);
+
+        var diffJson = session.GetDiff();
+        Assert.Contains("\"insert\"", diffJson);
+        Assert.Contains("Inserted text", diffJson);
+    }
+
+    [Fact]
+    public void DS288_GetDiff_WithoutInitialCapture_Throws()
+    {
+        var settings = new DocxSessionSettings { CaptureInitialProjection = false };
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders(), settings);
+        var ex = Assert.Throws<InvalidOperationException>(() => session.GetDiff());
+        Assert.Contains("CaptureInitialProjection", ex.Message);
+    }
+
+    [Fact]
+    public void DS289_GetDiff_UnifiedFormat_IsDeferredToV2()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        Assert.Throws<NotSupportedException>(() => session.GetDiff(DiffFormat.Unified));
+        Assert.Throws<NotSupportedException>(() => session.GetDiff(DiffFormat.SideBySide));
+    }
 }

@@ -390,6 +390,44 @@ public sealed record EditSummary
     public int CommentCount { get; init; }
 }
 
+/// <summary>
+/// Output format for <see cref="DocxSession.GetDiff(DiffFormat)"/>.
+/// </summary>
+public enum DiffFormat
+{
+    /// <summary>JSON array of <see cref="DiffEntry"/> records. The agentic-friendly
+    /// shape — anchor-keyed, ordered by document position. Default.</summary>
+    Json = 0,
+
+    /// <summary>Standard unified diff (git-style). Deferred to v2 — currently
+    /// throws <see cref="NotSupportedException"/>.</summary>
+    Unified = 1,
+
+    /// <summary>Two-column human-review diff. Deferred to v2 — currently
+    /// throws <see cref="NotSupportedException"/>.</summary>
+    SideBySide = 2,
+}
+
+/// <summary>
+/// A single anchor-keyed change in the diff between an initial and current projection.
+/// </summary>
+public sealed record DiffEntry
+{
+    /// <summary>Op kind: <c>"delete"</c> (anchor existed initially, gone now),
+    /// <c>"insert"</c> (anchor exists now but not initially), or
+    /// <c>"modify"</c> (anchor exists in both but with different content).</summary>
+    required public string Op { get; init; }
+
+    /// <summary>The anchor's id (current id for insert/modify; initial id for delete).</summary>
+    required public string AnchorId { get; init; }
+
+    /// <summary>Pre-change text content for delete/modify. <c>null</c> for insert.</summary>
+    public string? Before { get; init; }
+
+    /// <summary>Post-change text content for insert/modify. <c>null</c> for delete.</summary>
+    public string? After { get; init; }
+}
+
 public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown);
 
 public sealed record EditError(EditErrorCode Code, string Message, string? AnchorId = null);
@@ -468,6 +506,14 @@ public sealed class DocxSessionSettings
     /// through unchanged) — see issue #140.
     /// </summary>
     public bool SmartQuotes { get; init; } = false;
+
+    /// <summary>
+    /// When <c>true</c> (default), the session projects the document at construction
+    /// time and stashes the result so <see cref="DocxSession.GetDiff"/> can compare
+    /// initial vs. current. Costs ~200ms at construction for a 100-page doc; turn
+    /// off to skip the upfront cost when you don't plan to call <c>GetDiff</c>.
+    /// </summary>
+    public bool CaptureInitialProjection { get; init; } = true;
 }
 
 // ─── Session ───────────────────────────────────────────────────────────────
@@ -479,6 +525,7 @@ public sealed class DocxSession : IDisposable
     private MemoryStream? _stream;
     private WordprocessingDocument? _doc;
     private MarkdownProjection? _cachedProjection;
+    private MarkdownProjection? _initialProjection;
     private bool _disposed;
     private int _revisionCounter = 1000;
     private RawDocxOps? _raw;
@@ -492,6 +539,9 @@ public sealed class DocxSession : IDisposable
         _stream.Write(docxBytes, 0, docxBytes.Length);
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+
+        if (_settings.CaptureInitialProjection)
+            _initialProjection = WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
     }
 
     public Exception? LastInternalError { get; private set; }
@@ -1407,6 +1457,108 @@ public sealed class DocxSession : IDisposable
     public IReadOnlyList<TemplatePlaceholder> RemainingPlaceholders(
         PlaceholderKinds kinds = PlaceholderKinds.All) =>
         FindPlaceholders(kinds);
+
+    /// <summary>
+    /// Diffs the projection captured at session construction against the current projection
+    /// and returns an anchor-keyed change list. Keyed by <see cref="AnchorTarget.Unid"/>
+    /// (stable across mutations) rather than the anchor id (which can flip kind prefix
+    /// when a paragraph is promoted to a heading, etc.). Requires
+    /// <see cref="DocxSessionSettings.CaptureInitialProjection"/> to have been <c>true</c>
+    /// at construction time.
+    /// </summary>
+    /// <param name="format">Output shape. Only <see cref="DiffFormat.Json"/> is supported
+    /// in v1; <see cref="DiffFormat.Unified"/> and <see cref="DiffFormat.SideBySide"/>
+    /// are reserved enum values that throw <see cref="NotSupportedException"/>.</param>
+    /// <returns>JSON array of <see cref="DiffEntry"/> records. Returns <c>"[]"</c> when
+    /// the document has not been mutated since construction.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when
+    /// <see cref="DocxSessionSettings.CaptureInitialProjection"/> was <c>false</c>.</exception>
+    /// <exception cref="NotSupportedException">Thrown for <paramref name="format"/> values
+    /// other than <see cref="DiffFormat.Json"/>.</exception>
+    public string GetDiff(DiffFormat format = DiffFormat.Json)
+    {
+        ThrowIfDisposed();
+        if (_initialProjection is null)
+            throw new InvalidOperationException(
+                "GetDiff requires CaptureInitialProjection = true in DocxSessionSettings.");
+
+        if (format != DiffFormat.Json)
+            throw new NotSupportedException(
+                $"DiffFormat.{format} is deferred to v2 (see issue tracker). Only DiffFormat.Json is supported in v1.");
+
+        var current = Project();
+        var entries = ComputeDiff(_initialProjection, current);
+        return SerializeDiff(entries);
+    }
+
+    private static List<DiffEntry> ComputeDiff(MarkdownProjection initial, MarkdownProjection current)
+    {
+        var initialByUnid = initial.AnchorIndex.Values.ToDictionary(t => t.Unid, t => t);
+        var currentByUnid = current.AnchorIndex.Values.ToDictionary(t => t.Unid, t => t);
+
+        var entries = new List<DiffEntry>();
+
+        // Deletes: in initial, missing from current.
+        foreach (var (unid, target) in initialByUnid)
+        {
+            if (currentByUnid.ContainsKey(unid)) continue;
+            entries.Add(new DiffEntry
+            {
+                Op = "delete",
+                AnchorId = target.Anchor.Id,
+                Before = target.TextPreview,
+            });
+        }
+
+        // Modifies: present in both, text preview differs.
+        foreach (var (unid, initialTarget) in initialByUnid)
+        {
+            if (!currentByUnid.TryGetValue(unid, out var currentTarget)) continue;
+            if (initialTarget.TextPreview == currentTarget.TextPreview) continue;
+            entries.Add(new DiffEntry
+            {
+                Op = "modify",
+                AnchorId = currentTarget.Anchor.Id,
+                Before = initialTarget.TextPreview,
+                After = currentTarget.TextPreview,
+            });
+        }
+
+        // Inserts: in current, missing from initial.
+        foreach (var (unid, target) in currentByUnid)
+        {
+            if (initialByUnid.ContainsKey(unid)) continue;
+            entries.Add(new DiffEntry
+            {
+                Op = "insert",
+                AnchorId = target.Anchor.Id,
+                After = target.TextPreview,
+            });
+        }
+
+        return entries;
+    }
+
+    private static string SerializeDiff(List<DiffEntry> entries)
+    {
+        if (entries.Count == 0) return "[]";
+        var sb = new System.Text.StringBuilder(entries.Count * 100 + 2);
+        sb.Append('[');
+        for (int i = 0; i < entries.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var e = entries[i];
+            sb.Append("{\"op\":\"").Append(e.Op).Append("\"")
+              .Append(",\"anchorId\":").Append(System.Text.Json.JsonSerializer.Serialize(e.AnchorId));
+            if (e.Before is not null)
+                sb.Append(",\"before\":").Append(System.Text.Json.JsonSerializer.Serialize(e.Before));
+            if (e.After is not null)
+                sb.Append(",\"after\":").Append(System.Text.Json.JsonSerializer.Serialize(e.After));
+            sb.Append('}');
+        }
+        sb.Append(']');
+        return sb.ToString();
+    }
 
     /// <summary>
     /// Picker-driven template fill. For every placeholder matching
