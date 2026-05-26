@@ -683,6 +683,63 @@ public class DocxSessionTests
         Assert.Equal(1, result.Passes);
     }
 
+    [Fact]
+    public void DS247_FillPlaceholders_StillPresentZeroWhenMultiPassFinishesSkippedPlaceholders()
+    {
+        // Issue #189: Skipped is a misleading "is the template done?" signal
+        // because the picker can return null for a nested-outer wrapper in
+        // pass 1, then succeed in pass 2 once the inner brackets are stripped.
+        // The fixture's "[outer [inner] clause]" is the canonical case:
+        //   pass 1: picker sees "[inner]" only (innermost-first) → strips it
+        //   pass 2: picker now sees "[outer  clause]" → strips it too
+        // BUT the picker below also evaluates a non-bracket placeholder it
+        // can't recognize in pass 1, forcing a skip. Multi-pass should still
+        // finish all the bracketed work, so StillPresent must be 0 even
+        // though Skipped > 0.
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var options = new FillOptions { Kinds = PlaceholderKinds.AlternativeClause };
+        bool firstNestedSeen = false;
+        var result = session.FillPlaceholders(p =>
+        {
+            var t = p.Match.Text;
+            // Force a first-pass skip the first time we see the innermost
+            // "[inner]" — but every other call (including the second visit
+            // on the surfaced outer) strips brackets normally.
+            if (t == "[inner]" && !firstNestedSeen)
+            {
+                firstNestedSeen = true;
+                return null;
+            }
+            int lb = t.IndexOf('['), rb = t.LastIndexOf(']');
+            if (lb < 0 || rb <= lb) return null;
+            return t[..lb] + t[(lb + 1)..rb] + t[(rb + 1)..];
+        }, options);
+
+        // The first-pass skip of "[inner]" produced Skipped > 0…
+        Assert.True(result.Skipped > 0,
+            "Expected the contrived first-pass null to count as a skip.");
+        // …but multi-pass convergence still emptied every AlternativeClause,
+        // so StillPresent must report the trustworthy "template is done" 0.
+        Assert.Equal(0, result.StillPresent);
+        Assert.Empty(session.FindPlaceholders(PlaceholderKinds.AlternativeClause));
+    }
+
+    [Fact]
+    public void DS248_FillPlaceholders_StillPresentCountsGenuinelyUnfilled()
+    {
+        // When the picker truly returns null for everything, every visited
+        // placeholder remains in the doc. StillPresent must equal the count
+        // of placeholders in the requested kinds/scope after the loop exits.
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var options = new FillOptions { Kinds = PlaceholderKinds.BlankFill };
+        var result = session.FillPlaceholders(_ => null, options);
+
+        Assert.Equal(0, result.Filled);
+        var leftover = session.FindPlaceholders(PlaceholderKinds.BlankFill);
+        Assert.Equal(leftover.Count, result.StillPresent);
+        Assert.True(result.StillPresent > 0);
+    }
+
     // ─── Issue #164: boundary-aware Grep context windows ─────────────────
 
     [Fact]

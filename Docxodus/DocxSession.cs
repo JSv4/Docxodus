@@ -302,8 +302,28 @@ public sealed record BulkEditResult
     public int Filled { get; init; }
 
     /// <summary>Number of placeholders for which the picker returned <c>null</c>
-    /// (counted once per placeholder, in the first pass that saw it).</summary>
+    /// (counted once per placeholder, in the first pass that saw it). This is
+    /// <em>not</em> a trustworthy "did the fill leave anything undone?" signal —
+    /// a placeholder the picker said <c>null</c> to in pass 1 may be fully
+    /// resolved by pass 2 (e.g. a nested-outer wrapper becomes fillable once
+    /// its inner is stripped, or a structural delete removes the placeholder
+    /// entirely). Use <see cref="StillPresent"/> for the "is the template
+    /// done?" check, and consult <see cref="Unfilled"/> for the per-placeholder
+    /// detail.</summary>
     public int Skipped { get; init; }
+
+    /// <summary>Number of placeholders matching <see cref="FillOptions.Kinds"/>
+    /// in <see cref="FillOptions.Scope"/> that remain in the document after the
+    /// final pass. This is the metric to assert on when you want to know
+    /// whether the template is fully filled — <c>0</c> means every placeholder
+    /// the loop visited is now gone (filled, stripped, or removed by a
+    /// structural edit). Unlike <see cref="Skipped"/>, this is taken from the
+    /// post-loop document state, so multi-pass convergence is reflected
+    /// correctly: <c>Skipped &gt; 0</c> together with <c>StillPresent = 0</c> means
+    /// "picker said no the first time but later passes finished the job."
+    /// Computed via a single <see cref="DocxSession.FindPlaceholders"/> call
+    /// scoped to the same kinds/scope the loop was operating on.</summary>
+    public int StillPresent { get; init; }
 
     /// <summary>The highest iteration pass that actually filled at least one
     /// placeholder matching <see cref="FillOptions.Kinds"/>. <c>1</c> means a
@@ -1917,10 +1937,13 @@ public sealed class DocxSession : IDisposable
             if (passChanges == 0) break;
         }
 
+        int stillPresent = FindPlaceholders(opts.Kinds, opts.Scope).Count;
+
         return new BulkEditResult
         {
             Filled = filled,
             Skipped = unfilled.Count,
+            StillPresent = stillPresent,
             Passes = workPasses,
             Unfilled = unfilled,
             Errors = errors,

@@ -1080,10 +1080,20 @@ export interface FillOptions {
 
 /**
  * Aggregate result returned by {@link DocxSession.fillPlaceholders}.
+ *
+ * `skipped` counts placeholders the picker returned null for in the first pass
+ * that saw them — it stays > 0 even if later passes finished those same
+ * placeholders. Use `stillPresent` (post-loop document state) for the
+ * trustworthy "is the template done?" check; `skipped > 0 && stillPresent === 0`
+ * means "picker said no the first time but later passes resolved it."
  */
 export interface BulkEditResult {
   filled: number;
   skipped: number;
+  /** Number of placeholders matching `options.kinds` in `options.scope` that
+   *  remain in the document after the final pass. `0` means the template is
+   *  fully filled for the requested kinds/scope. */
+  stillPresent: number;
   passes: number;
   unfilled: TemplatePlaceholder[];
   errors: EditError[];

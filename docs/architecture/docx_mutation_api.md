@@ -297,7 +297,7 @@ var summary = session.FillPlaceholders(p => p.Kind switch
     PlaceholderKind.BlankFill when p.Match.ContextBefore.TrimEnd().EndsWith("name is") => "ACME, INC.",
     _ => null
 });
-// summary.Filled / .Skipped / .Passes / .Unfilled / .Errors
+// summary.Filled / .Skipped / .StillPresent / .Passes / .Unfilled / .Errors
 ```
 
 What `FillPlaceholders` does internally that the recipe doesn't:
@@ -309,6 +309,8 @@ What `FillPlaceholders` does internally that the recipe doesn't:
 The picker is invoked for every kind in `FillOptions.Kinds`, which defaults to `PlaceholderKinds.All` — so a picker that wants to ignore alternative-clause brackets should return `null` for them rather than relying on the option to filter them out. Set `Kinds = BlankFill | Instruction` if you want the prior behavior of leaving alternative clauses untouched.
 
 The picker is invoked once per placeholder per pass; return `null` to skip. `BulkEditResult.Unfilled` lists every placeholder the picker said `null` to (deduplicated across passes). `BulkEditResult.Passes` is the highest iteration pass that actually filled at least one placeholder (so a single-fill convergence reports `Passes = 1`, not 2).
+
+`BulkEditResult.Skipped` is the *first-pass-null* count and is **not** a reliable "is the template done?" signal — a placeholder the picker said `null` to in pass 1 may be fully resolved by pass 2 (a nested-outer wrapper becomes fillable once its inner is stripped, or a structural delete removes the placeholder entirely). Assert on `BulkEditResult.StillPresent == 0` for the trustworthy single-call check: it's a post-loop `FindPlaceholders(opts.Kinds, opts.Scope).Count`, so `Skipped > 0 && StillPresent == 0` correctly reads as "picker skipped on the first pass but later passes finished the job."
 
 ### `ReplaceInner` — strip brackets while preserving prefix/suffix
 
