@@ -341,6 +341,15 @@ public sealed record AnchorInfo(string Id, string Kind, string Scope, string Tex
 
 public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown);
 
+/// <summary>Summary returned by <see cref="DocxSession.CompactRuns"/>.</summary>
+public sealed record CompactResult
+{
+    /// <summary>Number of <c>w:r</c> elements whose only content was a <c>w:rPr</c>
+    /// (or which had no children at all) and were therefore removed. <c>0</c>
+    /// means the document was already compact across the selected scopes.</summary>
+    public int RunsRemoved { get; init; }
+}
+
 public sealed record EditError(EditErrorCode Code, string Message, string? AnchorId = null);
 
 public enum EditErrorCode
@@ -2650,6 +2659,79 @@ public sealed class DocxSession : IDisposable
             Modified = new[] { updated },
             Patch = ProjectScope(target),
         };
+    }
+
+    // ─── Maintenance / cleanup ───────────────────────────────────────────
+
+    /// <summary>
+    /// Remove every <c>w:r</c> in the selected scopes whose only content is a
+    /// <c>w:rPr</c> (no text, no tabs, no breaks, no field/footnote/comment
+    /// references). Generally useful after any workflow that deletes inline
+    /// content — accepting tracked changes, removing footnotes/comments, run-text
+    /// refactors — and leaves behind formatting-only runs that the document
+    /// model carries but that have no visible effect on rendering.
+    /// </summary>
+    /// <param name="scopes">Which package parts to compact. Defaults to
+    /// <see cref="ProjectionScopes.All"/>.</param>
+    /// <returns>How many runs were removed. <c>0</c> means the document was
+    /// already compact within the selected scopes.</returns>
+    /// <remarks>
+    /// One pre-op snapshot is recorded; <see cref="Undo"/> rolls every removal
+    /// back together. Block-level anchors (paragraphs / headings / list items /
+    /// tables / table cells) are unaffected — runs aren't part of the
+    /// <see cref="MarkdownProjection.AnchorIndex"/>.
+    /// </remarks>
+    public CompactResult CompactRuns(ProjectionScopes scopes = ProjectionScopes.All)
+    {
+        ThrowIfDisposed();
+        _history.RecordPreOp(TakeSnapshot());
+
+        int removed = 0;
+        foreach (var part in EnumerateProjectedPartsForScopes(scopes))
+        {
+            var root = part.GetXDocument().Root;
+            if (root is null) continue;
+            // Materialize before mutating — Remove() during enumeration is unsafe.
+            foreach (var r in root.Descendants(W.r).ToList())
+            {
+                if (IsEmptyRun(r))
+                {
+                    r.Remove();
+                    removed++;
+                }
+            }
+            part.PutXDocument();
+        }
+        if (removed > 0) InvalidateProjectionCache();
+        return new CompactResult { RunsRemoved = removed };
+    }
+
+    private static bool IsEmptyRun(XElement r)
+    {
+        foreach (var child in r.Elements())
+        {
+            if (child.Name == W.rPr) continue;
+            // any other child (w:t, w:tab, w:br, w:footnoteReference, …) is meaningful
+            return false;
+        }
+        return true;
+    }
+
+    private IEnumerable<OpenXmlPart> EnumerateProjectedPartsForScopes(ProjectionScopes scopes)
+    {
+        var main = _doc!.MainDocumentPart;
+        if (main is null) yield break;
+        if (scopes.HasFlag(ProjectionScopes.Body)) yield return main;
+        if (scopes.HasFlag(ProjectionScopes.Headers))
+            foreach (var h in main.HeaderParts) yield return h;
+        if (scopes.HasFlag(ProjectionScopes.Footers))
+            foreach (var f in main.FooterParts) yield return f;
+        if (scopes.HasFlag(ProjectionScopes.Footnotes) && main.FootnotesPart is not null)
+            yield return main.FootnotesPart;
+        if (scopes.HasFlag(ProjectionScopes.Endnotes) && main.EndnotesPart is not null)
+            yield return main.EndnotesPart;
+        if (scopes.HasFlag(ProjectionScopes.Comments) && main.WordprocessingCommentsPart is not null)
+            yield return main.WordprocessingCommentsPart;
     }
 
     // ─── Undo / Redo ─────────────────────────────────────────────────────

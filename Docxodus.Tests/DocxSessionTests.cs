@@ -2702,4 +2702,78 @@ public class DocxSessionTests
         Assert.Contains("Section Two", afterMd);
         Assert.Contains("para 2.1", afterMd);
     }
+
+    // ─── CompactRuns ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Build a doc whose first paragraph has one empty bold run plus one real
+    /// text run. The empty run is the kind of residue you get after deleting a
+    /// footnote/endnote/comment reference that was the only child of a styled
+    /// run, or after a refactoring pass that pulled the text out of a run but
+    /// left the run shell in place.
+    /// </summary>
+    internal static byte[] BuildDocWithEmptyBoldRun()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body());
+            var body = main.Document.Body!;
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            body.Append(new Paragraph(
+                new Run(new RunProperties(new Bold())),                    // empty bold run
+                new Run(new RunProperties(new Bold()), new Text("hi"))));  // real bold run
+        }
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public void DS290_CompactRuns_RemovesEmptyBoldRun()
+    {
+        using var session = new DocxSession(BuildDocWithEmptyBoldRun());
+        var r = session.CompactRuns();
+        Assert.Equal(1, r.RunsRemoved);
+
+        // After compaction, projection still contains "hi" — the real run survived.
+        var md = session.Project().Markdown;
+        Assert.Contains("hi", md);
+    }
+
+    [Fact]
+    public void DS291_CompactRuns_Undoable()
+    {
+        using var session = new DocxSession(BuildDocWithEmptyBoldRun());
+        var r = session.CompactRuns();
+        Assert.Equal(1, r.RunsRemoved);
+
+        Assert.True(session.Undo());
+
+        // Second CompactRuns should find the empty run again.
+        var r2 = session.CompactRuns();
+        Assert.Equal(1, r2.RunsRemoved);
+    }
+
+    [Fact]
+    public void DS292_CompactRuns_HonorsScope()
+    {
+        // Doc with one empty bold run in body. CompactRuns(Headers) shouldn't touch it.
+        using var session = new DocxSession(BuildDocWithEmptyBoldRun());
+        var r = session.CompactRuns(ProjectionScopes.Headers);
+        Assert.Equal(0, r.RunsRemoved);
+
+        // But CompactRuns(Body) does.
+        var r2 = session.CompactRuns(ProjectionScopes.Body);
+        Assert.Equal(1, r2.RunsRemoved);
+    }
+
+    [Fact]
+    public void DS293_CompactRuns_ReturnsZeroWhenAlreadyCompact()
+    {
+        using var session = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var r = session.CompactRuns();
+        Assert.Equal(0, r.RunsRemoved);
+    }
 }

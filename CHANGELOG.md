@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`DocxSession.CompactRuns(scopes?)` — remove formatting-only run residue.** Public, transactional, scope-aware primitive that removes every `w:r` whose only content is a `w:rPr` (no text, no tabs, no breaks, no field/footnote/comment references). Useful after any workflow that deletes inline content and leaves behind styled-but-empty runs — accepting tracked changes, removing footnotes/comments, run-text refactors. One pre-op snapshot is taken so a single `Undo()` rolls every removal back together; block-level anchors are unaffected because run-level Unids aren't part of the `AnchorIndex`. Defaults to `ProjectionScopes.All` so a call after a body edit also tidies header/footer/footnote/endnote/comment parts; callers that only want body cleanup can pass `ProjectionScopes.Body`. Returns a `CompactResult { RunsRemoved }` so callers can detect "did anything change" without a separate projection round-trip. Tests: `DS290`–`DS293`.
+
 ### Fixed
 - **`tools/python-host/pyhost.csproj` — suppress StyleCop SA1633/SA1636 file-header rules** (issue #173). `dotnet build -c Release tools/python-host/pyhost.csproj` was failing because `Directory.Build.props` sets `TreatWarningsAsErrors=true` for Release and the python-host project inherited the StyleCop ruleset without suppressing the file-header warnings on `Dispatcher.cs` and `Program.cs`. Added `<NoWarn>$(NoWarn);SA1633;SA1636</NoWarn>` to the csproj, matching the existing convention in `wasm/DocxodusWasm/DocxodusWasm.csproj` for tooling/wasm subprojects.
 
