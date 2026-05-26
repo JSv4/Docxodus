@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "docx-scalpel"
-version = "0.1.0a2.dev0"
+version = "0.1.0a2"
 description = "Anchor-addressed DOCX editing for LLM agents — a thin client over Docxodus' DocxSession."
 readme = "README.md"
 requires-python = ">=3.10"
