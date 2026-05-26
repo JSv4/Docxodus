@@ -399,17 +399,26 @@ export class DocxSession {
 
   /**
    * Diff the document's current projection against the projection captured at
-   * session construction time. Returns a structured `DiffEntry[]` (anchor-keyed).
+   * session construction time.
    *
    * Requires `captureInitialProjection: true` in {@link DocxSessionSettings}
    * (the default). Throws if not enabled.
    *
-   * v1 only supports `DiffFormat.Json`. `Unified` and `SideBySide` throw —
-   * file a follow-up issue if you need them.
+   * The return type depends on `format`:
+   * - `DiffFormat.Json` (default) — structured anchor-keyed `DiffEntry[]`.
+   * - `DiffFormat.Unified` — `patch(1)`-compatible unified-diff text;
+   *   empty string when nothing has changed.
+   * - `DiffFormat.SideBySide` — two-column human-review text
+   *   (`diff -y` style).
    */
-  getDiff(format: number = DiffFormat.Json): DiffEntry[] {
+  getDiff(format?: typeof DiffFormat.Json): DiffEntry[];
+  getDiff(format: typeof DiffFormat.Unified | typeof DiffFormat.SideBySide): string;
+  getDiff(format: number = DiffFormat.Json): DiffEntry[] | string {
     const raw = this.wasm.GetDiff(this.handle, format);
-    return JSON.parse(raw) as DiffEntry[];
+    if (format === DiffFormat.Json) {
+      return JSON.parse(raw) as DiffEntry[];
+    }
+    return raw;
   }
 
   // ─── Annotation-based anchor discovery (#132) ────────────────────────

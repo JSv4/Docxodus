@@ -988,8 +988,10 @@ export const PlaceholderKinds = {
  * {@link DocxSession.getDiff}.
  *
  * - `Json` (default) — anchor-keyed structured diff. Returns a `DiffEntry[]`.
- * - `Unified` — git-style unified diff. **Deferred to v2; throws.**
- * - `SideBySide` — two-column human-review diff. **Deferred to v2; throws.**
+ * - `Unified` — `patch(1)`-compatible unified diff over the markdown projection.
+ *   Returns a single string (`""` when nothing changed).
+ * - `SideBySide` — two-column human-review diff (`diff -y` style) over the
+ *   markdown projection. Returns a single string.
  */
 export const DiffFormat = {
   Json: 0,

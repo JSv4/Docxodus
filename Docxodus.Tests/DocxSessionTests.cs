@@ -3325,12 +3325,113 @@ public class DocxSessionTests
         Assert.Contains("CaptureInitialProjection", ex.Message);
     }
 
+    // ─── GetDiff line-based formats (issue #178 — DS289-DS289d) ──────────
+
     [Fact]
-    public void DS289_GetDiff_UnifiedFormat_IsDeferredToV2()
+    public void DS289_GetDiff_UnifiedFormat_AfterReplaceText_ProducesPatchCompatibleDiff()
     {
-        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
-        Assert.Throws<NotSupportedException>(() => session.GetDiff(DiffFormat.Unified));
-        Assert.Throws<NotSupportedException>(() => session.GetDiff(DiffFormat.SideBySide));
+        using var session = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        var r = session.ReplaceText(firstP.Anchor.Id, "REPLACED PARAGRAPH");
+        Assert.True(r.Success);
+
+        var unified = session.GetDiff(DiffFormat.Unified);
+
+        // Standard unified-diff structural markers — what patch(1) parses.
+        Assert.StartsWith("--- initial\n+++ current\n", unified);
+        Assert.Contains("@@ ", unified);
+        // Hunk header shape: @@ -<a>,<b> +<c>,<d> @@
+        Assert.Matches(@"@@ -\d+,\d+ \+\d+,\d+ @@", unified);
+        Assert.Contains("REPLACED PARAGRAPH", unified);
+
+        // Must have at least one '-' (deleted) line and one '+' (added) line in
+        // the body of the hunk (excluding the '---' / '+++' headers).
+        var bodyLines = unified.Split('\n').Skip(2).ToList();
+        Assert.Contains(bodyLines, l => l.StartsWith("-", StringComparison.Ordinal));
+        Assert.Contains(bodyLines, l => l.StartsWith("+", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void DS289a_GetDiff_UnifiedFormat_OnUneditedDoc_IsEmptyString()
+    {
+        using var session = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var unified = session.GetDiff(DiffFormat.Unified);
+        Assert.Equal(string.Empty, unified);
+    }
+
+    [Fact]
+    public void DS289b_GetDiff_UnifiedFormat_AfterInsertParagraph_HasInsertHunk()
+    {
+        using var session = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        var r = session.InsertParagraph(firstP.Anchor.Id, Position.After, "Brand new paragraph");
+        Assert.True(r.Success);
+
+        var unified = session.GetDiff(DiffFormat.Unified);
+
+        Assert.Contains("Brand new paragraph", unified);
+        // Inserted line must appear with a leading '+'.
+        var bodyLines = unified.Split('\n').Skip(2);
+        Assert.Contains(bodyLines, l => l.StartsWith("+", StringComparison.Ordinal)
+            && l.Contains("Brand new paragraph"));
+    }
+
+    [Fact]
+    public void DS289c_GetDiff_SideBySideFormat_AfterReplaceText_ShowsModifyMarker()
+    {
+        using var session = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        var r = session.ReplaceText(firstP.Anchor.Id, "REPLACED PARAGRAPH");
+        Assert.True(r.Success);
+
+        var sideBySide = session.GetDiff(DiffFormat.SideBySide);
+
+        Assert.Contains("REPLACED PARAGRAPH", sideBySide);
+        // Adjacent delete/insert collapses to a '|' modify row.
+        Assert.Contains(" | ", sideBySide);
+
+        // Each row's left column should be padded to a fixed width so the marker
+        // column lines up — verify by checking the marker is at the same offset on
+        // every non-empty row.
+        var rows = sideBySide.Split('\n').Where(l => l.Length > 0).ToList();
+        Assert.NotEmpty(rows);
+        var markerOffsets = rows.Select(r => r.IndexOfAny(new[] { ' ', '|', '<', '>' }, 70)).Distinct().ToList();
+        // All rows should have a marker at column 72 (the column width), surrounded
+        // by spaces — meaning index 72 is a space and index 73 is the marker.
+        Assert.All(rows, row =>
+        {
+            Assert.True(row.Length >= 74, $"row too short: {row}");
+            Assert.Equal(' ', row[72]);
+            Assert.Contains(row[73], " |<>");
+            Assert.Equal(' ', row[74]);
+        });
+    }
+
+    [Fact]
+    public void DS289d_GetDiff_SideBySideFormat_AfterInsertParagraph_HasInsertMarker()
+    {
+        using var session = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        var r = session.InsertParagraph(firstP.Anchor.Id, Position.After, "Inserted block");
+        Assert.True(r.Success);
+
+        var sideBySide = session.GetDiff(DiffFormat.SideBySide);
+
+        Assert.Contains("Inserted block", sideBySide);
+        // Pure insert (no matching delete) renders as '>' on the right.
+        Assert.Contains(" > ", sideBySide);
+    }
+
+    [Fact]
+    public void DS289e_GetDiff_InvalidDiffFormat_Throws()
+    {
+        using var session = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        // Out-of-range enum values still throw, just like an unrecognized switch arm.
+        Assert.Throws<NotSupportedException>(() => session.GetDiff((DiffFormat)99));
     }
 
     /// <summary>

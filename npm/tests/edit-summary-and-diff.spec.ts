@@ -8,6 +8,10 @@ import { test, expect, Page } from '@playwright/test';
 //   - DS285  GetDiff after DeleteBlock shows a "delete" entry
 //   - DS286  GetDiff after ReplaceText shows a "modify" entry
 //
+// Plus follow-up coverage for issue #178 — DiffFormat.Unified / SideBySide:
+//   - DS289  GetDiff(Unified) after ReplaceText returns a patch-style diff
+//   - DS289c GetDiff(SideBySide) after ReplaceText returns a two-column row
+//
 // Harness pattern matches `fill-placeholders.spec.ts` (#163),
 // `context-boundary.spec.ts` (#164), and `delete-range-section.spec.ts` (#165)
 // — inline base64 fixture, raw `Docxodus.DocxSessionBridge`, per-test
@@ -199,5 +203,87 @@ test.describe('edit-summary-and-diff (WASM bridge — Issue #166)', () => {
     expect(result.replaceSuccess).toBe(true);
     expect(result.diffJson).toContain('"modify"');
     expect(result.diffJson).toContain('NEW CONTENT');
+  });
+
+  // Issue #178: line-based DiffFormat coverage. The numeric format flags
+  // (DiffFormat.Unified = 1, DiffFormat.SideBySide = 2) map to the .NET
+  // `DiffFormat` enum values and used to throw NotSupportedException; the
+  // .NET tests for these are DS289_*.
+  test('getDiff(DiffFormat.Unified) after ReplaceText returns patch-style text', async ({ page }) => {
+    const bytes = bytesFromBase64(FIXTURE_BRACKET_B64);
+
+    const result = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const bridge = (window as any).Docxodus.DocxSessionBridge;
+      const handle = bridge.OpenSession(bin, '');
+      try {
+        const proj = JSON.parse(bridge.Project(handle));
+        const bodyPs = (Object.entries(proj.anchorIndex) as [string, any][])
+          .map(([id, t]) => ({ id, ...t, idx: proj.markdown.indexOf('{#' + id + '}') }))
+          .filter(t => t.scope === 'body' && t.kind === 'p' && t.idx >= 0)
+          .sort((a, b) => a.idx - b.idx);
+        if (bodyPs.length === 0) return { error: 'no body paragraphs found' };
+        const firstId = bodyPs[0].id;
+
+        const rep = JSON.parse(bridge.ReplaceText(handle, firstId, 'UNIFIED EDIT'));
+        // DiffFormat.Unified = 1.
+        const unified = bridge.GetDiff(handle, 1);
+        return { replaceSuccess: rep.success, unified };
+      } finally {
+        bridge.CloseSession(handle);
+      }
+    }, bytes);
+
+    expect(result.error).toBeUndefined();
+    expect(result.replaceSuccess).toBe(true);
+    expect(result.unified).toMatch(/^--- initial\n\+\+\+ current\n/);
+    expect(result.unified).toMatch(/@@ -\d+,\d+ \+\d+,\d+ @@/);
+    expect(result.unified).toContain('UNIFIED EDIT');
+    // Hunk body must include both '-' (removed) and '+' (added) lines.
+    const bodyLines = (result.unified as string).split('\n').slice(2);
+    expect(bodyLines.some(l => l.startsWith('-') && !l.startsWith('---'))).toBe(true);
+    expect(bodyLines.some(l => l.startsWith('+') && !l.startsWith('+++'))).toBe(true);
+  });
+
+  test('getDiff(DiffFormat.SideBySide) after ReplaceText returns a two-column row', async ({ page }) => {
+    const bytes = bytesFromBase64(FIXTURE_BRACKET_B64);
+
+    const result = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const bridge = (window as any).Docxodus.DocxSessionBridge;
+      const handle = bridge.OpenSession(bin, '');
+      try {
+        const proj = JSON.parse(bridge.Project(handle));
+        const bodyPs = (Object.entries(proj.anchorIndex) as [string, any][])
+          .map(([id, t]) => ({ id, ...t, idx: proj.markdown.indexOf('{#' + id + '}') }))
+          .filter(t => t.scope === 'body' && t.kind === 'p' && t.idx >= 0)
+          .sort((a, b) => a.idx - b.idx);
+        if (bodyPs.length === 0) return { error: 'no body paragraphs found' };
+        const firstId = bodyPs[0].id;
+
+        const rep = JSON.parse(bridge.ReplaceText(handle, firstId, 'SIDE BY SIDE EDIT'));
+        // DiffFormat.SideBySide = 2.
+        const sideBySide = bridge.GetDiff(handle, 2);
+        return { replaceSuccess: rep.success, sideBySide };
+      } finally {
+        bridge.CloseSession(handle);
+      }
+    }, bytes);
+
+    expect(result.error).toBeUndefined();
+    expect(result.replaceSuccess).toBe(true);
+    expect(result.sideBySide).toContain('SIDE BY SIDE EDIT');
+    // Adjacent delete+insert collapses to a '|' modify row.
+    expect(result.sideBySide).toContain(' | ');
+    // Every non-empty row should have its marker column at index 73 (left col
+    // padded to 72 + ' ' + marker + ' ' + right col), so row[72] == ' '.
+    const rows = (result.sideBySide as string).split('\n').filter(l => l.length > 0);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.length).toBeGreaterThanOrEqual(74);
+      expect(row[72]).toBe(' ');
+      expect(' |<>').toContain(row[73]);
+      expect(row[74]).toBe(' ');
+    }
   });
 });

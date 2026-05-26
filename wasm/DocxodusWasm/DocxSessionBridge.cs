@@ -233,9 +233,10 @@ public static partial class DocxSessionBridge
 
     /// <summary>
     /// Bridge for <see cref="DocxSession.GetDiff"/>. <paramref name="format"/> uses
-    /// the numeric layout of <see cref="DiffFormat"/> (Json=0, Unified=1, SideBySide=2).
-    /// Currently only Json is supported — other values throw NotSupportedException
-    /// on the .NET side, surfaced to JS as a thrown error.
+    /// the numeric layout of <see cref="DiffFormat"/>: <c>Json=0</c> (anchor-keyed JSON
+    /// array), <c>Unified=1</c> (patch(1)-compatible text), <c>SideBySide=2</c> (two-column
+    /// text). Unknown numeric values throw <c>NotSupportedException</c> on the .NET side,
+    /// surfaced to JS as a thrown error.
     /// </summary>
     [JSExport]
     public static string GetDiff(int h, int format) =>

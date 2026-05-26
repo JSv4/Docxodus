@@ -495,12 +495,18 @@ public enum DiffFormat
     /// shape — anchor-keyed, ordered by document position. Default.</summary>
     Json = 0,
 
-    /// <summary>Standard unified diff (git-style). Deferred to v2 — currently
-    /// throws <see cref="NotSupportedException"/>.</summary>
+    /// <summary>Standard unified diff (git-style) over the initial vs. current
+    /// markdown projection. Line-based LCS; 3 lines of context per hunk; uses
+    /// <c>--- initial</c> / <c>+++ current</c> as filename headers. Output is
+    /// parseable by <c>patch(1)</c>. Empty string when nothing has changed.</summary>
     Unified = 1,
 
-    /// <summary>Two-column human-review diff. Deferred to v2 — currently
-    /// throws <see cref="NotSupportedException"/>.</summary>
+    /// <summary>Two-column human-review diff (<c>diff -y</c> style) over the
+    /// initial vs. current markdown projection. Each row pairs an initial-side
+    /// line with a current-side line; the centre column carries one of
+    /// <c>' '</c> (unchanged), <c>'|'</c> (modified — both columns have content),
+    /// <c>'&lt;'</c> (only initial — deleted), <c>'&gt;'</c> (only current —
+    /// inserted). Left column is wrapped/padded to 72 chars.</summary>
     SideBySide = 2,
 }
 
@@ -1729,18 +1735,24 @@ public sealed class DocxSession : IDisposable
     /// issue #187). Requires <see cref="DocxSessionSettings.CaptureInitialProjection"/>
     /// to have been <c>true</c> at construction time.
     /// </summary>
-    /// <param name="format">Output shape. Only <see cref="DiffFormat.Json"/> is supported
-    /// in v1; <see cref="DiffFormat.Unified"/> and <see cref="DiffFormat.SideBySide"/>
-    /// are reserved enum values that throw <see cref="NotSupportedException"/>.</param>
+    /// <param name="format">Output shape. <see cref="DiffFormat.Json"/> (default) returns
+    /// an anchor-keyed JSON array; <see cref="DiffFormat.Unified"/> returns a
+    /// <c>patch(1)</c>-compatible unified diff over the markdown projections;
+    /// <see cref="DiffFormat.SideBySide"/> returns a two-column human-review diff.</param>
     /// <returns>For <see cref="DiffFormat.Json"/>, a JSON array of <see cref="DiffEntry"/>
     /// records. Entries are grouped by op (all deletes first, then modifies, then inserts);
     /// within each group, by anchor-index iteration order (which is document order in
     /// practice, since the projector builds the index via a depth-first descendant walk).
-    /// Returns <c>"[]"</c> when the document has not been mutated since construction.</returns>
+    /// Returns <c>"[]"</c> when the document has not been mutated since construction.
+    /// For <see cref="DiffFormat.Unified"/>, a standard unified diff with <c>--- initial</c>
+    /// / <c>+++ current</c> headers and 3 lines of context; empty string when nothing changed.
+    /// For <see cref="DiffFormat.SideBySide"/>, a two-column rendering with the initial
+    /// projection padded to 72 chars on the left, a single marker character, then the
+    /// current projection.</returns>
     /// <exception cref="InvalidOperationException">Thrown when
     /// <see cref="DocxSessionSettings.CaptureInitialProjection"/> was <c>false</c>.</exception>
     /// <exception cref="NotSupportedException">Thrown for <paramref name="format"/> values
-    /// other than <see cref="DiffFormat.Json"/>.</exception>
+    /// outside the defined <see cref="DiffFormat"/> range.</exception>
     public string GetDiff(DiffFormat format = DiffFormat.Json)
     {
         ThrowIfDisposed();
@@ -1748,13 +1760,16 @@ public sealed class DocxSession : IDisposable
             throw new InvalidOperationException(
                 "GetDiff requires CaptureInitialProjection = true in DocxSessionSettings.");
 
-        if (format != DiffFormat.Json)
-            throw new NotSupportedException(
-                $"DiffFormat.{format} is deferred to v2 (see issue tracker). Only DiffFormat.Json is supported in v1.");
-
         var current = Project();
-        var entries = ComputeDiff(_initialProjection, current);
-        return SerializeDiff(entries);
+
+        return format switch
+        {
+            DiffFormat.Json => SerializeDiff(ComputeDiff(_initialProjection, current)),
+            DiffFormat.Unified => SerializeUnifiedDiff(_initialProjection.Markdown, current.Markdown),
+            DiffFormat.SideBySide => SerializeSideBySideDiff(_initialProjection.Markdown, current.Markdown),
+            _ => throw new NotSupportedException(
+                $"DiffFormat.{format} is not a recognized value."),
+        };
     }
 
     private static List<DiffEntry> ComputeDiff(MarkdownProjection initial, MarkdownProjection current)
@@ -1877,6 +1892,225 @@ public sealed class DocxSession : IDisposable
             }
         }
         sb.Append('"');
+    }
+
+    // ─── Line-based LCS for DiffFormat.Unified / SideBySide ────────────────
+    //
+    // Hand-rolled O(n*m) LCS over arrays of lines. We deliberately avoid pulling
+    // in DiffPlex / DiffMatchPatch — the WASM build disables reflection-based
+    // serialization and we want this path to stay AOT-friendly without a NuGet
+    // edge case. The unified path is parseable by patch(1); the side-by-side
+    // path mirrors `diff -y` markers.
+
+    private enum LineDiffKind { Equal, Delete, Insert }
+
+    private readonly record struct LineDiffOp(LineDiffKind Kind, int AIdx, int BIdx);
+
+    private static List<LineDiffOp> ComputeLineDiff(string[] a, string[] b)
+    {
+        int n = a.Length, m = b.Length;
+        // dp[i, j] = length of LCS of a[..i] and b[..j].
+        var dp = new int[n + 1, m + 1];
+        for (int i = 1; i <= n; i++)
+        {
+            for (int j = 1; j <= m; j++)
+            {
+                dp[i, j] = a[i - 1] == b[j - 1]
+                    ? dp[i - 1, j - 1] + 1
+                    : Math.Max(dp[i - 1, j], dp[i, j - 1]);
+            }
+        }
+
+        var ops = new List<LineDiffOp>(n + m);
+        int x = n, y = m;
+        while (x > 0 && y > 0)
+        {
+            if (a[x - 1] == b[y - 1])
+            {
+                ops.Add(new LineDiffOp(LineDiffKind.Equal, x - 1, y - 1));
+                x--; y--;
+            }
+            else if (dp[x - 1, y] > dp[x, y - 1])
+            {
+                ops.Add(new LineDiffOp(LineDiffKind.Delete, x - 1, -1));
+                x--;
+            }
+            else
+            {
+                // Ties (dp[x-1,y] == dp[x,y-1]) go to Insert during backward traversal
+                // so that after List.Reverse() the forward order shows Delete before
+                // Insert — the conventional ordering for unified diffs and the
+                // precondition for `SerializeSideBySideDiff`'s Delete+Insert →
+                // "modify" pairing.
+                ops.Add(new LineDiffOp(LineDiffKind.Insert, -1, y - 1));
+                y--;
+            }
+        }
+        while (x > 0) { ops.Add(new LineDiffOp(LineDiffKind.Delete, x - 1, -1)); x--; }
+        while (y > 0) { ops.Add(new LineDiffOp(LineDiffKind.Insert, -1, y - 1)); y--; }
+
+        ops.Reverse();
+        return ops;
+    }
+
+    private const int UnifiedContextLines = 3;
+
+    private static string SerializeUnifiedDiff(string initial, string current)
+    {
+        // Split on '\n' only — the markdown projector emits LF line terminators.
+        // Trailing '\n' produces a trailing empty element; that round-trips
+        // correctly through patch(1) provided we don't add a phantom newline.
+        var a = initial.Split('\n');
+        var b = current.Split('\n');
+        var ops = ComputeLineDiff(a, b);
+
+        // No changes → empty string. Lets `if (string.IsNullOrEmpty(diff))` be the
+        // "did anything change?" check on the call site.
+        bool anyChange = false;
+        for (int i = 0; i < ops.Count; i++)
+        {
+            if (ops[i].Kind != LineDiffKind.Equal) { anyChange = true; break; }
+        }
+        if (!anyChange) return string.Empty;
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("--- initial\n");
+        sb.Append("+++ current\n");
+
+        int idx = 0;
+        while (idx < ops.Count)
+        {
+            // Skip leading Equal ops between hunks.
+            while (idx < ops.Count && ops[idx].Kind == LineDiffKind.Equal) idx++;
+            if (idx >= ops.Count) break;
+
+            int hunkStart = Math.Max(0, idx - UnifiedContextLines);
+            int lastChange = idx;
+            int scan = idx;
+            while (scan < ops.Count)
+            {
+                if (ops[scan].Kind != LineDiffKind.Equal)
+                {
+                    lastChange = scan;
+                    scan++;
+                    continue;
+                }
+
+                // Break when we'd have more than 2 * contextLines equal ops between
+                // the last change and the next one — that's where one hunk ends and
+                // the next begins.
+                int gap = 0;
+                while (scan < ops.Count && ops[scan].Kind == LineDiffKind.Equal)
+                {
+                    gap++;
+                    if (gap > 2 * UnifiedContextLines) break;
+                    scan++;
+                }
+                if (gap > 2 * UnifiedContextLines) break;
+            }
+            int hunkEnd = Math.Min(ops.Count, lastChange + UnifiedContextLines + 1);
+
+            // Compute 1-based line numbers and counts for the hunk header.
+            int aStart = 0, bStart = 0;
+            for (int k = 0; k < hunkStart; k++)
+            {
+                if (ops[k].Kind != LineDiffKind.Insert) aStart++;
+                if (ops[k].Kind != LineDiffKind.Delete) bStart++;
+            }
+            int aLines = 0, bLines = 0;
+            for (int k = hunkStart; k < hunkEnd; k++)
+            {
+                if (ops[k].Kind != LineDiffKind.Insert) aLines++;
+                if (ops[k].Kind != LineDiffKind.Delete) bLines++;
+            }
+
+            // Unified-diff convention: when count is 0, the start position is the
+            // line *before* the change (so a pure-insert hunk reads "@@ -0,0 +1,N @@").
+            // When count is >0, we emit "start+1" to convert from 0-based to 1-based.
+            int aHeaderStart = aLines == 0 ? aStart : aStart + 1;
+            int bHeaderStart = bLines == 0 ? bStart : bStart + 1;
+
+            sb.Append("@@ -").Append(aHeaderStart).Append(',').Append(aLines)
+              .Append(" +").Append(bHeaderStart).Append(',').Append(bLines)
+              .Append(" @@\n");
+
+            for (int k = hunkStart; k < hunkEnd; k++)
+            {
+                var op = ops[k];
+                switch (op.Kind)
+                {
+                    case LineDiffKind.Equal:
+                        sb.Append(' ').Append(a[op.AIdx]).Append('\n');
+                        break;
+                    case LineDiffKind.Delete:
+                        sb.Append('-').Append(a[op.AIdx]).Append('\n');
+                        break;
+                    case LineDiffKind.Insert:
+                        sb.Append('+').Append(b[op.BIdx]).Append('\n');
+                        break;
+                }
+            }
+
+            idx = hunkEnd;
+        }
+
+        return sb.ToString();
+    }
+
+    private const int SideBySideColumnWidth = 72;
+
+    private static string SerializeSideBySideDiff(string initial, string current)
+    {
+        var a = initial.Split('\n');
+        var b = current.Split('\n');
+        var ops = ComputeLineDiff(a, b);
+        if (ops.Count == 0) return string.Empty;
+
+        var sb = new System.Text.StringBuilder();
+        int i = 0;
+        while (i < ops.Count)
+        {
+            var op = ops[i];
+
+            // Pair an adjacent Delete + Insert into a single "modified" row marked
+            // '|' — matches `diff -y`'s presentation and keeps the row count tight
+            // when text on a line is rewritten in place.
+            if (op.Kind == LineDiffKind.Delete
+                && i + 1 < ops.Count
+                && ops[i + 1].Kind == LineDiffKind.Insert)
+            {
+                AppendSideBySideRow(sb, a[op.AIdx], b[ops[i + 1].BIdx], '|');
+                i += 2;
+                continue;
+            }
+
+            switch (op.Kind)
+            {
+                case LineDiffKind.Equal:
+                    AppendSideBySideRow(sb, a[op.AIdx], b[op.BIdx], ' ');
+                    break;
+                case LineDiffKind.Delete:
+                    AppendSideBySideRow(sb, a[op.AIdx], string.Empty, '<');
+                    break;
+                case LineDiffKind.Insert:
+                    AppendSideBySideRow(sb, string.Empty, b[op.BIdx], '>');
+                    break;
+            }
+            i++;
+        }
+
+        return sb.ToString();
+    }
+
+    private static void AppendSideBySideRow(System.Text.StringBuilder sb, string left, string right, char marker)
+    {
+        // Truncate (with U+2026 tail) anything past the column width so the marker
+        // column stays aligned. The right column is allowed to run to end-of-line —
+        // a terminal will wrap it; a viewer that hard-wraps can post-process.
+        string leftDisp = left.Length > SideBySideColumnWidth
+            ? string.Concat(left.AsSpan(0, SideBySideColumnWidth - 1), "…")
+            : left.PadRight(SideBySideColumnWidth);
+        sb.Append(leftDisp).Append(' ').Append(marker).Append(' ').Append(right).Append('\n');
     }
 
     /// <summary>

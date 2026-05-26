@@ -381,8 +381,34 @@ construction time against the current state.
 Initial-projection capture is on by default (`DocxSessionSettings.CaptureInitialProjection = true`)
 and costs ~200ms at construction. Turn it off if you don't plan to diff.
 
-`DiffFormat.Unified` and `DiffFormat.SideBySide` are reserved for v2 (line-based diff)
-— they throw `NotSupportedException` in v1. See issue #178.
+`DiffFormat.Unified` returns a `patch(1)`-compatible unified diff over the
+markdown projections (`--- initial` / `+++ current` headers, 3 lines of
+context per hunk, hand-rolled LCS over `\n`-split lines). Returns the empty
+string when nothing has changed:
+
+```diff
+--- initial
++++ current
+@@ -1,6 +1,6 @@
+ # Document
+
+-{#p:body:6b6439…} First paragraph.
++{#p:body:6b6439…} REPLACED PARAGRAPH
+
+ {#p:body:a321f0…} Second paragraph.
+```
+
+`DiffFormat.SideBySide` returns a `diff -y`-style two-column rendering — the
+initial projection padded to 72 chars on the left, a one-character marker
+(`' '` unchanged, `'|'` modified, `'<'` only-initial, `'>'` only-current),
+then the current projection on the right. Adjacent `Delete + Insert` pairs
+collapse to a single `|` "modified" row.
+
+Both line-based formats diff the raw markdown projection — anchor tokens
+(`{#…}`) appear verbatim in the output. Switch to
+`AnchorIdRendering = Abbreviated` or `Sequential` in
+`DocxSessionSettings.ProjectionSettings` to keep token noise out of the
+diff when reviewing in a terminal.
 
 ## Sliced projection — `ProjectAnchor`
 
