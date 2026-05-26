@@ -2702,4 +2702,162 @@ public class DocxSessionTests
         Assert.Contains("Section Two", afterMd);
         Assert.Contains("para 2.1", afterMd);
     }
+
+    // ─── GetEditSummary (issue #166 — DS280-DS283) ────────────────────────
+
+    [Fact]
+    public void DS280_GetEditSummary_CountsPlaceholdersOnUneditedDoc()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var summary = session.GetEditSummary();
+        Assert.True(summary.RemainingPlaceholders.Count >= 4);
+        Assert.True(summary.TotalAnchors > 0);
+    }
+
+    [Fact]
+    public void DS280b_GetEditSummary_BareUnderscoresExcludeBracketPlaceholders()
+    {
+        // BuildDocWithBracketPlaceholders contains "[_____]" and "[____________]"
+        // — both are bracketed placeholders, not bare underscore runs.
+        // EditSummary.BareUnderscoreRuns must be empty for this doc.
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var summary = session.GetEditSummary();
+        Assert.Empty(summary.BareUnderscoreRuns);
+    }
+
+    [Fact]
+    public void DS280c_GetEditSummary_BareUnderscoresPositiveCase()
+    {
+        // A doc with both a bare ____ and a bracketed [___] — only the bare run should match.
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(
+                new Paragraph(new Run(new Text("Fill ____ here. Also [___] should not count.")))));
+        }
+        using var session = new DocxSession(ms.ToArray());
+        var summary = session.GetEditSummary();
+        Assert.Single(summary.BareUnderscoreRuns);   // exactly the bare ____
+    }
+
+    [Fact]
+    public void DS281_GetEditSummary_RemainingPlaceholdersShrinksAfterFill()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var before = session.GetEditSummary().RemainingPlaceholders.Count;
+        var result = session.FillPlaceholders(p => "FILLED", new FillOptions
+        {
+            Kinds = PlaceholderKinds.BlankFill,
+        });
+        Assert.True(result.Filled > 0);
+        var after = session.GetEditSummary().RemainingPlaceholders.Count;
+        Assert.True(after < before, $"expected after < before; got after={after} before={before}");
+    }
+
+    [Fact]
+    public void DS282_RemainingPlaceholders_MatchesFindPlaceholders()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var fromAlias = session.RemainingPlaceholders().Count;
+        var fromCanonical = session.FindPlaceholders().Count;
+        Assert.Equal(fromCanonical, fromAlias);
+    }
+
+    [Fact]
+    public void DS283_GetEditSummary_FootnoteCountsExcludeBoilerplate()
+    {
+        using var session = new DocxSession(BuildDocWithFootnotes());
+        var summary = session.GetEditSummary();
+        Assert.Equal(1, summary.FootnoteCount);
+        Assert.Equal(1, summary.InlineFootnoteRefCount);
+    }
+
+    // ─── GetDiff (issue #166 — DS284-DS289) ───────────────────────────────
+
+    [Fact]
+    public void DS284_GetDiff_OnUneditedDoc_IsEmptyArray()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var diffJson = session.GetDiff();
+        // JSON empty array (no mutations have happened).
+        Assert.Equal("[]", diffJson);
+    }
+
+    [Fact]
+    public void DS285_GetDiff_AfterDelete_ShowsDeleteOp()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        var r = session.DeleteBlock(firstP.Anchor.Id);
+        Assert.True(r.Success);
+
+        var diffJson = session.GetDiff();
+        // Expect at least one entry with op=delete pointing at firstP's anchor id.
+        Assert.Contains("\"delete\"", diffJson);
+        Assert.Contains(firstP.Anchor.Id, diffJson);
+    }
+
+    [Fact]
+    public void DS285b_GetDiff_DetectsKindChangeWithoutTextChange()
+    {
+        // SetParagraphStyle flips anchor kind (p→h) without changing text.
+        // ComputeDiff must detect this as a modify, not silently miss it.
+        // Uses BuildDS001_SimpleTwoParagraphs because it ships with the heading
+        // style definitions that SetParagraphStyle needs.
+        using var session = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+
+        var r = session.SetParagraphStyle(firstP.Anchor.Id, "Heading2");
+        Assert.True(r.Success);
+
+        var diffJson = session.GetDiff();
+        Assert.Contains("\"modify\"", diffJson);
+    }
+
+    [Fact]
+    public void DS286_GetDiff_AfterReplaceText_ShowsModifyOp()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        session.ReplaceText(firstP.Anchor.Id, "NEW TEXT");
+
+        var diffJson = session.GetDiff();
+        Assert.Contains("\"modify\"", diffJson);
+        Assert.Contains("NEW TEXT", diffJson);
+    }
+
+    [Fact]
+    public void DS287_GetDiff_AfterInsertParagraph_ShowsInsertOp()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        var firstP = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind == "p");
+        var r = session.InsertParagraph(firstP.Anchor.Id, Position.After, "Inserted text");
+        Assert.True(r.Success);
+
+        var diffJson = session.GetDiff();
+        Assert.Contains("\"insert\"", diffJson);
+        Assert.Contains("Inserted text", diffJson);
+    }
+
+    [Fact]
+    public void DS288_GetDiff_WithoutInitialCapture_Throws()
+    {
+        var settings = new DocxSessionSettings { CaptureInitialProjection = false };
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders(), settings);
+        var ex = Assert.Throws<InvalidOperationException>(() => session.GetDiff());
+        Assert.Contains("CaptureInitialProjection", ex.Message);
+    }
+
+    [Fact]
+    public void DS289_GetDiff_UnifiedFormat_IsDeferredToV2()
+    {
+        using var session = new DocxSession(BuildDocWithBracketPlaceholders());
+        Assert.Throws<NotSupportedException>(() => session.GetDiff(DiffFormat.Unified));
+        Assert.Throws<NotSupportedException>(() => session.GetDiff(DiffFormat.SideBySide));
+    }
 }

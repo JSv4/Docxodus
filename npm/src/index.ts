@@ -68,6 +68,8 @@ export type {
 } from "./types.js";
 export type { FillOptions, BulkEditResult } from "./types.js";
 export { PlaceholderKinds, ContextBoundary } from "./types.js";
+export { DiffFormat } from "./types.js";
+export type { EditSummary, DiffEntry } from "./types.js";
 
 /**
  * Open a {@link DocxSession} for surgical mutation of a DOCX. Requires

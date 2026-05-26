@@ -8,12 +8,14 @@ import type {
   BulkEditResult,
   CharSpan,
   CrossBlockMatch,
+  DiffEntry,
   DocumentAnnotation,
   DocxodusWasmExports,
   DocxSessionProjection,
   DocxSessionSettings,
   EditError,
   EditResult,
+  EditSummary,
   FillOptions,
   FormatOp,
   GrepOptions,
@@ -21,7 +23,7 @@ import type {
   TemplatePlaceholder,
   TextMatch,
 } from "./types.js";
-import { ContextBoundary, PlaceholderKinds } from "./types.js";
+import { ContextBoundary, DiffFormat, PlaceholderKinds } from "./types.js";
 
 /**
  * Stateful in-memory DOCX editing session keyed by markdown-projection anchor ids.
@@ -347,6 +349,37 @@ export class DocxSession {
     return JSON.parse(
       this.wasm.FindPlaceholders(this.handle, kinds, scope, contextChars, boundary),
     ) as TemplatePlaceholder[];
+  }
+
+  /**
+   * Returns a snapshot of edit-state introspection signals — placeholder counts,
+   * underscore-run leftovers, footnote/comment counts. Useful for "am I done?"
+   * verification at the end of an edit pipeline.
+   */
+  getEditSummary(): EditSummary {
+    return JSON.parse(this.wasm.GetEditSummary(this.handle)) as EditSummary;
+  }
+
+  /**
+   * Discoverability alias for {@link findPlaceholders}. Same return shape.
+   */
+  remainingPlaceholders(kinds: number = PlaceholderKinds.All): TemplatePlaceholder[] {
+    return JSON.parse(this.wasm.RemainingPlaceholders(this.handle, kinds)) as TemplatePlaceholder[];
+  }
+
+  /**
+   * Diff the document's current projection against the projection captured at
+   * session construction time. Returns a structured `DiffEntry[]` (anchor-keyed).
+   *
+   * Requires `captureInitialProjection: true` in {@link DocxSessionSettings}
+   * (the default). Throws if not enabled.
+   *
+   * v1 only supports `DiffFormat.Json`. `Unified` and `SideBySide` throw —
+   * file a follow-up issue if you need them.
+   */
+  getDiff(format: number = DiffFormat.Json): DiffEntry[] {
+    const raw = this.wasm.GetDiff(this.handle, format);
+    return JSON.parse(raw) as DiffEntry[];
   }
 
   // ─── Annotation-based anchor discovery (#132) ────────────────────────

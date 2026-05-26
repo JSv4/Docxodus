@@ -206,6 +206,32 @@ public static partial class DocxSessionBridge
         DocxSessionOps.FindPlaceholders(h, (PlaceholderKinds)kinds, (ProjectionScopes)scope, contextChars, (ContextBoundary)boundary);
 
     /// <summary>
+    /// Bridge for <see cref="DocxSession.GetEditSummary"/>. Returns a JSON object
+    /// with placeholder, underscore-run, footnote, and comment counts useful for
+    /// "am I done?" verification at the end of an edit pipeline.
+    /// </summary>
+    [JSExport]
+    public static string GetEditSummary(int h) => DocxSessionOps.GetEditSummary(h);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.RemainingPlaceholders"/>. Discoverability
+    /// alias for <see cref="FindPlaceholders"/> — same return shape.
+    /// </summary>
+    [JSExport]
+    public static string RemainingPlaceholders(int h, int kinds) =>
+        DocxSessionOps.RemainingPlaceholders(h, (PlaceholderKinds)kinds);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.GetDiff"/>. <paramref name="format"/> uses
+    /// the numeric layout of <see cref="DiffFormat"/> (Json=0, Unified=1, SideBySide=2).
+    /// Currently only Json is supported — other values throw NotSupportedException
+    /// on the .NET side, surfaced to JS as a thrown error.
+    /// </summary>
+    [JSExport]
+    public static string GetDiff(int h, int format) =>
+        DocxSessionOps.GetDiff(h, (DiffFormat)format);
+
+    /// <summary>
     /// Bridge for <see cref="DocxSession.FindByAnnotation"/>. Returns a JSON array of
     /// <see cref="AnchorTarget"/> records (each <c>{id, kind, scope, unid, partUri}</c>);
     /// empty array when the id is unknown.

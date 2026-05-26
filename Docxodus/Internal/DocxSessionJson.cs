@@ -37,6 +37,7 @@ internal static class DocxSessionJson
         var revisionAuthor = TryGetString(root, "revisionAuthor", null);
         bool persistAnchorIds = TryGetBool(root, "persistAnchorIds", false);
         bool smartQuotes = TryGetBool(root, "smartQuotes", false);
+        bool captureInitialProjection = TryGetBool(root, "captureInitialProjection", true);
         return new DocxSessionSettings
         {
             UndoDepth = undoDepth,
@@ -45,6 +46,7 @@ internal static class DocxSessionJson
             RevisionAuthor = revisionAuthor,
             PersistAnchorIds = persistAnchorIds,
             SmartQuotes = smartQuotes,
+            CaptureInitialProjection = captureInitialProjection,
         };
     }
 
@@ -155,6 +157,19 @@ internal static class DocxSessionJson
         PlaceholderKind.Instruction => "instruction",
         _ => "unknown",
     };
+
+    public static string SerializeEditSummary(EditSummary summary)
+    {
+        var sb = new StringBuilder(1024);
+        sb.Append("{\"totalAnchors\":").Append(summary.TotalAnchors)
+          .Append(",\"remainingPlaceholders\":").Append(SerializePlaceholders(summary.RemainingPlaceholders))
+          .Append(",\"bareUnderscoreRuns\":").Append(SerializeMatches(summary.BareUnderscoreRuns))
+          .Append(",\"footnoteCount\":").Append(summary.FootnoteCount)
+          .Append(",\"inlineFootnoteRefCount\":").Append(summary.InlineFootnoteRefCount)
+          .Append(",\"commentCount\":").Append(summary.CommentCount)
+          .Append('}');
+        return sb.ToString();
+    }
 
     public static string SerializePlaceholders(IReadOnlyList<TemplatePlaceholder> placeholders)
     {

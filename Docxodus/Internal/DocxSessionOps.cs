@@ -75,6 +75,15 @@ internal static class DocxSessionOps
     public static string FindByKind(int handle, string kind, string? scope) =>
         DocxSessionJson.SerializeAnchorTargets(SessionRegistry.Get(handle).FindByKind(kind, scope));
 
+    public static string GetEditSummary(int handle) =>
+        DocxSessionJson.SerializeEditSummary(SessionRegistry.Get(handle).GetEditSummary());
+
+    public static string RemainingPlaceholders(int handle, PlaceholderKinds kinds) =>
+        DocxSessionJson.SerializePlaceholders(SessionRegistry.Get(handle).RemainingPlaceholders(kinds));
+
+    public static string GetDiff(int handle, DiffFormat format) =>
+        SessionRegistry.Get(handle).GetDiff(format);
+
     // ─── Tier A: text mutations ─────────────────────────────────────────
 
     public static string ReplaceText(int handle, string anchorId, string markdown) =>

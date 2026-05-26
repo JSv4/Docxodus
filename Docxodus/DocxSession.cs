@@ -339,6 +339,95 @@ public sealed record TemplatePlaceholder
 
 public sealed record AnchorInfo(string Id, string Kind, string Scope, string TextPreview);
 
+/// <summary>
+/// Snapshot of the high-signal "is this template fillable yet?" state for a
+/// <see cref="DocxSession"/>. Returned by <see cref="DocxSession.GetEditSummary"/>.
+/// Composes existing primitives — <see cref="DocxSession.FindPlaceholders"/>,
+/// <see cref="DocxSession.Grep"/>, and the projection's <c>AnchorIndex</c> — into
+/// a single struct so an agent can ask "what's left to fill in?" without
+/// stitching three separate calls together.
+/// </summary>
+/// <remarks>
+/// All counts are derived from the live document state at the moment the
+/// summary is taken; mutate-then-read is the expected pattern. The placeholder
+/// and underscore lists are disjoint by construction (the underscore regex
+/// excludes runs already enclosed in <c>[…]</c>), so totaling them gives a
+/// true count of remaining slots without double-counting.
+/// </remarks>
+public sealed record EditSummary
+{
+    /// <summary>Total number of anchors in the projection (paragraphs, headings,
+    /// list items, tables, cells, footnotes, comments) — a rough proxy for
+    /// document complexity / addressable surface.</summary>
+    public int TotalAnchors { get; init; }
+
+    /// <summary>Bracketed placeholders still present. Populated using
+    /// <see cref="ProjectionScopes.All"/> — body + headers/footers/footnotes/endnotes/comments —
+    /// so verification doesn't miss placeholders in non-body parts. Use
+    /// <see cref="DocxSession.FindPlaceholders"/> directly for narrower scope.
+    /// Empty when the template is fully filled.</summary>
+    public IReadOnlyList<TemplatePlaceholder> RemainingPlaceholders { get; init; }
+        = Array.Empty<TemplatePlaceholder>();
+
+    /// <summary>Bare <c>___</c> runs of three or more underscores NOT enclosed in
+    /// brackets — the second-class placeholder shape that <see cref="DocxSession.FindPlaceholders"/>
+    /// deliberately skips. Surfaces here so callers see "fillable blanks Word
+    /// authors sometimes leave outside brackets" without a manual <see cref="DocxSession.Grep"/>.</summary>
+    public IReadOnlyList<TextMatch> BareUnderscoreRuns { get; init; }
+        = Array.Empty<TextMatch>();
+
+    /// <summary>Number of user-authored footnotes (excludes the two Word-reserved
+    /// boilerplate notes: <c>w:type="separator"</c> and <c>w:type="continuationSeparator"</c>).</summary>
+    public int FootnoteCount { get; init; }
+
+    /// <summary>Number of inline <c>w:footnoteReference</c> markers in the main body —
+    /// how many times any footnote is cited. May differ from <see cref="FootnoteCount"/>
+    /// if a footnote is referenced multiple times or an orphan footnote exists.</summary>
+    public int InlineFootnoteRefCount { get; init; }
+
+    /// <summary>Number of comment anchors in the projection (excludes the comment
+    /// range markers; counts each distinct comment thread once).</summary>
+    public int CommentCount { get; init; }
+}
+
+/// <summary>
+/// Output format for <see cref="DocxSession.GetDiff(DiffFormat)"/>.
+/// </summary>
+public enum DiffFormat
+{
+    /// <summary>JSON array of <see cref="DiffEntry"/> records. The agentic-friendly
+    /// shape — anchor-keyed, ordered by document position. Default.</summary>
+    Json = 0,
+
+    /// <summary>Standard unified diff (git-style). Deferred to v2 — currently
+    /// throws <see cref="NotSupportedException"/>.</summary>
+    Unified = 1,
+
+    /// <summary>Two-column human-review diff. Deferred to v2 — currently
+    /// throws <see cref="NotSupportedException"/>.</summary>
+    SideBySide = 2,
+}
+
+/// <summary>
+/// A single anchor-keyed change in the diff between an initial and current projection.
+/// </summary>
+public sealed record DiffEntry
+{
+    /// <summary>Op kind: <c>"delete"</c> (anchor existed initially, gone now),
+    /// <c>"insert"</c> (anchor exists now but not initially), or
+    /// <c>"modify"</c> (anchor exists in both but with different content).</summary>
+    required public string Op { get; init; }
+
+    /// <summary>The anchor's id (current id for insert/modify; initial id for delete).</summary>
+    required public string AnchorId { get; init; }
+
+    /// <summary>Pre-change text content for delete/modify. <c>null</c> for insert.</summary>
+    public string? Before { get; init; }
+
+    /// <summary>Post-change text content for insert/modify. <c>null</c> for delete.</summary>
+    public string? After { get; init; }
+}
+
 public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown);
 
 public sealed record EditError(EditErrorCode Code, string Message, string? AnchorId = null);
@@ -417,6 +506,14 @@ public sealed class DocxSessionSettings
     /// through unchanged) — see issue #140.
     /// </summary>
     public bool SmartQuotes { get; init; } = false;
+
+    /// <summary>
+    /// When <c>true</c> (default), the session projects the document at construction
+    /// time and stashes the result so <see cref="DocxSession.GetDiff"/> can compare
+    /// initial vs. current. Costs ~200ms at construction for a 100-page doc; turn
+    /// off to skip the upfront cost when you don't plan to call <c>GetDiff</c>.
+    /// </summary>
+    public bool CaptureInitialProjection { get; init; } = true;
 }
 
 // ─── Session ───────────────────────────────────────────────────────────────
@@ -428,6 +525,7 @@ public sealed class DocxSession : IDisposable
     private MemoryStream? _stream;
     private WordprocessingDocument? _doc;
     private MarkdownProjection? _cachedProjection;
+    private MarkdownProjection? _initialProjection;
     private bool _disposed;
     private int _revisionCounter = 1000;
     private RawDocxOps? _raw;
@@ -441,6 +539,9 @@ public sealed class DocxSession : IDisposable
         _stream.Write(docxBytes, 0, docxBytes.Length);
         _stream.Position = 0;
         _doc = WordprocessingDocument.Open(_stream, isEditable: true);
+
+        if (_settings.CaptureInitialProjection)
+            _initialProjection = WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
     }
 
     public Exception? LastInternalError { get; private set; }
@@ -1296,6 +1397,208 @@ public sealed class DocxSession : IDisposable
             PlaceholderKind.Instruction => PlaceholderKinds.Instruction,
             _ => 0,
         };
+    }
+
+    /// <summary>
+    /// Compose a high-signal snapshot of the session's edit-state — total anchors,
+    /// remaining bracketed placeholders, bare underscore runs, and footnote/comment
+    /// counts. Pure composition of existing primitives (<see cref="Project"/>,
+    /// <see cref="FindPlaceholders"/>, <see cref="Grep"/>) with no new logic, so
+    /// every count is exactly what the caller would compute by hand. Designed as
+    /// the canonical "what's left to fill in?" check after a mutation batch.
+    /// </summary>
+    /// <remarks>
+    /// The bare-underscore regex <c>(?&lt;![\[_])_{3,}(?![\]_])</c> uses lookarounds
+    /// that exclude both a bracket and an adjacent underscore, so they guard the
+    /// boundaries of the maximal underscore run (not just the regex match) and
+    /// avoid false positives inside <c>[_____]</c>. Bracketed underscore runs are
+    /// surfaced via <see cref="EditSummary.RemainingPlaceholders"/>, so the two
+    /// collections are disjoint by construction. Both queries run against
+    /// <see cref="ProjectionScopes.All"/> so headers/footers/footnotes/endnotes/comments
+    /// are counted symmetrically.
+    /// </remarks>
+    public EditSummary GetEditSummary()
+    {
+        ThrowIfDisposed();
+
+        var projection = Project();
+        var placeholders = FindPlaceholders(PlaceholderKinds.All, ProjectionScopes.All);
+        var underscoreRuns = Grep(@"(?<![\[_])_{3,}(?![\]_])", scope: ProjectionScopes.All);
+
+        int footnoteCount = 0;
+        int commentCount = 0;
+        foreach (var t in projection.AnchorIndex.Values)
+        {
+            if (t.Anchor.Kind == "fn" && t.Anchor.Scope == "fn") footnoteCount++;
+            else if (t.Anchor.Kind == "cmt" && t.Anchor.Scope == "cmt") commentCount++;
+        }
+
+        var main = _doc!.MainDocumentPart;
+        int inlineFnRefs = 0;
+        if (main is not null)
+            inlineFnRefs = main.GetXDocument().Root!.Descendants(W.footnoteReference).Count();
+
+        return new EditSummary
+        {
+            TotalAnchors = projection.AnchorIndex.Count,
+            RemainingPlaceholders = placeholders,
+            BareUnderscoreRuns = underscoreRuns,
+            FootnoteCount = footnoteCount,
+            InlineFootnoteRefCount = inlineFnRefs,
+            CommentCount = commentCount,
+        };
+    }
+
+    /// <summary>
+    /// Thin discoverability alias for <see cref="FindPlaceholders"/>. Same return
+    /// shape; the rename exists because "what's remaining?" reads more naturally
+    /// at agent call sites than "find the placeholders."
+    /// </summary>
+    public IReadOnlyList<TemplatePlaceholder> RemainingPlaceholders(
+        PlaceholderKinds kinds = PlaceholderKinds.All) =>
+        FindPlaceholders(kinds);
+
+    /// <summary>
+    /// Diffs the projection captured at session construction against the current projection
+    /// and returns an anchor-keyed change list. Keyed by <see cref="AnchorTarget.Unid"/>
+    /// (stable across mutations) rather than the anchor id (which can flip kind prefix
+    /// when a paragraph is promoted to a heading, etc.). Requires
+    /// <see cref="DocxSessionSettings.CaptureInitialProjection"/> to have been <c>true</c>
+    /// at construction time.
+    /// </summary>
+    /// <param name="format">Output shape. Only <see cref="DiffFormat.Json"/> is supported
+    /// in v1; <see cref="DiffFormat.Unified"/> and <see cref="DiffFormat.SideBySide"/>
+    /// are reserved enum values that throw <see cref="NotSupportedException"/>.</param>
+    /// <returns>For <see cref="DiffFormat.Json"/>, a JSON array of <see cref="DiffEntry"/>
+    /// records. Entries are grouped by op (all deletes first, then modifies, then inserts);
+    /// within each group, by anchor-index iteration order (which is document order in
+    /// practice, since the projector builds the index via a depth-first descendant walk).
+    /// Returns <c>"[]"</c> when the document has not been mutated since construction.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when
+    /// <see cref="DocxSessionSettings.CaptureInitialProjection"/> was <c>false</c>.</exception>
+    /// <exception cref="NotSupportedException">Thrown for <paramref name="format"/> values
+    /// other than <see cref="DiffFormat.Json"/>.</exception>
+    public string GetDiff(DiffFormat format = DiffFormat.Json)
+    {
+        ThrowIfDisposed();
+        if (_initialProjection is null)
+            throw new InvalidOperationException(
+                "GetDiff requires CaptureInitialProjection = true in DocxSessionSettings.");
+
+        if (format != DiffFormat.Json)
+            throw new NotSupportedException(
+                $"DiffFormat.{format} is deferred to v2 (see issue tracker). Only DiffFormat.Json is supported in v1.");
+
+        var current = Project();
+        var entries = ComputeDiff(_initialProjection, current);
+        return SerializeDiff(entries);
+    }
+
+    private static List<DiffEntry> ComputeDiff(MarkdownProjection initial, MarkdownProjection current)
+    {
+        var initialByUnid = initial.AnchorIndex.Values.ToDictionary(t => t.Unid, t => t);
+        var currentByUnid = current.AnchorIndex.Values.ToDictionary(t => t.Unid, t => t);
+
+        var entries = new List<DiffEntry>();
+
+        // Deletes: in initial, missing from current.
+        foreach (var (unid, target) in initialByUnid)
+        {
+            if (currentByUnid.ContainsKey(unid)) continue;
+            entries.Add(new DiffEntry
+            {
+                Op = "delete",
+                AnchorId = target.Anchor.Id,
+                Before = target.TextPreview,
+            });
+        }
+
+        // Modifies: present in both, text preview OR kind differs.
+        // Kind can flip without a text change (e.g., SetParagraphStyle promoting
+        // a paragraph to a heading flips Anchor.Kind from "p" to "h" while
+        // preserving the Unid and TextPreview).
+        foreach (var (unid, initialTarget) in initialByUnid)
+        {
+            if (!currentByUnid.TryGetValue(unid, out var currentTarget)) continue;
+            if (initialTarget.TextPreview == currentTarget.TextPreview
+                && initialTarget.Anchor.Kind == currentTarget.Anchor.Kind) continue;
+            entries.Add(new DiffEntry
+            {
+                Op = "modify",
+                AnchorId = currentTarget.Anchor.Id,
+                Before = initialTarget.TextPreview,
+                After = currentTarget.TextPreview,
+            });
+        }
+
+        // Inserts: in current, missing from initial.
+        foreach (var (unid, target) in currentByUnid)
+        {
+            if (initialByUnid.ContainsKey(unid)) continue;
+            entries.Add(new DiffEntry
+            {
+                Op = "insert",
+                AnchorId = target.Anchor.Id,
+                After = target.TextPreview,
+            });
+        }
+
+        return entries;
+    }
+
+    private static string SerializeDiff(List<DiffEntry> entries)
+    {
+        // Hand-rolled JSON so SerializeDiff stays trim/AOT-safe; the WASM build
+        // ships with reflection-based serialization disabled, so
+        // `System.Text.Json.JsonSerializer.Serialize(...)` throws
+        // `JsonSerializerIsReflectionDisabled` at runtime in the browser.
+        if (entries.Count == 0) return "[]";
+        var sb = new System.Text.StringBuilder(entries.Count * 100 + 2);
+        sb.Append('[');
+        for (int i = 0; i < entries.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var e = entries[i];
+            sb.Append("{\"op\":\"").Append(e.Op).Append("\"")
+              .Append(",\"anchorId\":");
+            AppendJsonString(sb, e.AnchorId);
+            if (e.Before is not null)
+            {
+                sb.Append(",\"before\":");
+                AppendJsonString(sb, e.Before);
+            }
+            if (e.After is not null)
+            {
+                sb.Append(",\"after\":");
+                AppendJsonString(sb, e.After);
+            }
+            sb.Append('}');
+        }
+        sb.Append(']');
+        return sb.ToString();
+    }
+
+    private static void AppendJsonString(System.Text.StringBuilder sb, string s)
+    {
+        sb.Append('"');
+        foreach (var c in s)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                default:
+                    if (c < 0x20) sb.Append("\\u").Append(((int)c).ToString("X4"));
+                    else sb.Append(c);
+                    break;
+            }
+        }
+        sb.Append('"');
     }
 
     /// <summary>

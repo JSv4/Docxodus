@@ -80,6 +80,11 @@ internal static class Dispatcher
             (ProjectionScopes)IntOptional(args, "scope", (int)ProjectionScopes.Body),
             IntOptional(args, "contextChars", 80),
             (ContextBoundary)IntOptional(args, "boundary", (int)ContextBoundary.Char)),
+        "get_edit_summary" => DocxSessionOps.GetEditSummary(Handle(args)),
+        "remaining_placeholders" => DocxSessionOps.RemainingPlaceholders(
+            Handle(args), (PlaceholderKinds)IntOptional(args, "kinds", 7)),
+        "get_diff" => DocxSessionOps.GetDiff(
+            Handle(args), (DiffFormat)IntOptional(args, "format", 0)),
         "find_by_annotation" => DocxSessionOps.FindByAnnotation(Handle(args), Str(args, "annotationId")),
         "find_by_label" => DocxSessionOps.FindByLabel(Handle(args), Str(args, "labelId")),
         "find_by_bookmark" => DocxSessionOps.FindByBookmark(Handle(args), Str(args, "bookmarkName")),
