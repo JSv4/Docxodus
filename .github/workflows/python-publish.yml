@@ -198,7 +198,10 @@ jobs:
           else
             bin="$venv/bin"
           fi
-          "$bin/pip" install --upgrade pip
+          # `pip install --upgrade pip` via pip.exe fails on Windows because
+          # the running exe holds a lock on itself; pip 25+ refuses and tells
+          # you to use `python -m pip` instead. Use that form on every OS.
+          "$bin/python" -m pip install --upgrade pip
           "$bin/pip" install python/dist/*.whl pytest
           # Force the locator to use the wheel's bundled host, not any dev
           # fallback the runner might have lying around.
