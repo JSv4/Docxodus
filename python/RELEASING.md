@@ -76,32 +76,27 @@ The two tag namespaces are independent. A docx-scalpel point-release doesn't dra
 
 PyPI accepts PEP 440 pre-release identifiers — `0.1.0a1`, `0.1.0b2`, `0.1.0rc1`, `0.1.0.dev3`. Use the tag form `docx-scalpel-v0.1.0a1` and pip will only install pre-releases when `--pre` is passed.
 
-## Wheel scope (v1)
+## Wheel scope
 
-Today the workflow ships:
+The workflow ships one wheel per RID plus a single sdist:
 
-- `docx_scalpel-${VER}-py3-none-manylinux_2_28_x86_64.whl` — linux-x64, bundled `docxodus-pyhost`
-- `docx_scalpel-${VER}.tar.gz` — sdist (no bundled binary; install requires `DOCXODUS_HOST` env var or a dev clone of Docxodus)
+| RID | Runner | Wheel platform tag | Binary |
+|---|---|---|---|
+| `linux-x64` | `ubuntu-latest` | `manylinux_2_28_x86_64` | `docxodus-pyhost` |
+| `linux-arm64` | `ubuntu-22.04-arm` | `manylinux_2_28_aarch64` | `docxodus-pyhost` |
+| `osx-x64` | `macos-13` | `macosx_11_0_x86_64` | `docxodus-pyhost` |
+| `osx-arm64` | `macos-14` | `macosx_11_0_arm64` | `docxodus-pyhost` |
+| `win-x64` | `windows-latest` | `win_amd64` | `docxodus-pyhost.exe` |
 
-To install on linux-x64 the user does `pip install docx-scalpel` and gets the bundled host transparently. On other platforms today, the sdist install path requires building the host out-of-band — temporary until we add the other RIDs.
+The matrix is in `.github/workflows/python-publish.yml` under `build-wheel`. Each entry runs the same step sequence (publish .NET host → stage → smoke-test → build wheel → retag → lifecycle-test from a fresh-venv install). `fail-fast: false` so all RID failures surface at once, but `publish` still gates on every matrix entry succeeding.
 
-## Adding more RIDs
+`docx_scalpel-${VER}.tar.gz` (the sdist) has **no bundled binary** — install requires `DOCXODUS_HOST` set or a Docxodus monorepo clone with the host built locally.
 
-The matrix is the obvious one. Adding `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64` is a mechanical extension of `build-wheel-linux-x64`:
+### Known gaps
 
-1. Duplicate the `build-wheel-linux-x64` job per RID, parameterized by:
-   - `runs-on`: `ubuntu-22.04-arm` (linux-arm64), `macos-13` (osx-x64), `macos-14` (osx-arm64), `windows-latest` (win-x64)
-   - `-r <rid>` for `dotnet publish`
-   - Platform tag passed to `wheel tags`:
-     - `manylinux_2_28_aarch64`
-     - `macosx_11_0_x86_64`
-     - `macosx_11_0_arm64`
-     - `win_amd64`
-2. Linux ARM may need a manylinux container to ensure glibc compliance — see `auditwheel` if it does.
-3. Windows: the host binary is `docxodus-pyhost.exe`; everything else is identical. Use a bash shell for the wheel/sed steps (`shell: bash` or rewrite in PowerShell).
-4. Add the new artifact name to the `publish` job's `pattern: dist-*` glob (already wildcard-covered).
-
-Each per-RID wheel is independent — the publish job collects all artifacts from `dist-*` and uploads them as one PyPI release.
+- **Code signing on macOS** — wheels ship an unsigned `docxodus-pyhost`. First launch may trigger a Gatekeeper warning; user can bypass via right-click → Open or `xattr -d com.apple.quarantine`. Proper signing + notarization is a future ask; needs an Apple Developer ID and an `APPLE_*` secret bundle in CI.
+- **Authenticode signing on Windows** — same story. Unsigned `.exe` triggers SmartScreen on first run. Needs a code-signing cert.
+- **Glibc compliance for Linux ARM** — `ubuntu-22.04-arm` runner has glibc 2.35; we claim `manylinux_2_28_aarch64`. The .NET 8 self-contained binary should be glibc-2.28-compatible but we don't run `auditwheel` to enforce it. If users on older arm64 distros report `GLIBC_2.34 not found`, build inside a `quay.io/pypa/manylinux_2_28_aarch64` container instead.
 
 ## Troubleshooting
 

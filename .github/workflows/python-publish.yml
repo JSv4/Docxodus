@@ -9,8 +9,11 @@ name: python-publish
 # bump for unrelated work. Compatibility is handled by bundling: each wheel
 # embeds a docxodus-pyhost built from the same commit the tag points to.
 #
-# v1 scope: linux-x64 wheel + sdist. Other RIDs (linux-arm64, osx-x64,
-# osx-arm64, win-x64) are mechanical add-ons; see python/RELEASING.md.
+# Matrix builds wheels for linux-x64, linux-arm64, osx-x64, osx-arm64, win-x64
+# (each carrying a self-contained docxodus-pyhost for its RID) plus a single
+# sdist. The publish job collects every dist-* artifact and uploads them as
+# one PyPI release. fail-fast: false in the matrix surfaces all RID failures
+# at once, but publish still gates on every matrix entry succeeding.
 
 on:
   push:
@@ -37,9 +40,6 @@ permissions:
 env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
   DOTNET_NOLOGO: true
-  # Match the lowest manylinux baseline we're willing to support. .NET 8
-  # self-contained linux-x64 builds depend on glibc 2.27+, so 2_28 is safe.
-  WHEEL_PLATFORM_TAG_LINUX_X64: manylinux_2_28_x86_64
 
 jobs:
   resolve:
@@ -68,10 +68,47 @@ jobs:
           echo "target=$tgt"  >> "$GITHUB_OUTPUT"
           echo "Resolved: version=$ver target=$tgt"
 
-  build-wheel-linux-x64:
-    name: Build wheel (linux-x64)
+  build-wheel:
+    name: Build wheel (${{ matrix.rid }})
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      # One RID's failure shouldn't hide the others' — surface all problems at
+      # once so we can fix them in a single follow-up. publish still gates on
+      # ALL matrix entries succeeding (GH Actions matrix-job semantics), so a
+      # broken RID still blocks the release.
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            runner: ubuntu-latest
+            wheel-platform: manylinux_2_28_x86_64
+            binary: docxodus-pyhost
+          - rid: linux-arm64
+            # GitHub-hosted free ARM runner (GA for public repos since 2025).
+            runner: ubuntu-22.04-arm
+            wheel-platform: manylinux_2_28_aarch64
+            binary: docxodus-pyhost
+          - rid: osx-x64
+            # Intel Mac runner — being deprecated in 2026 but still works.
+            runner: macos-13
+            wheel-platform: macosx_11_0_x86_64
+            binary: docxodus-pyhost
+          - rid: osx-arm64
+            # Apple Silicon runner.
+            runner: macos-14
+            wheel-platform: macosx_11_0_arm64
+            binary: docxodus-pyhost
+          - rid: win-x64
+            runner: windows-latest
+            wheel-platform: win_amd64
+            binary: docxodus-pyhost.exe
+    defaults:
+      run:
+        # Use bash uniformly — windows-latest ships Git Bash, which handles the
+        # mkdir / cp / chmod / heredoc / glob syntax exactly the way the unix
+        # runners do. Saves us from forking the script per platform.
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -97,29 +134,33 @@ jobs:
         env:
           VER: ${{ needs.resolve.outputs.version }}
 
-      - name: Publish docxodus-pyhost (linux-x64, self-contained, single-file)
+      - name: Publish docxodus-pyhost (${{ matrix.rid }}, self-contained, single-file)
         run: |
           dotnet publish tools/python-host/pyhost.csproj \
             -c Release \
-            -r linux-x64 \
+            -r '${{ matrix.rid }}' \
             --self-contained true \
             -p:PublishSingleFile=true \
             -p:PublishReadyToRun=true \
             -p:IncludeNativeLibrariesForSelfExtract=true \
-            -o python/vendor/linux-x64
+            -o 'python/vendor/${{ matrix.rid }}'
 
       - name: Stage binary into wheel layout
         run: |
+          set -euo pipefail
           mkdir -p python/src/docx_scalpel/_bin
-          cp python/vendor/linux-x64/docxodus-pyhost python/src/docx_scalpel/_bin/
-          chmod +x python/src/docx_scalpel/_bin/docxodus-pyhost
+          cp "python/vendor/${{ matrix.rid }}/${{ matrix.binary }}" \
+             "python/src/docx_scalpel/_bin/${{ matrix.binary }}"
+          # chmod is a no-op on NTFS but a hard requirement on unix runners
+          # and harmless to run unconditionally inside Git Bash.
+          chmod +x "python/src/docx_scalpel/_bin/${{ matrix.binary }}" || true
           ls -la python/src/docx_scalpel/_bin/
 
       - name: Smoke-test the bundled host
         run: |
           set -euo pipefail
           out=$(printf '{"id":1,"op":"ping","args":{}}\n{"id":2,"op":"shutdown","args":{}}\n' \
-              | python/src/docx_scalpel/_bin/docxodus-pyhost)
+              | "python/src/docx_scalpel/_bin/${{ matrix.binary }}")
           echo "$out"
           echo "$out" | grep -q '"pong":true' || { echo "ping failed"; exit 1; }
 
@@ -131,13 +172,15 @@ jobs:
           python -m build --wheel
           ls -la dist/
 
-      - name: Retag wheel for ${{ env.WHEEL_PLATFORM_TAG_LINUX_X64 }}
+      - name: Retag wheel for ${{ matrix.wheel-platform }}
         run: |
           set -euo pipefail
           cd python/dist
-          # Use the wheel project's own CLI (PEP 491-aware), not a filename rename.
-          python -m wheel tags --remove --platform-tag="$WHEEL_PLATFORM_TAG_LINUX_X64" \
-            docx_scalpel-${VER}-py3-none-any.whl
+          # Use the wheel project's own CLI (PEP 491-aware) — updates filename
+          # AND the embedded WHEEL metadata, not just the file rename.
+          python -m wheel tags --remove \
+            --platform-tag='${{ matrix.wheel-platform }}' \
+            "docx_scalpel-${VER}-py3-none-any.whl"
           ls -la
         env:
           VER: ${{ needs.resolve.outputs.version }}
@@ -145,16 +188,26 @@ jobs:
       - name: Run lifecycle tests against the built wheel
         run: |
           set -euo pipefail
-          python -m venv /tmp/verify-venv
-          /tmp/verify-venv/bin/pip install --upgrade pip
-          /tmp/verify-venv/bin/pip install python/dist/*.whl pytest
-          # Use the wheel's bundled host, not the dev fallback.
+          # $RUNNER_TEMP is set by GH Actions on every platform — /tmp wouldn't
+          # exist on windows-latest.
+          venv="$RUNNER_TEMP/verify-venv"
+          python -m venv "$venv"
+          # venv bin layout: unix has bin/, windows has Scripts/
+          if [[ -d "$venv/Scripts" ]]; then
+            bin="$venv/Scripts"
+          else
+            bin="$venv/bin"
+          fi
+          "$bin/pip" install --upgrade pip
+          "$bin/pip" install python/dist/*.whl pytest
+          # Force the locator to use the wheel's bundled host, not any dev
+          # fallback the runner might have lying around.
           unset DOCXODUS_HOST
-          /tmp/verify-venv/bin/pytest python/tests/test_lifecycle.py -v
+          "$bin/pytest" python/tests/test_lifecycle.py -v
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dist-linux-x64
+          name: dist-${{ matrix.rid }}
           path: python/dist/*.whl
           if-no-files-found: error
 
@@ -199,7 +252,7 @@ jobs:
     name: Publish to ${{ needs.resolve.outputs.target }}
     needs:
       - resolve
-      - build-wheel-linux-x64
+      - build-wheel
       - build-sdist
     runs-on: ubuntu-latest
     # The environment must be configured in repo Settings → Environments AND
