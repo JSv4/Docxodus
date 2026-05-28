@@ -1199,9 +1199,10 @@ export interface AnchorInfo {
 /**
  * A custom annotation persisted in the document via Docxodus' annotation system.
  * Returned by {@link DocxSession.listAnnotations}; mirrors the wire-relevant
- * fields of the .NET `DocumentAnnotation` type. Stale page caches and arbitrary
- * metadata are omitted to keep the JSON payload compact — callers that need them
- * can use the .NET API directly.
+ * fields of the .NET `DocumentAnnotation` type. The page-info cache fields
+ * (`startPage`/`endPage`/`pageInfoStale`/`pageInfoComputedAt`) are omitted to
+ * keep the JSON payload compact — callers that need them can use the .NET API
+ * directly. The `metadata` bag is emitted only when non-empty.
  *
  * See `docs/architecture/custom_annotations.md` for the persistence design.
  */

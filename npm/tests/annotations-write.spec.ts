@@ -107,12 +107,9 @@ test.describe('annotation write surface', () => {
   });
 
   // ─── Test B ──────────────────────────────────────────────────────────────
-  // updateAnnotation mutates label; metadata patch is applied in-memory
-  // Note: ListAnnotations wire format does not include metadata (it is stored in
-  // custom XML and intentionally omitted from the compact wire shape). We verify
-  // success and label mutation — the xUnit UpdateAnnotation tests cover metadata
-  // semantics exhaustively at the .NET layer.
-  test('update mutates label (and metadata patch succeeds)', async ({ page }) => {
+  // updateAnnotation mutates label and applies a metadata patch; both surface
+  // through ListAnnotations now that SerializeAnnotations emits the metadata bag.
+  test('update mutates label and metadata patch is observable via list', async ({ page }) => {
     const bytes = readTestFile('DA001-TemplateDocument.docx');
 
     const result = await page.evaluate(async (bytesArray: number[]) => {
@@ -150,7 +147,7 @@ test.describe('annotation write surface', () => {
         });
         const updateResult = JSON.parse(bridge.UpdateAnnotation(h, 'ws-2', updateJson));
 
-        // ListAnnotations returns label but not metadata on the wire
+        // ListAnnotations now surfaces metadata, so we can verify the patch landed.
         const listed = (JSON.parse(bridge.ListAnnotations(h)) as any[]).find(a => a.id === 'ws-2');
 
         return {
@@ -161,6 +158,7 @@ test.describe('annotation write surface', () => {
           updateError: updateResult.error,
           listedLabel: listed?.label,
           listedLabelId: listed?.labelId,
+          listedMetadata: listed?.metadata,
         };
       } finally {
         bridge.CloseSession(h);
@@ -174,6 +172,8 @@ test.describe('annotation write surface', () => {
     expect(result.listedLabel).toBe('New');
     // labelId was not patched so should remain "OLD"
     expect(result.listedLabelId).toBe('OLD');
+    // Metadata patch: "drop" removed, "new" added, "keep" untouched
+    expect(result.listedMetadata).toEqual({ keep: 'yes', new: 'fresh' });
   });
 
   // ─── Test C ──────────────────────────────────────────────────────────────

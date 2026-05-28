@@ -542,6 +542,18 @@ internal static class DocxSessionJson
                 sb.Append(",\"created\":").Append(JsonString(a.Created.Value.ToString("o")));
             if (a.AnnotatedText is not null)
                 sb.Append(",\"annotatedText\":").Append(JsonString(a.AnnotatedText));
+            if (a.Metadata is { Count: > 0 })
+            {
+                sb.Append(",\"metadata\":{");
+                bool firstMeta = true;
+                foreach (var kv in a.Metadata)
+                {
+                    if (!firstMeta) sb.Append(',');
+                    firstMeta = false;
+                    sb.Append(JsonString(kv.Key)).Append(':').Append(JsonString(kv.Value ?? string.Empty));
+                }
+                sb.Append('}');
+            }
             sb.Append('}');
         }
         sb.Append(']');
@@ -550,28 +562,125 @@ internal static class DocxSessionJson
 
     // ─── Deserializers ──────────────────────────────────────────────────
 
-    // Web defaults give us camelCase property name matching (LabelId → "labelId",
-    // Metadata → "metadata", etc.) consistent with the camelCase output produced
-    // by SerializeAnnotations above.
-    // DefaultIgnoreCondition.Never ensures explicit JSON null values in
-    // MetadataPatch are preserved during deserialization ("null" means "remove this
-    // key") rather than silently dropped.
-    private static readonly JsonSerializerOptions s_annotationOptions =
-        new(JsonSerializerDefaults.Web)
-        {
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never,
-        };
-
+    /// <summary>
+    /// Parses a camelCase annotation JSON object into a <see cref="DocumentAnnotation"/>
+    /// using only <see cref="JsonDocument"/> — safe in trimmed WASM Release builds
+    /// where reflection-based <see cref="JsonSerializer"/> is disabled. Both the
+    /// WASM bridge and the stdio NDJSON host route annotation writes through here,
+    /// so wire shape stays unified across transports.
+    /// </summary>
     public static DocumentAnnotation DeserializeAnnotation(string json)
     {
-        var a = JsonSerializer.Deserialize<DocumentAnnotation>(json, s_annotationOptions)
-            ?? throw new System.ArgumentException("annotation JSON deserialized to null");
-        // Ensure Metadata is non-null even if the caller omitted the field.
-        a.Metadata ??= new System.Collections.Generic.Dictionary<string, string>();
-        return a;
+        if (string.IsNullOrEmpty(json))
+            throw new System.ArgumentException("annotation JSON is null or empty");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new System.ArgumentException("annotation JSON must be an object");
+
+        var annotation = new DocumentAnnotation
+        {
+            Id            = TryGetString(root, "id", string.Empty) ?? string.Empty,
+            LabelId       = TryGetString(root, "labelId", string.Empty) ?? string.Empty,
+            Label         = TryGetString(root, "label", string.Empty) ?? string.Empty,
+            Color         = TryGetString(root, "color", string.Empty) ?? string.Empty,
+            Author        = TryGetString(root, "author", string.Empty) ?? string.Empty,
+            BookmarkName  = TryGetString(root, "bookmarkName", string.Empty) ?? string.Empty,
+            AnnotatedText = TryGetString(root, "annotatedText", string.Empty) ?? string.Empty,
+            Metadata      = new System.Collections.Generic.Dictionary<string, string>(),
+        };
+
+        if (TryGetDateTime(root, "created", out var created))
+            annotation.Created = created;
+
+        if (TryGetIntNullable(root, "startPage", out var startPage))
+            annotation.StartPage = startPage;
+
+        if (TryGetIntNullable(root, "endPage", out var endPage))
+            annotation.EndPage = endPage;
+
+        // Honour explicit pageInfoStale if supplied; default already true on the model.
+        if (root.TryGetProperty("pageInfoStale", out var stale) &&
+            (stale.ValueKind == JsonValueKind.True || stale.ValueKind == JsonValueKind.False))
+            annotation.PageInfoStale = stale.GetBoolean();
+
+        if (TryGetDateTime(root, "pageInfoComputedAt", out var computedAt))
+            annotation.PageInfoComputedAt = computedAt;
+
+        if (root.TryGetProperty("metadata", out var meta) && meta.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var kv in meta.EnumerateObject())
+                if (kv.Value.ValueKind == JsonValueKind.String)
+                    annotation.Metadata[kv.Name] = kv.Value.GetString()!;
+        }
+
+        return annotation;
     }
 
-    public static AnnotationUpdate DeserializeAnnotationUpdate(string json) =>
-        JsonSerializer.Deserialize<AnnotationUpdate>(json, s_annotationOptions)
-            ?? throw new System.ArgumentException("annotation update JSON deserialized to null");
+    /// <summary>
+    /// Parses a camelCase annotation-update JSON object into an <see cref="AnnotationUpdate"/>
+    /// using only <see cref="JsonDocument"/> — trim-safe under the WASM Release build.
+    /// <see cref="AnnotationUpdate.MetadataPatch"/> honours explicit JSON nulls (a null
+    /// value means "remove this key"), while missing fields leave the existing annotation
+    /// value unchanged.
+    /// </summary>
+    public static AnnotationUpdate DeserializeAnnotationUpdate(string json)
+    {
+        if (string.IsNullOrEmpty(json))
+            throw new System.ArgumentException("annotation update JSON is null or empty");
+
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+            throw new System.ArgumentException("annotation update JSON must be an object");
+
+        System.Collections.Generic.Dictionary<string, string?>? patch = null;
+        if (root.TryGetProperty("metadataPatch", out var mp) && mp.ValueKind == JsonValueKind.Object)
+        {
+            patch = new System.Collections.Generic.Dictionary<string, string?>();
+            foreach (var kv in mp.EnumerateObject())
+                patch[kv.Name] = kv.Value.ValueKind == JsonValueKind.Null ? null : kv.Value.GetString();
+        }
+
+        return new AnnotationUpdate
+        {
+            LabelId       = TryGetString(root, "labelId", null),
+            Label         = TryGetString(root, "label", null),
+            Color         = TryGetString(root, "color", null),
+            Author        = TryGetString(root, "author", null),
+            MetadataPatch = patch,
+        };
+    }
+
+    private static bool TryGetDateTime(JsonElement root, string name, out System.DateTime value)
+    {
+        if (root.TryGetProperty(name, out var prop) && prop.ValueKind == JsonValueKind.String
+            && prop.TryGetDateTime(out var dt))
+        {
+            value = dt;
+            return true;
+        }
+        value = default;
+        return false;
+    }
+
+    private static bool TryGetIntNullable(JsonElement root, string name, out int? value)
+    {
+        if (root.TryGetProperty(name, out var prop))
+        {
+            if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var n))
+            {
+                value = n;
+                return true;
+            }
+            if (prop.ValueKind == JsonValueKind.Null)
+            {
+                value = null;
+                return true;
+            }
+        }
+        value = null;
+        return false;
+    }
 }
