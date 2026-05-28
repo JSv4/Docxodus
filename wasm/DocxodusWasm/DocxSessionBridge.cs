@@ -84,18 +84,8 @@ public static partial class DocxSessionBridge
         DocxSessionOps.MergeParagraphs(h, first, second);
 
     [JSExport]
-    public static string ApplyFormat(int h, string anchor, string spanJson, string opJson)
-    {
-        CharSpan? span = null;
-        if (!string.IsNullOrEmpty(spanJson))
-        {
-            using var doc = JsonDocument.Parse(spanJson);
-            span = new CharSpan(
-                doc.RootElement.GetProperty("start").GetInt32(),
-                doc.RootElement.GetProperty("length").GetInt32());
-        }
-        return DocxSessionOps.ApplyFormat(h, anchor, span, DocxSessionJson.ParseFormatOp(opJson));
-    }
+    public static string ApplyFormat(int h, string anchor, string spanJson, string opJson) =>
+        DocxSessionOps.ApplyFormat(h, anchor, ParseSpan(spanJson), DocxSessionJson.ParseFormatOp(opJson));
 
     /// <summary>
     /// Bridge for the substring-targeted <see cref="DocxSession.ApplyFormat(string, string, FormatOp)"/>
@@ -278,6 +268,36 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string ListAnnotations(int h) => DocxSessionOps.ListAnnotations(h);
 
+    // ─── Tier E: annotations (write surface) ──────────────────────────────
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.AddAnnotation"/>. The span is encoded as
+    /// a JSON string (empty/null = no span = annotate whole block, otherwise
+    /// <c>{"start": int, "length": int}</c>) matching the existing
+    /// <see cref="ApplyFormat"/> convention. The annotation JSON is a camelCase
+    /// mirror of <see cref="DocumentAnnotation"/>.
+    /// </summary>
+    [JSExport]
+    public static string AddAnnotation(int h, string anchorId, string spanJson, string annotationJson) =>
+        DocxSessionOps.AddAnnotation(h, anchorId, ParseSpan(spanJson), annotationJson);
+
+    /// <summary>
+    /// Session-style RemoveAnnotation (distinct from the existing WmlDocument-style
+    /// <see cref="RemoveAnnotation"/> which takes byte arrays). Removes the bookmark
+    /// pair and custom-XML entry from the live session document.
+    /// </summary>
+    [JSExport]
+    public static string SessionRemoveAnnotation(int h, string annotationId) =>
+        DocxSessionOps.RemoveAnnotation(h, annotationId);
+
+    [JSExport]
+    public static string UpdateAnnotation(int h, string annotationId, string updateJson) =>
+        DocxSessionOps.UpdateAnnotation(h, annotationId, updateJson);
+
+    [JSExport]
+    public static string MoveAnnotation(int h, string annotationId, string newAnchorId, string newSpanJson) =>
+        DocxSessionOps.MoveAnnotation(h, annotationId, newAnchorId, ParseSpan(newSpanJson));
+
     /// <summary>Bridge for <see cref="DocxSession.Exists"/>. Returns true/false.</summary>
     [JSExport]
     public static bool Exists(int h, string anchorId) => DocxSessionOps.Exists(h, anchorId);
@@ -356,6 +376,15 @@ public static partial class DocxSessionBridge
     public static byte[] Save(int h) => DocxSessionOps.Save(h);
 
     // ─── Helpers ────────────────────────────────────────────────────────
+
+    private static CharSpan? ParseSpan(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        using var doc = JsonDocument.Parse(json);
+        return new CharSpan(
+            doc.RootElement.GetProperty("start").GetInt32(),
+            doc.RootElement.GetProperty("length").GetInt32());
+    }
 
     private static FindOptions? ParseFindOptions(string optionsJson)
     {
