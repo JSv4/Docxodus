@@ -183,6 +183,25 @@ internal static class DocxSessionOps
     public static string RawReplaceXml(int handle, string anchorId, string xml) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).Raw.ReplaceXml(anchorId, xml));
 
+    // ─── Tier E: annotations ────────────────────────────────────────────
+
+    public static string AddAnnotation(int handle, string anchorId, CharSpan? span,
+        string annotationJson) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddAnnotation(
+            anchorId, span, DocxSessionJson.DeserializeAnnotation(annotationJson)));
+
+    public static string RemoveAnnotation(int handle, string annotationId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveAnnotation(annotationId));
+
+    public static string UpdateAnnotation(int handle, string annotationId, string updateJson) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).UpdateAnnotation(
+            annotationId, DocxSessionJson.DeserializeAnnotationUpdate(updateJson)));
+
+    public static string MoveAnnotation(int handle, string annotationId, string newAnchorId,
+        CharSpan? newSpan) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).MoveAnnotation(
+            annotationId, newAnchorId, newSpan));
+
     // ─── Undo / Redo ────────────────────────────────────────────────────
 
     public static bool Undo(int handle) => SessionRegistry.Get(handle).Undo();

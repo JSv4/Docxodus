@@ -384,4 +384,25 @@ public class DocxSessionAnnotationWriteTests
         Assert.Equal(EditErrorCode.AnchorNotFound, r.Error!.Code);
         Assert.Single(session.ListAnnotations(), a => a.Id == "safe"); // still present
     }
+
+    [Fact]
+    public void AW050_DocxSessionOps_AddAnnotation_JsonRoundtrip()
+    {
+        var handle = Docxodus.Internal.SessionRegistry.OpenSession(LoadFixture(Fixture), null);
+        try
+        {
+            var session = Docxodus.Internal.SessionRegistry.Get(handle);
+            var anchorId = session.AnchorsByScope(ProjectionScopes.Body)
+                .First(a => a.Anchor.Kind == "p" && a.TextPreview.Length > 0).Anchor.Id;
+            var annJson = "{\"id\":\"json-001\",\"labelId\":\"X\",\"label\":\"X\",\"color\":\"#0F0\"}";
+            var resultJson = Docxodus.Internal.DocxSessionOps.AddAnnotation(
+                handle, anchorId, new CharSpan(0, 1), annJson);
+            Assert.Contains("\"success\":true", resultJson);
+            Assert.Contains("\"annotationId\":\"json-001\"", resultJson);
+        }
+        finally
+        {
+            Docxodus.Internal.SessionRegistry.CloseSession(handle);
+        }
+    }
 }

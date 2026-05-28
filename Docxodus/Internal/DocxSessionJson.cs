@@ -147,6 +147,8 @@ internal static class DocxSessionJson
         sb.Append(",\"created\":"); AppendAnchorArray(sb, r.Created);
         sb.Append(",\"removed\":"); AppendAnchorArray(sb, r.Removed);
         sb.Append(",\"modified\":"); AppendAnchorArray(sb, r.Modified);
+        if (r.AnnotationId is not null)
+            sb.Append(",\"annotationId\":").Append(JsonString(r.AnnotationId));
         if (r.Patch is not null)
         {
             sb.Append(",\"patch\":{")
