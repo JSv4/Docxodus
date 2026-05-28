@@ -258,4 +258,69 @@ public class DocxSessionAnnotationWriteTests
         Assert.True(session.Undo());
         Assert.Single(session.ListAnnotations(), a => a.Id == "undoable-rm");
     }
+
+    [Fact]
+    public void AW030_UpdateAnnotation_ScalarPatch_MutatesFields()
+    {
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var firstP = session.AnchorsByScope(ProjectionScopes.Body).First(a => a.Anchor.Kind == "p");
+        session.AddAnnotation(firstP.Anchor.Id, new CharSpan(0, 1),
+            new DocumentAnnotation { Id = "u1", LabelId = "OLD", Label = "Old", Color = "#000",
+                Author = "alice" });
+
+        var r = session.UpdateAnnotation("u1", new AnnotationUpdate
+        {
+            Label = "New",
+            Color = "#FFF",
+            Author = "bob",
+        });
+        Assert.True(r.Success);
+
+        var listed = session.ListAnnotations().Single(a => a.Id == "u1");
+        Assert.Equal("New", listed.Label);
+        Assert.Equal("#FFF", listed.Color);
+        Assert.Equal("bob", listed.Author);
+        Assert.Equal("OLD", listed.LabelId); // unchanged
+    }
+
+    [Fact]
+    public void AW031_UpdateAnnotation_MetadataPatch_AddsAndRemovesKeys()
+    {
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var firstP = session.AnchorsByScope(ProjectionScopes.Body).First(a => a.Anchor.Kind == "p");
+        session.AddAnnotation(firstP.Anchor.Id, new CharSpan(0, 1),
+            new DocumentAnnotation
+            {
+                Id = "u2", LabelId = "L", Label = "L", Color = "#000",
+                Metadata = new System.Collections.Generic.Dictionary<string, string>
+                {
+                    ["keep"] = "yes",
+                    ["drop"] = "old",
+                },
+            });
+
+        var r = session.UpdateAnnotation("u2", new AnnotationUpdate
+        {
+            MetadataPatch = new System.Collections.Generic.Dictionary<string, string?>
+            {
+                ["drop"] = null,        // remove
+                ["new"] = "fresh",      // add
+            },
+        });
+        Assert.True(r.Success);
+
+        var listed = session.ListAnnotations().Single(a => a.Id == "u2");
+        Assert.Equal("yes", listed.Metadata["keep"]);
+        Assert.False(listed.Metadata.ContainsKey("drop"));
+        Assert.Equal("fresh", listed.Metadata["new"]);
+    }
+
+    [Fact]
+    public void AW032_UpdateAnnotation_Missing_ReturnsError()
+    {
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var r = session.UpdateAnnotation("nope", new AnnotationUpdate { Label = "x" });
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.AnnotationNotFound, r.Error!.Code);
+    }
 }
