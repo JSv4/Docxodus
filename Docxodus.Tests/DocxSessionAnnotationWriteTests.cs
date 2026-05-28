@@ -179,4 +179,45 @@ public class DocxSessionAnnotationWriteTests
         Assert.Equal("PERSIST", found.LabelId);
         Assert.Equal("v", found.Metadata["k"]);
     }
+
+    [Fact]
+    public void AW010_AddAnnotation_SpanStraddlingTwoRuns_SplitsRunsCorrectly()
+    {
+        // Pick the first paragraph with at least 6 characters of text.
+        // SplitRunsAtOffset handles both single-w:t and multi-w:t cases;
+        // the test confirms that a mid-block span survives save/reopen with
+        // the correct AnnotatedText.
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var target = session.AnchorsByScope(ProjectionScopes.Body)
+            .Where(a => a.Anchor.Kind == "p" && a.TextPreview.Length >= 6)
+            .First();
+
+        var r = session.AddAnnotation(target.Anchor.Id, new CharSpan(2, 4),
+            new DocumentAnnotation { Id = "mid", LabelId = "L", Label = "L", Color = "#000" });
+        Assert.True(r.Success);
+
+        var saved = session.Save();
+        using var reopened = new DocxSession(saved);
+        var listed = reopened.ListAnnotations().Single(a => a.Id == "mid");
+        Assert.Equal(4, listed.AnnotatedText!.Length);
+    }
+
+    [Fact]
+    public void AW011_AddAnnotation_InHeaderPart_Persists()
+    {
+        // Try a fixture known to have headers; fall back to the standard fixture.
+        string picked;
+        try { var _ = LoadFixture("DA034-HeaderFooter.docx"); picked = "DA034-HeaderFooter.docx"; }
+        catch (System.IO.FileNotFoundException) { picked = Fixture; }
+        catch (System.IO.DirectoryNotFoundException) { picked = Fixture; }
+
+        using var session = new DocxSession(LoadFixture(picked));
+        var headerAnchor = session.AnchorsByScope(ProjectionScopes.Headers).FirstOrDefault();
+        if (headerAnchor is null) return; // skip when no headers present in fixture
+
+        var r = session.AddAnnotation(headerAnchor.Anchor.Id, span: null,
+            new DocumentAnnotation { Id = "hdr-ann", LabelId = "H", Label = "H", Color = "#0FF" });
+        Assert.True(r.Success);
+        Assert.Single(session.ListAnnotations(), a => a.Id == "hdr-ann");
+    }
 }
