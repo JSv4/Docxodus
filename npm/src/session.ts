@@ -5,6 +5,7 @@ import type {
   AnchorInfo,
   AnchorRef,
   AnchorTargetRef,
+  AnnotationUpdate,
   BulkEditResult,
   CharSpan,
   CrossBlockMatch,
@@ -549,6 +550,46 @@ export class DocxSession {
    */
   listAnnotations(): DocumentAnnotation[] {
     return JSON.parse(this.wasm.ListAnnotations(this.handle)) as DocumentAnnotation[];
+  }
+
+  // ─── Annotation write surface ────────────────────────────────────────
+
+  /**
+   * Annotate a range inside `anchorId`. When `span` is `null`/`undefined`
+   * the annotation wraps every inline run of the block. When
+   * `annotation.id` is `undefined`, a 16-char hex id is auto-generated and
+   * returned in `EditResult.annotationId`.
+   */
+  addAnnotation(
+    anchorId: string,
+    span: CharSpan | null,
+    annotation: DocumentAnnotation,
+  ): EditResult {
+    const spanJson = span ? JSON.stringify(span) : "";
+    return JSON.parse(
+      this.wasm.AddAnnotation(this.handle, anchorId, spanJson, JSON.stringify(annotation)),
+    ) as EditResult;
+  }
+
+  removeAnnotation(annotationId: string): EditResult {
+    return JSON.parse(this.wasm.SessionRemoveAnnotation(this.handle, annotationId)) as EditResult;
+  }
+
+  updateAnnotation(annotationId: string, update: AnnotationUpdate): EditResult {
+    return JSON.parse(
+      this.wasm.UpdateAnnotation(this.handle, annotationId, JSON.stringify(update)),
+    ) as EditResult;
+  }
+
+  moveAnnotation(
+    annotationId: string,
+    newAnchorId: string,
+    newSpan: CharSpan | null,
+  ): EditResult {
+    const spanJson = newSpan ? JSON.stringify(newSpan) : "";
+    return JSON.parse(
+      this.wasm.MoveAnnotation(this.handle, annotationId, newAnchorId, spanJson),
+    ) as EditResult;
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────
