@@ -276,10 +276,19 @@ public static partial class DocxSessionBridge
     /// <c>{"start": int, "length": int}</c>) matching the existing
     /// <see cref="ApplyFormat"/> convention. The annotation JSON is a camelCase
     /// mirror of <see cref="DocumentAnnotation"/>.
+    ///
+    /// Uses <see cref="JsonDocument"/> for all parsing to remain trim-safe in the
+    /// WASM Release build (reflection-based <see cref="System.Text.Json.JsonSerializer"/>
+    /// is disabled after trimming).
     /// </summary>
     [JSExport]
-    public static string AddAnnotation(int h, string anchorId, string spanJson, string annotationJson) =>
-        DocxSessionOps.AddAnnotation(h, anchorId, ParseSpan(spanJson), annotationJson);
+    public static string AddAnnotation(int h, string anchorId, string spanJson, string annotationJson)
+    {
+        var annotation = ParseAnnotation(annotationJson);
+        var span = ParseSpan(spanJson);
+        var result = SessionRegistry.Get(h).AddAnnotation(anchorId, span, annotation);
+        return DocxSessionJson.Serialize(result);
+    }
 
     /// <summary>
     /// Session-style RemoveAnnotation (distinct from the existing WmlDocument-style
@@ -290,9 +299,17 @@ public static partial class DocxSessionBridge
     public static string SessionRemoveAnnotation(int h, string annotationId) =>
         DocxSessionOps.RemoveAnnotation(h, annotationId);
 
+    /// <summary>
+    /// Uses <see cref="JsonDocument"/> for all parsing to remain trim-safe in the
+    /// WASM Release build.
+    /// </summary>
     [JSExport]
-    public static string UpdateAnnotation(int h, string annotationId, string updateJson) =>
-        DocxSessionOps.UpdateAnnotation(h, annotationId, updateJson);
+    public static string UpdateAnnotation(int h, string annotationId, string updateJson)
+    {
+        var update = ParseAnnotationUpdate(updateJson);
+        var result = SessionRegistry.Get(h).UpdateAnnotation(annotationId, update);
+        return DocxSessionJson.Serialize(result);
+    }
 
     [JSExport]
     public static string MoveAnnotation(int h, string annotationId, string newAnchorId, string newSpanJson) =>
@@ -415,5 +432,74 @@ public static partial class DocxSessionBridge
             whitespace = (WhitespaceMode)w.GetInt32();
         if (root.TryGetProperty("boundary", out var b) && b.ValueKind == JsonValueKind.Number)
             boundary = (ContextBoundary)b.GetInt32();
+    }
+
+    /// <summary>
+    /// Parses a camelCase annotation JSON object into a <see cref="DocumentAnnotation"/>
+    /// using only <see cref="JsonDocument"/> — safe in trimmed WASM builds where
+    /// reflection-based <see cref="System.Text.Json.JsonSerializer"/> is disabled.
+    /// </summary>
+    private static DocumentAnnotation ParseAnnotation(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        static string Str(JsonElement el, string name, string fallback = "") =>
+            el.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String
+                ? p.GetString() ?? fallback : fallback;
+
+        var annotation = new DocumentAnnotation
+        {
+            Id           = Str(root, "id"),
+            LabelId      = Str(root, "labelId"),
+            Label        = Str(root, "label"),
+            Color        = Str(root, "color"),
+            Author       = Str(root, "author"),
+            BookmarkName = Str(root, "bookmarkName"),
+            AnnotatedText = Str(root, "annotatedText"),
+            Metadata     = new Dictionary<string, string>(),
+        };
+
+        if (root.TryGetProperty("metadata", out var meta) && meta.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var kv in meta.EnumerateObject())
+                if (kv.Value.ValueKind == JsonValueKind.String)
+                    annotation.Metadata[kv.Name] = kv.Value.GetString()!;
+        }
+
+        return annotation;
+    }
+
+    /// <summary>
+    /// Parses a camelCase annotation-update JSON object into an <see cref="AnnotationUpdate"/>
+    /// using only <see cref="JsonDocument"/> — safe in trimmed WASM builds.
+    /// The <see cref="AnnotationUpdate.MetadataPatch"/> honours explicit JSON null values
+    /// (null = remove the key).
+    /// </summary>
+    private static AnnotationUpdate ParseAnnotationUpdate(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+
+        static string? NullableStr(JsonElement el, string name) =>
+            el.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String
+                ? p.GetString() : null;
+
+        Dictionary<string, string?>? patch = null;
+        if (root.TryGetProperty("metadataPatch", out var mp) && mp.ValueKind == JsonValueKind.Object)
+        {
+            patch = new Dictionary<string, string?>();
+            foreach (var kv in mp.EnumerateObject())
+                patch[kv.Name] = kv.Value.ValueKind == JsonValueKind.Null ? null : kv.Value.GetString();
+        }
+
+        return new AnnotationUpdate
+        {
+            LabelId       = NullableStr(root, "labelId"),
+            Label         = NullableStr(root, "label"),
+            Color         = NullableStr(root, "color"),
+            Author        = NullableStr(root, "author"),
+            MetadataPatch = patch,
+        };
     }
 }
