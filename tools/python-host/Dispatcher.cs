@@ -92,6 +92,20 @@ internal static class Dispatcher
         "find_by_label" => DocxSessionOps.FindByLabel(Handle(args), Str(args, "labelId")),
         "find_by_bookmark" => DocxSessionOps.FindByBookmark(Handle(args), Str(args, "bookmarkName")),
         "list_annotations" => DocxSessionOps.ListAnnotations(Handle(args)),
+        "add_annotation" => DocxSessionOps.AddAnnotation(
+            Handle(args),
+            Str(args, "anchorId"),
+            ParseOptionalSpan(args, "span"),
+            JsonObject(args, "annotation")),
+        "remove_annotation" => DocxSessionOps.RemoveAnnotation(
+            Handle(args), Str(args, "annotationId")),
+        "update_annotation" => DocxSessionOps.UpdateAnnotation(
+            Handle(args), Str(args, "annotationId"), JsonObject(args, "update")),
+        "move_annotation" => DocxSessionOps.MoveAnnotation(
+            Handle(args),
+            Str(args, "annotationId"),
+            Str(args, "newAnchorId"),
+            ParseOptionalSpan(args, "newSpan")),
 
         "exists" => DocxSessionOps.Exists(Handle(args), Str(args, "anchorId")) ? "true" : "false",
         "get_anchor_info" => DocxSessionOps.GetAnchorInfo(Handle(args), Str(args, "anchorId")),
@@ -248,4 +262,11 @@ internal static class Dispatcher
     }
 
     private static string JsonString(string s) => DocxSessionJson.JsonString(s);
+
+    private static string JsonObject(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Object)
+            throw new FormatException($"args missing object \"{name}\"");
+        return v.GetRawText();
+    }
 }
