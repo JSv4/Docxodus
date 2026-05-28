@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [6.1.0] - 2026-05-28
+
 ### Changed
 - **`DocxSession.DeleteRange` / `DeleteSection` honor `TrackedChangeMode.RenderInline`** (issue #177). The bulk-delete primitives now produce native Word tracked-deletion markup instead of silently performing a structural delete in tracked mode. Each removed paragraph has every direct-child run wrapped in `w:del` (reusing `WrapRunsInDel`) and the paragraph-mark marked deleted via `w:pPr/w:rPr/w:del` — the combination Word interprets as "this entire paragraph is a tracked deletion", so accepting the change actually removes the block (the old `DeleteBlock`-tracked path left empty paragraphs behind). Tables get `w:trPr/w:del` on every row (Word's row-deletion convention — there is no table-level "delete" markup) plus the same run/paragraph-mark wrapping inside every cell; nested tables recurse. Anchors stay live in the document tree, so the top-level block anchors are reported via `EditResult.Modified` instead of `Removed` — matching `DeleteBlock`'s existing tracked-mode contract. Block kinds outside `w:p`/`w:tbl` (e.g. `w:sdt` content controls appearing mid-range) still fall back to structural removal in tracked mode. No wire-shape changes — the WASM bridge, npm wrapper, and Python stdio host pick up the new behavior automatically through `DocxSessionOps`. Tests: `DS271`–`DS273`.
 
