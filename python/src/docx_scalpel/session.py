@@ -37,6 +37,7 @@ from .enums import (
 from .types import (
     AnchorInfo,
     AnchorTarget,
+    AnnotationUpdate,
     BulkEditResult,
     CharSpan,
     CrossBlockMatch,
@@ -396,6 +397,59 @@ class DocxSession:
     def list_annotations(self) -> tuple[DocumentAnnotation, ...]:
         result = self._call("list_annotations", {})
         return tuple(DocumentAnnotation._from_wire(a) for a in result)
+
+    # -- Tier E: annotations (write surface) -------------------------------
+
+    def add_annotation(
+        self,
+        anchor_id: str,
+        span: CharSpan | None,
+        annotation: DocumentAnnotation,
+    ) -> EditResult:
+        """Annotate a range inside ``anchor_id``.
+
+        When ``span`` is ``None`` the annotation wraps every inline run of
+        the block. When ``annotation.id`` is empty, a 16-char hex id is
+        auto-generated; check ``EditResult.annotation_id`` for the id used.
+        """
+        args: dict[str, Any] = {
+            "anchorId": anchor_id,
+            "annotation": annotation.to_wire(),
+        }
+        if span is not None:
+            args["span"] = {"start": span.start, "length": span.length}
+        return EditResult._from_wire(self._call("add_annotation", args))
+
+    def remove_annotation(self, annotation_id: str) -> EditResult:
+        return EditResult._from_wire(
+            self._call("remove_annotation", {"annotationId": annotation_id})
+        )
+
+    def update_annotation(
+        self,
+        annotation_id: str,
+        update: AnnotationUpdate,
+    ) -> EditResult:
+        return EditResult._from_wire(
+            self._call(
+                "update_annotation",
+                {"annotationId": annotation_id, "update": update.to_wire()},
+            )
+        )
+
+    def move_annotation(
+        self,
+        annotation_id: str,
+        new_anchor_id: str,
+        new_span: CharSpan | None,
+    ) -> EditResult:
+        args: dict[str, Any] = {
+            "annotationId": annotation_id,
+            "newAnchorId": new_anchor_id,
+        }
+        if new_span is not None:
+            args["newSpan"] = {"start": new_span.start, "length": new_span.length}
+        return EditResult._from_wire(self._call("move_annotation", args))
 
     # -- discovery: anchor existence + info -------------------------------
 

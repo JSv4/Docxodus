@@ -50,6 +50,7 @@ __all__ = [
     "DocxSessionSettings",
     "WmlToMarkdownConverterSettings",
     "DocumentAnnotation",
+    "AnnotationUpdate",
     "EditSummary",
     "FindOptions",
     "ReplaceOptions",
@@ -367,6 +368,7 @@ class EditResult:
     modified: tuple[Anchor, ...] = ()
     patch: MarkdownPatch | None = None
     error: EditError | None = None
+    annotation_id: str | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "EditResult":
@@ -379,6 +381,7 @@ class EditResult:
             modified=tuple(Anchor._from_wire(a) for a in d.get("modified", ())),
             patch=MarkdownPatch._from_wire(patch_d) if patch_d else None,
             error=EditError._from_wire(err_d) if err_d else None,
+            annotation_id=d.get("annotationId"),
         )
 
 
@@ -429,6 +432,7 @@ class DocumentAnnotation:
     author: str | None = None
     created: str | None = None  # ISO-8601, kept as a string in v1.
     annotated_text: str | None = None
+    metadata: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "DocumentAnnotation":
@@ -441,7 +445,58 @@ class DocumentAnnotation:
             author=d.get("author"),
             created=d.get("created"),
             annotated_text=d.get("annotatedText"),
+            metadata=dict(d.get("metadata", {}) or {}),
         )
+
+    def to_wire(self) -> dict[str, Any]:
+        wire: dict[str, Any] = {
+            "id": self.id,
+            "labelId": self.label_id,
+            "label": self.label,
+            "color": self.color,
+            "bookmarkName": self.bookmark_name,
+        }
+        if self.author is not None:
+            wire["author"] = self.author
+        if self.created is not None:
+            wire["created"] = self.created
+        if self.annotated_text is not None:
+            wire["annotatedText"] = self.annotated_text
+        if self.metadata:
+            wire["metadata"] = dict(self.metadata)
+        return wire
+
+
+@dataclass(frozen=True, slots=True)
+class AnnotationUpdate:
+    """Partial-update payload for :meth:`DocxSession.update_annotation`.
+
+    ``None`` / missing fields leave the existing value unchanged.
+    ``metadata_patch`` is a per-key merge: a non-``None`` value sets the
+    key, an explicit ``None`` removes it, a missing key leaves it
+    unchanged.
+    """
+
+    label_id: str | None = None
+    label: str | None = None
+    color: str | None = None
+    author: str | None = None
+    metadata_patch: Mapping[str, str | None] | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        wire: dict[str, Any] = {}
+        if self.label_id is not None:
+            wire["labelId"] = self.label_id
+        if self.label is not None:
+            wire["label"] = self.label
+        if self.color is not None:
+            wire["color"] = self.color
+        if self.author is not None:
+            wire["author"] = self.author
+        if self.metadata_patch is not None:
+            # Preserve explicit None values — they mean "remove this key".
+            wire["metadataPatch"] = dict(self.metadata_patch)
+        return wire
 
 
 # ---------------------------------------------------------------------------
