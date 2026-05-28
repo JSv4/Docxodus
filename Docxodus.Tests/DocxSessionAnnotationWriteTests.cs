@@ -220,4 +220,42 @@ public class DocxSessionAnnotationWriteTests
         Assert.True(r.Success);
         Assert.Single(session.ListAnnotations(), a => a.Id == "hdr-ann");
     }
+
+    [Fact]
+    public void AW020_RemoveAnnotation_HappyPath_DropsBookmarkAndCustomXml()
+    {
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var firstP = session.AnchorsByScope(ProjectionScopes.Body).First(a => a.Anchor.Kind == "p");
+        session.AddAnnotation(firstP.Anchor.Id, new CharSpan(0, 1),
+            new DocumentAnnotation { Id = "to-remove", LabelId = "L", Label = "L", Color = "#000" });
+
+        var r = session.RemoveAnnotation("to-remove");
+        Assert.True(r.Success);
+        Assert.Equal("to-remove", r.AnnotationId);
+        Assert.DoesNotContain(session.ListAnnotations(), a => a.Id == "to-remove");
+    }
+
+    [Fact]
+    public void AW021_RemoveAnnotation_Missing_ReturnsError()
+    {
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var r = session.RemoveAnnotation("does-not-exist");
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.AnnotationNotFound, r.Error!.Code);
+    }
+
+    [Fact]
+    public void AW022_RemoveAnnotation_UndoRestores()
+    {
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var firstP = session.AnchorsByScope(ProjectionScopes.Body).First(a => a.Anchor.Kind == "p");
+        session.AddAnnotation(firstP.Anchor.Id, new CharSpan(0, 1),
+            new DocumentAnnotation { Id = "undoable-rm", LabelId = "L", Label = "L", Color = "#000" });
+
+        session.RemoveAnnotation("undoable-rm");
+        Assert.DoesNotContain(session.ListAnnotations(), a => a.Id == "undoable-rm");
+
+        Assert.True(session.Undo());
+        Assert.Single(session.ListAnnotations(), a => a.Id == "undoable-rm");
+    }
 }
