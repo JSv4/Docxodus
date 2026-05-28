@@ -2575,6 +2575,9 @@ public sealed class DocxSession : IDisposable
         if (main.FootnotesPart is not null) yield return main.FootnotesPart;
         if (main.EndnotesPart is not null) yield return main.EndnotesPart;
         if (main.WordprocessingCommentsPart is not null) yield return main.WordprocessingCommentsPart;
+        // Custom XML parts hold annotation metadata; include them so undo/redo
+        // snapshots capture the full annotation store, not just the body bookmarks.
+        foreach (var cx in main.CustomXmlParts) yield return cx;
     }
 
     // ─── Tier A: text CRUD ────────────────────────────────────────────────
@@ -3897,11 +3900,47 @@ public sealed class DocxSession : IDisposable
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
     {
         var byUri = snapshot.Parts.ToDictionary(p => p.PartUri, p => p.Xml);
+
+        // Restore content for all parts that exist in both snapshot and document.
         foreach (var part in EnumerateProjectedParts())
         {
             if (!byUri.TryGetValue(part.Uri.ToString(), out var xml)) continue;
             part.PutXDocument(new XDocument(xml));
         }
+
+        var main = _doc!.MainDocumentPart;
+        if (main is not null)
+        {
+            var currentCustomXmlUris = main.CustomXmlParts
+                .ToDictionary(cx => cx.Uri.ToString(), cx => cx);
+
+            // Remove custom XML parts that were created after the snapshot was taken
+            // (undo direction: forward-op added them, roll them back).
+            var toRemove = currentCustomXmlUris.Keys
+                .Where(u => !byUri.ContainsKey(u))
+                .ToList();
+            foreach (var u in toRemove)
+                main.DeletePart(currentCustomXmlUris[u]);
+
+            // Re-create custom XML parts that existed in the snapshot but were deleted
+            // after the snapshot was taken (redo direction: undo removed them, restore them).
+            var currentUrisAfterRemoval = main.CustomXmlParts
+                .Select(cx => cx.Uri.ToString())
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var (partUri, xml) in snapshot.Parts)
+            {
+                // Only handle custom XML parts (structural parts are always present).
+                if (!partUri.StartsWith("/customXml/", StringComparison.OrdinalIgnoreCase))
+                    continue;
+                if (currentUrisAfterRemoval.Contains(partUri))
+                    continue;
+
+                // Re-add the part with its snapshotted content.
+                var newPart = main.AddCustomXmlPart(CustomXmlPartType.CustomXml);
+                newPart.PutXDocument(new XDocument(xml));
+            }
+        }
+
         InvalidateProjectionCache();
     }
 
