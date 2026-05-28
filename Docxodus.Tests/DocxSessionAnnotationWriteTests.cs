@@ -11,8 +11,10 @@ namespace Docxodus.Tests;
 
 public class DocxSessionAnnotationWriteTests
 {
+    private static readonly DirectoryInfo TestFilesDir = new("../../../../TestFiles/");
+
     private static byte[] LoadFixture(string name) =>
-        File.ReadAllBytes(Path.Combine("TestFiles", name));
+        File.ReadAllBytes(Path.Combine(TestFilesDir.FullName, name));
 
     // Smallest known-good fixture used throughout the suite.
     private const string Fixture = "DA001-TemplateDocument.docx";
