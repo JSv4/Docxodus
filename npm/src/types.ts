@@ -766,6 +766,25 @@ export interface DocxodusWasmExports {
     GetAnchorInfo: (handle: number, anchorId: string) => string;
     GetAnchorInfos: (handle: number, anchorIdsJson: string) => string;
     ListAnnotations: (handle: number) => string;
+    // Session annotation write surface
+    AddAnnotation: (
+      handle: number,
+      anchorId: string,
+      spanJson: string,
+      annotationJson: string
+    ) => string;
+    SessionRemoveAnnotation: (handle: number, annotationId: string) => string;
+    UpdateAnnotation: (
+      handle: number,
+      annotationId: string,
+      updateJson: string
+    ) => string;
+    MoveAnnotation: (
+      handle: number,
+      annotationId: string,
+      newAnchorId: string,
+      newSpanJson: string
+    ) => string;
     Undo: (handle: number) => boolean;
     Redo: (handle: number) => boolean;
     Save: (handle: number) => Uint8Array;
@@ -1203,6 +1222,22 @@ export interface DocumentAnnotation {
   created?: string;
   /** The text content covered by the annotation's bookmark, populated when reading. */
   annotatedText?: string;
+  /** Arbitrary string→string metadata bag persisted with the annotation. */
+  metadata?: Record<string, string>;
+}
+
+/**
+ * Partial-update payload for {@link DocxSession.updateAnnotation}.
+ * Null/missing fields leave the existing value unchanged. `metadataPatch`
+ * is a per-key merge: a non-null value sets the key, an explicit `null`
+ * removes it, a missing key leaves it unchanged.
+ */
+export interface AnnotationUpdate {
+  labelId?: string;
+  label?: string;
+  color?: string;
+  author?: string;
+  metadataPatch?: Record<string, string | null>;
 }
 
 /**
