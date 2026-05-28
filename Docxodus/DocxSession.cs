@@ -3647,6 +3647,113 @@ public sealed class DocxSession : IDisposable
         };
     }
 
+    // ─── Tier E: annotations ────────────────────────────────────────────
+
+    /// <summary>
+    /// Annotate the range <paramref name="span"/> inside the block addressed by
+    /// <paramref name="anchorId"/>. When <paramref name="span"/> is null, the
+    /// annotation wraps every inline run of the block. When
+    /// <paramref name="annotation"/>.Id is null/empty, a 16-char hex id is
+    /// generated. The bookmark name, AnnotatedText, Created, and PageInfoStale
+    /// fields of the annotation are always set by this method.
+    /// </summary>
+    public EditResult AddAnnotation(string anchorId, CharSpan? span, DocumentAnnotation annotation)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (annotation is null)
+            return EditResult.Fail(EditErrorCode.MalformedMarkdown, "annotation is null", anchorId);
+
+        var anchor = FindAnchor(anchorId);
+        if (anchor is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var result = Internal.AnnotationOps.Add(_doc!, anchor, span, annotation);
+            if (result.Success) InvalidateProjectionCache();
+            else { var preOp = _history.PopForUndo(); if (preOp.ok) RestoreSnapshot(preOp.snapshot); }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            var preOp = _history.PopForUndo();
+            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>Removes an annotation (its bookmark and custom-XML entry) by id.</summary>
+    public EditResult RemoveAnnotation(string annotationId)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var result = Internal.AnnotationOps.Remove(_doc!, annotationId);
+            if (result.Success) InvalidateProjectionCache();
+            else { var preOp = _history.PopForUndo(); if (preOp.ok) RestoreSnapshot(preOp.snapshot); }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            var preOp = _history.PopForUndo();
+            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
+        }
+    }
+
+    /// <summary>Mutates label/color/author/metadata of an annotation without re-targeting.</summary>
+    public EditResult UpdateAnnotation(string annotationId, AnnotationUpdate update)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (update is null)
+            return EditResult.Fail(EditErrorCode.MalformedMarkdown, "update is null");
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var result = Internal.AnnotationOps.Update(_doc!, annotationId, update);
+            if (!result.Success) { var preOp = _history.PopForUndo(); if (preOp.ok) RestoreSnapshot(preOp.snapshot); }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            var preOp = _history.PopForUndo();
+            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
+        }
+    }
+
+    /// <summary>Re-targets an existing annotation to a new anchor + span.</summary>
+    public EditResult MoveAnnotation(string annotationId, string newAnchorId, CharSpan? newSpan)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var anchor = FindAnchor(newAnchorId);
+        if (anchor is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound,
+                $"anchor not found: {newAnchorId}", newAnchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var result = Internal.AnnotationOps.Move(_doc!, annotationId, anchor, newSpan);
+            if (result.Success) InvalidateProjectionCache();
+            else { var preOp = _history.PopForUndo(); if (preOp.ok) RestoreSnapshot(preOp.snapshot); }
+            return result;
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            var preOp = _history.PopForUndo();
+            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, newAnchorId);
+        }
+    }
+
     // ─── Maintenance / cleanup ───────────────────────────────────────────
 
     /// <summary>
