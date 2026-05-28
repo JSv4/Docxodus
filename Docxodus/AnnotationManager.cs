@@ -428,83 +428,9 @@ namespace Docxodus
 
         private static DocumentAnnotation GetAnnotationInternal(WordprocessingDocument wordDoc, string annotationId)
         {
-            var customXmlPart = FindAnnotationsCustomXmlPart(wordDoc);
-            if (customXmlPart == null) return null;
-
-            var xdoc = customXmlPart.GetXDocument();
-            var element = xdoc.Root?.Elements(Ann + "annotation")
-                .FirstOrDefault(a => (string)a.Attribute("id") == annotationId);
-
-            if (element == null) return null;
-
-            var annotation = ParseAnnotationElement(element);
-            if (annotation != null)
-            {
+            var annotation = Docxodus.Internal.AnnotationsCustomXml.FindById(wordDoc, annotationId);
+            if (annotation is not null)
                 annotation.AnnotatedText = GetTextInBookmark(wordDoc, annotation.BookmarkName);
-            }
-
-            return annotation;
-        }
-
-        private static DocumentAnnotation ParseAnnotationElement(XElement element)
-        {
-            var id = (string)element.Attribute("id");
-            if (string.IsNullOrEmpty(id)) return null;
-
-            var annotation = new DocumentAnnotation
-            {
-                Id = id,
-                LabelId = (string)element.Attribute("labelId"),
-                Label = (string)element.Attribute("label"),
-                Color = (string)element.Attribute("color"),
-                Author = (string)element.Attribute("author"),
-            };
-
-            var createdStr = (string)element.Attribute("created");
-            if (DateTime.TryParse(createdStr, out var created))
-            {
-                annotation.Created = created;
-            }
-
-            var rangeElement = element.Element(Ann + "range");
-            if (rangeElement != null)
-            {
-                annotation.BookmarkName = (string)rangeElement.Attribute("bookmarkName");
-            }
-
-            var pageSpanElement = element.Element(Ann + "pageSpan");
-            if (pageSpanElement != null)
-            {
-                var startPageStr = (string)pageSpanElement.Attribute("startPage");
-                var endPageStr = (string)pageSpanElement.Attribute("endPage");
-                var staleStr = (string)pageSpanElement.Attribute("stale");
-                var computedAtStr = (string)pageSpanElement.Attribute("computedAt");
-
-                if (int.TryParse(startPageStr, out var startPage))
-                    annotation.StartPage = startPage;
-                if (int.TryParse(endPageStr, out var endPage))
-                    annotation.EndPage = endPage;
-
-                annotation.PageInfoStale = staleStr?.ToLowerInvariant() == "true";
-
-                if (DateTime.TryParse(computedAtStr, out var computedAt))
-                    annotation.PageInfoComputedAt = computedAt;
-            }
-
-            var metadataElement = element.Element(Ann + "metadata");
-            if (metadataElement != null)
-            {
-                foreach (var item in metadataElement.Elements(Ann + "item"))
-                {
-                    var key = (string)item.Attribute("key");
-                    var value = item.Value;
-                    if (!string.IsNullOrEmpty(key))
-                    {
-                        annotation.Metadata[key] = value;
-                    }
-                }
-            }
-
             return annotation;
         }
 
