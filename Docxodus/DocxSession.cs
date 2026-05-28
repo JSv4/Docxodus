@@ -2565,6 +2565,13 @@ public sealed class DocxSession : IDisposable
     /// Enumerates every OOXML part the projector walks. Kept centralized so
     /// <see cref="Save"/> (Unid stripping) and any future part-level pass don't drift.
     /// </summary>
+    /// <remarks>
+    /// Includes every <see cref="CustomXmlPart"/> on the main document because
+    /// callers like <see cref="ResolvePart"/> need to be able to look up any
+    /// CustomXmlPart by URI. The snapshot/restore path uses
+    /// <see cref="EnumerateProjectedPartsForSnapshot"/> instead, which narrows
+    /// CustomXmlParts to the annotations part only — see that method for why.
+    /// </remarks>
     private IEnumerable<OpenXmlPart> EnumerateProjectedParts()
     {
         var main = _doc!.MainDocumentPart;
@@ -2575,9 +2582,41 @@ public sealed class DocxSession : IDisposable
         if (main.FootnotesPart is not null) yield return main.FootnotesPart;
         if (main.EndnotesPart is not null) yield return main.EndnotesPart;
         if (main.WordprocessingCommentsPart is not null) yield return main.WordprocessingCommentsPart;
-        // Custom XML parts hold annotation metadata; include them so undo/redo
-        // snapshots capture the full annotation store, not just the body bookmarks.
+        // Custom XML parts hold annotation metadata; include them so callers that
+        // need to look up parts by URI (e.g. ResolvePart) can find them.
         foreach (var cx in main.CustomXmlParts) yield return cx;
+    }
+
+    /// <summary>
+    /// Snapshot-scoped projected-part enumeration. Same as
+    /// <see cref="EnumerateProjectedParts"/> for the structural parts, but narrows
+    /// <see cref="OpenXmlPackaging.CustomXmlPart"/> enumeration to the Docxodus
+    /// <em>annotations</em> CustomXmlPart only (identified by its root namespace
+    /// via <see cref="Internal.AnnotationsCustomXml.Find"/>).
+    /// </summary>
+    /// <remarks>
+    /// Why narrow here: <see cref="RestoreSnapshot"/> handles undo-time create/delete
+    /// of CustomXmlParts via <c>AddCustomXmlPart(CustomXmlPartType.CustomXml)</c>,
+    /// which hard-codes the content type and creates no
+    /// <c>CustomXmlPropertiesPart</c> partner. That is correct for the annotations
+    /// part but would silently corrupt other CustomXmlParts that Word/SharePoint
+    /// rely on (SharePoint metadata, content-type-bound SDT data-binding parts,
+    /// inkml, etc.) by re-creating them with the wrong content type and missing
+    /// properties partner. Today no session op deletes non-annotation CustomXmlParts
+    /// — narrowing here pre-empts the footgun before such an op is added.
+    /// </remarks>
+    private IEnumerable<OpenXmlPart> EnumerateProjectedPartsForSnapshot()
+    {
+        var main = _doc!.MainDocumentPart;
+        if (main is null) yield break;
+        yield return main;
+        foreach (var h in main.HeaderParts) yield return h;
+        foreach (var f in main.FooterParts) yield return f;
+        if (main.FootnotesPart is not null) yield return main.FootnotesPart;
+        if (main.EndnotesPart is not null) yield return main.EndnotesPart;
+        if (main.WordprocessingCommentsPart is not null) yield return main.WordprocessingCommentsPart;
+        var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
+        if (annotationsPart is not null) yield return annotationsPart;
     }
 
     // ─── Tier A: text CRUD ────────────────────────────────────────────────
@@ -3892,7 +3931,7 @@ public sealed class DocxSession : IDisposable
     internal DocumentSnapshot TakeSnapshot()
     {
         var parts = new System.Collections.Generic.List<(string, XDocument)>();
-        foreach (var part in EnumerateProjectedParts())
+        foreach (var part in EnumerateProjectedPartsForSnapshot())
             parts.Add((part.Uri.ToString(), new XDocument(part.GetXDocument())));
         return new DocumentSnapshot(parts);
     }
@@ -3902,42 +3941,49 @@ public sealed class DocxSession : IDisposable
         var byUri = snapshot.Parts.ToDictionary(p => p.PartUri, p => p.Xml);
 
         // Restore content for all parts that exist in both snapshot and document.
-        foreach (var part in EnumerateProjectedParts())
+        // Scoped via EnumerateProjectedPartsForSnapshot — only the annotations
+        // CustomXmlPart participates here; other CustomXmlParts (SharePoint
+        // metadata, SDT data-binding parts, inkml, …) are intentionally outside
+        // the snapshot scope.
+        foreach (var part in EnumerateProjectedPartsForSnapshot())
         {
             if (!byUri.TryGetValue(part.Uri.ToString(), out var xml)) continue;
             part.PutXDocument(new XDocument(xml));
         }
 
+        // TODO: Asymmetric scope, intentional. The undo-time create/delete logic
+        // below only handles the annotations CustomXmlPart — see
+        // EnumerateProjectedPartsForSnapshot for why AddCustomXmlPart(CustomXml)
+        // is unsafe for non-annotation custom-xml parts (wrong content type, no
+        // CustomXmlPropertiesPart partner). The same hazard would exist for
+        // HeaderParts / FooterParts / FootnotesPart / etc. — but no session op
+        // creates or deletes those today, so they're not yet snapshot-scoped here.
+        // If a future op starts adding/removing those parts, expand this block
+        // (and the snapshot enumeration) to cover them with the correct factory.
         var main = _doc!.MainDocumentPart;
         if (main is not null)
         {
-            var currentCustomXmlUris = main.CustomXmlParts
-                .ToDictionary(cx => cx.Uri.ToString(), cx => cx);
+            var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
+            var snapshotAnnotationsUri = snapshot.Parts
+                .FirstOrDefault(p => p.PartUri.StartsWith("/customXml/", StringComparison.OrdinalIgnoreCase))
+                .PartUri;
 
-            // Remove custom XML parts that were created after the snapshot was taken
-            // (undo direction: forward-op added them, roll them back).
-            var toRemove = currentCustomXmlUris.Keys
-                .Where(u => !byUri.ContainsKey(u))
-                .ToList();
-            foreach (var u in toRemove)
-                main.DeletePart(currentCustomXmlUris[u]);
-
-            // Re-create custom XML parts that existed in the snapshot but were deleted
-            // after the snapshot was taken (redo direction: undo removed them, restore them).
-            var currentUrisAfterRemoval = main.CustomXmlParts
-                .Select(cx => cx.Uri.ToString())
-                .ToHashSet(StringComparer.Ordinal);
-            foreach (var (partUri, xml) in snapshot.Parts)
+            // Undo direction: snapshot has no annotations part but the live doc
+            // does → forward-op created it, roll it back by deleting.
+            if (annotationsPart is not null
+                && !byUri.ContainsKey(annotationsPart.Uri.ToString()))
             {
-                // Only handle custom XML parts (structural parts are always present).
-                if (!partUri.StartsWith("/customXml/", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (currentUrisAfterRemoval.Contains(partUri))
-                    continue;
+                main.DeletePart(annotationsPart);
+                annotationsPart = null;
+            }
 
-                // Re-add the part with its snapshotted content.
+            // Redo direction: snapshot has an annotations part but the live doc
+            // doesn't → undo previously removed it, restore by re-adding.
+            if (annotationsPart is null && snapshotAnnotationsUri is not null
+                && byUri.TryGetValue(snapshotAnnotationsUri, out var annXml))
+            {
                 var newPart = main.AddCustomXmlPart(CustomXmlPartType.CustomXml);
-                newPart.PutXDocument(new XDocument(xml));
+                newPart.PutXDocument(new XDocument(annXml));
             }
         }
 

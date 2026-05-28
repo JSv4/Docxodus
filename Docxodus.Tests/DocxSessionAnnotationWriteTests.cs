@@ -50,8 +50,16 @@ public class DocxSessionAnnotationWriteTests
     public void AW002_AddAnnotation_NullSpan_BookmarksWholeBlock()
     {
         using var session = new DocxSession(LoadFixture(Fixture));
+        // Deliberately pick a paragraph short enough that TextPreview is the FULL
+        // block text (no "…" truncation at 80 chars). Required so the strict
+        // equality assertion below actually proves the annotation wraps the whole
+        // block — a non-strict StartsWith would silently pass even if the
+        // annotation only covered the first 80 chars of a 5000-char paragraph
+        // (the exact bug this test is designed to catch).
         var firstP = session.AnchorsByScope(ProjectionScopes.Body)
-            .First(a => a.Anchor.Kind == "p" && a.TextPreview.Length > 0);
+            .First(a => a.Anchor.Kind == "p"
+                     && a.TextPreview.Length > 0
+                     && !a.TextPreview.EndsWith("…"));
 
         var result = session.AddAnnotation(firstP.Anchor.Id, span: null,
             new DocumentAnnotation { Id = "ann-whole", LabelId = "L", Label = "L", Color = "#FFF" });
@@ -59,15 +67,10 @@ public class DocxSessionAnnotationWriteTests
         Assert.True(result.Success);
         var listed = session.ListAnnotations().Single(a => a.Id == "ann-whole");
 
-        // TextPreview is capped at ~80 chars (with trailing "…" when truncated).
-        // AnnotatedText is the full run text of the block.  When the paragraph is
-        // short the two are equal; when it is long, AnnotatedText starts with the
-        // preview characters (minus the ellipsis sentinel).
-        if (firstP.TextPreview.EndsWith("…"))
-            Assert.StartsWith(firstP.TextPreview[..^1], listed.AnnotatedText,
-                StringComparison.Ordinal);
-        else
-            Assert.Equal(firstP.TextPreview, listed.AnnotatedText);
+        // Strict full-text equality: AnnotatedText must equal the entire block
+        // text. TextPreview == full text for non-truncated previews, so this
+        // proves null-span = whole-block bookmarking.
+        Assert.Equal(firstP.TextPreview, listed.AnnotatedText);
     }
 
     [Fact]
