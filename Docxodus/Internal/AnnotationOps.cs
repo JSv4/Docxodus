@@ -361,9 +361,16 @@ internal static class AnnotationOps
                 : root.Descendants(W + "bookmarkEnd")
                     .FirstOrDefault(b => (string?)b.Attribute(W + "id") == id);
 
-            // Locate enclosing block for the Modified anchor.
-            var enclosing = start.AncestorsAndSelf()
-                .FirstOrDefault(e => (string?)e.Attribute(PtOpenXml.Unid) is not null);
+            // Locate the nearest block-level ancestor for the Modified anchor.
+            // We restrict the search to known block-level tags (w:p, w:tbl, w:tr, w:tc)
+            // so that inline elements such as w:bookmarkStart or w:r — which also
+            // receive PtOpenXml.Unid attributes from the projector — are never
+            // mistaken for the enclosing block.
+            var enclosing = start.Ancestors()
+                .FirstOrDefault(e =>
+                    (e.Name == W + "p" || e.Name == W + "tbl" ||
+                     e.Name == W + "tr" || e.Name == W + "tc") &&
+                    (string?)e.Attribute(PtOpenXml.Unid) is not null);
             if (enclosing is not null)
             {
                 var unid = (string)enclosing.Attribute(PtOpenXml.Unid)!;

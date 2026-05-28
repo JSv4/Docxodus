@@ -323,4 +323,65 @@ public class DocxSessionAnnotationWriteTests
         Assert.False(r.Success);
         Assert.Equal(EditErrorCode.AnnotationNotFound, r.Error!.Code);
     }
+
+    [Fact]
+    public void AW040_MoveAnnotation_DifferentBlock_ReturnsOldAndNewModified()
+    {
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var paragraphs = session.AnchorsByScope(ProjectionScopes.Body)
+            .Where(a => a.Anchor.Kind == "p" && a.TextPreview.Length > 0)
+            .Take(2)
+            .ToArray();
+        Assert.Equal(2, paragraphs.Length);
+
+        session.AddAnnotation(paragraphs[0].Anchor.Id, new CharSpan(0, 1),
+            new DocumentAnnotation { Id = "movable", LabelId = "L", Label = "L", Color = "#000" });
+
+        var r = session.MoveAnnotation("movable", paragraphs[1].Anchor.Id, new CharSpan(0, 2));
+        Assert.True(r.Success);
+        Assert.Equal("movable", r.AnnotationId);
+        Assert.Equal(2, r.Modified.Count);
+        Assert.Contains(r.Modified, m => m.Id == paragraphs[0].Anchor.Id);
+        Assert.Contains(r.Modified, m => m.Id == paragraphs[1].Anchor.Id);
+    }
+
+    [Fact]
+    public void AW041_MoveAnnotation_SameBlockNewSpan_DedupsModified()
+    {
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var p = session.AnchorsByScope(ProjectionScopes.Body)
+            .First(a => a.Anchor.Kind == "p" && a.TextPreview.Length >= 5);
+
+        session.AddAnnotation(p.Anchor.Id, new CharSpan(0, 1),
+            new DocumentAnnotation { Id = "shift", LabelId = "L", Label = "L", Color = "#000" });
+
+        var r = session.MoveAnnotation("shift", p.Anchor.Id, new CharSpan(2, 2));
+        Assert.True(r.Success);
+        Assert.Single(r.Modified);
+        Assert.Equal(p.Anchor.Id, r.Modified[0].Id);
+    }
+
+    [Fact]
+    public void AW042_MoveAnnotation_AnnotationMissing_ReturnsError()
+    {
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var p = session.AnchorsByScope(ProjectionScopes.Body).First(a => a.Anchor.Kind == "p");
+        var r = session.MoveAnnotation("nope", p.Anchor.Id, null);
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.AnnotationNotFound, r.Error!.Code);
+    }
+
+    [Fact]
+    public void AW043_MoveAnnotation_NewAnchorMissing_ReturnsErrorWithoutDamagingOld()
+    {
+        using var session = new DocxSession(LoadFixture(Fixture));
+        var p = session.AnchorsByScope(ProjectionScopes.Body).First(a => a.Anchor.Kind == "p");
+        session.AddAnnotation(p.Anchor.Id, new CharSpan(0, 1),
+            new DocumentAnnotation { Id = "safe", LabelId = "L", Label = "L", Color = "#000" });
+
+        var r = session.MoveAnnotation("safe", "p:body:DEADBEEFDEADBEEF", new CharSpan(0, 1));
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.AnchorNotFound, r.Error!.Code);
+        Assert.Single(session.ListAnnotations(), a => a.Id == "safe"); // still present
+    }
 }
