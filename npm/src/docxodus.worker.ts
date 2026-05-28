@@ -17,6 +17,12 @@ import type {
   WorkerCompareToHtmlRequest,
   WorkerGetRevisionsRequest,
   WorkerGetDocumentMetadataRequest,
+  WorkerSessionOpenRequest,
+  WorkerSessionCloseRequest,
+  WorkerSessionAddAnnotationRequest,
+  WorkerSessionRemoveAnnotationRequest,
+  WorkerSessionUpdateAnnotationRequest,
+  WorkerSessionMoveAnnotationRequest,
   DocxodusWasmExports,
   ConversionOptions,
   CompareOptions,
@@ -26,11 +32,18 @@ import type {
   DocumentMetadata,
   SectionMetadata,
   CommentRenderMode,
+  EditResult,
 } from "./types.js";
 
 // Worker-local state
 let wasmExports: DocxodusWasmExports | null = null;
 let initPromise: Promise<void> | null = null;
+
+/**
+ * Live session handles opened inside this worker.
+ * Key = handle number returned by DocxSessionBridge.OpenSession.
+ */
+const sessionHandles = new Set<number>();
 
 /**
  * Initialize the WASM runtime in the worker.
@@ -382,6 +395,122 @@ function handleGetDocumentMetadata(
 }
 
 /**
+ * Handle sessionOpen request.
+ */
+function handleSessionOpen(
+  request: WorkerSessionOpenRequest
+): { handle?: number; error?: string } {
+  const exports = ensureInitialized();
+  try {
+    const handle = exports.DocxSessionBridge.OpenSession(
+      request.documentBytes,
+      request.settingsJson ?? ""
+    );
+    sessionHandles.add(handle);
+    return { handle };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/**
+ * Handle sessionClose request.
+ */
+function handleSessionClose(
+  request: WorkerSessionCloseRequest
+): { error?: string } {
+  const exports = ensureInitialized();
+  try {
+    exports.DocxSessionBridge.CloseSession(request.handle);
+    sessionHandles.delete(request.handle);
+    return {};
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/**
+ * Handle sessionAddAnnotation request.
+ */
+function handleSessionAddAnnotation(
+  request: WorkerSessionAddAnnotationRequest
+): { result?: EditResult; error?: string } {
+  const exports = ensureInitialized();
+  try {
+    const json = exports.DocxSessionBridge.AddAnnotation(
+      request.handle,
+      request.anchorId,
+      request.spanJson,
+      request.annotationJson
+    );
+    const result = JSON.parse(json) as EditResult;
+    return { result };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/**
+ * Handle sessionRemoveAnnotation request.
+ */
+function handleSessionRemoveAnnotation(
+  request: WorkerSessionRemoveAnnotationRequest
+): { result?: EditResult; error?: string } {
+  const exports = ensureInitialized();
+  try {
+    const json = exports.DocxSessionBridge.SessionRemoveAnnotation(
+      request.handle,
+      request.annotationId
+    );
+    const result = JSON.parse(json) as EditResult;
+    return { result };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/**
+ * Handle sessionUpdateAnnotation request.
+ */
+function handleSessionUpdateAnnotation(
+  request: WorkerSessionUpdateAnnotationRequest
+): { result?: EditResult; error?: string } {
+  const exports = ensureInitialized();
+  try {
+    const json = exports.DocxSessionBridge.UpdateAnnotation(
+      request.handle,
+      request.annotationId,
+      request.updateJson
+    );
+    const result = JSON.parse(json) as EditResult;
+    return { result };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/**
+ * Handle sessionMoveAnnotation request.
+ */
+function handleSessionMoveAnnotation(
+  request: WorkerSessionMoveAnnotationRequest
+): { result?: EditResult; error?: string } {
+  const exports = ensureInitialized();
+  try {
+    const json = exports.DocxSessionBridge.MoveAnnotation(
+      request.handle,
+      request.annotationId,
+      request.newAnchorId,
+      request.newSpanJson
+    );
+    const result = JSON.parse(json) as EditResult;
+    return { result };
+  } catch (error) {
+    return { error: String(error) };
+  }
+}
+
+/**
  * Handle getVersion request.
  */
 function handleGetVersion(): {
@@ -513,6 +642,83 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
           type: "getVersion",
           success: !result.error,
           version: result.version,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionOpen": {
+        const sessionOpenRequest = request as WorkerSessionOpenRequest;
+        const result = handleSessionOpen(sessionOpenRequest);
+        response = {
+          id: request.id,
+          type: "sessionOpen",
+          success: !result.error,
+          handle: result.handle,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionClose": {
+        const sessionCloseRequest = request as WorkerSessionCloseRequest;
+        const result = handleSessionClose(sessionCloseRequest);
+        response = {
+          id: request.id,
+          type: "sessionClose",
+          success: !result.error,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionAddAnnotation": {
+        const addAnnotRequest = request as WorkerSessionAddAnnotationRequest;
+        const result = handleSessionAddAnnotation(addAnnotRequest);
+        response = {
+          id: request.id,
+          type: "sessionAddAnnotation",
+          success: !result.error,
+          result: result.result,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionRemoveAnnotation": {
+        const removeAnnotRequest = request as WorkerSessionRemoveAnnotationRequest;
+        const result = handleSessionRemoveAnnotation(removeAnnotRequest);
+        response = {
+          id: request.id,
+          type: "sessionRemoveAnnotation",
+          success: !result.error,
+          result: result.result,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionUpdateAnnotation": {
+        const updateAnnotRequest = request as WorkerSessionUpdateAnnotationRequest;
+        const result = handleSessionUpdateAnnotation(updateAnnotRequest);
+        response = {
+          id: request.id,
+          type: "sessionUpdateAnnotation",
+          success: !result.error,
+          result: result.result,
+          error: result.error,
+        };
+        break;
+      }
+
+      case "sessionMoveAnnotation": {
+        const moveAnnotRequest = request as WorkerSessionMoveAnnotationRequest;
+        const result = handleSessionMoveAnnotation(moveAnnotRequest);
+        response = {
+          id: request.id,
+          type: "sessionMoveAnnotation",
+          success: !result.error,
+          result: result.result,
           error: result.error,
         };
         break;

@@ -1941,7 +1941,13 @@ export type WorkerRequestType =
   | "compareDocumentsToHtml"
   | "getRevisions"
   | "getDocumentMetadata"
-  | "getVersion";
+  | "getVersion"
+  | "sessionOpen"
+  | "sessionClose"
+  | "sessionAddAnnotation"
+  | "sessionRemoveAnnotation"
+  | "sessionUpdateAnnotation"
+  | "sessionMoveAnnotation";
 
 /**
  * Base structure for worker requests.
@@ -2027,6 +2033,69 @@ export interface WorkerGetVersionRequest extends WorkerRequestBase {
 }
 
 /**
+ * Open a DocxSession in the worker.
+ */
+export interface WorkerSessionOpenRequest extends WorkerRequestBase {
+  type: "sessionOpen";
+  /** Document bytes transferred to the worker */
+  documentBytes: Uint8Array;
+  /** Session settings as JSON */
+  settingsJson?: string;
+}
+
+/**
+ * Close a worker DocxSession.
+ */
+export interface WorkerSessionCloseRequest extends WorkerRequestBase {
+  type: "sessionClose";
+  /** Session handle returned by sessionOpen */
+  handle: number;
+}
+
+/**
+ * Add an annotation via a worker DocxSession.
+ */
+export interface WorkerSessionAddAnnotationRequest extends WorkerRequestBase {
+  type: "sessionAddAnnotation";
+  handle: number;
+  anchorId: string;
+  /** CharSpan as JSON, or empty string for block-level */
+  spanJson: string;
+  annotationJson: string;
+}
+
+/**
+ * Remove an annotation via a worker DocxSession.
+ */
+export interface WorkerSessionRemoveAnnotationRequest extends WorkerRequestBase {
+  type: "sessionRemoveAnnotation";
+  handle: number;
+  annotationId: string;
+}
+
+/**
+ * Update an annotation via a worker DocxSession.
+ */
+export interface WorkerSessionUpdateAnnotationRequest extends WorkerRequestBase {
+  type: "sessionUpdateAnnotation";
+  handle: number;
+  annotationId: string;
+  updateJson: string;
+}
+
+/**
+ * Move an annotation via a worker DocxSession.
+ */
+export interface WorkerSessionMoveAnnotationRequest extends WorkerRequestBase {
+  type: "sessionMoveAnnotation";
+  handle: number;
+  annotationId: string;
+  newAnchorId: string;
+  /** CharSpan as JSON, or empty string for block-level */
+  newSpanJson: string;
+}
+
+/**
  * Union type of all possible worker requests.
  */
 export type WorkerRequest =
@@ -2036,7 +2105,13 @@ export type WorkerRequest =
   | WorkerCompareToHtmlRequest
   | WorkerGetRevisionsRequest
   | WorkerGetDocumentMetadataRequest
-  | WorkerGetVersionRequest;
+  | WorkerGetVersionRequest
+  | WorkerSessionOpenRequest
+  | WorkerSessionCloseRequest
+  | WorkerSessionAddAnnotationRequest
+  | WorkerSessionRemoveAnnotationRequest
+  | WorkerSessionUpdateAnnotationRequest
+  | WorkerSessionMoveAnnotationRequest;
 
 /**
  * Base structure for worker responses.
@@ -2112,6 +2187,36 @@ export interface WorkerGetVersionResponse extends WorkerResponseBase {
 }
 
 /**
+ * Response from sessionOpen request.
+ */
+export interface WorkerSessionOpenResponse extends WorkerResponseBase {
+  type: "sessionOpen";
+  /** Integer handle identifying the session in the worker */
+  handle?: number;
+}
+
+/**
+ * Response from sessionClose request.
+ */
+export interface WorkerSessionCloseResponse extends WorkerResponseBase {
+  type: "sessionClose";
+}
+
+/**
+ * Response from session annotation write operations.
+ * The `result` field is the serialised EditResult from the WASM bridge.
+ */
+export interface WorkerSessionEditResponse extends WorkerResponseBase {
+  type:
+    | "sessionAddAnnotation"
+    | "sessionRemoveAnnotation"
+    | "sessionUpdateAnnotation"
+    | "sessionMoveAnnotation";
+  /** EditResult returned by the session operation */
+  result?: EditResult;
+}
+
+/**
  * Union type of all possible worker responses.
  */
 export type WorkerResponse =
@@ -2121,7 +2226,10 @@ export type WorkerResponse =
   | WorkerCompareToHtmlResponse
   | WorkerGetRevisionsResponse
   | WorkerGetDocumentMetadataResponse
-  | WorkerGetVersionResponse;
+  | WorkerGetVersionResponse
+  | WorkerSessionOpenResponse
+  | WorkerSessionCloseResponse
+  | WorkerSessionEditResponse;
 
 /**
  * Options for creating a worker-based Docxodus instance.

@@ -28,6 +28,8 @@ import type {
   WorkerGetRevisionsResponse,
   WorkerGetDocumentMetadataResponse,
   WorkerGetVersionResponse,
+  WorkerSessionOpenResponse,
+  WorkerSessionEditResponse,
   WorkerDocxodusOptions,
   ConversionOptions,
   CompareOptions,
@@ -35,6 +37,11 @@ import type {
   Revision,
   VersionInfo,
   DocumentMetadata,
+  DocxSessionSettings,
+  DocumentAnnotation,
+  AnnotationUpdate,
+  CharSpan,
+  EditResult,
 } from "./types.js";
 
 /**
@@ -72,6 +79,66 @@ function deriveWasmBasePath(): string {
 
   // Default fallback
   return "/wasm/";
+}
+
+/**
+ * A worker-proxied DocxSession. Mirrors the main-thread {@link DocxSession}
+ * annotation write surface but each call returns a Promise, since the actual
+ * work happens inside the Web Worker.
+ *
+ * Acquire via {@link WorkerDocxodus.openDocxSession}; always call
+ * {@link close} when finished to free the in-worker handle.
+ */
+export interface WorkerDocxSession {
+  /**
+   * Add an annotation to the document at the given anchor.
+   * @param anchorId - Markdown-projection anchor id of the target block
+   * @param span - Character span within the block, or null for the whole block
+   * @param annotation - Annotation data (id auto-generated if omitted)
+   * @returns EditResult indicating success and any created/modified anchors
+   */
+  addAnnotation(
+    anchorId: string,
+    span: CharSpan | null,
+    annotation: DocumentAnnotation
+  ): Promise<EditResult>;
+
+  /**
+   * Remove an existing annotation by its id.
+   * @param annotationId - The annotation id to remove
+   * @returns EditResult indicating success
+   */
+  removeAnnotation(annotationId: string): Promise<EditResult>;
+
+  /**
+   * Partially update an annotation's metadata without moving it.
+   * @param annotationId - The annotation id to update
+   * @param update - Fields to change (omitted fields are left unchanged)
+   * @returns EditResult indicating success
+   */
+  updateAnnotation(
+    annotationId: string,
+    update: AnnotationUpdate
+  ): Promise<EditResult>;
+
+  /**
+   * Move an annotation to a new anchor/span position.
+   * @param annotationId - The annotation id to move
+   * @param newAnchorId - Target anchor id
+   * @param newSpan - New character span, or null for the whole block
+   * @returns EditResult indicating success
+   */
+  moveAnnotation(
+    annotationId: string,
+    newAnchorId: string,
+    newSpan: CharSpan | null
+  ): Promise<EditResult>;
+
+  /**
+   * Close the session and release its in-worker handle.
+   * After calling this, the instance cannot be used anymore.
+   */
+  close(): Promise<void>;
 }
 
 /**
@@ -142,6 +209,22 @@ export interface WorkerDocxodus {
    * @returns Version information
    */
   getVersion(): Promise<VersionInfo>;
+
+  /**
+   * Open a {@link WorkerDocxSession} for surgical annotation editing inside
+   * the worker. The document bytes are transferred to the worker (zero-copy).
+   *
+   * Always call {@link WorkerDocxSession.close} when you are done to release
+   * the in-worker session handle.
+   *
+   * @param document - DOCX file as File or Uint8Array
+   * @param settings - Optional session settings
+   * @returns A proxied session whose methods are off-main-thread
+   */
+  openDocxSession(
+    document: File | Uint8Array,
+    settings?: DocxSessionSettings
+  ): Promise<WorkerDocxSession>;
 
   /**
    * Terminate the worker.
@@ -370,6 +453,109 @@ export async function createWorkerDocxodus(
         type: "getVersion",
       });
       return response.version!;
+    },
+
+    async openDocxSession(
+      document: File | Uint8Array,
+      settings?: DocxSessionSettings
+    ): Promise<WorkerDocxSession> {
+      const bytes = await toBytes(document);
+      const settingsJson = settings ? JSON.stringify(settings) : "";
+      const openResponse = await sendRequest<WorkerSessionOpenResponse>(
+        {
+          id: generateId(),
+          type: "sessionOpen",
+          documentBytes: bytes,
+          settingsJson,
+        },
+        [bytes.buffer]
+      );
+
+      if (!openResponse.success || openResponse.handle === undefined) {
+        throw new Error(
+          `Failed to open worker DocxSession: ${openResponse.error ?? "unknown error"}`
+        );
+      }
+
+      const handle = openResponse.handle;
+
+      return {
+        async addAnnotation(
+          anchorId: string,
+          span: CharSpan | null,
+          annotation: DocumentAnnotation
+        ): Promise<EditResult> {
+          const res = await sendRequest<WorkerSessionEditResponse>({
+            id: generateId(),
+            type: "sessionAddAnnotation",
+            handle,
+            anchorId,
+            spanJson: span ? JSON.stringify(span) : "",
+            annotationJson: JSON.stringify(annotation),
+          });
+          if (!res.success) {
+            throw new Error(res.error ?? "sessionAddAnnotation failed");
+          }
+          return res.result!;
+        },
+
+        async removeAnnotation(annotationId: string): Promise<EditResult> {
+          const res = await sendRequest<WorkerSessionEditResponse>({
+            id: generateId(),
+            type: "sessionRemoveAnnotation",
+            handle,
+            annotationId,
+          });
+          if (!res.success) {
+            throw new Error(res.error ?? "sessionRemoveAnnotation failed");
+          }
+          return res.result!;
+        },
+
+        async updateAnnotation(
+          annotationId: string,
+          update: AnnotationUpdate
+        ): Promise<EditResult> {
+          const res = await sendRequest<WorkerSessionEditResponse>({
+            id: generateId(),
+            type: "sessionUpdateAnnotation",
+            handle,
+            annotationId,
+            updateJson: JSON.stringify(update),
+          });
+          if (!res.success) {
+            throw new Error(res.error ?? "sessionUpdateAnnotation failed");
+          }
+          return res.result!;
+        },
+
+        async moveAnnotation(
+          annotationId: string,
+          newAnchorId: string,
+          newSpan: CharSpan | null
+        ): Promise<EditResult> {
+          const res = await sendRequest<WorkerSessionEditResponse>({
+            id: generateId(),
+            type: "sessionMoveAnnotation",
+            handle,
+            annotationId,
+            newAnchorId,
+            newSpanJson: newSpan ? JSON.stringify(newSpan) : "",
+          });
+          if (!res.success) {
+            throw new Error(res.error ?? "sessionMoveAnnotation failed");
+          }
+          return res.result!;
+        },
+
+        async close(): Promise<void> {
+          await sendRequest({
+            id: generateId(),
+            type: "sessionClose",
+            handle,
+          });
+        },
+      };
     },
 
     terminate(): void {
