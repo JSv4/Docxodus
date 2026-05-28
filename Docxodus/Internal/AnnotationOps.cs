@@ -79,7 +79,7 @@ internal static class AnnotationOps
         var bookmarkName = AnnotationManager.BookmarkPrefix + id;
         var bookmarkId = NextBookmarkId(block.Document!.Root!);
 
-        var (startRunInsert, endRunInsert) = SplitRunsForSpan(map, spanStart, spanLength);
+        var (startRunInsert, endRunInsert) = SplitRunsForSpan(block, spanStart, spanLength);
 
         var bookmarkStart = new XElement(W + "bookmarkStart",
             new XAttribute(W + "id", bookmarkId),
@@ -109,7 +109,10 @@ internal static class AnnotationOps
         };
     }
 
-    public static EditResult Remove(WordprocessingDocument doc, string annotationId)
+    public static EditResult Remove(
+        WordprocessingDocument doc,
+        string annotationId,
+        Func<string, Anchor?>? canonicalize = null)
     {
         if (string.IsNullOrEmpty(annotationId))
             return EditResult.Fail(EditErrorCode.AnnotationNotFound,
@@ -124,7 +127,7 @@ internal static class AnnotationOps
         Anchor? touchedBlock = null;
         if (!string.IsNullOrEmpty(bookmarkName))
         {
-            touchedBlock = RemoveBookmarkPair(doc, bookmarkName!);
+            touchedBlock = RemoveBookmarkPair(doc, bookmarkName!, canonicalize);
         }
 
         AnnotationsCustomXml.Remove(doc, annotationId);
@@ -178,7 +181,8 @@ internal static class AnnotationOps
         WordprocessingDocument doc,
         string annotationId,
         AnchorTarget newAnchor,
-        CharSpan? newSpan)
+        CharSpan? newSpan,
+        Func<string, Anchor?>? canonicalize = null)
     {
         var existing = AnnotationsCustomXml.FindById(doc, annotationId);
         if (existing is null)
@@ -218,7 +222,7 @@ internal static class AnnotationOps
         var bookmarkName = existing.BookmarkName;
         Anchor? oldBlockAnchor = null;
         if (!string.IsNullOrEmpty(bookmarkName))
-            oldBlockAnchor = RemoveBookmarkPair(doc, bookmarkName!);
+            oldBlockAnchor = RemoveBookmarkPair(doc, bookmarkName!, canonicalize);
 
         // Old bookmark removal may have invalidated the cached run map of the
         // new block when the old and new blocks are the same element. Rebuild.
@@ -234,7 +238,7 @@ internal static class AnnotationOps
 
         // Reinsert with a fresh bookmark id at the new range.
         var bookmarkId = NextBookmarkId(newBlock.Document!.Root!);
-        var (startRunInsert, endRunInsert) = SplitRunsForSpan(newMap, s, l);
+        var (startRunInsert, endRunInsert) = SplitRunsForSpan(newBlock, s, l);
         startRunInsert.AddBeforeSelf(new XElement(W + "bookmarkStart",
             new XAttribute(W + "id", bookmarkId),
             new XAttribute(W + "name", bookmarkName!)));
@@ -287,107 +291,63 @@ internal static class AnnotationOps
     /// Splits the runs at the span boundaries (when boundaries fall mid-run) so
     /// that <c>w:bookmarkStart</c> can be inserted before the run containing the
     /// span start and <c>w:bookmarkEnd</c> after the run containing the span end,
-    /// with no other runs between them inside the span.
-    /// Returns the start-side and end-side runs to insert before/after.
+    /// with no other runs between them inside the span. Returns the start-side
+    /// and end-side runs to insert before/after.
+    ///
+    /// Routes through <see cref="DocxSession.SplitRunsAtOffset"/>, which correctly
+    /// handles multi-<c>w:t</c> runs and runs nested inside hyperlinks/sdts —
+    /// boundaries always land on a run-element boundary after the splits run.
     /// </summary>
     private static (XElement startRun, XElement endRun) SplitRunsForSpan(
-        RunTextMap.Map map, int start, int length)
+        XElement block, int start, int length)
     {
-        var segments = RunTextMap.ResolveRange(map, start, length);
-        // segments is guaranteed non-empty when length > 0 and bounds were checked.
+        // Split at the END boundary first — if start == end - 0 length would be illegal,
+        // but length > 0 is guaranteed by the caller. Splitting end first keeps the
+        // start offset valid (the left-of-start text is unchanged by an end-side split).
+        int endOffset = start + length;
+        DocxSession.SplitRunsAtOffset(block, endOffset);
+        DocxSession.SplitRunsAtOffset(block, start);
 
-        var first = segments[0];
-        var last = segments[^1];
-
-        // Handle the same-run case explicitly: the span starts AND ends inside a
-        // single run. We have to split at most twice on the SAME run, and the
-        // start/end run references must follow whatever split we did first.
-        if (first.Segment.Run == last.Segment.Run)
+        // After both splits, every run boundary in the span [start, end) falls on a
+        // run-element boundary. Rebuild the text map and pick the first/last segment
+        // whose flat-offset range falls inside [start, end).
+        var map = RunTextMap.Build(block);
+        XElement? startRun = null;
+        XElement? endRun = null;
+        foreach (var seg in map.Segments)
         {
-            var run = first.Segment.Run;
-            var spanStartInRun = first.OffsetInRun;
-            var spanEndInRun = first.OffsetInRun + first.Length; // last == first
-
-            XElement startRunSingle = run;
-            XElement endRunSingle = run;
-
-            // Split off the trailing portion first (so the leading split's offset
-            // remains valid against the unchanged left chunk).
-            if (spanEndInRun < first.Segment.Length)
-            {
-                // Right half becomes a new sibling; we keep the left (run) as endRunSingle.
-                _ = SplitRunAt(run, spanEndInRun, takeRightHalf: true);
-                endRunSingle = run;
-            }
-
-            if (spanStartInRun > 0)
-            {
-                // Now split the (possibly shortened) left chunk at the span start.
-                // The right half is the span content; both start and end reference it.
-                var spanRun = SplitRunAt(run, spanStartInRun, takeRightHalf: true);
-                startRunSingle = spanRun;
-                endRunSingle = spanRun;
-            }
-
-            return (startRunSingle, endRunSingle);
+            if (seg.EndOffsetInBlock <= start) continue;
+            if (seg.StartOffsetInBlock >= endOffset) break;
+            startRun ??= seg.Run;
+            endRun = seg.Run;
         }
 
-        // Span crosses run boundaries: at most one split on each end.
-        XElement startRun = first.Segment.Run;
-        if (first.OffsetInRun > 0)
-        {
-            startRun = SplitRunAt(startRun, first.OffsetInRun, takeRightHalf: true);
-        }
-
-        XElement endRun = last.Segment.Run;
-        if (last.OffsetInRun + last.Length < last.Segment.Length)
-        {
-            endRun = SplitRunAt(endRun, last.OffsetInRun + last.Length, takeRightHalf: false);
-        }
-
-        return (startRun, endRun);
+        // length > 0 with bounds-checked offsets means at least one segment overlaps,
+        // unless the span is entirely zero-width text (impossible — RunTextMap excludes
+        // empty runs). The bang is justified by the precondition.
+        return (startRun!, endRun!);
     }
 
     /// <summary>
-    /// Splits a <c>w:r</c> element at <paramref name="offsetInRunText"/> characters
-    /// from the start of its text. Returns either the original (left) run or the
-    /// newly-inserted right-hand run, per <paramref name="takeRightHalf"/>.
-    /// Only handles the common case of a run with a single <c>w:t</c> child;
-    /// runs with multiple text fragments or other content are out of scope for
-    /// v1 (the bookmark just sits at the closer of the two boundary positions).
+    /// Removes the bookmark pair matching <paramref name="bookmarkName"/> across every
+    /// part we recognise, and returns the anchor of the enclosing block element so
+    /// the session can report it as <see cref="EditResult.Modified"/>.
+    ///
+    /// The returned anchor is canonicalised against the live projection via
+    /// <paramref name="canonicalize"/> when supplied — that's the only way to be
+    /// sure the kind ("p" vs "h" vs "li") and scope ("hdr1" vs "hdr2" vs …) match
+    /// what the next <see cref="DocxSession.Project"/> will emit. The local fallback
+    /// (used only when no callback is supplied) reproduces the projector's logic
+    /// inline so even the un-canonicalised result is correct against the standard
+    /// layouts.
     /// </summary>
-    private static XElement SplitRunAt(XElement run, int offsetInRunText, bool takeRightHalf)
-    {
-        var text = run.Element(W + "t");
-        if (text is null) return run;
-
-        var full = text.Value;
-        if (offsetInRunText <= 0 || offsetInRunText >= full.Length) return run;
-
-        var leftText = full.Substring(0, offsetInRunText);
-        var rightText = full.Substring(offsetInRunText);
-
-        text.Value = leftText;
-        if (string.IsNullOrEmpty(text.Attribute(XNamespace.Xml + "space")?.Value)
-            && (leftText.StartsWith(' ') || leftText.EndsWith(' ')))
-        {
-            text.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-        }
-
-        var rightRun = new XElement(run); // clone formatting + text
-        var rightTextElement = rightRun.Element(W + "t")!;
-        rightTextElement.Value = rightText;
-        if (rightText.StartsWith(' ') || rightText.EndsWith(' '))
-            rightTextElement.SetAttributeValue(XNamespace.Xml + "space", "preserve");
-
-        run.AddAfterSelf(rightRun);
-        return takeRightHalf ? rightRun : run;
-    }
-
-    private static Anchor? RemoveBookmarkPair(WordprocessingDocument doc, string bookmarkName)
+    private static Anchor? RemoveBookmarkPair(
+        WordprocessingDocument doc,
+        string bookmarkName,
+        Func<string, Anchor?>? canonicalize)
     {
         Anchor? affectedBlock = null;
-        foreach (var part in EnumerateParts(doc))
+        foreach (var (part, scope) in EnumeratePartsWithScope(doc))
         {
             var root = part.GetXDocument().Root;
             if (root is null) continue;
@@ -406,14 +366,26 @@ internal static class AnnotationOps
                 .FirstOrDefault(e => (string?)e.Attribute(PtOpenXml.Unid) is not null);
             if (enclosing is not null)
             {
-                var kind = KindOfElement(enclosing);
-                var scope = ScopeOfPart(part);
                 var unid = (string)enclosing.Attribute(PtOpenXml.Unid)!;
-                affectedBlock = new Anchor(
-                    Id: $"{kind}:{scope}:{unid}",
-                    Kind: kind,
-                    Scope: scope,
-                    Unid: unid);
+                // Prefer the live projection — it's the authoritative source of
+                // kind+scope and is guaranteed to match what the agent will see
+                // after Project() on the next tick.
+                Anchor? canonical = canonicalize?.Invoke(unid);
+                if (canonical is not null)
+                {
+                    affectedBlock = canonical;
+                }
+                else
+                {
+                    // Fallback: classifier + scope iteration that mirrors
+                    // WmlToMarkdownConverter.BuildAnchorIndex exactly.
+                    var kind = DocxSession.ClassifyBlockKind(enclosing);
+                    affectedBlock = new Anchor(
+                        Id: $"{kind}:{scope}:{unid}",
+                        Kind: kind,
+                        Scope: scope,
+                        Unid: unid);
+                }
             }
 
             start.Remove();
@@ -426,13 +398,26 @@ internal static class AnnotationOps
 
     private static IEnumerable<OpenXmlPart> EnumerateParts(WordprocessingDocument doc)
     {
+        foreach (var (part, _) in EnumeratePartsWithScope(doc)) yield return part;
+    }
+
+    /// <summary>
+    /// Enumerate parts paired with the scope name the projector would assign.
+    /// Header/footer scopes get a 1-based index ("hdr1", "hdr2", …) matching the
+    /// loop in <see cref="WmlToMarkdownConverter.BuildAnchorIndex"/>.
+    /// </summary>
+    private static IEnumerable<(OpenXmlPart Part, string Scope)> EnumeratePartsWithScope(
+        WordprocessingDocument doc)
+    {
         var main = doc.MainDocumentPart;
         if (main is null) yield break;
-        yield return main;
-        foreach (var h in main.HeaderParts) yield return h;
-        foreach (var f in main.FooterParts) yield return f;
-        if (main.FootnotesPart is not null) yield return main.FootnotesPart;
-        if (main.EndnotesPart is not null) yield return main.EndnotesPart;
+        yield return (main, "body");
+        int h = 1;
+        foreach (var hp in main.HeaderParts) yield return (hp, $"hdr{h++}");
+        int f = 1;
+        foreach (var fp in main.FooterParts) yield return (fp, $"ftr{f++}");
+        if (main.FootnotesPart is not null) yield return (main.FootnotesPart, "fn");
+        if (main.EndnotesPart is not null) yield return (main.EndnotesPart, "en");
     }
 
     private static void SavePart(WordprocessingDocument doc, string partUri)
@@ -445,30 +430,5 @@ internal static class AnnotationOps
                 return;
             }
         }
-    }
-
-    private static string KindOfElement(XElement e)
-    {
-        if (e.Name == W + "p")
-        {
-            var pStyle = e.Element(W + "pPr")?.Element(W + "pStyle")?.Attribute(W + "val")?.Value;
-            if (pStyle?.StartsWith("Heading", StringComparison.OrdinalIgnoreCase) == true) return "h";
-            if (e.Element(W + "pPr")?.Element(W + "numPr") is not null) return "li";
-            return "p";
-        }
-        if (e.Name == W + "tbl") return "tbl";
-        if (e.Name == W + "tr") return "tr";
-        if (e.Name == W + "tc") return "tc";
-        return "p";
-    }
-
-    private static string ScopeOfPart(OpenXmlPart part)
-    {
-        if (part is MainDocumentPart) return "body";
-        if (part is HeaderPart) return "hdr";
-        if (part is FooterPart) return "ftr";
-        if (part is FootnotesPart) return "fn";
-        if (part is EndnotesPart) return "en";
-        return "body";
     }
 }

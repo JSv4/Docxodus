@@ -3672,7 +3672,7 @@ public sealed class DocxSession : IDisposable
         {
             var result = Internal.AnnotationOps.Add(_doc!, anchor, span, annotation);
             if (result.Success) InvalidateProjectionCache();
-            else { var preOp = _history.PopForUndo(); if (preOp.ok) RestoreSnapshot(preOp.snapshot); }
+            else _ = _history.PopForUndo();
             return result;
         }
         catch (Exception ex)
@@ -3691,9 +3691,9 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var result = Internal.AnnotationOps.Remove(_doc!, annotationId);
+            var result = Internal.AnnotationOps.Remove(_doc!, annotationId, CanonicalizeAnchorByUnid);
             if (result.Success) InvalidateProjectionCache();
-            else { var preOp = _history.PopForUndo(); if (preOp.ok) RestoreSnapshot(preOp.snapshot); }
+            else _ = _history.PopForUndo();
             return result;
         }
         catch (Exception ex)
@@ -3716,7 +3716,7 @@ public sealed class DocxSession : IDisposable
         try
         {
             var result = Internal.AnnotationOps.Update(_doc!, annotationId, update);
-            if (!result.Success) { var preOp = _history.PopForUndo(); if (preOp.ok) RestoreSnapshot(preOp.snapshot); }
+            if (!result.Success) _ = _history.PopForUndo();
             return result;
         }
         catch (Exception ex)
@@ -3740,9 +3740,10 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var result = Internal.AnnotationOps.Move(_doc!, annotationId, anchor, newSpan);
+            var result = Internal.AnnotationOps.Move(
+                _doc!, annotationId, anchor, newSpan, CanonicalizeAnchorByUnid);
             if (result.Success) InvalidateProjectionCache();
-            else { var preOp = _history.PopForUndo(); if (preOp.ok) RestoreSnapshot(preOp.snapshot); }
+            else _ = _history.PopForUndo();
             return result;
         }
         catch (Exception ex)
@@ -3752,6 +3753,19 @@ public sealed class DocxSession : IDisposable
             if (preOp.ok) RestoreSnapshot(preOp.snapshot);
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, newAnchorId);
         }
+    }
+
+    /// <summary>
+    /// Looks up the canonical <see cref="Anchor"/> for a Unid in the current
+    /// projection. Used by annotation ops so that the <see cref="EditResult.Modified"/>
+    /// anchor matches what <see cref="Project"/>'s AnchorIndex will return on the
+    /// next tick — bypasses the local kind/scope classifier in <c>AnnotationOps</c>
+    /// drifting from the projector.
+    /// </summary>
+    private Anchor? CanonicalizeAnchorByUnid(string unid)
+    {
+        var idx = Project().AnchorIndex;
+        return idx.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor;
     }
 
     // ─── Maintenance / cleanup ───────────────────────────────────────────
@@ -4247,6 +4261,21 @@ public sealed class DocxSession : IDisposable
                 || styleId.Equals("Subtitle", StringComparison.OrdinalIgnoreCase)))
             return "h";
         if (pPr?.Element(W.numPr) is not null) return "li";
+        return "p";
+    }
+
+    /// <summary>
+    /// Classify any block-level XElement to the kind used in anchor ids. Mirrors
+    /// the kinds the projector emits — paragraphs go through
+    /// <see cref="ClassifyParagraphKind"/>; tables/rows/cells map to their fixed kinds.
+    /// Falls back to "p" for unknown shapes.
+    /// </summary>
+    internal static string ClassifyBlockKind(XElement element)
+    {
+        if (element.Name == W.p) return ClassifyParagraphKind(element);
+        if (element.Name == W.tbl) return "tbl";
+        if (element.Name == W.tr) return "tr";
+        if (element.Name == W.tc) return "tc";
         return "p";
     }
 
