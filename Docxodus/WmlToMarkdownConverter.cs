@@ -558,7 +558,32 @@ public static class WmlToMarkdownConverter
     }
 
     private static bool IsListItem(XElement p)
-        => p.Element(W.pPr)?.Element(W.numPr) != null;
+    {
+        // Inline w:numPr wins.
+        if (p.Element(W.pPr)?.Element(W.numPr) != null) return true;
+        // Otherwise the paragraph is a list item if its pStyle chain contributes numPr.
+        // Resolved via the styles part reachable from the in-memory OpenXmlPart annotation
+        // that BuildAnchorIndex stashes on each scope root.
+        var styleId = (string?)p.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val);
+        if (string.IsNullOrEmpty(styleId)) return false;
+        var part = p.Document?.Root?.Annotation<OpenXmlPart>();
+        if (part?.OpenXmlPackage is not WordprocessingDocument wDoc) return false;
+        var stylesRoot = wDoc.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument().Root;
+        if (stylesRoot is null) return false;
+
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var current = styleId;
+        for (int i = 0; i < 16 && current is not null; i++)
+        {
+            if (!visited.Add(current)) return false;  // cycle
+            var style = stylesRoot.Elements(W.style)
+                .FirstOrDefault(s => (string?)s.Attribute(W.styleId) == current);
+            if (style is null) return false;
+            if (style.Element(W.pPr)?.Element(W.numPr) != null) return true;
+            current = (string?)style.Element(W.basedOn)?.Attribute(W.val);
+        }
+        return false;
+    }
 
     // ------------------------------------------------------------------
     // Markdown emission. Phase 2+ implementation. Per-element handlers are

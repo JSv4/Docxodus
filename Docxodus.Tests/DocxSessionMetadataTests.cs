@@ -60,4 +60,19 @@ public class DocxSessionMetadataTests
 
         Assert.Null(session.GetListMembership(anchor.Anchor.Id));
     }
+
+    [Fact]
+    public void BM004_GetListMembership_StyleInheritedNumPr_SetsFromStyleTrue()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildBM_StyleInheritedList());
+        var anchor = session.Project().AnchorIndex.Values.First(t => t.Anchor.Kind == "li");
+
+        var list = session.GetListMembership(anchor.Anchor.Id);
+
+        Assert.NotNull(list);
+        Assert.True(list!.FromStyle);
+        Assert.Equal(1, list.NumId);
+        Assert.Equal(0, list.Level);
+        Assert.Equal(NumberFormat.Bullet, list.Format);
+    }
 }
