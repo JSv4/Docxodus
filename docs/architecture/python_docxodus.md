@@ -43,7 +43,7 @@ NDJSON over stdio — one JSON object per line, `\n` terminated.
 
 **Bytes:** `open_session.args = {"docxB64": "..."}`; `save` response = `{"docxB64": "..."}`. Base64 inside JSON. ~33% overhead, acceptable for the agentic edit-loop pattern.
 
-**Op names** (~32, all snake_case): `open_session`, `close_session`, `save`, `ping`, `shutdown`, `project`, `replace_text`, `delete_block`, `insert_paragraph`, `split_paragraph`, `merge_paragraphs`, `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_list_level`, `remove_list_membership`, `replace_cell_content`, `raw_get_xml`, `raw_insert_xml`, `raw_replace_xml`, `grep`, `grep_cross_block`, `replace_text_range`, `replace_text_at_span`, `find_placeholders`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `exists`, `get_anchor_info`, `get_anchor_infos`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `undo`, `redo`.
+**Op names** (~36, all snake_case): `open_session`, `close_session`, `save`, `ping`, `shutdown`, `project`, `replace_text`, `delete_block`, `insert_paragraph`, `split_paragraph`, `merge_paragraphs`, `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_list_level`, `remove_list_membership`, `replace_cell_content`, `raw_get_xml`, `raw_insert_xml`, `raw_replace_xml`, `grep`, `grep_cross_block`, `replace_text_range`, `replace_text_at_span`, `find_placeholders`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `add_annotation`, `remove_annotation`, `update_annotation`, `move_annotation`, `exists`, `get_anchor_info`, `get_anchor_infos`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `undo`, `redo`.
 
 ## Planned Python package layout
 
@@ -149,6 +149,7 @@ Every Python value type is `@dataclass(frozen=True, slots=True)`. Wire keys rema
 | `MarkdownProjection` | `MarkdownProjection(markdown, anchor_index: dict[str, AnchorTarget])` | object map keyed by id |
 | `DocxSessionSettings` | `DocxSessionSettings(undo_depth=50, validate_raw_ops=False, tracked_changes=TrackedChangeMode.ACCEPT, revision_author=None, persist_anchor_ids=False, smart_quotes=False)` | nested `projection_settings` deferred to v0.2 |
 | `DocumentAnnotation` | mirror; `created` stays ISO-8601 `str` in v1 | |
+| `AnnotationUpdate` | `AnnotationUpdate(label_id=None, label=None, color=None, author=None, metadata_patch=None)` — all fields optional; `metadata_patch` is `dict[str, str \| None] \| None` | `{labelId?, label?, color?, author?, metadataPatch?}` |
 
 Decoders live in `types.py` — one pair per type, ~5 lines each. The Python wrapper methods are 3-line wrappers: build args dict → `transport.call(op, args)` → decode → return.
 
@@ -171,6 +172,24 @@ A few methods exist as syntactic sugar over already-exposed wire ops; the Python
   iteration for nested AlternativeClause brackets. Runs entirely in Python over
   the existing `find_placeholders` + `replace_match` primitives, matching the TS
   wrapper's no-extra-wire-op design.
+
+## Annotation write surface
+
+Four wire ops added to the Tier E surface (`add_annotation`, `remove_annotation`,
+`update_annotation`, `move_annotation`). Python wrapper signatures:
+
+| Method | Signature |
+|--------|-----------|
+| `add_annotation` | `add_annotation(anchor_id: str, span: CharSpan \| None, annotation: DocumentAnnotation) → EditResult` |
+| `remove_annotation` | `remove_annotation(annotation_id: str) → EditResult` |
+| `update_annotation` | `update_annotation(annotation_id: str, update: AnnotationUpdate) → EditResult` |
+| `move_annotation` | `move_annotation(annotation_id: str, new_anchor_id: str, new_span: CharSpan \| None) → EditResult` |
+
+All four return the standard `EditResult` envelope; `EditResult.annotation_id`
+carries the affected id on success. New `EditErrorCode` values:
+`DUPLICATE_ANNOTATION_ID`, `ANNOTATION_NOT_FOUND`, `EMPTY_ANNOTATION_SPAN`.
+See `docs/architecture/docx_mutation_api.md` § "Tier E: Annotations" for the
+full semantics.
 
 ## Wire-only internals
 

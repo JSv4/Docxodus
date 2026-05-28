@@ -236,6 +236,57 @@ Two caveats that are explicitly out of scope for v1 (tracked in [#132](https://g
 
 The agent's prompt should also be aware: it can call `session.ListAnnotations()` once at session start to enumerate available labels (e.g., "you can target: INDEMNIFICATION, TERMINATION, GOVERNING_LAW") and present those as tools rather than asking the LLM to discover them from text.
 
+## Tier E: Annotations
+
+Anchor-addressed CRUD for the Docxodus annotation system (custom-XML +
+bookmark pairs). Mutates the live session document; round-trips through
+Save and Reopen. Exposed in .NET, WASM (`@docxodus/wasm`), and Python
+(`docx-scalpel`).
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `AddAnnotation(anchorId, span?, DocumentAnnotation)` | Annotate a range; auto-generates 16-char hex id when `annotation.Id` is empty. `BookmarkName`, `AnnotatedText`, `Created`, and `PageInfoStale` are always set by the session. |
+| `RemoveAnnotation(id)` | Removes the bookmark pair and the custom-XML entry. |
+| `UpdateAnnotation(id, AnnotationUpdate)` | Mutates scalar fields (label/labelId/color/author) and metadata (per-key merge, explicit null = remove key). Range is preserved. |
+| `MoveAnnotation(id, newAnchorId, newSpan?)` | Atomically re-targets to a new anchor + span. Validates the new range *before* removing the old bookmark. |
+
+### `AnnotationUpdate`
+
+```csharp
+public sealed record AnnotationUpdate
+{
+    public string? LabelId { get; init; }
+    public string? Label { get; init; }
+    public string? Color { get; init; }
+    public string? Author { get; init; }
+    public IReadOnlyDictionary<string, string?>? MetadataPatch { get; init; }
+}
+```
+
+Null/missing fields leave existing values unchanged. `MetadataPatch`
+per-key semantics: non-null value = set/replace, explicit `null` = remove,
+missing key = leave as-is.
+
+### New error codes
+
+- `DuplicateAnnotationId` — caller-supplied id already exists, or auto-id
+  collided 4 times in a row (vanishingly rare).
+- `AnnotationNotFound` — `Remove`/`Update`/`Move` invoked with an unknown id.
+- `EmptyAnnotationSpan` — `span.Length == 0`, or `span == null` and the
+  resolved block has zero inline runs.
+
+### Return shape
+
+All four ops use the standard `EditResult` envelope with one new field:
+`AnnotationId` carries the affected id on success. `Created`/`Removed` are
+always empty for these ops (the bookmark + custom-XML entry are internal,
+not markdown anchors). `Patch` is null — annotation ops don't change the
+markdown projection. `Modified` lists the enclosing block anchor (one
+entry for Add/Remove/Update; one or two for Move depending on whether the
+destination is the same block as the source).
+
 ## Find* helpers — anchor-level convenience over Grep
 
 For anchor-level lookups that don't need match spans / fragments:

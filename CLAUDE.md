@@ -145,7 +145,7 @@ This repo is not just a .NET library — it ships a four-layer stack. Changes to
 | npm/TypeScript | `npm/` | Wrapper around the WASM bridge — `src/index.ts` is the public API, `src/react.ts` is the React hook layer, `src/docxodus.worker.ts`/`worker-proxy.ts` run WASM off the main thread. |
 | Web demo | `web/DocxodusWeb/` | Blazor/web demo app (separate workflow). |
 
-When the core library changes a public method or setting on `DocxSession`, update **`Docxodus/Internal/DocxSessionOps.cs` first** — both bridges and both clients pick up the change automatically. Then ripple through: tests, the WASM `[JSExport]` shell in `DocxSessionBridge.cs`, the stdio dispatcher in `tools/python-host/Dispatcher.cs`, `npm/src/types.ts` + `npm/src/index.ts`. The table in "Feature Development Workflow" below summarizes when each is required.
+When the core library changes a public method or setting on `DocxSession`, update **`Docxodus/Internal/DocxSessionOps.cs` first** — both bridges and both clients pick up the change automatically. Then ripple through: tests, the WASM `[JSExport]` shell in `DocxSessionBridge.cs`, the stdio dispatcher in `tools/python-host/Dispatcher.cs`, `npm/src/types.ts` + `npm/src/index.ts`, `python/src/docx_scalpel/types.py` + `python/src/docx_scalpel/session.py`. The table in "Feature Development Workflow" below summarizes when each is required.
 
 ### WASM Conditional Compilation
 
@@ -255,6 +255,11 @@ See `docs/architecture/comment_rendering.md` for detailed comment rendering docu
 - Tier B (structural): `InsertParagraph(anchor, Position, markdown)`, `SplitParagraph(anchor, offset)`, `MergeParagraphs(first, second)`
 - Tier C (formatting): `ApplyFormat(anchor, CharSpan?, FormatOp)`, `SetParagraphStyle(anchor, styleId)`, `SetListLevel(anchor, delta)`, `RemoveListMembership(anchor)`
 - Tier D (advanced): `ReplaceCellContent(cellAnchor, markdown)`; `Settings.TrackedChanges = RenderInline` makes all mutations land as `w:ins`/`w:del`
+- Tier E (annotations): `AddAnnotation(anchorId, span, DocumentAnnotation)`,
+  `RemoveAnnotation(id)`, `UpdateAnnotation(id, AnnotationUpdate)`,
+  `MoveAnnotation(id, newAnchorId, newSpan)` — anchor-addressed annotation
+  CRUD that mutates the live session document. `EditResult.AnnotationId`
+  carries the affected id on success.
 - Raw OOXML escape hatch: `session.Raw.GetXml(anchor)`, `Raw.InsertXml(anchor, Position, xml)`, `Raw.ReplaceXml(anchor, xml)` for content the markdown subset can't express
 - Bounded snapshot `Undo()`/`Redo()` (configurable depth via `Settings.UndoDepth`)
 - Every mutation returns a typed `EditResult` envelope: `Success`, `EditError(EditErrorCode, message, anchorId)`, `Created`/`Removed`/`Modified` anchor lists, and a `MarkdownPatch` for the affected scope
