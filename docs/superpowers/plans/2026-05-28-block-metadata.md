@@ -1294,8 +1294,20 @@ Expected: hits around lines 320 and 328.
     [JSExport]
     public static string GetBlockMetadatas(int h, string anchorIdsJson)
     {
-        var ids = System.Text.Json.JsonSerializer.Deserialize<string[]>(anchorIdsJson)
-            ?? System.Array.Empty<string>();
+        // Use the source-generated JsonContext — reflection-based JsonSerializer
+        // is disabled in the WASM Release build (JsonSerializerIsReflectionDisabled).
+        // Pattern matches GetAnchorInfos.
+        string[] ids;
+        try
+        {
+            ids = JsonSerializer.Deserialize<string[]>(
+                anchorIdsJson, DocxodusJsonContext.Default.StringArray)
+                ?? System.Array.Empty<string>();
+        }
+        catch (JsonException)
+        {
+            return "{\"error\":\"malformed anchor id array\"}";
+        }
         return DocxSessionOps.GetBlockMetadatas(h, ids);
     }
 
