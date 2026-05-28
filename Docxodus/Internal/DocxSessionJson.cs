@@ -545,4 +545,31 @@ internal static class DocxSessionJson
         sb.Append(']');
         return sb.ToString();
     }
+
+    // ─── Deserializers ──────────────────────────────────────────────────
+
+    // Web defaults give us camelCase property name matching (LabelId → "labelId",
+    // Metadata → "metadata", etc.) consistent with the camelCase output produced
+    // by SerializeAnnotations above.
+    // DefaultIgnoreCondition.Never ensures explicit JSON null values in
+    // MetadataPatch are preserved during deserialization ("null" means "remove this
+    // key") rather than silently dropped.
+    private static readonly JsonSerializerOptions s_annotationOptions =
+        new(JsonSerializerDefaults.Web)
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.Never,
+        };
+
+    public static DocumentAnnotation DeserializeAnnotation(string json)
+    {
+        var a = JsonSerializer.Deserialize<DocumentAnnotation>(json, s_annotationOptions)
+            ?? throw new System.ArgumentException("annotation JSON deserialized to null");
+        // Ensure Metadata is non-null even if the caller omitted the field.
+        a.Metadata ??= new System.Collections.Generic.Dictionary<string, string>();
+        return a;
+    }
+
+    public static AnnotationUpdate DeserializeAnnotationUpdate(string json) =>
+        JsonSerializer.Deserialize<AnnotationUpdate>(json, s_annotationOptions)
+            ?? throw new System.ArgumentException("annotation update JSON deserialized to null");
 }
