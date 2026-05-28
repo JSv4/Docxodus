@@ -605,6 +605,10 @@ public enum EditErrorCode
     NothingToUndo,
     NothingToRedo,
 
+    DuplicateAnnotationId,
+    AnnotationNotFound,
+    EmptyAnnotationSpan,
+
     InternalError,
 }
 
@@ -617,8 +621,29 @@ public sealed class EditResult
     public IReadOnlyList<Anchor> Modified { get; init; } = Array.Empty<Anchor>();
     public MarkdownPatch? Patch { get; init; }
 
+    /// <summary>
+    /// Populated by AddAnnotation/RemoveAnnotation/UpdateAnnotation/MoveAnnotation
+    /// with the affected annotation id. Null for every other op.
+    /// </summary>
+    public string? AnnotationId { get; init; }
+
     internal static EditResult Fail(EditErrorCode code, string message, string? anchorId = null) =>
         new() { Success = false, Error = new EditError(code, message, anchorId) };
+}
+
+/// <summary>
+/// Partial-update payload for <see cref="DocxSession.UpdateAnnotation"/>.
+/// Null fields leave the existing value unchanged. <see cref="MetadataPatch"/>
+/// is a per-key merge: a non-null value sets the key, an explicit null removes
+/// it, a missing key leaves it unchanged.
+/// </summary>
+public sealed record AnnotationUpdate
+{
+    public string? LabelId { get; init; }
+    public string? Label { get; init; }
+    public string? Color { get; init; }
+    public string? Author { get; init; }
+    public IReadOnlyDictionary<string, string?>? MetadataPatch { get; init; }
 }
 
 public sealed class DocxSessionSettings
