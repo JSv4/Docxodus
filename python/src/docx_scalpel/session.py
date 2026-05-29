@@ -165,10 +165,10 @@ class DocxSession:
 
     def to_html(self, options: HtmlOptions | None = None) -> str:
         """Render this session's current (possibly edited) state to HTML."""
-        args: dict[str, Any] = {"handle": self._handle}
+        args: dict[str, Any] = {}
         if options is not None:
             args["options"] = options.to_wire()
-        html = _call("session_to_html", args)
+        html = self._call("session_to_html", args)
         if not isinstance(html, str):
             raise TypeError(f"session_to_html: expected str, got {type(html).__name__}")
         return html

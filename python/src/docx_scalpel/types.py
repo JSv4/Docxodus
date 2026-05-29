@@ -685,7 +685,7 @@ class ReplaceOptions:
 
 
 # ---------------------------------------------------------------------------
-# Fill placeholders (client-side multi-pass loop; see DocxSession.fill_placeholders)
+# DOCX → HTML conversion options (see convert_docx_to_html / DocxSession.to_html)
 # ---------------------------------------------------------------------------
 
 
@@ -744,6 +744,11 @@ class HtmlOptions:
         if self.document_language is not None:
             wire["documentLanguage"] = self.document_language
         return wire
+
+
+# ---------------------------------------------------------------------------
+# Fill placeholders (client-side multi-pass loop; see DocxSession.fill_placeholders)
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
