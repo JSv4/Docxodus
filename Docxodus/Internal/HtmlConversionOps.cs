@@ -50,6 +50,7 @@ internal static class HtmlConversionOps
     {
         if (docxBytes == null || docxBytes.Length == 0)
             throw new ArgumentException("No document data provided", nameof(docxBytes));
+        ArgumentNullException.ThrowIfNull(options);
 
         // Writable stream required: WmlToHtmlConverter runs RevisionAccepter internally.
         using var memoryStream = new MemoryStream();
