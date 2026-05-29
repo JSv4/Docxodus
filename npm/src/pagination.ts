@@ -88,6 +88,8 @@ export interface MeasuredBlock {
   pageBreakBefore: boolean;
   /** Whether this is a page break marker */
   isPageBreak: boolean;
+  /** Whether widow/orphan control is enabled for this block */
+  widowControl: boolean;
 }
 
 /**
@@ -126,6 +128,10 @@ export interface PaginationOptions {
   showPageNumbers?: boolean;
   /** Gap between pages in pixels. Default: 20 */
   pageGap?: number;
+  /** Minimum number of lines to keep at the bottom of a page (orphan control). Default: 2 */
+  minOrphanLines?: number;
+  /** Minimum number of lines to keep at the top of a page (widow control). Default: 2 */
+  minWidowLines?: number;
 }
 
 // Default letter size in points (612 x 792 = 8.5" x 11")
@@ -222,6 +228,8 @@ export class PaginationEngine {
   private cssPrefix: string;
   private showPageNumbers: boolean;
   private pageGap: number;
+  private minOrphanLines: number;
+  private minWidowLines: number;
   private hfRegistry: HeaderFooterRegistry;
   private footnoteRegistry: FootnoteRegistry;
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
@@ -258,6 +266,8 @@ export class PaginationEngine {
     this.cssPrefix = options.cssPrefix ?? "page-";
     this.showPageNumbers = options.showPageNumbers ?? true;
     this.pageGap = options.pageGap ?? 20;
+    this.minOrphanLines = options.minOrphanLines ?? 2;
+    this.minWidowLines = options.minWidowLines ?? 2;
     this.hfRegistry = new Map();
     this.footnoteRegistry = new Map();
   }
@@ -355,6 +365,7 @@ export class PaginationEngine {
         keepLines: child.dataset.keepLines === "true",
         pageBreakBefore: child.dataset.pageBreakBefore === "true",
         isPageBreak,
+        widowControl: child.dataset.widowControl !== "false", // defaults to true per Word behavior
       });
     }
 
@@ -561,6 +572,146 @@ export class PaginationEngine {
     this.stagingElement.removeChild(measureContainer);
 
     return heightPt;
+  }
+
+  /**
+   * Represents a measured line within a paragraph element.
+   */
+  private measureLines(
+    element: HTMLElement,
+    contentWidth: number
+  ): { top: number; bottom: number; height: number }[] {
+    // Mount a clone in the staging area at the correct width for measurement
+    const measureContainer = document.createElement("div");
+    measureContainer.style.position = "absolute";
+    measureContainer.style.visibility = "hidden";
+    measureContainer.style.width = `${ptToPx(contentWidth)}px`;
+    measureContainer.style.left = "-9999px";
+    const clone = element.cloneNode(true) as HTMLElement;
+    measureContainer.appendChild(clone);
+    this.stagingElement.appendChild(measureContainer);
+
+    const lines: { top: number; bottom: number; height: number }[] = [];
+
+    // Use Range API to walk through all text nodes and detect line breaks
+    // via getClientRects()
+    const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+    const rects: DOMRect[] = [];
+
+    let textNode: Text | null;
+    while ((textNode = walker.nextNode() as Text | null)) {
+      const range = document.createRange();
+      // Get rects for each character cluster to detect line breaks
+      for (let i = 0; i < textNode.length; i++) {
+        range.setStart(textNode, i);
+        range.setEnd(textNode, i + 1);
+        const charRects = range.getClientRects();
+        for (let r = 0; r < charRects.length; r++) {
+          rects.push(charRects[r]);
+        }
+      }
+    }
+
+    // Also include non-text inline elements (images, etc.)
+    const inlineElements = clone.querySelectorAll("img, svg, br");
+    inlineElements.forEach((el) => {
+      const elRects = el.getClientRects();
+      for (let r = 0; r < elRects.length; r++) {
+        rects.push(elRects[r]);
+      }
+    });
+
+    if (rects.length === 0) {
+      // Fallback: treat the whole element as one line
+      const elRect = clone.getBoundingClientRect();
+      if (elRect.height > 0) {
+        lines.push({ top: 0, bottom: elRect.height, height: elRect.height });
+      }
+      this.stagingElement.removeChild(measureContainer);
+      return lines;
+    }
+
+    // Sort rects by vertical position, then cluster into lines
+    // Two rects are on the same line if their vertical midpoints overlap
+    const containerTop = clone.getBoundingClientRect().top;
+    const sortedRects = rects
+      .filter((r) => r.height > 0)
+      .sort((a, b) => a.top - b.top);
+
+    let currentLineTop = sortedRects[0]?.top ?? 0;
+    let currentLineBottom = sortedRects[0]?.bottom ?? 0;
+
+    for (const rect of sortedRects) {
+      const midpoint = (rect.top + rect.bottom) / 2;
+      if (midpoint > currentLineBottom) {
+        // New line
+        lines.push({
+          top: currentLineTop - containerTop,
+          bottom: currentLineBottom - containerTop,
+          height: currentLineBottom - currentLineTop,
+        });
+        currentLineTop = rect.top;
+        currentLineBottom = rect.bottom;
+      } else {
+        // Same line - extend bottom if needed
+        currentLineBottom = Math.max(currentLineBottom, rect.bottom);
+      }
+    }
+
+    // Push the last line
+    if (sortedRects.length > 0) {
+      lines.push({
+        top: currentLineTop - containerTop,
+        bottom: currentLineBottom - containerTop,
+        height: currentLineBottom - currentLineTop,
+      });
+    }
+
+    this.stagingElement.removeChild(measureContainer);
+    return lines;
+  }
+
+  /**
+   * Splits a paragraph element at a given line boundary.
+   *
+   * Returns two elements: the portion that fits (up to splitAfterLine lines)
+   * and the remainder, or null if splitting is not feasible.
+   *
+   * Uses a CSS clip approach: clones the element twice, clipping the first
+   * to show only lines up to the split point, and the second to show lines after.
+   */
+  private splitParagraphAtLine(
+    element: HTMLElement,
+    lines: { top: number; bottom: number; height: number }[],
+    splitAfterLine: number,
+    contentWidth: number
+  ): { first: HTMLElement; second: HTMLElement } | null {
+    if (splitAfterLine <= 0 || splitAfterLine >= lines.length) {
+      return null;
+    }
+
+    const splitPointPx = lines[splitAfterLine - 1].bottom;
+    const totalHeightPx = lines[lines.length - 1].bottom;
+
+    // Create first part: a wrapper that clips to show only the top portion
+    const firstWrapper = document.createElement("div");
+    firstWrapper.className = "pagination-split-first";
+    firstWrapper.style.overflow = "hidden";
+    firstWrapper.style.height = `${splitPointPx}px`;
+    const firstClone = element.cloneNode(true) as HTMLElement;
+    firstWrapper.appendChild(firstClone);
+
+    // Create second part: a wrapper that clips to show only the bottom portion
+    const secondWrapper = document.createElement("div");
+    secondWrapper.className = "pagination-split-second";
+    secondWrapper.style.overflow = "hidden";
+    secondWrapper.style.height = `${totalHeightPx - splitPointPx}px`;
+    const secondClone = element.cloneNode(true) as HTMLElement;
+    // Shift the content up by the split point
+    secondClone.style.marginTop = `-${splitPointPx}px`;
+    secondWrapper.appendChild(secondClone);
+
+    return { first: firstWrapper, second: secondWrapper };
   }
 
   /**
@@ -1166,15 +1317,67 @@ export class PaginationEngine {
             currentFootnoteIds = [...blockFootnoteIds];
             currentFootnoteHeight = newPageFootnoteHeight;
           }
+        } else if (!block.keepLines && currentContent.length > 0) {
+          // Block doesn't fit on current page - try splitting at line boundary
+          // instead of moving the entire block to a new page
+          const lines = this.measureLines(block.element, dims.contentWidth);
+          const availableOnCurrentPt = remainingHeight - currentFootnoteHeight;
+
+          if (lines.length > 1) {
+            const splitResult = this.trySplitWithWidowOrphan(
+              block, lines, availableOnCurrentPt, effectiveContentHeight, dims.contentWidth
+            );
+
+            if (splitResult) {
+              // First part on current page, second part on next
+              currentContent.push(splitResult.first);
+              finishPage();
+
+              // Calculate remainder height
+              const remainingLines = lines.slice(splitResult.splitAfterLine);
+              const remainderHeightPx = remainingLines.length > 0
+                ? remainingLines[remainingLines.length - 1].bottom - remainingLines[0].top
+                : 0;
+              const remainderHeightPt = pxToPt(remainderHeightPx);
+              currentContent.push(splitResult.second);
+              remainingHeight = effectiveContentHeight - remainderHeightPt - block.marginBottomPt;
+              prevMarginBottomPt = block.marginBottomPt;
+              currentFootnoteIds = [...blockFootnoteIds];
+              currentFootnoteHeight = blockFootnoteIds.length > 0
+                ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth, currentContinuation)
+                : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
+            } else {
+              // Can't split usefully - move whole block to new page
+              finishPage();
+              const newPageFootnoteHeight = blockFootnoteIds.length > 0
+                ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth, currentContinuation)
+                : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
+              const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
+              currentContent.push(block.element.cloneNode(true) as HTMLElement);
+              remainingHeight = effectiveContentHeight - newPageSpace;
+              prevMarginBottomPt = block.marginBottomPt;
+              currentFootnoteIds = [...blockFootnoteIds];
+              currentFootnoteHeight = newPageFootnoteHeight;
+            }
+          } else {
+            // Single line - move whole block to new page
+            finishPage();
+            const newPageFootnoteHeight = blockFootnoteIds.length > 0
+              ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth, currentContinuation)
+              : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
+            const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
+            currentContent.push(block.element.cloneNode(true) as HTMLElement);
+            remainingHeight = effectiveContentHeight - newPageSpace;
+            prevMarginBottomPt = block.marginBottomPt;
+            currentFootnoteIds = [...blockFootnoteIds];
+            currentFootnoteHeight = newPageFootnoteHeight;
+          }
         } else {
-          // Block itself doesn't fit - start new page
+          // Block itself doesn't fit and keepLines is set or page is empty - start new page
           finishPage();
-          // On new page, recalculate footnote height for just this block's footnotes
-          // (plus any continuation from previous page)
           const newPageFootnoteHeight = blockFootnoteIds.length > 0
             ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth, currentContinuation)
             : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
-          // Include full top margin
           const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
           currentContent.push(block.element.cloneNode(true) as HTMLElement);
           remainingHeight = effectiveContentHeight - newPageSpace;
@@ -1183,14 +1386,80 @@ export class PaginationEngine {
           currentFootnoteHeight = newPageFootnoteHeight;
         }
       } else {
-        // Block is taller than a page - add it and let it overflow
-        // (In a more sophisticated implementation, we would split the block)
-        if (currentContent.length > 0) {
+        // Block is taller than a page - attempt line-level splitting
+        if (!block.keepLines) {
+          const lines = this.measureLines(block.element, dims.contentWidth);
+
+          if (lines.length > 1) {
+            // Determine available height on current page (or a full page if we need to start fresh)
+            if (currentContent.length > 0) {
+              const availableOnCurrentPt = remainingHeight - currentFootnoteHeight;
+              const splitResult = this.trySplitWithWidowOrphan(
+                block, lines, availableOnCurrentPt, effectiveContentHeight, dims.contentWidth
+              );
+
+              if (splitResult) {
+                // First part goes on current page
+                currentContent.push(splitResult.first);
+                finishPage();
+
+                // Handle remaining part - may need further splitting across pages
+                this.flowSplitRemainder(
+                  splitResult.second, block, lines, splitResult.splitAfterLine,
+                  dims, effectiveContentHeight, currentContent, currentFootnoteIds,
+                  blockFootnoteIds, finishPage,
+                  () => remainingHeight,
+                  (v: number) => { remainingHeight = v; },
+                  () => prevMarginBottomPt,
+                  (v: number) => { prevMarginBottomPt = v; },
+                  () => currentFootnoteHeight,
+                  (v: number) => { currentFootnoteHeight = v; }
+                );
+              } else {
+                // Can't split usefully for current page, start new page and split there
+                finishPage();
+                this.splitBlockAcrossPages(
+                  block, lines, dims, effectiveContentHeight, currentContent,
+                  currentFootnoteIds, blockFootnoteIds, finishPage,
+                  () => remainingHeight,
+                  (v: number) => { remainingHeight = v; },
+                  () => prevMarginBottomPt,
+                  (v: number) => { prevMarginBottomPt = v; },
+                  () => currentFootnoteHeight,
+                  (v: number) => { currentFootnoteHeight = v; }
+                );
+              }
+            } else {
+              // Current page is empty - split across pages from here
+              this.splitBlockAcrossPages(
+                block, lines, dims, effectiveContentHeight, currentContent,
+                currentFootnoteIds, blockFootnoteIds, finishPage,
+                () => remainingHeight,
+                (v: number) => { remainingHeight = v; },
+                () => prevMarginBottomPt,
+                (v: number) => { prevMarginBottomPt = v; },
+                () => currentFootnoteHeight,
+                (v: number) => { currentFootnoteHeight = v; }
+              );
+            }
+          } else {
+            // Single line or can't measure lines - fall through to overflow behavior
+            if (currentContent.length > 0) {
+              finishPage();
+            }
+            currentContent.push(block.element.cloneNode(true) as HTMLElement);
+            currentFootnoteIds = [...blockFootnoteIds];
+            finishPage();
+          }
+        } else {
+          // keepLines is set - don't split, just overflow
+          if (currentContent.length > 0) {
+            finishPage();
+          }
+          currentContent.push(block.element.cloneNode(true) as HTMLElement);
+          currentFootnoteIds = [...blockFootnoteIds];
           finishPage();
         }
-        currentContent.push(block.element.cloneNode(true) as HTMLElement);
-        currentFootnoteIds = [...blockFootnoteIds];
-        finishPage();
       }
     }
 
@@ -1201,6 +1470,150 @@ export class PaginationEngine {
     this.pendingFootnoteContinuation = nextPageContinuation;
 
     return pages;
+  }
+
+  /**
+   * Tries to find a valid split point respecting widow/orphan constraints.
+   * Returns the split elements and split line index, or null if no valid split exists.
+   */
+  private trySplitWithWidowOrphan(
+    block: MeasuredBlock,
+    lines: { top: number; bottom: number; height: number }[],
+    availableHeightPt: number,
+    fullPageHeightPt: number,
+    contentWidth: number
+  ): { first: HTMLElement; second: HTMLElement; splitAfterLine: number } | null {
+    const availableHeightPx = ptToPx(availableHeightPt);
+
+    // Find how many lines fit in available height
+    let fittingLines = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].bottom <= availableHeightPx) {
+        fittingLines = i + 1;
+      } else {
+        break;
+      }
+    }
+
+    if (fittingLines === 0) return null;
+
+    // Apply orphan/widow constraints when widow control is enabled
+    let splitAfterLine = fittingLines;
+    if (block.widowControl) {
+      const remainingLines = lines.length - splitAfterLine;
+
+      // Orphan control: ensure at least minOrphanLines stay on current page
+      if (splitAfterLine < this.minOrphanLines) {
+        return null; // Not enough lines for orphan control - don't split here
+      }
+
+      // Widow control: ensure at least minWidowLines go to next page
+      if (remainingLines < this.minWidowLines) {
+        // Pull back lines to ensure enough go to next page
+        splitAfterLine = lines.length - this.minWidowLines;
+        if (splitAfterLine < this.minOrphanLines) {
+          return null; // Can't satisfy both constraints
+        }
+        // Verify adjusted split point still fits
+        if (lines[splitAfterLine - 1].bottom > availableHeightPx) {
+          return null;
+        }
+      }
+    }
+
+    if (splitAfterLine <= 0 || splitAfterLine >= lines.length) return null;
+
+    const result = this.splitParagraphAtLine(block.element, lines, splitAfterLine, contentWidth);
+    if (!result) return null;
+
+    return { ...result, splitAfterLine };
+  }
+
+  /**
+   * Handles flowing the remainder of a split paragraph across subsequent pages.
+   */
+  private flowSplitRemainder(
+    secondPart: HTMLElement,
+    block: MeasuredBlock,
+    allLines: { top: number; bottom: number; height: number }[],
+    splitAfterLine: number,
+    dims: PageDimensions,
+    effectiveContentHeight: number,
+    currentContent: HTMLElement[],
+    currentFootnoteIds: string[],
+    blockFootnoteIds: string[],
+    finishPage: () => void,
+    getRemainingHeight: () => number,
+    setRemainingHeight: (v: number) => void,
+    getPrevMarginBottom: () => number,
+    setPrevMarginBottom: (v: number) => void,
+    getFootnoteHeight: () => number,
+    setFootnoteHeight: (v: number) => void
+  ): void {
+    // Calculate remaining lines' height
+    const remainingLines = allLines.slice(splitAfterLine);
+    const remainingHeightPx = remainingLines.length > 0
+      ? remainingLines[remainingLines.length - 1].bottom - remainingLines[0].top
+      : 0;
+    const remainingHeightPt = pxToPt(remainingHeightPx);
+
+    if (remainingHeightPt <= effectiveContentHeight) {
+      // Remainder fits on one page
+      currentContent.push(secondPart);
+      setRemainingHeight(effectiveContentHeight - remainingHeightPt - block.marginBottomPt);
+      setPrevMarginBottom(block.marginBottomPt);
+      currentFootnoteIds.push(...blockFootnoteIds);
+    } else {
+      // Remainder still too tall - add what we can and continue splitting
+      // For simplicity, add remainder and let it overflow (rare edge case with very long paragraphs)
+      currentContent.push(secondPart);
+      currentFootnoteIds.push(...blockFootnoteIds);
+      finishPage();
+    }
+  }
+
+  /**
+   * Splits a block across pages starting from an empty page.
+   */
+  private splitBlockAcrossPages(
+    block: MeasuredBlock,
+    lines: { top: number; bottom: number; height: number }[],
+    dims: PageDimensions,
+    effectiveContentHeight: number,
+    currentContent: HTMLElement[],
+    currentFootnoteIds: string[],
+    blockFootnoteIds: string[],
+    finishPage: () => void,
+    getRemainingHeight: () => number,
+    setRemainingHeight: (v: number) => void,
+    getPrevMarginBottom: () => number,
+    setPrevMarginBottom: (v: number) => void,
+    getFootnoteHeight: () => number,
+    setFootnoteHeight: (v: number) => void
+  ): void {
+    const splitResult = this.trySplitWithWidowOrphan(
+      block, lines, effectiveContentHeight, effectiveContentHeight, dims.contentWidth
+    );
+
+    if (splitResult) {
+      currentContent.push(splitResult.first);
+      finishPage();
+
+      // Handle the remainder
+      this.flowSplitRemainder(
+        splitResult.second, block, lines, splitResult.splitAfterLine,
+        dims, effectiveContentHeight, currentContent, currentFootnoteIds,
+        blockFootnoteIds, finishPage,
+        getRemainingHeight, setRemainingHeight,
+        getPrevMarginBottom, setPrevMarginBottom,
+        getFootnoteHeight, setFootnoteHeight
+      );
+    } else {
+      // Can't split (e.g., single line taller than a page) - overflow
+      currentContent.push(block.element.cloneNode(true) as HTMLElement);
+      currentFootnoteIds.push(...blockFootnoteIds);
+      finishPage();
+    }
   }
 
   /**

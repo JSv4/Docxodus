@@ -158,6 +158,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased] - .NET 8 / Open XML SDK 3.x Migration
 
+### Added (npm)
+- **Line-level pagination with paragraph splitting and widow/orphan control (Issue #30)**
+  - Paragraphs taller than a page are now split at line boundaries instead of overflowing
+  - Uses Range API / `getClientRects()` for precise line measurement
+  - Widow/orphan control ensures minimum line counts at page top/bottom (default: 2 lines each)
+  - Respects Word's `w:widowControl` and `w:keepLines` paragraph properties
+  - Configurable via `PaginationOptions.minOrphanLines` and `PaginationOptions.minWidowLines`
+  - `MeasuredBlock` now includes `widowControl` property parsed from `data-widow-control` attribute
+
 ### Fixed (npm)
 - **TypeScript subpath exports not resolving under `moduleResolution: "node"` (Issue #113)** - Added `typesVersions` fallback to npm package.json so `docxodus/react` and `docxodus/worker` subpath imports resolve types correctly under all TypeScript module resolution modes. Also reordered export conditions to put `types` before `import` per TypeScript requirements.
 
