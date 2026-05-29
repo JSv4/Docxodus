@@ -255,49 +255,29 @@ public partial class DocumentConverter
 
         try
         {
-            // Must use writable stream - WmlToHtmlConverter calls RevisionAccepter internally
-            using var memoryStream = new MemoryStream();
-            memoryStream.Write(docxBytes, 0, docxBytes.Length);
-            memoryStream.Position = 0;
-            using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
-
-            var renderComments = commentRenderMode >= 0;
-
-            var settings = new WmlToHtmlConverterSettings
+            var options = new Docxodus.Internal.HtmlConversionOptions
             {
                 PageTitle = pageTitle ?? "Document",
                 CssClassPrefix = cssPrefix ?? "docx-",
                 FabricateCssClasses = fabricateClasses,
                 AdditionalCss = additionalCss ?? "",
-                GeneralCss = "body { font-family: Arial, sans-serif; margin: 20px; } " +
-                             "span { white-space: pre-wrap; }",
-                RenderComments = renderComments,
-                CommentRenderMode = renderComments ? (CommentRenderMode)commentRenderMode : CommentRenderMode.EndnoteStyle,
+                CommentRenderMode = commentRenderMode,
                 CommentCssClassPrefix = commentCssClassPrefix ?? "comment-",
-                IncludeCommentMetadata = true,
-                RenderPagination = (PaginationMode)paginationMode,
-                PaginationScale = paginationScale > 0 ? paginationScale : 1.0,
+                PaginationMode = paginationMode,
+                PaginationScale = paginationScale,
                 PaginationCssClassPrefix = paginationCssClassPrefix ?? "page-",
                 RenderAnnotations = renderAnnotations,
-                AnnotationLabelMode = (AnnotationLabelMode)annotationLabelMode,
+                AnnotationLabelMode = annotationLabelMode,
                 AnnotationCssClassPrefix = annotationCssClassPrefix ?? "annot-",
-                IncludeAnnotationMetadata = true,
                 RenderFootnotesAndEndnotes = renderFootnotesAndEndnotes,
                 RenderHeadersAndFooters = renderHeadersAndFooters,
                 RenderTrackedChanges = renderTrackedChanges,
                 ShowDeletedContent = showDeletedContent,
                 RenderMoveOperations = renderMoveOperations,
-                IncludeRevisionMetadata = true,
                 RenderUnsupportedContentPlaceholders = renderUnsupportedContentPlaceholders,
-                UnsupportedContentCssClassPrefix = "unsupported-",
-                IncludeUnsupportedContentMetadata = true,
                 DocumentLanguage = documentLanguage,
-                // Embed images as base64 data URIs - no SkiaSharp needed
-                ImageHandler = CreateBase64ImageHandler()
             };
-
-            var htmlElement = WmlToHtmlConverter.ConvertToHtml(wordDoc, settings);
-            return htmlElement.ToString(SaveOptions.DisableFormatting);
+            return Docxodus.Internal.HtmlConversionOps.ConvertToHtml(docxBytes, options);
         }
         catch (Exception ex)
         {
