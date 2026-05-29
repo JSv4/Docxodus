@@ -5,6 +5,16 @@ from __future__ import annotations
 from docx_scalpel import HtmlOptions, convert_docx_to_html, open_session
 
 
+def _document_order(markdown: str, anchor_id: str) -> int:
+    """Position of an anchor's marker in the projection, for document-order sort.
+
+    Mirrors the helper in ``test_smoke.py``; kept local for the same reason
+    (conftest functions are not reliably importable by name).
+    """
+    i = markdown.find("{#" + anchor_id + "}")
+    return i if i >= 0 else 1 << 30
+
+
 def test_th001_stateless_convert_produces_html(tour_plan_bytes: bytes) -> None:
     html = convert_docx_to_html(tour_plan_bytes)
     assert "<html" in html
@@ -28,11 +38,7 @@ def test_th003_session_to_html_reflects_edit(tour_plan_bytes: bytes) -> None:
         ]
         anchor = min(
             candidates,
-            key=lambda t: (
-                projection.markdown.find("{#" + t.id + "}")
-                if projection.markdown.find("{#" + t.id + "}") >= 0
-                else 1 << 30
-            ),
+            key=lambda t: _document_order(projection.markdown, t.id),
         )
         result = session.replace_text(anchor.id, f"{marker} edited body.")
         assert result.success, result.error
