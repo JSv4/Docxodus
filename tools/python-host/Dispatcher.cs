@@ -28,6 +28,8 @@ internal static class Dispatcher
         "open_session" => OpenSession(args),
         "close_session" => CloseSession(args),
         "save" => Save(args),
+        "convert_to_html" => ConvertToHtml(args),
+        "session_to_html" => SessionToHtml(args),
         "project" => DocxSessionOps.Project(Handle(args)),
         "project_anchor" => DocxSessionOps.ProjectAnchor(
             Handle(args), Str(args, "anchorId"),
@@ -168,6 +170,67 @@ internal static class Dispatcher
     {
         var bytes = DocxSessionOps.Save(Handle(args));
         return "{\"docxB64\":" + DocxSessionJson.JsonString(Convert.ToBase64String(bytes)) + "}";
+    }
+
+    private static string ConvertToHtml(JsonElement args)
+    {
+        var bytes = Convert.FromBase64String(Str(args, "docxB64"));
+        var html = HtmlConversionOps.ConvertToHtml(bytes, ParseHtmlOptions(args));
+        return JsonString(html);
+    }
+
+    private static string SessionToHtml(JsonElement args)
+    {
+        var html = HtmlConversionOps.ConvertToHtml(Handle(args), ParseHtmlOptions(args));
+        return JsonString(html);
+    }
+
+    private static HtmlConversionOptions ParseHtmlOptions(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object
+            || !args.TryGetProperty("options", out var o)
+            || o.ValueKind != JsonValueKind.Object)
+        {
+            return new HtmlConversionOptions();
+        }
+
+        string StrOpt(string name, string fallback) =>
+            o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                ? v.GetString()! : fallback;
+        int IntOpt(string name, int fallback) =>
+            o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+                ? v.GetInt32() : fallback;
+        double DblOpt(string name, double fallback) =>
+            o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+                ? v.GetDouble() : fallback;
+        bool BoolOpt(string name, bool fallback) =>
+            o.TryGetProperty(name, out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)
+                ? v.GetBoolean() : fallback;
+
+        var defaults = new HtmlConversionOptions();
+        return new HtmlConversionOptions
+        {
+            PageTitle = StrOpt("pageTitle", defaults.PageTitle),
+            CssClassPrefix = StrOpt("cssClassPrefix", defaults.CssClassPrefix),
+            FabricateCssClasses = BoolOpt("fabricateCssClasses", defaults.FabricateCssClasses),
+            AdditionalCss = StrOpt("additionalCss", defaults.AdditionalCss),
+            CommentRenderMode = IntOpt("commentRenderMode", defaults.CommentRenderMode),
+            CommentCssClassPrefix = StrOpt("commentCssClassPrefix", defaults.CommentCssClassPrefix),
+            PaginationMode = IntOpt("paginationMode", defaults.PaginationMode),
+            PaginationScale = DblOpt("paginationScale", defaults.PaginationScale),
+            PaginationCssClassPrefix = StrOpt("paginationCssClassPrefix", defaults.PaginationCssClassPrefix),
+            RenderAnnotations = BoolOpt("renderAnnotations", defaults.RenderAnnotations),
+            AnnotationLabelMode = IntOpt("annotationLabelMode", defaults.AnnotationLabelMode),
+            AnnotationCssClassPrefix = StrOpt("annotationCssClassPrefix", defaults.AnnotationCssClassPrefix),
+            RenderFootnotesAndEndnotes = BoolOpt("renderFootnotesAndEndnotes", defaults.RenderFootnotesAndEndnotes),
+            RenderHeadersAndFooters = BoolOpt("renderHeadersAndFooters", defaults.RenderHeadersAndFooters),
+            RenderTrackedChanges = BoolOpt("renderTrackedChanges", defaults.RenderTrackedChanges),
+            ShowDeletedContent = BoolOpt("showDeletedContent", defaults.ShowDeletedContent),
+            RenderMoveOperations = BoolOpt("renderMoveOperations", defaults.RenderMoveOperations),
+            RenderUnsupportedContentPlaceholders = BoolOpt("renderUnsupportedContentPlaceholders", defaults.RenderUnsupportedContentPlaceholders),
+            DocumentLanguage = o.TryGetProperty("documentLanguage", out var dl) && dl.ValueKind == JsonValueKind.String
+                ? dl.GetString() : defaults.DocumentLanguage,
+        };
     }
 
     private static string Grep(JsonElement args, bool crossBlock)
