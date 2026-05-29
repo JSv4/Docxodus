@@ -51,7 +51,7 @@ NDJSON over stdio — one JSON object per line, `\n` terminated.
 python/
   pyproject.toml          # hatchling backend; stdlib-only deps
   src/docxodus/
-    __init__.py           # re-export DocxSession, open_docx_session, dataclasses
+    __init__.py           # re-export DocxSession, open_session, dataclasses
     session.py            # public DocxSession class — snake_case methods, 1:1 with C# surface
     types.py              # @dataclass(frozen=True, slots=True) value types
     enums.py              # Position, EditErrorCode, TrackedChangeMode, PlaceholderKind/Kinds, ProjectionScopes, etc.
@@ -78,7 +78,7 @@ python/
 
 **One host process per Python process; many DocxSession handles inside it.**
 
-- Lazy-spawned by `_Transport.get()` on first `open_docx_session(...)` call.
+- Lazy-spawned by `_Transport.get()` on first `open_session(...)` call.
 - `atexit` sends `shutdown` then `wait(timeout=2)` then `terminate()` then `kill()`.
 - Stderr drained on a daemon thread into Python's `logging`.
 - v1 is sync: a `threading.Lock` serializes one request/response round-trip at a time so two threads sharing a session don't interleave NDJSON lines.
@@ -112,7 +112,7 @@ class _Transport:
 ## Lifecycle
 
 ```python
-with open_docx_session(docx_bytes) as session:        # documented contract
+with open_session(docx_bytes) as session:        # documented contract
     proj = session.project()
     for placeholder in session.find_placeholders():
         session.replace_match(placeholder.match, "filled value")
@@ -211,7 +211,7 @@ to edit the document. Maps to the `convert_to_html` stdio-host op.
 ### Session method (renders current edited state)
 
 ```python
-with open_docx_session(docx_bytes) as session:
+with open_session(docx_bytes) as session:
     session.replace_text(anchor_id, "updated text")
     html = session.to_html(HtmlOptions(render_tracked_changes=True))
 ```
@@ -248,9 +248,10 @@ to the `session_to_html` stdio-host op.
 | `render_unsupported_content_placeholders` | `False` | Insert placeholder text for unsupported OOXML elements. |
 | `document_language` | `None` | BCP-47 language tag (e.g. `"en-US"`). Omitted from the wire when `None`. |
 
-Integer-coded mode fields follow the same conventions as the WASM/npm surface:
-any value that is the field's default (e.g. `comment_render_mode=-1`,
-`pagination_mode=0`) is omitted from the JSON args to keep the wire compact.
+Integer-coded mode fields follow the same conventions as the WASM/npm surface.
+`HtmlOptions.to_wire()` always serializes every field except `document_language`,
+which is omitted when `None`; the host's `ParseHtmlOptions` then applies the same
+per-field defaults for any key that is absent.
 
 ### Shared core renderer
 
