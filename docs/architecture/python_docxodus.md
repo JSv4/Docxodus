@@ -43,7 +43,7 @@ NDJSON over stdio — one JSON object per line, `\n` terminated.
 
 **Bytes:** `open_session.args = {"docxB64": "..."}`; `save` response = `{"docxB64": "..."}`. Base64 inside JSON. ~33% overhead, acceptable for the agentic edit-loop pattern.
 
-**Op names** (~36, all snake_case): `open_session`, `close_session`, `save`, `ping`, `shutdown`, `project`, `replace_text`, `delete_block`, `insert_paragraph`, `split_paragraph`, `merge_paragraphs`, `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_list_level`, `remove_list_membership`, `replace_cell_content`, `raw_get_xml`, `raw_insert_xml`, `raw_replace_xml`, `grep`, `grep_cross_block`, `replace_text_range`, `replace_text_at_span`, `find_placeholders`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `add_annotation`, `remove_annotation`, `update_annotation`, `move_annotation`, `exists`, `get_anchor_info`, `get_anchor_infos`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `undo`, `redo`.
+**Op names** (~38, all snake_case): `open_session`, `close_session`, `save`, `ping`, `shutdown`, `project`, `replace_text`, `delete_block`, `insert_paragraph`, `split_paragraph`, `merge_paragraphs`, `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_list_level`, `remove_list_membership`, `replace_cell_content`, `raw_get_xml`, `raw_insert_xml`, `raw_replace_xml`, `grep`, `grep_cross_block`, `replace_text_range`, `replace_text_at_span`, `find_placeholders`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `add_annotation`, `remove_annotation`, `update_annotation`, `move_annotation`, `exists`, `get_anchor_info`, `get_anchor_infos`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `undo`, `redo`, `convert_to_html`, `session_to_html`.
 
 ## Planned Python package layout
 
@@ -191,6 +191,82 @@ carries the affected id on success. New `EditErrorCode` values:
 See `docs/architecture/docx_mutation_api.md` § "Tier E: Annotations" for the
 full semantics.
 
+## DOCX→HTML conversion
+
+Two public functions expose HTML rendering on the Python surface.
+
+### Module-level function (stateless)
+
+```python
+from docx_scalpel import convert_docx_to_html, HtmlOptions
+
+html: str = convert_docx_to_html(docx_bytes, HtmlOptions(page_title="My Doc"))
+```
+
+`convert_docx_to_html(data: bytes, options: HtmlOptions | None = None) -> str`
+renders the supplied bytes directly in the host process — no persistent session
+is created, so it is the right choice when you only need HTML and do not intend
+to edit the document. Maps to the `convert_to_html` stdio-host op.
+
+### Session method (renders current edited state)
+
+```python
+with open_docx_session(docx_bytes) as session:
+    session.replace_text(anchor_id, "updated text")
+    html = session.to_html(HtmlOptions(render_tracked_changes=True))
+```
+
+`DocxSession.to_html(options: HtmlOptions | None = None) -> str`
+renders the session's current, possibly-edited in-memory state. If the session
+is in `TrackedChangeMode.RENDER_INLINE`, tracked insertions and deletions appear
+as `<ins>`/`<del>` in the HTML output when `render_tracked_changes=True`. Maps
+to the `session_to_html` stdio-host op.
+
+### `HtmlOptions` dataclass
+
+`@dataclass(frozen=True, slots=True)` with the following fields and defaults:
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `page_title` | `"Document"` | Value of the HTML `<title>` element. |
+| `css_class_prefix` | `"docx-"` | Prefix applied to all generated CSS class names. |
+| `fabricate_css_classes` | `True` | Emit a `<style>` block of generated classes in the output. |
+| `additional_css` | `""` | Extra CSS injected into the `<style>` block verbatim. |
+| `comment_render_mode` | `-1` | `-1` = disabled; `0` = endnote-style; `1` = inline; `2` = margin. |
+| `comment_css_class_prefix` | `"comment-"` | CSS prefix for comment elements. |
+| `pagination_mode` | `0` | `0` = none; `1` = paginated (emulates page breaks). |
+| `pagination_scale` | `1.0` | Scale factor applied in paginated mode. |
+| `pagination_css_class_prefix` | `"page-"` | CSS prefix for page-break elements. |
+| `render_annotations` | `False` | Overlay `ExternalAnnotationProjector` annotation spans. |
+| `annotation_label_mode` | `0` | `0` = above; `1` = inline; `2` = tooltip; `3` = none. |
+| `annotation_css_class_prefix` | `"annot-"` | CSS prefix for annotation spans. |
+| `render_footnotes_and_endnotes` | `False` | Append a footnotes/endnotes section to the HTML. |
+| `render_headers_and_footers` | `False` | Include document headers and footers in the output. |
+| `render_tracked_changes` | `False` | Render tracked insertions/deletions as `<ins>`/`<del>`. |
+| `show_deleted_content` | `True` | When rendering tracked changes, include deleted content. |
+| `render_move_operations` | `True` | Distinguish move operations from plain insert/delete. |
+| `render_unsupported_content_placeholders` | `False` | Insert placeholder text for unsupported OOXML elements. |
+| `document_language` | `None` | BCP-47 language tag (e.g. `"en-US"`). Omitted from the wire when `None`. |
+
+Integer-coded mode fields follow the same conventions as the WASM/npm surface:
+any value that is the field's default (e.g. `comment_render_mode=-1`,
+`pagination_mode=0`) is omitted from the JSON args to keep the wire compact.
+
+### Shared core renderer
+
+Both `convert_docx_to_html` and `DocxSession.to_html` are backed by
+`Docxodus.Internal.HtmlConversionOps` — a single `internal` class that
+provides:
+
+- `ConvertToHtml(byte[] docxBytes, HtmlConversionOptions options) → string`
+- `ConvertToHtml(DocxSession session, HtmlConversionOptions options) → string`
+- `ConvertToHtml(int handle, HtmlConversionOptions options) → string`
+
+The WASM `DocumentConverter.ConvertDocxToHtmlComplete` delegates to the same
+renderer, ensuring that .NET, WASM/browser, and Python/stdio produce
+byte-identical HTML for the same input and options. There is no
+Python-specific rendering path.
+
 ## Wire-only internals
 
 Decode helpers (`Anchor._from_wire(d)`, `EditResult._from_wire(d)`, etc.) live on
@@ -231,7 +307,7 @@ Tests import fixtures via `TEST_FILES = Path(__file__).parent.parent.parent / "T
 - **`async` API** — `asyncio.subprocess` facade is straightforward (one asyncio.Lock + request-id matching already on the wire), but doubles the test surface. v0.2.
 - **Multi-process pooling** — one host per Python process is enough for the agentic editing pattern.
 - **Native AOT publish** — `PublishReadyToRun` already eliminates JIT warmup; NAOT would require trim-safety auditing of every `PtOpenXmlUtil` reflection path. High risk for marginal payoff.
-- **HTML conversion / comparison / chart extraction** (the SkiaSharp-dependent surface) — clean additive in v0.3 (new op names, same wire protocol).
+- **HTML conversion** — landed (`convert_docx_to_html` / `DocxSession.to_html`; see "DOCX→HTML conversion" above). **Comparison / chart extraction** (SkiaSharp-dependent) remain deferred — clean additive in v0.3 (new op names, same wire protocol).
 - **Streaming `save`** — even 10 MB documents transit stdio in <100 ms.
 - **Schema validation** — JSON Schema per op alongside the host binary so Python can validate before sending. v0.2.
 - **Nested `ProjectionSettings`** — bridges don't expose them; defer until both transports gain support.

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Python DOCX→HTML conversion** — `convert_docx_to_html(data, options)` and
+  `DocxSession.to_html(options)` in `docx_scalpel`, backed by a new shared
+  `HtmlConversionOps` core renderer that the WASM bridge now also delegates to.
+  New `HtmlOptions` dataclass mirrors the existing WASM/npm conversion options.
+  New stdio-host ops: `convert_to_html`, `session_to_html`.
+
 ## [6.2.0] - 2026-05-28
 
 ### Added
