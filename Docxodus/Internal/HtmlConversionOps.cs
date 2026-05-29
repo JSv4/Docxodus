@@ -14,7 +14,7 @@ namespace Docxodus.Internal;
 /// CommentRenderMode -1=disabled,0=Endnote,1=Inline,2=Margin;
 /// PaginationMode 0=None,1=Paginated; AnnotationLabelMode 0=Above,1=Inline,2=Tooltip,3=None.
 /// </summary>
-public sealed class HtmlConversionOptions
+internal sealed class HtmlConversionOptions
 {
     public string PageTitle { get; init; } = "Document";
     public string CssClassPrefix { get; init; } = "docx-";
@@ -43,7 +43,7 @@ public sealed class HtmlConversionOptions
 /// stdio Python host route through here, so render behavior lives in one place.
 /// Throws on invalid input; callers serialize errors at their boundary.
 /// </summary>
-public static class HtmlConversionOps
+internal static class HtmlConversionOps
 {
     /// <summary>Render raw DOCX bytes to a self-contained HTML string.</summary>
     public static string ConvertToHtml(byte[] docxBytes, HtmlConversionOptions options)
