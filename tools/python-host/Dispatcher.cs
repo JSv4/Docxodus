@@ -206,6 +206,9 @@ internal static class Dispatcher
         bool BoolOpt(string name, bool fallback) =>
             o.TryGetProperty(name, out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)
                 ? v.GetBoolean() : fallback;
+        string? StrOptNullable(string name, string? fallback) =>
+            o.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String
+                ? v.GetString() : fallback;
 
         var defaults = new HtmlConversionOptions();
         return new HtmlConversionOptions
@@ -228,8 +231,7 @@ internal static class Dispatcher
             ShowDeletedContent = BoolOpt("showDeletedContent", defaults.ShowDeletedContent),
             RenderMoveOperations = BoolOpt("renderMoveOperations", defaults.RenderMoveOperations),
             RenderUnsupportedContentPlaceholders = BoolOpt("renderUnsupportedContentPlaceholders", defaults.RenderUnsupportedContentPlaceholders),
-            DocumentLanguage = o.TryGetProperty("documentLanguage", out var dl) && dl.ValueKind == JsonValueKind.String
-                ? dl.GetString() : defaults.DocumentLanguage,
+            DocumentLanguage = StrOptNullable("documentLanguage", defaults.DocumentLanguage),
         };
     }
 
