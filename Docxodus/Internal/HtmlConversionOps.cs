@@ -98,6 +98,17 @@ internal static class HtmlConversionOps
         return htmlElement.ToString(SaveOptions.DisableFormatting);
     }
 
+    /// <summary>Render a live session's current (possibly edited) state to HTML.</summary>
+    public static string ConvertToHtml(DocxSession session, HtmlConversionOptions options)
+    {
+        if (session == null) throw new ArgumentNullException(nameof(session));
+        return ConvertToHtml(session.Save(), options);
+    }
+
+    /// <summary>Render the session registered under <paramref name="handle"/> to HTML.</summary>
+    public static string ConvertToHtml(int handle, HtmlConversionOptions options) =>
+        ConvertToHtml(SessionRegistry.Get(handle), options);
+
     private static Func<ImageInfo, XElement> CreateBase64ImageHandler()
     {
         return imageInfo =>
