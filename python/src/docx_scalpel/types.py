@@ -42,6 +42,10 @@ __all__ = [
     "AnchorTarget",
     "AnchorInfo",
     "BlockMetadata",
+    "BulkEditResult",
+    "FillOptions",
+    "FindOptions",
+    "HtmlOptions",
     "ListMembership",
     "NumberFormat",
     "RunFormatting",
@@ -57,10 +61,7 @@ __all__ = [
     "DocumentAnnotation",
     "AnnotationUpdate",
     "EditSummary",
-    "FindOptions",
     "ReplaceOptions",
-    "FillOptions",
-    "BulkEditResult",
 ]
 
 
@@ -686,6 +687,63 @@ class ReplaceOptions:
 # ---------------------------------------------------------------------------
 # Fill placeholders (client-side multi-pass loop; see DocxSession.fill_placeholders)
 # ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class HtmlOptions:
+    """Options for DOCX→HTML conversion. Mirrors the .NET ``HtmlConversionOptions``.
+
+    Integer-coded modes match the wire contract:
+    ``comment_render_mode`` -1=disabled,0=endnote,1=inline,2=margin;
+    ``pagination_mode`` 0=none,1=paginated;
+    ``annotation_label_mode`` 0=above,1=inline,2=tooltip,3=none.
+    """
+
+    page_title: str = "Document"
+    css_class_prefix: str = "docx-"
+    fabricate_css_classes: bool = True
+    additional_css: str = ""
+    comment_render_mode: int = -1
+    comment_css_class_prefix: str = "comment-"
+    pagination_mode: int = 0
+    pagination_scale: float = 1.0
+    pagination_css_class_prefix: str = "page-"
+    render_annotations: bool = False
+    annotation_label_mode: int = 0
+    annotation_css_class_prefix: str = "annot-"
+    render_footnotes_and_endnotes: bool = False
+    render_headers_and_footers: bool = False
+    render_tracked_changes: bool = False
+    show_deleted_content: bool = True
+    render_move_operations: bool = True
+    render_unsupported_content_placeholders: bool = False
+    document_language: str | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        """camelCase keys the host dispatcher's ``ParseHtmlOptions`` reads."""
+        wire: dict[str, Any] = {
+            "pageTitle": self.page_title,
+            "cssClassPrefix": self.css_class_prefix,
+            "fabricateCssClasses": self.fabricate_css_classes,
+            "additionalCss": self.additional_css,
+            "commentRenderMode": self.comment_render_mode,
+            "commentCssClassPrefix": self.comment_css_class_prefix,
+            "paginationMode": self.pagination_mode,
+            "paginationScale": self.pagination_scale,
+            "paginationCssClassPrefix": self.pagination_css_class_prefix,
+            "renderAnnotations": self.render_annotations,
+            "annotationLabelMode": self.annotation_label_mode,
+            "annotationCssClassPrefix": self.annotation_css_class_prefix,
+            "renderFootnotesAndEndnotes": self.render_footnotes_and_endnotes,
+            "renderHeadersAndFooters": self.render_headers_and_footers,
+            "renderTrackedChanges": self.render_tracked_changes,
+            "showDeletedContent": self.show_deleted_content,
+            "renderMoveOperations": self.render_move_operations,
+            "renderUnsupportedContentPlaceholders": self.render_unsupported_content_placeholders,
+        }
+        if self.document_language is not None:
+            wire["documentLanguage"] = self.document_language
+        return wire
 
 
 @dataclass(frozen=True, slots=True)

@@ -50,6 +50,7 @@ from .types import (
     FillOptions,
     FindOptions,
     FormatOp,
+    HtmlOptions,
     ListMembership,
     MarkdownProjection,
     ReplaceOptions,
@@ -58,7 +59,7 @@ from .types import (
     TextMatch,
 )
 
-__all__ = ["DocxSession", "open_session", "ping"]
+__all__ = ["DocxSession", "open_session", "ping", "convert_docx_to_html"]
 
 
 def ping() -> dict[str, Any]:
@@ -83,6 +84,25 @@ def open_session(
     if not isinstance(handle, int):
         raise TypeError(f"open_session: expected int handle, got {type(handle).__name__}: {handle!r}")
     return DocxSession(handle)
+
+
+def convert_docx_to_html(
+    data: bytes, options: HtmlOptions | None = None
+) -> str:
+    """Convert DOCX bytes to a self-contained HTML string (stateless).
+
+    Mirrors the WASM/npm ``convertDocxToHtml``. Renders the bytes directly in
+    the host without creating a persistent session — use
+    :meth:`DocxSession.to_html` to render the current state of an already-open
+    editing session instead.
+    """
+    args: dict[str, Any] = {"docxB64": base64.b64encode(data).decode("ascii")}
+    if options is not None:
+        args["options"] = options.to_wire()
+    html = _call("convert_to_html", args)
+    if not isinstance(html, str):
+        raise TypeError(f"convert_to_html: expected str, got {type(html).__name__}")
+    return html
 
 
 class DocxSession:
@@ -142,6 +162,16 @@ class DocxSession:
         """Serialize the (mutated) document back to DOCX bytes. Does not close the session."""
         result = self._call("save", {})
         return base64.b64decode(result["docxB64"])
+
+    def to_html(self, options: HtmlOptions | None = None) -> str:
+        """Render this session's current (possibly edited) state to HTML."""
+        args: dict[str, Any] = {"handle": self._handle}
+        if options is not None:
+            args["options"] = options.to_wire()
+        html = _call("session_to_html", args)
+        if not isinstance(html, str):
+            raise TypeError(f"session_to_html: expected str, got {type(html).__name__}")
+        return html
 
     def undo(self) -> bool:
         """Undo one snapshot. Returns ``True`` if the undo ring had something to pop."""

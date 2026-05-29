@@ -49,7 +49,7 @@ from .enums import (
     WhitespaceMode,
 )
 from .errors import DocxodusHostNotFoundError, DocxodusTransportError, DocxScalpelError
-from .session import DocxSession, open_session, ping
+from .session import DocxSession, convert_docx_to_html, open_session, ping
 from .types import (
     Anchor,
     AnchorInfo,
@@ -68,6 +68,7 @@ from .types import (
     FillOptions,
     FindOptions,
     FormatOp,
+    HtmlOptions,
     ListMembership,
     MarkdownPatch,
     MarkdownProjection,
@@ -94,6 +95,7 @@ __all__ = [
     "__version__",
     # entry points
     "DocxSession",
+    "convert_docx_to_html",
     "open_session",
     "ping",
     "shutdown_host",
@@ -115,6 +117,7 @@ __all__ = [
     "FillOptions",
     "FindOptions",
     "FormatOp",
+    "HtmlOptions",
     "ListMembership",
     "MarkdownPatch",
     "MarkdownProjection",
