@@ -1100,9 +1100,13 @@ namespace Docxodus
         /// </list>
         /// </para>
         /// <para>
-        /// LIMITATION: sectPr elements inside tables or text boxes are NOT detected.
-        /// This is an edge case - most documents don't have section breaks inside tables.
-        /// See GitHub issue #51 for tracking this enhancement.
+        /// NOTE: sectPr elements inside tables or text boxes are intentionally NOT detected.
+        /// Sections are body-level constructs in OOXML — a section spans top-level body content
+        /// and is delimited by sectPr in the last paragraph's pPr or the body's trailing sectPr.
+        /// Word does not support section breaks inside table cells (it either splits the table
+        /// or ignores the break). MS-OI29500 §17.7.6.1 further notes that Word does not allow
+        /// sectPr as a child of pPr in table style definitions. See GitHub issue #51 and
+        /// docs/ooxml_corner_cases.md for details.
         /// </para>
         /// </remarks>
         private static List<(XElement sectPr, List<XElement> paragraphs, List<XElement> tables)> CollectSectionData(XElement body)

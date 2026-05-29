@@ -657,6 +657,64 @@ namespace OxPt
 
         #endregion
 
+        #region OOXML Spec Compliance Tests
+
+        [Fact]
+        public void DM070_GetDocumentMetadata_IgnoresSectPrInsideTableCells()
+        {
+            // Sections are body-level constructs in OOXML. Word ignores sectPr inside
+            // table cells (MS-OI29500 §17.7.6.1 notes Word disallows sectPr in table
+            // style pPr). This test verifies we correctly produce only 1 section (the
+            // body-level one), not 2, when a sectPr appears inside a table cell paragraph.
+            using (var ms = new MemoryStream())
+            {
+                using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+                    mainPart.Document = new Document(
+                        new Body(
+                            new Paragraph(new Run(new Text("Before table"))),
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new Paragraph(
+                                            new ParagraphProperties(
+                                                // This sectPr should be ignored per spec
+                                                new SectionProperties(
+                                                    new PageSize() { Width = 15840, Height = 12240 }
+                                                )
+                                            ),
+                                            new Run(new Text("Cell with sectPr"))
+                                        )
+                                    )
+                                )
+                            ),
+                            new Paragraph(new Run(new Text("After table"))),
+                            new SectionProperties(
+                                new PageSize() { Width = 12240, Height = 15840 },
+                                new PageMargin() { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 }
+                            )
+                        )
+                    );
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                var wmlDoc = new WmlDocument("test.docx", ms);
+
+                // Act
+                var metadata = WmlToHtmlConverter.GetDocumentMetadata(wmlDoc);
+
+                // Assert - should be exactly 1 section (the body-level one), not 2
+                Assert.Equal(1, metadata.Sections.Count);
+
+                // The section should use the body-level dimensions (US Letter), not the table-cell one
+                Assert.Equal(612, metadata.Sections[0].PageWidthPt);
+            }
+        }
+
+        #endregion
+
     }
 }
 
