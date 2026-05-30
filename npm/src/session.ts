@@ -19,6 +19,7 @@ import type {
   EditResult,
   EditSummary,
   FillOptions,
+  FindOptions,
   FormatOp,
   GrepOptions,
   ListMembership,
@@ -524,6 +525,65 @@ export class DocxSession {
     return JSON.parse(this.wasm.FindByBookmark(this.handle, bookmarkName)) as AnchorTargetRef[];
   }
 
+  // ─── Text/kind-based anchor discovery (#171) ─────────────────────────
+
+  /**
+   * True when `anchorId` resolves to a live element in the current session.
+   * Cheap existence probe — use it to guard an anchor obtained from an earlier
+   * projection before handing it to a mutation (anchors can be invalidated by
+   * intervening edits; see the anchor lifecycle table in the mutation docs).
+   */
+  exists(anchorId: string): boolean {
+    return this.wasm.Exists(this.handle, anchorId);
+  }
+
+  /**
+   * Find the first block-level anchor (in document order) whose flat text
+   * contains `needle`, or `null` when nothing matches. `options` tune case /
+   * whitespace handling and narrow the search by kind or scope. For all
+   * matches use {@link findAllByText}.
+   */
+  findByText(needle: string, options?: FindOptions): AnchorTargetRef | null {
+    return JSON.parse(
+      this.wasm.FindByText(this.handle, needle, options ? JSON.stringify(options) : ""),
+    ) as AnchorTargetRef | null;
+  }
+
+  /**
+   * Like {@link findByText} but returns every matching anchor in document
+   * order (empty when nothing matches).
+   */
+  findAllByText(needle: string, options?: FindOptions): AnchorTargetRef[] {
+    return JSON.parse(
+      this.wasm.FindAllByText(this.handle, needle, options ? JSON.stringify(options) : ""),
+    ) as AnchorTargetRef[];
+  }
+
+  /**
+   * Find every block-level anchor whose flat text matches the regular
+   * expression `pattern`, in document order. `regexOptions` uses the numeric
+   * layout of .NET `RegexOptions` (e.g. `1` = IgnoreCase); `options` is the
+   * same shape as {@link findByText} (its `ignoreCase` composes with the regex
+   * flag). Defaults to `regexOptions = 0` (none).
+   */
+  findByRegex(pattern: string, regexOptions = 0, options?: FindOptions): AnchorTargetRef[] {
+    return JSON.parse(
+      this.wasm.FindByRegex(this.handle, pattern, regexOptions, options ? JSON.stringify(options) : ""),
+    ) as AnchorTargetRef[];
+  }
+
+  /**
+   * Return every anchor of the given `kind` (`"p"`, `"h"`, `"li"`, `"tbl"`,
+   * `"row"`, `"cell"`, …), in document order. Reads the projection's anchor
+   * index directly — no text scan. Pass `scope` (e.g. `"body"`) to restrict to
+   * a single part; omit it to span all scopes.
+   */
+  findByKind(kind: string, scope?: string): AnchorTargetRef[] {
+    return JSON.parse(
+      this.wasm.FindByKind(this.handle, kind, scope ?? ""),
+    ) as AnchorTargetRef[];
+  }
+
   /**
    * Look up a single anchor's preview info — `{ id, kind, scope, textPreview }`.
    * Returns null when the anchor id is unknown.
@@ -670,5 +730,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";
