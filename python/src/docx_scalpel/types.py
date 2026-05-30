@@ -654,19 +654,32 @@ class EditSummary:
 
 @dataclass(frozen=True, slots=True)
 class FindOptions:
-    """Optional filters for ``find_by_text`` / ``find_all_by_text`` / ``find_by_regex``."""
+    """Optional filters for ``find_by_text`` / ``find_all_by_text`` / ``find_by_regex``.
+
+    Mirrors the .NET ``FindOptions`` record's two distinct scope controls:
+
+    * ``scopes`` — a :class:`ProjectionScopes` flag set (coarse "which categories
+      of part" filter; wire key ``scopes``). Compose with ``|`` to widen, e.g.
+      ``ProjectionScopes.HEADERS | ProjectionScopes.FOOTERS``. Defaults to all
+      scopes when unset.
+    * ``scope_filter`` — a string naming one specific part such as ``"hdr1"``
+      (wire key ``scopeFilter``), applied as a finer post-filter on top of
+      ``scopes``. Prefer ``scopes`` for whole-category filtering.
+    """
 
     ignore_case: bool = False
     ignore_whitespace: bool = False
     kind_filter: str | None = None
-    scope_filter: ProjectionScopes | None = None
+    scopes: ProjectionScopes | None = None
+    scope_filter: str | None = None
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         if self.ignore_case: out["ignoreCase"] = True
         if self.ignore_whitespace: out["ignoreWhitespace"] = True
         if self.kind_filter is not None: out["kindFilter"] = self.kind_filter
-        if self.scope_filter is not None: out["scopeFilter"] = int(self.scope_filter)
+        if self.scopes is not None: out["scopes"] = int(self.scopes)
+        if self.scope_filter is not None: out["scopeFilter"] = self.scope_filter
         return out
 
 

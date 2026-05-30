@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Python `FindOptions` scope filtering was a silent no-op.** In `docx_scalpel`, `FindOptions` exposed a single `scope_filter: ProjectionScopes` field and serialized it as an **int** under the `scopeFilter` wire key. But the stdio host (and WASM bridge) parse `scopeFilter` as a **string** (a single named part like `"hdr1"`) and read the coarse `ProjectionScopes` flag set from a separate `scopes` (number) key — which the wrapper never emitted. The net effect: `find_by_text` / `find_all_by_text` / `find_by_regex` ignored any scope restriction passed from Python and always searched all scopes. `FindOptions` now mirrors the .NET record's two distinct controls: `scopes: ProjectionScopes | None` (coarse category flag set → wire `scopes`, int) and `scope_filter: str | None` (fine named-part post-filter → wire `scopeFilter`, string). **API change:** `scope_filter` is now a `str` (was `ProjectionScopes`); callers that want category filtering should use the new `scopes` field (e.g. `FindOptions(scopes=ProjectionScopes.HEADERS | ProjectionScopes.FOOTERS)`). Tests: `python/tests/test_find_options_scopes.py` pins the wire mapping and verifies `scopes=ProjectionScopes.BODY` actually drops a footnote-scope hit on HC031.
+
 ## [6.3.0] - 2026-05-30
 
 ### Fixed
