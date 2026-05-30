@@ -80,6 +80,35 @@ dotnet test            # Run .NET tests
 | Internal refactor | ✓ | ✓ | - | - | - |
 | New module | ✓ | ✓ | ✓ | ✓ | ✓ |
 
+## Release Process
+
+Releases are **CHANGELOG + annotated git tag only** — no version bump in
+`Docxodus.csproj` (`<Version>` is intentionally left at `1.0.0`) or
+`npm/package.json`; those are not tied to the release tags.
+
+Versioning is **semver** on tags of the form `vMAJOR.MINOR.PATCH` (e.g.
+`v6.3.0`). Pick the bump from what landed in `[Unreleased]` since the last tag:
+
+| Bump | When |
+|------|------|
+| Patch (`v6.2.0` → `v6.2.1`) | only `### Fixed` entries (bug fixes) |
+| Minor (`v6.2.0` → `v6.3.0`) | any `### Added`/`### Changed` (new feature/surface, no breaking change) |
+| Major (`v6.x` → `v7.0.0`) | a breaking public-API change |
+
+To cut a release from an up-to-date `main`:
+
+1. Edit `CHANGELOG.md`: insert `## [X.Y.Z] - YYYY-MM-DD` immediately under the
+   `## [Unreleased]` header, leaving the accumulated `### Added`/`### Fixed`/etc.
+   entries beneath it as the released section and `## [Unreleased]` empty above.
+   (Do not add per-release version commits to csproj/package.json.)
+2. Commit changelog-only with message `docs(changelog): cut vX.Y.0 release notes`.
+3. Create an **annotated** tag whose message is the version string:
+   `git tag -a vX.Y.Z -m vX.Y.Z`.
+4. `git push origin main` then `git push origin vX.Y.Z`.
+
+Prior release-cut commits (`#206`, `#209`) and tags (`v6.1.0`, `v6.2.0`) are the
+reference for the exact diff shape.
+
 ## Build Commands
 
 ```bash
