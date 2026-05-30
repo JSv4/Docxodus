@@ -224,6 +224,73 @@ The ECMA-376 specification clarifies how footnote numbering works:
 
 ---
 
+## Table/Cell Width as Percent-Suffixed String (`w:tblW` / `w:tcW` with `w:type="pct"`)
+
+**Status:** Fixed (2026-05) — Issue #210
+
+### Symptom
+
+`WmlToHtmlConverter.ConvertToHtml` (`convertDocxToHtml` in the npm wrapper) threw
+`FormatException` — `Conversion failed: Format_InvalidStringWithValue, 100%` —
+for any document whose table or cell width was a percentage.
+
+### Minimal XML reproducer
+
+```xml
+<w:tbl>
+  <w:tblPr>
+    <!-- percent-suffixed string form -->
+    <w:tblW w:w="100%" w:type="pct"/>
+  </w:tblPr>
+  <w:tr>
+    <w:tc>
+      <w:tcPr><w:tcW w:w="50%" w:type="pct"/></w:tcPr>
+      <w:p><w:r><w:t>Item</w:t></w:r></w:p>
+    </w:tc>
+  </w:tr>
+</w:tbl>
+```
+
+### The corner case
+
+The `w:w` attribute on `w:tblW` / `w:tcW` has schema type `ST_TblWidth`
+(a union over `ST_MeasurementOrPercent` + `ST_DecimalNumber`). Under
+`w:type="pct"` the value may be expressed **two** schema-valid ways:
+
+| Form | Example | Meaning |
+|------|---------|---------|
+| Integer (fiftieths of a percent) | `w:w="5000"` | 5000 / 50 = 100% |
+| Percent-suffixed string | `w:w="100%"` | a literal 100% |
+
+Microsoft Word writes the integer-fiftieths form. The widely used `docx`
+JavaScript library writes the **percent-suffixed string** form for
+`WidthType.PERCENTAGE` — both are schema-valid, but Docxodus only handled the
+integer form, casting the attribute straight to `int`. `(int)"100%"` throws.
+
+### Renderer comparison
+
+| Width markup | Word | LibreOffice | Docxodus (before) | Docxodus (after) |
+|--------------|------|-------------|-------------------|------------------|
+| `w:w="5000" w:type="pct"` | 100% | 100% | `width: 100%` | `width: 100%` |
+| `w:w="100%" w:type="pct"` | 100% | 100% | **throws** | `width: 100%` |
+| `w:w="9000" w:type="dxa"` | 450pt | 450pt | `width: 450pt` | `width: 450pt` |
+
+### Relevant code
+
+`Docxodus/WmlToHtmlConverter.cs` — `ParseTblWidthValue(XAttribute, out bool isExplicitPercent)`
+centralizes the parse and is called from `ProcessTable` (table-level `w:tblW`)
+and the cell-processing path (`w:tcW`). When the raw value ends with `%`,
+`isExplicitPercent` is set and the number is treated as a literal percentage;
+otherwise a `pct` value is divided by 50 (fiftieths -> percent) as before.
+Non-numeric values return `null` and are skipped instead of throwing.
+
+### Tests
+
+`Docxodus.Tests/HtmlConverterTablePercentageWidthTests.cs`
+(`HcTablePercentageWidthTests`).
+
+---
+
 ## Contributing
 
 When adding new corner cases to this document:
