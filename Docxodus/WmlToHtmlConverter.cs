@@ -4417,6 +4417,28 @@ namespace Docxodus
             }
         }
 
+        // Parses an OOXML table/cell width value (w:w on w:tblW / w:tcW, schema type
+        // ST_TblWidth / ST_MeasurementOrPercent). The value is normally a plain integer,
+        // but the spec (and authoring tools such as the `docx` JS library) also permit a
+        // percent-suffixed form, e.g. "100%" or "50.5%". Returns null when the attribute is
+        // missing or cannot be parsed. `isExplicitPercent` is true when the raw value carried
+        // a trailing '%', meaning it is already a literal percentage (NOT fiftieths-of-a-percent).
+        private static decimal? ParseTblWidthValue(XAttribute widthAttr, out bool isExplicitPercent)
+        {
+            isExplicitPercent = false;
+            var raw = ((string)widthAttr)?.Trim();
+            if (string.IsNullOrEmpty(raw))
+                return null;
+            if (raw.EndsWith("%", StringComparison.Ordinal))
+            {
+                isExplicitPercent = true;
+                raw = raw.Substring(0, raw.Length - 1).Trim();
+            }
+            if (decimal.TryParse(raw, NumberStyles.Number, NumberFormatInfo.InvariantInfo, out var value))
+                return value;
+            return null;
+        }
+
         private static object ProcessTable(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, XElement element, decimal currentMarginLeft)
         {
             var style = new Dictionary<string, string>();
@@ -4433,15 +4455,20 @@ namespace Docxodus
                 var type = (string)tblW.Attribute(W.type);
                 if (type == "pct")
                 {
-                    var w = (int)tblW.Attribute(W._w);
-                    style.AddIfMissing("width", (w / 50) + "%");
+                    var w = ParseTblWidthValue(tblW.Attribute(W._w), out var isExplicitPercent);
+                    if (w != null)
+                    {
+                        // "pct" integers are fiftieths of a percent; an explicit "100%" is already a percent.
+                        var percent = isExplicitPercent ? w.Value : w.Value / 50m;
+                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.####}%", percent));
+                    }
                 }
                 else if (type == "dxa")
                 {
-                    var w = (decimal?)tblW.Attribute(W._w);
-                    if (w != null && w > 0)
+                    var w = ParseTblWidthValue(tblW.Attribute(W._w), out var isExplicitPercent);
+                    if (w != null && !isExplicitPercent && w > 0m)
                     {
-                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", w / 20m));
+                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", w.Value / 20m));
                     }
                 }
                 // type == "auto" or type == "nil" means no fixed width (browser default)
@@ -4632,13 +4659,20 @@ namespace Docxodus
 
                 if ((string) tcPr.Elements(W.tcW).Attributes(W.type).FirstOrDefault() == "dxa")
                 {
-                    decimal width = (int) tcPr.Elements(W.tcW).Attributes(W._w).FirstOrDefault();
-                    style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", width/20m));
+                    var width = ParseTblWidthValue(tcPr.Elements(W.tcW).Attributes(W._w).FirstOrDefault(), out var isExplicitPercent);
+                    if (width != null && !isExplicitPercent)
+                    {
+                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", width.Value/20m));
+                    }
                 }
                 if ((string) tcPr.Elements(W.tcW).Attributes(W.type).FirstOrDefault() == "pct")
                 {
-                    decimal width = (int) tcPr.Elements(W.tcW).Attributes(W._w).FirstOrDefault();
-                    style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}%", width/50m));
+                    var width = ParseTblWidthValue(tcPr.Elements(W.tcW).Attributes(W._w).FirstOrDefault(), out var isExplicitPercent);
+                    if (width != null)
+                    {
+                        var percent = isExplicitPercent ? width.Value : width.Value/50m;
+                        style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}%", percent));
+                    }
                 }
 
                 var tcBorders = tcPr.Element(W.tcBorders);
