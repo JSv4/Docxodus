@@ -36,6 +36,25 @@ namespace OxPt
             {
                 var mainPart = doc.AddMainDocumentPart();
 
+                // WmlToHtmlConverter routes through FormattingAssembler, which
+                // dereferences MainDocumentPart.StyleDefinitionsPart. A minimal
+                // in-memory document must supply one (plus default run props) or
+                // conversion throws ArgumentNullException before any width parsing.
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new W.Styles(
+                    new W.DocDefaults(
+                        new W.RunPropertiesDefault(
+                            new W.RunPropertiesBaseStyle(
+                                new W.RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
+                                new W.FontSize { Val = "24" }))));
+                stylesPart.Styles.Save();
+
+                // ConvertToHtml also dereferences MainDocumentPart.DocumentSettingsPart
+                // (CalculateSpanWidthForTabs reads w:defaultTabStop).
+                var settingsPart = mainPart.AddNewPart<DocumentSettingsPart>();
+                settingsPart.Settings = new W.Settings();
+                settingsPart.Settings.Save();
+
                 W.TableCell MakeCell(string text) => new W.TableCell(
                     new W.TableCellProperties(
                         new W.TableCellWidth { Width = cellWidth, Type = cellType }),
