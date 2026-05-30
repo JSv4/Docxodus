@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **npm `DocxSession` find-by surface** (issue #171). The TypeScript wrapper at
+  `npm/src/session.ts` now exposes the six `DocxSession` methods whose bridge
+  shells landed in #168 but were unreachable from the typed API: `exists`,
+  `findByText`, `findAllByText`, `findByRegex`, and `findByKind` (`replaceMatch`
+  was already present). New `FindOptions` type in `npm/src/types.ts`
+  (`ignoreCase` / `ignoreWhitespace` / `kindFilter` / `scopes` / `scopeFilter`,
+  matching the .NET `FindOptions` record), and the corresponding `Exists` /
+  `FindByText` / `FindAllByText` / `FindByRegex` / `FindByKind` signatures added
+  to the `DocxSessionBridge` exports interface. Wire shapes are byte-identical to
+  what `tools/python-host` consumes, preserving the cross-transport parity
+  invariant. Tests: `npm/tests/find-by.spec.ts` exercises the *typed* wrapper
+  (via a new `window.Docxodus.openTypedSession` harness helper backed by an
+  IIFE-bundled `session.ts`), covering case-sensitive/insensitive text search,
+  broad-pattern regex, kind+scope filtering, existence probes, and the
+  `grep → replaceMatch` round-trip.
+
 ## [6.3.0] - 2026-05-30
 
 ### Fixed

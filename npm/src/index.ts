@@ -64,6 +64,7 @@ export type {
   EditError,
   EditErrorCode,
   EditResult,
+  FindOptions,
   FormatOp,
   ListMembership,
   MarkdownPatch,

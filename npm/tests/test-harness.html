@@ -9,6 +9,11 @@
     <div id="status">Loading...</div>
     <pre id="output"></pre>
 
+    <!-- Typed TS wrapper (DocxSession class + openDocxSession), IIFE-bundled to
+         window.DocxodusSession so specs can exercise the typed API, not just the
+         raw [JSExport] bridge. Built by `npm run build:session-bundle`. -->
+    <script src="./session.bundle.js"></script>
+
     <script type="module">
         import { dotnet } from './_framework/dotnet.js';
 
@@ -23,7 +28,14 @@
         window.Docxodus = {
             DocumentConverter: exports.DocxodusWasm.DocumentConverter,
             DocumentComparer: exports.DocxodusWasm.DocumentComparer,
-            DocxSessionBridge: exports.DocxodusWasm.DocxSessionBridge
+            DocxSessionBridge: exports.DocxodusWasm.DocxSessionBridge,
+            // Typed wrapper class from the IIFE bundle above; constructor takes
+            // (handle, bridge). openTypedSession opens + wraps in one call.
+            DocxSession: window.DocxodusSession.DocxSession,
+            openTypedSession: (bytes, settingsJson) => new window.DocxodusSession.DocxSession(
+                exports.DocxodusWasm.DocxSessionBridge.OpenSession(bytes, settingsJson || ''),
+                exports.DocxodusWasm.DocxSessionBridge
+            )
         };
 
         // Test helper functions

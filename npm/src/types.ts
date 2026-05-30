@@ -769,6 +769,11 @@ export interface DocxodusWasmExports {
     FindByAnnotation: (handle: number, annotationId: string) => string;
     FindByLabel: (handle: number, labelId: string) => string;
     FindByBookmark: (handle: number, bookmarkName: string) => string;
+    Exists: (handle: number, anchorId: string) => boolean;
+    FindByText: (handle: number, needle: string, optionsJson: string) => string;
+    FindAllByText: (handle: number, needle: string, optionsJson: string) => string;
+    FindByRegex: (handle: number, pattern: string, regexOptions: number, optionsJson: string) => string;
+    FindByKind: (handle: number, kind: string, scope: string) => string;
     GetAnchorInfo: (handle: number, anchorId: string) => string;
     GetAnchorInfos: (handle: number, anchorIdsJson: string) => string;
     GetBlockMetadata: (handle: number, anchorId: string) => string;
@@ -1174,6 +1179,32 @@ export interface GrepOptions {
    * `contextChars`.
    */
   boundary?: number;
+}
+
+/**
+ * Options that tune the `findBy*` helpers on {@link DocxSession}. Mirrors the
+ * .NET `FindOptions` record; wire keys are already camelCase, so this object is
+ * serialized straight to the bridge. Omit it (or pass `{}`) for the defaults
+ * (case-sensitive, whitespace-preserving, all scopes, no kind filter).
+ */
+export interface FindOptions {
+  /** Case-insensitive matching. */
+  ignoreCase?: boolean;
+  /** Fold NBSP / narrow-NBSP / thin-space to ASCII space before matching. */
+  ignoreWhitespace?: boolean;
+  /** Only return anchors of this kind (e.g. `"h"` for headings, `"p"` for paragraphs). */
+  kindFilter?: string;
+  /**
+   * Coarse-grained scope flag set (Body / Headers / Footers / Footnotes /
+   * Endnotes / Comments). Numeric layout matching the .NET `ProjectionScopes`
+   * flags enum; use {@link ProjectionScopes}. Defaults to all scopes.
+   */
+  scopes?: number;
+  /**
+   * Target a single named package part (e.g. `"hdr1"`). Prefer {@link scopes}
+   * for whole-category filtering; this is for the rare single-part case.
+   */
+  scopeFilter?: string;
 }
 
 /**
