@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [6.4.0] - 2026-05-30
+
 ### Added
 - **npm `DocxSession` find-by surface** (issue #171). The TypeScript wrapper at
   `npm/src/session.ts` now exposes the six `DocxSession` methods whose bridge
