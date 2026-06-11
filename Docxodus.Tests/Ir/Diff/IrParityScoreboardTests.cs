@@ -75,10 +75,16 @@ public class IrParityScoreboardTests
 
         board.Report(_out);
 
-        // Totality only: every scored case ran, none threw out of the soft-assert harness. The per-case
-        // PASS/FAIL is the measurement; there is deliberately NO pass-rate threshold this milestone.
+        // Totality: every scored case ran, none threw out of the soft-assert harness. The per-case
+        // PASS/FAIL is the measurement; there is deliberately NO 100% threshold until M2.4 closes the
+        // gate — but the M2.3 baseline is a RATCHET: parity may only go up. Raise the floor as M2.4
+        // burn-down lands; never lower it.
+        const int ParityFloor = 129; // M2.3 baseline (129/179 = 72.1%)
         Assert.True(board.Total > 0, "Scoreboard scored no cases.");
         Assert.Equal(board.Total, board.Pass + board.Fail);
+        Assert.True(board.Pass >= ParityFloor,
+            $"PARITY REGRESSION: {board.Pass} passing < ratchet floor {ParityFloor}. " +
+            "The scoreboard may only improve (user directive: 100% WmlComparer-test parity).");
     }
 
     // ---------------------------------------------------------------------- WC003: revisionCount parity
