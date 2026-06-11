@@ -58,3 +58,31 @@ Tests on synthetic IR (build via IrTestDocuments + IrReader): identity alignment
 ## Out of scope (M2.2+)
 
 Intra-block token diff, edit script, row/cell-level table alignment, similarity-based gap pairing refinement, MovedModified detection, any renderer.
+
+## M2.1 Outcome
+
+**Status: COMPLETE (2026-06-11).** All three tasks landed; exit criteria met. The diff layer (`Docxodus/Ir/Diff/`, all `internal`, `#nullable enable`, WASM-safe, no new dependencies) holds `IrDiffSettings`/`IrDiffToken`/`IrDiffTokenizer` (Task 1), `IrBlockAlignment`/`IrBlockAligner` (Task 2), and the corpus/adversarial/scale coverage below (Task 3). The shared `IrAlignmentAsserts` helper (extracted from Task 2's inline invariants) is reused by every aligner test.
+
+### WC corpus alignment smoke (`IrAlignerCorpusTests`, `Trait Category=Corpus`)
+
+- **92 base↔variant pairs** inferred from `TestFiles/WC/` by name convention (rules documented in the test's class doc + `BuildPairs`): (1) `-Before…` ↔ `-After…` families split at the first Before/After token, with index-matched pairing for multi-base families (`WC021 Before-1/After-1`, `Before-2/After-2`) and single-before fan-out to every numbered after (`WC033`/`WC034` `Before` ↔ `After1/2/3`); (2) base ↔ prefix-extending variants (`WC001-Digits` ↔ `…-Mod` AND ↔ `…-Deleted-Paragraph`; `WC006-Table` ↔ both row-delete variants); (3) `WCnnn-` numeric-prefix fan-out around an `-Unmodified` base (`WC002`, `WC007`). **161 of 163 WC files** are covered; the two `WC014-SmartArt-With-Image-Deleted-After[2]` files are deliberately unpaired (the `-Deleted-` infix gives no unambiguous base; the family's plain Before/After/After2 pairs exercise the same content).
+- **Every pair runs forward (before→after) AND reversed (after→before)**; the shared invariants (totality by reference identity, per-kind hash constraints, `MovedModified` never produced) hold in both directions — **no throws, all invariants pass**.
+- **Per-pair kind histograms + corpus totals** logged via `ITestOutputHelper`. Corpus totals (forward): Unchanged=556, FormatOnly=1714, Modified=1488, Moved=3, MovedModified=0, Inserted=901, Deleted=35. Highlights: most small WC pairs resolve to a couple of Unchanged + one Modified (the edited block), exactly as expected; tables/SmartArt/images align as whole-block Modified units (M2.1 granularity); the large `WC-BodyBookmarks-Before/After` pair (the only Moved source) yields FormatOnly=1714/Modified=1374/Moved=3 with Inserted/Deleted swapping cleanly under reversal (885↔28).
+
+### Adversarial fixtures (`IrAlignerAdversarialTests`)
+
+- **500 near-identical** distinct-clause paragraphs, one word changed in one → **499 Unchanged + 1 Modified, 0 Moved** (0 Inserted/Deleted). ✓
+- **500 identical** boilerplate paragraphs, one deleted → **499 Unchanged + 1 Deleted, 0 Moved, 0 Modified** (the gap in-order refinement resolves repeated content without false moves). ✓
+- **Fully rewritten** 200 vs 200 completely-different paragraphs → **200 Modified, 0 Unchanged, 0 Moved**, no throw, sub-second runtime (one head↔tail gap, all positional Modified). ✓
+- **Contiguous block move**: a 10-paragraph block of unique paras relocated front→back of a 300-para doc → **exactly 10 Moved + 290 Unchanged**. This confirms the LIS spine keeps the 290 stationary blocks (right positions 0..289, left 10..299, monotone) and drops the smaller 10-block off the spine as the move — the moved 10 (left 0..9) cannot extend the spine past the stationary chain. The smaller side dropping off is the correct, designed behavior.
+
+### Scale guard (`Trait Category=Perf`, default-run-safe)
+
+- 500-para vs 2000-para near-identical self-pairs (one edit each), warm-up + best-of-3: **500 = 1.40 ms, 2000 = 6.62 ms → 4.72× for 4× input** (≤ 8× anti-O(n²) bound). Inputs are sized to all-unique anchors so no single large all-distinct gap trips the `InOrderRefine` G²/2 worst case; this isolates the anchoring/spine cost, which scales near-linearly.
+
+### Known limitations carried to M2.2
+
+- **Cross-gap move + edit → Delete + Insert.** M2.1 move detection is exact-`ContentHash` only. A block that is BOTH moved and edited has no exact off-spine anchor, so it falls out as Deleted + Inserted (or a positional Modified if it happens to land in a shared gap), never as a move. Similarity-based fuzzy move matching is M2.2.
+- **`MovedModified` reserved, never produced.** The enum kind exists for surface stability but M2.1 cannot reach it (it needs intra-block token diff + fuzzy move pairing).
+- **Whole-block table granularity.** Tables align as single units; a cell-only edit surfaces as one Modified table entry. Row/cell-level alignment is M2.2+.
+- **Positional gap pairing.** Non-anchored blocks inside a gap pair by order, not similarity; similarity-based gap-pairing refinement is M2.2.
