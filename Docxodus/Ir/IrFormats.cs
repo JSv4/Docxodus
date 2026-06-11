@@ -48,7 +48,7 @@ internal sealed record IrSectionFormat
 
     /// <summary>
     /// Digest of unmodeled `w:sectPr` children (§6.4) so a change in an unmodeled section
-    /// property still flips the format fingerprint instead of being silently ignored.
+    /// property still flips the format fingerprint instead of being silently treated as equal.
     /// </summary>
     public required IrHash UnmodeledDigest { get; init; }
 }
@@ -117,7 +117,8 @@ internal sealed record IrParaFormat
 /// List membership facts for a paragraph, mirroring what `GetBlockMetadata`/`GetListMembership`
 /// report. <see cref="AbstractNumId"/>, <see cref="NumberFormat"/>, <see cref="StartOverride"/>,
 /// and <see cref="FromStyle"/> are populated in M1.3; the M1.1 reader passes the placeholders
-/// -1 / "" / null / false respectively.
+/// null / "" / null / false respectively. A null <see cref="AbstractNumId"/> means "not yet
+/// resolved" (numbering resolution lands in M1.3); never a -1 sentinel.
 /// </summary>
-internal sealed record IrListInfo(int NumId, int AbstractNumId, int Ilvl,
+internal sealed record IrListInfo(int NumId, int? AbstractNumId, int Ilvl,
                                   string NumberFormat, int? StartOverride, bool FromStyle);

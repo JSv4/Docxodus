@@ -40,6 +40,40 @@ public class IrFormatTests
     }
 
     [Fact]
+    public void IrSectionFormat_RecordEquality_IncludesUnmodeledDigest()
+    {
+        var digestA = IrHash.Compute("section-unmodeled-a");
+        var digestB = IrHash.Compute("section-unmodeled-b");
+
+        var section1 = new IrSectionFormat
+        {
+            PageWidthTwips = 12240,
+            PageHeightTwips = 15840,
+            Landscape = false,
+            MarginTopTwips = 1440,
+            MarginBottomTwips = 1440,
+            SectionType = "nextPage",
+            UnmodeledDigest = digestA,
+        };
+        var section2 = new IrSectionFormat
+        {
+            PageWidthTwips = 12240,
+            PageHeightTwips = 15840,
+            Landscape = false,
+            MarginTopTwips = 1440,
+            MarginBottomTwips = 1440,
+            SectionType = "nextPage",
+            UnmodeledDigest = digestA,
+        };
+        var section3 = section2 with { UnmodeledDigest = digestB };
+
+        Assert.Equal(section1, section2);
+        Assert.Equal(section1.GetHashCode(), section2.GetHashCode());
+
+        Assert.NotEqual(section1, section3);
+    }
+
+    [Fact]
     public void IrParaFormat_RecordEquality()
     {
         var digest = IrHash.Compute("para-unmodeled");
