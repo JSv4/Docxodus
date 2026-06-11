@@ -43,3 +43,6 @@ _ReSharper.Caches/
 
 # Plans (internal working documents)
 docs/plans/
+
+# IR markdown-equivalence triage artifacts (regenerated per test run)
+Docxodus.Tests/Ir/EquivalenceArtifacts/

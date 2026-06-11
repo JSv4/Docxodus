@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Document IR markdown emitter scaffold + equivalence harness (M1.4 Task 1)** —
+  *internal/experimental.* New `IrMarkdownEmitter.Emit(IrDocument, settings)`
+  reimplements the markdown projection as an IR consumer (the shipped
+  `WmlToMarkdownConverter` stays the byte-untouched oracle), returning a
+  `MarkdownProjection`-shaped result (markdown + public `AnchorTarget` index).
+  Task-1 scope is BODY paragraphs under DEFAULT settings: headings (`#`-level from
+  the pStyle), plain/empty paragraphs (AnchorOnly trim), bulleted list items
+  (symbol-glyph → `-`, 2-space-per-ilvl indent), block `{#kind:scope:unid}`
+  anchors, inline bold/italic/code/strike with the oracle's exact delimiters and
+  escaping, hyperlinks, tabs, and line breaks. Tables/images/opaque blocks,
+  multipart scopes, section breaks, numbered-counter markers, heading
+  auto-number prefixes, and non-default settings modes are stubbed
+  (TODO(M1.4-T2/T3)). A corpus equivalence harness
+  (`IrMarkdownEquivalenceTests`, Trait `Corpus`) drives both paths over every
+  `TestFiles/*.docx`, compares markdown + body anchor index, writes per-fixture
+  diffs to the gitignored `Docxodus.Tests/Ir/EquivalenceArtifacts/`, and asserts
+  byte-equality on a curated must-pass list plus per-rule unit tests. Baseline:
+  205/668 fixtures byte-equal; emitter never throws (totality).
 - **Document IR remaining scopes + comment targets (M1.3)** —
   *internal/experimental.* `IrReader` now honors all `IrScopes` flags and reads
   the header/footer, footnote/endnote, and comment scopes in addition to the body.
