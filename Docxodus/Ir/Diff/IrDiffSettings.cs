@@ -157,10 +157,69 @@ internal sealed record IrDiffSettings
     public int MoveMinimumTokenCount { get; init; } = 3;
 
     /// <summary>
+    /// REVISIONS-SURFACE setting (M2.3 Task 1). Author name stamped on every <see cref="IrRevision"/>'s
+    /// <see cref="IrRevision.Author"/>. Default <c>"Open-Xml-PowerTools"</c> — copied verbatim from
+    /// <c>WmlComparerSettings.AuthorForRevisions</c> (Docxodus/WmlComparer.cs ~line 54) so an IR-rendered
+    /// revision set is author-comparable to the shipped comparer's out of the box.
+    /// </summary>
+    public string AuthorForRevisions { get; init; } = "Open-Xml-PowerTools";
+
+    /// <summary>
+    /// REVISIONS-SURFACE setting (M2.3 Task 1). When true (the DEFAULT), <see cref="DateTimeForRevisions"/>
+    /// is pinned to a fixed epoch (<see cref="DeterministicEpoch"/>) so two renders of the same inputs
+    /// produce byte-identical revision dates.
+    /// </summary>
+    /// <remarks>
+    /// <b>Why deterministic by default.</b> Reproducible output is a program principle (the IR/diff layer
+    /// is value-equal and JSON-round-trippable end to end). <c>WmlComparerSettings.DateTimeForRevisions</c>
+    /// defaults to <c>DateTime.Now.ToString("o")</c> (Docxodus/WmlComparer.cs ~line 55), a documented
+    /// nondeterminism wart: the same compare run twice yields different revision dates, which breaks
+    /// golden-output and round-trip determinism tests. We invert that default — pinned epoch unless the
+    /// caller opts into wall-clock behavior by setting this false (and optionally supplying
+    /// <see cref="DateTimeForRevisions"/> explicitly).
+    /// </remarks>
+    public bool Deterministic { get; init; } = true;
+
+    /// <summary>
+    /// REVISIONS-SURFACE setting (M2.3 Task 1). The ISO-8601 date string stamped on every
+    /// <see cref="IrRevision.Date"/>. Defaults to:
+    /// <list type="bullet">
+    /// <item>the fixed <see cref="DeterministicEpoch"/> when <see cref="Deterministic"/> is true (the
+    /// default), so output is reproducible;</item>
+    /// <item><c>DateTime.Now.ToString("o")</c> — captured once at settings construction — when
+    /// <see cref="Deterministic"/> is false, matching <c>WmlComparerSettings.DateTimeForRevisions</c>'s
+    /// "o" round-trip format (Docxodus/WmlComparer.cs ~line 55).</item>
+    /// </list>
+    /// A caller may set this explicitly to any string; an explicit value always wins over both defaults.
+    /// </summary>
+    public string DateTimeForRevisions { get; init; } = DeterministicEpoch;
+
+    /// <summary>
+    /// The fixed epoch stamped on revision dates when <see cref="Deterministic"/> is true:
+    /// <c>2000-01-01T00:00:00Z</c>. Chosen as a recognizable, timezone-explicit ISO-8601 instant well
+    /// before any plausible document date, so a pinned revision date is obviously synthetic.
+    /// </summary>
+    public const string DeterministicEpoch = "2000-01-01T00:00:00Z";
+
+    /// <summary>
     /// The default separator set, copied verbatim from <c>WmlComparerSettings.WordSeparators</c>
     /// (Docxodus/WmlComparer.cs ~line 123). The comparer's literal includes duplicate CJK entries;
     /// the set folds them.
     /// </summary>
     public static readonly ImmutableHashSet<char> DefaultWordSeparators = ImmutableHashSet.Create(
         ' ', '-', ')', '(', ';', ',', '（', '）', '，', '、', '、', '，', '；', '。', '：', '的');
+
+    /// <summary>
+    /// Build a settings instance for NONDETERMINISTIC revision rendering: <see cref="Deterministic"/>
+    /// false with <see cref="DateTimeForRevisions"/> captured once from <c>DateTime.Now</c> in the "o"
+    /// format (so all revisions in one render share a single timestamp, mirroring a single
+    /// <c>WmlComparerSettings</c> instance). Other settings keep their defaults; chain <c>with</c> to
+    /// override. The wall-clock read happens here, NOT lazily per revision, so a render is internally
+    /// consistent.
+    /// </summary>
+    public static IrDiffSettings WithWallClockRevisionDate() => new()
+    {
+        Deterministic = false,
+        DateTimeForRevisions = System.DateTime.Now.ToString("o", CultureInfo.InvariantCulture),
+    };
 }
