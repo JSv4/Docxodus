@@ -185,7 +185,7 @@ The core library compiles in two modes controlled by the `WASM_BUILD` MSBuild pr
 
 When touching image/font/color code, check whether your change compiles under `WASM_BUILD` before shipping — the npm build will fail loudly if it doesn't.
 
-**Switching back from a WASM build to the default build:** after `scripts/build-wasm.sh` runs, the cached `Docxodus.dll` in `Docxodus/bin/Debug/net8.0/` is the WASM-mode assembly (no `SkiaSharp`, no `ImageInfo.SaveImage`). The next `dotnet build Docxodus.sln` won't recompile it because nothing changed in `Docxodus/`, but `Docxodus.Tests` links against the stale binary and fails with `error CS1061: 'ImageInfo' does not contain a definition for 'SaveImage'`. Fix: run `dotnet clean Docxodus.sln` once before going back to the non-WASM workflow.
+**WASM-mode output isolation:** the WASM-mode `Docxodus.dll` (no `SkiaSharp`, no `ImageInfo.SaveImage`) builds into its own `Docxodus/bin/wasm/` + `Docxodus/obj/wasm/` paths (see the `WASM_BUILD` PropertyGroup in `Docxodus.csproj`), so neither `scripts/build-wasm.sh` nor a solution build (which compiles Docxodus twice — `DocxodusWasm` references it with `WASM_BUILD=true`) can clobber the default-mode assembly. If you ever see `error CS1061: 'ImageInfo' does not contain a definition for 'SaveImage'` again, a stale pre-isolation artifact is lingering — delete `Docxodus*/bin` + `Docxodus*/obj` once; no recurring `dotnet clean` ritual is needed.
 
 ### Document Wrapper Classes
 

@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Solution builds no longer race the WASM-mode assembly.** `DocxodusWasm` references `Docxodus` with `WASM_BUILD=true`, so every solution build compiled Docxodus twice into the same `bin/<Config>/net8.0/` output — whichever finished last won, and `Docxodus.Tests` intermittently linked the SkiaSharp-free WASM assembly (`error CS1061: 'ImageInfo' ... 'SaveImage'`). WASM-mode output now builds into isolated `bin/wasm/` + `obj/wasm/` paths; the `dotnet clean` workaround documented in CLAUDE.md is no longer needed.
+
 ### Added
 - **Document IR — Phase 1 (M1.1–M1.4) complete** — *internal/experimental.* The
   read-only, immutable, typed, anchor-identified, normalized in-memory DOCX model

@@ -28,9 +28,17 @@
     <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 
-  <!-- Define WASM_BUILD constant when building for WASM -->
+  <!-- Define WASM_BUILD constant when building for WASM.
+       The output/intermediate paths are redirected so the WASM-mode assembly (no SkiaSharp,
+       no ImageInfo.SaveImage) can never clobber the default-mode assembly: DocxodusWasm
+       references this project with AdditionalProperties="WASM_BUILD=true", so a solution
+       build compiles Docxodus twice — without distinct paths the two builds race for
+       bin/$(Configuration)/net8.0/Docxodus.dll and Docxodus.Tests intermittently links the
+       WASM-mode one (the recurring CS1061 'ImageInfo.SaveImage' failure). -->
   <PropertyGroup Condition="'$(WASM_BUILD)' == 'true'">
     <DefineConstants>$(DefineConstants);WASM_BUILD</DefineConstants>
+    <OutputPath>bin\wasm\$(Configuration)\</OutputPath>
+    <IntermediateOutputPath>obj\wasm\$(Configuration)\</IntermediateOutputPath>
   </PropertyGroup>
 
   <!-- Core dependencies (always included) -->
