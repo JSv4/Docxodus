@@ -38,6 +38,19 @@ internal static class IrHasher
     /// (namespace, local name) ordinal. Serialized with <see cref="SaveOptions.DisableFormatting"/>.
     /// Result is stable across attribute reordering and rsid/Unid churn.
     /// </summary>
+    /// <remarks>
+    /// Deferred §6.3 clauses (intentional for M1.1):
+    /// <list type="bullet">
+    /// <item>"Normalize inter-element whitespace" is handled solely by
+    /// <see cref="SaveOptions.DisableFormatting"/> — we do not emit indentation/line breaks
+    /// between elements. Pre-existing <em>significant</em> whitespace text nodes (e.g.
+    /// <c>xml:space="preserve"</c> content) are deliberately preserved as content, not
+    /// collapsed.</item>
+    /// <item>The broader N1/N2-rule attribute stripping (beyond the rsid*/pt14/proofErr/noProof
+    /// noise removed here) lands with the M1.2 normalization work; this method intentionally
+    /// strips only that minimal noise set for now.</item>
+    /// </list>
+    /// </remarks>
     public static byte[] Canonicalize(XElement element)
     {
         var clone = new XElement(element);
@@ -99,10 +112,12 @@ internal static class IrHasher
 
     /// <summary>
     /// Fingerprint of a direct run format (spec §6.2). Serializes every NON-NULL property as
-    /// <c>name=value;</c> pairs in declaration order, appends the 32 raw
-    /// <see cref="IrRunFormat.UnmodeledDigest"/> bytes, then SHA-256s the whole. Null
-    /// properties are omitted entirely, so "Bold=true, Italic=null" hashes equal to
-    /// "Bold=true" with Italic absent.
+    /// length-prefixed <c>name=&lt;charCount&gt;:&lt;value&gt;;</c> pairs in declaration order
+    /// (the char count is the value's <see cref="string.Length"/> in invariant culture),
+    /// appends the 32 raw <see cref="IrRunFormat.UnmodeledDigest"/> bytes, then SHA-256s the
+    /// whole. The length prefix makes the framing unambiguous even when a value (e.g. a style
+    /// id or font name) contains <c>=</c> or <c>;</c>. Null properties are omitted entirely,
+    /// so "Bold=true, Italic=null" hashes equal to "Bold=true" with Italic absent.
     /// </summary>
     public static IrHash FingerprintRunFormat(IrRunFormat f)
     {
@@ -169,8 +184,7 @@ internal static class IrHasher
         WriteHash(ms, FingerprintParaFormat(paraFormat));
         foreach (var rf in runFormats)
             WriteHash(ms, FingerprintRunFormat(rf));
-        ms.Position = 0;
-        return IrHash.Compute(ms.ToArray());
+        return IrHash.Compute(ms.GetBuffer().AsSpan(0, (int)ms.Length));
     }
 
     /// <summary>
@@ -199,21 +213,39 @@ internal static class IrHasher
     {
         if (value is null)
             return;
-        sb.Append(name).Append('=').Append(value).Append(';');
+        AppendFramed(sb, name, value);
     }
 
     private static void AppendField(StringBuilder sb, string name, bool? value)
     {
         if (value is null)
             return;
-        sb.Append(name).Append('=').Append(value.Value ? "true" : "false").Append(';');
+        AppendFramed(sb, name, value.Value ? "true" : "false");
     }
 
     private static void AppendField(StringBuilder sb, string name, int? value)
     {
         if (value is null)
             return;
-        sb.Append(name).Append('=').Append(value.Value.ToString(CultureInfo.InvariantCulture)).Append(';');
+        AppendFramed(sb, name, value.Value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>
+    /// Emit a length-prefixed <c>name=&lt;charCount&gt;:&lt;value&gt;;</c> field.
+    /// <paramref name="value"/> may originate from OOXML strings (style ids, font names,
+    /// color hexes, highlight/section-type tokens) that can themselves contain <c>=</c> or
+    /// <c>;</c>; the leading character count (value length, invariant culture) makes the
+    /// framing unambiguous so e.g. <c>StyleId="A;Bold=true"</c> can never collide with
+    /// <c>StyleId="A"</c> + <c>Bold=true</c>.
+    /// </summary>
+    private static void AppendFramed(StringBuilder sb, string name, string value)
+    {
+        sb.Append(name)
+          .Append('=')
+          .Append(value.Length.ToString(CultureInfo.InvariantCulture))
+          .Append(':')
+          .Append(value)
+          .Append(';');
     }
 
     private static IrHash HashFields(StringBuilder sb, IrHash unmodeledDigest)

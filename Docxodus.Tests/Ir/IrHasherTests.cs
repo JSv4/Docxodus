@@ -1,5 +1,8 @@
 #nullable enable
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Xml.Linq;
 using Docxodus.Ir;
 using Xunit;
@@ -53,6 +56,24 @@ public class IrHasherTests
             new XElement(W + "r", new XElement(W + "t", "world")));
 
         Assert.NotEqual(IrHasher.CanonicalHash(a), IrHasher.CanonicalHash(b));
+    }
+
+    [Fact]
+    public void Canonicalize_DoesNotMutateInput()
+    {
+        // Pt is the PowerTools (pt14) namespace the canonicalizer strips.
+        var element = new XElement(W + "p",
+            new XAttribute(W + "rsidR", "00AB12CD"),
+            new XAttribute(Pt + "Unid", "deadbeef"),
+            new XElement(W + "proofErr", new XAttribute(W + "type", "spellStart")),
+            new XElement(W + "r", new XElement(W + "t", "hello")));
+
+        IrHasher.Canonicalize(element);
+
+        // The ORIGINAL element must still carry all three noise items.
+        Assert.NotNull(element.Attribute(W + "rsidR"));
+        Assert.NotNull(element.Attribute(Pt + "Unid"));
+        Assert.NotNull(element.Element(W + "proofErr"));
     }
 
     // --- Content-hash stream builder --------------------------------------
@@ -201,5 +222,120 @@ public class IrHasherTests
         // A bolded run flips the block fingerprint.
         var fpNoRuns = IrHasher.FingerprintBlock(para, new[] { run2 });
         Assert.NotEqual(fpA, fpNoRuns);
+    }
+
+    [Fact]
+    public void Fingerprint_FieldFraming_Unambiguous()
+    {
+        var digest = IrHash.Compute("u");
+
+        // StyleId value chosen to mimic the concatenation of "A" + "Bold=true" without framing.
+        var packed = new IrRunFormat { StyleId = "A;Bold=true:1", UnmodeledDigest = digest };
+        var split = new IrRunFormat { StyleId = "A", Bold = true, UnmodeledDigest = digest };
+
+        Assert.NotEqual(
+            IrHasher.FingerprintRunFormat(packed),
+            IrHasher.FingerprintRunFormat(split));
+    }
+
+    // --- Every-field-flips-the-fingerprint guards -------------------------
+    //
+    // These catch the "added a property to the record but forgot to serialize it in
+    // Fingerprint*" class of bugs: each single-field variant must differ from the
+    // all-null baseline AND be pairwise-distinct from every other single-field variant.
+
+    [Fact]
+    public void Fingerprint_EveryRunFormatField_FlipsFingerprint()
+    {
+        var digest = IrHash.Compute("baseline");
+        var baseline = new IrRunFormat { UnmodeledDigest = digest };
+
+        var variants = new (string Name, IrRunFormat Value)[]
+        {
+            ("StyleId", baseline with { StyleId = "Heading1" }),
+            ("Bold", baseline with { Bold = true }),
+            ("Italic", baseline with { Italic = true }),
+            ("Underline", baseline with { Underline = new IrUnderline(IrUnderlineKind.Single, "FF0000") }),
+            ("Strike", baseline with { Strike = true }),
+            ("DoubleStrike", baseline with { DoubleStrike = true }),
+            ("VertAlign", baseline with { VertAlign = IrVertAlign.Superscript }),
+            ("FontAscii", baseline with { FontAscii = "Calibri" }),
+            ("SizeHalfPoints", baseline with { SizeHalfPoints = 24 }),
+            ("ColorHex", baseline with { ColorHex = "FF0000" }),
+            ("Highlight", baseline with { Highlight = "yellow" }),
+            ("Caps", baseline with { Caps = true }),
+            ("SmallCaps", baseline with { SmallCaps = true }),
+            ("Vanish", baseline with { Vanish = true }),
+        };
+
+        AssertPairwiseDistinctFromBaseline(
+            IrHasher.FingerprintRunFormat(baseline),
+            variants.Select(v => (v.Name, IrHasher.FingerprintRunFormat(v.Value))));
+    }
+
+    [Fact]
+    public void Fingerprint_EveryParaFormatField_FlipsFingerprint()
+    {
+        var digest = IrHash.Compute("baseline");
+        var baseline = new IrParaFormat { UnmodeledDigest = digest };
+
+        var variants = new (string Name, IrParaFormat Value)[]
+        {
+            ("StyleId", baseline with { StyleId = "Normal" }),
+            ("Justification", baseline with { Justification = IrJustification.Center }),
+            ("IndentLeftTwips", baseline with { IndentLeftTwips = 720 }),
+            ("IndentRightTwips", baseline with { IndentRightTwips = 720 }),
+            ("IndentFirstLineTwips", baseline with { IndentFirstLineTwips = 360 }),
+            ("SpacingBeforeTwips", baseline with { SpacingBeforeTwips = 120 }),
+            ("SpacingAfterTwips", baseline with { SpacingAfterTwips = 120 }),
+            ("LineSpacing", baseline with { LineSpacing = new IrLineSpacing(240, IrLineSpacingRule.Auto) }),
+            ("OutlineLevel", baseline with { OutlineLevel = 1 }),
+            ("KeepNext", baseline with { KeepNext = true }),
+            ("KeepLines", baseline with { KeepLines = true }),
+            ("PageBreakBefore", baseline with { PageBreakBefore = true }),
+        };
+
+        AssertPairwiseDistinctFromBaseline(
+            IrHasher.FingerprintParaFormat(baseline),
+            variants.Select(v => (v.Name, IrHasher.FingerprintParaFormat(v.Value))));
+    }
+
+    [Fact]
+    public void Fingerprint_EverySectionFormatField_FlipsFingerprint()
+    {
+        var digest = IrHash.Compute("baseline");
+        var baseline = new IrSectionFormat { UnmodeledDigest = digest };
+
+        var variants = new (string Name, IrSectionFormat Value)[]
+        {
+            ("PageWidthTwips", baseline with { PageWidthTwips = 12240 }),
+            ("PageHeightTwips", baseline with { PageHeightTwips = 15840 }),
+            ("Landscape", baseline with { Landscape = true }),
+            ("MarginTopTwips", baseline with { MarginTopTwips = 1440 }),
+            ("MarginBottomTwips", baseline with { MarginBottomTwips = 1440 }),
+            ("MarginLeftTwips", baseline with { MarginLeftTwips = 1440 }),
+            ("MarginRightTwips", baseline with { MarginRightTwips = 1440 }),
+            ("SectionType", baseline with { SectionType = "nextPage" }),
+        };
+
+        AssertPairwiseDistinctFromBaseline(
+            IrHasher.FingerprintSectionFormat(baseline),
+            variants.Select(v => (v.Name, IrHasher.FingerprintSectionFormat(v.Value))));
+    }
+
+    private static void AssertPairwiseDistinctFromBaseline(
+        IrHash baseline,
+        IEnumerable<(string Name, IrHash Fingerprint)> variants)
+    {
+        var list = variants.ToList();
+        var seen = new Dictionary<IrHash, string>();
+
+        foreach (var (name, fp) in list)
+        {
+            Assert.True(fp != baseline, $"Field '{name}' did not flip the fingerprint vs baseline.");
+            if (seen.TryGetValue(fp, out var other))
+                Assert.Fail($"Field '{name}' collides with field '{other}': same fingerprint.");
+            seen.Add(fp, name);
+        }
     }
 }
