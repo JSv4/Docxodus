@@ -73,16 +73,15 @@
     {
       "anchor": "p:body:6e7a5b86548a916d758b6db36852edf1",
       "type": "paragraph",
-      "contentHash": "144dbc417bda6d96f54a5a46b52d0c7d86aac9f2c78f4b532e975bd3c7a440a0",
+      "contentHash": "04fd78a332a1f2993afe2940b95e72e99af7e0ac5ebcd63e4192635e019b0850",
       "formatFingerprint": "f09c741a16fc4821f139ec1724eee5bae819533ffa8cba102be6dd9d25120f1f",
       "format": {
         "styleId": "Note"
       },
       "inlines": [
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing",
-          "hash": "2990aeeddb2fac70e91fc5c18df0ab521ffaea85bb8ece5ff64bffb98f774f46"
+          "kind": "unsupported",
+          "type": "IrInlineImage"
         }
       ]
     },
@@ -232,14 +231,13 @@
     {
       "anchor": "p:body:db39746482d68145ed0965effe660cc6",
       "type": "paragraph",
-      "contentHash": "2b27f85b9c28f4da407487569394693cbdc0f5ce96e089f19c28d9164f2ec408",
+      "contentHash": "adfd9e086c49a4b7484d9391105733f3301ac0220185db74a25a4cc484369b8e",
       "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
       "format": {},
       "inlines": [
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing",
-          "hash": "5f4b441a5b00ec965157f9f1dcf0e96c32174d137f90e56a9bce4f7a1fa1bdcb"
+          "kind": "unsupported",
+          "type": "IrInlineImage"
         }
       ]
     },

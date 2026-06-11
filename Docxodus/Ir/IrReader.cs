@@ -28,6 +28,14 @@ internal static class IrReader
     private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private static readonly XNamespace R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
+    // Drawing element/attribute names for inline-image promotion (established constants in
+    // PtOpenXmlUtil). Fully qualified because the local `R` field above shadows the `Docxodus.R`
+    // namespace-constants class.
+    private static readonly XName ABlip = Docxodus.A.blip;       // a:blip (drawingml)
+    private static readonly XName REmbed = Docxodus.R.embed;     // r:embed (relationships)
+    private static readonly XName WpExtent = Docxodus.WP.extent; // wp:extent (wordprocessingDrawing)
+    private static readonly XName WpDocPr = Docxodus.WP.docPr;   // wp:docPr (wordprocessingDrawing)
+
     // The empty-unmodeled-container digest: CanonicalHash of <unmodeled/> with no children.
     // Cached because it is the fingerprint of every format record that carries no leftover props.
     private static readonly IrHash EmptyUnmodeledDigest =
@@ -89,14 +97,14 @@ internal static class IrReader
             root.AddAnnotation(main);
 
         var partUri = main.Uri;
-        var ctx = new ReadContext(partUri);
+        var ctx = new ReadContext(partUri, main);
 
         var body = root.Element(W + "body")
             ?? throw new DocxodusException("Document has no w:body element.");
 
         var blocks = new List<IrBlock>();
         foreach (var child in body.Elements())
-            blocks.Add(BuildBlock(child, ctx));
+            AppendBlocks(child, ctx, blocks);
 
         // 5. Anchor index over blocks only (rows/cells are positional, not blocks).
         var anchorIndex = new Dictionary<string, IrBlock>(StringComparer.Ordinal);
@@ -119,12 +127,27 @@ internal static class IrReader
         };
     }
 
-    /// <summary>Carries the part URI through the recursive walk for provenance.</summary>
+    /// <summary>
+    /// Carries the part URI (for provenance), the owning <see cref="MainDocumentPart"/> (for
+    /// resolving image relationships), and a per-<see cref="Read"/> image-bytes hash cache through
+    /// the recursive walk. The cache keys on embed rel id so a logo reused 50 times hashes once.
+    /// </summary>
     private sealed class ReadContext
     {
-        public ReadContext(Uri partUri) => PartUri = partUri;
+        public ReadContext(Uri partUri, MainDocumentPart main)
+        {
+            PartUri = partUri;
+            Main = main;
+        }
 
         public Uri PartUri { get; }
+
+        public MainDocumentPart Main { get; }
+
+        // embed rel id → (image part URI, hash of its bytes). Negative results are not cached because
+        // a missing/wrong-typed rel is rare and cheap to re-check.
+        public Dictionary<string, (Uri PartUri, IrHash BytesHash)> ImageHashCache { get; } =
+            new(StringComparer.Ordinal);
 
         public IrProvenance Provenance(XElement element) =>
             new() { Element = element, PartUri = PartUri };
@@ -167,6 +190,28 @@ internal static class IrReader
     }
 
     // --- block dispatch ---------------------------------------------------
+
+    /// <summary>
+    /// Append the IR block(s) produced by a single body/cell child element to <paramref name="sink"/>.
+    /// Almost every element yields exactly one block; the exception is N12: a block-level
+    /// <c>w:sdt</c> (content control) contributes nothing itself — its <c>w:sdtContent</c> children
+    /// are walked through the normal block walker so each inner <c>w:p</c>/<c>w:tbl</c> gets its own
+    /// anchor from its own <c>pt:Unid</c>. The SDT wrapper is recoverable via the inner blocks'
+    /// provenance ancestors. Multiple or zero content children are handled naturally (we walk
+    /// whatever is there). SDTs can nest, so this recurses.
+    /// </summary>
+    private static void AppendBlocks(XElement el, ReadContext ctx, List<IrBlock> sink)
+    {
+        if (el.Name == W + "sdt")
+        {
+            var content = el.Element(W + "sdtContent");
+            if (content is not null)
+                foreach (var inner in content.Elements())
+                    AppendBlocks(inner, ctx, sink);
+            return;
+        }
+        sink.Add(BuildBlock(el, ctx));
+    }
 
     private static IrBlock BuildBlock(XElement el, ReadContext ctx)
     {
@@ -267,11 +312,28 @@ internal static class IrReader
             }
             else if (child.Name == W + "hyperlink")
             {
-                EmitInline(BuildHyperlink(child, _ctx));
+                EmitInline(BuildHyperlink(child, _ctx), child);
             }
             else if (child.Name == W + "fldSimple")
             {
-                EmitInline(BuildFldSimple(child, _ctx));
+                EmitInline(BuildFldSimple(child, _ctx), child);
+            }
+            else if (child.Name == W + "sdt")
+            {
+                // N12: inline content control — splice w:sdtContent's children into the inline
+                // stream so the runs inside join the paragraph and coalesce normally.
+                var content = child.Element(W + "sdtContent");
+                if (content is not null)
+                    foreach (var inner in content.Elements())
+                        Feed(inner);
+            }
+            else if (child.Name == W + "smartTag")
+            {
+                // N12: w:smartTag wraps runs (and can nest other smartTags) — splice its children
+                // into the inline stream the same way; recursion handles nesting. Its own
+                // w:smartTagPr metadata child is not content and is skipped.
+                foreach (var inner in child.Elements().Where(e => e.Name != W + "smartTagPr"))
+                    Feed(inner);
             }
             else if (child.Name == W + "proofErr")
             {
@@ -283,7 +345,7 @@ internal static class IrReader
             }
             else
             {
-                EmitInline(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)));
+                EmitInline(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)), child);
             }
         }
 
@@ -314,11 +376,11 @@ internal static class IrReader
                         continue;
                     }
                     // Post-separate: divert run content into the field result.
-                    EmitRunChild(child, rPr, runFormat, _result);
+                    EmitRunChild(child, rPr, runFormat, _ctx, _result);
                     continue;
                 }
 
-                EmitRunChild(child, rPr, runFormat, _output);
+                EmitRunChild(child, rPr, runFormat, _ctx, _output);
             }
         }
 
@@ -366,6 +428,17 @@ internal static class IrReader
             }
         }
 
+        /// <summary>
+        /// Flush the walker's accumulated inlines. When the sequence ended mid-field (a
+        /// <c>begin</c> with no matching <c>end</c>), nothing built during that field was committed
+        /// to <c>_output</c> — the instruction-phase run text, hyperlinks, fldSimples, and opaque
+        /// elements were all diverted into <c>_captured</c>. To lose no content we emit every
+        /// captured element as an <see cref="IrOpaqueInline"/> here. (When a field instead
+        /// terminates normally, its instruction-phase plumbing — including any nested
+        /// hyperlink/fldSimple/opaque — is deliberately flattened away and never reaches
+        /// <c>_output</c>; this fallback only fires for the unterminated case, where dropping it
+        /// would be data loss.)
+        /// </summary>
         public List<IrInline> Finish()
         {
             // Unterminated field (begin without matching end): fall back to opaque so no content
@@ -379,18 +452,27 @@ internal static class IrReader
             return _output;
         }
 
-        // Emit a typed inline at the current nesting level — into the field result when capturing
-        // a result, otherwise into the top-level output.
-        private void EmitInline(IrInline inline)
+        /// <summary>
+        /// Emit a typed inline at the current nesting level. Three mutually-exclusive cases, made
+        /// visually exhaustive:
+        /// <list type="bullet">
+        /// <item>Not in a field (<c>_fieldDepth == 0</c>): commit to the top-level output.</item>
+        /// <item>In a field's result phase (after <c>separate</c>): divert into the field result.</item>
+        /// <item>In a field's instruction phase (before <c>separate</c>): field plumbing — flatten
+        /// it from the modeled stream, but ALSO capture its <paramref name="source"/> element so the
+        /// unterminated-field fallback in <see cref="Finish"/> can re-emit it opaquely rather than
+        /// silently dropping it. A null source (e.g. a synthesized field run) cannot be captured;
+        /// such inlines only ever emit at depth 0, so this never loses content.</item>
+        /// </list>
+        /// </summary>
+        private void EmitInline(IrInline inline, XElement? source = null)
         {
-            if (_fieldDepth > 0 && _inResult)
-                _result.Add(inline);
-            else if (_fieldDepth > 0)
-                // A nested hyperlink/fldSimple/opaque appearing in the instruction phase is field
-                // plumbing; drop it from the modeled stream (still recoverable via provenance).
-                { }
-            else
+            if (_fieldDepth == 0)
                 _output.Add(inline);
+            else if (_inResult)
+                _result.Add(inline);
+            else if (source is not null)
+                _captured.Add(source);
         }
     }
 
@@ -399,7 +481,7 @@ internal static class IrReader
     /// <paramref name="sink"/>. Shared by the top-level walk and the field-result diversion so a
     /// field's cached result is read with identical run semantics.
     /// </summary>
-    private static void EmitRunChild(XElement child, XElement? rPr, IrRunFormat runFormat, List<IrInline> sink)
+    private static void EmitRunChild(XElement child, XElement? rPr, IrRunFormat runFormat, ReadContext ctx, List<IrInline> sink)
     {
         if (child.Name == W + "t")
             sink.Add(new IrTextRun(child.Value, runFormat));
@@ -416,6 +498,12 @@ internal static class IrReader
             sink.Add(new IrTextRun("­", runFormat));
         else if (child.Name == W + "sym")
             AppendSym(child, rPr, runFormat, sink); // N8.
+        else if (child.Name == W + "footnoteReference")
+            sink.Add(new IrNoteRef(IrNoteKind.Footnote, NoteId(child)));
+        else if (child.Name == W + "endnoteReference")
+            sink.Add(new IrNoteRef(IrNoteKind.Endnote, NoteId(child)));
+        else if (child.Name == W + "drawing")
+            AppendDrawing(child, ctx, sink); // inline image (a:blip @r:embed) or opaque fallback.
         else if (child.Name == W + "lastRenderedPageBreak")
             return; // N4: layout cache, not content.
         else if (child.Name == W + "commentReference")
@@ -477,6 +565,98 @@ internal static class IrReader
             if (rel.Id == relId)
                 return rel.Uri.ToString();
         return null;
+    }
+
+    // --- note refs --------------------------------------------------------
+
+    /// <summary>
+    /// The <c>@w:id</c> of a note reference, or <c>""</c> when absent. The id is intentionally NOT
+    /// fed into the content hash (spec §6.1: only the kind sentinel is hashed) — it is positional
+    /// bookkeeping, and renumbering notes must not flip body hashes. Separator/continuationSeparator
+    /// reference variants carry no id (or carry only <c>@w:customMarkFollows</c> etc.), which yields
+    /// <c>""</c> here without crashing.
+    /// </summary>
+    private static string NoteId(XElement noteRef) => (string?)noteRef.Attribute(W + "id") ?? "";
+
+    // --- inline images ----------------------------------------------------
+
+    /// <summary>
+    /// Promote a <c>w:drawing</c> whose descendant <c>a:blip</c> has an <c>@r:embed</c> resolving to
+    /// an image part on the main document part into an <see cref="IrInlineImage"/>. Extent comes from
+    /// the first descendant <c>wp:extent</c> (<c>@cx</c>/<c>@cy</c>, 0 when absent); alt text from
+    /// <c>wp:docPr/@descr</c> falling back to <c>@name</c>, else null. The image part's bytes are
+    /// read fully and SHA-256'd (cached per embed rel id within one <see cref="Read"/> so a reused
+    /// logo hashes once). Anything that doesn't resolve to a real image part — a missing/wrong-typed
+    /// relationship, a <c>w:pict</c> (VML) with no blip, or a drawing without <c>a:blip@embed</c> —
+    /// falls back to <see cref="IrOpaqueInline"/>; this method never throws on malformed drawings.
+    /// </summary>
+    private static void AppendDrawing(XElement drawing, ReadContext ctx, List<IrInline> sink)
+    {
+        var blip = drawing.Descendants(ABlip).FirstOrDefault();
+        var embedId = (string?)blip?.Attribute(REmbed);
+        if (embedId is not null)
+        {
+            var resolved = ResolveImagePart(ctx, embedId);
+            if (resolved is { } image)
+            {
+                var extent = drawing.Descendants(WpExtent).FirstOrDefault();
+                long cx = LongAttr(extent, "cx");
+                long cy = LongAttr(extent, "cy");
+
+                var docPr = drawing.Descendants(WpDocPr).FirstOrDefault();
+                string? altText = (string?)docPr?.Attribute("descr")
+                    ?? (string?)docPr?.Attribute("name");
+
+                sink.Add(new IrInlineImage(image.PartUri, image.BytesHash, cx, cy, altText));
+                return;
+            }
+        }
+
+        // No resolvable embedded image (VML w:pict, missing rel, etc.): preserve opaquely.
+        sink.Add(new IrOpaqueInline(drawing.Name, IrHasher.CanonicalHash(drawing)));
+    }
+
+    /// <summary>
+    /// Resolve an embed rel id to its image part's URI and the SHA-256 of its bytes, caching per rel
+    /// id within the current read (so a logo reused N times hashes once). Returns null when the
+    /// relationship is missing or does not point at an image part, or when reading the part's stream
+    /// fails — every such case is tolerated to an opaque fallback by the caller so a malformed
+    /// package never aborts the read.
+    /// </summary>
+    private static (Uri PartUri, IrHash BytesHash)? ResolveImagePart(ReadContext ctx, string embedId)
+    {
+        if (ctx.ImageHashCache.TryGetValue(embedId, out var cached))
+            return cached;
+
+        try
+        {
+            var part = ctx.Main.GetPartById(embedId);
+            if (part is not ImagePart imagePart)
+                return null;
+
+            using var stream = imagePart.GetStream(System.IO.FileMode.Open, System.IO.FileAccess.Read);
+            using var ms = new System.IO.MemoryStream();
+            stream.CopyTo(ms);
+            var hash = IrHash.Compute(ms.GetBuffer().AsSpan(0, (int)ms.Length));
+            var resolved = (imagePart.Uri, hash);
+            ctx.ImageHashCache[embedId] = resolved;
+            return resolved;
+        }
+        catch
+        {
+            // Missing rel id (KeyNotFoundException / ArgumentOutOfRangeException), wrong part type,
+            // or unreadable stream: opaque fallback. Totality over the corpus depends on this.
+            return null;
+        }
+    }
+
+    private static long LongAttr(XElement? el, string localName)
+    {
+        var raw = (string?)el?.Attribute(localName);
+        return raw is not null
+            && long.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)
+            ? v
+            : 0L;
     }
 
     // --- fields (N9) ------------------------------------------------------
@@ -638,6 +818,23 @@ internal static class IrReader
                 case IrFieldRun fld:
                     // Transparent: cached-result bytes only, no sentinels, no instruction.
                     AppendInlinesToContentHash(fld.CachedResult, builder);
+                    break;
+                case IrNoteRef note:
+                    // Kind sentinel ONLY (0x05/0x06) — never the note id (spec §6.1). Footnote vs
+                    // endnote stays distinguishable; renumbering does not change the body hash.
+                    builder.AppendSentinel(note.Kind == IrNoteKind.Footnote
+                        ? IrContentHashBuilder.SentinelFootnoteRef
+                        : IrContentHashBuilder.SentinelEndnoteRef);
+                    break;
+                case IrInlineImage img:
+                    // Sentinel + the image part's bytes hash (spec §6.1). Extent and alt text do NOT
+                    // affect ContentHash (they are not text); they also do not currently affect the
+                    // FormatFingerprint — the image carries no run format, so a resize is invisible to
+                    // both hashes today.
+                    // TODO(M2): the diff engine may want extent/alt changes surfaced (e.g. as a
+                    // format-grade change) so a resized-but-same-bytes image reads as "changed".
+                    builder.AppendSentinel(IrContentHashBuilder.SentinelImage);
+                    builder.AppendHash(img.ImageBytesHash);
                     break;
                 case IrOpaqueInline o:
                     builder.AppendSentinel(IrContentHashBuilder.SentinelOpaque);
@@ -902,10 +1099,14 @@ internal static class IrReader
         {
             if (child.Name == W + "tcPr")
                 continue;
-            var block = BuildBlock(child, ctx);
-            blocks.Add(block);
-            cellBuilder.AppendHash(block.ContentHash);
-            fingerprints.Add(block.FormatFingerprint);
+            // N12: a block-level w:sdt inside a cell unwraps to its content blocks, same as in body.
+            var before = blocks.Count;
+            AppendBlocks(child, ctx, blocks);
+            for (int i = before; i < blocks.Count; i++)
+            {
+                cellBuilder.AppendHash(blocks[i].ContentHash);
+                fingerprints.Add(blocks[i].FormatFingerprint);
+            }
         }
 
         var cell = new IrCell(

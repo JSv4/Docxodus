@@ -100,11 +100,41 @@
       ]
     },
     {
-      "anchor": "unk:body:a4240f17299ed0b88a05ebb7e3590384",
-      "type": "opaque",
-      "contentHash": "b1f15aa177aba6addfd0d3d8d7e0c4a989addabe32b63ce6ecd7e1bdafe3f6b1",
-      "formatFingerprint": "7a0e64a1117e67cf087c5f7f7f32ab6ccdc8e3157ee173652d96314f944cc658",
-      "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sdt"
+      "anchor": "p:body:f6cad3d1ec16fa2d97df20c602d3a7ba",
+      "type": "paragraph",
+      "contentHash": "3e3cee63a3bd83377925dc10e5eec4aecfee2d6ddcf1523e674e2b3c782c6fcc",
+      "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+      "format": {},
+      "inlines": [
+        {
+          "kind": "opaque",
+          "element": "{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent",
+          "hash": "95862c66450532709dd4a8c88cf98cd47535cd724130d2a8eef9f2e68894542c"
+        },
+        {
+          "kind": "opaque",
+          "element": "{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent",
+          "hash": "49f2f64b31bd642e14191366a4d994f019a3a5b2b737719f97f06dca3e8ac349"
+        },
+        {
+          "kind": "opaque",
+          "element": "{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent",
+          "hash": "144f0fde6a8cea9fd47629463602c97e9d21418ef928aae1e30e5ab08d2e0b1f"
+        }
+      ]
+    },
+    {
+      "anchor": "p:body:63226bf00f45c4792f5ac4ef961ce6a3",
+      "type": "paragraph",
+      "contentHash": "c79b932e1e1da3c0e098e5ad2c422937eb904a76cf61d83975a74a68fbb04b99",
+      "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+      "format": {},
+      "inlines": [
+        {
+          "kind": "break",
+          "breakKind": "Page"
+        }
+      ]
     },
     {
       "anchor": "h:body:4d423c81a3f84b13637927ce8b8687b8",
@@ -219,7 +249,7 @@
     {
       "anchor": "p:body:b07ff71420d877a0b35a200423b41746",
       "type": "paragraph",
-      "contentHash": "ca1d27aa1e4df1201aec52ff53bdfff5dfd2ad9c6f52cc97ddd4ccb5a239d9df",
+      "contentHash": "ffb3b6479c74867d81feed70b88c8215a89d7522730654521b439d1e147339fa",
       "formatFingerprint": "fdf132b3a0e5cc199d3f2b9f4f2fb58227fc203882f340d578568de6200d88ab",
       "format": {},
       "inlines": [
@@ -229,9 +259,8 @@
           "format": {}
         },
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}endnoteReference",
-          "hash": "77f62bf9227201ad0eaa3c9f112333678faadfc4fcb324236cb3c1230d12ae0c"
+          "kind": "unsupported",
+          "type": "IrNoteRef"
         },
         {
           "kind": "text",
@@ -859,32 +888,29 @@
       ]
     },
     {
-      "anchor": "unk:body:8e7bd9a5f888a8641a4bea0fa536f02f",
-      "type": "opaque",
-      "contentHash": "7283e5aae6840d26746bd32bab6c50120a4cf74ddb23c33aacffd07fb043fe8e",
-      "formatFingerprint": "7a0e64a1117e67cf087c5f7f7f32ab6ccdc8e3157ee173652d96314f944cc658",
-      "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sdt"
-    },
-    {
-      "anchor": "p:body:4cc4c45b62bdb21c5858bb5957eb6915",
+      "anchor": "p:body:26a93332e1b268cb5c1f01fec4a8b40f",
       "type": "paragraph",
-      "contentHash": "b06281cbdb34b43e5e40dab54aef6bcb4e5ef65e168d6e4885a72f2b3cd6cc2d",
-      "formatFingerprint": "fdf132b3a0e5cc199d3f2b9f4f2fb58227fc203882f340d578568de6200d88ab",
+      "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
+      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
       "format": {},
       "inlines": [
         {
           "kind": "text",
-          "text": "To ",
+          "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
           "format": {}
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sdt",
-          "hash": "b1c24115ded0dc6b4de514c6b5249052de09e2df25fc8314592d8c58dd83ef25"
-        },
+        }
+      ]
+    },
+    {
+      "anchor": "p:body:4cc4c45b62bdb21c5858bb5957eb6915",
+      "type": "paragraph",
+      "contentHash": "a9378c10464199fd954ca2219dc17aacb28f492289b9d8c1404e40721771b5a6",
+      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+      "format": {},
+      "inlines": [
         {
           "kind": "text",
-          "text": " produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+          "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
           "format": {}
         }
       ]
@@ -965,7 +991,7 @@
     {
       "anchor": "p:body:9a8c788324e61e1ab15dac8d11b5f29f",
       "type": "paragraph",
-      "contentHash": "dd538c98ec6102d33e1c6233edde1bc20de9b439107dade77e11b0a4f799f553",
+      "contentHash": "1431dfa59803bbf5039048b4bb60b40c5ce8a8f0b135f8a0617fe75914a6ddbe",
       "formatFingerprint": "fdf132b3a0e5cc199d3f2b9f4f2fb58227fc203882f340d578568de6200d88ab",
       "format": {},
       "inlines": [
@@ -975,9 +1001,8 @@
           "format": {}
         },
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}footnoteReference",
-          "hash": "4d73438158ff51fb656458c2fa1f909d3580dfdae2384981e6d611c2e12c6a41"
+          "kind": "unsupported",
+          "type": "IrNoteRef"
         },
         {
           "kind": "text",
@@ -1416,11 +1441,89 @@
       ]
     },
     {
-      "anchor": "unk:body:ce958d2d376da20fefb7b712683bdb4e",
-      "type": "opaque",
-      "contentHash": "2ed40dd2d67096a61e9dad46aff4dc0a4d61b5fe4beebdd047aa812bae5d9829",
-      "formatFingerprint": "7a0e64a1117e67cf087c5f7f7f32ab6ccdc8e3157ee173652d96314f944cc658",
-      "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sdt"
+      "anchor": "p:body:6727415fcb72bd3f33cdbb696a03ecff",
+      "type": "paragraph",
+      "contentHash": "437aea62a5bd6ad4762e494c81b88532809a231477c82bdecf6fd6636908b7ab",
+      "formatFingerprint": "bef038cef8e9ec224dc8883f580ba894cbe2d45d1f394a1524d14fbd8da5695c",
+      "format": {
+        "styleId": "TOCHeading"
+      },
+      "inlines": [
+        {
+          "kind": "text",
+          "text": "Contents",
+          "format": {}
+        }
+      ]
+    },
+    {
+      "anchor": "p:body:8cb0f1284fcc46c84bccc3785fa9242e",
+      "type": "paragraph",
+      "contentHash": "d2e3cf93465156b7ffd257539bc813985102b24bb47121c08f92b61ab34040cd",
+      "formatFingerprint": "73d542b2ffd5fe80b80acab4c8a7a5bd87cf690dcc66b1168d085a410c6bde48",
+      "format": {
+        "styleId": "TOC1"
+      },
+      "inlines": [
+        {
+          "kind": "opaque",
+          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}instrText",
+          "hash": "4f9e829352446eb0b7ffdd887d7b469277bbc90a9419414b0ba4572389268d57"
+        }
+      ]
+    },
+    {
+      "anchor": "p:body:5e2ea29c2e00a05a6c59c0be86ec0cd7",
+      "type": "paragraph",
+      "contentHash": "76cb73cbe86c9db1e9945b906efa138e896bb3704ec93a08d41657879e483907",
+      "formatFingerprint": "8c208ce32879325434eefe12e95aa4c9e9c16ef59cf7f97ce86dce966cc3381c",
+      "format": {
+        "styleId": "TOC2"
+      },
+      "inlines": [
+        {
+          "kind": "unsupported",
+          "type": "IrHyperlink"
+        }
+      ]
+    },
+    {
+      "anchor": "p:body:9d3282f50f08cc4539c62302ef64cfa3",
+      "type": "paragraph",
+      "contentHash": "bbf5856b8865509dff05a8bae8da007dc291aa83d91b2d79b122c7e7353bc371",
+      "formatFingerprint": "1563398d69ab3eb5d82031af9dea5daa54455ba70587437ae3308575d016be80",
+      "format": {
+        "styleId": "TOC1"
+      },
+      "inlines": [
+        {
+          "kind": "unsupported",
+          "type": "IrHyperlink"
+        }
+      ]
+    },
+    {
+      "anchor": "p:body:40a2e1544c90622cbf3ded0cb90bc7e6",
+      "type": "paragraph",
+      "contentHash": "d3a0ead0b0e4eecd3f2cbf42ab0e9e83fb58ffc4a586c3775256c62fb9b02966",
+      "formatFingerprint": "8c208ce32879325434eefe12e95aa4c9e9c16ef59cf7f97ce86dce966cc3381c",
+      "format": {
+        "styleId": "TOC2"
+      },
+      "inlines": [
+        {
+          "kind": "unsupported",
+          "type": "IrHyperlink"
+        }
+      ]
+    },
+    {
+      "anchor": "p:body:5d1713fc78373a0ca3dcd577d5a9315c",
+      "type": "paragraph",
+      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+      "format": {},
+      "inlines": []
     },
     {
       "anchor": "p:body:db6f9b58a2bdc8cf22d525359f808504",
@@ -1962,32 +2065,29 @@
       "inlines": []
     },
     {
-      "anchor": "unk:body:6becbfcb52de31c64e084df1e1d256c8",
-      "type": "opaque",
-      "contentHash": "f4f2c02ba11fcc473b662415f39c6754ce1b61de297a7a9e02745ec13f944b55",
-      "formatFingerprint": "7a0e64a1117e67cf087c5f7f7f32ab6ccdc8e3157ee173652d96314f944cc658",
-      "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sdt"
-    },
-    {
-      "anchor": "p:body:6c81a2e14b4ead50192132cd8452e2f4",
+      "anchor": "p:body:cb75b29b21a71c163bd6ebbfffadc4d4",
       "type": "paragraph",
-      "contentHash": "7323115198b669c2004bff0bcffceaf20d238a96b70ce1aae90dbdcf8726422f",
-      "formatFingerprint": "fdf132b3a0e5cc199d3f2b9f4f2fb58227fc203882f340d578568de6200d88ab",
+      "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
+      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
       "format": {},
       "inlines": [
         {
           "kind": "text",
-          "text": "To ",
+          "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
           "format": {}
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}sdt",
-          "hash": "311330212518abdf8f41db98cf4401840653022f63400915fabed0636c45bedf"
-        },
+        }
+      ]
+    },
+    {
+      "anchor": "p:body:6c81a2e14b4ead50192132cd8452e2f4",
+      "type": "paragraph",
+      "contentHash": "a9378c10464199fd954ca2219dc17aacb28f492289b9d8c1404e40721771b5a6",
+      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+      "format": {},
+      "inlines": [
         {
           "kind": "text",
-          "text": " produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+          "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
           "format": {}
         }
       ]

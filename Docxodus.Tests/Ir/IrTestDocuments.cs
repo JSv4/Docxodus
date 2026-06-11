@@ -130,4 +130,59 @@ internal static class IrTestDocuments
         }
         return new WmlDocument("ir-test.docx", ms.ToArray());
     }
+
+    /// <summary>
+    /// A document whose <c>w:body</c> inner XML is <paramref name="bodyInnerXml"/>, with one or more
+    /// <see cref="ImagePart"/>s added to the main document part. Each entry in
+    /// <paramref name="imageParts"/> maps a relationship id (the <c>r:embed</c> an <c>a:blip</c>
+    /// references) to the raw image bytes stored in that part. The body XML must reference the same
+    /// rel ids via <c>a:blip r:embed</c>. Namespaces for <c>r:</c> / <c>a:</c> / <c>wp:</c> are not
+    /// declared automatically — callers should include them on the <c>w:document</c> root if needed;
+    /// this builder declares <c>w:</c> only, so tests pass a fully namespaced body fragment.
+    /// </summary>
+    internal static WmlDocument FromBodyXmlWithImageParts(
+        string bodyInnerXml,
+        params (string RelId, byte[] Bytes)[] imageParts)
+    {
+        const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        const string A = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        const string WpNs = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            foreach (var (relId, bytes) in imageParts)
+            {
+                var imagePart = main.AddNewPart<ImagePart>("image/png", relId);
+                using var imgStream = imagePart.GetStream(FileMode.Create, FileAccess.Write);
+                imgStream.Write(bytes, 0, bytes.Length);
+            }
+
+            var documentXml =
+                $"<w:document xmlns:w=\"{W}\" xmlns:r=\"{R}\" xmlns:a=\"{A}\" xmlns:wp=\"{WpNs}\">" +
+                $"<w:body>{bodyInnerXml}</w:body></w:document>";
+            using (var partStream = main.GetStream(FileMode.Create, FileAccess.Write))
+            using (var writer = new StreamWriter(partStream))
+            {
+                writer.Write(documentXml);
+            }
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
+
+    /// <summary>
+    /// Minimal valid PNG bytes (an 8-byte signature plus a stub) — enough for an
+    /// <see cref="ImagePart"/> to store and for the reader to hash. Not a renderable image; the IR
+    /// only ever hashes the bytes, never decodes them.
+    /// </summary>
+    internal static byte[] TinyPng { get; } =
+    {
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR length + type
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
+    };
 }

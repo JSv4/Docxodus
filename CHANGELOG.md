@@ -48,6 +48,29 @@ All notable changes to this project will be documented in this file.
   no sentinels), so a `PAGE` field showing "5" is content-equal to a literal "5".
   HC031 golden snapshot regenerated; block anchors unchanged. (The diagnostic JSON
   still renders the new inline kinds as `"unsupported"` until the M1.2 writer task.)
+- **Document IR note refs, images & SDT unwrap (M1.2, N12)** —
+  *internal/experimental.* `IrReader` promotes two more inline constructs and
+  unwraps content controls. Note references (`w:footnoteReference`/
+  `w:endnoteReference`) → `IrNoteRef(Kind, NoteId)`; only the kind sentinel
+  (`0x05`/`0x06`) feeds `ContentHash` — the note id is positional bookkeeping, so
+  renumbering notes never flips a body hash, while footnote and endnote refs stay
+  distinguishable. Inline images (a `w:drawing` whose descendant `a:blip` has an
+  `@r:embed` resolving to an image part) → `IrInlineImage(PartUri, ImageBytesHash,
+  WidthEmu, HeightEmu, AltText)`; the part bytes are SHA-256'd (cached per embed rel
+  id so a reused logo hashes once) and `ContentHash` mixes the sentinel `0x07` plus
+  that bytes hash, so "same image re-added under a different rel id" is content-equal
+  while different bytes diverge. Extent (`wp:extent`) and alt text (`wp:docPr/@descr`
+  ?? `@name`) are surfaced but do **not** yet affect `ContentHash` or
+  `FormatFingerprint` (a `TODO(M2)` flags surfacing resize as a change). A
+  `w:pict` (VML), a drawing without `a:blip@embed`, or a missing/wrong-typed image
+  rel falls back to `Opaque` — never throws. **N12**: block-level `w:sdt` (body or
+  cell) unwraps to its `w:sdtContent` blocks (each inner `w:p`/`w:tbl` keeps its own
+  anchor); inline `w:sdt` and `w:smartTag` (nesting allowed) splice their child runs
+  into the paragraph's inline stream and coalesce normally. Formerly-opaque body SDT
+  blocks now expose their inner paragraphs/tables with their own anchors; all
+  pre-existing non-SDT anchors are unchanged. DB007/HC031/HC042 golden snapshots
+  regenerated. (The diagnostic JSON still renders `IrNoteRef`/`IrInlineImage` as
+  `"unsupported"` until the M1.2 writer task.)
 
 ## [6.4.0] - 2026-05-30
 

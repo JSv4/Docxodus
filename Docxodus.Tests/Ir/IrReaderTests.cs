@@ -154,12 +154,15 @@ public class IrReaderTests
     [Fact]
     public void Read_UnknownElement_BecomesOpaque()
     {
-        // w:sdt is still an unmodeled block (N12/SDT-unwrap lands in M1.2 Task 3); w:ptab
-        // (an absolute-position tab) is an unmodeled inline.
+        // w:customXmlInsRangeStart is an unmodeled block (unlike w:sdt, which N12 now unwraps in
+        // M1.2 Task 3); w:ptab (an absolute-position tab) is an unmodeled inline. Read with
+        // FailIfPresent so the default Accept round-trip (which normalizes such synthetic unknown
+        // blocks away before the IR ever sees them) is skipped — this test is about the reader's
+        // opaque mapping, not RevisionProcessor's body normalization.
         var doc = IrTestDocuments.FromBodyXml(
-            "<w:sdt><w:sdtContent><w:p><w:r><w:t>x</w:t></w:r></w:p></w:sdtContent></w:sdt>" +
+            "<w:customXmlInsRangeStart w:id=\"1\"/>" +
             "<w:p><w:r><w:ptab w:relativeTo=\"margin\" w:alignment=\"left\" w:leader=\"none\"/></w:r></w:p>");
-        var ir = IrReader.Read(doc);
+        var ir = IrReader.Read(doc, new IrReaderOptions { RevisionView = RevisionView.FailIfPresent });
 
         Assert.Contains(ir.Body.Blocks, b => b is IrOpaqueBlock);
         var para = ir.Body.Blocks.OfType<IrParagraph>().Single();
