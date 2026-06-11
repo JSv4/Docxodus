@@ -4,6 +4,177 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Document IR — Phase 1 (M1.1–M1.4) complete** — *internal/experimental.* The
+  read-only, immutable, typed, anchor-identified, normalized in-memory DOCX model
+  (`Docxodus/Ir/`, all `internal`) is feature-complete through its Phase-1 gate:
+  core types + reader (M1.1), normalization rules N1–N15 + `ContentHash`/
+  `FormatFingerprint`/`UnmodeledDigest` hashing (M1.2), style/numbering/theme
+  registries + lazy effective formats + all scopes (M1.3), and the markdown
+  projection ported onto the IR as its validating consumer (M1.4). The IR-path
+  markdown emitter reaches **608/668 corpus fixtures byte-equal** with the shipped
+  `WmlToMarkdownConverter` (which stays the untouched production oracle); the 60
+  remaining divergences are fully triaged — accepted oracle bugs (special-char
+  drops, multi-run hyperlink splits, where the IR is *more* correct) plus deferred
+  IR work (textbox/shape body content modeled as opaque, and its downstream
+  header/footer `ScopeHasContent` detection difference). Phase-1 gate met: perf
+  IR-path `Read`+`Emit` 1.90× the oracle's corpus wall time (≤ 2.0× budget,
+  `IrMarkdownPerfBudgetTests`, Trait `Perf`); memory ≈11× the largest-body
+  fixture's main-part XML retained (measured + reported, not gated); architecture
+  doc `docs/architecture/document_ir.md` written. Cutover of the shipped converter
+  to the IR path (decision D3) is **deferred to Phase 2** — the IR path ships as a
+  CI-validated alternative, not the default. No public API / WASM / npm / python
+  surface (Phase 1 is `internal` by design).
+- **Document IR markdown emitter — tables, images, section breaks, settings modes (M1.4 Task 2)** —
+  *internal/experimental.* `IrMarkdownEmitter` now ports the projection's table
+  rendering (simple tables → GFM pipe tables; merges / nesting / over-long cells →
+  the opaque ` ```table rows/cols ` block, via the oracle's exact `CanRenderAsGfm`
+  simplicity predicate and `CellTextForGfm` escaping), in-paragraph section breaks
+  (`{#sec:scope:unid}` + `---` thematic break), the `tbl`/`tr`/`tc`/`sec` anchor-index
+  entries (with `TextPreview` parity), and the `AnchorIdRendering`
+  (FullUnid/Abbreviated/Sequential, same per-(kind,scope) `AnchorIdMap` construction
+  order) and `EmptyParagraphs` settings modes. Images and unmodeled block elements
+  project to nothing, matching the oracle (which emits no `w:drawing`/opaque-block
+  markup). Two additive IR extensions back the port: `IrInlineImage.Unid` (the source
+  `w:drawing`'s `pt:Unid`, equality-neutral) and `IrParagraph.InlineSectionBreakAnchor`
+  (the in-pPr `w:sectPr`'s anchor, captured by the reader so the emitter/index can
+  reproduce the section transition the body walk's pPr skip otherwise hides). Corpus
+  equivalence rises from 205 to 344/668 byte-equal; emitter still never throws.
+- **Document IR markdown emitter scaffold + equivalence harness (M1.4 Task 1)** —
+  *internal/experimental.* New `IrMarkdownEmitter.Emit(IrDocument, settings)`
+  reimplements the markdown projection as an IR consumer (the shipped
+  `WmlToMarkdownConverter` stays the byte-untouched oracle), returning a
+  `MarkdownProjection`-shaped result (markdown + public `AnchorTarget` index).
+  Task-1 scope is BODY paragraphs under DEFAULT settings: headings (`#`-level from
+  the pStyle), plain/empty paragraphs (AnchorOnly trim), bulleted list items
+  (symbol-glyph → `-`, 2-space-per-ilvl indent), block `{#kind:scope:unid}`
+  anchors, inline bold/italic/code/strike with the oracle's exact delimiters and
+  escaping, hyperlinks, tabs, and line breaks. Tables/images/opaque blocks,
+  multipart scopes, section breaks, numbered-counter markers, heading
+  auto-number prefixes, and non-default settings modes are stubbed
+  (TODO(M1.4-T2/T3)). A corpus equivalence harness
+  (`IrMarkdownEquivalenceTests`, Trait `Corpus`) drives both paths over every
+  `TestFiles/*.docx`, compares markdown + body anchor index, writes per-fixture
+  diffs to the gitignored `Docxodus.Tests/Ir/EquivalenceArtifacts/`, and asserts
+  byte-equality on a curated must-pass list plus per-rule unit tests. Baseline:
+  205/668 fixtures byte-equal; emitter never throws (totality).
+- **Document IR remaining scopes + comment targets (M1.3)** —
+  *internal/experimental.* `IrReader` now honors all `IrScopes` flags and reads
+  the header/footer, footnote/endnote, and comment scopes in addition to the body.
+  Header/footer parts are enumerated in the same order as the markdown projection
+  (`hdr1`/`ftr1`… scope names), each walked by the shared block walker into
+  `IrDocument.Headers`/`Footers` with an occurrence kind resolved from the body
+  section `w:headerReference`/`w:footerReference`. Footnotes/endnotes populate
+  `IrNoteStore` keyed by note id (Word-reserved separator/continuation notes
+  skipped via the projection's `IsBoilerplateNote`). Comments populate
+  `IrCommentStore` with author/initials/date and blocks, plus N15 comment-range
+  *targets*: `w:commentRangeStart`/`End`/`w:commentReference` positions tracked
+  during the body walk into per-block `IrCommentTarget(blockAnchor, startChar,
+  endChar)` records (visible-`IrTextRun`-char offsets; one target per block for
+  cross-block ranges; zero-length target for a reference with no range; orphan
+  starts discarded). Comment plumbing stays dropped from the inline stream, so
+  body `ContentHash`/`FormatFingerprint` are byte-stable. The diagnostic JSON
+  document level is now `{"scopes":[…]}` (body first, then hdr\*/ftr\*/fn/en/cmt);
+  all snapshots regenerated (body content/anchors/hashes unchanged modulo the
+  wrapper). Corpus totality holds 668/668 reading every scope.
+- **Document IR effective-format resolution (M1.3)** — *internal/experimental.*
+  New `IrEffectiveFormats(IrDocument)` resolves the *effective* paragraph/run
+  format non-destructively by cascading docDefaults → the paragraph/character
+  style chain (`basedOn`, applied root-first, cycle-guarded, depth ≤ 16) → direct
+  properties, merging per field with later-non-null-wins. `w:rFonts/@w:asciiTheme`
+  indirection on a mapped layer resolves through the theme fonts
+  (major\*→MajorAscii, minor\*→MinorAscii). Toggle properties are last-writer-wins
+  at this fidelity tier (a documented divergence from OOXML toggle-XOR, deferred to
+  M1.4+). Style-layer `w:pPr`/`w:rPr` map through the same `IrReader.MapParaFormat`/
+  `MapRunFormat` mappers as direct props (refactored to internal statics); the
+  effective record's `UnmodeledDigest` is the direct record's. Hash-neutral (no
+  reader output change; snapshots byte-stable). Per-style-chain memo cache,
+  lock-guarded.
+- **Internal Document IR groundwork (M1.1)** — *internal/experimental, no public
+  surface.* A typed, normalized, anchor-identified, immutable in-memory model of a
+  Word document under `Docxodus/Ir/`: the IR type model (blocks, inlines, formats,
+  document/scopes), content-derived SHA-256 hashing (`IrHasher` — `ContentHash` +
+  `FormatFingerprint`), and a total body-scope reader (`IrReader.Read`) that
+  preserves anything unmodeled as `Opaque` nodes so it never throws on
+  weird-but-valid OOXML. Adds a stable, hand-written diagnostic JSON projection
+  (`IrDiagnosticJson.Write`, spec §9 — a debugging/test format, **not** a versioned
+  contract) plus conformance tests: reader totality over the entire `TestFiles/`
+  corpus and golden snapshots over curated fixtures. Groundwork for the planned
+  IR/diff-engine program; not referenced by any shipped converter or wrapper yet.
+- **Document IR normalization rules (M1.2, partial)** — *internal/experimental.*
+  `IrReader` now applies five more §5.2 normalization rules so equality-irrelevant
+  OOXML noise stops affecting hashes: **N3** drops `w:bookmarkStart`/`w:bookmarkEnd`
+  (at paragraph level and inside runs); **N4** drops `w:lastRenderedPageBreak`
+  (layout cache); **N7** maps `w:noBreakHyphen`→U+2011 and `w:softHyphen`→U+00AD as
+  text that participates in N5 coalescing; **N8** maps `w:sym` with a parseable hex
+  `@w:char` to that BMP code point as text, folding the whole `w:sym` element
+  (including `@w:font`) into the run's `UnmodeledDigest` so the glyph font still
+  flips the `FormatFingerprint` (unparseable `w:sym` stays `Opaque`); and the
+  strip half of **N15** drops comment plumbing (`w:commentRangeStart`/`End`,
+  `w:commentReference`) from the inline stream (target-span recording into the
+  comment store lands in M1.3). All five previously surfaced as `IrOpaqueInline`
+  and perturbed hashes. Golden snapshots regenerated accordingly; block anchors are
+  unchanged.
+- **Document IR fields & hyperlinks (M1.2, N9 + N14)** — *internal/experimental.*
+  `IrReader` now promotes two more constructs from `Opaque` to typed inlines.
+  **N14**: `w:hyperlink` → `IrHyperlink` — child runs are walked through the same
+  inline pipeline as direct paragraph runs (empty-drop + N5 coalescing within the
+  link), an `@r:id` resolves against the main part's hyperlink relationships to the
+  external URI (a missing relationship tolerates to `Target=null`), and `@w:anchor`
+  internal links use the convention `Target = "#" + anchor` (`InternalTarget`
+  bookmark resolution is deferred). The target is bracketed into `ContentHash`
+  (sentinels `0x08`/`0x09`), so a target change is a content change and linked text
+  is never content-equal to identical plain text; the link's run formats participate
+  in the block `FormatFingerprint` in order. **N9**: `w:fldSimple` and complex
+  `w:fldChar begin/separate/end` run sequences → `IrFieldRun(Instruction,
+  CachedResult)` via a depth-counting field state machine (nested fields flatten
+  into the outermost; an unterminated `begin` falls back to opaque losslessly). A
+  field contributes only its cached-result bytes to `ContentHash` (no instruction,
+  no sentinels), so a `PAGE` field showing "5" is content-equal to a literal "5".
+  HC031 golden snapshot regenerated; block anchors unchanged. (The diagnostic JSON
+  still renders the new inline kinds as `"unsupported"` until the M1.2 writer task.)
+- **Document IR note refs, images & SDT unwrap (M1.2, N12)** —
+  *internal/experimental.* `IrReader` promotes two more inline constructs and
+  unwraps content controls. Note references (`w:footnoteReference`/
+  `w:endnoteReference`) → `IrNoteRef(Kind, NoteId)`; only the kind sentinel
+  (`0x05`/`0x06`) feeds `ContentHash` — the note id is positional bookkeeping, so
+  renumbering notes never flips a body hash, while footnote and endnote refs stay
+  distinguishable. Inline images (a `w:drawing` whose descendant `a:blip` has an
+  `@r:embed` resolving to an image part) → `IrInlineImage(PartUri, ImageBytesHash,
+  WidthEmu, HeightEmu, AltText)`; the part bytes are SHA-256'd (cached per embed rel
+  id so a reused logo hashes once) and `ContentHash` mixes the sentinel `0x07` plus
+  that bytes hash, so "same image re-added under a different rel id" is content-equal
+  while different bytes diverge. Extent (`wp:extent`) and alt text (`wp:docPr/@descr`
+  ?? `@name`) are surfaced but do **not** yet affect `ContentHash` or
+  `FormatFingerprint` (a `TODO(M2)` flags surfacing resize as a change). A
+  `w:pict` (VML), a drawing without `a:blip@embed`, or a missing/wrong-typed image
+  rel falls back to `Opaque` — never throws. **N12**: block-level `w:sdt` (body or
+  cell) unwraps to its `w:sdtContent` blocks (each inner `w:p`/`w:tbl` keeps its own
+  anchor); inline `w:sdt` and `w:smartTag` (nesting allowed) splice their child runs
+  into the paragraph's inline stream and coalesce normally. Formerly-opaque body SDT
+  blocks now expose their inner paragraphs/tables with their own anchors; all
+  pre-existing non-SDT anchors are unchanged. DB007/HC031/HC042 golden snapshots
+  regenerated.
+- **Document IR M1.2 complete — diagnostic writer in lockstep + completeness
+  guard** — *internal/experimental.* The diagnostic JSON writer now renders the
+  four promoted inline kinds with real branches instead of an `"unsupported"`
+  fallback: `IrFieldRun` → `{"kind":"field","instruction","cachedResult":[…recursive
+  inlines…]}`, `IrHyperlink` → `{"kind":"hyperlink","target"(omitted when
+  null),"inlines":[…]}`, `IrNoteRef` → `{"kind":"noteRef","noteKind","noteId"}`, and
+  `IrInlineImage` → `{"kind":"image","partUri","imageBytesHash","widthEmu","heightEmu",
+  "altText"(omitted when null)}` (`partUri` is the relative part URI — no filesystem
+  path leaks). A reflection-driven completeness guard now asserts every concrete
+  `IrInline`/`IrBlock` subtype serializes to a known kind (never `"unsupported"`), so
+  the writer can no longer drift behind a new reader kind. Every `"kind":"unsupported"`
+  disappears from the golden snapshots in favor of typed field/hyperlink/note-ref/image
+  objects; all block anchors and content/format hashes are byte-unchanged (the writer
+  does not affect hashes). With this, **M1.2 is complete**: normalization rules N3–N15
+  (strip-half), typed fields/hyperlinks/note-refs/images, and SDT/smartTag unwrap.
+  Also hardened: `ResolveImagePart` narrows its catch to package/IO-shaped exceptions
+  (OOM/systemic escape), and SDT/smartTag unwrap recursion (block and inline) is now
+  depth-capped at 64 with an opaque fallback beyond the cap (totality without stack
+  risk on adversarially-deep nesting).
+
 ## [6.4.0] - 2026-05-30
 
 ### Added

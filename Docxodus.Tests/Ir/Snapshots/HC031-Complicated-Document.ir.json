@@ -1,0 +1,2841 @@
+{
+  "scopes": [
+    {
+      "scope": "body",
+      "blocks": [
+        {
+          "anchor": "p:body:cdc83f56a4a73265099dc1ffdff63665",
+          "type": "paragraph",
+          "contentHash": "8dafc43687cac962111f2f339a35c11455709e4cb73f3c8c73bcff56958a73b3",
+          "formatFingerprint": "638e36dfd2c84b6baf5ea6745b9fdf4acd6fe3ee8b775a408688890125239ee0",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point.",
+              "format": {
+                "fontAscii": "Wide Latin"
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:8def99db9dcb4393d8b714d9525e78a0",
+          "type": "paragraph",
+          "contentHash": "b650cee0de38f6b5244324b6a23d41ec2df5cc293d6317bb1a632d413b4e74ab",
+          "formatFingerprint": "89a548cdef12da78a12c25e1b3f8e782b46224f370a5da7fc8aaf5c8eeefbb32",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you click Online Video, you can paste in the embed code for the video you want to add.",
+              "format": {
+                "fontAscii": "Times New Roman",
+                "sizeHalfPoints": 40
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:c517c846d9d16bfa65412e156865571d",
+          "type": "paragraph",
+          "contentHash": "42572b4e881f249cf9bf597ec9f4f3171fe1a57739904a42cd50f33861e729ff",
+          "formatFingerprint": "eccadc08d721321e3ea7437ab97b928c71b860b5bb8f3cc7e47a893b8457da9c",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "You can also type a keyword to search online for the video that best fits your document.",
+              "format": {
+                "fontAscii": "Consolas",
+                "sizeHalfPoints": 12
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:5a4ae35fbf203edf47f680776c6b914f",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:4fb92c3285e795f2749cc4d42be840a4",
+          "type": "paragraph",
+          "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
+          "formatFingerprint": "84d74a2b5b26fe5bc2e4efde788b6c5b4c0bb24802f9042fbec2ee3edd4c115d",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:041339bad731283d76343ba44672dc80",
+          "type": "paragraph",
+          "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
+          "formatFingerprint": "5936d4acc0e0ff3b93224c7c38084a566906c36449d241e1d9faa0c1f2ea86fb",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point.",
+              "format": {
+                "bold": true,
+                "italic": true,
+                "underline": {
+                  "kind": "Single"
+                },
+                "highlight": "yellow"
+              }
+            },
+            {
+              "kind": "text",
+              "text": " When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:f6cad3d1ec16fa2d97df20c602d3a7ba",
+          "type": "paragraph",
+          "contentHash": "3e3cee63a3bd83377925dc10e5eec4aecfee2d6ddcf1523e674e2b3c782c6fcc",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "opaque",
+              "element": "{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent",
+              "hash": "95862c66450532709dd4a8c88cf98cd47535cd724130d2a8eef9f2e68894542c"
+            },
+            {
+              "kind": "opaque",
+              "element": "{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent",
+              "hash": "49f2f64b31bd642e14191366a4d994f019a3a5b2b737719f97f06dca3e8ac349"
+            },
+            {
+              "kind": "opaque",
+              "element": "{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent",
+              "hash": "144f0fde6a8cea9fd47629463602c97e9d21418ef928aae1e30e5ab08d2e0b1f"
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:63226bf00f45c4792f5ac4ef961ce6a3",
+          "type": "paragraph",
+          "contentHash": "c79b932e1e1da3c0e098e5ad2c422937eb904a76cf61d83975a74a68fbb04b99",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "break",
+              "breakKind": "Page"
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:4d423c81a3f84b13637927ce8b8687b8",
+          "type": "paragraph",
+          "contentHash": "481e7d2a3f70258e7b3f894eccaa737ef6690188bc3aafb820d31d2aa3468e9e",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+          "format": {
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Heading1",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:38b487020f9c4dd76659536eac2b250a",
+          "type": "paragraph",
+          "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:66cfba82362789f79508ede64c095aec",
+          "type": "paragraph",
+          "contentHash": "a9378c10464199fd954ca2219dc17aacb28f492289b9d8c1404e40721771b5a6",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:3694892972801008663298677806c526",
+          "type": "paragraph",
+          "contentHash": "3291955e900530da1940bdce97fa0f944e26627f2174172d0e4d97ed9c5510c0",
+          "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
+          "format": {
+            "styleId": "Heading2"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Heading 2",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:756a334cc6927cc3220837997247d6fc",
+          "type": "paragraph",
+          "contentHash": "18d57068089ff6923840662f2c067d687817fb5b9993bcf831112e1fb7be400c",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Themes and styles also help keep your document coordinated. When you click Design and choose a new Theme, the pictures, charts, and SmartArt graphics change to match your new theme. When you apply styles, your headings change to match the new theme.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:209201902e7cde536652c7320a1776c8",
+          "type": "paragraph",
+          "contentHash": "ecb9b1f951e22a45012b20f58c0058c7990b8c11db636e7376a08db232687bf4",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Save time in Word with new buttons that show up where you need them. To change the way a picture fits in your document, click it and a button for layout options appears next to it. When you work on a table, click where you want to add a row or a column, and then click the plus sign.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:7b6c7fff1241b69bc2e9abb6f0b15b4f",
+          "type": "paragraph",
+          "contentHash": "6bd0f57253665a249e9f26226f8cc7bc093d7d5543d9d92ddd6ff0f029f8e9f5",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Reading is easier, too, in the new Reading view. You can collapse parts of the document and focus on the text you want. If you need to stop reading before you reach the end, Word remembers where you left off - even on another device.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:933923954acd4ae619d469db0dd3a51f",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:b07ff71420d877a0b35a200423b41746",
+          "type": "paragraph",
+          "contentHash": "ffb3b6479c74867d81feed70b88c8215a89d7522730654521b439d1e147339fa",
+          "formatFingerprint": "fdf132b3a0e5cc199d3f2b9f4f2fb58227fc203882f340d578568de6200d88ab",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document. ",
+              "format": {}
+            },
+            {
+              "kind": "noteRef",
+              "noteKind": "Endnote",
+              "noteId": "1"
+            },
+            {
+              "kind": "text",
+              "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:651e0cf9a3cee409c6ae71f062b1c706",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "li:body:291a254221792e70f9b72168781faec5",
+          "type": "paragraph",
+          "contentHash": "8dafc43687cac962111f2f339a35c11455709e4cb73f3c8c73bcff56958a73b3",
+          "formatFingerprint": "358493755dec63121c556ea3e41f6f7535e7c3ed87c267b4c3e8c779f4914ba5",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 3,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:e7cb93eaa6ea4a6d681e38da83668f5b",
+          "type": "paragraph",
+          "contentHash": "b650cee0de38f6b5244324b6a23d41ec2df5cc293d6317bb1a632d413b4e74ab",
+          "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 3,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you click Online Video, you can paste in the embed code for the video you want to add.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:132d31aca84ee72420a0c61e30b5c253",
+          "type": "paragraph",
+          "contentHash": "42572b4e881f249cf9bf597ec9f4f3171fe1a57739904a42cd50f33861e729ff",
+          "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 3,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:ff94a1938d1130e75b6fb45eea0cdabe",
+          "type": "paragraph",
+          "contentHash": "6db490be8d0509c507016c823e67bdcbfb2d0064816dd16865e3495abee579a2",
+          "formatFingerprint": "358493755dec63121c556ea3e41f6f7535e7c3ed87c267b4c3e8c779f4914ba5",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 3,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:7a2372f49ceab02a90d4e77371cd7fb2",
+          "type": "paragraph",
+          "contentHash": "35fe11d2360800ef7424a9bd0e1eae73161e04c9e0e5432af6ea0086fa034ac1",
+          "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 3,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "For example, you can add a matching cover page, header, and sidebar.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:fe6b4a76e50a4a56d9d1258c164eb5ab",
+          "type": "paragraph",
+          "contentHash": "d729a1bbc284b5b79c4a258d37310efbc974e58768e8dd632c2aa2f8a3c7a030",
+          "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 3,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:b2df62cef940c03433d6caed8d59549d",
+          "type": "paragraph",
+          "contentHash": "4be0301a57c82b73ad9a6d60fa80d41ea1026d97548b3cb838fb06a71d688bd1",
+          "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 3,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Themes and styles also help keep your document coordinated.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:ab17da2a687cac65c1fce83226600d31",
+          "type": "paragraph",
+          "contentHash": "f5cf0fb2d5d13de85e3e7f3e6a6a07fa921d5166b94bf8e4c44ad663084cd2e8",
+          "formatFingerprint": "76579e5131c596f0d506cc2a4bc4c6fd7c593acfb263bdd43a2e7d6739fa2db1",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 3,
+            "ilvl": 2,
+            "numberFormat": "lowerRoman",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you click Design and choose a new Theme, the pictures, charts, and SmartArt graphics change to match your new theme.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:fc9eae025eda13d85ff01de3b972dfd2",
+          "type": "paragraph",
+          "contentHash": "ae6f0370aa39d566a7d7295420cb132c38721016c8fdb81781874d15b1101b8e",
+          "formatFingerprint": "358493755dec63121c556ea3e41f6f7535e7c3ed87c267b4c3e8c779f4914ba5",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 3,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you apply styles, your headings change to match the new theme.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:1a66b31f6309867b1621de05f9d9315a",
+          "type": "paragraph",
+          "contentHash": "1321b948327c0062060a64270fdb1af1c984bf17e5171344ffc49b30a59c96a6",
+          "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 3,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Save time in Word with new buttons that show up where you need them.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:4b00f1e5e5cbb8f5f332e8458908689d",
+          "type": "paragraph",
+          "contentHash": "8dafc43687cac962111f2f339a35c11455709e4cb73f3c8c73bcff56958a73b3",
+          "formatFingerprint": "402aaf5366906489ce8c1eddb6b8444234e167c34a1cef6bc19da5de29701ae0",
+          "list": {
+            "numId": 2,
+            "abstractNumId": 1,
+            "ilvl": 0,
+            "numberFormat": "bullet",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:987a9df354216ae30f994404add44d23",
+          "type": "paragraph",
+          "contentHash": "b650cee0de38f6b5244324b6a23d41ec2df5cc293d6317bb1a632d413b4e74ab",
+          "formatFingerprint": "6e525c1a4a22b2151ba1ccdfe7e92e153d3a3eb8f884f126974f34f7efd883ba",
+          "list": {
+            "numId": 2,
+            "abstractNumId": 1,
+            "ilvl": 1,
+            "numberFormat": "bullet",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you click Online Video, you can paste in the embed code for the video you want to add.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:fc488a8f3b4cad8df305904bb9e46e3a",
+          "type": "paragraph",
+          "contentHash": "42572b4e881f249cf9bf597ec9f4f3171fe1a57739904a42cd50f33861e729ff",
+          "formatFingerprint": "6e525c1a4a22b2151ba1ccdfe7e92e153d3a3eb8f884f126974f34f7efd883ba",
+          "list": {
+            "numId": 2,
+            "abstractNumId": 1,
+            "ilvl": 1,
+            "numberFormat": "bullet",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:0c24263e43c74ac0002f688ddef235ee",
+          "type": "paragraph",
+          "contentHash": "6db490be8d0509c507016c823e67bdcbfb2d0064816dd16865e3495abee579a2",
+          "formatFingerprint": "402aaf5366906489ce8c1eddb6b8444234e167c34a1cef6bc19da5de29701ae0",
+          "list": {
+            "numId": 2,
+            "abstractNumId": 1,
+            "ilvl": 0,
+            "numberFormat": "bullet",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:42ae7f0c8bd2b6af6dcb943c76ff7d87",
+          "type": "paragraph",
+          "contentHash": "35fe11d2360800ef7424a9bd0e1eae73161e04c9e0e5432af6ea0086fa034ac1",
+          "formatFingerprint": "6e525c1a4a22b2151ba1ccdfe7e92e153d3a3eb8f884f126974f34f7efd883ba",
+          "list": {
+            "numId": 2,
+            "abstractNumId": 1,
+            "ilvl": 1,
+            "numberFormat": "bullet",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "For example, you can add a matching cover page, header, and sidebar.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:97029a0f6045e31fe506928def8ba1ac",
+          "type": "paragraph",
+          "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
+          "formatFingerprint": "359ad7af69b1bf02987ae3fb9d420998839c6b15582b6c05af953a9f1ea2236f",
+          "format": {
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -720
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:383c4d367b263d23090aeabec739133a",
+          "type": "paragraph",
+          "contentHash": "6db490be8d0509c507016c823e67bdcbfb2d0064816dd16865e3495abee579a2",
+          "formatFingerprint": "08df5f4776bbdef707459cc18c6b470e160922719e637487a4b60005f6c35565",
+          "format": {
+            "indentFirstLineTwips": 720
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:52a11f591af0d18cbe60429b668f8651",
+          "type": "paragraph",
+          "contentHash": "35fe11d2360800ef7424a9bd0e1eae73161e04c9e0e5432af6ea0086fa034ac1",
+          "formatFingerprint": "d15ee161074a0e3c1dcd89945044c80142e550ee10484a83a5a67f9b19960a69",
+          "format": {
+            "indentLeftTwips": 1440
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "For example, you can add a matching cover page, header, and sidebar.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:5c9fb06f0017a6436d73d03ae4520368",
+          "type": "paragraph",
+          "contentHash": "d729a1bbc284b5b79c4a258d37310efbc974e58768e8dd632c2aa2f8a3c7a030",
+          "formatFingerprint": "7cb9be4cff952e4c9023e003adc8e5d0c958db197276f2e6b97022e4202a448f",
+          "format": {
+            "indentLeftTwips": 2880
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:b8cb54edb192e0a9554e96508785cccd",
+          "type": "paragraph",
+          "contentHash": "f03d8065cd301c1a01c2032403ef9250c8656c7ff333551e13cc0766b040b83c",
+          "formatFingerprint": "5936d4acc0e0ff3b93224c7c38084a566906c36449d241e1d9faa0c1f2ea86fb",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point.",
+              "format": {
+                "bold": true,
+                "italic": true,
+                "underline": {
+                  "kind": "Single"
+                },
+                "highlight": "yellow"
+              }
+            },
+            {
+              "kind": "text",
+              "text": " When you click Online Video, you can paste. You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "tbl:body:c8d7175430d2890a576660d37129f163",
+          "type": "table",
+          "contentHash": "06a1687e28229357361ca4baaf235248284222d45623e902d56d6be9a31f1133",
+          "formatFingerprint": "e72534b0e0fb6c2c771482beaabfca75378258d6881baa16ca5a7edb3ed658fe",
+          "unmodeledTablePropsDigest": "2c6e4dac94f757b4dbbddf75f49abc468ecfb03eadeb1fd08a42a6796824d478",
+          "rows": [
+            {
+              "anchor": "tr:body:e8bdb46a6049b85bf736a116172aa698",
+              "contentHash": "f2166272b2e219c0a1202b689fa9cbe01f79be48899eca7e3f07bf7013c3ced8",
+              "cells": [
+                {
+                  "anchor": "tc:body:7e5725c56b3c6a509d2e7f94eb039700",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "e0ecc614092446c2f0d97880cbe4bf717dd3ed36179ed6c2f37d70c8b6d91e69",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:0257ade0295eaca225f66a2c9eb98716",
+                      "type": "paragraph",
+                      "contentHash": "16aba5393ad72c0041f5600ad3c2c52ec437a2f0c7fc08fadfc3c0fe9641d7a3",
+                      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Lorem ipsum dolor sit amet",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:2dd410b9b660c7d324f4fd9b821728d9",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "14724778ddafb3363a241f2d17bf5cbbc28d76e88798fe43911877a108d14be8",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:88b12b9f8d611df786a7ade784b22a01",
+                      "type": "paragraph",
+                      "contentHash": "8b79c6264973677f9b797286341c5ceeefb01ffc0e86be3579c83d4490a3a9d5",
+                      "formatFingerprint": "4f38a496d9cc562c20b90a48035100af9e04b827d81768b865c1dfc52a72b9a4",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Consectetuer adipiscing elit",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:cd1109d22610639c5b2e9bd4ae570c7a",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "caf175706f1ed677d106c654fcc55083e4755011a650ebc6fdbefdbd46178c51",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:65acd054a5171445b9d077f19764e9e9",
+                      "type": "paragraph",
+                      "contentHash": "218e376b7eac07f335f7bfe19af10617d8bdb1f57b380a479f7c461975905eab",
+                      "formatFingerprint": "ad6789b8c28b74a96b3424d2fa45c9e3992ce92abd1c3b52fe3173d78c3d20c9",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Maecenas porttitor congue massa.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:0ccf61cd16ddae9157a69e40b104eac2",
+              "contentHash": "222cf95524f27f7f44be227cd107045a6355a82849d8d28e430342f18f3e266d",
+              "cells": [
+                {
+                  "anchor": "tc:body:53b3533e536d099b8499e0bb6378d9f3",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "93ec8c9ce5da124cc0930632ff42360bc1cd77cf0aa15b86a03a7d5584de7181",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:6f38e307a7cbd15cfd03c61363a8a194",
+                      "type": "paragraph",
+                      "contentHash": "26d228663f13a88592a12d16cf9587caab0388b262d6d9f126ed62f9333aca94",
+                      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "400",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:5b1f231bc6b184f28049076c504e4d8f",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "7dee73c872a24da1a68151f0e783e6e98155ff1157003ccc3f3d72504d60bf40",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:3d123e77658fec0a6387cb13c2630322",
+                      "type": "paragraph",
+                      "contentHash": "0604cd3138feed202ef293e062da2f4720f77a05d25ee036a7a01c9cfcdd1f0a",
+                      "formatFingerprint": "c82e9f000d98d4248c86406a7a2ac873165d10d6d28ba60db7a759d8dad67821",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "500",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:f765cecb87d2cd42a046af82e92eebfc",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "512ce3c0ca968bfae4c76724034d92d1f2abbc2ec959ec86b8649d2678eda640",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:0ea2729ea59bae62aa55cdebbf2409a6",
+                      "type": "paragraph",
+                      "contentHash": "284b7e6d788f363f910f7beb1910473e23ce9d6c871f1ce0f31f22a982d48ad4",
+                      "formatFingerprint": "c82e9f000d98d4248c86406a7a2ac873165d10d6d28ba60db7a759d8dad67821",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "600",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:c88b96414bcf4a9b360bc2520e3a20e3",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:2a9b4a50c71e2cb0b0ea557bb8072bb9",
+          "type": "paragraph",
+          "contentHash": "5eb6f4d9d8ef75a75bf672d159a21a0750a241433170fe99344941cd762260bf",
+          "formatFingerprint": "bf5f0fe9e6472c4b4f5f9be8939026991bb763d0b5128ff01903a6e9eca192e8",
+          "format": {
+            "justification": "Right"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document. To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:6b13e6c3ff4ff6e32036d80f2bad6a6c",
+          "type": "paragraph",
+          "contentHash": "c7cd053ca1cec46bbeea9f8df960939ed68cb7ee3fcd8f31ae30669a14fbb572",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Following is a hyperlink.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:c98273b1ef6ac5d6fbc2857427c14261",
+          "type": "paragraph",
+          "contentHash": "4e7de5f3f8fd80bd7a44553b45dc07ec275bcbf473ae9de2e6b91dda275dd665",
+          "formatFingerprint": "39cf31b573843c0776cfc046eb6c2574ef169dbb878616fa3db39e0bbbd1a02a",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "hyperlink",
+              "target": "http://www.ericwhite.com/",
+              "inlines": [
+                {
+                  "kind": "text",
+                  "text": "EricWhite.com",
+                  "format": {
+                    "styleId": "Hyperlink"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:26a93332e1b268cb5c1f01fec4a8b40f",
+          "type": "paragraph",
+          "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:4cc4c45b62bdb21c5858bb5957eb6915",
+          "type": "paragraph",
+          "contentHash": "a9378c10464199fd954ca2219dc17aacb28f492289b9d8c1404e40721771b5a6",
+          "formatFingerprint": "3c65d1b7918edbae4ddacf1293a8ef39fd612cc94eeac37f5a798ca5e8fd891c",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "To ",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": "make your document look professionally",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": " produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:73cdfd44f05f36aeb2b7a9f0235ce69d",
+          "type": "paragraph",
+          "contentHash": "7c7ec6686e1b779f393b0df186070ad58ee4e1593c64fc38db0d7dd18eef16ae",
+          "formatFingerprint": "b0eed4e88374ddc0ae6d7fb3b0cab7dcb1f4e98f421026049484e063990e82f5",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document. To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:3a32daf6e84fa77e6603053d86a8e8ea",
+          "type": "paragraph",
+          "contentHash": "8dafc43687cac962111f2f339a35c11455709e4cb73f3c8c73bcff56958a73b3",
+          "formatFingerprint": "5dd23a893da54c72e3c3a0d400e2e3778f11c821bdf92fea763e66a2ec027565",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point.",
+              "format": {
+                "bold": true,
+                "sizeHalfPoints": 36,
+                "colorHex": "262626"
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:e73c568afd3b94d90852b98573414004",
+          "type": "paragraph",
+          "contentHash": "b650cee0de38f6b5244324b6a23d41ec2df5cc293d6317bb1a632d413b4e74ab",
+          "formatFingerprint": "1383d2ae5181d8d5267a6a6a4500c488c897ad1f67da07694ed335fade788952",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you click Online Video, you can paste in the embed code for the video you want to add.",
+              "format": {
+                "sizeHalfPoints": 40
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:56cd554da10210a059e40b6ac0b70c4e",
+          "type": "paragraph",
+          "contentHash": "42572b4e881f249cf9bf597ec9f4f3171fe1a57739904a42cd50f33861e729ff",
+          "formatFingerprint": "84c63c796558dae530e05536182f2e9b5769227bfa2c6dbbc488bd3b070f36eb",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "You can also type a keyword to search online for the video that best fits your document.",
+              "format": {
+                "bold": true,
+                "colorHex": "F7CAAC"
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:71b6d81c422c61f046586c75ad3f8f84",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:9a8c788324e61e1ab15dac8d11b5f29f",
+          "type": "paragraph",
+          "contentHash": "1431dfa59803bbf5039048b4bb60b40c5ce8a8f0b135f8a0617fe75914a6ddbe",
+          "formatFingerprint": "fdf132b3a0e5cc199d3f2b9f4f2fb58227fc203882f340d578568de6200d88ab",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a ",
+              "format": {}
+            },
+            {
+              "kind": "noteRef",
+              "noteKind": "Footnote",
+              "noteId": "1"
+            },
+            {
+              "kind": "text",
+              "text": "powerful way to help you prove your point.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:110cf3da4bfa7fc821651ab45a1f9c73",
+          "type": "paragraph",
+          "contentHash": "71dd8bc61b5db980262e9f5d9169dd36f8e3987a727202b4f6f18ed781ea49a2",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Following hyperlink is to a bookmark on this same page.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:1a0db1b5fdf712e207f59ccc0a52e62e",
+          "type": "paragraph",
+          "contentHash": "0f6b8f9cbc9406d9fa2ef216ede8b3ae1a212410515f0b304cf0245021b09994",
+          "formatFingerprint": "a591954d65002e7beaaed55bc44f11b9e24a0d6a502bb6eddf689937d11257f6",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "hyperlink",
+              "target": "#ABookmark",
+              "inlines": [
+                {
+                  "kind": "text",
+                  "text": "Video provides a powerful",
+                  "format": {
+                    "styleId": "Hyperlink"
+                  }
+                }
+              ]
+            },
+            {
+              "kind": "text",
+              "text": " way to help you prove your point.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:f8bf982b1d5bcdbceeae22f5020b95d9",
+          "type": "paragraph",
+          "contentHash": "b650cee0de38f6b5244324b6a23d41ec2df5cc293d6317bb1a632d413b4e74ab",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you click Online Video, you can paste in the embed code for the video you want to add.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:f436b204daa87a06ed68f4ae10ad5b64",
+          "type": "paragraph",
+          "contentHash": "f5cf0fb2d5d13de85e3e7f3e6a6a07fa921d5166b94bf8e4c44ad663084cd2e8",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you click Design and choose a new Theme, the pictures, charts, and SmartArt graphics change to match your new theme.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:51e849612d166c4757dc5a004b2716ea",
+          "type": "paragraph",
+          "contentHash": "6f7dc5d96170d013ba3b7a83d319b578e4d2869b3042b3e62735c5aff22d2324",
+          "formatFingerprint": "2c0b22f3f27a3826df070d416afc91402fc8cb30b8d46b8c7b2f11f6602ffb29",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "This is the bookmark here.",
+              "format": {
+                "highlight": "yellow"
+              }
+            },
+            {
+              "kind": "text",
+              "text": " Your headings change to match the new theme.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:88427fe85b950cecc2d24e9974ddcb1c",
+          "type": "paragraph",
+          "contentHash": "1321b948327c0062060a64270fdb1af1c984bf17e5171344ffc49b30a59c96a6",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Save time in Word with new buttons that show up where you need them.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:272fb51fcafe40253f9007af9b418758",
+          "type": "paragraph",
+          "contentHash": "3b9a199c1e366d3af57a32cda257dd916e7e129651f423a76e9e99fbd56c10b9",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "field",
+              "instruction": " DATE \\@ \u0022dddd, MMMM d, yyyy\u0022 ",
+              "cachedResult": [
+                {
+                  "kind": "text",
+                  "text": "Tuesday, July 28, 2015",
+                  "format": {}
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:6806306bb8420841faee36472d583176",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "tbl:body:1a45e2fbb3b8f8b210fdc984f054c9b8",
+          "type": "table",
+          "contentHash": "5880c925fde1fbb651a29fc36b849e18e06e668aa8adf335e5cf33702d651a47",
+          "formatFingerprint": "a0e7ec7d344a9dcca33fb67ab22c34665310a92cfbcfdf9c6e7511c34a98f0e4",
+          "unmodeledTablePropsDigest": "927ce4fc46968e260da586201418344b8f87aeb294e5c60208894965bf2c13c6",
+          "rows": [
+            {
+              "anchor": "tr:body:7c8023eee1329d28746ffc26d91cf695",
+              "contentHash": "f2166272b2e219c0a1202b689fa9cbe01f79be48899eca7e3f07bf7013c3ced8",
+              "cells": [
+                {
+                  "anchor": "tc:body:3595bc5ae367117e296d78d17399786a",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "e0ecc614092446c2f0d97880cbe4bf717dd3ed36179ed6c2f37d70c8b6d91e69",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:be71dab5176cfb3df82211a4f875f9ea",
+                      "type": "paragraph",
+                      "contentHash": "16aba5393ad72c0041f5600ad3c2c52ec437a2f0c7fc08fadfc3c0fe9641d7a3",
+                      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Lorem ipsum dolor sit amet",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:2e1399299874347601c3ab70bdd0dd0c",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "14724778ddafb3363a241f2d17bf5cbbc28d76e88798fe43911877a108d14be8",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:121048f44519598dbab2a24b200e811f",
+                      "type": "paragraph",
+                      "contentHash": "8b79c6264973677f9b797286341c5ceeefb01ffc0e86be3579c83d4490a3a9d5",
+                      "formatFingerprint": "4f38a496d9cc562c20b90a48035100af9e04b827d81768b865c1dfc52a72b9a4",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Consectetuer adipiscing elit",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:c1270b87424a7974cadbc729d9df1728",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "caf175706f1ed677d106c654fcc55083e4755011a650ebc6fdbefdbd46178c51",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:38bda13473b310d200d3464766bd66dc",
+                      "type": "paragraph",
+                      "contentHash": "218e376b7eac07f335f7bfe19af10617d8bdb1f57b380a479f7c461975905eab",
+                      "formatFingerprint": "ad6789b8c28b74a96b3424d2fa45c9e3992ce92abd1c3b52fe3173d78c3d20c9",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Maecenas porttitor congue massa.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:252eb99fb6b6d940011b00fbf1f36083",
+              "contentHash": "19e8f169d71a01e5ca18527d13f0635c04822f5bd26465cfd65d6c3cb6f634e1",
+              "cells": [
+                {
+                  "anchor": "tc:body:d611ad45ce9fc9de24236bad44615416",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "c4e8e6cc76fed9189aa9dcbd6c7bb10cf9e55ca6d69087f2538270bb25cd6edf",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:9e94a484a2907b5f48f1e974001dab98",
+                      "type": "paragraph",
+                      "contentHash": "ad57366865126e55649ecb23ae1d48887544976efea46a48eb5d85a6eeb4d306",
+                      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "100",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:382750e4ef5a1f346c3db09ee95ffc22",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "8866bc80d593adfd7e3ebdc62c61e26d90ac702f3e157208778017539229dc77",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:228c3c5304af00bc9ffb17f95447946f",
+                      "type": "paragraph",
+                      "contentHash": "27badc983df1780b60c2b3fa9d3a19a00e46aac798451f0febdca52920faaddf",
+                      "formatFingerprint": "8b5b079266ca5ddeacf9a92bdc6e01851dfdfa1a12c3c1876d7fd547fb64cc29",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "200",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:9d30efa1af8778f5dc71087d4c8c1f5b",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "a9c7f0c18e9cb08102bfc22752d37a0300b909ead200fb02d782fcb5dd7d207c",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:e72718e116912100119679d94d2863f7",
+                      "type": "paragraph",
+                      "contentHash": "983bd614bb5afece5ab3b6023f71147cd7b6bc2314f9d27af7422541c6558389",
+                      "formatFingerprint": "8b5b079266ca5ddeacf9a92bdc6e01851dfdfa1a12c3c1876d7fd547fb64cc29",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "300",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:33f8bd80ed7b5e6ba5cb4b71536fdbf8",
+              "contentHash": "222cf95524f27f7f44be227cd107045a6355a82849d8d28e430342f18f3e266d",
+              "cells": [
+                {
+                  "anchor": "tc:body:224578c16824aeff9a2dfc944ada3538",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "93ec8c9ce5da124cc0930632ff42360bc1cd77cf0aa15b86a03a7d5584de7181",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:7014b2fd8faf0f397fe58def0b3bf44f",
+                      "type": "paragraph",
+                      "contentHash": "26d228663f13a88592a12d16cf9587caab0388b262d6d9f126ed62f9333aca94",
+                      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "400",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:3f072be67a04259031d2b8f5aaea9181",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "7dee73c872a24da1a68151f0e783e6e98155ff1157003ccc3f3d72504d60bf40",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:398e15deebbf8fdf07d38c44bf5db521",
+                      "type": "paragraph",
+                      "contentHash": "0604cd3138feed202ef293e062da2f4720f77a05d25ee036a7a01c9cfcdd1f0a",
+                      "formatFingerprint": "c82e9f000d98d4248c86406a7a2ac873165d10d6d28ba60db7a759d8dad67821",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "500",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:bce75a9db3a7ab73fa3b6d728723029b",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "512ce3c0ca968bfae4c76724034d92d1f2abbc2ec959ec86b8649d2678eda640",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:8c2fe10033928f234923ea58c098fe2d",
+                      "type": "paragraph",
+                      "contentHash": "284b7e6d788f363f910f7beb1910473e23ce9d6c871f1ce0f31f22a982d48ad4",
+                      "formatFingerprint": "c82e9f000d98d4248c86406a7a2ac873165d10d6d28ba60db7a759d8dad67821",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "600",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:60b8699903eb2eb4358feab3b93b2427",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:ac54ccb4f6bbc1924144b22de8dc231a",
+          "type": "paragraph",
+          "contentHash": "5eb6f4d9d8ef75a75bf672d159a21a0750a241433170fe99344941cd762260bf",
+          "formatFingerprint": "4c990158c835471d2f3d836e04bd9d34c641de021bcefa1427ffbe263de95257",
+          "format": {
+            "justification": "Both"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document. To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:fd0ea50ad2088b476b28a7e9b8b738e3",
+          "type": "paragraph",
+          "contentHash": "2245c1c8daf7694bc2b2fe9f156c39f4bac6c788dc32e42bccb74554af2b5d86",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "\u03B2",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:737cc59fdb58a717bb941503fcc55695",
+          "type": "paragraph",
+          "contentHash": "f4f98f87d9184119e0cd67a8de2ac788097e3087cceebc6cfc20dbe529a40d1c",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "\u00A5\u2264\u2265",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:bbe02a56a0351b2241f95d2bbf55b03e",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:206cf2ebb043785902b1ea55d58ea611",
+          "type": "paragraph",
+          "contentHash": "2871bbcabc29f3e33ec552199f04f9f94c40e1df85afed79df8db8faf729952b",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:ecf3c38ae30f2f9d02a6f81f32a59128",
+          "type": "paragraph",
+          "contentHash": "aba305734d26788a708b05478c3bd1fb4ac0b080cb8b62e7652c71b084b340df",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "opaque",
+              "element": "{http://schemas.openxmlformats.org/officeDocument/2006/math}oMathPara",
+              "hash": "b6f0c01b7709181657c41f4470723ba0a7045ad38b12d299709a9de1f2618d7f"
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:6727415fcb72bd3f33cdbb696a03ecff",
+          "type": "paragraph",
+          "contentHash": "437aea62a5bd6ad4762e494c81b88532809a231477c82bdecf6fd6636908b7ab",
+          "formatFingerprint": "bef038cef8e9ec224dc8883f580ba894cbe2d45d1f394a1524d14fbd8da5695c",
+          "format": {
+            "styleId": "TOCHeading"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Contents",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:8cb0f1284fcc46c84bccc3785fa9242e",
+          "type": "paragraph",
+          "contentHash": "d2e3cf93465156b7ffd257539bc813985102b24bb47121c08f92b61ab34040cd",
+          "formatFingerprint": "73d542b2ffd5fe80b80acab4c8a7a5bd87cf690dcc66b1168d085a410c6bde48",
+          "format": {
+            "styleId": "TOC1"
+          },
+          "inlines": [
+            {
+              "kind": "opaque",
+              "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}instrText",
+              "hash": "4f9e829352446eb0b7ffdd887d7b469277bbc90a9419414b0ba4572389268d57"
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:5e2ea29c2e00a05a6c59c0be86ec0cd7",
+          "type": "paragraph",
+          "contentHash": "76cb73cbe86c9db1e9945b906efa138e896bb3704ec93a08d41657879e483907",
+          "formatFingerprint": "8c208ce32879325434eefe12e95aa4c9e9c16ef59cf7f97ce86dce966cc3381c",
+          "format": {
+            "styleId": "TOC2"
+          },
+          "inlines": [
+            {
+              "kind": "hyperlink",
+              "target": "#_Toc402299823",
+              "inlines": [
+                {
+                  "kind": "text",
+                  "text": "Heading 2",
+                  "format": {
+                    "styleId": "Hyperlink"
+                  }
+                },
+                {
+                  "kind": "tab"
+                },
+                {
+                  "kind": "field",
+                  "instruction": " PAGEREF _Toc402299823 \\h ",
+                  "cachedResult": [
+                    {
+                      "kind": "text",
+                      "text": "1",
+                      "format": {}
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:9d3282f50f08cc4539c62302ef64cfa3",
+          "type": "paragraph",
+          "contentHash": "bbf5856b8865509dff05a8bae8da007dc291aa83d91b2d79b122c7e7353bc371",
+          "formatFingerprint": "1563398d69ab3eb5d82031af9dea5daa54455ba70587437ae3308575d016be80",
+          "format": {
+            "styleId": "TOC1"
+          },
+          "inlines": [
+            {
+              "kind": "hyperlink",
+              "target": "#_Toc402299824",
+              "inlines": [
+                {
+                  "kind": "text",
+                  "text": "Heading 1 again",
+                  "format": {
+                    "styleId": "Hyperlink"
+                  }
+                },
+                {
+                  "kind": "tab"
+                },
+                {
+                  "kind": "field",
+                  "instruction": " PAGEREF _Toc402299824 \\h ",
+                  "cachedResult": [
+                    {
+                      "kind": "text",
+                      "text": "1",
+                      "format": {}
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:40a2e1544c90622cbf3ded0cb90bc7e6",
+          "type": "paragraph",
+          "contentHash": "d3a0ead0b0e4eecd3f2cbf42ab0e9e83fb58ffc4a586c3775256c62fb9b02966",
+          "formatFingerprint": "8c208ce32879325434eefe12e95aa4c9e9c16ef59cf7f97ce86dce966cc3381c",
+          "format": {
+            "styleId": "TOC2"
+          },
+          "inlines": [
+            {
+              "kind": "hyperlink",
+              "target": "#_Toc402299825",
+              "inlines": [
+                {
+                  "kind": "text",
+                  "text": "Heading 2 again",
+                  "format": {
+                    "styleId": "Hyperlink"
+                  }
+                },
+                {
+                  "kind": "tab"
+                },
+                {
+                  "kind": "field",
+                  "instruction": " PAGEREF _Toc402299825 \\h ",
+                  "cachedResult": [
+                    {
+                      "kind": "text",
+                      "text": "1",
+                      "format": {}
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:5d1713fc78373a0ca3dcd577d5a9315c",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:db6f9b58a2bdc8cf22d525359f808504",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:779d32b6b1dcbebdc6212585ad160cbe",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:5baf2dae2b36e805d647ffc2fb5431b4",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "h:body:49c91b4cfbf62c36b81201636fabee36",
+          "type": "paragraph",
+          "contentHash": "d95e9370ef74ec209bedb1f6a57044525776464c572c93d7709a2fd46d7e3527",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+          "format": {
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Heading 1",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:2c56a902f7cb0b2935feabb0e0c5b34c",
+          "type": "paragraph",
+          "contentHash": "3291955e900530da1940bdce97fa0f944e26627f2174172d0e4d97ed9c5510c0",
+          "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
+          "format": {
+            "styleId": "Heading2"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Heading 2",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:8cdcc1b5a798cff8620cf8fe5c766745",
+          "type": "paragraph",
+          "contentHash": "615d319fb526ac3d4316c796cd77f457a325db3b2a76ab9c8151d9f93eac634d",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+          "format": {
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Heading 1 again",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:e3148ee2dbe7f582b8196e6285e1b981",
+          "type": "paragraph",
+          "contentHash": "d3b7d7a96552ece4af0ac63606981cd217346a40151beef558abea3591033559",
+          "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
+          "format": {
+            "styleId": "Heading2"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Heading 2 again",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:4ca97edffcee8d2b34ce4bc1b2871b99",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:f78598d1c2820f9e8aa66c4607983626",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "9472813d5f7c6d8fe9e69daa7dc97c0ed1184dfc8f9db7f23e3a6e1774f0bf16",
+          "format": {},
+          "inlineSectionBreak": "sec:body:30a9c50899948316c5a51ea7ce004618",
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:3a98d0ad62ee495486c2833901b0459e",
+          "type": "paragraph",
+          "contentHash": "1b942364d5a26d1d056179080c9b0a6506bda390ba33159737ad9354156a3ebc",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "This is a section that is in landscape mode.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:3c872b0126d5acb9ac1c3c46fe720dc2",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "72eaef3febe46ce3e48e86333ac362eeedbc0985637ed46c84e0cad9ee92f76e",
+          "format": {},
+          "inlineSectionBreak": "sec:body:69bb975fdaf8cf4b3d1b8d076a5c3a23",
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:35716f820d13f7051237a664260dd2a5",
+          "type": "paragraph",
+          "contentHash": "b8b57b3aa8c989f5adb0de0d480586d3f28be2b32a6f3533fbee983a9291905b",
+          "formatFingerprint": "e1f502b9431cf440ff00836ddb2824f508098206b6d7c573af1a0fd94e3c60fb",
+          "format": {},
+          "inlineSectionBreak": "sec:body:35f9cad328bb029bde63e7f4a8a3595b",
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "This is in the following section.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:63856fa569284949adbd3c14f2644d35",
+          "type": "paragraph",
+          "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
+          "formatFingerprint": "de6656490769299d899139c5b3810eb1263f1d3698e02d3afbd6ce8660b4ae8a",
+          "format": {
+            "spacingAfterTwips": 480
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:0412acaef39735aae2707977d2946951",
+          "type": "paragraph",
+          "contentHash": "a9378c10464199fd954ca2219dc17aacb28f492289b9d8c1404e40721771b5a6",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:9b19a481e9fe09f57979d980e80beac9",
+          "type": "paragraph",
+          "contentHash": "18d57068089ff6923840662f2c067d687817fb5b9993bcf831112e1fb7be400c",
+          "formatFingerprint": "9f0c425d332b83e811c089c4c1a439e222c1b40c750635938916443622626336",
+          "format": {
+            "spacingBeforeTwips": 800
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Themes and styles also help keep your document coordinated. When you click Design and choose a new Theme, the pictures, charts, and SmartArt graphics change to match your new theme. When you apply styles, your headings change to match the new theme.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:83493f5986c861f981b4907acee4426c",
+          "type": "paragraph",
+          "contentHash": "8dafc43687cac962111f2f339a35c11455709e4cb73f3c8c73bcff56958a73b3",
+          "formatFingerprint": "7be90d5a05332c7a04049fcf79f95c099698a7e4bfec8bf534096a518035ae64",
+          "list": {
+            "numId": 3,
+            "abstractNumId": 2,
+            "ilvl": 0,
+            "numberFormat": "upperRoman",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:69fbc72256ba7e17d59a2558693e4666",
+          "type": "paragraph",
+          "contentHash": "b650cee0de38f6b5244324b6a23d41ec2df5cc293d6317bb1a632d413b4e74ab",
+          "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
+          "list": {
+            "numId": 3,
+            "abstractNumId": 2,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you click Online Video, you can paste in the embed code for the video you want to add.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:f43244424d82f5452b43d95e320557a5",
+          "type": "paragraph",
+          "contentHash": "42572b4e881f249cf9bf597ec9f4f3171fe1a57739904a42cd50f33861e729ff",
+          "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
+          "list": {
+            "numId": 3,
+            "abstractNumId": 2,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:bb55e42fb7b03b91779aa7129e5fad48",
+          "type": "paragraph",
+          "contentHash": "6db490be8d0509c507016c823e67bdcbfb2d0064816dd16865e3495abee579a2",
+          "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
+          "list": {
+            "numId": 3,
+            "abstractNumId": 2,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:8ba1557f190ee0d3549230def1e0018a",
+          "type": "paragraph",
+          "contentHash": "35fe11d2360800ef7424a9bd0e1eae73161e04c9e0e5432af6ea0086fa034ac1",
+          "formatFingerprint": "7be90d5a05332c7a04049fcf79f95c099698a7e4bfec8bf534096a518035ae64",
+          "list": {
+            "numId": 3,
+            "abstractNumId": 2,
+            "ilvl": 0,
+            "numberFormat": "upperRoman",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "For example, you can add a matching cover page, header, and sidebar.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:94ab760b92ebe84ee6c5277b55e61c0a",
+          "type": "paragraph",
+          "contentHash": "d729a1bbc284b5b79c4a258d37310efbc974e58768e8dd632c2aa2f8a3c7a030",
+          "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
+          "list": {
+            "numId": 3,
+            "abstractNumId": 2,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:6b295720c061b01f5542ac6f4ee37650",
+          "type": "paragraph",
+          "contentHash": "4be0301a57c82b73ad9a6d60fa80d41ea1026d97548b3cb838fb06a71d688bd1",
+          "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
+          "list": {
+            "numId": 3,
+            "abstractNumId": 2,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Themes and styles also help keep your document coordinated.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:8c462aab371efc64d1ae3b2473a58224",
+          "type": "paragraph",
+          "contentHash": "f5cf0fb2d5d13de85e3e7f3e6a6a07fa921d5166b94bf8e4c44ad663084cd2e8",
+          "formatFingerprint": "7be90d5a05332c7a04049fcf79f95c099698a7e4bfec8bf534096a518035ae64",
+          "list": {
+            "numId": 3,
+            "abstractNumId": 2,
+            "ilvl": 0,
+            "numberFormat": "upperRoman",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you click Design and choose a new Theme, the pictures, charts, and SmartArt graphics change to match your new theme.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:7cb146ad83c0dba2017f3707324e4801",
+          "type": "paragraph",
+          "contentHash": "ae6f0370aa39d566a7d7295420cb132c38721016c8fdb81781874d15b1101b8e",
+          "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
+          "list": {
+            "numId": 3,
+            "abstractNumId": 2,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "When you apply styles, your headings change to match the new theme.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:b73ed3733c684adb2316ad4ec3dae5cb",
+          "type": "paragraph",
+          "contentHash": "1321b948327c0062060a64270fdb1af1c984bf17e5171344ffc49b30a59c96a6",
+          "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
+          "list": {
+            "numId": 3,
+            "abstractNumId": 2,
+            "ilvl": 1,
+            "numberFormat": "lowerLetter",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Save time in Word with new buttons that show up where you need them.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:4a8dd08a2ed86cab768de50b20db01c9",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:a5ea3cab122e06ddb0fe999125397ec9",
+          "type": "paragraph",
+          "contentHash": "7a06ef634be59dffbd1cf921f49001e6d775a4bd8fba97af7c18c4c4238602af",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "opaque",
+              "element": "{http://schemas.openxmlformats.org/markup-compatibility/2006}AlternateContent",
+              "hash": "02b0f04302474b6028bfbd07154a67c1f7537563d2642848c2ad1a1ffbaa1b36"
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:b37960a391bade17b2adde3c7b4e61e7",
+          "type": "paragraph",
+          "contentHash": "1d32dc481e105799b079b5a1b18c2e302bc43bc5feac01450c7ffa50a1c65b92",
+          "formatFingerprint": "4b5b7209b17524124ace75899974150a7b32147ab0445a339fae0b7dfe84137c",
+          "list": {
+            "numId": 4,
+            "abstractNumId": 0,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Lorem ipsum dolor sit amet, consectetuer adipiscing elit.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:cdf6e3452f5043264639a53b4bc740c6",
+          "type": "paragraph",
+          "contentHash": "218e376b7eac07f335f7bfe19af10617d8bdb1f57b380a479f7c461975905eab",
+          "formatFingerprint": "4b5b7209b17524124ace75899974150a7b32147ab0445a339fae0b7dfe84137c",
+          "list": {
+            "numId": 4,
+            "abstractNumId": 0,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Maecenas porttitor congue massa.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:30def1025b4e2ff1560cb3efdcaf380e",
+          "type": "paragraph",
+          "contentHash": "fcbc774ea8f723b5c3efca6df813ddb3e3c256ed9f7835d8e8e26bfad38cc01d",
+          "formatFingerprint": "4b5b7209b17524124ace75899974150a7b32147ab0445a339fae0b7dfe84137c",
+          "list": {
+            "numId": 4,
+            "abstractNumId": 0,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Fusce posuere, magna sed pulvinar ultricies, purus lectus malesuada libero, sit amet commodo magna eros quis urna.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:63e3473a853db3e26b2147cd836069e1",
+          "type": "paragraph",
+          "contentHash": "b59dfb244e8343b242cce67d0f46147a65d0fe67f94fa6216e3957d766c597f9",
+          "formatFingerprint": "4b5b7209b17524124ace75899974150a7b32147ab0445a339fae0b7dfe84137c",
+          "list": {
+            "numId": 4,
+            "abstractNumId": 0,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Nunc viverra imperdiet enim.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "li:body:8ba556af7beff67a93f5263bcb9b4faf",
+          "type": "paragraph",
+          "contentHash": "db4884586a90d539f96865fc4d6fbe8d0988d244d939e50646da84f8d3aa58ae",
+          "formatFingerprint": "5935a8815b4184d4a7ae7330d0f2af8a6d27152082cf4692bbf9710a57b4696c",
+          "list": {
+            "numId": 4,
+            "abstractNumId": 0,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "ListParagraph"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Fusce est.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "tbl:body:ed710a8d2bbbef26e1199ee064990d07",
+          "type": "table",
+          "contentHash": "5880c925fde1fbb651a29fc36b849e18e06e668aa8adf335e5cf33702d651a47",
+          "formatFingerprint": "a0e7ec7d344a9dcca33fb67ab22c34665310a92cfbcfdf9c6e7511c34a98f0e4",
+          "unmodeledTablePropsDigest": "927ce4fc46968e260da586201418344b8f87aeb294e5c60208894965bf2c13c6",
+          "rows": [
+            {
+              "anchor": "tr:body:738890860c8c07089b02975775bc6ecb",
+              "contentHash": "f2166272b2e219c0a1202b689fa9cbe01f79be48899eca7e3f07bf7013c3ced8",
+              "cells": [
+                {
+                  "anchor": "tc:body:aaee0c039e2343b66c1c28e9b1ea93e2",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "e0ecc614092446c2f0d97880cbe4bf717dd3ed36179ed6c2f37d70c8b6d91e69",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:721892b360444d25d2ff2040527a0e99",
+                      "type": "paragraph",
+                      "contentHash": "16aba5393ad72c0041f5600ad3c2c52ec437a2f0c7fc08fadfc3c0fe9641d7a3",
+                      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Lorem ipsum dolor sit amet",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:574abaea6adf23a291667df1bc7b1396",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "14724778ddafb3363a241f2d17bf5cbbc28d76e88798fe43911877a108d14be8",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:2a611356c8b1b0d43297bf9e35d48555",
+                      "type": "paragraph",
+                      "contentHash": "8b79c6264973677f9b797286341c5ceeefb01ffc0e86be3579c83d4490a3a9d5",
+                      "formatFingerprint": "4f38a496d9cc562c20b90a48035100af9e04b827d81768b865c1dfc52a72b9a4",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Consectetuer adipiscing elit",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:5854b13c906f831000502aa46e2d636c",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "caf175706f1ed677d106c654fcc55083e4755011a650ebc6fdbefdbd46178c51",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:266038409dda7cf1907588ad098411b6",
+                      "type": "paragraph",
+                      "contentHash": "218e376b7eac07f335f7bfe19af10617d8bdb1f57b380a479f7c461975905eab",
+                      "formatFingerprint": "ad6789b8c28b74a96b3424d2fa45c9e3992ce92abd1c3b52fe3173d78c3d20c9",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Maecenas porttitor congue massa.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:65faaa82125d3d378f060287169cfa52",
+              "contentHash": "19e8f169d71a01e5ca18527d13f0635c04822f5bd26465cfd65d6c3cb6f634e1",
+              "cells": [
+                {
+                  "anchor": "tc:body:59123904bd2f871f194f118e0fcc6f46",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "c4e8e6cc76fed9189aa9dcbd6c7bb10cf9e55ca6d69087f2538270bb25cd6edf",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:8a8d854b9a5ae67de88d3331d67b7348",
+                      "type": "paragraph",
+                      "contentHash": "ad57366865126e55649ecb23ae1d48887544976efea46a48eb5d85a6eeb4d306",
+                      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "100",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:f2393520cacde9b6f018a35c17ee5da1",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "8866bc80d593adfd7e3ebdc62c61e26d90ac702f3e157208778017539229dc77",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:3575b24e95d2b108b53e3cdc66f9859a",
+                      "type": "paragraph",
+                      "contentHash": "27badc983df1780b60c2b3fa9d3a19a00e46aac798451f0febdca52920faaddf",
+                      "formatFingerprint": "8b5b079266ca5ddeacf9a92bdc6e01851dfdfa1a12c3c1876d7fd547fb64cc29",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "200",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:7d35c6605c1552c3e7bf8987cb023c41",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "a9c7f0c18e9cb08102bfc22752d37a0300b909ead200fb02d782fcb5dd7d207c",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:69b20f81902bd1dd560b2d260eb8c29c",
+                      "type": "paragraph",
+                      "contentHash": "983bd614bb5afece5ab3b6023f71147cd7b6bc2314f9d27af7422541c6558389",
+                      "formatFingerprint": "8b5b079266ca5ddeacf9a92bdc6e01851dfdfa1a12c3c1876d7fd547fb64cc29",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "300",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:8d205be9837fece4c222806a9f3ca70f",
+              "contentHash": "222cf95524f27f7f44be227cd107045a6355a82849d8d28e430342f18f3e266d",
+              "cells": [
+                {
+                  "anchor": "tc:body:a5688c31001d7d97929fc52afad58683",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "93ec8c9ce5da124cc0930632ff42360bc1cd77cf0aa15b86a03a7d5584de7181",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:a45315496ca892fe03f8cc910a860509",
+                      "type": "paragraph",
+                      "contentHash": "26d228663f13a88592a12d16cf9587caab0388b262d6d9f126ed62f9333aca94",
+                      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "400",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:0627664d1132b3f87b23bafb30078792",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "7dee73c872a24da1a68151f0e783e6e98155ff1157003ccc3f3d72504d60bf40",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:c7f4e3d3d1981db36eae2fbdd27b3b91",
+                      "type": "paragraph",
+                      "contentHash": "0604cd3138feed202ef293e062da2f4720f77a05d25ee036a7a01c9cfcdd1f0a",
+                      "formatFingerprint": "c82e9f000d98d4248c86406a7a2ac873165d10d6d28ba60db7a759d8dad67821",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "500",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:729c875dc9d1478459e06be3aaf3a29c",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "512ce3c0ca968bfae4c76724034d92d1f2abbc2ec959ec86b8649d2678eda640",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:8f26c496fac1b677049eb9fdfe020330",
+                      "type": "paragraph",
+                      "contentHash": "284b7e6d788f363f910f7beb1910473e23ce9d6c871f1ce0f31f22a982d48ad4",
+                      "formatFingerprint": "c82e9f000d98d4248c86406a7a2ac873165d10d6d28ba60db7a759d8dad67821",
+                      "format": {},
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "600",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:f4cb267f3cdf5a85397342601dd7d041",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:cb75b29b21a71c163bd6ebbfffadc4d4",
+          "type": "paragraph",
+          "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:6c81a2e14b4ead50192132cd8452e2f4",
+          "type": "paragraph",
+          "contentHash": "a9378c10464199fd954ca2219dc17aacb28f492289b9d8c1404e40721771b5a6",
+          "formatFingerprint": "3c65d1b7918edbae4ddacf1293a8ef39fd612cc94eeac37f5a798ca5e8fd891c",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "To ",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": "make your document look professionally",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": " produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:3c6a499c4b766190f88c4fbfa6ffb943",
+          "type": "paragraph",
+          "contentHash": "d95e9370ef74ec209bedb1f6a57044525776464c572c93d7709a2fd46d7e3527",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+          "format": {
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Heading 1",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:a40aa40ccc004cffd34d4d4153970131",
+          "type": "paragraph",
+          "contentHash": "776e699e05f6452cff38bf34c00022b71cda352d0eddb6a67b6a7e44e500b2b4",
+          "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
+          "format": {
+            "styleId": "Heading2"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "This is Heading 2",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:1ae450593d3bb88c722373381a3c364d",
+          "type": "paragraph",
+          "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
+          "formatFingerprint": "5936d4acc0e0ff3b93224c7c38084a566906c36449d241e1d9faa0c1f2ea86fb",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point.",
+              "format": {
+                "bold": true,
+                "italic": true,
+                "underline": {
+                  "kind": "Single"
+                },
+                "highlight": "yellow"
+              }
+            },
+            {
+              "kind": "text",
+              "text": " When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:f878fd5a154a1413d7c1f7c089494455",
+          "type": "paragraph",
+          "contentHash": "10b1ac41a59f41976f13ea1cb032c9e03325caa528560d343cc7962b78c59bc1",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+          "format": {
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Second Heading 1",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:5bed0576f3b8eda44aea8539f846b27e",
+          "type": "paragraph",
+          "contentHash": "ae45cedf80ec5e9e95a9819967a7003be9d769eb13101df9b04ec0a5da698720",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Maecenas porttitor congue massa. Fusce posuere, magna sed pulvinar ultricies, purus lectus malesuada libero, sit amet commodo magna eros quis urna.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:e70507f5f97d66987f9dc8c91a51708a",
+          "type": "paragraph",
+          "contentHash": "d0407f5d1f831612ef4695509ec6b2d6fe77280841b001629fc0f6216d13ff91",
+          "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
+          "format": {
+            "styleId": "Heading2"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "More Info",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:8039f6a542cbff8a21c3386890266252",
+          "type": "paragraph",
+          "contentHash": "1d32dc481e105799b079b5a1b18c2e302bc43bc5feac01450c7ffa50a1c65b92",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Lorem ipsum dolor sit amet, consectetuer adipiscing elit.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:6239274905bd3e62f1650621bae85bf8",
+          "type": "paragraph",
+          "contentHash": "5eb6f4d9d8ef75a75bf672d159a21a0750a241433170fe99344941cd762260bf",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document. To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "sec:body:05042b17662bdf691f11e7ffac876855",
+          "type": "sectionBreak",
+          "contentHash": "87688e82547fb01ee9ab48d4739fb0f1dab9d22ab3009c0c8fa49a9504d06999",
+          "formatFingerprint": "e05907240f700491233fd61ff4a8239fe8d9caf71b69e617a962b0b790365221",
+          "format": {
+            "pageWidthTwips": 12240,
+            "pageHeightTwips": 15840,
+            "marginTopTwips": 1440,
+            "marginBottomTwips": 1440,
+            "marginLeftTwips": 1440,
+            "marginRightTwips": 1440
+          }
+        }
+      ]
+    },
+    {
+      "scope": "hdr1",
+      "kind": "Default",
+      "blocks": [
+        {
+          "anchor": "p:hdr1:f45169015fe7675d5fafe3025d9c57b2",
+          "type": "paragraph",
+          "contentHash": "3899702de274d8aa38e0ab10132cba80518215f499755ea62068f275a077d081",
+          "formatFingerprint": "bb1893b8152fb08b22ffa858edf875274a3fa102d8b69999e8739e47b83154ce",
+          "format": {
+            "styleId": "Header"
+          },
+          "inlines": [
+            {
+              "kind": "opaque",
+              "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}pict",
+              "hash": "8717310814517288882b2363dc38397118b7c67b26e01a29b5e33381f107b0ee"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scope": "hdr2",
+      "kind": "Even",
+      "blocks": [
+        {
+          "anchor": "p:hdr2:03fc7270be6d5abc029133cc7917c67c",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "bb1893b8152fb08b22ffa858edf875274a3fa102d8b69999e8739e47b83154ce",
+          "format": {
+            "styleId": "Header"
+          },
+          "inlines": []
+        }
+      ]
+    },
+    {
+      "scope": "hdr3",
+      "kind": "First",
+      "blocks": [
+        {
+          "anchor": "p:hdr3:03fc7270be6d5abc029133cc7917c67c",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "bb1893b8152fb08b22ffa858edf875274a3fa102d8b69999e8739e47b83154ce",
+          "format": {
+            "styleId": "Header"
+          },
+          "inlines": []
+        }
+      ]
+    },
+    {
+      "scope": "ftr1",
+      "kind": "Even",
+      "blocks": [
+        {
+          "anchor": "p:ftr1:a469559e3e2eaa3f707240f01bdd3d76",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "96b477266a172ed8f947907b2f003edf39ed758a4daf4847f4a3d39c82cd114f",
+          "format": {
+            "styleId": "Footer"
+          },
+          "inlines": []
+        }
+      ]
+    },
+    {
+      "scope": "ftr2",
+      "kind": "First",
+      "blocks": [
+        {
+          "anchor": "p:ftr2:a469559e3e2eaa3f707240f01bdd3d76",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "96b477266a172ed8f947907b2f003edf39ed758a4daf4847f4a3d39c82cd114f",
+          "format": {
+            "styleId": "Footer"
+          },
+          "inlines": []
+        }
+      ]
+    },
+    {
+      "scope": "ftr3",
+      "kind": "Default",
+      "blocks": [
+        {
+          "anchor": "p:ftr3:a469559e3e2eaa3f707240f01bdd3d76",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "96b477266a172ed8f947907b2f003edf39ed758a4daf4847f4a3d39c82cd114f",
+          "format": {
+            "styleId": "Footer"
+          },
+          "inlines": []
+        }
+      ]
+    },
+    {
+      "scope": "fn",
+      "notes": {
+        "1": [
+          {
+            "anchor": "p:fn:5939fc68b8ecdd0033e0ce4b7d035b82",
+            "type": "paragraph",
+            "contentHash": "78b50940800727d20837fe95a2e312336e124f733894fe1f0430e2be2be52580",
+            "formatFingerprint": "1eb579655a82e0599585b6a4f8e3dc2210ec23f45084c569f21c13c61e9f7b4f",
+            "format": {
+              "styleId": "FootnoteText"
+            },
+            "inlines": [
+              {
+                "kind": "opaque",
+                "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}footnoteRef",
+                "hash": "9fd3e2a2698cc6894a79f6ca79ad9ca87ee05a7d94a9f55607883b61e0ca6b0d"
+              },
+              {
+                "kind": "text",
+                "text": " This is a footnote.",
+                "format": {}
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scope": "en",
+      "notes": {
+        "1": [
+          {
+            "anchor": "p:en:bb2ff8c39520fa2db097273f46e07f43",
+            "type": "paragraph",
+            "contentHash": "76ce875abfaf542d6a42452814edea931008e033e5fa7c2bdf0df251b1f3b11a",
+            "formatFingerprint": "c7bd4d96c45b61195d870f88b3061ee610be2b77af2ba021514b899fbb3de4aa",
+            "format": {
+              "styleId": "EndnoteText"
+            },
+            "inlines": [
+              {
+                "kind": "opaque",
+                "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}endnoteRef",
+                "hash": "3fb3e048c9e8927a1bf3b7c4c37ee1d536cfcb94712b760caca50fef5865db50"
+              },
+              {
+                "kind": "text",
+                "text": " This is an endnote.",
+                "format": {}
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scope": "cmt",
+      "comments": [
+        {
+          "anchor": "cmt:cmt:5194513fbdd776ff7ef2d8a5ed6822f4",
+          "author": "Eric White",
+          "initials": "EW",
+          "date": "2014-10-28T20:22:00Z",
+          "targets": [
+            {
+              "blockAnchor": "p:body:206cf2ebb043785902b1ea55d58ea611",
+              "startChar": 5,
+              "endChar": 27
+            }
+          ],
+          "blocks": [
+            {
+              "anchor": "p:cmt:122d78f77c867dcaf80e9d72d8c58d8f",
+              "type": "paragraph",
+              "contentHash": "98c257ec2ef30e6c7ec5e3bd8d9355c1b577a26870f5d3316566003a861a206c",
+              "formatFingerprint": "1e070f57316d5bb43541cb8c848403611e099eefd4ba5a65d2b0158756cde362",
+              "format": {
+                "styleId": "CommentText"
+              },
+              "inlines": [
+                {
+                  "kind": "opaque",
+                  "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}annotationRef",
+                  "hash": "8e20af17102cbdaaa83d84348efaa5e006a161f06e84792ecf36b8301f73a378"
+                },
+                {
+                  "kind": "text",
+                  "text": "This is a comment.",
+                  "format": {}
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

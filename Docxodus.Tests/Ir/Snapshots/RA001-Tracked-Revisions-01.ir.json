@@ -1,0 +1,3389 @@
+{
+  "scopes": [
+    {
+      "scope": "body",
+      "blocks": [
+        {
+          "anchor": "p:body:cfa93cdf4e7fb096d9423de5d510ab1a",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "68f3da4b6180f4ba7619aa41c4ce8b4f526da9456f03afdf4b2d1faefa92c2d4",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:c0d14b853fb01c607fedc4b39eec5b7f",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "68f3da4b6180f4ba7619aa41c4ce8b4f526da9456f03afdf4b2d1faefa92c2d4",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:30d578c59b651a527e74a8480526e2ef",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "68f3da4b6180f4ba7619aa41c4ce8b4f526da9456f03afdf4b2d1faefa92c2d4",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:117689ddc21247a486fe5fbf8f77282e",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "68f3da4b6180f4ba7619aa41c4ce8b4f526da9456f03afdf4b2d1faefa92c2d4",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:4ac07a852ce5f3ceb9a93af571998cdb",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "68f3da4b6180f4ba7619aa41c4ce8b4f526da9456f03afdf4b2d1faefa92c2d4",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:0aa7b06d149e0de5bd595b64a1b8b0f6",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "68f3da4b6180f4ba7619aa41c4ce8b4f526da9456f03afdf4b2d1faefa92c2d4",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:412554ed49eba99e70223a0b8d15a9bc",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "68f3da4b6180f4ba7619aa41c4ce8b4f526da9456f03afdf4b2d1faefa92c2d4",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:0008c77cd84eb73f1358887e8b251a04",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "68f3da4b6180f4ba7619aa41c4ce8b4f526da9456f03afdf4b2d1faefa92c2d4",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:fe23362dadf69524e5df41ed9379a023",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "68f3da4b6180f4ba7619aa41c4ce8b4f526da9456f03afdf4b2d1faefa92c2d4",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:7c838a2f5d4d325446adde7a1163cbd2",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "320fbff7a8b608925c952981c109740771b95ae61e7aa67f3533c1deffeea671",
+          "format": {
+            "indentFirstLineTwips": 720
+          },
+          "inlineSectionBreak": "sec:body:fff51044d48ea1a573e855bdf02ee1b4",
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:66b4b98f2af3265c932b2acfafc650d1",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "b5c25a3970bbdbfa01048ef278c5eda6cccf79115d466157895e96abeacb2cb1",
+          "format": {
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:daca8e7e757be03d2b059163a9c0b793",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "b5c25a3970bbdbfa01048ef278c5eda6cccf79115d466157895e96abeacb2cb1",
+          "format": {
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:0ef7d5707e7ac8e4e5bc67336db1b59d",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "b5c25a3970bbdbfa01048ef278c5eda6cccf79115d466157895e96abeacb2cb1",
+          "format": {
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:e960f6a67d55970a19f01d805de89f03",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "b5c25a3970bbdbfa01048ef278c5eda6cccf79115d466157895e96abeacb2cb1",
+          "format": {
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:36338a92d44a884ca1d701bb1db795d5",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "b5c25a3970bbdbfa01048ef278c5eda6cccf79115d466157895e96abeacb2cb1",
+          "format": {
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:6d47bdec97938f10038cb5714075fae6",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "e44e892cee5a63f4aa1451a86d662701583a2ebe837b57819f6b716b08bdfb9f",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:77b1a57ef6ee0c3ad55e9742f736748c",
+          "type": "paragraph",
+          "contentHash": "36a9e7f1c95b82ffb99743e0c5c4ce95d83c9a430aac59f84ef3cbfab6145068",
+          "formatFingerprint": "a6c1007e1f080ebb5c90f2fb6dbcb0ebba4a1cadacd37bccd2b2474c3f3c9020",
+          "format": {
+            "styleId": "ListParagraph",
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": " ",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:2f659123a00aa985734c2f2bf6b01e4d",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "5aa98459966b8e36066c2f0cf3868a060d4d3dcc0ea86ab2389dcb067f98f06e",
+          "format": {
+            "styleId": "ListParagraph",
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:051e68471f0d7821786d87acb0443f03",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "1822fa77132e63d3f7a71e6e415a9a01067f0b1cf574ec902cf4fe49c0f4c7d9",
+          "format": {
+            "styleId": "ListParagraph",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:372e1d70bf512c1ccda2275ee4c4e9f0",
+          "type": "paragraph",
+          "contentHash": "e7ac0786668e0ff0f02b62bd04f45ff636fd82db63b1104601c975dc005f3a67",
+          "formatFingerprint": "9540b8909d05ae37c65c29b77e23358f60935b80a8f438ca0a1626a29f85d839",
+          "format": {
+            "styleId": "ListParagraph",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": ":",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:64872d18db2c07adb785f9ead98484a6",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "beb2c6955a0a4d76a93ac156541c674b158744d0c10faed1ab484a8e1d134e57",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 276,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:d0ace414a8b5c884e3c0a77f3696241f",
+          "type": "paragraph",
+          "contentHash": "b0da8d93eab173a045bd657f29a05a1d5b14069b0defe324126e3a5790ee7013",
+          "formatFingerprint": "58c50d5b20d8ead71596ab73a77b48d4540db66505a7041f4427ae386d6ce432",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -4,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "diluent and mix well. ",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": "[Label as sample preparation-1 and 2]. ",
+              "format": {
+                "bold": true
+              }
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "format": {
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:489d154ef3ea419eeec61341e73df74b",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "982a677cd191580e13b4fc40b26f9f9cd0eca8a566c52509c4df68de431efbf4",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -4,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:ed70e22d98431d80c0c4fb25904e4bf8",
+          "type": "paragraph",
+          "contentHash": "6dfc4b6dc379b28dc3a2f559215c9833794f1aabe3f05a72a96ebdce31f754a2",
+          "formatFingerprint": "79aedba3252d528621e4c4e88ff5e72774b3ad38dc7c501a7d197693ffab6054",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Order of injection:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "tbl:body:c8d7175430d2890a576660d37129f163",
+          "type": "table",
+          "contentHash": "80e8fb50197e1e35210ade812cdc85810d85a90f58b2955481ebe9472e9c4d65",
+          "formatFingerprint": "549c2673f7eb0860f2a0ec348c07d25f7f6c3205ee910d85aaa8647835380265",
+          "unmodeledTablePropsDigest": "e3b2065618a5b88b9d54000afefd2c4f31f9e723f0a6e49b09fbeb6c46275b66",
+          "rows": [
+            {
+              "anchor": "tr:body:e8bdb46a6049b85bf736a116172aa698",
+              "contentHash": "9c68e135cd0969f1931d6de56cb3016783f66d2d5eb608474ce727ec824ed6ca",
+              "cells": [
+                {
+                  "anchor": "tc:body:7e5725c56b3c6a509d2e7f94eb039700",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "a468b4b72704a82fae5cfbbf355bcd7957da91890af064e8910bbfdbd552f603",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:335d8bfeb36994f3f57a4786fb51066c",
+                      "type": "paragraph",
+                      "contentHash": "6a9120d5de66649d79c7ffe8c40c21df9ec95cfa05ff459c5c217719d2742dd4",
+                      "formatFingerprint": "9ff79f550faa1aa6bc5658400d38c0b9171eb1045115c98fe85bb7fd580a1762",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Name of the preparations",
+                          "format": {
+                            "italic": true,
+                            "underline": {
+                              "kind": "Single"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:2dd410b9b660c7d324f4fd9b821728d9",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "9137e2cdff9bbc0a5843264aa030a4a2024608b6fe86f9af1bc3f018ffdbf3da",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:ba54cd1b90905d9c30a07c201da0039c",
+                      "type": "paragraph",
+                      "contentHash": "ca5e725d60de61cbea4b8a5697166dd53b726b528f2d31ae6e01bf5480ba9d11",
+                      "formatFingerprint": "9ff79f550faa1aa6bc5658400d38c0b9171eb1045115c98fe85bb7fd580a1762",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "No. of  injections",
+                          "format": {
+                            "italic": true,
+                            "underline": {
+                              "kind": "Single"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:cd1109d22610639c5b2e9bd4ae570c7a",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "9ed1a0a7350f775efeadde1ba94baa63722a27b3771536f16155013db6b9f952",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:df8c06c7f929e6150832c2d011d873d1",
+                      "type": "paragraph",
+                      "contentHash": "d4e8830a71c73edffe0115b8abad16b0b5cb2e121047c64cd01995203cfad062",
+                      "formatFingerprint": "9ff79f550faa1aa6bc5658400d38c0b9171eb1045115c98fe85bb7fd580a1762",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Purpose",
+                          "format": {
+                            "italic": true,
+                            "underline": {
+                              "kind": "Single"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:0ccf61cd16ddae9157a69e40b104eac2",
+              "contentHash": "e37431115ee2d627648ee217f8b87807773d536d797b21dc1baacf637ef1f8f9",
+              "cells": [
+                {
+                  "anchor": "tc:body:53b3533e536d099b8499e0bb6378d9f3",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "ec1b16e982bea1b9d095e84a763784a38c263f934f0c9ecd8f0eddf77d45dc2a",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:52d09cba7538eb6f7321d2fc2de25183",
+                      "type": "paragraph",
+                      "contentHash": "2c3d371cbfd31225ec25b3e9798107cb8ca008f2357b98d13d1eddb7b042cc44",
+                      "formatFingerprint": "6aa54af00a5adca9903fdd69e2db466db7517553a74c904ffe36a81a07f76e94",
+                      "format": {
+                        "justification": "Center",
+                        "indentRightTwips": -18,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Blank",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:5b1f231bc6b184f28049076c504e4d8f",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "524fe888ae64bf99df7f029f6fa0ba47739cfc7e48247c1ca3b3f17c76c6b540",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:6c89d0f234d8efa23c25b51ee04b7927",
+                      "type": "paragraph",
+                      "contentHash": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+                      "formatFingerprint": "cb0b54a18544b98a5dc9dfef88658a6e840ceba79040d580bd554906266e08e3",
+                      "format": {
+                        "justification": "Center",
+                        "indentLeftTwips": -18,
+                        "indentRightTwips": -139,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "1",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:f765cecb87d2cd42a046af82e92eebfc",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "ec1b16e982bea1b9d095e84a763784a38c263f934f0c9ecd8f0eddf77d45dc2a",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:fa06397e6447110bd6d04ef300415964",
+                      "type": "paragraph",
+                      "contentHash": "2c3d371cbfd31225ec25b3e9798107cb8ca008f2357b98d13d1eddb7b042cc44",
+                      "formatFingerprint": "5bee807f5ea38ea1ad907b3bcf0ac61bc4df3ae2cb62665ef1083b7f52b84171",
+                      "format": {
+                        "justification": "Center",
+                        "indentLeftTwips": -77,
+                        "indentRightTwips": -18,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Blank",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:e8c370dc2c43583b20481cfb2b918429",
+              "contentHash": "8c10957e404f9237a1a79a3eaff16dbb35eba0a2a0d171009eb59f55e10aef3f",
+              "cells": [
+                {
+                  "anchor": "tc:body:39010edcc6d54555dd8c656c367ffb06",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "8ae65afe12e9d3e589257d32e4f307acc8e07d4d1ecb44e622fe077b55726bd3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:0f50429422eac0e71af92adc5b3735c4",
+                      "type": "paragraph",
+                      "contentHash": "1993dd5f2ae3be1c308750a43a1430bf575f26fab1122729c7d57e27962209ee",
+                      "formatFingerprint": "6aa54af00a5adca9903fdd69e2db466db7517553a74c904ffe36a81a07f76e94",
+                      "format": {
+                        "justification": "Center",
+                        "indentRightTwips": -18,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "System suitability solution",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:d5a84d32439852fc15eb385ac76aff8e",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "524fe888ae64bf99df7f029f6fa0ba47739cfc7e48247c1ca3b3f17c76c6b540",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:891d1db3226124df20f567d21b3d1303",
+                      "type": "paragraph",
+                      "contentHash": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+                      "formatFingerprint": "cb0b54a18544b98a5dc9dfef88658a6e840ceba79040d580bd554906266e08e3",
+                      "format": {
+                        "justification": "Center",
+                        "indentLeftTwips": -18,
+                        "indentRightTwips": -139,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "1",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:2f65ebbcfd15e3adfd3bb021c639bc19",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "42ea6d81510d8c4908b17111db5d3f2a445d36b1f13bd9316775399404adcda7",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:46a99b0fe8fd56b8548028ca8e1c2175",
+                      "type": "paragraph",
+                      "contentHash": "e8690c16964e51b6fdc50b80d7d16170660548019b8e793dcec285f724af3428",
+                      "formatFingerprint": "5bee807f5ea38ea1ad907b3bcf0ac61bc4df3ae2cb62665ef1083b7f52b84171",
+                      "format": {
+                        "justification": "Center",
+                        "indentLeftTwips": -77,
+                        "indentRightTwips": -18,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "System suitability",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:ec2b0178c1ed827fe07f7bad4e17ba9d",
+              "contentHash": "a30495d82434c5c8817238082a068a4eb3e723e1ded1745034babb1d5757af82",
+              "cells": [
+                {
+                  "anchor": "tc:body:01ed3206c7b3b1fcfa1565ac36c955b1",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "efc5ee0ba9340e0dc31fda428c5979ab37dc3aa324bac3596061037f5aef5e58",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:291b9a2e44fb22834a5e7c07a90e2f09",
+                      "type": "paragraph",
+                      "contentHash": "a03dae6e033f35f55c0c3af55127209b648d294c49cfeac99f4f216e2859ba38",
+                      "formatFingerprint": "7eeb248fa2a2fbe8be4212c0c79a3f99cafbc2f6c58beee738f3386187f14dfa",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Sample preparation-1",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:ec4a1bff704ad1c1e26957ca7ef18353",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "53c19bcd32f55b2f97fbb953a1b8f72ce9b57bed53f7279eef29d8f6ff4f7122",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:43027e191c9bf7a2c420c94d59274891",
+                      "type": "paragraph",
+                      "contentHash": "b8d52dc3f650996a66e32d4fd4f40129f6d5f742a20893615fe1b8dbedac6039",
+                      "formatFingerprint": "e6558b7389396725684018ee3e9067b5b90ab182ba77b658225164b00652f4a8",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "  1",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:ddf8d39ce671352ded7c0a61d8496f9f",
+                  "gridSpan": 1,
+                  "vMerge": "Restart",
+                  "contentHash": "8452a3f21b61c9e3b195d7b182a2fa08eda74494929d8d7dc3a2195162264a02",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:6fdac77734c29d21542b9c38e10f5890",
+                      "type": "paragraph",
+                      "contentHash": "1863a3af252198303a7b3d2650f69399b766821a29d1dc63b2092800b4f50d75",
+                      "formatFingerprint": "7eeb248fa2a2fbe8be4212c0c79a3f99cafbc2f6c58beee738f3386187f14dfa",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Sample analysis",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:1843ff78897be6fc3f47daca69287603",
+              "contentHash": "ec307676feb0b45ace490586d9702bca31dce6429d1d2c8b331d2d601b588038",
+              "cells": [
+                {
+                  "anchor": "tc:body:74e62cd028b3e3f92f1cd0344964b3b0",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "07d349c6a60543d9b3160d97ba333895af4975b0b80fce18c9a1e18d3fe2bdbc",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:7e7f85cc3ccf48354fd749d618c1c48e",
+                      "type": "paragraph",
+                      "contentHash": "142c01f81a6b9eafcc8f87cd61b83487511ff8c7d7237140a1ca92eddcd6be39",
+                      "formatFingerprint": "7eeb248fa2a2fbe8be4212c0c79a3f99cafbc2f6c58beee738f3386187f14dfa",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Sample preparation-2",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:7ed6f18bee8536cd4ce1584bf4d2cb29",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "53c19bcd32f55b2f97fbb953a1b8f72ce9b57bed53f7279eef29d8f6ff4f7122",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:58e7acc3b01c6f532eef01d8dddb8bec",
+                      "type": "paragraph",
+                      "contentHash": "b8d52dc3f650996a66e32d4fd4f40129f6d5f742a20893615fe1b8dbedac6039",
+                      "formatFingerprint": "e6558b7389396725684018ee3e9067b5b90ab182ba77b658225164b00652f4a8",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "  1",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:0c8c230767d2b14c4937bbebd22fd6cb",
+                  "gridSpan": 1,
+                  "vMerge": "Continue",
+                  "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:e6ef7316d4ec334ecfc26c74a6aac5b2",
+                      "type": "paragraph",
+                      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                      "formatFingerprint": "3246c1f26f389e779c36427ac97dfc443079a16c6f7b95c89774d0c5305e73a8",
+                      "format": {},
+                      "inlines": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:8f8f71f984a8b0297afaa9851eedc708",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "982a677cd191580e13b4fc40b26f9f9cd0eca8a566c52509c4df68de431efbf4",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -4,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:23cc88be952c4be52368d938e75b5dde",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "982a677cd191580e13b4fc40b26f9f9cd0eca8a566c52509c4df68de431efbf4",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -4,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:df192842b5149eb06c936360dee1d336",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "982a677cd191580e13b4fc40b26f9f9cd0eca8a566c52509c4df68de431efbf4",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -4,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:a199f6acff4d5aeff06b7a35f1c5709f",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "982a677cd191580e13b4fc40b26f9f9cd0eca8a566c52509c4df68de431efbf4",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -4,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:583a85b2adc8b2f70b47058086b06c61",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "982a677cd191580e13b4fc40b26f9f9cd0eca8a566c52509c4df68de431efbf4",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -4,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:c6fe61d4e6a82515a3ac3ec7a8371450",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "982a677cd191580e13b4fc40b26f9f9cd0eca8a566c52509c4df68de431efbf4",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -4,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:7a43ddc1d06e00e512b30002d50fcc04",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "982a677cd191580e13b4fc40b26f9f9cd0eca8a566c52509c4df68de431efbf4",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -4,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:d5ed1e8c7a26bad8b7f09d79efdbb4d8",
+          "type": "paragraph",
+          "contentHash": "ace099805556400d14118246393fb6e737ff4998ea39c8bcad83efbe95c000e8",
+          "formatFingerprint": "764bc954abfaa8f2cc1d874612c963b4389e9fdcacc69ab14511b1e8160b5700",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "peak is about 29.39 min. The relative retention time are given below.   ",
+              "format": {
+                "colorHex": "000000"
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "tbl:body:7fb34211628333ee9bdf43bc5295e2d5",
+          "type": "table",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "5cbe1021b96fa15eb47969ea1c19e3889573436331d8798939f0aa08afda187a",
+          "unmodeledTablePropsDigest": "d82eb44a009ea3166afb577b68e97b64eda396a361fc71bfcdb096a812af5847",
+          "rows": []
+        },
+        {
+          "anchor": "p:body:811b735fc8ba4e628bf6d0b47837c01d",
+          "type": "paragraph",
+          "contentHash": "6c179f21e6f62b629055d8ab40f454ed02e48b68563913473b857d3638e23b28",
+          "formatFingerprint": "d88186a2ee69a4e026c17f850d457a93e3f895354643879a1a12fdef91e525a3",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "  ",
+              "format": {
+                "colorHex": "000000",
+                "highlight": "yellow"
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:3c8ae46a3fd7a2d048e8b8a5f1827f44",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "c98d8cbe1ee9a0fa81d73565a4e4173ac83c0facd85293088347c5e3814f155a",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:b3ef1c06e7eace46291c2d7eddc563b4",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "c98d8cbe1ee9a0fa81d73565a4e4173ac83c0facd85293088347c5e3814f155a",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:b4fd4a2d1ceedc2257276cbb6869619e",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "c98d8cbe1ee9a0fa81d73565a4e4173ac83c0facd85293088347c5e3814f155a",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:da41efb8885a4ed2891fd616bff83ca6",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "c98d8cbe1ee9a0fa81d73565a4e4173ac83c0facd85293088347c5e3814f155a",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:5916975c0e7580e2cc910c177e9d06c8",
+          "type": "paragraph",
+          "contentHash": "a84ae3324d3a82901f16577e6d5fbe6871b6308d4364ef0f790892d8a634f6fb",
+          "formatFingerprint": "d88186a2ee69a4e026c17f850d457a93e3f895354643879a1a12fdef91e525a3",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "                                         ",
+              "format": {
+                "colorHex": "000000",
+                "highlight": "yellow"
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:029d5a7c1fcbdad9e4fc51b1fcde19c5",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f491458161f536fdb8490f423ac53d08970c6d1a5fab1d2ee546f41722c3948d",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:4bf6d21075adf614a46ecfa57e757944",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:43104bcab907ae505f8be106b42f41da",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:8b7779662209d7c360f405aa4f7e4f28",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:cfaaa1c117e48c4b13dff333772a1b9b",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:e6105676f02f40854fd17fc061c58522",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:12c00a7af330a8290300a835df1e77ae",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:b325db6a8058327c8acb3c3d0117c357",
+          "type": "paragraph",
+          "contentHash": "23edd9e6dda62d4f9570be3e76e26b7fbeef5587eae8c164a657ce87c68d7392",
+          "formatFingerprint": "79aedba3252d528621e4c4e88ff5e72774b3ad38dc7c501a7d197693ffab6054",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Reference Chromatograms:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:441719aa17687725033d756b76ed1e89",
+          "type": "paragraph",
+          "contentHash": "f414e14b26fdecb7039aa5669f53b1a4e65fb9c8cf1479db8ae896a88e9bfeb9",
+          "formatFingerprint": "76a26634502fdd5810ef94cebd192ab9ca2bcd7e79c5508cf5e1d0cba9f1122a",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Consider stage IV  in the below chromatogram as stage III, stage-IV dimer as ",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            },
+            {
+              "kind": "text",
+              "text": "Insitu dimer, stage-III as KSM-II, KSM-II as KSM-II/II, ",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:2647f7e35e8b6c1d185e36b6cd01c5f2",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:f7823d1b83104327fe1c401692f08f21",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "tbl:body:87af15db45543f97d692b9cd6ec13d05",
+          "type": "table",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "a3d6f87c6ac9e78e66323ce45b822b09c5a04630ea3c21ac689289f659c4803c",
+          "unmodeledTablePropsDigest": "7a0e64a1117e67cf087c5f7f7f32ab6ccdc8e3157ee173652d96314f944cc658",
+          "rows": []
+        },
+        {
+          "anchor": "p:body:0ddd845dc18c848d194431de58727ef9",
+          "type": "paragraph",
+          "contentHash": "83961423a51567543fd351266a315208faa670a42328ccdf2859601ffced5c2e",
+          "formatFingerprint": "c0443fac03adb2cf49927b6b276e3c6a497c8f31e3117cd3f88cac858d616f53",
+          "format": {
+            "styleId": "Header",
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Reporting:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:477a0cc14ba562f5f133861db5cf4eba",
+          "type": "paragraph",
+          "contentHash": "6f33b88a60214e862600ce75bbf3d6a79901b7320f95c80c201f100fa7aa9819",
+          "formatFingerprint": "24afc38956e3fa8592202a846b505b7362aa37d5464e13b8f2a24aa0d9b43c74",
+          "format": {
+            "styleId": "Header",
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Report the results on the basis of % area average of two injections.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:1cd5a6d98b099d672b6c69212cd3908d",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "d89e4736e3c388360471261e4e9be39de9f3a7f12e97b5b05acbd2fb1918f085",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:e00956f66a112b6dc991e9ccf8940308",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "5459b88e7cf97c66f5986330113ec16afa9a80b4fbdeced429672f3468d3e708",
+          "format": {
+            "styleId": "ListParagraph",
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:4ac21280f06e2c2079d29322e60ad9c0",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "1822fa77132e63d3f7a71e6e415a9a01067f0b1cf574ec902cf4fe49c0f4c7d9",
+          "format": {
+            "styleId": "ListParagraph",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:f445253838fb0eca474cce2bca4ec671",
+          "type": "paragraph",
+          "contentHash": "e5bfc50f2049ca9b8232764f99d65a8a97295c7a1f1aab4c022d2bd285116aec",
+          "formatFingerprint": "9540b8909d05ae37c65c29b77e23358f60935b80a8f438ca0a1626a29f85d839",
+          "format": {
+            "styleId": "ListParagraph",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Gradient Program:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:ae2722e681bd19eddb014d74766a49ba",
+          "type": "paragraph",
+          "contentHash": "c1ef9c070fb1b665a828706920a5659b9e811e20180ba7631f33ad96c94cdbb3",
+          "formatFingerprint": "24fd29b866424db58099dc1da53cc2747390ee8d7e3d1805266df558881d9383",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 276,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Seal Wash:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:46b09bee650c80fec38f57d9f9aeb7a8",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "cf2b44f0cfa4c8437cf0b8fafcb59970e65ec2ba644d183837b51f84c77e2f53",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 276,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:1f2876baa36c7ae2feac24def45f1154",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "64a5eafd1589cd7a3df13dd83d4aad65c6ac87e0bc1161390815b00d35579a1b",
+          "format": {
+            "styleId": "ListParagraph",
+            "indentLeftTwips": 0,
+            "indentFirstLineTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:59a7d96113def838e4257ce89e6b30f4",
+          "type": "paragraph",
+          "contentHash": "1c14485298ef7505092df42aee93e147490bc2841414a72ebb73c8f85bb24de6",
+          "formatFingerprint": "79aedba3252d528621e4c4e88ff5e72774b3ad38dc7c501a7d197693ffab6054",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Standard stock solution preparation:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:cfc6d61f98a840a9a40afb7c83c1a3c7",
+          "type": "paragraph",
+          "contentHash": "72e842c2165a8f07fc64796e10deda97a5653a9733fd259e41ace51d3a66e73e",
+          "formatFingerprint": "2be9d9ba5867865b0cbf3a6c825c79c36822d3864d88314f1e37acf1f9c32ac1",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Weigh and transfer about  5.0 \u00B1 0.5 mg each of Stage III (Insitu) impurity III, standard into a 50 ",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:53b3c971f616febabc09b46e5a0ad608",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:00bee81a8fbaeb60ab7125482b363186",
+          "type": "paragraph",
+          "contentHash": "4d5a38f56c822f50e73fe932aba209804a2621f32477c8518cbf237a5ad31c91",
+          "formatFingerprint": "79aedba3252d528621e4c4e88ff5e72774b3ad38dc7c501a7d197693ffab6054",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Evaluation of system suitability:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:93b9398d9011be270a06927434555185",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "1af59cfd9869a14c86841562f32a44f68a7d21898da88cafdc84841d0f930142",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:dd54713e6a97bc8d3fe9696e83771da5",
+          "type": "paragraph",
+          "contentHash": "23edd9e6dda62d4f9570be3e76e26b7fbeef5587eae8c164a657ce87c68d7392",
+          "formatFingerprint": "290da95ebcb388f4b7335349dfa231831572a75b975651eacee1fc8b84a14f04",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Reference Chromatograms:",
+              "format": {
+                "bold": true,
+                "italic": true,
+                "colorHex": "000000"
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:9b7c39e030c7911ea968209687643f61",
+          "type": "paragraph",
+          "contentHash": "b7499bd62f0a1f1e9f8d1d3fa23078ab5af3f32bf5673a3fbedd5f03a44b07e5",
+          "formatFingerprint": "58b6a78e1a7e1bfd89f02ae67545e36149bc491ad2405c09d0bdac9e1a83ac06",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Consider stage IV  in the below chromatogram as stage III, stage-IV insitu as stage-III insitu",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:020403a41803c5c63c1715d1f75293d7",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "b0619096ad46091c13842dfd802b4d866ce9187772912d6e7c6039e8d4055df8",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:124458983604899211c241545730675d",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "b0619096ad46091c13842dfd802b4d866ce9187772912d6e7c6039e8d4055df8",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:e30bd0eb00377750e51b3dccb5f89509",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "1af59cfd9869a14c86841562f32a44f68a7d21898da88cafdc84841d0f930142",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:1c3a393a0cb8c2db569e38273d752031",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:070e96453bac5e0932a9e73340399fbd",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:988919076701bdda40d49a34d46b04e8",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:629db67f98e2943a9f84d7ffb9b96f21",
+          "type": "paragraph",
+          "contentHash": "6dfc4b6dc379b28dc3a2f559215c9833794f1aabe3f05a72a96ebdce31f754a2",
+          "formatFingerprint": "79aedba3252d528621e4c4e88ff5e72774b3ad38dc7c501a7d197693ffab6054",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Order of injection:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:1c62c6e5b8c4870dc6d22557dc40f719",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "tbl:body:1a45e2fbb3b8f8b210fdc984f054c9b8",
+          "type": "table",
+          "contentHash": "e57376c208d83f5203aae35ecd611906af6d90189190e3f1c7fa2d7b97d54324",
+          "formatFingerprint": "694e172b56ac1daa96e9f23221ce49d7f8cbd75353e2cf2a12222f0bfc2af3d0",
+          "unmodeledTablePropsDigest": "a7a3328c62b7b57bbeb952b761400970bfd2fbdfba5c7d5a9b659200749bb4ff",
+          "rows": [
+            {
+              "anchor": "tr:body:7c8023eee1329d28746ffc26d91cf695",
+              "contentHash": "9c68e135cd0969f1931d6de56cb3016783f66d2d5eb608474ce727ec824ed6ca",
+              "cells": [
+                {
+                  "anchor": "tc:body:3595bc5ae367117e296d78d17399786a",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "a468b4b72704a82fae5cfbbf355bcd7957da91890af064e8910bbfdbd552f603",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:04aa18e57380493a060b4f12313325e0",
+                      "type": "paragraph",
+                      "contentHash": "6a9120d5de66649d79c7ffe8c40c21df9ec95cfa05ff459c5c217719d2742dd4",
+                      "formatFingerprint": "9ff79f550faa1aa6bc5658400d38c0b9171eb1045115c98fe85bb7fd580a1762",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Name of the preparations",
+                          "format": {
+                            "italic": true,
+                            "underline": {
+                              "kind": "Single"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:2e1399299874347601c3ab70bdd0dd0c",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "9137e2cdff9bbc0a5843264aa030a4a2024608b6fe86f9af1bc3f018ffdbf3da",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:11eb759101e7685cab780b7fa5b2531f",
+                      "type": "paragraph",
+                      "contentHash": "ca5e725d60de61cbea4b8a5697166dd53b726b528f2d31ae6e01bf5480ba9d11",
+                      "formatFingerprint": "9ff79f550faa1aa6bc5658400d38c0b9171eb1045115c98fe85bb7fd580a1762",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "No. of  injections",
+                          "format": {
+                            "italic": true,
+                            "underline": {
+                              "kind": "Single"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:c1270b87424a7974cadbc729d9df1728",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "9ed1a0a7350f775efeadde1ba94baa63722a27b3771536f16155013db6b9f952",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:46172a9e78e53cef034142289297eee2",
+                      "type": "paragraph",
+                      "contentHash": "d4e8830a71c73edffe0115b8abad16b0b5cb2e121047c64cd01995203cfad062",
+                      "formatFingerprint": "9ff79f550faa1aa6bc5658400d38c0b9171eb1045115c98fe85bb7fd580a1762",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Purpose",
+                          "format": {
+                            "italic": true,
+                            "underline": {
+                              "kind": "Single"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:252eb99fb6b6d940011b00fbf1f36083",
+              "contentHash": "e37431115ee2d627648ee217f8b87807773d536d797b21dc1baacf637ef1f8f9",
+              "cells": [
+                {
+                  "anchor": "tc:body:d611ad45ce9fc9de24236bad44615416",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "ec1b16e982bea1b9d095e84a763784a38c263f934f0c9ecd8f0eddf77d45dc2a",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:a641f8f53a011dfadde687ce87a8aa8b",
+                      "type": "paragraph",
+                      "contentHash": "2c3d371cbfd31225ec25b3e9798107cb8ca008f2357b98d13d1eddb7b042cc44",
+                      "formatFingerprint": "6aa54af00a5adca9903fdd69e2db466db7517553a74c904ffe36a81a07f76e94",
+                      "format": {
+                        "justification": "Center",
+                        "indentRightTwips": -18,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Blank",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:382750e4ef5a1f346c3db09ee95ffc22",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "524fe888ae64bf99df7f029f6fa0ba47739cfc7e48247c1ca3b3f17c76c6b540",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:72d839712724fe97dbac04daf3580860",
+                      "type": "paragraph",
+                      "contentHash": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b",
+                      "formatFingerprint": "cb0b54a18544b98a5dc9dfef88658a6e840ceba79040d580bd554906266e08e3",
+                      "format": {
+                        "justification": "Center",
+                        "indentLeftTwips": -18,
+                        "indentRightTwips": -139,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "1",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:9d30efa1af8778f5dc71087d4c8c1f5b",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "ec1b16e982bea1b9d095e84a763784a38c263f934f0c9ecd8f0eddf77d45dc2a",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:6f2e1d5cf2d4289a635c7211c97930ee",
+                      "type": "paragraph",
+                      "contentHash": "2c3d371cbfd31225ec25b3e9798107cb8ca008f2357b98d13d1eddb7b042cc44",
+                      "formatFingerprint": "5bee807f5ea38ea1ad907b3bcf0ac61bc4df3ae2cb62665ef1083b7f52b84171",
+                      "format": {
+                        "justification": "Center",
+                        "indentLeftTwips": -77,
+                        "indentRightTwips": -18,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Blank",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:33f8bd80ed7b5e6ba5cb4b71536fdbf8",
+              "contentHash": "5f5f50c4b72d6aef4b413e42e3f06f6ee2705cca2fce62cf95a47bd50412a521",
+              "cells": [
+                {
+                  "anchor": "tc:body:224578c16824aeff9a2dfc944ada3538",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "52b7edfac23673d8e04980d529e85d6806bae48c14d6e2e0c22dde0f29101d3c",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:91d02b3a8184aa96ea74845952ee22b0",
+                      "type": "paragraph",
+                      "contentHash": "1d9bdc2ecb2d86d127adf1812b907592bc9b5cfa8e2516acfee74ed161b922f9",
+                      "formatFingerprint": "6aa54af00a5adca9903fdd69e2db466db7517553a74c904ffe36a81a07f76e94",
+                      "format": {
+                        "justification": "Center",
+                        "indentRightTwips": -18,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Standard solution",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:3f072be67a04259031d2b8f5aaea9181",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "1d3790d0a798e9b4294de459d545464e5963e1a05da859bf5ab95da1d52b63f5",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:e26a975ffc1e2f99e51e7272e8813481",
+                      "type": "paragraph",
+                      "contentHash": "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+                      "formatFingerprint": "cb0b54a18544b98a5dc9dfef88658a6e840ceba79040d580bd554906266e08e3",
+                      "format": {
+                        "justification": "Center",
+                        "indentLeftTwips": -18,
+                        "indentRightTwips": -139,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "3",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:bce75a9db3a7ab73fa3b6d728723029b",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "42ea6d81510d8c4908b17111db5d3f2a445d36b1f13bd9316775399404adcda7",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:2aababb51f8282614e89348d0ae0a2a7",
+                      "type": "paragraph",
+                      "contentHash": "e8690c16964e51b6fdc50b80d7d16170660548019b8e793dcec285f724af3428",
+                      "formatFingerprint": "5bee807f5ea38ea1ad907b3bcf0ac61bc4df3ae2cb62665ef1083b7f52b84171",
+                      "format": {
+                        "justification": "Center",
+                        "indentLeftTwips": -77,
+                        "indentRightTwips": -18,
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "System suitability",
+                          "format": {
+                            "colorHex": "000000"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:781c597974e8157b8e6c34c8f2d628d2",
+              "contentHash": "a30495d82434c5c8817238082a068a4eb3e723e1ded1745034babb1d5757af82",
+              "cells": [
+                {
+                  "anchor": "tc:body:2e8679d009d7c38b209b250cf2f1f9e7",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "efc5ee0ba9340e0dc31fda428c5979ab37dc3aa324bac3596061037f5aef5e58",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:8536ca3363f51177b8408a4cbbf3de00",
+                      "type": "paragraph",
+                      "contentHash": "a03dae6e033f35f55c0c3af55127209b648d294c49cfeac99f4f216e2859ba38",
+                      "formatFingerprint": "7eeb248fa2a2fbe8be4212c0c79a3f99cafbc2f6c58beee738f3386187f14dfa",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Sample preparation-1",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:f9d20f1d9f9f8d4ae5d47c3e378d0c72",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "53c19bcd32f55b2f97fbb953a1b8f72ce9b57bed53f7279eef29d8f6ff4f7122",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:5d4cf2a607f8e625410dfbb58d3e972b",
+                      "type": "paragraph",
+                      "contentHash": "b8d52dc3f650996a66e32d4fd4f40129f6d5f742a20893615fe1b8dbedac6039",
+                      "formatFingerprint": "e6558b7389396725684018ee3e9067b5b90ab182ba77b658225164b00652f4a8",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "  1",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:6e30a454e58db2e156abe78c8bea45b1",
+                  "gridSpan": 1,
+                  "vMerge": "Restart",
+                  "contentHash": "8452a3f21b61c9e3b195d7b182a2fa08eda74494929d8d7dc3a2195162264a02",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:815f3bdb70226f23de036f89574db65d",
+                      "type": "paragraph",
+                      "contentHash": "1863a3af252198303a7b3d2650f69399b766821a29d1dc63b2092800b4f50d75",
+                      "formatFingerprint": "7eeb248fa2a2fbe8be4212c0c79a3f99cafbc2f6c58beee738f3386187f14dfa",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Sample analysis",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:1ae18185fc7a2b0ddaf6d45c627156b2",
+              "contentHash": "5d262d629e80ef1556570aa6c589bcaacf2331db423d48c1a3879ac909ab6e4f",
+              "cells": [
+                {
+                  "anchor": "tc:body:a10838254cd87fa9d2c1f0ac6e6588cd",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "07d349c6a60543d9b3160d97ba333895af4975b0b80fce18c9a1e18d3fe2bdbc",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:33620ab4287122013005ec75134d7f58",
+                      "type": "paragraph",
+                      "contentHash": "142c01f81a6b9eafcc8f87cd61b83487511ff8c7d7237140a1ca92eddcd6be39",
+                      "formatFingerprint": "7eeb248fa2a2fbe8be4212c0c79a3f99cafbc2f6c58beee738f3386187f14dfa",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Sample preparation-2",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:b85926361c9c518667522ef58934312c",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "53c19bcd32f55b2f97fbb953a1b8f72ce9b57bed53f7279eef29d8f6ff4f7122",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:9c17b3d02a7e72c014bb38cda83715ea",
+                      "type": "paragraph",
+                      "contentHash": "b8d52dc3f650996a66e32d4fd4f40129f6d5f742a20893615fe1b8dbedac6039",
+                      "formatFingerprint": "e6558b7389396725684018ee3e9067b5b90ab182ba77b658225164b00652f4a8",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "  1",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:6cbcda1dd08b32179aa860f6e0f74a19",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "8452a3f21b61c9e3b195d7b182a2fa08eda74494929d8d7dc3a2195162264a02",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:95bb4b147e79fa225f932527547682a2",
+                      "type": "paragraph",
+                      "contentHash": "1863a3af252198303a7b3d2650f69399b766821a29d1dc63b2092800b4f50d75",
+                      "formatFingerprint": "7eeb248fa2a2fbe8be4212c0c79a3f99cafbc2f6c58beee738f3386187f14dfa",
+                      "format": {
+                        "justification": "Center",
+                        "lineSpacing": {
+                          "valueTwips": 360,
+                          "rule": "Auto"
+                        }
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Sample analysis",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:3a707fe947fc1ca9850a7f77613ec003",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "1af59cfd9869a14c86841562f32a44f68a7d21898da88cafdc84841d0f930142",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:6e35212151762cdbe5926855be524918",
+          "type": "paragraph",
+          "contentHash": "38113c36d1f8eb3558d5868d285a7ddcba11128374fd2f13537255c351ea8c2f",
+          "formatFingerprint": "a1e986276cfa76e95f31c39521a44411ed3d83fa3f349bb33d22d252b7b7e51a",
+          "format": {
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "                ",
+              "format": {
+                "colorHex": "000000",
+                "highlight": "yellow"
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:cc64621c188716d400d0ee4aef0d831d",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "eef0302b1f1d6fda66a4c04eef30f428b509ae5a7b46b270634f74d366c8940b",
+          "format": {
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:c82ba7d1bd3b7a0a39b235a6a7c94a26",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "eef0302b1f1d6fda66a4c04eef30f428b509ae5a7b46b270634f74d366c8940b",
+          "format": {
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:7ba21b1ed0daba50dfaff069f512573f",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "eef0302b1f1d6fda66a4c04eef30f428b509ae5a7b46b270634f74d366c8940b",
+          "format": {
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:e7050be897289bb88277659e3d0fa65b",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "eef0302b1f1d6fda66a4c04eef30f428b509ae5a7b46b270634f74d366c8940b",
+          "format": {
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:2939006d5081da9646f918f98867998e",
+          "type": "paragraph",
+          "contentHash": "399141be1d30ac2656d89eedcf0d8dcedaa72d6c29bf959cae243dc7b1442cf6",
+          "formatFingerprint": "a1e986276cfa76e95f31c39521a44411ed3d83fa3f349bb33d22d252b7b7e51a",
+          "format": {
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "      ",
+              "format": {
+                "colorHex": "000000",
+                "highlight": "yellow"
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:ca15de16ab027e6a8abcf9ee990f7fcd",
+          "type": "paragraph",
+          "contentHash": "e201358d08246e1b44edabd8ed9aac89b896114dc3cc221f9041e652c6db9bff",
+          "formatFingerprint": "79aedba3252d528621e4c4e88ff5e72774b3ad38dc7c501a7d197693ffab6054",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Calculations:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:ffe6c0cdf907f49a8595e936fa721035",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:260a65d16fd577e564ff3909920662b1",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:a0e14fe42c69d469e911e2f6844bdcd6",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:4527359fe8571ed095e4c44c4dda2bfb",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:768a3f0c536f7f0a7775b31fce9f7d9f",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "li:body:fc95bfdd312b25f9eef4034a4cf0ea80",
+          "type": "paragraph",
+          "contentHash": "3f311cf0e8c03e10067ccde6919bc097c97532e3c09c41ac19a65656274f6235",
+          "formatFingerprint": "08934c82c3d98d30637d0378274225f737e4059e2251aad30d33de22ecd3ccd5",
+          "list": {
+            "numId": 34,
+            "abstractNumId": 18,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": false
+          },
+          "format": {
+            "styleId": "Header",
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "indentFirstLineTwips": -720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Assay (By HPLC, %w/w) (On dried basis) :",
+              "format": {
+                "bold": true
+              }
+            },
+            {
+              "kind": "text",
+              "text": " ",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:2e615c926554ceb9083c44da575eee57",
+          "type": "paragraph",
+          "contentHash": "9dcf97a184f32623d11a73124ceb99a5709b083721e878a16d78f596718ba7b2",
+          "formatFingerprint": "087df2841006101f8f1506ad8b2ebbd7778335ff4108eb0928620b29b80e2786",
+          "format": {
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "tab"
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:c2766af37e03dcb4c473081ce57ae1fa",
+          "type": "paragraph",
+          "contentHash": "ab8b217de452623ed71598208195511cbb43e087a05dc044ac8da5d75f5c5f10",
+          "formatFingerprint": "78e5b328757d05c565a4e2a09d47c5d6a50274123cce74a1f11e788f98735f83",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Preparation of diluted orthophosphoric acid solution (10% v/v):",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:700406afc233305f1025f8ff3af230bb",
+          "type": "paragraph",
+          "contentHash": "f6e8322dd0efc9c18afd6921b87a86240254da2d71d6e8ac3c684a7c2b832030",
+          "formatFingerprint": "409a8f54e377dc9559465cb70994880589914c24fc19b02b6f6d16e413681e67",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Add about 10 mL of orthophosphoric acid into a 100 mL volumetric flask.  Make up to the volume with water.  Mix well.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:f338350e785ddfadebf91b5d8b920441",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "ddcd236be265225444aed1b8f75cdd9cd94d30fd157bbae0a7b7fc6e97882362",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:6f3fa81ec9c44a10e336ff3af28c2e5b",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "ddcd236be265225444aed1b8f75cdd9cd94d30fd157bbae0a7b7fc6e97882362",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:3b9a5b1af0f7056b883de6067bab7e1d",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "cd079d237a044a1d8ec720d70f06eeea734b1837310711c5eee6a6498bb245b7",
+          "format": {
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:fe4a98a97e45f78b15cbf0b6b387bda4",
+          "type": "paragraph",
+          "contentHash": "d0ec468e9649a544abb8ac104271a8a601287760da6cd3d1311b523992de22cd",
+          "formatFingerprint": "01765352ecaa63def9afb564f499ab71856f68ea1ddf80517450afde7d79e894",
+          "format": {
+            "justification": "Both",
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "           ",
+              "format": {
+                "bold": true
+              }
+            },
+            {
+              "kind": "text",
+              "text": "Buffer solution Preparation:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:ecb83adc6af333f152f70ca737a3a0ab",
+          "type": "paragraph",
+          "contentHash": "0a5a01600260595d8f82ef9dc5e1f4a0220b1bc9a0539d8ae963db7c641c2b0f",
+          "formatFingerprint": "2deb57e9a0c4e9e483c4c474822bfeb3151fc0e972af4cc9b55924adef0be404",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Transfer 2.0 mL of triethylamine into a 1000 mL of water, and mix well. Adjust the pH ",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:2d24183b969dfaecaa832401056fcc5a",
+          "type": "paragraph",
+          "contentHash": "d8e8f73290711a8af9524529090f752adbf908a00c66c506fe8de1215d67ec4c",
+          "formatFingerprint": "2deb57e9a0c4e9e483c4c474822bfeb3151fc0e972af4cc9b55924adef0be404",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "8 \u00B1 0.05 with diluted orthophosphoric acid solution. Filter it through 0.45 \u00B5 filter paper [Make: Millipore] and degas.   ",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:71b14cc90148a10ef2e4626f8612a54c",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "8b226534a050085a101c654522c85e88dee13296464e9e8ea36e66d98d270c29",
+          "format": {
+            "indentLeftTwips": 630
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:0219ec06300a81cdc7fc1300a34a287a",
+          "type": "paragraph",
+          "contentHash": "74d12407c6117b5073aa50081cfd2596ab47288ed5347aec089d7f1eced26969",
+          "formatFingerprint": "6c7c24f84cfffa1cea9d9c7bafb34436e45de0765179542bc9f757d5df647406",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Mobile phase preparation:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:b4884782b5eea5d2a2dfae14776afc01",
+          "type": "paragraph",
+          "contentHash": "f778471f3e4eb74dd55249945a887ef2f0ca5ff811f3522fcb4c9daad018c875",
+          "formatFingerprint": "f4d8c4b2d2e019345a5e38f19d42b475451acff2e1115d374d26f6df126d1d3c",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Transfer about 350 mL of buffer and 650 mL of Acetonitrile into a suitable container.  Mix well.  Sonicate to degas.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:6ea2c88e595238a15d8563c73162d50f",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "e296d60fb36c99cb3e8d1d84222a715eed9b8153a6f1845ad5af9986dd2ef47c",
+          "format": {
+            "indentLeftTwips": 630
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:9543a533f2014d0d20cb486e554a544b",
+          "type": "paragraph",
+          "contentHash": "c1ef9c070fb1b665a828706920a5659b9e811e20180ba7631f33ad96c94cdbb3",
+          "formatFingerprint": "6c7c24f84cfffa1cea9d9c7bafb34436e45de0765179542bc9f757d5df647406",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Seal Wash:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:ed32bc78342a3b70ec2cf93691f1ad81",
+          "type": "paragraph",
+          "contentHash": "4377b2a07be4bb1a7cb886b64badc7f61ee1546ec4956b8395c7e3893b939238",
+          "formatFingerprint": "8933ce493ae98d9aea9efcaabe1e8d63b80840ed456b59bff567d50fafab5491",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Transfer about 900 mL of water and 100 mL of Acetonitrile into a suitable container.  Mix well.  Sonicate to degas.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:54f3f1dded7b13e85f425ba2364560b8",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "1404169fcff0f74815f923f60e85ec90b72842c7a4f64a7ff77fca0802331049",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:fa6781d1ac3a1d03ea71190a785ec303",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:40f3c6d1691187b19199506ee66d94ce",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:38ec8794833c1bd6a0b35caa3afe5639",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:c34a2d650543890af2aae55b75180906",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:d26be89a925bb4336d0f103a01f0ec13",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:a1f19e55f0e3a6ca121c8dcd41af46b5",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:a54882b65077115cb5e1bd3a3da365d1",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:99d55612400d0f1b4b5957efeb7cddf0",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:415a13f707fe28a2f4a64cd9454d1c6a",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:6ba62a91daba5d53c3c9f955df838f43",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:55047cec87a9be4dd42e892dfff26c1a",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:345ae0c1b33368742ec6ac0e464a587d",
+          "type": "paragraph",
+          "contentHash": "23edd9e6dda62d4f9570be3e76e26b7fbeef5587eae8c164a657ce87c68d7392",
+          "formatFingerprint": "dc0d8bbe22b072e47f4447b55eb54b51d7f7d19779762ee15b6f56da809a2bfc",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Reference Chromatograms:",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:1933a72aae0e0f7019a4ea60b71657bd",
+          "type": "paragraph",
+          "contentHash": "91f576c760ca202e983d925489399474ca3d147129e6b1d4a04f825eff146a78",
+          "formatFingerprint": "d2f4a7e614bbca3db027a08a911661e7a65fdf87bf1dd3c15445ccdf34a89872",
+          "format": {
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Consider stage IV  in the below chromatogram as stage III",
+              "format": {
+                "bold": true,
+                "italic": true
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:a7acb5c959f8ee084e47c43488b2c8f9",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "dd7dc7911a601c980dcffd0142de7b500004dc754b7a2ecd0945f69b75101276",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:fd9916d65a3d2cc4096639e3b7738f1d",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:3fb855d2944964d3117347f35c3e4cdd",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:78133866864fdd0e60aaae945eb6acba",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:bb9b2b0534195aeb34a55475a6d4b727",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f86638b1e0d147398b3ddc52565375867ceb72ee6eddbf9b54991be7567c8550",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 630,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:b85f3d7b9113fce13a6c66decc529d8e",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
+          "format": {
+            "justification": "Both",
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:143c7754112f181828648e6495dcc94b",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "d89e4736e3c388360471261e4e9be39de9f3a7f12e97b5b05acbd2fb1918f085",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:6401d9bbadf3905f3f5c827a602b27b1",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "38031ee8d96ab1ab8b98cc24425dc155340c7ea3a8612b6abc52c9c8b62387e3",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:729b3bb9c0eed068188b74a5adce9388",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "38031ee8d96ab1ab8b98cc24425dc155340c7ea3a8612b6abc52c9c8b62387e3",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:5248e68a9795627deb7011ee465d14b8",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "38031ee8d96ab1ab8b98cc24425dc155340c7ea3a8612b6abc52c9c8b62387e3",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:8ccc965614067c4befaf219b5469edc5",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "38031ee8d96ab1ab8b98cc24425dc155340c7ea3a8612b6abc52c9c8b62387e3",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:c2308e4012d61807c53fdc4917ac4229",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "38031ee8d96ab1ab8b98cc24425dc155340c7ea3a8612b6abc52c9c8b62387e3",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:257556bcd08a39eca5aebb54b146d6e8",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "38031ee8d96ab1ab8b98cc24425dc155340c7ea3a8612b6abc52c9c8b62387e3",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:80961ea3baff61067ae05f05b097d145",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "38031ee8d96ab1ab8b98cc24425dc155340c7ea3a8612b6abc52c9c8b62387e3",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:b6de1bfb9296e9899690316103466261",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "38031ee8d96ab1ab8b98cc24425dc155340c7ea3a8612b6abc52c9c8b62387e3",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:32699ffa12d39171cf21f11d9ed08c31",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "d89e4736e3c388360471261e4e9be39de9f3a7f12e97b5b05acbd2fb1918f085",
+          "format": {
+            "indentLeftTwips": 720,
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "p:body:648fdec958e83003e26098e1bfe5ffa6",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "9decf6ceae0ce2481028730e730a3bc1f8c0abdc7a1af805f11d1fe8b520e921",
+          "format": {
+            "lineSpacing": {
+              "valueTwips": 360,
+              "rule": "Auto"
+            }
+          },
+          "inlines": []
+        },
+        {
+          "anchor": "sec:body:fe574d4b8e0fb6ceb4a4f5db2e1761ed",
+          "type": "sectionBreak",
+          "contentHash": "085eb2117de05d6ab7f909737008466f68950cb54da6877cebd7552fecfbf210",
+          "formatFingerprint": "2bd828c4823baecf47cbe86fb5c8c8ac6493d09110b6b0ad1f25ff9992feeae0",
+          "format": {
+            "pageWidthTwips": 11909,
+            "pageHeightTwips": 16834,
+            "marginTopTwips": 720,
+            "marginBottomTwips": 720,
+            "marginLeftTwips": 1152,
+            "marginRightTwips": 720
+          }
+        }
+      ]
+    },
+    {
+      "scope": "hdr1",
+      "kind": "Default",
+      "blocks": [
+        {
+          "anchor": "tbl:hdr1:eb7a5600ad66c0a6a0d71b28b0a80627",
+          "type": "table",
+          "contentHash": "7ee5ca3cd69d9d6549ac8fc284cf2f85fe121fbf536b0b8f0a915863b9965b1c",
+          "formatFingerprint": "92fa7acc1cfc5e64607e34d1c3eb6229187bb87378b101036de5c32fec711e00",
+          "unmodeledTablePropsDigest": "a051d21db7ca89fe48335bb7024dc10041e2bfaa1f1782a50ef61f73d61a2b07",
+          "rows": [
+            {
+              "anchor": "tr:hdr1:d1d182f52317b2307512df7e7095e674",
+              "contentHash": "3ebbc5a556f5136820f02615b5203f41b78a45a5ec22b66c2fb661316658c670",
+              "cells": [
+                {
+                  "anchor": "tc:hdr1:cfe6e08cb1e4c81e0391652536637b13",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                  "blocks": [
+                    {
+                      "anchor": "p:hdr1:d7f6e3483120842a7a5bb0ec80632c51",
+                      "type": "paragraph",
+                      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                      "formatFingerprint": "4e4ebf6a75a369efe603ea0f60a3bc7f84e365e9189df2a4e003c68924179da6",
+                      "format": {},
+                      "inlines": []
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:hdr1:faf334ecc34b905e02cbae46399dbf98",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                  "blocks": [
+                    {
+                      "anchor": "p:hdr1:7f4034e799c527a3eb360751f7e7cce2",
+                      "type": "paragraph",
+                      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                      "formatFingerprint": "bc1810d96ab8e9b402670349af7123a8ed591f29b631768dcb3901bdf62328ff",
+                      "format": {
+                        "justification": "Right"
+                      },
+                      "inlines": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:hdr1:80a30172b75714ead449d0927253fb04",
+          "type": "paragraph",
+          "contentHash": "9aaff82411067c2a370b9e99ea5848a7922e16f8ac88176cce74fcde8bed01aa",
+          "formatFingerprint": "7702c02fcef6e177f0151c913986ad62bfdec446fc484d99b34738b1dd4c247e",
+          "format": {
+            "styleId": "Header"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Head1",
+              "format": {
+                "colorHex": "FFFFFF"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "scope": "hdr2",
+      "kind": "Even",
+      "blocks": [
+        {
+          "anchor": "p:hdr2:6491c14353aba2bee1539483b9a6693f",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "fc0d060084c11a06375c434c299a62898b6042d303a521bc29356781fabba417",
+          "format": {
+            "styleId": "Header"
+          },
+          "inlines": [
+            {
+              "kind": "field",
+              "instruction": "PAGE  ",
+              "cachedResult": []
+            }
+          ]
+        },
+        {
+          "anchor": "p:hdr2:11d9eeaa8ceaaf38172f7c39d02bdc4d",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "2a548a2377384c87610ae000808747194baf86d4e662ccaec48334a5dca1fef5",
+          "format": {
+            "styleId": "Header",
+            "indentRightTwips": 360
+          },
+          "inlines": []
+        }
+      ]
+    },
+    {
+      "scope": "hdr3",
+      "kind": "Default",
+      "blocks": [
+        {
+          "anchor": "tbl:hdr3:eb7a5600ad66c0a6a0d71b28b0a80627",
+          "type": "table",
+          "contentHash": "7ee5ca3cd69d9d6549ac8fc284cf2f85fe121fbf536b0b8f0a915863b9965b1c",
+          "formatFingerprint": "3736536cf5ada1a3fec77994940cd623395bbb572c791659979143162dcfaebf",
+          "unmodeledTablePropsDigest": "c1cb7699ad1f7dc12505046f97e07a038a3aec260736c93e14cabe7eaae308a7",
+          "rows": [
+            {
+              "anchor": "tr:hdr3:d1d182f52317b2307512df7e7095e674",
+              "contentHash": "3ebbc5a556f5136820f02615b5203f41b78a45a5ec22b66c2fb661316658c670",
+              "cells": [
+                {
+                  "anchor": "tc:hdr3:cfe6e08cb1e4c81e0391652536637b13",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                  "blocks": [
+                    {
+                      "anchor": "p:hdr3:d7f6e3483120842a7a5bb0ec80632c51",
+                      "type": "paragraph",
+                      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                      "formatFingerprint": "4e4ebf6a75a369efe603ea0f60a3bc7f84e365e9189df2a4e003c68924179da6",
+                      "format": {},
+                      "inlines": []
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:hdr3:faf334ecc34b905e02cbae46399dbf98",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                  "blocks": [
+                    {
+                      "anchor": "p:hdr3:7f4034e799c527a3eb360751f7e7cce2",
+                      "type": "paragraph",
+                      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                      "formatFingerprint": "bc1810d96ab8e9b402670349af7123a8ed591f29b631768dcb3901bdf62328ff",
+                      "format": {
+                        "justification": "Right"
+                      },
+                      "inlines": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:hdr3:4e8f15449b7cc1328a6bc6fdb5f929f2",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "6792a7af4a40e9e3118f8d5ce865f2e445758e95d94d08573bcb764dc7e650f4",
+          "format": {},
+          "inlines": []
+        }
+      ]
+    },
+    {
+      "scope": "ftr1",
+      "kind": "Default",
+      "blocks": [
+        {
+          "anchor": "p:ftr1:bf37413fc199a419bcd9e2b5bbbde73c",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "ab0b7c7cadf34b49221dc9e861aaba114cabd56513ad8cb522998c9ae871c7c6",
+          "format": {
+            "styleId": "Footer"
+          },
+          "inlines": []
+        }
+      ]
+    }
+  ]
+}
