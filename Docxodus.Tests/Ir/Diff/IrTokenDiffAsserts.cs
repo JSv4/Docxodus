@@ -22,8 +22,10 @@ internal static class IrTokenDiffAsserts
     /// <item>Coverage: left spans, concatenated in op order, tile <c>[0, left.Count)</c> exactly once
     /// ascending (no gap, no overlap); right spans tile <c>[0, right.Count)</c> likewise.</item>
     /// <item>Equal/FormatChanged ⇒ pairwise-equal MatchKeys across the span.</item>
-    /// <item>Equal ⇒ pairwise-EQUAL Format records; FormatChanged ⇒ pairwise-UNEQUAL Format records at
-    /// EVERY position (a FormatChanged span is a maximal run of format-differing positions).</item>
+    /// <item>Equal ⇒ pairwise format-EQUAL under the policy; FormatChanged ⇒ pairwise format-UNEQUAL at
+    /// EVERY position (a FormatChanged span is a maximal run of format-differing positions). "Format
+    /// equal" follows <see cref="IrFormatComparison"/>: modeled-only (default) ignores unmodeled rPr
+    /// noise, Full uses full record equality.</item>
     /// <item>No two adjacent ops share a coalescible kind boundary that should have merged: adjacent
     /// Equal-Equal, Insert-Insert, Delete-Delete are forbidden (they would not be maximal). Adjacent
     /// FormatChanged-FormatChanged and Equal-FormatChanged are allowed (the format pass produces
@@ -32,8 +34,10 @@ internal static class IrTokenDiffAsserts
     /// </list>
     /// </summary>
     public static void AssertInvariants(
-        IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right, IrTokenDiff diff)
+        IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right, IrTokenDiff diff,
+        IrDiffSettings? settings = null)
     {
+        var comparison = (settings ?? new IrDiffSettings()).FormatComparison;
         int leftCursor = 0, rightCursor = 0;
         IrTokenOp? prev = null;
 
@@ -68,7 +72,7 @@ internal static class IrTokenDiffAsserts
                         var l = left[op.LeftStart + k];
                         var r = right[op.RightStart + k];
                         Assert.Equal(l.MatchKey, r.MatchKey);      // pairwise-equal MatchKeys
-                        bool fmtEqual = Equals(l.Format, r.Format);
+                        bool fmtEqual = IrModeledFormat.RunFormatEqual(l.Format, r.Format, comparison);
                         if (op.Kind == IrTokenOpKind.Equal)
                             Assert.True(fmtEqual, "Equal position must have equal Format records");
                         else

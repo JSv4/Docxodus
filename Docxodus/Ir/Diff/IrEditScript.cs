@@ -30,8 +30,9 @@ internal enum IrEditOpKind
     /// <summary>
     /// A block present on both sides but neither content- nor format-equal (projects an
     /// <see cref="IrAlignmentKind.Modified"/> entry). Both anchors set. For a PARAGRAPH pair
-    /// <see cref="IrEditOp.TokenDiff"/> carries the intra-block token diff; for a non-paragraph pair
-    /// (table / opaque / section break) it is null in M2.2 Task 2 — table row/cell granularity is Task 4.
+    /// <see cref="IrEditOp.TokenDiff"/> carries the intra-block token diff; for a TABLE pair
+    /// <see cref="IrEditOp.TableDiff"/> carries the nested row/cell diff (M2.2 Task 4); for any other
+    /// non-paragraph pair (opaque / section break) both are null (no sub-block model).
     /// </summary>
     ModifyBlock,
 
@@ -81,8 +82,10 @@ internal enum IrEditOpKind
 /// <list type="bullet">
 /// <item><see cref="IrEditOpKind.EqualBlock"/> / <see cref="IrEditOpKind.FormatOnlyBlock"/>: both
 /// anchors set; <see cref="TokenDiff"/>, <see cref="MoveGroupId"/>, <see cref="IsMoveSource"/> null.</item>
-/// <item><see cref="IrEditOpKind.ModifyBlock"/>: both anchors set; <see cref="TokenDiff"/> non-null for
-/// paragraph pairs, null for non-paragraph pairs (Task 4).</item>
+/// <item><see cref="IrEditOpKind.ModifyBlock"/>: both anchors set; for a paragraph pair
+/// <see cref="TokenDiff"/> is non-null and <see cref="TableDiff"/> null; for a TABLE pair
+/// <see cref="TableDiff"/> is non-null and <see cref="TokenDiff"/> null (M2.2 Task 4); for any other
+/// non-paragraph pair both are null.</item>
 /// <item><see cref="IrEditOpKind.InsertBlock"/>: <see cref="RightAnchor"/> set, <see cref="LeftAnchor"/> null.</item>
 /// <item><see cref="IrEditOpKind.DeleteBlock"/>: <see cref="LeftAnchor"/> set, <see cref="RightAnchor"/> null.</item>
 /// <item><see cref="IrEditOpKind.MoveBlock"/> / <see cref="IrEditOpKind.MoveModifyBlock"/>:
@@ -97,7 +100,65 @@ internal sealed record IrEditOp(
     string? RightAnchor,
     IrTokenDiff? TokenDiff,
     int? MoveGroupId,
-    bool? IsMoveSource);
+    bool? IsMoveSource,
+    IrTableDiff? TableDiff = null);
+
+/// <summary>
+/// The kind of a row-level operation in an <see cref="IrTableDiff"/> (M2.2 Task 4). Rows carry a
+/// <c>ContentHash</c> but no <c>FormatFingerprint</c>, so there is no row-level FormatOnly — the kinds
+/// reduce to content classifications.
+/// </summary>
+internal enum IrRowOpKind
+{
+    /// <summary>Rows whose <c>ContentHash</c> is equal, on the in-order spine. Both anchors set; no cell ops.</summary>
+    EqualRow,
+
+    /// <summary>Rows paired in a gap but content-differing. Both anchors set; <see cref="IrRowOp.CellOps"/> carries the per-cell diff.</summary>
+    ModifyRow,
+
+    /// <summary>A right-only row. <see cref="IrRowOp.RightRowAnchor"/> set, left null, no cell ops.</summary>
+    InsertRow,
+
+    /// <summary>A left-only row. <see cref="IrRowOp.LeftRowAnchor"/> set, right null, no cell ops.</summary>
+    DeleteRow,
+
+    /// <summary>An exact-content row relocated off the spine (only emitted when free; see <see cref="IrTableDiffer"/>).</summary>
+    MovedRow,
+}
+
+/// <summary>
+/// One row-level operation in a table diff. For <see cref="IrRowOpKind.ModifyRow"/>,
+/// <see cref="CellOps"/> carries the positional per-cell diff; all other kinds carry a null
+/// <see cref="CellOps"/>. <see cref="MoveGroupId"/> links a <see cref="IrRowOpKind.MovedRow"/> source
+/// and destination (one row op per side, like the block-level move convention).
+/// </summary>
+internal sealed record IrRowOp(
+    IrRowOpKind Kind,
+    string? LeftRowAnchor,
+    string? RightRowAnchor,
+    IrNodeList<IrCellOp>? CellOps,
+    int? MoveGroupId = null,
+    bool? IsMoveSource = null);
+
+/// <summary>
+/// One cell-level operation inside a <see cref="IrRowOpKind.ModifyRow"/>. Cells pair POSITIONALLY within
+/// the row (grid-aware pairing — gridSpan/vMerge-aware — is M2.3+; documented). A paired cell's
+/// paragraph blocks are aligned with the same block machinery and each Modified paragraph pair carries a
+/// token diff in <see cref="BlockOps"/>, so a cell-text edit surfaces as a token diff IN THE CELL rather
+/// than a whole-table blob. An unpaired cell (column count differs) carries one anchor and a null
+/// <see cref="BlockOps"/>.
+/// </summary>
+internal sealed record IrCellOp(
+    string? LeftCellAnchor,
+    string? RightCellAnchor,
+    IrNodeList<IrEditOp>? BlockOps);
+
+/// <summary>
+/// The nested diff of one Modified table pair (M2.2 Task 4): an ordered list of <see cref="IrRowOp"/>
+/// in right-table row order (with deleted rows interleaved at their left positions, mirroring the
+/// block-level convention).
+/// </summary>
+internal sealed record IrTableDiff(IrNodeList<IrRowOp> RowOps);
 
 /// <summary>
 /// The diff-as-data product: an ordered, anchor-addressed, JSON-round-trippable, apply-verifiable

@@ -38,18 +38,18 @@ internal static class IrTokenDiffer
     public static IrTokenDiff Diff(
         IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right, IrDiffSettings settings)
     {
-        _ = settings; // accepted for surface stability; M2.2 Task 1 keys purely on the precomputed
-                      // MatchKey/Format the tokenizer already produced under these settings.
-
-        // 1. Raw token-grain edits via Myers, already coalesced into same-kind spans.
+        // 1. Raw token-grain edits via Myers, already coalesced into same-kind spans. (MatchKey/Format
+        // were precomputed by the tokenizer under these settings; the Myers walk keys on MatchKey.)
         var spans = MyersSpans(left, right);
 
-        // 2. Format post-pass: split each Equal span into Equal / FormatChanged sub-spans.
+        // 2. Format post-pass: split each Equal span into Equal / FormatChanged sub-spans. The
+        // FormatComparison policy (M2.2 Task 4) decides whether unmodeled rPr noise (lang/bCs/iCs/…)
+        // raises a FormatChanged span — ModeledOnly (default) ignores it.
         var ops = new List<IrTokenOp>(spans.Count);
         foreach (var span in spans)
         {
             if (span.Kind == IrTokenOpKind.Equal)
-                SplitEqualByFormat(left, right, span, ops);
+                SplitEqualByFormat(left, right, span, ops, settings.FormatComparison);
             else
                 ops.Add(span);
         }
@@ -250,16 +250,16 @@ internal static class IrTokenDiffer
     /// </summary>
     private static void SplitEqualByFormat(
         IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right,
-        IrTokenOp span, List<IrTokenOp> ops)
+        IrTokenOp span, List<IrTokenOp> ops, IrFormatComparison comparison)
     {
         int len = span.LeftLength;
         int i = 0;
         while (i < len)
         {
-            bool changed = FormatDiffers(left[span.LeftStart + i].Format, right[span.RightStart + i].Format);
+            bool changed = FormatDiffers(left[span.LeftStart + i].Format, right[span.RightStart + i].Format, comparison);
             int j = i + 1;
             while (j < len &&
-                   FormatDiffers(left[span.LeftStart + j].Format, right[span.RightStart + j].Format) == changed)
+                   FormatDiffers(left[span.LeftStart + j].Format, right[span.RightStart + j].Format, comparison) == changed)
                 j++;
 
             ops.Add(new IrTokenOp(
@@ -272,9 +272,12 @@ internal static class IrTokenDiffer
     }
 
     /// <summary>
-    /// Per-token format comparison: record equality of the governing <see cref="IrRunFormat"/>. Two
-    /// nulls are equal (non-run kinds — tab/break/etc. — carry null and never trip a format change);
-    /// a null vs non-null pair differs.
+    /// Per-token format comparison under the <paramref name="comparison"/> policy: modeled-only field
+    /// equality (default) or full record equality (byte-fidelity). Two nulls are equal (non-run kinds —
+    /// tab/break/etc. — carry null and never trip a format change); a null vs non-null pair differs only
+    /// when the non-null side carries some modeled formatting (under ModeledOnly, a run whose rPr is
+    /// entirely unmodeled keys equal to null).
     /// </summary>
-    private static bool FormatDiffers(IrRunFormat? a, IrRunFormat? b) => !Equals(a, b);
+    private static bool FormatDiffers(IrRunFormat? a, IrRunFormat? b, IrFormatComparison comparison) =>
+        !IrModeledFormat.RunFormatEqual(a, b, comparison);
 }

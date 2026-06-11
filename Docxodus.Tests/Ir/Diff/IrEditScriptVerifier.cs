@@ -82,8 +82,13 @@ internal static class IrEditScriptVerifier
                 {
                     var leftBlock = ResolveLeft(left, op.LeftAnchor!);
                     var rightBlock = ResolveRight(right, op.RightAnchor!);
-                    // Non-paragraph Modify has no token model in Task 2; its content genuinely differs
-                    // (it's Modified), so the source-of-truth for the non-paragraph check is the right block.
+                    // A Modified TABLE pair carries a nested table diff (M2.2 Task 4): validate its
+                    // row/cell anchors + reconstruct the right table row-by-row/cell-by-cell from it.
+                    if (leftBlock is IrTable lt && rightBlock is IrTable rt && op.TableDiff is { } tableDiff)
+                        VerifyTableDiff(lt, rt, tableDiff, settings);
+                    // Block-level: a non-paragraph Modify's content genuinely differs (it's Modified), so
+                    // the block-sequence check sources truth from the right block (table reconstruction is
+                    // proven in depth by VerifyTableDiff above).
                     reconstructed.Add((rightBlock, ApplyModify(leftBlock, rightBlock, op.TokenDiff, settings), rightBlock));
                     break;
                 }
@@ -160,6 +165,189 @@ internal static class IrEditScriptVerifier
                 Assert.Equal(actual.ContentHash, sourceBlock.ContentHash);
             }
         }
+    }
+
+    // ------------------------------------------------------------------ table diff
+
+    /// <summary>
+    /// Verify a nested <see cref="IrTableDiff"/> (M2.2 Task 4): (1) every row/cell anchor resolves
+    /// against the ACTUAL left/right tables (row + cell anchors are NOT in the document AnchorIndex, so
+    /// we resolve them against the table structure directly); (2) move row pairing is well-formed; (3)
+    /// reconstruct the right table's row ContentHash sequence from the left table + the row ops and
+    /// assert it equals the actual right table's rows in order; (4) for each ModifyRow, reconstruct each
+    /// paired cell's paragraph text from its block ops and assert it equals the right cell's text.
+    /// </summary>
+    private static void VerifyTableDiff(IrTable left, IrTable right, IrTableDiff diff, IrDiffSettings settings)
+    {
+        var leftRows = left.Rows.ToDictionary(r => r.Anchor.ToString());
+        var rightRows = right.Rows.ToDictionary(r => r.Anchor.ToString());
+
+        // Move-source rows, keyed by group, so a destination can reproduce the moved-from row.
+        var moveSourceRow = new Dictionary<int, IrRow>();
+        foreach (var op in diff.RowOps)
+            if (op.IsMoveSource == true)
+                moveSourceRow[op.MoveGroupId!.Value] = ResolveRow(leftRows, op.LeftRowAnchor!);
+
+        var moveSources = new HashSet<int>();
+        var moveDests = new HashSet<int>();
+
+        // Reconstruct the right table's rows (ContentHash) in right order.
+        var reconstructedRows = new List<IrHash>();
+        foreach (var op in diff.RowOps)
+        {
+            switch (op.Kind)
+            {
+                case IrRowOpKind.EqualRow:
+                {
+                    var lr = ResolveRow(leftRows, op.LeftRowAnchor!);
+                    var rr = ResolveRow(rightRows, op.RightRowAnchor!);
+                    Assert.Equal(lr.ContentHash, rr.ContentHash); // EqualRow ⇒ row content unchanged
+                    reconstructedRows.Add(lr.ContentHash);
+                    break;
+                }
+                case IrRowOpKind.ModifyRow:
+                {
+                    var lr = ResolveRow(leftRows, op.LeftRowAnchor!);
+                    var rr = ResolveRow(rightRows, op.RightRowAnchor!);
+                    Assert.NotNull(op.CellOps);
+                    VerifyCellOps(lr, rr, op.CellOps!, settings);
+                    reconstructedRows.Add(rr.ContentHash); // modified content sourced from the right row
+                    break;
+                }
+                case IrRowOpKind.InsertRow:
+                {
+                    var rr = ResolveRow(rightRows, op.RightRowAnchor!);
+                    Assert.Null(op.LeftRowAnchor);
+                    reconstructedRows.Add(rr.ContentHash);
+                    break;
+                }
+                case IrRowOpKind.DeleteRow:
+                {
+                    ResolveRow(leftRows, op.LeftRowAnchor!); // resolves; produces no right row
+                    Assert.Null(op.RightRowAnchor);
+                    break;
+                }
+                case IrRowOpKind.MovedRow:
+                {
+                    Assert.NotNull(op.MoveGroupId);
+                    Assert.NotNull(op.IsMoveSource);
+                    if (op.IsMoveSource == true)
+                    {
+                        moveSources.Add(op.MoveGroupId!.Value);
+                        ResolveRow(leftRows, op.LeftRowAnchor!);
+                    }
+                    else
+                    {
+                        moveDests.Add(op.MoveGroupId!.Value);
+                        var rr = ResolveRow(rightRows, op.RightRowAnchor!);
+                        var src = moveSourceRow[op.MoveGroupId!.Value];
+                        Assert.Equal(src.ContentHash, rr.ContentHash); // exact-content row move
+                        reconstructedRows.Add(rr.ContentHash);
+                    }
+                    break;
+                }
+            }
+        }
+
+        Assert.Equal(moveSources, moveDests); // every moved row has both a source and a destination
+
+        // The reconstructed right-row sequence equals the actual right table's rows in order.
+        Assert.Equal(right.Rows.Count, reconstructedRows.Count);
+        for (int i = 0; i < right.Rows.Count; i++)
+            Assert.Equal(right.Rows[i].ContentHash, reconstructedRows[i]);
+    }
+
+    /// <summary>
+    /// Verify a ModifyRow's positional cell ops: anchors resolve against the actual rows, paired cells'
+    /// block ops reconstruct the right cell text, and the cell-op count covers both rows' cells.
+    /// </summary>
+    private static void VerifyCellOps(IrRow left, IrRow right, IrNodeList<IrCellOp> cellOps, IrDiffSettings settings)
+    {
+        var leftCells = left.Cells.ToDictionary(c => c.Anchor.ToString());
+        var rightCells = right.Cells.ToDictionary(c => c.Anchor.ToString());
+
+        int leftSeen = 0, rightSeen = 0;
+        foreach (var op in cellOps)
+        {
+            bool hasLeft = op.LeftCellAnchor is not null;
+            bool hasRight = op.RightCellAnchor is not null;
+            if (hasLeft) { Assert.True(leftCells.ContainsKey(op.LeftCellAnchor!), $"cell anchor {op.LeftCellAnchor} unresolved (left)"); leftSeen++; }
+            if (hasRight) { Assert.True(rightCells.ContainsKey(op.RightCellAnchor!), $"cell anchor {op.RightCellAnchor} unresolved (right)"); rightSeen++; }
+
+            if (hasLeft && hasRight && op.BlockOps is { } blockOps)
+            {
+                // Paired, content-differing cell: reconstruct the right cell's block text from the block
+                // ops applied to the left cell's blocks, and assert it matches the right cell's text.
+                var lc = leftCells[op.LeftCellAnchor!];
+                var rc = rightCells[op.RightCellAnchor!];
+                var reconstructed = ReconstructBlocks(lc.Blocks, rc.Blocks, blockOps, settings);
+                var expected = BlockTexts(rc.Blocks, settings);
+                Assert.Equal(expected, reconstructed);
+            }
+        }
+
+        Assert.Equal(left.Cells.Count, leftSeen);
+        Assert.Equal(right.Cells.Count, rightSeen);
+    }
+
+    /// <summary>
+    /// Reconstruct a right cell's per-paragraph text (concatenated MatchKeys) from the left cell's blocks
+    /// and the cell's block ops, mirroring the body-level reconstruction. Non-paragraph cell blocks
+    /// contribute their ContentHash hex as a stand-in text token (compared on both sides identically).
+    /// </summary>
+    private static List<string> ReconstructBlocks(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
+        IrNodeList<IrEditOp> blockOps, IrDiffSettings settings)
+    {
+        var leftByAnchor = leftBlocks.ToDictionary(b => b.Anchor.ToString());
+        var rightByAnchor = rightBlocks.ToDictionary(b => b.Anchor.ToString());
+        var result = new List<string>();
+
+        foreach (var op in blockOps)
+        {
+            switch (op.Kind)
+            {
+                case IrEditOpKind.EqualBlock:
+                case IrEditOpKind.FormatOnlyBlock:
+                    result.Add(BlockText(leftByAnchor[op.LeftAnchor!], settings));
+                    break;
+                case IrEditOpKind.ModifyBlock:
+                {
+                    var lb = leftByAnchor[op.LeftAnchor!];
+                    var rb = rightByAnchor[op.RightAnchor!];
+                    if (lb is IrParagraph && rb is IrParagraph)
+                        result.Add(string.Concat(ApplyModify(lb, rb, op.TokenDiff, settings)!));
+                    else
+                        result.Add(BlockText(rb, settings)); // nested table/opaque in a cell: source from right
+                    break;
+                }
+                case IrEditOpKind.InsertBlock:
+                    result.Add(BlockText(rightByAnchor[op.RightAnchor!], settings));
+                    break;
+                case IrEditOpKind.DeleteBlock:
+                    break;
+                case IrEditOpKind.MoveBlock:
+                case IrEditOpKind.MoveModifyBlock:
+                    // Cell-internal block moves are not produced by the table differ in M2.2; if they
+                    // ever are, the destination sources from the right block.
+                    if (op.IsMoveSource != true)
+                        result.Add(BlockText(rightByAnchor[op.RightAnchor!], settings));
+                    break;
+            }
+        }
+        return result;
+    }
+
+    private static List<string> BlockTexts(IrNodeList<IrBlock> blocks, IrDiffSettings settings) =>
+        blocks.Select(b => BlockText(b, settings)).ToList();
+
+    private static string BlockText(IrBlock block, IrDiffSettings settings) =>
+        block is IrParagraph p ? string.Concat(Tokens(p, settings)) : block.ContentHash.ToHex();
+
+    private static IrRow ResolveRow(Dictionary<string, IrRow> rows, string anchor)
+    {
+        Assert.True(rows.TryGetValue(anchor, out var row), $"row anchor '{anchor}' missing in table.");
+        return row!;
     }
 
     // ------------------------------------------------------------------ helpers
@@ -259,7 +447,7 @@ internal static class IrEditScriptVerifier
         // does NOT pass on a structurally-broken-but-text-equal diff (non-tiling spans, wrong-length
         // Equal/FormatChanged runs, corrupt right spans). This makes the concatenated-text check below a
         // SUFFICIENT-given-tiling proof rather than the sole assertion.
-        IrTokenDiffAsserts.AssertInvariants(leftTokens, rightTokens, tokenDiff!);
+        IrTokenDiffAsserts.AssertInvariants(leftTokens, rightTokens, tokenDiff!, settings);
 
         var result = new List<string>();
         foreach (var op in tokenDiff!.Ops)

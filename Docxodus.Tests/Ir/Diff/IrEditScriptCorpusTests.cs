@@ -33,6 +33,7 @@ public class IrEditScriptCorpusTests
         var totals = new Dictionary<IrEditOpKind, int>();
         foreach (var k in Enum.GetValues<IrEditOpKind>())
             totals[k] = 0;
+        var tableStats = new TableStats();
 
         _out.WriteLine($"WC corpus: {pairs.Count} pairs (each built + verified + round-tripped, fwd + rev)");
         _out.WriteLine("");
@@ -42,22 +43,36 @@ public class IrEditScriptCorpusTests
             var baseDoc = WcCorpus.ReadWc(baseName);
             var variantDoc = WcCorpus.ReadWc(variantName);
 
-            VerifyOne(baseDoc, variantDoc, totals, accumulate: true);   // forward (accumulates totals)
-            VerifyOne(variantDoc, baseDoc, totals, accumulate: false);  // reversed
+            VerifyOne(baseDoc, variantDoc, totals, tableStats, accumulate: true);   // forward (accumulates)
+            VerifyOne(variantDoc, baseDoc, totals, tableStats, accumulate: false);  // reversed
         }
 
         _out.WriteLine("Corpus op-kind totals (forward direction):");
         foreach (var kv in totals.OrderBy(k => (int)k.Key))
             _out.WriteLine($"  {kv.Key} = {kv.Value}");
+        _out.WriteLine("");
+        _out.WriteLine("Table-diff stats (forward, M2.2 Task 4):");
+        _out.WriteLine($"  ModifyBlock-with-table-diff = {tableStats.TablesDiffed}");
+        _out.WriteLine($"  row ops total = {tableStats.RowOps} " +
+            $"(Equal={tableStats.EqualRows} Modify={tableStats.ModifyRows} " +
+            $"Insert={tableStats.InsertRows} Delete={tableStats.DeleteRows} Moved={tableStats.MovedRows})");
+        _out.WriteLine($"  cell ops total = {tableStats.CellOps}; cells with a block token diff = {tableStats.CellsWithTokenDiff}");
+    }
+
+    private sealed class TableStats
+    {
+        public int TablesDiffed, RowOps, EqualRows, ModifyRows, InsertRows, DeleteRows, MovedRows;
+        public int CellOps, CellsWithTokenDiff;
     }
 
     private static void VerifyOne(
         Docxodus.Ir.IrDocument left, Docxodus.Ir.IrDocument right,
-        Dictionary<IrEditOpKind, int> totals, bool accumulate)
+        Dictionary<IrEditOpKind, int> totals, TableStats tableStats, bool accumulate)
     {
         var script = IrEditScriptBuilder.Build(left, right, Diff);
 
-        // Exit invariant: apply(script, left) reconstructs right at text level.
+        // Exit invariant: apply(script, left) reconstructs right at text level (validates nested table
+        // row/cell diffs + their anchors too).
         IrEditScriptVerifier.Verify(left, right, script, Diff);
 
         // JSON round-trip: Read(Write(s)) is record-equal to s, and Write is deterministic.
@@ -68,6 +83,35 @@ public class IrEditScriptCorpusTests
 
         if (accumulate)
             foreach (var op in script.Operations)
+            {
                 totals[op.Kind]++;
+                if (op.TableDiff is { } td)
+                    AccumulateTable(td, tableStats);
+            }
+    }
+
+    private static void AccumulateTable(IrTableDiff td, TableStats s)
+    {
+        s.TablesDiffed++;
+        foreach (var rowOp in td.RowOps)
+        {
+            s.RowOps++;
+            switch (rowOp.Kind)
+            {
+                case IrRowOpKind.EqualRow: s.EqualRows++; break;
+                case IrRowOpKind.ModifyRow: s.ModifyRows++; break;
+                case IrRowOpKind.InsertRow: s.InsertRows++; break;
+                case IrRowOpKind.DeleteRow: s.DeleteRows++; break;
+                case IrRowOpKind.MovedRow: s.MovedRows++; break;
+            }
+            if (rowOp.CellOps is { } cellOps)
+                foreach (var cellOp in cellOps)
+                {
+                    s.CellOps++;
+                    if (cellOp.BlockOps is { } blockOps &&
+                        blockOps.Any(b => b.TokenDiff is not null))
+                        s.CellsWithTokenDiff++;
+                }
+        }
     }
 }

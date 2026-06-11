@@ -53,3 +53,113 @@ internal sealed record IrEditScript(IrNodeList<IrEditOp> Operations);
 ## Out of scope (M2.3+)
 
 Revisions-API renderer, differential harness vs WmlComparer, native OOXML markup, any public surface.
+
+## M2.2 Outcome
+
+**Status: COMPLETE (2026-06-11).** All four tasks landed; exit criteria met. The diff layer
+(`Docxodus/Ir/Diff/`, all `internal`, `#nullable enable`, WASM-safe, no new dependencies) now holds the
+intra-block token differ (Task 1), the anchor-addressed `IrEditScript` with apply-verification + JSON
+round-trip (Task 2), similarity gap pairing + cross-gap fuzzy moves (Task 3), and — this task — row/cell
+table granularity, the diff-time `FormatComparison` policy, and the close.
+
+### Headline capabilities (M2.2 product)
+
+- **Token-level diff inside Modified paragraph pairs** (`IrTokenDiff`: Equal / Insert / Delete /
+  FormatChanged), Myers O(ND).
+- **`IrEditScript`** — ordered, anchor-addressed (`kind:scope:unid`), JSON-round-trippable,
+  apply-verifiable (apply(script,left) reconstructs right at text level over the whole WC corpus + all
+  synthetic cases).
+- **Fuzzy moves** — `MovedModified` reachable: a relocated-AND-edited paragraph emits a move pair with a
+  nested token diff (the capability WmlComparer cannot express).
+- **Nested table diffs** — a Modified table pair carries `IrTableDiff(rowOps[])`; a cell-text edit
+  surfaces as a token diff *inside that cell*, not a whole-table blob.
+- **Diff-time format policy** — `FormatComparison = ModeledOnly (default) | Full`, resolving the M2.1
+  FormatFingerprint run-boundary-noise finding without any IR snapshot churn.
+
+### Sub-task A — table row/cell granularity (design)
+
+- **Row alignment (self-contained, `IrTableDiffer`).** Rows carry a `ContentHash` but no
+  `FormatFingerprint`, and `IrRow` is not an `IrBlock`, so the body aligner's IrBlock/fingerprint-keyed
+  machinery does not apply directly. A focused row aligner mirrors the SAME design at row grain:
+  unique-`ContentHash` anchoring → LIS spine (on-spine = `EqualRow`, off-spine exact-hash = `MovedRow`)
+  → positional gap fill (paired = `ModifyRow`, surplus left = `DeleteRow`, surplus right = `InsertRow`).
+  Justification for not generalizing the block aligner: that would mean refactoring it around a
+  hash-provider interface for little reuse; the ~120-line row aligner is cleaner and self-contained.
+  Row kinds reduce to Unchanged/Modify/Insert/Delete + optional Moved (free off-spine exact only; no
+  fuzzy row moves — documented limitation).
+- **Cell pairing — positional.** Within a `ModifyRow`, cell *i* pairs with cell *i* (grid-aware
+  gridSpan/vMerge pairing is M2.3+). A content-equal cell carries no recursion; a differing cell's
+  paragraph blocks are aligned by the SHARED block aligner (`IrBlockAligner.AlignBlocks`, the new
+  generalized entry point) and projected through the SHARED `IrEditScriptBuilder.ProjectAlignment`, so a
+  cell-text edit lands as a `ModifyBlock` carrying a token diff — recursion reuses the exact body
+  machinery one level down.
+- **Edit-script shapes (`IrEditScript.cs`).** `IrEditOp` gained `IrTableDiff? TableDiff`;
+  `IrTableDiff(IrNodeList<IrRowOp>)`, `IrRowOp(kind, leftRowAnchor?, rightRowAnchor?, cellOps?,
+  moveGroupId?, isMoveSource?)`, `IrCellOp(leftCellAnchor?, rightCellAnchor?, blockOps?)`. JSON
+  writer/reader extended (`tableDiff`/`rowOps`/`cellOps`/`blockOps`); apply-verifier extended to
+  reconstruct table content row-by-row/cell-by-cell and to validate row + cell anchors against the
+  actual tables (row/cell anchors are NOT in `AnchorIndex` — only cell-child blocks are — so the
+  verifier resolves them against the table structure directly).
+
+### Sub-task B — fingerprint-noise diagnosis + resolution
+
+**Diagnosis (with evidence, `FingerprintNoiseDiagnosticTests`, `Category=Diagnostic`).** Over the
+WC-BodyBookmarks pair (the sole source of the corpus' 1,714 FormatOnly entries), all 1,714 FormatOnly
+paragraph pairs are ContentHash-equal with every MODELED run-format field byte-identical — the ONLY
+difference is the unmodeled-rPr `UnmodeledDigest`. Leftover (unmodeled) rPr child inventory across all
+pairs:
+
+| element | occurrences | nature |
+|---|---:|---|
+| `w:lang` | 4597 | locale (nb-NO) — genuine IR fact, pure diff noise |
+| `w:iCs` | 1328 | complex-script italic toggle — diff noise |
+| `w:bCs` | 550 | complex-script bold toggle — diff noise |
+| `w:rFonts` (hAnsi/cs faces; ascii is modeled) | 33 | mostly diff noise |
+| `w:noProof` | 4 | already dropped by N2 in `Canonicalize` — does NOT reach `UnmodeledDigest`; the diagnostic's leftover reconstruction over-reports it |
+| `w:rtl` | 4 | borderline |
+| `w:szCs` | 3 | complex-script size — diff noise |
+
+**Decision (with evidence).** Implement `IrDiffSettings.FormatComparison = ModeledOnly | Full`, default
+**ModeledOnly**. Do NOT add IR-level normalization rules. Rationale:
+
+- A `w:rPrChange`-grade format-change report can only ever DESCRIBE modeled fields, so a FormatOnly
+  classification driven by an undescribable unmodeled-digest flip is a pure false positive — exactly the
+  1,714-entry population. ModeledOnly is therefore the correct default.
+- These elements (lang/bCs/iCs/szCs/rtl/rFonts-cs) are LEGITIMATE IR facts that byte-fidelity consumers
+  want; an N-rule strip would cause snapshot churn for ALL consumers. `Full` preserves the M2.1 behavior
+  for them. So this is purely a **diff-time policy**: the IR's stored hashes never change.
+- `w:noProof` is already dropped by N2 (it never reaches the digest), so no new normalization is owed.
+
+**Layering (documented in `IrDiffSettings`/`IrModeledFormat`).** ModeledOnly compares `IrRunFormat`
+records EXCLUDING `UnmodeledDigest` at the token level (the differ's FormatChanged post-pass), and at the
+BLOCK level recomputes a boundary-normalized modeled-only signature at diff time — the per-token
+`(MatchKey, modeled-format key)` sequence, boundary-independent by construction — instead of trusting the
+reader's stored block `FormatFingerprint` (which folds in the digest AND is run-boundary-sensitive). The
+IR's stored hashes DO NOT change.
+
+**Measurement (default ModeledOnly).** WC-BodyBookmarks pair: **FormatOnly 1714 → 50**, Unchanged
+290 → 1664, Modified 1374 → 1310 (forward). Corpus-wide aligner totals: **FormatOnly 1714 → 50**,
+**Unchanged 556 → 2220**, Modified 1488 → 1419, Moved 3 (unchanged), Inserted 901 → 970, Deleted
+35 → 104. (Modified/Inserted/Deleted drift reflects content-equal pairs that previously anchored as
+FormatOnly now anchoring as Unchanged and freeing the gaps differently — net: the noise collapsed and
+real content classifications stayed coherent; all invariants hold both directions.)
+
+### Final corpus histograms
+
+- **Aligner (`IrAlignerCorpusTests`, forward):** Unchanged=2220, FormatOnly=50, Modified=1419, Moved=3,
+  MovedModified=0, Inserted=970, Deleted=104.
+- **Edit script (`IrEditScriptCorpusTests`, forward op kinds):** EqualBlock=2220, FormatOnlyBlock=50,
+  ModifyBlock=1419, InsertBlock=970, DeleteBlock=104, MoveBlock=6, MoveModifyBlock=0. (Moved=3 alignment
+  entries → 6 MoveBlock ops, one source + one destination each.)
+- **Table-diff stats (forward):** 18 ModifyBlocks carry a nested `IrTableDiff`; 53 row ops (Equal=26,
+  Modify=20, Insert=1, Delete=6, Moved=0); 39 cell ops; **25 cells carry a block-level token diff** —
+  i.e. 25 cell-text edits that M2.1 would have buried in a whole-table Modified blob now surface as
+  in-cell token diffs.
+
+### Verification
+
+- `Ir.Diff` suite: **102 passed** (was 92 at M2.1 close; +10 across table-diff, format-comparison, and
+  the diagnostic). Full IR suite: 327 passed. Full test suite: 1,868 passed, 1 skipped — the lone
+  `Scale_guard` red under full-suite CPU contention is timing flakiness (passes isolated at ~4.4×, well
+  within the 8× bound; not a regression). Release build (`-c Release`, warnings-as-errors) of the
+  solution succeeds.

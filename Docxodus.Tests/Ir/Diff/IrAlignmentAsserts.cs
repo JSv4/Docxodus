@@ -19,8 +19,12 @@ internal static class IrAlignmentAsserts
     /// The aligner invariants the plan pins — run against EVERY case's output:
     /// <list type="bullet">
     /// <item>Inserted ⇒ Left null, Right non-null; Deleted ⇒ Left non-null, Right null.</item>
-    /// <item>Unchanged ⇒ both present, ContentHash AND FormatFingerprint equal.</item>
-    /// <item>FormatOnly ⇒ both present, ContentHash equal, FormatFingerprint differs.</item>
+    /// <item>Unchanged ⇒ both present, ContentHash equal AND format-equal under the policy
+    /// (<see cref="IrFormatComparison"/>): exact FormatFingerprint under Full, boundary-normalized
+    /// modeled-only block signature under ModeledOnly — so a content-equal pair differing ONLY in
+    /// unmodeled rPr noise (lang/bCs/iCs/…) is legitimately Unchanged under the default policy even
+    /// though its stored FormatFingerprint differs.</item>
+    /// <item>FormatOnly ⇒ both present, ContentHash equal, format DIFFERS under the policy.</item>
     /// <item>Moved ⇒ both present, ContentHash equal (format may differ).</item>
     /// <item>Modified ⇒ both present (no hash constraint).</item>
     /// <item>MovedModified ⇒ both present (no hash constraint — M2.2 fuzzy moved+edited;
@@ -29,8 +33,10 @@ internal static class IrAlignmentAsserts
     /// by reference identity to the input lists.</item>
     /// </list>
     /// </summary>
-    public static void AssertInvariants(IrDocument left, IrDocument right, IrBlockAlignment a)
+    public static void AssertInvariants(
+        IrDocument left, IrDocument right, IrBlockAlignment a, IrDiffSettings? settings = null)
     {
+        settings ??= new IrDiffSettings();
         var leftSeen = new List<IrBlock>();
         var rightSeen = new List<IrBlock>();
 
@@ -50,13 +56,15 @@ internal static class IrAlignmentAsserts
                     Assert.NotNull(e.Left);
                     Assert.NotNull(e.Right);
                     Assert.Equal(e.Left!.ContentHash, e.Right!.ContentHash);
-                    Assert.Equal(e.Left!.FormatFingerprint, e.Right!.FormatFingerprint);
+                    Assert.True(FormatEqual(e.Left!, e.Right!, settings),
+                        "Unchanged entry must be format-equal under the policy.");
                     break;
                 case IrAlignmentKind.FormatOnly:
                     Assert.NotNull(e.Left);
                     Assert.NotNull(e.Right);
                     Assert.Equal(e.Left!.ContentHash, e.Right!.ContentHash);
-                    Assert.NotEqual(e.Left!.FormatFingerprint, e.Right!.FormatFingerprint);
+                    Assert.False(FormatEqual(e.Left!, e.Right!, settings),
+                        "FormatOnly entry must differ in format under the policy.");
                     break;
                 case IrAlignmentKind.Moved:
                     Assert.NotNull(e.Left);
@@ -98,6 +106,18 @@ internal static class IrAlignmentAsserts
             pool.RemoveAt(idx);
         }
         Assert.Empty(pool);
+    }
+
+    /// <summary>
+    /// Diff-time format equality under the policy, mirroring the aligner's private rule: modeled-only
+    /// block signature for a paragraph pair under ModeledOnly, the stored FormatFingerprint otherwise.
+    /// </summary>
+    private static bool FormatEqual(IrBlock left, IrBlock right, IrDiffSettings settings)
+    {
+        if (settings.FormatComparison == IrFormatComparison.ModeledOnly
+            && left is IrParagraph lp && right is IrParagraph rp)
+            return IrModeledFormat.BlockSignature(lp, settings) == IrModeledFormat.BlockSignature(rp, settings);
+        return left.FormatFingerprint.Equals(right.FormatFingerprint);
     }
 
     /// <summary>Count entries of a given kind.</summary>

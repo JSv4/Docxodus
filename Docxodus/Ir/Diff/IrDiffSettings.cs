@@ -6,6 +6,37 @@ using System.Globalization;
 namespace Docxodus.Ir.Diff;
 
 /// <summary>
+/// How the diff engine compares formatting (M2.2 Task 4). A purely DIFF-TIME policy: it changes which
+/// format facts a comparison treats as significant, NOT the IR's stored hashes (no snapshot churn).
+/// </summary>
+internal enum IrFormatComparison
+{
+    /// <summary>
+    /// Compare only the MODELED run-format fields (Bold/Italic/Underline/Size/Color/… — the
+    /// <see cref="IrRunFormat"/> record EXCLUDING its <see cref="IrRunFormat.UnmodeledDigest"/>). The
+    /// DEFAULT.
+    /// <para><b>Why default.</b> The WC-BodyBookmarks diagnosis (M2.2 Task 4, sub-task B) showed the
+    /// corpus' entire FormatOnly population (1,714 entries) comes from content-equal paragraphs whose
+    /// ONLY format difference is unmodeled rPr leftovers — <c>w:lang</c> (4597), <c>w:iCs</c> (1328),
+    /// <c>w:bCs</c> (550), <c>w:rFonts</c> hAnsi/cs faces (33), <c>w:szCs</c>/<c>w:rtl</c> — with every
+    /// MODELED field byte-identical. Those are legitimate IR facts but pure noise for diff purposes:
+    /// a <c>w:rPrChange</c>-grade format-change report can only ever DESCRIBE modeled fields anyway, so
+    /// reporting a format change driven by an undescribable unmodeled-digest flip is a false positive.
+    /// Comparing modeled fields only collapses that noise (FormatOnly → Unchanged) without losing any
+    /// reportable format delta.</para>
+    /// </summary>
+    ModeledOnly,
+
+    /// <summary>
+    /// Compare the FULL run format including <see cref="IrRunFormat.UnmodeledDigest"/> — i.e. trust the
+    /// reader-computed <c>FormatFingerprint</c> verbatim. Available for byte-fidelity consumers that
+    /// must see every rPr difference (lang, complex-script toggles, secondary font faces). This is the
+    /// M2.1 behavior.
+    /// </summary>
+    Full,
+}
+
+/// <summary>
 /// Diff-time settings for the IR diff engine (Phase 2). These govern how IR paragraphs are
 /// tokenized and compared; they are <b>not</b> document facts. Per the IR spec (§1 non-goals,
 /// "Not the diff's tokenization"), word splitting, case folding, and separator policy are
@@ -17,6 +48,31 @@ namespace Docxodus.Ir.Diff;
 /// </remarks>
 internal sealed record IrDiffSettings
 {
+    /// <summary>
+    /// DIFF-TIME setting. How formatting is compared at both the token level (the differ's
+    /// FormatChanged post-pass) and the block level (the aligner's FormatOnly classification). Default
+    /// <see cref="IrFormatComparison.ModeledOnly"/> — see that member for the evidence.
+    /// </summary>
+    /// <remarks>
+    /// <b>Layering (purely diff-time; the IR's stored hashes never change).</b>
+    /// <list type="bullet">
+    /// <item><b>Token level.</b> <see cref="IrFormatComparison.ModeledOnly"/> compares
+    /// <see cref="IrRunFormat"/> records EXCLUDING <see cref="IrRunFormat.UnmodeledDigest"/>, so a
+    /// lang/iCs/bCs-only difference does not raise a FormatChanged token span.</item>
+    /// <item><b>Block level.</b> The aligner cannot trust the reader's block <c>FormatFingerprint</c>
+    /// for FormatOnly under ModeledOnly (that fingerprint folds in the UnmodeledDigest AND is
+    /// run-boundary-sensitive). Instead it recomputes a BOUNDARY-NORMALIZED modeled-only signature at
+    /// diff time: the sequence of <c>(token MatchKey, modeled-format key)</c> over the paragraph's
+    /// tokens. Because it keys on the boundary-independent token stream rather than the raw run
+    /// segmentation, editing churn that re-segments runs (the M2.1 finding) no longer flips it. A pair
+    /// that is ContentHash-equal but whose modeled-only signatures differ is FormatOnly; equal
+    /// signatures are Unchanged.</item>
+    /// </list>
+    /// Under <see cref="IrFormatComparison.Full"/> both levels fall back to the M2.1 behavior (full
+    /// record equality at the token level; the stored block FormatFingerprint at the block level).
+    /// </remarks>
+    public IrFormatComparison FormatComparison { get; init; } = IrFormatComparison.ModeledOnly;
+
     /// <summary>
     /// DIFF-TIME setting. Characters that split an <c>IrTextRun</c>'s text into word vs. separator
     /// tokens. Each separator character becomes its own <see cref="IrDiffTokenKind.Separator"/> token

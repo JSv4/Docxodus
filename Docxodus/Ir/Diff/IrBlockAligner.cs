@@ -30,14 +30,22 @@ internal static class IrBlockAligner
     /// Align the body block lists of <paramref name="left"/> and <paramref name="right"/>.
     /// </summary>
     public static IrBlockAlignment Align(IrDocument left, IrDocument right, IrDiffSettings settings)
+        => AlignBlocks(left.Body.Blocks, right.Body.Blocks, settings);
+
+    /// <summary>
+    /// Align two raw block lists (M2.2 Task 4 generalization). The public <see cref="Align"/> calls this
+    /// with the bodies; <see cref="IrTableDiffer"/> calls it on a table CELL's block list to recurse the
+    /// same machinery into cell contents. Identical semantics — anchoring, LIS spine, gap fill, fuzzy
+    /// moves — just over an arbitrary block list rather than a document body.
+    /// </summary>
+    public static IrBlockAlignment AlignBlocks(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrDiffSettings settings)
     {
         // M2.2 Task 3: settings now drive similarity-based in-gap pairing + cross-gap fuzzy moves.
         // One per-call similarity scorer carries the tokenization cache (each block tokenized at most
         // once across all the candidate-pair scorings below).
         var similarity = new IrBlockSimilarity(settings);
 
-        var leftBlocks = left.Body.Blocks;
-        var rightBlocks = right.Body.Blocks;
         int nLeft = leftBlocks.Count;
         int nRight = rightBlocks.Count;
 
@@ -51,12 +59,15 @@ internal static class IrBlockAligner
         Array.Fill(rightMatch, -1);
 
         // --- Anchor pass A: key (ContentHash, FormatFingerprint), unique-each-side → candidate Unchanged.
-        // --- Anchor pass B: key ContentHash alone (over A-unpaired), unique-each-side → candidate FormatOnly.
+        // --- Anchor pass B: key ContentHash alone (over A-unpaired), unique-each-side → Unchanged or
+        //     FormatOnly decided by FormatEqual (boundary-normalized modeled-only under ModeledOnly; the
+        //     stored fingerprint under Full). M2.2 Task 4: this is where unmodeled-rPr noise that flipped
+        //     the stored fingerprint (lang/bCs/iCs/…) is reclassified Unchanged instead of FormatOnly.
         var candidates = new List<Candidate>();
         CollectAnchors(leftBlocks, rightBlocks, KeyAB, IrAlignmentKind.Unchanged,
-            leftMatch, rightMatch, candidates);
+            leftMatch, rightMatch, candidates, settings);
         CollectAnchors(leftBlocks, rightBlocks, KeyContentOnly, IrAlignmentKind.FormatOnly,
-            leftMatch, rightMatch, candidates);
+            leftMatch, rightMatch, candidates, settings);
 
         // --- Spine: longest increasing subsequence over candidates (sorted by left index) by right
         // index. On-spine candidates keep their anchor kind (Unchanged/FormatOnly); off-spine become Moved.
@@ -114,14 +125,17 @@ internal static class IrBlockAligner
 
     /// <summary>
     /// Find blocks whose key occurs exactly once on each side (among blocks not already paired),
-    /// pairing them up as candidates of <paramref name="anchorKind"/>. For the FormatOnly pass, a
-    /// pair whose fingerprints actually match is skipped (it was already an A candidate or would be a
-    /// redundant Unchanged) — only genuine same-content/different-format pairs become FormatOnly.
+    /// pairing them up. Pass A (<paramref name="anchorKind"/> = Unchanged, key includes the fingerprint)
+    /// only ever pairs exact content+format matches. Pass B (<paramref name="anchorKind"/> = FormatOnly,
+    /// ContentHash-only key) pairs content-equal blocks and then DECIDES the kind via
+    /// <see cref="FormatEqual"/>: format-equal (boundary-normalized modeled-only under ModeledOnly, the
+    /// stored fingerprint under Full) → Unchanged, else FormatOnly. This is what makes unmodeled-rPr
+    /// noise that flips the stored fingerprint reclassify as Unchanged under the default policy.
     /// </summary>
     private static void CollectAnchors(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
         Func<IrBlock, (IrHash, IrHash)> key, IrAlignmentKind anchorKind,
-        int[] leftMatch, int[] rightMatch, List<Candidate> candidates)
+        int[] leftMatch, int[] rightMatch, List<Candidate> candidates, IrDiffSettings settings)
     {
         var leftByKey = BuildUniqueIndex(leftBlocks, leftMatch, key);
         var rightByKey = BuildUniqueIndex(rightBlocks, rightMatch, key);
@@ -139,14 +153,34 @@ internal static class IrBlockAligner
             if (rightMatch[rj] != -1)
                 continue;
 
-            if (anchorKind == IrAlignmentKind.FormatOnly &&
-                leftBlocks[i].FormatFingerprint.Equals(rightBlocks[rj].FormatFingerprint))
-                continue; // identical content+format would be Unchanged, not FormatOnly
+            // Pass B refines its content-equal pair into Unchanged (format-equal) or FormatOnly.
+            var resolvedKind = anchorKind == IrAlignmentKind.FormatOnly
+                ? (FormatEqual(leftBlocks[i], rightBlocks[rj], settings)
+                    ? IrAlignmentKind.Unchanged : IrAlignmentKind.FormatOnly)
+                : anchorKind;
 
             leftMatch[i] = rj;
             rightMatch[rj] = i;
-            candidates.Add(new Candidate(i, rj, anchorKind));
+            candidates.Add(new Candidate(i, rj, resolvedKind));
         }
+    }
+
+    /// <summary>
+    /// Diff-time format equality of two content-equal blocks under the settings' format-comparison
+    /// policy. Under <see cref="IrFormatComparison.Full"/> (and for any non-paragraph pair) it is the
+    /// stored block <c>FormatFingerprint</c>. Under <see cref="IrFormatComparison.ModeledOnly"/> for a
+    /// paragraph pair it is the BOUNDARY-NORMALIZED modeled-only block signature — the per-token
+    /// (MatchKey, modeled-format) sequence — which is invariant to the run-resegmentation churn that
+    /// flips the stored fingerprint (the M2.1 finding), so unmodeled rPr noise no longer reads as a
+    /// format change.
+    /// </summary>
+    private static bool FormatEqual(IrBlock left, IrBlock right, IrDiffSettings settings)
+    {
+        if (settings.FormatComparison == IrFormatComparison.ModeledOnly
+            && left is IrParagraph lp && right is IrParagraph rp)
+            return IrModeledFormat.BlockSignature(lp, settings) == IrModeledFormat.BlockSignature(rp, settings);
+
+        return left.FormatFingerprint.Equals(right.FormatFingerprint);
     }
 
     /// <summary>
@@ -277,12 +311,12 @@ internal static class IrBlockAligner
             if (rightMatch[j] == -1)
                 freeRight.Add(j);
 
-        // Refinement pass 1: in-order exact (content+format) pairing → Unchanged.
+        // Refinement pass 1: in-order content-equal + format-equal pairing → Unchanged.
         InOrderRefine(leftBlocks, rightBlocks, freeLeft, freeRight, leftKind, rightKind, leftMatch, rightMatch,
-            requireFormatEqual: true, kind: IrAlignmentKind.Unchanged);
-        // Refinement pass 2: in-order content-only pairing → FormatOnly.
+            requireFormatEqual: true, kind: IrAlignmentKind.Unchanged, settings: settings);
+        // Refinement pass 2: in-order content-equal + format-DIFFERING pairing → FormatOnly.
         InOrderRefine(leftBlocks, rightBlocks, freeLeft, freeRight, leftKind, rightKind, leftMatch, rightMatch,
-            requireFormatEqual: false, kind: IrAlignmentKind.FormatOnly);
+            requireFormatEqual: false, kind: IrAlignmentKind.FormatOnly, settings: settings);
 
         // Drop the now-consumed entries, preserving order.
         freeLeft.RemoveAll(i => leftMatch[i] != -1);
@@ -405,7 +439,7 @@ internal static class IrBlockAligner
         List<int> freeLeft, List<int> freeRight,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
         int[] leftMatch, int[] rightMatch,
-        bool requireFormatEqual, IrAlignmentKind kind)
+        bool requireFormatEqual, IrAlignmentKind kind, IrDiffSettings settings)
     {
         foreach (int rj in freeRight)
         {
@@ -417,7 +451,7 @@ internal static class IrBlockAligner
                     continue;
                 if (!leftBlocks[candLeft].ContentHash.Equals(rightBlocks[rj].ContentHash))
                     continue;
-                bool formatEqual = leftBlocks[candLeft].FormatFingerprint.Equals(rightBlocks[rj].FormatFingerprint);
+                bool formatEqual = FormatEqual(leftBlocks[candLeft], rightBlocks[rj], settings);
                 if (requireFormatEqual != formatEqual)
                     continue; // Unchanged needs format-equal; FormatOnly needs format-differ
 

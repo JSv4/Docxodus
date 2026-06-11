@@ -63,6 +63,56 @@ internal static class IrEditScriptJson
             writer.WritePropertyName("tokenDiff");
             WriteTokenDiff(writer, diff);
         }
+        if (op.TableDiff is { } tableDiff)
+        {
+            writer.WritePropertyName("tableDiff");
+            WriteTableDiff(writer, tableDiff);
+        }
+        writer.WriteEndObject();
+    }
+
+    // ------------------------------------------------------------------ table diff
+
+    private static void WriteTableDiff(Utf8JsonWriter writer, IrTableDiff diff)
+    {
+        writer.WriteStartObject();
+        writer.WriteStartArray("rowOps");
+        foreach (var rowOp in diff.RowOps)
+            WriteRowOp(writer, rowOp);
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteRowOp(Utf8JsonWriter writer, IrRowOp op)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("kind", op.Kind.ToString());
+        if (op.LeftRowAnchor is { } l) writer.WriteString("leftRowAnchor", l);
+        if (op.RightRowAnchor is { } r) writer.WriteString("rightRowAnchor", r);
+        if (op.MoveGroupId is { } g) writer.WriteNumber("moveGroupId", g);
+        if (op.IsMoveSource is { } s) writer.WriteBoolean("isMoveSource", s);
+        if (op.CellOps is { } cellOps)
+        {
+            writer.WriteStartArray("cellOps");
+            foreach (var cellOp in cellOps)
+                WriteCellOp(writer, cellOp);
+            writer.WriteEndArray();
+        }
+        writer.WriteEndObject();
+    }
+
+    private static void WriteCellOp(Utf8JsonWriter writer, IrCellOp op)
+    {
+        writer.WriteStartObject();
+        if (op.LeftCellAnchor is { } l) writer.WriteString("leftCellAnchor", l);
+        if (op.RightCellAnchor is { } r) writer.WriteString("rightCellAnchor", r);
+        if (op.BlockOps is { } blockOps)
+        {
+            writer.WriteStartArray("blockOps");
+            foreach (var blockOp in blockOps)
+                WriteOp(writer, blockOp);
+            writer.WriteEndArray();
+        }
         writer.WriteEndObject();
     }
 
@@ -125,7 +175,49 @@ internal static class IrEditScriptJson
         int? moveGroupId = element.TryGetProperty("moveGroupId", out var g) ? g.GetInt32() : null;
         bool? isMoveSource = element.TryGetProperty("isMoveSource", out var s) ? s.GetBoolean() : null;
         IrTokenDiff? tokenDiff = element.TryGetProperty("tokenDiff", out var t) ? ReadTokenDiff(t) : null;
-        return new IrEditOp(kind, leftAnchor, rightAnchor, tokenDiff, moveGroupId, isMoveSource);
+        IrTableDiff? tableDiff = element.TryGetProperty("tableDiff", out var td) ? ReadTableDiff(td) : null;
+        return new IrEditOp(kind, leftAnchor, rightAnchor, tokenDiff, moveGroupId, isMoveSource, tableDiff);
+    }
+
+    private static IrTableDiff ReadTableDiff(JsonElement element)
+    {
+        var rowOps = new List<IrRowOp>();
+        foreach (var rowElement in element.GetProperty("rowOps").EnumerateArray())
+            rowOps.Add(ReadRowOp(rowElement));
+        return new IrTableDiff(IrNodeList.From(rowOps));
+    }
+
+    private static IrRowOp ReadRowOp(JsonElement element)
+    {
+        var kind = Enum.Parse<IrRowOpKind>(element.GetProperty("kind").GetString()!);
+        string? leftRowAnchor = element.TryGetProperty("leftRowAnchor", out var l) ? l.GetString() : null;
+        string? rightRowAnchor = element.TryGetProperty("rightRowAnchor", out var r) ? r.GetString() : null;
+        int? moveGroupId = element.TryGetProperty("moveGroupId", out var g) ? g.GetInt32() : null;
+        bool? isMoveSource = element.TryGetProperty("isMoveSource", out var s) ? s.GetBoolean() : null;
+        IrNodeList<IrCellOp>? cellOps = null;
+        if (element.TryGetProperty("cellOps", out var c))
+        {
+            var list = new List<IrCellOp>();
+            foreach (var cellElement in c.EnumerateArray())
+                list.Add(ReadCellOp(cellElement));
+            cellOps = IrNodeList.From(list);
+        }
+        return new IrRowOp(kind, leftRowAnchor, rightRowAnchor, cellOps, moveGroupId, isMoveSource);
+    }
+
+    private static IrCellOp ReadCellOp(JsonElement element)
+    {
+        string? leftCellAnchor = element.TryGetProperty("leftCellAnchor", out var l) ? l.GetString() : null;
+        string? rightCellAnchor = element.TryGetProperty("rightCellAnchor", out var r) ? r.GetString() : null;
+        IrNodeList<IrEditOp>? blockOps = null;
+        if (element.TryGetProperty("blockOps", out var b))
+        {
+            var list = new List<IrEditOp>();
+            foreach (var blockElement in b.EnumerateArray())
+                list.Add(ReadOp(blockElement));
+            blockOps = IrNodeList.From(list);
+        }
+        return new IrCellOp(leftCellAnchor, rightCellAnchor, blockOps);
     }
 
     private static IrTokenDiff ReadTokenDiff(JsonElement element)

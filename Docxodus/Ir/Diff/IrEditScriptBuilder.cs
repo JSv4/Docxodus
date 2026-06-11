@@ -46,9 +46,22 @@ internal static class IrEditScriptBuilder
         ArgumentNullException.ThrowIfNull(settings);
 
         var alignment = IrBlockAligner.Align(left, right, settings);
+        return new IrEditScript(IrNodeList.From(
+            ProjectAlignment(left.Body.Blocks, alignment, settings)));
+    }
 
+    /// <summary>
+    /// Project an alignment over <paramref name="leftBlocks"/> into the ordered block edit-op list
+    /// (right order, with move/delete sources interleaved). Shared by <see cref="Build"/> (body) and
+    /// <see cref="IrTableDiffer"/> (cell block lists) so both produce identical op shapes. Move group ids
+    /// are LOCAL to this projection (1..N in destination order) — for cell projections that means ids are
+    /// scoped to the cell, which is exactly right since a row/cell move never crosses cells in M2.2.
+    /// </summary>
+    public static List<IrEditOp> ProjectAlignment(
+        IrNodeList<IrBlock> leftBlocks, IrBlockAlignment alignment, IrDiffSettings settings)
+    {
         // Left block index by reference identity → used to order move-source interleaving by left position.
-        var leftIndex = BuildLeftIndexMap(left);
+        var leftIndex = BuildLeftIndexMap(leftBlocks);
 
         // Pass 1: assign MoveGroupIds in destination (right-entry) order, ascending from 1, capturing
         // each move's source block + the op kind (MoveBlock vs MoveModifyBlock), keyed by left index.
@@ -68,7 +81,7 @@ internal static class IrEditScriptBuilder
 
         // Bucket move-source ops by the left index of the nearest preceding paired-in-place left block
         // (left-anchored convention; -1 = front), walking the LEFT document order.
-        var sourcesAfterLeft = BuildSourceInterleave(left, alignment, leftIndex, moves);
+        var sourcesAfterLeft = BuildSourceInterleave(leftBlocks, alignment, leftIndex, moves);
 
         var ops = new List<IrEditOp>();
 
@@ -92,9 +105,7 @@ internal static class IrEditScriptBuilder
                     break;
 
                 case IrAlignmentKind.Modified:
-                    ops.Add(new IrEditOp(IrEditOpKind.ModifyBlock,
-                        entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
-                        TokenDiffFor(entry.Left!, entry.Right!, settings), null, null));
+                    ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings));
                     break;
 
                 case IrAlignmentKind.Inserted:
@@ -130,15 +141,33 @@ internal static class IrEditScriptBuilder
                 EmitSources(sourcesAfterLeft, leftIndex[entry.Left], moves, ops);
         }
 
-        return new IrEditScript(IrNodeList.From(ops));
+        return ops;
     }
 
-    // ------------------------------------------------------------------ token diff
+    // ------------------------------------------------------------------ modify op (token / table diff)
+
+    /// <summary>
+    /// Build a <see cref="IrEditOpKind.ModifyBlock"/> op for a Modified pair. A paragraph pair carries a
+    /// token diff; a TABLE pair carries a nested <see cref="IrTableDiff"/> (M2.2 Task 4) — so a cell-text
+    /// edit surfaces as a token diff inside the cell, not a whole-table blob; any other non-paragraph
+    /// pair (opaque / section break) carries neither.
+    /// </summary>
+    private static IrEditOp MakeModifyOp(IrBlock leftBlock, IrBlock rightBlock, IrDiffSettings settings)
+    {
+        if (leftBlock is IrTable lt && rightBlock is IrTable rt)
+            return new IrEditOp(IrEditOpKind.ModifyBlock,
+                leftBlock.Anchor.ToString(), rightBlock.Anchor.ToString(),
+                null, null, null, IrTableDiffer.Diff(lt, rt, settings));
+
+        return new IrEditOp(IrEditOpKind.ModifyBlock,
+            leftBlock.Anchor.ToString(), rightBlock.Anchor.ToString(),
+            TokenDiffFor(leftBlock, rightBlock, settings), null, null);
+    }
 
     /// <summary>
     /// Token-diff a Modified (or MovedModified) pair. Paragraph pairs are tokenized + Myers-diffed;
-    /// non-paragraph pairs (tables, opaque blocks, section breaks) get a null TokenDiff in M2.2 Task 2 —
-    /// table row/cell granularity is Task 4, and the other non-paragraph kinds have no sub-block token model.
+    /// non-paragraph pairs other than tables (opaque blocks, section breaks) get a null TokenDiff — they
+    /// have no sub-block token model. Tables are handled by <see cref="MakeModifyOp"/> via the table diff.
     /// </summary>
     private static IrTokenDiff? TokenDiffFor(IrBlock leftBlock, IrBlock rightBlock, IrDiffSettings settings)
     {
@@ -154,11 +183,10 @@ internal static class IrEditScriptBuilder
 
     // ------------------------------------------------------------------ move interleave
 
-    /// <summary>Map each left body block to its index by reference identity (for deterministic ordering).</summary>
-    private static Dictionary<IrBlock, int> BuildLeftIndexMap(IrDocument left)
+    /// <summary>Map each left block to its index by reference identity (for deterministic ordering).</summary>
+    private static Dictionary<IrBlock, int> BuildLeftIndexMap(IrNodeList<IrBlock> blocks)
     {
         var map = new Dictionary<IrBlock, int>(ReferenceEqualityComparer.Instance);
-        var blocks = left.Body.Blocks;
         for (int i = 0; i < blocks.Count; i++)
             map[blocks[i]] = i;
         return map;
@@ -172,7 +200,7 @@ internal static class IrEditScriptBuilder
     /// order so the adjacency exactly mirrors the aligner's deletion interleave.
     /// </summary>
     private static Dictionary<int, List<int>> BuildSourceInterleave(
-        IrDocument left, IrBlockAlignment alignment,
+        IrNodeList<IrBlock> blocks, IrBlockAlignment alignment,
         Dictionary<IrBlock, int> leftIndex, Dictionary<int, MoveInfo> moves)
     {
         var pairedInPlace = new HashSet<int>();
@@ -184,7 +212,6 @@ internal static class IrEditScriptBuilder
 
         var sourcesAfterLeft = new Dictionary<int, List<int>>();
         int lastPairedLeft = -1;
-        var blocks = left.Body.Blocks;
         for (int i = 0; i < blocks.Count; i++)
         {
             if (moves.ContainsKey(i)) // this left block is a move source
