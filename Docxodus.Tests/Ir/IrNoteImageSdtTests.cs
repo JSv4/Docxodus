@@ -252,4 +252,40 @@ public class IrNoteImageSdtTests
 
         Assert.Equal(plain.ContentHash, wrapped.ContentHash);
     }
+
+    [Fact]
+    public void Read_NestedBlockSdt_Unwrapped()
+    {
+        // sdt-in-sdt, 2 deep: the inner paragraph must surface correctly (no opaque fallback).
+        var doc = Read(
+            "<w:sdt><w:sdtContent>" +
+              "<w:sdt><w:sdtContent>" +
+                "<w:p><w:r><w:t>inner</w:t></w:r></w:p>" +
+              "</w:sdtContent></w:sdt>" +
+            "</w:sdtContent></w:sdt>");
+
+        var para = Assert.Single(doc.Body.Blocks.OfType<IrParagraph>());
+        Assert.Empty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
+        Assert.Equal("inner", string.Concat(para.Inlines.OfType<IrTextRun>().Select(r => r.Text)));
+    }
+
+    [Fact]
+    public void Read_PathologicallyDeepSdt_FallsBackToOpaque()
+    {
+        // 70-deep nested block SDTs exceed the MaxSdtDepth (64) recursion cap: the reader must not
+        // throw and must preserve the subtree as an opaque block rather than unwrapping forever.
+        var sb = new System.Text.StringBuilder();
+        const int depth = 70;
+        for (int i = 0; i < depth; i++)
+            sb.Append("<w:sdt><w:sdtContent>");
+        sb.Append("<w:p><w:r><w:t>buried</w:t></w:r></w:p>");
+        for (int i = 0; i < depth; i++)
+            sb.Append("</w:sdtContent></w:sdt>");
+
+        var doc = Read(sb.ToString());
+
+        // No throw, and the cap produced an opaque fallback (the deeply nested sdt is preserved
+        // opaquely rather than fully unwrapped to a paragraph).
+        Assert.NotEmpty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
+    }
 }

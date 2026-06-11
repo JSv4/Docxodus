@@ -200,18 +200,33 @@ internal static class IrReader
     /// provenance ancestors. Multiple or zero content children are handled naturally (we walk
     /// whatever is there). SDTs can nest, so this recurses.
     /// </summary>
-    private static void AppendBlocks(XElement el, ReadContext ctx, List<IrBlock> sink)
+    private static void AppendBlocks(XElement el, ReadContext ctx, List<IrBlock> sink, int depth = 0)
     {
         if (el.Name == W + "sdt")
         {
+            // Pathologically deep SDT nesting would recurse without bound; cap it and preserve the
+            // whole subtree opaquely so totality holds without stack risk (the cap is far beyond any
+            // legitimate content control nesting).
+            if (depth >= MaxSdtDepth)
+            {
+                sink.Add(BuildOpaqueBlock(el, ctx));
+                return;
+            }
             var content = el.Element(W + "sdtContent");
             if (content is not null)
                 foreach (var inner in content.Elements())
-                    AppendBlocks(inner, ctx, sink);
+                    AppendBlocks(inner, ctx, sink, depth + 1);
             return;
         }
         sink.Add(BuildBlock(el, ctx));
     }
+
+    /// <summary>
+    /// Maximum content-control (<c>w:sdt</c>/<c>w:smartTag</c>) nesting the reader unwraps before
+    /// falling back to an opaque node. Real documents nest only a handful deep; the cap exists
+    /// purely to bound recursion against adversarial/corrupt input.
+    /// </summary>
+    private const int MaxSdtDepth = 64;
 
     private static IrBlock BuildBlock(XElement el, ReadContext ctx)
     {
@@ -304,7 +319,9 @@ internal static class IrReader
 
         public InlineWalker(ReadContext ctx) => _ctx = ctx;
 
-        public void Feed(XElement child)
+        public void Feed(XElement child) => Feed(child, 0);
+
+        private void Feed(XElement child, int depth)
         {
             if (child.Name == W + "r")
             {
@@ -318,6 +335,12 @@ internal static class IrReader
             {
                 EmitInline(BuildFldSimple(child, _ctx), child);
             }
+            else if (depth >= MaxSdtDepth && (child.Name == W + "sdt" || child.Name == W + "smartTag"))
+            {
+                // Pathologically deep inline content-control nesting: bound the recursion and
+                // preserve the whole subtree opaquely rather than risk a stack overflow.
+                EmitInline(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)), child);
+            }
             else if (child.Name == W + "sdt")
             {
                 // N12: inline content control — splice w:sdtContent's children into the inline
@@ -325,7 +348,7 @@ internal static class IrReader
                 var content = child.Element(W + "sdtContent");
                 if (content is not null)
                     foreach (var inner in content.Elements())
-                        Feed(inner);
+                        Feed(inner, depth + 1);
             }
             else if (child.Name == W + "smartTag")
             {
@@ -333,7 +356,7 @@ internal static class IrReader
                 // into the inline stream the same way; recursion handles nesting. Its own
                 // w:smartTagPr metadata child is not content and is skipped.
                 foreach (var inner in child.Elements().Where(e => e.Name != W + "smartTagPr"))
-                    Feed(inner);
+                    Feed(inner, depth + 1);
             }
             else if (child.Name == W + "proofErr")
             {
@@ -642,10 +665,13 @@ internal static class IrReader
             ctx.ImageHashCache[embedId] = resolved;
             return resolved;
         }
-        catch
+        catch (Exception e) when (e is KeyNotFoundException or ArgumentException or System.IO.IOException
+            or InvalidOperationException or NotSupportedException or System.Xml.XmlException)
         {
             // Missing rel id (KeyNotFoundException / ArgumentOutOfRangeException), wrong part type,
             // or unreadable stream: opaque fallback. Totality over the corpus depends on this.
+            // OOM and other systemic exceptions are allowed to escape rather than masquerade as a
+            // benign missing image.
             return null;
         }
     }

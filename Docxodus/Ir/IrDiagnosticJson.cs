@@ -166,13 +166,45 @@ internal static class IrDiagnosticJson
                 writer.WriteString("kind", "break");
                 writer.WriteString("breakKind", b.Kind.ToString());
                 break;
+            case IrFieldRun fld:
+                writer.WriteString("kind", "field");
+                writer.WriteString("instruction", fld.Instruction);
+                writer.WriteStartArray("cachedResult");
+                foreach (var child in fld.CachedResult)
+                    WriteInline(writer, child);
+                writer.WriteEndArray();
+                break;
+            case IrHyperlink h:
+                writer.WriteString("kind", "hyperlink");
+                if (h.Target is { } target) writer.WriteString("target", target);
+                writer.WriteStartArray("inlines");
+                foreach (var child in h.Inlines)
+                    WriteInline(writer, child);
+                writer.WriteEndArray();
+                break;
+            case IrNoteRef n:
+                writer.WriteString("kind", "noteRef");
+                writer.WriteString("noteKind", n.Kind.ToString());
+                writer.WriteString("noteId", n.NoteId);
+                break;
+            case IrInlineImage img:
+                writer.WriteString("kind", "image");
+                // PartUri is a relative part URI (e.g. "/word/media/image1.png"); no absolute
+                // filesystem path may leak into the diagnostic output.
+                writer.WriteString("partUri", img.PartUri.ToString());
+                writer.WriteString("imageBytesHash", img.ImageBytesHash.ToHex());
+                writer.WriteNumber("widthEmu", img.WidthEmu);
+                writer.WriteNumber("heightEmu", img.HeightEmu);
+                if (img.AltText is { } altText) writer.WriteString("altText", altText);
+                break;
             case IrOpaqueInline o:
                 writer.WriteString("kind", "opaque");
                 writer.WriteString("element", o.ElementName.ToString());
                 writer.WriteString("hash", o.CanonicalHash.ToHex());
                 break;
             default:
-                // The M1.1 reader never emits the remaining inline kinds; keep the writer total.
+                // No concrete IrInline subtype should reach here; the completeness guard test
+                // (IrDiagnosticJsonTests) enforces a branch above for every concrete kind.
                 writer.WriteString("kind", "unsupported");
                 writer.WriteString("type", inline.GetType().Name);
                 break;

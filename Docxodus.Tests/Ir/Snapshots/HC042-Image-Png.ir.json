@@ -9,8 +9,12 @@
       "format": {},
       "inlines": [
         {
-          "kind": "unsupported",
-          "type": "IrInlineImage"
+          "kind": "image",
+          "partUri": "/word/media/image1.PNG",
+          "imageBytesHash": "db12e3ce62c8babad549d29f252a1adbefa9e45033fc3845856f6b8ed3c4b5ff",
+          "widthEmu": 419158,
+          "heightEmu": 314369,
+          "altText": "Picture 1"
         }
       ]
     },

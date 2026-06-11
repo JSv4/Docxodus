@@ -69,8 +69,26 @@ All notable changes to this project will be documented in this file.
   into the paragraph's inline stream and coalesce normally. Formerly-opaque body SDT
   blocks now expose their inner paragraphs/tables with their own anchors; all
   pre-existing non-SDT anchors are unchanged. DB007/HC031/HC042 golden snapshots
-  regenerated. (The diagnostic JSON still renders `IrNoteRef`/`IrInlineImage` as
-  `"unsupported"` until the M1.2 writer task.)
+  regenerated.
+- **Document IR M1.2 complete — diagnostic writer in lockstep + completeness
+  guard** — *internal/experimental.* The diagnostic JSON writer now renders the
+  four promoted inline kinds with real branches instead of an `"unsupported"`
+  fallback: `IrFieldRun` → `{"kind":"field","instruction","cachedResult":[…recursive
+  inlines…]}`, `IrHyperlink` → `{"kind":"hyperlink","target"(omitted when
+  null),"inlines":[…]}`, `IrNoteRef` → `{"kind":"noteRef","noteKind","noteId"}`, and
+  `IrInlineImage` → `{"kind":"image","partUri","imageBytesHash","widthEmu","heightEmu",
+  "altText"(omitted when null)}` (`partUri` is the relative part URI — no filesystem
+  path leaks). A reflection-driven completeness guard now asserts every concrete
+  `IrInline`/`IrBlock` subtype serializes to a known kind (never `"unsupported"`), so
+  the writer can no longer drift behind a new reader kind. Every `"kind":"unsupported"`
+  disappears from the golden snapshots in favor of typed field/hyperlink/note-ref/image
+  objects; all block anchors and content/format hashes are byte-unchanged (the writer
+  does not affect hashes). With this, **M1.2 is complete**: normalization rules N3–N15
+  (strip-half), typed fields/hyperlinks/note-refs/images, and SDT/smartTag unwrap.
+  Also hardened: `ResolveImagePart` narrows its catch to package/IO-shaped exceptions
+  (OOM/systemic escape), and SDT/smartTag unwrap recursion (block and inline) is now
+  depth-capped at 64 with an opaque fallback beyond the cap (totality without stack
+  risk on adversarially-deep nesting).
 
 ## [6.4.0] - 2026-05-30
 

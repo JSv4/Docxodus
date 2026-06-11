@@ -259,8 +259,9 @@
           "format": {}
         },
         {
-          "kind": "unsupported",
-          "type": "IrNoteRef"
+          "kind": "noteRef",
+          "noteKind": "Endnote",
+          "noteId": "1"
         },
         {
           "kind": "text",
@@ -882,8 +883,17 @@
       "format": {},
       "inlines": [
         {
-          "kind": "unsupported",
-          "type": "IrHyperlink"
+          "kind": "hyperlink",
+          "target": "http://www.ericwhite.com/",
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "EricWhite.com",
+              "format": {
+                "styleId": "Hyperlink"
+              }
+            }
+          ]
         }
       ]
     },
@@ -1001,8 +1011,9 @@
           "format": {}
         },
         {
-          "kind": "unsupported",
-          "type": "IrNoteRef"
+          "kind": "noteRef",
+          "noteKind": "Footnote",
+          "noteId": "1"
         },
         {
           "kind": "text",
@@ -1033,8 +1044,17 @@
       "format": {},
       "inlines": [
         {
-          "kind": "unsupported",
-          "type": "IrHyperlink"
+          "kind": "hyperlink",
+          "target": "#ABookmark",
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful",
+              "format": {
+                "styleId": "Hyperlink"
+              }
+            }
+          ]
         },
         {
           "kind": "text",
@@ -1114,8 +1134,15 @@
       "format": {},
       "inlines": [
         {
-          "kind": "unsupported",
-          "type": "IrFieldRun"
+          "kind": "field",
+          "instruction": " DATE \\@ \u0022dddd, MMMM d, yyyy\u0022 ",
+          "cachedResult": [
+            {
+              "kind": "text",
+              "text": "Tuesday, July 28, 2015",
+              "format": {}
+            }
+          ]
         }
       ]
     },
@@ -1482,8 +1509,31 @@
       },
       "inlines": [
         {
-          "kind": "unsupported",
-          "type": "IrHyperlink"
+          "kind": "hyperlink",
+          "target": "#_Toc402299823",
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Heading 2",
+              "format": {
+                "styleId": "Hyperlink"
+              }
+            },
+            {
+              "kind": "tab"
+            },
+            {
+              "kind": "field",
+              "instruction": " PAGEREF _Toc402299823 \\h ",
+              "cachedResult": [
+                {
+                  "kind": "text",
+                  "text": "1",
+                  "format": {}
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -1497,8 +1547,31 @@
       },
       "inlines": [
         {
-          "kind": "unsupported",
-          "type": "IrHyperlink"
+          "kind": "hyperlink",
+          "target": "#_Toc402299824",
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Heading 1 again",
+              "format": {
+                "styleId": "Hyperlink"
+              }
+            },
+            {
+              "kind": "tab"
+            },
+            {
+              "kind": "field",
+              "instruction": " PAGEREF _Toc402299824 \\h ",
+              "cachedResult": [
+                {
+                  "kind": "text",
+                  "text": "1",
+                  "format": {}
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -1512,8 +1585,31 @@
       },
       "inlines": [
         {
-          "kind": "unsupported",
-          "type": "IrHyperlink"
+          "kind": "hyperlink",
+          "target": "#_Toc402299825",
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Heading 2 again",
+              "format": {
+                "styleId": "Hyperlink"
+              }
+            },
+            {
+              "kind": "tab"
+            },
+            {
+              "kind": "field",
+              "instruction": " PAGEREF _Toc402299825 \\h ",
+              "cachedResult": [
+                {
+                  "kind": "text",
+                  "text": "1",
+                  "format": {}
+                }
+              ]
+            }
+          ]
         }
       ]
     },
