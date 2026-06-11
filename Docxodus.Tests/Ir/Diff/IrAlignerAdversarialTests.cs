@@ -167,8 +167,8 @@ public class IrAlignerAdversarialTests
         // every block anchors uniquely and the only gap is a single 1-block Modified gap — i.e. NO large
         // all-distinct gap that would trip the InOrderRefine G²/2 worst case. This isolates the spine /
         // anchoring cost, which should scale ~linearly: 4× the blocks ⇒ well under 8× the wall time.
-        double small = BestOfThree(500);
-        double large = BestOfThree(2000);
+        double small = BestSampleMs(500);
+        double large = BestSampleMs(2000);
         double ratio = large / Math.Max(small, 0.0001);
 
         _out.WriteLine($"Scale guard: 500-para = {small:F2} ms, 2000-para = {large:F2} ms, ratio = {ratio:F2}x (n=4x)");
@@ -177,9 +177,16 @@ public class IrAlignerAdversarialTests
             $"(500={small:F2}ms, 2000={large:F2}ms).");
     }
 
-    /// <summary>Warm up once, then best-of-3 wall-time (ms) for an n-para self-pair with one edit.</summary>
-    private static double BestOfThree(int n)
+    /// <summary>
+    /// Warm up once, then best-of-5 wall-time (ms per align) for an n-para self-pair with one edit.
+    /// Each sample times a BATCH of 10 aligns: single-align wall times at n=500 are ~2 ms, small
+    /// enough that scheduler noise under parallel test load dominates the ratio's denominator
+    /// (observed 8.72× flake in a full-suite run vs 4.7× in isolation). Batching keeps every sample
+    /// well above timer/scheduler granularity without changing what is measured.
+    /// </summary>
+    private static double BestSampleMs(int n)
     {
+        const int alignsPerSample = 10;
         var baseParas = DistinctClauses(n);
         var edited = (string[])baseParas.Clone();
         edited[n / 2] = $"Clause {n / 2}: REVISED wording for this section of the agreement.";
@@ -190,12 +197,13 @@ public class IrAlignerAdversarialTests
         _ = Align(l, r); // warm-up (JIT, dictionary growth)
 
         double best = double.MaxValue;
-        for (int i = 0; i < 3; i++)
+        for (int i = 0; i < 5; i++)
         {
             var sw = Stopwatch.StartNew();
-            _ = Align(l, r);
+            for (int j = 0; j < alignsPerSample; j++)
+                _ = Align(l, r);
             sw.Stop();
-            best = Math.Min(best, sw.Elapsed.TotalMilliseconds);
+            best = Math.Min(best, sw.Elapsed.TotalMilliseconds / alignsPerSample);
         }
         return best;
     }
