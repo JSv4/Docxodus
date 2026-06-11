@@ -8,8 +8,10 @@
       "formatFingerprint": "d33fdaa9e29db96f9a4cb65406fcb528d518bbe8d6109df4a80178472d574838",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "Listeafsnit"
@@ -29,8 +31,10 @@
       "formatFingerprint": "d33fdaa9e29db96f9a4cb65406fcb528d518bbe8d6109df4a80178472d574838",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "Listeafsnit"
@@ -50,8 +54,10 @@
       "formatFingerprint": "d33fdaa9e29db96f9a4cb65406fcb528d518bbe8d6109df4a80178472d574838",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "Listeafsnit"
@@ -79,8 +85,11 @@
       "formatFingerprint": "697db4da0b16acda8327f48c98089c18b98f536fd5cb77da6c8338db61c71115",
       "list": {
         "numId": 2,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "startOverride": 1,
+        "fromStyle": false
       },
       "format": {
         "styleId": "Listeafsnit"
@@ -100,8 +109,11 @@
       "formatFingerprint": "697db4da0b16acda8327f48c98089c18b98f536fd5cb77da6c8338db61c71115",
       "list": {
         "numId": 2,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "startOverride": 1,
+        "fromStyle": false
       },
       "format": {
         "styleId": "Listeafsnit"
@@ -121,8 +133,11 @@
       "formatFingerprint": "697db4da0b16acda8327f48c98089c18b98f536fd5cb77da6c8338db61c71115",
       "list": {
         "numId": 2,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "startOverride": 1,
+        "fromStyle": false
       },
       "format": {
         "styleId": "Listeafsnit"
@@ -150,8 +165,11 @@
       "formatFingerprint": "381f5d9339cad421f84cb4657053c38a6fcc9586dc53a2a1bfe6fb12f1834203",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "startOverride": 1,
+        "fromStyle": false
       },
       "format": {
         "styleId": "Listeafsnit"
@@ -171,8 +189,11 @@
       "formatFingerprint": "381f5d9339cad421f84cb4657053c38a6fcc9586dc53a2a1bfe6fb12f1834203",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "startOverride": 1,
+        "fromStyle": false
       },
       "format": {
         "styleId": "Listeafsnit"
@@ -192,8 +213,11 @@
       "formatFingerprint": "381f5d9339cad421f84cb4657053c38a6fcc9586dc53a2a1bfe6fb12f1834203",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "startOverride": 1,
+        "fromStyle": false
       },
       "format": {
         "styleId": "Listeafsnit"

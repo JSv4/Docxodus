@@ -285,8 +285,10 @@
       "formatFingerprint": "358493755dec63121c556ea3e41f6f7535e7c3ed87c267b4c3e8c779f4914ba5",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 3,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -306,8 +308,10 @@
       "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 3,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -327,8 +331,10 @@
       "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 3,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -348,8 +354,10 @@
       "formatFingerprint": "358493755dec63121c556ea3e41f6f7535e7c3ed87c267b4c3e8c779f4914ba5",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 3,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -369,8 +377,10 @@
       "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 3,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -390,8 +400,10 @@
       "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 3,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -411,8 +423,10 @@
       "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 3,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -432,8 +446,10 @@
       "formatFingerprint": "76579e5131c596f0d506cc2a4bc4c6fd7c593acfb263bdd43a2e7d6739fa2db1",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 2
+        "abstractNumId": 3,
+        "ilvl": 2,
+        "numberFormat": "lowerRoman",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -453,8 +469,10 @@
       "formatFingerprint": "358493755dec63121c556ea3e41f6f7535e7c3ed87c267b4c3e8c779f4914ba5",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 3,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -474,8 +492,10 @@
       "formatFingerprint": "c6d6ecd147713d5f950fc57bef1bccaa641fd9371e1cd1ddff211cd57f450b9c",
       "list": {
         "numId": 1,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 3,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -495,8 +515,10 @@
       "formatFingerprint": "402aaf5366906489ce8c1eddb6b8444234e167c34a1cef6bc19da5de29701ae0",
       "list": {
         "numId": 2,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 1,
+        "ilvl": 0,
+        "numberFormat": "bullet",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -516,8 +538,10 @@
       "formatFingerprint": "6e525c1a4a22b2151ba1ccdfe7e92e153d3a3eb8f884f126974f34f7efd883ba",
       "list": {
         "numId": 2,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 1,
+        "ilvl": 1,
+        "numberFormat": "bullet",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -537,8 +561,10 @@
       "formatFingerprint": "6e525c1a4a22b2151ba1ccdfe7e92e153d3a3eb8f884f126974f34f7efd883ba",
       "list": {
         "numId": 2,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 1,
+        "ilvl": 1,
+        "numberFormat": "bullet",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -558,8 +584,10 @@
       "formatFingerprint": "402aaf5366906489ce8c1eddb6b8444234e167c34a1cef6bc19da5de29701ae0",
       "list": {
         "numId": 2,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 1,
+        "ilvl": 0,
+        "numberFormat": "bullet",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -579,8 +607,10 @@
       "formatFingerprint": "6e525c1a4a22b2151ba1ccdfe7e92e153d3a3eb8f884f126974f34f7efd883ba",
       "list": {
         "numId": 2,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 1,
+        "ilvl": 1,
+        "numberFormat": "bullet",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -1814,8 +1844,10 @@
       "formatFingerprint": "7be90d5a05332c7a04049fcf79f95c099698a7e4bfec8bf534096a518035ae64",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 2,
+        "ilvl": 0,
+        "numberFormat": "upperRoman",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -1835,8 +1867,10 @@
       "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 2,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -1856,8 +1890,10 @@
       "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 2,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -1877,8 +1913,10 @@
       "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 2,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -1898,8 +1936,10 @@
       "formatFingerprint": "7be90d5a05332c7a04049fcf79f95c099698a7e4bfec8bf534096a518035ae64",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 2,
+        "ilvl": 0,
+        "numberFormat": "upperRoman",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -1919,8 +1959,10 @@
       "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 2,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -1940,8 +1982,10 @@
       "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 2,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -1961,8 +2005,10 @@
       "formatFingerprint": "7be90d5a05332c7a04049fcf79f95c099698a7e4bfec8bf534096a518035ae64",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 2,
+        "ilvl": 0,
+        "numberFormat": "upperRoman",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -1982,8 +2028,10 @@
       "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 2,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -2003,8 +2051,10 @@
       "formatFingerprint": "0aefdb8143c7d3043e9ceff80d3ef7d43f679ad46185e2ac9103b21ba24f9161",
       "list": {
         "numId": 3,
-        "abstractNumId": null,
-        "ilvl": 1
+        "abstractNumId": 2,
+        "ilvl": 1,
+        "numberFormat": "lowerLetter",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -2046,8 +2096,10 @@
       "formatFingerprint": "4b5b7209b17524124ace75899974150a7b32147ab0445a339fae0b7dfe84137c",
       "list": {
         "numId": 4,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -2067,8 +2119,10 @@
       "formatFingerprint": "4b5b7209b17524124ace75899974150a7b32147ab0445a339fae0b7dfe84137c",
       "list": {
         "numId": 4,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -2088,8 +2142,10 @@
       "formatFingerprint": "4b5b7209b17524124ace75899974150a7b32147ab0445a339fae0b7dfe84137c",
       "list": {
         "numId": 4,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -2109,8 +2165,10 @@
       "formatFingerprint": "4b5b7209b17524124ace75899974150a7b32147ab0445a339fae0b7dfe84137c",
       "list": {
         "numId": 4,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"
@@ -2130,8 +2188,10 @@
       "formatFingerprint": "5935a8815b4184d4a7ae7330d0f2af8a6d27152082cf4692bbf9710a57b4696c",
       "list": {
         "numId": 4,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "ListParagraph"

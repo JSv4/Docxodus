@@ -2399,8 +2399,10 @@
       "formatFingerprint": "08934c82c3d98d30637d0378274225f737e4059e2251aad30d33de22ecd3ccd5",
       "list": {
         "numId": 34,
-        "abstractNumId": null,
-        "ilvl": 0
+        "abstractNumId": 18,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": false
       },
       "format": {
         "styleId": "Header",

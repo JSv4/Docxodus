@@ -97,7 +97,13 @@ internal static class IrReader
             root.AddAnnotation(main);
 
         var partUri = main.Uri;
-        var ctx = new ReadContext(partUri, main);
+
+        // Registries are built BEFORE the body walk so paragraph list resolution can chase
+        // numPr → IrNum → IrAbstractNum → level format (rule M1.3). The style registry feeds the
+        // style-chain numPr lookup; the numbering registry resolves the facts.
+        var styles = BuildStyleRegistry(main);
+        var numbering = BuildNumberingRegistry(main);
+        var ctx = new ReadContext(partUri, main, styles, numbering);
 
         var body = root.Element(W + "body")
             ?? throw new DocxodusException("Document has no w:body element.");
@@ -119,8 +125,8 @@ internal static class IrReader
             Footnotes = IrNoteStore.Empty,
             Endnotes = IrNoteStore.Empty,
             Comments = IrCommentStore.Empty,
-            Styles = BuildStyleRegistry(main),
-            Numbering = BuildNumberingRegistry(main),
+            Styles = styles,
+            Numbering = numbering,
             ThemeFonts = BuildThemeFonts(main),
             AnchorIndex = anchorIndex,
             Sources = sources,
@@ -134,15 +140,24 @@ internal static class IrReader
     /// </summary>
     private sealed class ReadContext
     {
-        public ReadContext(Uri partUri, MainDocumentPart main)
+        public ReadContext(Uri partUri, MainDocumentPart main,
+            IrStyleRegistry styles, IrNumberingRegistry numbering)
         {
             PartUri = partUri;
             Main = main;
+            Styles = styles;
+            Numbering = numbering;
         }
 
         public Uri PartUri { get; }
 
         public MainDocumentPart Main { get; }
+
+        // Registries for list resolution (numPr → IrNum → IrAbstractNum → level format) and the
+        // pStyle → basedOn walk that finds style-inherited numbering.
+        public IrStyleRegistry Styles { get; }
+
+        public IrNumberingRegistry Numbering { get; }
 
         // embed rel id → (image part URI, hash of its bytes). Negative results are not cached because
         // a missing/wrong-typed rel is rare and cheap to re-check.
@@ -252,7 +267,7 @@ internal static class IrReader
         var kind = kindToken is null ? IrAnchorKind.P : IrAnchor.KindFromToken(kindToken);
 
         var pPr = p.Element(W + "pPr");
-        var (paraFormat, listInfo) = MapParaFormat(pPr);
+        var (paraFormat, listInfo) = MapParaFormat(pPr, ctx);
 
         // Walk the paragraph's children (skipping w:pPr) through the shared inline walker, which
         // handles run content, hyperlinks (N14), and the field state machine (N9), then applies
@@ -872,7 +887,7 @@ internal static class IrReader
 
     // --- paragraph format -------------------------------------------------
 
-    private static (IrParaFormat Format, IrListInfo? List) MapParaFormat(XElement? pPr)
+    private static (IrParaFormat Format, IrListInfo? List) MapParaFormat(XElement? pPr, ReadContext ctx)
     {
         if (pPr is null)
             return (new IrParaFormat { UnmodeledDigest = EmptyUnmodeledDigest }, null);
@@ -922,19 +937,13 @@ internal static class IrReader
         bool? keepLines = Toggle(pPr.Element(W + "keepLines"));
         bool? pageBreakBefore = Toggle(pPr.Element(W + "pageBreakBefore"));
 
-        IrListInfo? listInfo = null;
-        var numPr = pPr.Element(W + "numPr");
-        if (numPr is not null)
-        {
-            var numId = IntAttr(numPr.Element(W + "numId"), W + "val");
-            var ilvl = IntAttr(numPr.Element(W + "ilvl"), W + "val");
-            if (numId is not null)
-                listInfo = new IrListInfo(numId.Value, null, ilvl ?? 0, "", null, false);
-        }
+        IrListInfo? listInfo = ResolveListInfo(pPr, ctx);
 
         // Unmodeled leftovers: every pPr child not consumed by a modeled field above.
-        // numPr is consumed for list facts but ALSO kept here so numbering still affects the
-        // fingerprint until M1.3 resolution. w:rPr (mark props) and mid-doc w:sectPr stay too.
+        // numPr is read for the IrListInfo facts but is intentionally NOT in PPrConsumed, so it
+        // stays in this digest: IrListInfo is not hashed, and numPr has always ridden in the
+        // unmodeled digest — keeping it here makes FormatFingerprint byte-identical across M1.3
+        // resolution. w:rPr (mark props) and mid-doc w:sectPr stay too.
         var digest = UnmodeledDigest(pPr, PPrConsumed);
 
         var format = new IrParaFormat
@@ -954,6 +963,90 @@ internal static class IrReader
             UnmodeledDigest = digest,
         };
         return (format, listInfo);
+    }
+
+    // --- list resolution (M1.3) -------------------------------------------
+
+    /// <summary>
+    /// Resolve a paragraph's list membership through the numbering registry, mirroring
+    /// <c>BlockMetadataOps.ResolveListMembership</c> / <c>WmlToMarkdownConverter.IsListItem</c>:
+    /// <list type="number">
+    /// <item>A direct <c>w:pPr/w:numPr</c> wins (<c>FromStyle=false</c>).</item>
+    /// <item>Otherwise walk the <c>pStyle → basedOn</c> chain (cycle-guarded, depth ≤ 16) for the
+    /// first style that contributes a <c>w:numPr</c> (<c>FromStyle=true</c>).</item>
+    /// </list>
+    /// OOXML rule: a <c>w:numId</c> of 0 (or absent, or one that does not resolve to a
+    /// <see cref="IrNum"/> in the registry) means "no list membership" → returns null. When the
+    /// numId resolves, the abstract-num id, the level's <c>w:numFmt</c> string (or "" when the
+    /// level is missing), and the per-level <c>w:startOverride</c> (or null) come from the registry.
+    /// </summary>
+    private static IrListInfo? ResolveListInfo(XElement pPr, ReadContext ctx)
+    {
+        var numPr = pPr.Element(W + "numPr");
+        bool fromStyle = false;
+
+        if (numPr is null)
+        {
+            var styleId = AttrVal(pPr.Element(W + "pStyle"));
+            numPr = ResolveStyleNumPr(styleId, ctx.Styles);
+            fromStyle = numPr is not null;
+        }
+
+        if (numPr is null)
+            return null;
+
+        var numId = IntAttr(numPr.Element(W + "numId"), W + "val");
+        // numId absent or 0 → no list membership (OOXML: numId="0" cancels numbering).
+        if (numId is null || numId.Value == 0)
+            return null;
+
+        var ilvl = IntAttr(numPr.Element(W + "ilvl"), W + "val") ?? 0;
+
+        // numId must resolve to a w:num in the registry; an unresolvable numId is no membership.
+        if (!ctx.Numbering.Nums.TryGetValue(numId.Value, out var num))
+            return null;
+
+        int abstractNumId = num.AbstractNumId;
+
+        // Level format from the abstract num's level table; "" when the level is missing.
+        string numberFormat = "";
+        if (ctx.Numbering.AbstractNums.TryGetValue(abstractNumId, out var abs)
+            && abs.Levels.TryGetValue(ilvl, out var level))
+        {
+            numberFormat = level.NumberFormat;
+        }
+
+        int? startOverride = num.StartOverrides.TryGetValue(ilvl, out var so) ? so : (int?)null;
+
+        return new IrListInfo(numId.Value, abstractNumId, ilvl, numberFormat, startOverride, fromStyle);
+    }
+
+    /// <summary>
+    /// Walk the <c>pStyle → basedOn</c> chain for the first style that carries a <c>w:numPr</c>,
+    /// reading from the deep-cloned <see cref="IrStyle.PPr"/> in the style registry. Cycle-guarded
+    /// and depth-capped at 16, matching <c>WmlToMarkdownConverter.IsListItem</c> and
+    /// <c>BlockMetadataOps.ResolveStyleNumPr</c>. Returns null when no style in the chain
+    /// contributes numbering (or the chain is broken/cyclic).
+    /// </summary>
+    private static XElement? ResolveStyleNumPr(string? styleId, IrStyleRegistry styles)
+    {
+        if (string.IsNullOrEmpty(styleId))
+            return null;
+
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var current = styleId;
+        for (int i = 0; i < 16 && current is not null; i++)
+        {
+            if (!visited.Add(current))
+                return null; // cycle guard.
+            if (!styles.Styles.TryGetValue(current, out var style))
+                return null;
+            var numPr = style.PPr?.Element(W + "numPr");
+            if (numPr is not null)
+                return numPr;
+            current = style.BasedOn;
+        }
+        return null;
     }
 
     // --- run format -------------------------------------------------------

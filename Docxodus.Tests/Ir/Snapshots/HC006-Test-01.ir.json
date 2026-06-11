@@ -158,6 +158,13 @@
       "type": "paragraph",
       "contentHash": "de8adaf865af045389f81b549bb4ce279f81bb4c9c38f09f39fdea6149761d26",
       "formatFingerprint": "4ffd52930660c7fe9b1a4757eea9a509548418ea3960aa59da9dcc85195b7b19",
+      "list": {
+        "numId": 1,
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": true
+      },
       "format": {
         "styleId": "Heading1",
         "spacingBeforeTwips": 620
@@ -334,6 +341,13 @@
       "type": "paragraph",
       "contentHash": "37191775a23e25b0e0f1265dc6298ed11b78a01009086b56a062bce935c72f6e",
       "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+      "list": {
+        "numId": 1,
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": true
+      },
       "format": {
         "styleId": "Heading1"
       },
@@ -509,6 +523,13 @@
       "type": "paragraph",
       "contentHash": "d87301f080d6116f73474f1abed56abccb82de17bc2c1e0c5fa6fe1c411c8ed1",
       "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+      "list": {
+        "numId": 1,
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": true
+      },
       "format": {
         "styleId": "Heading1"
       },
@@ -624,6 +645,13 @@
       "type": "paragraph",
       "contentHash": "2aa6372027f526d2f5eca614fabaf1d904be49abbd558ad4e14ea73284beb17c",
       "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+      "list": {
+        "numId": 1,
+        "abstractNumId": 0,
+        "ilvl": 0,
+        "numberFormat": "decimal",
+        "fromStyle": true
+      },
       "format": {
         "styleId": "Heading1"
       },

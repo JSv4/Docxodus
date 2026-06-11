@@ -105,6 +105,10 @@ internal static class IrDiagnosticJson
             else
                 writer.WriteNull("abstractNumId");
             writer.WriteNumber("ilvl", list.Ilvl);
+            writer.WriteString("numberFormat", list.NumberFormat);
+            if (list.StartOverride is { } start)
+                writer.WriteNumber("startOverride", start);
+            writer.WriteBoolean("fromStyle", list.FromStyle);
             writer.WriteEndObject();
         }
 
