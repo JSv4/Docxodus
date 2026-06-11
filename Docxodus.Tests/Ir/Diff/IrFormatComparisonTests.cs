@@ -33,6 +33,11 @@ public class IrFormatComparisonTests
     [InlineData("<w:bCs/>")]                      // complex-script bold toggle (550 occ.)
     [InlineData("<w:iCs/>")]                      // complex-script italic toggle (1328 occ.)
     [InlineData("<w:szCs w:val=\"24\"/>")]       // complex-script size (3 occ.)
+    // w:shd is NOT noise — it's a VISIBLE unmodeled format change (run shading). It pins the
+    // documented ModeledOnly trade-off: visible-but-undescribable changes are false negatives
+    // (Unchanged) under the default and detectable (FormatOnly) only under Full. See
+    // IrFormatComparison.ModeledOnly's XML-doc.
+    [InlineData("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFFF00\"/>")]
     public void Unmodeled_rpr_only_diff_is_unchanged_under_modeled_only_but_formatonly_under_full(string noiseRpr)
     {
         var left = FromXml(Para(string.Empty));

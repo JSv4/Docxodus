@@ -23,7 +23,10 @@ internal enum IrFormatComparison
     /// a <c>w:rPrChange</c>-grade format-change report can only ever DESCRIBE modeled fields anyway, so
     /// reporting a format change driven by an undescribable unmodeled-digest flip is a false positive.
     /// Comparing modeled fields only collapses that noise (FormatOnly → Unchanged) without losing any
-    /// reportable format delta.</para>
+    /// format delta a <c>w:rPrChange</c>-grade report could DESCRIBE. The honest trade-off: a visible
+    /// but UNMODELED format change (e.g. <c>w:shd</c> run shading) is a false NEGATIVE under this
+    /// default — it reads as Unchanged. Consumers needing to detect (if not describe) such changes use
+    /// <see cref="Full"/>.</para>
     /// </summary>
     ModeledOnly,
 
