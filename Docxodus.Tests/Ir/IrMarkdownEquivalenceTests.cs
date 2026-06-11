@@ -135,6 +135,20 @@ public class IrMarkdownEquivalenceTests
         // A clean body-only in-pPr sectPr corpus fixture does not exist (every TestFiles sectPr
         // fixture is also multipart or revision-tainted — T3 territory), so the {#sec:…} + thematic
         // break is pinned programmatically in IrMarkdownRuleTests.Rule_InlineSectionBreak instead.
+
+        // --- M1.4-T3: numbering counters, multipart scopes, note refs, revision-accepted inputs ---
+        "CA003-Numbered-List.docx",           // numbered (decimal) list markers via the resolved-marker fact
+        "LIR001-en-US-ordinal.docx",          // ordinal numbering + Heading-with-numPr trailing-blank rule
+        "LIR003-en-US-upperLetter.docx",      // upperLetter counter markers
+        "DB012-Lists-With-Different-Numberings.docx", // multiple numId counters in one document
+        "CA008-Footnote-Reference.docx",      // body [^fn-…] note ref + # Footnotes definition section
+        "DB007-Notes.docx",                   // footnotes scope: labels from note Unid, definition lines
+        "RC007-Endnotes-After.docx",          // # Endnotes section
+        "DB002-Sections-With-Headers.docx",   // # Headers / ## hdrN multipart structure + dividers
+        "DA236-Page-Num-in-Footer.docx",      // # Footers / ## ftrN multipart structure
+        "WC020-FootNote-After-1.docx",        // footnote ref + section, revision-accepted by the harness
+        // Per-rule pins for the resolved-marker display rules, fldSimple drop, inline-SDT drop,
+        // block-level-SDT skip, and tab grouping live in IrMarkdownRuleTests (added this task).
     };
 
     // --- corpus report (informational; asserts only the must-pass list + totality) ---------------
@@ -293,6 +307,10 @@ public class IrMarkdownEquivalenceTests
                 sb.AppendLine($"  partUri mismatch: {key} oracle={oTarget.PartUri} ir={iTarget.PartUri}");
             if (oTarget.TextPreview != iTarget.TextPreview)
                 sb.AppendLine($"  textPreview mismatch: {key} oracle='{oTarget.TextPreview}' ir='{iTarget.TextPreview}'");
+            // AutoNumberPrefix now resolved on the IR (the reader captures the live-package marker),
+            // so it participates in the comparison (M1.4-T3 removed the exclusion).
+            if (oTarget.AutoNumberPrefix != iTarget.AutoNumberPrefix)
+                sb.AppendLine($"  autoNumberPrefix mismatch: {key} oracle='{oTarget.AutoNumberPrefix}' ir='{iTarget.AutoNumberPrefix}'");
         }
 
         // Body anchors the IR produced that the oracle did not.

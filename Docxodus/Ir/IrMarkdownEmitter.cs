@@ -66,26 +66,35 @@ internal static class IrMarkdownEmitter
     {
         var index = new Dictionary<string, AnchorTarget>(StringComparer.Ordinal);
 
-        // Body scope only (multipart scopes land in T3). The body part URI is the provenance pin on
-        // the first block's Source; fall back to scanning Sources for the main document part.
-        var partUri = ResolveBodyPartUri(ir);
+        // Index ALL scopes in the oracle's BuildAnchorIndex order — body, hdr1.., ftr1.., fn, en, cmt —
+        // so the AnchorIdMap (built from index.Values in insertion order) matches the oracle for every
+        // AnchorIdRendering mode. The harness compares only BODY entries, but the markdown's note labels
+        // and {#cmt:…}/{#sec:…} tokens in non-default modes route through this map.
+        var autoNumber = BuildAutoNumberResolver(ir);
 
+        // --- body ---
+        var bodyPartUri = ResolveBodyPartUri(ir);
         foreach (var (anchor, preview) in WalkAnchorsForIndex(ir.Body.Blocks, settings))
-        {
-            var id = anchor.ToString();
-            if (index.ContainsKey(id)) continue;
+            AddIndexEntry(index, anchor, bodyPartUri, preview, autoNumber);
 
-            index[id] = new AnchorTarget
-            {
-                Anchor = ToPublicAnchor(anchor),
-                PartUri = partUri,
-                Unid = anchor.Unid,
-                TextPreview = preview,
-                // AutoNumberPrefix: the oracle resolves this via ListNumberResolver's counter walk.
-                // TODO(M1.4-T3): port the counter walk onto IR list facts. For now leave it null and
-                // EXCLUDE it from must-pass index comparison (documented in the harness).
-                AutoNumberPrefix = null,
-            };
+        // --- headers / footers (each in part-enumeration order) ---
+        foreach (var hf in ir.Headers.Concat(ir.Footers))
+        {
+            var partUri = ResolveScopePartUri(ir, hf.Scope.Blocks);
+            foreach (var (anchor, preview) in WalkAnchorsForIndex(hf.Scope.Blocks, settings))
+                AddIndexEntry(index, anchor, partUri, preview, autoNumber);
+        }
+
+        // --- footnotes / endnotes (the note ELEMENT is the addressable anchor) ---
+        IndexNoteScope(index, ir, ir.Footnotes, IrAnchorKind.Fn);
+        IndexNoteScope(index, ir, ir.Endnotes, IrAnchorKind.En);
+
+        // --- comments ---
+        if (ir.Comments.Comments.Count > 0)
+        {
+            var partUri = ResolveCommentsPartUri(ir);
+            foreach (var c in ir.Comments.Comments)
+                AddIndexEntry(index, c.Anchor, partUri, ComputeScopeTextPreview(c.Blocks), autoNumber);
         }
 
         // Build the AnchorIdMap. Mirror the oracle exactly: the map is constructed by iterating
@@ -109,6 +118,82 @@ internal static class IrMarkdownEmitter
         }
 
         return (index, renderMap);
+    }
+
+    private static void AddIndexEntry(
+        Dictionary<string, AnchorTarget> index, IrAnchor anchor, string partUri, string preview,
+        AutoNumberResolver autoNumber)
+    {
+        var id = anchor.ToString();
+        if (index.ContainsKey(id)) return;
+        index[id] = new AnchorTarget
+        {
+            Anchor = ToPublicAnchor(anchor),
+            PartUri = partUri,
+            Unid = anchor.Unid,
+            TextPreview = preview,
+            // AutoNumberPrefix is resolved (heading/list numbering) only for p/h/li in the body scope,
+            // matching the oracle (kind is "p"/"h"/"li" && scope.Name == "body").
+            AutoNumberPrefix = anchor.Scope == "body"
+                && anchor.Kind is IrAnchorKind.P or IrAnchorKind.H or IrAnchorKind.Li
+                ? autoNumber.Prefix(anchor)
+                : null,
+        };
+    }
+
+    /// <summary>Index a note scope's note ELEMENTS (kind fn/en, scope fn/en). The note's anchor Unid
+    /// comes from <see cref="IrNoteStore.NoteUnids"/>; its TextPreview is the flat text of its blocks,
+    /// in the note store's insertion (document) order — mirroring the oracle's
+    /// <c>scope.Root.Elements(noteName)</c> walk over real (non-boilerplate) notes.</summary>
+    private static void IndexNoteScope(
+        Dictionary<string, AnchorTarget> index, IrDocument ir, IrNoteStore store, IrAnchorKind kind)
+    {
+        if (store.Notes.Count == 0) return;
+        var scope = IrAnchor.KindToken(kind);
+        var partUri = ResolveScopePartUriBySuffix(ir, scope == "fn" ? "/footnotes.xml" : "/endnotes.xml");
+        foreach (var (noteId, noteScope) in store.Notes)
+        {
+            if (!store.NoteUnids.TryGetValue(noteId, out var unid)) continue;
+            var anchor = new IrAnchor(kind, scope, unid);
+            AddIndexEntry(index, anchor, partUri, ComputeScopeTextPreview(noteScope.Blocks),
+                AutoNumberResolver.None);
+        }
+    }
+
+    private static string ComputeScopeTextPreview(IrNodeList<IrBlock> blocks)
+    {
+        var sb = new StringBuilder();
+        foreach (var b in blocks) AppendFlatText(b, sb);
+        var text = sb.ToString();
+        return text.Length > TextPreviewMaxLength
+            ? text.Substring(0, TextPreviewMaxLength) + "…"
+            : text;
+    }
+
+    private static string ResolveScopePartUri(IrDocument ir, IrNodeList<IrBlock> blocks)
+    {
+        foreach (var b in blocks)
+            if (b.Source.PartUri is { } uri) return uri.ToString();
+        return ir.Sources.Keys.FirstOrDefault()?.ToString() ?? "/word/document.xml";
+    }
+
+    private static string ResolveScopePartUriBySuffix(IrDocument ir, string suffix)
+    {
+        var match = ir.Sources.Keys.FirstOrDefault(u => u.ToString().EndsWith(suffix, StringComparison.Ordinal));
+        return match?.ToString() ?? bodyPartUriFallback(ir);
+
+        static string bodyPartUriFallback(IrDocument ir) =>
+            ir.Sources.Keys.FirstOrDefault(u => u.ToString().EndsWith("/document.xml", StringComparison.Ordinal))?.ToString()
+            ?? "/word/document.xml";
+    }
+
+    private static string ResolveCommentsPartUri(IrDocument ir)
+    {
+        // Comment blocks carry their part provenance; fall back to a Sources scan by suffix.
+        foreach (var c in ir.Comments.Comments)
+            foreach (var b in c.Blocks)
+                if (b.Source.PartUri is { } uri) return uri.ToString();
+        return ResolveScopePartUriBySuffix(ir, "/comments.xml");
     }
 
     /// <summary>
@@ -228,6 +313,72 @@ internal static class IrMarkdownEmitter
     private static Anchor ToPublicAnchor(IrAnchor a) =>
         new(a.ToString(), IrAnchor.KindToken(a.Kind), a.Scope, a.Unid);
 
+    // ------------------------------------------------------------------
+    // Auto-number prefixes / list markers (port of the oracle's two display rules over the IR fact
+    // IrParagraph.ResolvedListMarker, which the reader resolved against the live package). The raw
+    // marker (e.g. "1.", "a.", "·", "First Article") is shared; the heading-PREFIX rule drops a single
+    // non-alphanumeric glyph to null (bullets aren't meaningful heading prefixes), while the list-ITEM
+    // MARKER rule keeps such a glyph as "-".
+    // ------------------------------------------------------------------
+
+    /// <summary>Resolves a block anchor to its index <c>AutoNumberPrefix</c> — the heading/list-number
+    /// prefix Word renders, or null. Built once per emit from the IR's resolved markers.</summary>
+    private sealed class AutoNumberResolver
+    {
+        public static readonly AutoNumberResolver None = new(new Dictionary<string, string?>(StringComparer.Ordinal));
+
+        private readonly Dictionary<string, string?> _byAnchor;
+        public AutoNumberResolver(Dictionary<string, string?> byAnchor) => _byAnchor = byAnchor;
+
+        /// <summary>The AutoNumberPrefix for an index entry: the heading-prefix form of the resolved
+        /// marker (single non-alnum glyph → null), or null when the paragraph carries no marker.</summary>
+        public string? Prefix(IrAnchor anchor) =>
+            _byAnchor.TryGetValue(anchor.ToString(), out var v) ? v : null;
+    }
+
+    /// <summary>Walk every paragraph in every scope, mapping its anchor to the heading-prefix form of
+    /// its <see cref="IrParagraph.ResolvedListMarker"/> (the projection's <c>ResolveHeadingNumberPrefix</c>
+    /// rule). Used for the index AutoNumberPrefix field.</summary>
+    private static AutoNumberResolver BuildAutoNumberResolver(IrDocument ir)
+    {
+        var map = new Dictionary<string, string?>(StringComparer.Ordinal);
+        void Visit(IrNodeList<IrBlock> blocks)
+        {
+            foreach (var b in blocks)
+            {
+                if (b is IrParagraph p)
+                {
+                    var prefix = HeadingNumberPrefix(p);
+                    if (prefix != null) map[p.Anchor.ToString()] = prefix;
+                }
+                else if (b is IrTable t)
+                {
+                    foreach (var row in t.Rows)
+                        foreach (var cell in row.Cells)
+                            Visit(cell.Blocks);
+                }
+            }
+        }
+        Visit(ir.Body.Blocks);
+        foreach (var hf in ir.Headers.Concat(ir.Footers)) Visit(hf.Scope.Blocks);
+        foreach (var s in ir.Footnotes.Notes.Values) Visit(s.Blocks);
+        foreach (var s in ir.Endnotes.Notes.Values) Visit(s.Blocks);
+        foreach (var c in ir.Comments.Comments) Visit(c.Blocks);
+        return new AutoNumberResolver(map);
+    }
+
+    /// <summary>Port of the oracle's <c>ResolveHeadingNumberPrefix</c> →
+    /// <c>ListNumberResolver.Resolve</c> display rule over the IR's resolved marker: trim the trailing
+    /// whitespace; a single non-alphanumeric glyph (a bullet) → null; empty → null.</summary>
+    private static string? HeadingNumberPrefix(IrParagraph p)
+    {
+        var raw = p.ResolvedListMarker;
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var trimmed = raw.TrimEnd();
+        if (trimmed.Length == 1 && !char.IsLetterOrDigit(trimmed, 0)) return null;
+        return trimmed.Length == 0 ? null : trimmed;
+    }
+
     private static string ResolveBodyPartUri(IrDocument ir)
     {
         // Prefer the provenance pin carried on the first body block.
@@ -306,12 +457,28 @@ internal static class IrMarkdownEmitter
         }
     }
 
+    /// <summary>
+    /// Mirror the oracle's <c>HasVisibleInlineContent</c>: true when the paragraph would emit any
+    /// visible text under the markdown grouping (which DROPS inline-SDT-spliced runs and w:fldSimple
+    /// text — see GroupInlineRuns). Used by Suppress mode and the empty-paragraph trim, so it must match
+    /// what is actually rendered, NOT the richer TextPreview text.
+    /// </summary>
     private static bool ParagraphHasVisibleText(IrParagraph p)
     {
-        var sb = new StringBuilder();
-        AppendInlineText(p.Inlines, sb);
-        return sb.Length > 0;
+        foreach (var (_, runs) in GroupInlineRuns(p.Inlines))
+            foreach (var r in runs)
+                if (RunHasText(r))
+                    return true;
+        return false;
     }
+
+    private static bool RunHasText(IrInline inline) => inline switch
+    {
+        IrTextRun tr => tr.Text.Length > 0,
+        IrHyperlink h => h.Inlines.Any(RunHasText),
+        IrFieldRun f => !f.IsSimpleField && f.CachedResult.Any(RunHasText),
+        _ => false,
+    };
 
     // ------------------------------------------------------------------
     // Markdown emission (body scope; multipart scopes land in T3)
@@ -321,39 +488,199 @@ internal static class IrMarkdownEmitter
         IrDocument ir, WmlToMarkdownConverterSettings settings, AnchorIdMap renderMap)
     {
         var sb = new StringBuilder();
-        var ctx = new EmitCtx { Settings = settings, Scope = "body", AnchorIdMap = renderMap };
+        var ctx = new EmitCtx
+        {
+            Settings = settings,
+            Scope = "body",
+            AnchorIdMap = renderMap,
+            // Note ref labels resolve w:id → the note element's pt:Unid through these stores.
+            Footnotes = ir.Footnotes,
+            Endnotes = ir.Endnotes,
+        };
 
-        // The body scope opens with the fixed, non-addressable "# Document" marker, then a blank line.
+        // A divider (---) separates two non-empty scopes so downstream parsers can split per-scope
+        // chunks without inspecting heading text — mirroring the oracle's anyScopeEmitted bookkeeping.
+        var anyScopeEmitted = false;
+
+        // --- body: opens with the fixed, non-addressable "# Document" marker, then a blank line. ---
+        ctx.Scope = "body";
         sb.AppendLine("# Document");
         sb.AppendLine();
-
         EmitBlocks(ir.Body.Blocks, sb, ctx);
+        anyScopeEmitted = true;
 
-        // NOTE(T3): multipart scopes (headers/footers/notes/comments) and the scope dividers are not
-        // emitted here yet. On the must-pass body fixtures the oracle's other scopes are
-        // empty/suppressed so this still reaches byte-equality; richer fixtures are off-list.
+        // --- headers (suppress scopes with no non-whitespace text, like the oracle's ScopeHasContent) ---
+        var headerScopes = ir.Headers.Where(ScopeHasContent).ToList();
+        if (headerScopes.Count > 0)
+        {
+            if (anyScopeEmitted) AppendScopeDivider(sb);
+            sb.AppendLine("# Headers");
+            sb.AppendLine();
+            foreach (var hf in headerScopes)
+            {
+                sb.Append("## ").AppendLine(hf.ScopeName);
+                sb.AppendLine();
+                ctx.Scope = hf.ScopeName;
+                EmitBlocks(hf.Scope.Blocks, sb, ctx);
+            }
+            anyScopeEmitted = true;
+        }
+
+        var footerScopes = ir.Footers.Where(ScopeHasContent).ToList();
+        if (footerScopes.Count > 0)
+        {
+            if (anyScopeEmitted) AppendScopeDivider(sb);
+            sb.AppendLine("# Footers");
+            sb.AppendLine();
+            foreach (var hf in footerScopes)
+            {
+                sb.Append("## ").AppendLine(hf.ScopeName);
+                sb.AppendLine();
+                ctx.Scope = hf.ScopeName;
+                EmitBlocks(hf.Scope.Blocks, sb, ctx);
+            }
+            anyScopeEmitted = true;
+        }
+
+        // --- footnotes / endnotes ---
+        if (EmitNoteDefinitions(ir.Footnotes, sb, ctx, "Footnotes", "fn", anyScopeEmitted))
+            anyScopeEmitted = true;
+        if (EmitNoteDefinitions(ir.Endnotes, sb, ctx, "Endnotes", "en", anyScopeEmitted))
+            anyScopeEmitted = true;
+
+        // --- comments ---
+        if (EmitComments(ir.Comments, sb, ctx, anyScopeEmitted))
+            anyScopeEmitted = true;
+
         return sb.ToString();
     }
+
+    private static void AppendScopeDivider(StringBuilder sb)
+    {
+        sb.AppendLine("---");
+        sb.AppendLine();
+    }
+
+    /// <summary>True when a header/footer scope has any non-whitespace text (the oracle's
+    /// <c>ScopeHasContent</c>: <c>Descendants(w:t)</c> with a non-blank value).</summary>
+    private static bool ScopeHasContent(IrHeaderFooter hf)
+    {
+        var sb = new StringBuilder();
+        foreach (var b in hf.Scope.Blocks) AppendFlatText(b, sb);
+        for (int i = 0; i < sb.Length; i++)
+            if (!char.IsWhiteSpace(sb[i])) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Port of the oracle's <c>EmitNoteDefinitions</c>: a <c># Footnotes</c>/<c># Endnotes</c> header
+    /// (preceded by a divider when content already emitted), then one <c>[^fn-…]: …</c>/<c>[^en-…]: …</c>
+    /// line per real note, the note's paragraphs flattened inline and joined by a single space. The
+    /// label suffix derives from the note element's <c>pt:Unid</c> (<see cref="IrNoteStore.NoteUnids"/>).
+    /// Notes are walked in the store's insertion (document) order. Returns true if anything was emitted.
+    /// </summary>
+    private static bool EmitNoteDefinitions(
+        IrNoteStore store, StringBuilder sb, EmitCtx ctx, string header, string kindPrefix,
+        bool precedingContent)
+    {
+        if (store.Notes.Count == 0) return false;
+
+        if (precedingContent) AppendScopeDivider(sb);
+        sb.Append("# ").AppendLine(header);
+        sb.AppendLine();
+        ctx.Scope = kindPrefix;
+        foreach (var (noteId, noteScope) in store.Notes)
+        {
+            var unid = store.NoteUnids.TryGetValue(noteId, out var u) ? u : "0";
+            var label = $"{kindPrefix}-{NoteLabelSuffix(unid, ctx)}";
+            sb.Append("[^").Append(label).Append("]: ");
+            var first = true;
+            foreach (var p in noteScope.Blocks.OfType<IrParagraph>())
+            {
+                if (!first) sb.Append(' ');
+                first = false;
+                EmitInlineRuns(p, sb, ctx);
+            }
+            sb.AppendLine();
+            sb.AppendLine();
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Port of the oracle's <c>EmitComments</c>: a <c># Comments</c> header (preceded by a divider when
+    /// content already emitted), then one <c>- {#cmt:cmt:…} **author** (date): …</c> line per comment,
+    /// each comment paragraph flattened inline with a trailing space, closing with a blank line.
+    /// Returns true if anything was emitted.
+    /// </summary>
+    private static bool EmitComments(
+        IrCommentStore store, StringBuilder sb, EmitCtx ctx, bool precedingContent)
+    {
+        if (store.Comments.Count == 0) return false;
+
+        if (precedingContent) AppendScopeDivider(sb);
+        sb.AppendLine("# Comments");
+        sb.AppendLine();
+        ctx.Scope = "cmt";
+        foreach (var c in store.Comments)
+        {
+            var author = string.IsNullOrEmpty(c.Author) ? "unknown" : c.Author;
+            var renderedUnid = ctx.AnchorIdMap.Render(c.Anchor.Unid);
+            sb.Append($"- {{#cmt:cmt:{renderedUnid}}} **{author}**");
+            if (!string.IsNullOrEmpty(c.Date)) sb.Append(" (").Append(c.Date).Append(')');
+            sb.Append(": ");
+            foreach (var p in c.Blocks.OfType<IrParagraph>())
+            {
+                EmitInlineRuns(p, sb, ctx);
+                sb.Append(' ');
+            }
+            sb.AppendLine();
+        }
+        sb.AppendLine();
+        return true;
+    }
+
+    private static string ShortUnid(string unid) =>
+        unid.Length >= 8 ? unid.Substring(0, 8) : unid;
+
+    /// <summary>Port of the oracle's <c>NoteLabelSuffix</c>: FullUnid mode keeps the legacy 8-char
+    /// truncation; Abbreviated/Sequential route through the AnchorIdMap for consistency with the
+    /// corresponding <c>{#fn:…}</c> token.</summary>
+    private static string NoteLabelSuffix(string unid, EmitCtx ctx) =>
+        ctx.Settings.AnchorIdRendering == AnchorIdRendering.FullUnid
+            ? ShortUnid(unid)
+            : ctx.AnchorIdMap.Render(unid);
 
     private sealed class EmitCtx
     {
         public required WmlToMarkdownConverterSettings Settings { get; init; }
-        public required string Scope { get; init; }
+        public required string Scope { get; set; }
         public required AnchorIdMap AnchorIdMap { get; init; }
+        public IrNoteStore Footnotes { get; init; } = IrNoteStore.Empty;
+        public IrNoteStore Endnotes { get; init; } = IrNoteStore.Empty;
     }
 
     private static void EmitBlocks(IrNodeList<IrBlock> blocks, StringBuilder sb, EmitCtx ctx)
     {
-        var list = blocks.ToList();
+        // Skip blocks a block-level w:sdt delivered: the oracle's EmitBlocks dispatches only direct
+        // w:p/w:tbl/w:sectPr children and silently skips the w:sdt wrapper, so it never renders these.
+        // They stay in the IR + anchor index (the oracle indexes them via Descendants).
+        var list = blocks.Where(b => !b.Source.FromBlockSdt).ToList();
         for (var i = 0; i < list.Count; i++)
         {
             var b = list[i];
             if (b is IrParagraph p)
             {
+                // The trailing-blank-line rule keys on the oracle's IsListItem (numPr present, inline
+                // OR via the pStyle chain) — NOT the anchor kind alone. Two cases the IR must union to
+                // match it: (a) a plain list item is anchor-kind "li"; (b) a Heading{N} paragraph that
+                // ALSO carries numPr is anchor-kind "h" but IS a list item. p.List carries resolved
+                // numbering facts but is null for some style-inherited empty list items, so OR it with
+                // the "li" anchor kind — together they reproduce the oracle's IsListItem exactly.
                 var nextIsListItem = i + 1 < list.Count
-                    && list[i + 1] is IrParagraph np && np.Anchor.Kind == IrAnchorKind.Li;
+                    && list[i + 1] is IrParagraph np && IsListItemForBlankRule(np);
                 EmitParagraph(p, sb, ctx);
-                if (p.Anchor.Kind == IrAnchorKind.Li && !nextIsListItem)
+                if (IsListItemForBlankRule(p) && !nextIsListItem)
                     sb.AppendLine();
             }
             else if (b is IrTable t)
@@ -367,6 +694,12 @@ internal static class IrMarkdownEmitter
         }
     }
 
+    /// <summary>The IR proxy for the oracle's <c>IsListItem</c>, used by the EmitBlocks trailing-blank
+    /// rule: a paragraph is a list item iff its anchor kind is <c>li</c> OR it carries resolved
+    /// numbering facts (<see cref="IrParagraph.List"/> — true for a Heading-with-numPr).</summary>
+    private static bool IsListItemForBlankRule(IrParagraph p) =>
+        p.Anchor.Kind == IrAnchorKind.Li || p.List is not null;
+
     private static void EmitParagraph(IrParagraph p, StringBuilder sb, EmitCtx ctx)
     {
         var anchor = AnchorPrefix(p.Anchor, ctx);
@@ -377,8 +710,14 @@ internal static class IrMarkdownEmitter
             sb.Append(anchor);
             sb.Append('#', level);
             sb.Append(' ');
-            // TODO(M1.4-T3): resolve heading auto-number prefix (legal clause numbering) via the
-            // counter walk. Headings carrying w:numPr are therefore off the must-pass list.
+            // Legal-style headings often style each clause Heading{N} AND attach numbering so Word
+            // renders "First …" / "1.1 …". Emit that prefix (the heading-prefix form of the reader-
+            // resolved marker) so it survives projection, mirroring ResolveHeadingNumberPrefix.
+            if (ctx.Settings.ResolveNumbering)
+            {
+                var numberPrefix = HeadingNumberPrefix(p);
+                if (numberPrefix != null) sb.Append(numberPrefix).Append(' ');
+            }
             EmitInlineRuns(p, sb, ctx);
             sb.AppendLine();
             sb.AppendLine();
@@ -450,22 +789,21 @@ internal static class IrMarkdownEmitter
     }
 
     /// <summary>
-    /// Resolve the list marker from IR list facts. <c>bullet</c>-format levels (and the
-    /// <see cref="WmlToMarkdownConverterSettings.ResolveNumbering"/>=false case) render as <c>-</c>,
-    /// matching the oracle exactly. Counter-bearing formats (decimal, lowerLetter, …) need the full
-    /// counter walk the oracle performs; TODO(M1.4-T3) ports it. Until then we emit a clearly-wrong
-    /// <c>?.</c> placeholder so numbered-list fixtures stay off the must-pass list and visibly differ.
+    /// Resolve the list marker, porting the oracle's <c>ResolveListMarker</c> display rule over the
+    /// IR's <see cref="IrParagraph.ResolvedListMarker"/> (resolved by the reader against the live
+    /// package). When <see cref="WmlToMarkdownConverterSettings.ResolveNumbering"/> is false, or no
+    /// marker resolved, render <c>-</c>; a single non-alphanumeric glyph (a bullet) renders <c>-</c>;
+    /// otherwise the trimmed marker (e.g. <c>1.</c>, <c>a.</c>, <c>1.1</c>) renders verbatim.
     /// </summary>
     private static string ResolveListMarker(IrParagraph p, EmitCtx ctx)
     {
         if (!ctx.Settings.ResolveNumbering) return "-";
-        var fmt = p.List?.NumberFormat;
-        if (string.IsNullOrEmpty(fmt)) return "-";
-        // The oracle renders a single-char bullet glyph (·, , etc.) as "-". The IR carries the
-        // numFmt string, so a "bullet" level maps to "-" directly.
-        if (fmt == "bullet" || fmt == "none") return "-";
-        // TODO(M1.4-T3): counter walk for decimal/lowerLetter/upperRoman/etc.
-        return "?.";
+        var raw = p.ResolvedListMarker;
+        if (string.IsNullOrEmpty(raw)) return "-";
+        var trimmed = raw.TrimEnd();
+        if (trimmed.Length == 0) return "-";
+        if (trimmed.Length == 1 && !char.IsLetterOrDigit(trimmed, 0)) return "-";
+        return trimmed;
     }
 
     // ------------------------------------------------------------------
@@ -551,21 +889,34 @@ internal static class IrMarkdownEmitter
                     Flush();
                     break;
                 case IrTextRun tr:
+                    // Inline-SDT/smartTag-spliced runs are DROPPED from the markdown (the oracle's
+                    // GroupInlineRuns never visits a w:sdt), though they still count toward TextPreview
+                    // (AppendInlineText keeps them, mirroring the oracle's Descendants(w:t)).
+                    if (tr.FromInlineSdt) break;
                     Add(tr, ReadRunFmt(tr.Format));
                     break;
                 case IrFieldRun f:
-                    // Field cached-result runs are visible text; emit them as plain runs (no per-run
-                    // format key beyond default — TODO(M1.4-T2) thread result-run formats).
+                    // A w:fldSimple is DROPPED from the markdown (the oracle's GroupInlineRuns walks
+                    // only w:r/w:hyperlink/w:ins/w:del, never w:fldSimple) — though its text still
+                    // counts toward TextPreview/cell text (Descendants(w:t)), handled in AppendInlineText.
+                    if (f.IsSimpleField) break;
+                    // Run-based field result runs ARE direct w:r children → the oracle emits them.
                     Flush();
                     foreach (var rr in f.CachedResult)
                         if (rr is IrTextRun ftr) Add(ftr, ReadRunFmt(ftr.Format));
                     Flush();
                     break;
-                case IrTab:
+                case IrTab tab:
+                    // A w:tab is a child of a w:r, so the oracle groups it under THAT run's formatting
+                    // (e.g. an italic run's tab lands inside the *…* span). The IR carries the run's
+                    // format on the tab, so group by it — matching the oracle's per-run grouping.
+                    Add(tab, ReadRunFmt(tab.Format));
+                    break;
                 case IrBreak:
                 case IrNoteRef:
-                    // Whitespace/structural inlines carry no formatting toggle; group them with a
-                    // default key so they emit between delimiters like the oracle's non-text runs.
+                    // Breaks/note refs carry no run-format on the IR node; group them with a default
+                    // key. (A w:br inside a formatted run is a rare delimiter-placement edge case left
+                    // to triage; note refs carry no formatting toggle.)
                     Add(inline, default);
                     break;
                 // IrInlineImage / IrOpaqueInline: TODO(M1.4-T2). Skipped here.
@@ -627,6 +978,8 @@ internal static class IrMarkdownEmitter
                     AppendRunText(inner, sb, ctx);
                 break;
             case IrFieldRun f:
+                // A w:fldSimple is not rendered (see GroupInlineRuns); run-based field result recurses.
+                if (f.IsSimpleField) break;
                 foreach (var inner in f.CachedResult)
                     AppendRunText(inner, sb, ctx);
                 break;
@@ -640,14 +993,29 @@ internal static class IrMarkdownEmitter
             case IrTab:
                 sb.Append("    ");
                 break;
-            case IrNoteRef:
-                // TODO(M1.4-T3): the oracle resolves the note's Unid and emits [^fn-<suffix>]. The IR
-                // IrNoteRef carries only the w:id, not the note's Unid, so a faithful label needs the
-                // note store. Emit a clearly-wrong placeholder; note-ref fixtures stay off-list.
-                sb.Append("[^ir-noteref]");
+            case IrNoteRef nr:
+                // Port of the oracle's AppendNoteRefMarker: resolve w:id → the note element's pt:Unid
+                // (through the note store) → label suffix → [^fn-<suffix>] / [^en-<suffix>]. A ref to a
+                // missing/boilerplate note (not in the store) emits nothing, matching the oracle's
+                // unid==null early return.
+                AppendNoteRefMarker(nr, sb, ctx);
                 break;
             // IrInlineImage / IrOpaqueInline: TODO(M1.4-T2).
         }
+    }
+
+    /// <summary>Mirror the oracle's <c>AppendNoteRefMarker</c>: resolve the note ref's <c>w:id</c>
+    /// through the matching note store to the note element's Unid, then emit
+    /// <c>[^fn-&lt;suffix&gt;]</c>/<c>[^en-&lt;suffix&gt;]</c>. Emits nothing when the id resolves to no
+    /// real note (the oracle returns early when the Unid is null — e.g. a ref to a boilerplate or
+    /// missing note).</summary>
+    private static void AppendNoteRefMarker(IrNoteRef nr, StringBuilder sb, EmitCtx ctx)
+    {
+        var (store, prefix) = nr.Kind == IrNoteKind.Footnote
+            ? (ctx.Footnotes, "fn")
+            : (ctx.Endnotes, "en");
+        if (!store.NoteUnids.TryGetValue(nr.NoteId, out var unid)) return;
+        sb.Append("[^").Append(prefix).Append('-').Append(NoteLabelSuffix(unid, ctx)).Append(']');
     }
 
     private static readonly System.Text.RegularExpressions.Regex MarkdownMetaPattern =

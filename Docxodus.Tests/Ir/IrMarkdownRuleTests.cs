@@ -317,4 +317,102 @@ public class IrMarkdownRuleTests
         "<w:tr><w:tc><w:p><w:r><w:t>r1</w:t></w:r></w:p></w:tc>" +
         "<w:tc><w:p><w:r><w:t>r2</w:t></w:r></w:p></w:tc></w:tr>" +
         "</w:tbl>";
+
+    // --- M1.4-T3 rules: numbering markers/prefixes, multipart scopes, note refs, SDT/field drops ----
+
+    /// <summary>A decimal numbered list renders <c>1.</c>/<c>2.</c> markers (the reader-resolved
+    /// marker), not a bullet, in both paths.</summary>
+    [Fact]
+    public void Rule_NumberedList_RendersDecimalMarkers()
+    {
+        var body =
+            "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr>" +
+            "<w:r><w:t>first</w:t></w:r></w:p>" +
+            "<w:p><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr>" +
+            "<w:r><w:t>second</w:t></w:r></w:p>";
+        var numbering =
+            "<w:abstractNum w:abstractNumId=\"0\">" +
+            "<w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%1.\"/></w:lvl>" +
+            "</w:abstractNum>" +
+            "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+        AssertEquivalent(IrTestDocuments.FromParts(body, stylesInnerXml: "", numberingInnerXml: numbering));
+    }
+
+    /// <summary>A Heading{N} paragraph that also carries numbering emits the auto-number PREFIX inline
+    /// after the <c>#</c>s (e.g. "## 1. Title"), mirroring ResolveHeadingNumberPrefix.</summary>
+    [Fact]
+    public void Rule_HeadingWithNumbering_EmitsNumberPrefix()
+    {
+        var body =
+            "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/>" +
+            "<w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr>" +
+            "<w:r><w:t>The Clause</w:t></w:r></w:p>";
+        var styles = "<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"Heading1\"/></w:style>";
+        var numbering =
+            "<w:abstractNum w:abstractNumId=\"0\">" +
+            "<w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/><w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%1.\"/></w:lvl>" +
+            "</w:abstractNum>" +
+            "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num>";
+        AssertEquivalent(IrTestDocuments.FromParts(body, stylesInnerXml: styles, numberingInnerXml: numbering));
+    }
+
+    /// <summary>A footnote AND endnote reference: the body emits <c>[^fn-…]</c>/<c>[^en-…]</c> labels
+    /// (suffix from the note's Unid), then the <c># Footnotes</c>/<c># Endnotes</c> definition sections.</summary>
+    [Fact]
+    public void Rule_FootnoteAndEndnote_Multipart()
+    {
+        AssertEquivalent(IrTestDocuments.WithFootnoteAndEndnote("A footnote.", "An endnote."));
+    }
+
+    /// <summary>A comment: the <c># Comments</c> section emits
+    /// <c>- {#cmt:cmt:…} **author** (date): text</c>.</summary>
+    [Fact]
+    public void Rule_Comment_Multipart()
+    {
+        AssertEquivalent(IrTestDocuments.WithComment(
+            "Alice", "AB", "2020-01-02T00:00:00Z", "A remark.",
+            "<w:p><w:commentRangeStart w:id=\"0\"/><w:r><w:t>flagged</w:t></w:r>" +
+            "<w:commentRangeEnd w:id=\"0\"/><w:r><w:commentReference w:id=\"0\"/></w:r></w:p>"));
+    }
+
+    /// <summary>A <c>w:fldSimple</c> is DROPPED from the rendered markdown (the oracle's GroupInlineRuns
+    /// never visits a w:fldSimple), so the paragraph projects only its surrounding text.</summary>
+    [Fact]
+    public void Rule_FldSimple_DroppedFromMarkdown()
+    {
+        AssertEquivalent(IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">Date: </w:t></w:r>" +
+            "<w:fldSimple w:instr=\" DATE \"><w:r><w:t>4/24/2016</w:t></w:r></w:fldSimple></w:p>"));
+    }
+
+    /// <summary>An inline <c>w:sdt</c> content control's runs are DROPPED from the markdown (the oracle
+    /// only walks w:r/w:hyperlink/w:ins/w:del), so only the surrounding plain text projects.</summary>
+    [Fact]
+    public void Rule_InlineSdt_DroppedFromMarkdown()
+    {
+        AssertEquivalent(IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">Text: </w:t></w:r>" +
+            "<w:sdt><w:sdtPr/><w:sdtContent><w:r><w:t>ABC</w:t></w:r></w:sdtContent></w:sdt></w:p>"));
+    }
+
+    /// <summary>A block-level <c>w:sdt</c> wrapping a paragraph is SKIPPED by the oracle's EmitBlocks
+    /// (it dispatches only direct w:p/w:tbl/w:sectPr), so its paragraph does not render.</summary>
+    [Fact]
+    public void Rule_BlockSdt_SkippedFromMarkdown()
+    {
+        AssertEquivalent(IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>before</w:t></w:r></w:p>" +
+            "<w:sdt><w:sdtContent><w:p><w:r><w:t>inside cc</w:t></w:r></w:p></w:sdtContent></w:sdt>" +
+            "<w:p><w:r><w:t>after</w:t></w:r></w:p>"));
+    }
+
+    /// <summary>A tab inside a formatted run lands INSIDE that run's delimiter span (the oracle groups a
+    /// w:tab under its containing w:r's formatting), e.g. an italic run's tab inside <c>*…*</c>.</summary>
+    [Fact]
+    public void Rule_TabInsideFormattedRun_GroupsWithRun()
+    {
+        AssertEquivalent(IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:rPr><w:i/></w:rPr><w:t>Video</w:t><w:tab/></w:r>" +
+            "<w:r><w:t>Video</w:t></w:r></w:p>"));
+    }
 }

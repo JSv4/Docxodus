@@ -947,12 +947,22 @@
           "anchor": "p:body:4cc4c45b62bdb21c5858bb5957eb6915",
           "type": "paragraph",
           "contentHash": "a9378c10464199fd954ca2219dc17aacb28f492289b9d8c1404e40721771b5a6",
-          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "formatFingerprint": "3c65d1b7918edbae4ddacf1293a8ef39fd612cc94eeac37f5a798ca5e8fd891c",
           "format": {},
           "inlines": [
             {
               "kind": "text",
-              "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+              "text": "To ",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": "make your document look professionally",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": " produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
               "format": {}
             }
           ]
@@ -2460,12 +2470,22 @@
           "anchor": "p:body:6c81a2e14b4ead50192132cd8452e2f4",
           "type": "paragraph",
           "contentHash": "a9378c10464199fd954ca2219dc17aacb28f492289b9d8c1404e40721771b5a6",
-          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "formatFingerprint": "3c65d1b7918edbae4ddacf1293a8ef39fd612cc94eeac37f5a798ca5e8fd891c",
           "format": {},
           "inlines": [
             {
               "kind": "text",
-              "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+              "text": "To ",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": "make your document look professionally",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": " produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
               "format": {}
             }
           ]

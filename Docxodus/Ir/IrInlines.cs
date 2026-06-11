@@ -1,6 +1,7 @@
 #nullable enable
 
 using System;
+using System.Collections.Generic;
 using System.Xml.Linq;
 
 namespace Docxodus.Ir;
@@ -18,7 +19,26 @@ namespace Docxodus.Ir;
 internal abstract record IrInline;
 
 /// <summary>A run of literal text with its direct run formatting.</summary>
-internal sealed record IrTextRun(string Text, IrRunFormat Format) : IrInline;
+/// <remarks>
+/// <see cref="FromInlineSdt"/> marks a run the reader spliced out of an inline <c>w:sdt</c>/<c>w:smartTag</c>
+/// content control. It is EQUALITY-NEUTRAL (excluded from <see cref="Equals(IrTextRun?)"/>/<see cref="GetHashCode"/>),
+/// preserving the IR's content-transparency invariant for content controls (a run reads the same value
+/// whether or not it came through an SDT wrapper — see <c>Read_InlineSdt_Spliced</c>). The markdown
+/// emitter reads the flag to mirror the ORACLE, whose <c>GroupInlineRuns</c> walks only
+/// <c>w:r</c>/<c>w:hyperlink</c>/<c>w:ins</c>/<c>w:del</c> children and so DROPS inline-SDT content from
+/// the rendered markdown — though that text still counts toward TextPreview (the oracle's
+/// <c>Descendants(w:t)</c>), which the IR matches because the run is present in the inline list.
+/// </remarks>
+internal sealed record IrTextRun(string Text, IrRunFormat Format) : IrInline
+{
+    /// <summary>True when this run was spliced from an inline <c>w:sdt</c>/<c>w:smartTag</c>. Equality-neutral.</summary>
+    public bool FromInlineSdt { get; init; }
+
+    public bool Equals(IrTextRun? other) =>
+        other is not null && Text == other.Text && EqualityComparer<IrRunFormat>.Default.Equals(Format, other.Format);
+
+    public override int GetHashCode() => HashCode.Combine(Text, Format);
+}
 
 /// <summary>A tab character (`w:tab`) carrying the run formatting of its containing run.</summary>
 internal sealed record IrTab(IrRunFormat Format) : IrInline;
@@ -36,7 +56,19 @@ internal sealed record IrHyperlink(string? Target, IrAnchor? InternalTarget, IrN
 /// A field (`w:fldSimple` or the run-based field machinery), modeled as its instruction string
 /// plus the cached result inlines that Word last computed for it.
 /// </summary>
-internal sealed record IrFieldRun(string Instruction, IrNodeList<IrInline> CachedResult) : IrInline;
+/// <remarks>
+/// <see cref="IsSimpleField"/> distinguishes a <c>w:fldSimple</c> (the inline self-contained form)
+/// from the run-based <c>w:fldChar</c> begin/separate/end machinery. It is equality-participating: the
+/// two forms render DIFFERENTLY in the markdown projection — the oracle's <c>GroupInlineRuns</c> walks
+/// only <c>w:r</c>/<c>w:hyperlink</c>/<c>w:ins</c>/<c>w:del</c> children and so emits the run-based
+/// field's result runs (they are direct <c>w:r</c> children) but DROPS a <c>w:fldSimple</c> entirely
+/// (it is none of those). The emitter mirrors that by suppressing a simple field's cached text.
+/// </remarks>
+internal sealed record IrFieldRun(string Instruction, IrNodeList<IrInline> CachedResult) : IrInline
+{
+    /// <summary>True for a <c>w:fldSimple</c>; false for the run-based <c>w:fldChar</c> machinery.</summary>
+    public bool IsSimpleField { get; init; }
+}
 
 /// <summary>A footnote/endnote reference (`w:footnoteReference`/`w:endnoteReference`).</summary>
 internal sealed record IrNoteRef(IrNoteKind Kind, string NoteId) : IrInline;

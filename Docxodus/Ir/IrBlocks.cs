@@ -21,7 +21,11 @@ internal abstract record IrBlock
     public required IrHash ContentHash { get; init; }
     public required IrHash FormatFingerprint { get; init; }
 
-    /// <summary>Back-reference to source OOXML; equality-neutral (does not affect record equality).</summary>
+    /// <summary>
+    /// Back-reference to source OOXML; equality-neutral (does not affect record equality). Also carries
+    /// the <see cref="IrProvenance.FromBlockSdt"/> flag (see there) which the markdown emitter uses to
+    /// mirror the oracle's block-level-SDT skip without perturbing block value equality.
+    /// </summary>
     public IrProvenance Source { get; init; } = new();
 }
 
@@ -36,6 +40,26 @@ internal sealed record IrParagraph : IrBlock
     public required IrParaFormat Format { get; init; }
     public IrListInfo? List { get; init; }
     public required IrNodeList<IrInline> Inlines { get; init; }
+
+    /// <summary>
+    /// The auto-number marker Word would render for this paragraph, resolved by the reader via
+    /// <c>ListItemRetriever.RetrieveListItem</c> against the live package — the exact string the
+    /// markdown projection's <c>ResolveListMarker</c>/<c>ResolveHeadingNumberPrefix</c> consume (e.g.
+    /// <c>"1."</c>, <c>"a."</c>, <c>"1.1"</c>, a bullet glyph, or "First Article"). Null when the
+    /// paragraph is not a list item / carries no resolvable numbering.
+    /// <para>
+    /// <b>Why this is an IR fact, not an emitter computation.</b> Word's numbering is a stateful
+    /// document-order counter walk (per numId/ilvl, with continuation/restart/style-inherited cases)
+    /// that needs the live <c>NumberingDefinitionsPart</c>/<c>StyleDefinitionsPart</c> and cross-
+    /// paragraph state — facts the per-paragraph <see cref="List"/> info does NOT capture. The reader
+    /// has the live package, so it resolves the marker once at read time (additive, equality-
+    /// participating: the same document yields the same marker deterministically). The emitter then
+    /// applies the projection's display rules (bullet→<c>-</c> for list items, single-glyph→null for
+    /// heading prefixes) to this raw marker, guaranteeing byte-parity with the oracle without
+    /// re-implementing the counter walk or peeking at <see cref="IrBlock.Source"/>.
+    /// </para>
+    /// </summary>
+    public string? ResolvedListMarker { get; init; }
 
     /// <summary>
     /// When this paragraph's `w:pPr` carries a `w:sectPr` (an in-document section transition), the

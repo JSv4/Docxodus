@@ -413,11 +413,29 @@ internal static class IrReader
             }
             var content = el.Element(W + "sdtContent");
             if (content is not null)
+            {
+                var before = sink.Count;
                 foreach (var inner in content.Elements())
                     AppendBlocks(inner, ctx, sink, depth + 1);
+                // Mark every block this SDT delivered (transitively) so the markdown emitter can mirror
+                // the oracle's EmitBlocks, which skips SDT wrappers and thus never renders these blocks
+                // (they remain present + indexed, matching the oracle's Descendants-based index).
+                for (int i = before; i < sink.Count; i++)
+                    sink[i] = MarkFromBlockSdt(sink[i]);
+            }
             return;
         }
         sink.Add(BuildBlock(el, ctx));
+    }
+
+    /// <summary>Return <paramref name="block"/> with its provenance's <c>FromBlockSdt</c> set, preserving
+    /// the original source element/part. Equality-neutral (provenance is excluded from record equality),
+    /// so this never perturbs the block's value/hash.</summary>
+    private static IrBlock MarkFromBlockSdt(IrBlock block)
+    {
+        var src = block.Source;
+        var marked = new IrProvenance { Element = src.Element, PartUri = src.PartUri, FromBlockSdt = true };
+        return block with { Source = marked };
     }
 
     /// <summary>
@@ -478,6 +496,12 @@ internal static class IrReader
             ? null
             : AnchorFor(IrAnchorKind.Sec, inlineSectPr, ctx);
 
+        // Resolve the auto-number marker against the LIVE package while we have it (see
+        // IrParagraph.ResolvedListMarker for the rationale). RetrieveListItem returns null for
+        // non-list-items; it is the exact string the markdown projection consumes. Tolerance-wrapped
+        // so a malformed numbering setup degrades to null (no marker) rather than aborting the read.
+        string? resolvedMarker = ResolveListMarkerText(p, ctx);
+
         return new IrParagraph
         {
             Anchor = anchor,
@@ -485,10 +509,38 @@ internal static class IrReader
             List = listInfo,
             Inlines = IrNodeList.From(processed),
             InlineSectionBreakAnchor = inlineSectAnchor,
+            ResolvedListMarker = resolvedMarker,
             ContentHash = contentHash,
             FormatFingerprint = formatFingerprint,
             Source = ctx.Provenance(p),
         };
+    }
+
+    /// <summary>
+    /// Resolve the raw auto-number marker for <paramref name="p"/> via
+    /// <see cref="ListItemRetriever.RetrieveListItem(WordprocessingDocument, XElement, ListItemRetrieverSettings)"/>
+    /// against the live package (<see cref="ReadContext.Main"/>'s owning <see cref="WordprocessingDocument"/>).
+    /// Returns null when the document has no numbering part, the paragraph is not a list item, or any
+    /// tolerable fault occurs — matching the projection's null-on-failure contract.
+    /// </summary>
+    private static string? ResolveListMarkerText(XElement p, ReadContext ctx)
+    {
+        if (ctx.Main.OpenXmlPackage is not WordprocessingDocument wdoc)
+            return null;
+        try
+        {
+            var resolved = ListItemRetriever.RetrieveListItem(wdoc, p, new ListItemRetrieverSettings());
+            return string.IsNullOrEmpty(resolved) ? null : resolved;
+        }
+        catch
+        {
+            // The oracle's ResolveListMarker / ListNumberResolver.Resolve both wrap RetrieveListItem in
+            // a broad catch (it throws DocxodusException on malformed numbering setups, e.g. an ilvl set
+            // twice). We mirror that EXACT broad catch here — scoped to this single resolver call — so a
+            // pathological numbering definition degrades to "no marker", matching the projection and
+            // preserving reader totality. This is the resolver's own contract, not a reader-wide policy.
+            return null;
+        }
     }
 
     // --- inline walk (runs, hyperlinks N14, fields N9) --------------------
@@ -561,19 +613,28 @@ internal static class IrReader
             else if (child.Name == W + "sdt")
             {
                 // N12: inline content control — splice w:sdtContent's children into the inline
-                // stream so the runs inside join the paragraph and coalesce normally.
+                // stream so the runs inside join the paragraph and coalesce normally. The spliced
+                // text runs are flagged FromInlineSdt (equality-neutral) so the markdown emitter can
+                // mirror the oracle, which drops inline-SDT content from the rendered markdown.
                 var content = child.Element(W + "sdtContent");
                 if (content is not null)
-                    foreach (var inner in content.Elements())
-                        Feed(inner, depth + 1);
+                    SpliceWithInlineSdtMark(() =>
+                    {
+                        foreach (var inner in content.Elements())
+                            Feed(inner, depth + 1);
+                    });
             }
             else if (child.Name == W + "smartTag")
             {
                 // N12: w:smartTag wraps runs (and can nest other smartTags) — splice its children
                 // into the inline stream the same way; recursion handles nesting. Its own
-                // w:smartTagPr metadata child is not content and is skipped.
-                foreach (var inner in child.Elements().Where(e => e.Name != W + "smartTagPr"))
-                    Feed(inner, depth + 1);
+                // w:smartTagPr metadata child is not content and is skipped. Spliced runs flagged as
+                // for w:sdt above.
+                SpliceWithInlineSdtMark(() =>
+                {
+                    foreach (var inner in child.Elements().Where(e => e.Name != W + "smartTagPr"))
+                        Feed(inner, depth + 1);
+                });
             }
             else if (child.Name == W + "proofErr")
             {
@@ -775,6 +836,30 @@ internal static class IrReader
                 _result.Add(inline);
             else if (source is not null)
                 _captured.Add(source);
+        }
+
+        /// <summary>
+        /// Run an inline-SDT/smartTag splice, then flag every <see cref="IrTextRun"/> it appended to the
+        /// active sink (<see cref="_output"/> outside a field, <see cref="_result"/> inside one's result)
+        /// with <see cref="IrTextRun.FromInlineSdt"/>. The flag is equality-neutral so this preserves the
+        /// content-transparency of content controls while letting the markdown emitter drop the spliced
+        /// text (the oracle's GroupInlineRuns never visits a w:sdt). Nested splices compound naturally:
+        /// an inner splice marks its runs, and the outer pass re-marking an already-true flag is a no-op.
+        /// </summary>
+        private void SpliceWithInlineSdtMark(Action splice)
+        {
+            int outBefore = _output.Count;
+            int resBefore = _result.Count;
+            splice();
+            MarkInlineSdt(_output, outBefore);
+            MarkInlineSdt(_result, resBefore);
+        }
+
+        private static void MarkInlineSdt(List<IrInline> sink, int from)
+        {
+            for (int i = from; i < sink.Count; i++)
+                if (sink[i] is IrTextRun tr && !tr.FromInlineSdt)
+                    sink[i] = tr with { FromInlineSdt = true };
         }
     }
 
@@ -982,7 +1067,7 @@ internal static class IrReader
     {
         var instruction = (string?)fldSimple.Attribute(W + "instr") ?? "";
         var result = WalkInlines(fldSimple.Elements(), ctx);
-        return new IrFieldRun(instruction, IrNodeList.From(result));
+        return new IrFieldRun(instruction, IrNodeList.From(result)) { IsSimpleField = true };
     }
 
     /// <summary>
@@ -1044,7 +1129,10 @@ internal static class IrReader
             if (inline is IrTextRun run
                 && result.Count > 0
                 && result[^1] is IrTextRun prev
-                && prev.Format.Equals(run.Format))
+                && prev.Format.Equals(run.Format)
+                // Don't coalesce across the inline-SDT boundary: the flag is the emitter's drop signal,
+                // so a spliced run must not absorb (or be absorbed into) an unflagged neighbor.
+                && prev.FromInlineSdt == run.FromInlineSdt)
             {
                 result[^1] = prev with { Text = prev.Text + run.Text };
             }
@@ -1797,6 +1885,8 @@ internal static class IrReader
 
             var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName);
             var notes = new Dictionary<string, IrScope>(StringComparer.Ordinal);
+            // Insertion-ordered map id → the note element's own pt:Unid (the projection's label source).
+            var noteUnids = new Dictionary<string, string>(StringComparer.Ordinal);
 
             foreach (var noteEl in root.Elements(noteName))
             {
@@ -1813,10 +1903,11 @@ internal static class IrReader
                     IndexBlock(b, anchorIndex);
 
                 notes[id] = new IrScope(scopeName, IrNodeList.From(blocks));
+                noteUnids[id] = Unid(noteEl);
             }
 
             sources[part.Uri] = part.GetXDocument();
-            return new IrNoteStore(notes);
+            return new IrNoteStore(notes, noteUnids);
         }
         catch (Exception e) when (IsTolerableRegistryException(e))
         {

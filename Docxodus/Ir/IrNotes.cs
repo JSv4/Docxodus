@@ -6,16 +6,26 @@ namespace Docxodus.Ir;
 
 /// <summary>
 /// Footnote or endnote store: a map from note id (`w:id`) to the <see cref="IrScope"/> holding
-/// that note's blocks.
+/// that note's blocks, plus a parallel map from note id to that note element's own
+/// <c>pt:Unid</c> (<see cref="NoteUnids"/>).
 /// </summary>
 /// <remarks>
-/// The backing dictionary keeps reference equality (it is a derived index, not modeled content);
-/// node-for-node value equality of an <see cref="IrDocument"/> is defined over the scopes it
-/// contains, not over this dictionary.
+/// <para>The backing dictionaries keep reference equality (they are derived indexes, not modeled
+/// content); node-for-node value equality of an <see cref="IrDocument"/> is defined over the scopes
+/// it contains, not over these dictionaries.</para>
+/// <para><b>Why <see cref="NoteUnids"/>.</b> The markdown projection's note LABEL
+/// (<c>[^fn-…]</c>/<c>[^en-…]</c>) is derived from the <c>w:footnote</c>/<c>w:endnote</c> element's
+/// own <c>pt:Unid</c> — NOT the first block's anchor unid — and a body <c>IrNoteRef</c> carries only
+/// the <c>w:id</c>. The emitter resolves <c>w:id → note Unid</c> through this map so it can render
+/// the label the oracle does. The note element's Unid is otherwise not addressable (a note is a
+/// scope, not a block), so this is the additive fact the projection needs.</para>
 /// </remarks>
-internal sealed record IrNoteStore(IReadOnlyDictionary<string, IrScope> Notes)
+internal sealed record IrNoteStore(
+    IReadOnlyDictionary<string, IrScope> Notes,
+    IReadOnlyDictionary<string, string> NoteUnids)
 {
-    public static readonly IrNoteStore Empty = new(new Dictionary<string, IrScope>());
+    public static readonly IrNoteStore Empty =
+        new(new Dictionary<string, IrScope>(), new Dictionary<string, string>());
 }
 
 /// <summary>The set of document comments, each modeled as an <see cref="IrComment"/>.</summary>
