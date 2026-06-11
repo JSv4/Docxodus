@@ -125,8 +125,11 @@ internal static class IrReader
         // its provisional spans buffered but never committed — an orphan start, discarded (totality).
 
         // 5. Anchor index over ALL scopes' blocks (rows/cells are positional, not blocks). Collision
-        // checking spans scopes — two distinct scopes producing the same kind:scope:unid string is an
-        // invariant violation, but in practice each scope's name disambiguates.
+        // checking spans scopes, and IndexBlock throws on any duplicate kind:scope:unid string.
+        // INVARIANT: collision-safety depends on every scope emitting a unique scope-name prefix.
+        // Deterministic Unids are content-addressable per part, so identical content appearing in two
+        // different parts yields identical Unids — without the per-scope name prefix those would
+        // collide. Each scope's distinct name (body, hdr1, fn, …) is what keeps anchors unique.
         var anchorIndex = new Dictionary<string, IrBlock>(StringComparer.Ordinal);
         foreach (var b in blocks)
             IndexBlock(b, anchorIndex);
@@ -796,8 +799,8 @@ internal static class IrReader
         else if (child.Name == W + "lastRenderedPageBreak")
             return; // N4: layout cache, not content.
         else if (child.Name == W + "commentReference")
-            // N15 (strip half): comment plumbing never affects ContentHash.
-            // TODO(M1.3): record the comment id into the comments store here.
+            // N15 (strip half): comment plumbing never affects ContentHash. Comment ids/targets are
+            // recorded upstream by CommentTracker (via FeedRun); here the reference is only dropped.
             return;
         else if (IsDroppedParagraphChild(child.Name))
             return; // N3: bookmarks can legally appear inside a run too.
@@ -998,7 +1001,7 @@ internal static class IrReader
     private static bool IsDroppedParagraphChild(XName name) =>
         name == W + "bookmarkStart"
         || name == W + "bookmarkEnd"
-        || name == W + "commentRangeStart"   // N15: TODO(M1.3) records the target span into the comment store.
+        || name == W + "commentRangeStart"   // N15: target spans are recorded by CommentTracker upstream; here only dropped.
         || name == W + "commentRangeEnd";
 
     private static IrBreakKind BreakKind(XElement br)

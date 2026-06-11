@@ -61,19 +61,25 @@ module that today re-derives its own private view from raw OOXML.
 ```
 Docxodus/Ir/
   IrAnchor.cs          // identity types
-  IrHash.cs            // hash value type + hashing helpers
+  IrHash.cs            // hash value type
   IrDocument.cs        // root + scopes
   IrBlocks.cs          // IrParagraph, IrTable, IrRow, IrCell, IrSectionBreak, IrOpaqueBlock
   IrInlines.cs         // IrTextRun, IrBreak, IrTab, IrFieldRun, IrHyperlink, IrNoteRef, IrInlineImage, IrOpaqueInline
   IrFormats.cs         // IrRunFormat, IrParaFormat, IrSectionFormat, IrListInfo
+  IrEffectiveFormats.cs// effective (resolved) paragraph/run formats over the registries
   IrRegistries.cs      // IrStyleRegistry, IrNumberingRegistry, IrThemeFonts
-  IrNotes.cs           // footnote/endnote/comment stores
-  IrReader.cs          // OOXML → IR entry point
+  IrNotes.cs           // footnote/endnote/comment stores + IrCommentTarget
+  IrNodeList.cs        // IrNodeList<T> value-equality list wrapper
+  IrProvenance.cs      // Source provenance type
+  IrReader.cs          // OOXML → IR entry point; normalization rules N1–N15 live here inline
   IrReaderOptions.cs
-  IrNormalizer.cs      // rules N1–N15
   IrHasher.cs          // §6
   IrDiagnosticJson.cs  // §9
 ```
+
+> Note (M1.3): `IrNormalizer.cs` never materialized — the N1–N15 rules live
+> inline in `IrReader.cs` rather than in a separate normalizer pass. The list
+> above reflects the files actually landed under `Docxodus/Ir/`.
 
 - Namespace `Docxodus.Ir`. All files `#nullable enable`.
 - All types `internal`. Tests reach them via `InternalsVisibleTo`
@@ -417,6 +423,67 @@ internal sealed record IrListInfo(int NumId, int? AbstractNumId, int Ilvl,
 `IrListInfo` carries exactly the facts `GetBlockMetadata`/`GetListMembership`
 report today (`numId`/`abstractNumId`/`ilvl`/format/start-override/
 from-style); M1.3 asserts parity with that surface.
+
+### 7.5 Registries
+
+The registries landed in M1.3 (`Docxodus/Ir/IrRegistries.cs`). They are resolved
+once during `IrReader.Read`, before the body walk, so paragraph list resolution
+can chase `numPr → IrNum → IrAbstractNum → level format`.
+
+```csharp
+internal sealed record IrStyle(string Id, string? Name, string? BasedOn, string Type, bool IsDefault)
+{
+    public XElement? PPr { get; init; }   // deep clone of the style's w:pPr, or null
+    public XElement? RPr { get; init; }   // deep clone of the style's w:rPr, or null
+}
+
+internal sealed record IrStyleRegistry(
+    IReadOnlyDictionary<string, IrStyle> Styles,
+    string? DefaultParagraphStyleId,
+    XElement? DocDefaultsPPr,
+    XElement? DocDefaultsRPr)
+{
+    public static readonly IrStyleRegistry Empty =
+        new(new Dictionary<string, IrStyle>(), null, null, null);
+}
+
+internal sealed record IrNumLevel(int Ilvl, string NumberFormat, int? Start, string? LvlText)
+{
+    public XElement? PPr { get; init; }   // deep clone of the level's w:pPr, or null
+}
+
+internal sealed record IrAbstractNum(int AbstractNumId, IReadOnlyDictionary<int, IrNumLevel> Levels);
+
+internal sealed record IrNum(int NumId, int AbstractNumId, IReadOnlyDictionary<int, int> StartOverrides);
+
+internal sealed record IrNumberingRegistry(
+    IReadOnlyDictionary<int, IrNum> Nums,
+    IReadOnlyDictionary<int, IrAbstractNum> AbstractNums)
+{
+    public static readonly IrNumberingRegistry Empty =
+        new(new Dictionary<int, IrNum>(), new Dictionary<int, IrAbstractNum>());
+}
+
+internal sealed record IrThemeFonts(string? MajorAscii, string? MinorAscii)
+{
+    public static readonly IrThemeFonts Empty = new(null, null);
+}
+```
+
+Semantics of the landed shapes:
+
+- **Tolerant population.** A missing part resolves to the registry's `Empty`
+  value (no styles/numbering/theme part → `IrStyleRegistry.Empty` /
+  `IrNumberingRegistry.Empty` / `IrThemeFonts.Empty`). Malformed entries are
+  skipped rather than fatal, and duplicate ids are **first-wins**.
+- **Reference equality.** Registries hold cloned `XElement` props and
+  `IReadOnlyDictionary` members, both of which compare by reference. Per the
+  document-level dictionary policy (§8 / `IrDocument` equality), registries are
+  derived indexes excluded from content-scope determinism: callers must not rely
+  on registry value equality for document equality.
+- **`numStyleLink` indirection deferred.** An `w:abstractNum` that carries only a
+  `w:numStyleLink` (no inline `w:lvl`) resolves to an `IrAbstractNum` with empty
+  `Levels`; chasing the link through the style chain is deferred past M1.3.
 
 ## 8. Immutability, laziness, threading
 

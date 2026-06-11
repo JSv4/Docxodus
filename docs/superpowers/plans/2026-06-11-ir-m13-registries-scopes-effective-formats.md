@@ -49,3 +49,22 @@ Reader honors `IrScopes` flags: HeadersFooters → enumerate `main.HeaderParts`/
 - Effective-format resolver with hand-computed cascade tests.
 - All scopes readable; corpus totality 668/668 with `IrScopes.All`; full suite green.
 - Spec updated: §7.5 registries, §12 open-question resolutions (comment targets per-block).
+
+## Outcome
+
+All four tasks landed; exit criteria met.
+
+- Task 1 — registries populated (`f43ae32`): IrStyle/Numbering/ThemeFonts resolved tolerantly (missing part → `Empty`, malformed skipped, first-wins duplicates).
+- Task 2 — full IrListInfo resolution with `GetListMembership` parity (`7dee824`).
+- Task 3 — non-destructive effective-format resolver via the style cascade (`fc3f224`).
+- Task 4 — header/footer/note/comment scopes + N15 record-half comment targets (`246a8cc`).
+
+Spec updated: §7.5 Registries documents the landed shapes; §3 file list corrected to reality.
+
+Known deferred items (carried to M1.4+):
+
+- `numStyleLink` indirection — abstractNums carrying only a `w:numStyleLink` resolve to empty `Levels`; link not chased.
+- Toggle-property semantics — effective resolution uses last-writer-wins, not full OOXML toggle-XOR.
+- Direct `w:asciiTheme` — theme-font references on direct run props are not theme-resolved in the effective record.
+- Cross-field comment-range test — comment ranges interacting with field cached results not yet covered by a dedicated test.
+- `IrReader` partial-class split — the reader remains a single file (N1–N15 inline); splitting deferred to M1.4.

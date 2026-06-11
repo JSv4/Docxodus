@@ -22,12 +22,16 @@ internal sealed record IrHeaderFooter(string ScopeName, IrHeaderFooterKind Kind,
 /// The immutable root of a Document IR snapshot.
 /// </summary>
 /// <remarks>
-/// Node-for-node value equality is defined over the content scopes and stores
-/// (<see cref="Body"/>, <see cref="Headers"/>, <see cref="Footers"/>, <see cref="Footnotes"/>,
-/// <see cref="Endnotes"/>, <see cref="Comments"/>) — these compose value equality via
-/// <see cref="IrNodeList{T}"/>. <see cref="AnchorIndex"/> and <see cref="Sources"/> are derived
-/// indexes / provenance pins that keep dictionary reference equality; do not rely on them for
-/// document equality. Two reads of the same bytes produce equal scopes/stores (§8).
+/// This is a record, so the compiler-generated <c>Equals</c>/<c>GetHashCode</c> include EVERY member
+/// — the content scopes/stores AND the registries (<see cref="Styles"/>, <see cref="Numbering"/>,
+/// <see cref="ThemeFonts"/>), plus <see cref="AnchorIndex"/> and <see cref="Sources"/>. The
+/// determinism guarantee (and the tests that assert it) is defined over the <em>content scopes</em>
+/// — <see cref="Body"/>, <see cref="Headers"/>, <see cref="Footers"/>, <see cref="Footnotes"/>,
+/// <see cref="Endnotes"/>, <see cref="Comments"/> — which compose value equality via
+/// <see cref="IrNodeList{T}"/>: two reads of the same bytes produce equal scopes/stores (§8).
+/// Document-level <c>Equals</c> over two separate reads is NOT expected to hold, because
+/// <see cref="AnchorIndex"/>, <see cref="Sources"/>, and the registries are reference-typed
+/// (dictionary reference equality) — compare the content scopes, not whole <see cref="IrDocument"/>s.
 /// </remarks>
 internal sealed record IrDocument
 {
