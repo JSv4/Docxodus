@@ -129,4 +129,50 @@ public class IrNodeTests
         Assert.Equal(a.GetHashCode(), b.GetHashCode());
         Assert.NotEqual(a, c);
     }
+
+    [Fact]
+    public void IrBlock_DifferentConcreteTypes_NeverEqual()
+    {
+        // A paragraph and a table sharing identical Anchor/ContentHash/FormatFingerprint must
+        // still be unequal: sealed-record equality keys off the synthesized EqualityContract.
+        var anchor = new IrAnchor(IrAnchorKind.P, "body", "00000000000000000000000000000030");
+        var contentHash = IrHash.Compute("shared");
+        var formatHash = IrHash.Compute("sharedfmt");
+
+        var paragraph = new IrParagraph
+        {
+            Anchor = anchor,
+            ContentHash = contentHash,
+            FormatFingerprint = formatHash,
+            Format = ParaFmt(),
+            Inlines = IrNodeList.Empty<IrInline>(),
+        };
+
+        var table = new IrTable
+        {
+            Anchor = anchor,
+            ContentHash = contentHash,
+            FormatFingerprint = formatHash,
+            Rows = IrNodeList.Empty<IrRow>(),
+            UnmodeledTablePropsDigest = EmptyDigest,
+        };
+
+        Assert.False(paragraph.Equals((object)table));
+        Assert.NotEqual<object>(paragraph, table);
+    }
+
+    [Fact]
+    public void IrNodeList_EmptyAndOrdering_Equality()
+    {
+        var empty1 = IrNodeList.Empty<int>();
+        var empty2 = IrNodeList.Empty<int>();
+        Assert.Equal(empty1, empty2);
+
+        var single = IrNodeList.From(new[] { 1 });
+        Assert.NotEqual(empty1, single);
+
+        var forward = IrNodeList.From(new[] { 1, 2 });
+        var reversed = IrNodeList.From(new[] { 2, 1 });
+        Assert.NotEqual(forward, reversed);
+    }
 }
