@@ -89,6 +89,86 @@ internal static class IrModeledFormat
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Project a run format's MODELED fields to a WmlComparer-friendly property dictionary (M2.3 Task 1):
+    /// name → display value, omitting any field that is null on this run (mirroring WmlComparer's
+    /// "absent rPr child ⇒ absent key" convention). Property names match
+    /// <c>WmlComparer.GetFriendlyPropertyName</c> (bold/italic/underline/strikethrough/…) so the produced
+    /// <see cref="IrFormatChangeDetails"/> is adapter-comparable to <c>WmlComparer.FormatChangeDetails</c>.
+    /// The unmodeled digest is never projected (it is undescribable as an rPrChange).
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ModeledProperties(IrRunFormat? f)
+    {
+        var dict = new Dictionary<string, string>();
+        if (f is null)
+            return dict;
+
+        AddProp(dict, "style", f.StyleId);
+        AddBool(dict, "bold", f.Bold);
+        AddBool(dict, "italic", f.Italic);
+        AddProp(dict, "underline", RenderUnderline(f.Underline));
+        AddBool(dict, "strikethrough", f.Strike);
+        AddBool(dict, "doubleStrikethrough", f.DoubleStrike);
+        AddProp(dict, "verticalAlign", f.VertAlign?.ToString());
+        AddProp(dict, "font", f.FontAscii);
+        AddInt(dict, "fontSize", f.SizeHalfPoints);
+        AddProp(dict, "color", f.ColorHex);
+        AddProp(dict, "highlight", f.Highlight);
+        AddBool(dict, "allCaps", f.Caps);
+        AddBool(dict, "smallCaps", f.SmallCaps);
+        AddBool(dict, "hidden", f.Vanish);
+        return dict;
+    }
+
+    /// <summary>
+    /// Build the <see cref="IrFormatChangeDetails"/> for a (left, right) run-format pair: the modeled
+    /// property dictionaries plus the changed-property names (a field present-on-one-side-only OR
+    /// present-on-both-with-differing-value), computed by the SAME rule as
+    /// <c>WmlComparer.ExtractFormatChangeDetails</c>. Changed names are emitted in a STABLE order (the
+    /// fixed modeled-field order of <see cref="ModeledProperties"/>) for deterministic output.
+    /// </summary>
+    public static IrFormatChangeDetails FormatChangeDetails(IrRunFormat? left, IrRunFormat? right)
+    {
+        var oldProps = ModeledProperties(left);
+        var newProps = ModeledProperties(right);
+
+        var changed = new List<string>();
+        foreach (var name in ModeledFieldOrder)
+        {
+            bool hasOld = oldProps.TryGetValue(name, out var oldVal);
+            bool hasNew = newProps.TryGetValue(name, out var newVal);
+            if (hasOld != hasNew || (hasOld && hasNew && oldVal != newVal))
+                changed.Add(name);
+        }
+
+        return new IrFormatChangeDetails(oldProps, newProps, changed);
+    }
+
+    /// <summary>The fixed modeled-field property-name order (matches <see cref="ModeledProperties"/>).</summary>
+    private static readonly string[] ModeledFieldOrder =
+    {
+        "style", "bold", "italic", "underline", "strikethrough", "doubleStrikethrough",
+        "verticalAlign", "font", "fontSize", "color", "highlight", "allCaps", "smallCaps", "hidden",
+    };
+
+    private static void AddProp(Dictionary<string, string> dict, string name, string? value)
+    {
+        if (value is not null)
+            dict[name] = value;
+    }
+
+    private static void AddBool(Dictionary<string, string> dict, string name, bool? value)
+    {
+        if (value is not null)
+            dict[name] = value.Value ? "true" : "false";
+    }
+
+    private static void AddInt(Dictionary<string, string> dict, string name, int? value)
+    {
+        if (value is not null)
+            dict[name] = value.Value.ToString(CultureInfo.InvariantCulture);
+    }
+
     // ------------------------------------------------------------------ framing
 
     private static void Append(StringBuilder sb, string name, string? value)

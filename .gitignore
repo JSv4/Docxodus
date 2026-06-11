@@ -46,3 +46,9 @@ docs/plans/
 
 # IR markdown-equivalence triage artifacts (regenerated per test run)
 Docxodus.Tests/Ir/EquivalenceArtifacts/
+
+# IR-vs-WmlComparer differential harness triage artifacts (regenerated per test run)
+Docxodus.Tests/Ir/Diff/DifferentialArtifacts/
+
+# IR diff generative-fuzzer triage artifacts (regenerated per test run)
+Docxodus.Tests/Ir/Diff/FuzzArtifacts/
