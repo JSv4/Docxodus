@@ -8,6 +8,21 @@ All notable changes to this project will be documented in this file.
 - **Solution builds no longer race the WASM-mode assembly.** `DocxodusWasm` references `Docxodus` with `WASM_BUILD=true`, so every solution build compiled Docxodus twice into the same `bin/<Config>/net8.0/` output — whichever finished last won, and `Docxodus.Tests` intermittently linked the SkiaSharp-free WASM assembly (`error CS1061: 'ImageInfo' ... 'SaveImage'`). WASM-mode output now builds into isolated `bin/wasm/` + `obj/wasm/` paths; the `dotnet clean` workaround documented in CLAUDE.md is no longer needed.
 
 ### Added
+- **Document IR — M1.5 optional provenance retention (`RetainSources`)** —
+  *internal/experimental.* New `IrReaderOptions.RetainSources` (default `true` —
+  current behavior). When `false`, `IrDocument.Sources` is left empty and every
+  node's `IrProvenance.Element` is null (a single shared empty provenance instance,
+  zero per-node allocation), so the parsed `XDocument`s become collectible once
+  `IrReader.Read` returns — dropping the largest fixture's retained snapshot from
+  **≈11.1× to ≈2.7× the main-part XML size** (live-heap delta; reported, not gated).
+  Part-URI facts survive in both modes via the new additive scope-level
+  `IrScope.PartUri` / `IrCommentStore.PartUri` (the markdown emitter now prefers
+  these over per-node provenance). Content is provably identical across modes —
+  anchors, `ContentHash`, and `FormatFingerprint` are unchanged (verified corpus-wide
+  + spot-checked in `IrRetentionTests`), and the diagnostic JSON is byte-stable (it
+  never serialized part URIs at scope/block granularity). The Phase-2 diff engine and
+  bulk pipelines should read with `RetainSources=false`. No public API / WASM / npm /
+  python surface (still `internal`).
 - **Document IR — M1.5 textbox bodies (`IrTextbox`)** — *internal/experimental.*
   Textbox bodies (`w:txbxContent` reachable from a DrawingML `w:drawing`/`wps:txbx`
   or a VML `w:pict`/`v:textbox`, including the `mc:AlternateContent` Choice/Fallback

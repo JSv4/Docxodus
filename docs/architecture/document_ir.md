@@ -107,6 +107,19 @@ trees from different physical files with identical content compare equal. The
 stay alive exactly as long as the snapshot (the memory consequence is in the
 budget below).
 
+**Optional retention — `IrReaderOptions.RetainSources` (default `true`).** Pinning
+the XML DOM is convenient for diagnostics/raw round-tripping but roots ~11× the part
+XML for the snapshot's lifetime. The Phase-2 diff engine and bulk pipelines don't
+need element-level provenance, so retention is opt-out: with `RetainSources=false`,
+`Sources` is empty and every node's `Source` is a single shared empty `IrProvenance`
+(`Element`/`PartUri` null, zero per-node allocation), letting the working
+`XDocument`s be collected once `Read` returns (≈11× → ≈2.7× retained — see the gate
+addendum). The part URI a consumer needs at scope/block granularity survives as a
+**scope-level** fact, promoted to `IrScope.PartUri` (and `IrCommentStore.PartUri`),
+populated in BOTH modes; the markdown emitter prefers those over per-node provenance.
+Retention is a pure memory knob — anchors, `ContentHash`, and `FormatFingerprint` are
+byte-identical across modes.
+
 ## Normalization
 
 The reader applies normalization rules **N1–N15** before any node is
@@ -256,11 +269,13 @@ parallel run), with a GC-quiet smoke check as the default-run guard.
   to Accept; an as-is (revision-aware) view is a v2 item. The equivalence harness
   pre-accepts revisions once and feeds the same bytes to both paths to compare
   like-for-like.
-- **Memory footprint is above the ≤3× reference target.** A snapshot costs
-  roughly (pinned XML DOM via `Sources`) + (IR nodes); the largest-body corpus
-  fixture retains ≈11× its main-part XML size (measured, reported — see the gate
-  report). Acceptable for an internal Phase 1 model; a candidate for the Phase 2
-  budget if it bites.
+- **Memory footprint is above the ≤3× reference target in the default (retained)
+  mode.** A retained snapshot costs roughly (pinned XML DOM via `Sources`) + (IR
+  nodes); the largest-body corpus fixture retains ≈11× its main-part XML size
+  (measured, reported — see the gate report). M1.5 made this opt-out:
+  `RetainSources=false` drops the pinned DOM and brings the same fixture to ≈2.7×
+  (see Provenance above + the gate addendum), which is the mode Phase-2 bulk
+  consumers should use.
 - **`numStyleLink` numbering indirection** and several v2 model facts above are
   not yet resolved.
 

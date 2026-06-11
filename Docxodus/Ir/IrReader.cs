@@ -106,7 +106,14 @@ internal static class IrReader
         var styles = BuildStyleRegistry(main);
         var numbering = BuildNumberingRegistry(main);
 
-        var sources = new Dictionary<Uri, XDocument> { [partUri] = mainXDoc };
+        // Sources pins the parsed XDocuments so per-node IrProvenance.Element pointers stay alive. When
+        // RetainSources is off we leave it EMPTY: the working XDocuments still exist for the duration of
+        // this Read (the walk needs them), but nothing in the returned snapshot roots them, so they
+        // become collectible once Read returns. Part-URI facts survive via IrScope.PartUri instead.
+        var retain = options.RetainSources;
+        var sources = new Dictionary<Uri, XDocument>();
+        if (retain)
+            sources[partUri] = mainXDoc;
 
         // --- body scope (always walked; the IrDocument requires a body) -------------------------
         // Comment targets (N15) are recorded only while walking the BODY: the markdown projection's
@@ -114,7 +121,8 @@ internal static class IrReader
         var commentTracker = options.Scopes.HasFlag(IrScopes.Comments)
             ? new CommentTracker()
             : null;
-        var bodyCtx = new ReadContext(partUri, main, styles, numbering, "body", commentTracker);
+        var bodyCtx = new ReadContext(partUri, main, styles, numbering, "body", commentTracker,
+            retainSources: retain);
 
         var body = root.Element(W + "body")
             ?? throw new DocxodusException("Document has no w:body element.");
@@ -141,9 +149,9 @@ internal static class IrReader
         if (options.Scopes.HasFlag(IrScopes.HeadersFooters))
         {
             headers = ReadHeaderFooterScopes(main, body, styles, numbering, sources, anchorIndex,
-                main.HeaderParts.Cast<OpenXmlPart>(), "hdr", W + "headerReference");
+                main.HeaderParts.Cast<OpenXmlPart>(), "hdr", W + "headerReference", retain);
             footers = ReadHeaderFooterScopes(main, body, styles, numbering, sources, anchorIndex,
-                main.FooterParts.Cast<OpenXmlPart>(), "ftr", W + "footerReference");
+                main.FooterParts.Cast<OpenXmlPart>(), "ftr", W + "footerReference", retain);
         }
 
         // --- footnote / endnote scopes (rule M1.3) ----------------------------------------------
@@ -152,19 +160,20 @@ internal static class IrReader
         if (options.Scopes.HasFlag(IrScopes.Notes))
         {
             footnotes = ReadNoteStore(main, main.FootnotesPart, styles, numbering, sources,
-                anchorIndex, "fn", W + "footnote");
+                anchorIndex, "fn", W + "footnote", retain);
             endnotes = ReadNoteStore(main, main.EndnotesPart, styles, numbering, sources,
-                anchorIndex, "en", W + "endnote");
+                anchorIndex, "en", W + "endnote", retain);
         }
 
         // --- comment scope (rule M1.3 + N15 record-half) ----------------------------------------
         var comments = IrCommentStore.Empty;
         if (options.Scopes.HasFlag(IrScopes.Comments))
-            comments = ReadCommentStore(main, styles, numbering, sources, anchorIndex, commentTracker!);
+            comments = ReadCommentStore(main, styles, numbering, sources, anchorIndex, commentTracker!,
+                retain);
 
         return new IrDocument
         {
-            Body = new IrScope("body", IrNodeList.From(blocks)),
+            Body = new IrScope("body", IrNodeList.From(blocks), partUri),
             Headers = headers,
             Footers = footers,
             Footnotes = footnotes,
@@ -187,7 +196,8 @@ internal static class IrReader
     {
         public ReadContext(Uri partUri, MainDocumentPart main,
             IrStyleRegistry styles, IrNumberingRegistry numbering,
-            string scope, CommentTracker? commentTracker = null, int textboxDepth = 0)
+            string scope, CommentTracker? commentTracker = null, int textboxDepth = 0,
+            bool retainSources = true)
         {
             PartUri = partUri;
             Main = main;
@@ -196,7 +206,14 @@ internal static class IrReader
             Scope = scope;
             CommentTracker = commentTracker;
             TextboxDepth = textboxDepth;
+            RetainSources = retainSources;
         }
+
+        // Whether per-node provenance pins the source XElement (IrReaderOptions.RetainSources). When
+        // false, Provenance() hands back the shared empty instance so the parsed XML can be collected
+        // after Read returns. The part URI is still carried (PartUri above) because it is promoted to
+        // the scope level regardless of this flag.
+        public bool RetainSources { get; }
 
         // How many w:txbxContent bodies deep this context is. Bounds textbox nesting recursion
         // (textboxes can legally nest) the same way MaxSdtDepth bounds content-control nesting.
@@ -209,7 +226,8 @@ internal static class IrReader
         /// document order against the CURRENT block) has no defined meaning across a textbox boundary —
         /// matching the reader's existing "no offsets inside a field" stance.</summary>
         public ReadContext IntoTextbox() =>
-            new(PartUri, Main, Styles, Numbering, Scope, commentTracker: null, TextboxDepth + 1);
+            new(PartUri, Main, Styles, Numbering, Scope, commentTracker: null, TextboxDepth + 1,
+                RetainSources);
 
         public Uri PartUri { get; }
 
@@ -235,8 +253,13 @@ internal static class IrReader
         public Dictionary<string, (Uri PartUri, IrHash BytesHash)> ImageHashCache { get; } =
             new(StringComparer.Ordinal);
 
+        // Retained mode pins the source element + part URI on a fresh provenance; retention-off mode
+        // hands back the shared empty instance (no element, no part URI — those facts live at the scope
+        // level now) so the parsed XDocument becomes collectible after Read.
         public IrProvenance Provenance(XElement element) =>
-            new() { Element = element, PartUri = PartUri };
+            RetainSources
+                ? new IrProvenance { Element = element, PartUri = PartUri }
+                : IrProvenance.Empty;
     }
 
     // --- comment range tracking (N15 record-half) -------------------------
@@ -1921,7 +1944,7 @@ internal static class IrReader
     private static IrNodeList<IrHeaderFooter> ReadHeaderFooterScopes(
         MainDocumentPart main, XElement body, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        IEnumerable<OpenXmlPart> parts, string scopePrefix, XName referenceName)
+        IEnumerable<OpenXmlPart> parts, string scopePrefix, XName referenceName, bool retain)
     {
         var result = new List<IrHeaderFooter>();
         int i = 1;
@@ -1934,17 +1957,20 @@ internal static class IrReader
                 if (root is null)
                     continue;
 
-                var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName);
+                var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName,
+                    retainSources: retain);
                 var blocks = new List<IrBlock>();
                 foreach (var child in root.Elements())
                     AppendBlocks(child, ctx, blocks);
 
                 foreach (var b in blocks)
                     IndexBlock(b, anchorIndex);
-                sources[part.Uri] = part.GetXDocument();
+                if (retain)
+                    sources[part.Uri] = part.GetXDocument();
 
                 var kind = ResolveHeaderFooterKind(main, body, part, referenceName);
-                result.Add(new IrHeaderFooter(scopeName, kind, new IrScope(scopeName, IrNodeList.From(blocks))));
+                result.Add(new IrHeaderFooter(scopeName, kind,
+                    new IrScope(scopeName, IrNodeList.From(blocks), part.Uri)));
             }
             catch (Exception e) when (IsTolerableRegistryException(e))
             {
@@ -1991,7 +2017,7 @@ internal static class IrReader
     private static IrNoteStore ReadNoteStore(
         MainDocumentPart main, OpenXmlPart? part, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        string scopeName, XName noteName)
+        string scopeName, XName noteName, bool retain)
     {
         if (part is null)
             return IrNoteStore.Empty;
@@ -2002,7 +2028,8 @@ internal static class IrReader
             if (root is null)
                 return IrNoteStore.Empty;
 
-            var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName);
+            var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName,
+                retainSources: retain);
             var notes = new Dictionary<string, IrScope>(StringComparer.Ordinal);
             // Insertion-ordered map id → the note element's own pt:Unid (the projection's label source).
             var noteUnids = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -2021,11 +2048,12 @@ internal static class IrReader
                 foreach (var b in blocks)
                     IndexBlock(b, anchorIndex);
 
-                notes[id] = new IrScope(scopeName, IrNodeList.From(blocks));
+                notes[id] = new IrScope(scopeName, IrNodeList.From(blocks), part.Uri);
                 noteUnids[id] = Unid(noteEl);
             }
 
-            sources[part.Uri] = part.GetXDocument();
+            if (retain)
+                sources[part.Uri] = part.GetXDocument();
             return new IrNoteStore(notes, noteUnids);
         }
         catch (Exception e) when (IsTolerableRegistryException(e))
@@ -2046,7 +2074,7 @@ internal static class IrReader
     private static IrCommentStore ReadCommentStore(
         MainDocumentPart main, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        CommentTracker tracker)
+        CommentTracker tracker, bool retain)
     {
         var part = main.WordprocessingCommentsPart;
         if (part is null)
@@ -2058,7 +2086,8 @@ internal static class IrReader
             if (root is null)
                 return IrCommentStore.Empty;
 
-            var ctx = new ReadContext(part.Uri, main, styles, numbering, "cmt");
+            var ctx = new ReadContext(part.Uri, main, styles, numbering, "cmt",
+                retainSources: retain);
             var comments = new List<IrComment>();
 
             foreach (var commentEl in root.Elements(W + "comment"))
@@ -2081,8 +2110,9 @@ internal static class IrReader
                     IrNodeList.From(blocks), IrNodeList.From(targets)));
             }
 
-            sources[part.Uri] = part.GetXDocument();
-            return new IrCommentStore(IrNodeList.From(comments));
+            if (retain)
+                sources[part.Uri] = part.GetXDocument();
+            return new IrCommentStore(IrNodeList.From(comments), part.Uri);
         }
         catch (Exception e) when (IsTolerableRegistryException(e))
         {

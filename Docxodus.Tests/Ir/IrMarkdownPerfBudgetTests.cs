@@ -214,33 +214,45 @@ public class IrMarkdownPerfBudgetTests
         var bytes = PrepareInput(largest!).DocumentByteArray;
         var xmlBytes = MainPartXmlSize(bytes);
 
-        // Two complementary numbers, both reported (neither asserted — see class doc):
-        //  - RETAINED: live-heap delta with the snapshot rooted (GC.GetTotalMemory(true) brackets) —
-        //    the closest cheap proxy for the snapshot's resident footprint, which is what the 3×
+        // Two complementary numbers per mode, all reported (none asserted — see class doc):
+        //  - RETAINED (live-heap delta with the snapshot rooted; GC.GetTotalMemory(true) brackets) —
+        //    the closest cheap proxy for the snapshot's resident footprint, which is what the X-ratio
         //    reference is about.
-        //  - CHURN: total managed bytes allocated during the read (GC.GetTotalAllocatedBytes delta) —
+        //  - CHURN (GC.GetTotalAllocatedBytes delta) — total managed bytes allocated during the read;
         //    includes transient XML/parse garbage, so it over-counts the snapshot but bounds peak
         //    pressure.
+        // Measured for BOTH provenance modes (M1.5 Task 2): RetainSources=true pins the parsed XML
+        // (Sources + per-node IrProvenance.Element), false drops it (Sources empty, Element null) so the
+        // working XDocuments become collectible after Read. PartUri facts survive in both.
+        var on = MeasureSnapshot(bytes, new IrReaderOptions { RetainSources = true });
+        var off = MeasureSnapshot(bytes, new IrReaderOptions { RetainSources = false });
+
+        _output.WriteLine($"Memory spot-check (largest-body fixture: {largest!.Name}):");
+        _output.WriteLine($"  main-part XML size: {xmlBytes:N0} bytes");
+        _output.WriteLine($"  RetainSources=true  RETAINED (live-heap delta): {on.Retained:N0} bytes ({Ratio(on.Retained, xmlBytes):F2}× XML)");
+        _output.WriteLine($"  RetainSources=true  CHURN    (alloc delta):     {on.Churn:N0} bytes ({Ratio(on.Churn, xmlBytes):F2}× XML)");
+        _output.WriteLine($"  RetainSources=false RETAINED (live-heap delta): {off.Retained:N0} bytes ({Ratio(off.Retained, xmlBytes):F2}× XML)");
+        _output.WriteLine($"  RetainSources=false CHURN    (alloc delta):     {off.Churn:N0} bytes ({Ratio(off.Churn, xmlBytes):F2}× XML)");
+        _output.WriteLine("  (the X-ratio reference is the retained-mode live-heap ratio; reported, not asserted — see gate report methodology)");
+    }
+
+    private static double Ratio(long value, long xmlBytes) =>
+        xmlBytes > 0 ? (double)value / xmlBytes : double.NaN;
+
+    /// <summary>One IR snapshot's resident (live-heap delta, snapshot rooted) and churn (total-allocated
+    /// delta) bytes, measured with the same GC bracketing the class doc describes.</summary>
+    private static (long Retained, long Churn) MeasureSnapshot(byte[] bytes, IrReaderOptions options)
+    {
         GC.Collect();
         GC.WaitForPendingFinalizers();
         GC.Collect();
         var liveBefore = GC.GetTotalMemory(forceFullCollection: true);
         var allocBefore = GC.GetTotalAllocatedBytes(precise: true);
-        var ir = IrReader.Read(new WmlDocument("perf.docx", bytes));
+        var ir = IrReader.Read(new WmlDocument("perf.docx", bytes), options);
         var allocAfter = GC.GetTotalAllocatedBytes(precise: true);
         var liveAfter = GC.GetTotalMemory(forceFullCollection: true);
         GC.KeepAlive(ir);
-
-        var retained = liveAfter - liveBefore;
-        var churn = allocAfter - allocBefore;
-        var retainedRatio = xmlBytes > 0 ? (double)retained / xmlBytes : double.NaN;
-        var churnRatio = xmlBytes > 0 ? (double)churn / xmlBytes : double.NaN;
-
-        _output.WriteLine($"Memory spot-check (largest-body fixture: {largest!.Name}):");
-        _output.WriteLine($"  main-part XML size: {xmlBytes:N0} bytes");
-        _output.WriteLine($"  IR snapshot RETAINED (live-heap delta): {retained:N0} bytes ({retainedRatio:F2}× XML)");
-        _output.WriteLine($"  IR read CHURN (total allocated delta): {churn:N0} bytes ({churnRatio:F2}× XML)");
-        _output.WriteLine("  (3× reference is the retained ratio; reported, not asserted — see gate report methodology)");
+        return (liveAfter - liveBefore, allocAfter - allocBefore);
     }
 
     private static long MainPartXmlSize(byte[] bytes)

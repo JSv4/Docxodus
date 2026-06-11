@@ -10,7 +10,20 @@ namespace Docxodus.Ir;
 /// A named sequence of block-level content (e.g. "body", a header/footer, or a note body). Scope
 /// names follow the IR vocabulary: "body", "hdr1"/"ftr1"…, "fn", "en", "cmt".
 /// </summary>
-internal sealed record IrScope(string Name, IrNodeList<IrBlock> Blocks);
+/// <remarks>
+/// <para><b><see cref="PartUri"/>.</b> The URI of the OOXML part this scope was read from, populated
+/// in BOTH retention modes (it is a scope-level fact, independent of whether per-node provenance
+/// elements are pinned — see <see cref="IrReaderOptions.RetainSources"/>). Consumers that only need
+/// the originating part at scope/block granularity (e.g. the markdown emitter's
+/// <c>AnchorTarget.PartUri</c>) MUST prefer this over per-node <see cref="IrProvenance.PartUri"/>,
+/// because that per-node fact is null when <c>RetainSources=false</c>.</para>
+/// <para>Equality-neutral by intent for the same reason provenance is: two reads of the same bytes
+/// from the same part carry the same URI, and the determinism guarantee is defined over content. It
+/// is nonetheless part of the record's generated equality (records include every member); that is
+/// harmless for the determinism tests, which compare scopes from the same source bytes, and the
+/// document-level <c>Equals</c> is already not relied upon (see <see cref="IrDocument"/> remarks).</para>
+/// </remarks>
+internal sealed record IrScope(string Name, IrNodeList<IrBlock> Blocks, Uri? PartUri = null);
 
 /// <summary>Which header/footer occurrence a part is bound to (`w:headerReference/@w:type`).</summary>
 internal enum IrHeaderFooterKind { Default, First, Even }

@@ -73,14 +73,14 @@ internal static class IrMarkdownEmitter
         var autoNumber = BuildAutoNumberResolver(ir);
 
         // --- body ---
-        var bodyPartUri = ResolveBodyPartUri(ir);
+        var bodyPartUri = ResolveScopePartUri(ir, ir.Body);
         foreach (var (anchor, preview) in WalkAnchorsForIndex(ir.Body.Blocks, settings))
             AddIndexEntry(index, anchor, bodyPartUri, preview, autoNumber);
 
         // --- headers / footers (each in part-enumeration order) ---
         foreach (var hf in ir.Headers.Concat(ir.Footers))
         {
-            var partUri = ResolveScopePartUri(ir, hf.Scope.Blocks);
+            var partUri = ResolveScopePartUri(ir, hf.Scope);
             foreach (var (anchor, preview) in WalkAnchorsForIndex(hf.Scope.Blocks, settings))
                 AddIndexEntry(index, anchor, partUri, preview, autoNumber);
         }
@@ -150,7 +150,10 @@ internal static class IrMarkdownEmitter
     {
         if (store.Notes.Count == 0) return;
         var scope = IrAnchor.KindToken(kind);
-        var partUri = ResolveScopePartUriBySuffix(ir, scope == "fn" ? "/footnotes.xml" : "/endnotes.xml");
+        // Prefer the scope-level part URI carried on the note scopes (populated in both retention
+        // modes); fall back to a Sources suffix scan for any legacy scope with no PartUri.
+        var partUri = store.Notes.Values.Select(s => s.PartUri).FirstOrDefault(u => u is not null)?.ToString()
+            ?? ResolveScopePartUriBySuffix(ir, scope == "fn" ? "/footnotes.xml" : "/endnotes.xml");
         foreach (var (noteId, noteScope) in store.Notes)
         {
             if (!store.NoteUnids.TryGetValue(noteId, out var unid)) continue;
@@ -170,9 +173,17 @@ internal static class IrMarkdownEmitter
             : text;
     }
 
-    private static string ResolveScopePartUri(IrDocument ir, IrNodeList<IrBlock> blocks)
+    /// <summary>
+    /// The part URI for a scope's anchor-index entries. Prefers the scope-level
+    /// <see cref="IrScope.PartUri"/> (populated in BOTH retention modes); falls back to per-block
+    /// provenance (retained mode only), then to a <see cref="IrDocument.Sources"/> scan, then to the
+    /// conventional main-part path. The scope-level fact is what keeps this correct when
+    /// <c>RetainSources=false</c> empties <see cref="IrDocument.Sources"/> and per-node provenance.
+    /// </summary>
+    private static string ResolveScopePartUri(IrDocument ir, IrScope scope)
     {
-        foreach (var b in blocks)
+        if (scope.PartUri is { } scopeUri) return scopeUri.ToString();
+        foreach (var b in scope.Blocks)
             if (b.Source.PartUri is { } uri) return uri.ToString();
         return ir.Sources.Keys.FirstOrDefault()?.ToString() ?? "/word/document.xml";
     }
@@ -189,7 +200,9 @@ internal static class IrMarkdownEmitter
 
     private static string ResolveCommentsPartUri(IrDocument ir)
     {
-        // Comment blocks carry their part provenance; fall back to a Sources scan by suffix.
+        // Prefer the comment store's scope-level part URI (populated in both retention modes); then
+        // per-block provenance (retained mode only); then a Sources scan by suffix.
+        if (ir.Comments.PartUri is { } storeUri) return storeUri.ToString();
         foreach (var c in ir.Comments.Comments)
             foreach (var b in c.Blocks)
                 if (b.Source.PartUri is { } uri) return uri.ToString();
@@ -406,20 +419,6 @@ internal static class IrMarkdownEmitter
         var trimmed = raw.TrimEnd();
         if (trimmed.Length == 1 && !char.IsLetterOrDigit(trimmed, 0)) return null;
         return trimmed.Length == 0 ? null : trimmed;
-    }
-
-    private static string ResolveBodyPartUri(IrDocument ir)
-    {
-        // Prefer the provenance pin carried on the first body block.
-        foreach (var b in ir.Body.Blocks)
-        {
-            var uri = b.Source.PartUri;
-            if (uri is not null) return uri.ToString();
-        }
-        // Fallback: the single source whose part is the main document part. Sources is keyed by URI;
-        // the main document part is conventionally "/word/document.xml".
-        var main = ir.Sources.Keys.FirstOrDefault(u => u.ToString().EndsWith("/document.xml", StringComparison.Ordinal));
-        return main?.ToString() ?? ir.Sources.Keys.FirstOrDefault()?.ToString() ?? "/word/document.xml";
     }
 
     // ------------------------------------------------------------------

@@ -146,6 +146,35 @@ model, but it is a real overage worth flagging for the Phase 2 budget if it bite
 (the pinned `XDocument`s are the obvious reclaim target once consumers no longer
 need `Source`).
 
+#### M1.5 memory addendum
+
+M1.5 Task 2 made that reclaim real: `IrReaderOptions.RetainSources` (default
+`true`) gates whether the snapshot pins the parsed XML. With `RetainSources=false`
+the `Sources` dictionary is left empty and every node's `IrProvenance.Element` is
+null (a single shared empty provenance instance — zero per-node allocation), so the
+working `XDocument`s become collectible once `Read` returns. The part-URI facts the
+emitter needs survive via the new scope-level `IrScope.PartUri` (and
+`IrCommentStore.PartUri`), populated in both modes.
+
+Re-measured with the **same** M1.4 methodology (same largest-main-part-XML fixture,
+same `GC.GetTotalMemory(forceFullCollection:true)` / `GetTotalAllocatedBytes`
+brackets in `IrMarkdownPerfBudgetTests.ReportMemorySpotCheck`, now reporting both
+modes):
+
+| Mode | Fixture | XML size | RETAINED | Retained / XML | CHURN | Churn / XML |
+|---|---|---|---|---|---|---|
+| `RetainSources=true`  | `WC-BodyBookmarks-Before.docx` | 2,849,523 B | 31,580,840 B | **11.08×** | 889,584,992 B | 312.19× |
+| `RetainSources=false` | `WC-BodyBookmarks-Before.docx` | 2,849,523 B | 7,770,632 B  | **2.73×**  | 889,450,776 B | 312.14× |
+
+Notes on the deltas vs the M1.4 table: the retained-mode ratio is essentially
+unchanged (11.05× → 11.08×, run-to-run jitter plus the M1.5 textbox nodes); CHURN is
+identical between modes because the input XML is parsed during `Read` either way —
+only post-`Read` *retention* differs, which is exactly the live-heap RETAINED column.
+Retention-off lands at **2.73× XML** (a ~4× reduction, at/near the ≤2-3× reference),
+confirming the pinned `XDocument`s were the dominant resident cost. Content facts are
+provably identical across modes (anchors/`ContentHash`/`FormatFingerprint` spot-checks
+in `IrRetentionTests`); retention is a pure memory knob, never a content change.
+
 ### Criterion 3 — Architecture doc (PASS)
 
 `docs/architecture/document_ir.md` written to the repo's architecture-doc
