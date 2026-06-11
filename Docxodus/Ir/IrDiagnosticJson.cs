@@ -313,6 +313,13 @@ internal static class IrDiagnosticJson
                 if (img.AltText is { } altText) writer.WriteString("altText", altText);
                 if (img.Unid is { } imgUnid) writer.WriteString("unid", imgUnid);
                 break;
+            case IrTextbox tb:
+                writer.WriteString("kind", "textbox");
+                writer.WriteStartArray("blocks");
+                foreach (var inner in tb.Blocks)
+                    WriteBlock(writer, inner);
+                writer.WriteEndArray();
+                break;
             case IrOpaqueInline o:
                 writer.WriteString("kind", "opaque");
                 writer.WriteString("element", o.ElementName.ToString());

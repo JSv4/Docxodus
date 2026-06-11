@@ -141,6 +141,18 @@ public class IrDiagnosticJsonTests
             new IrInlineImage(new Uri("/word/media/i.png", UriKind.Relative), ZeroHash, 1, 2, null),
         _ when t == typeof(IrOpaqueInline) =>
             new IrOpaqueInline(XName.Get("thing", "urn:x"), ZeroHash),
+        _ when t == typeof(IrTextbox) =>
+            new IrTextbox(IrNodeList.From(new IrBlock[]
+            {
+                new IrParagraph
+                {
+                    Anchor = Anchor(IrAnchorKind.P),
+                    ContentHash = ZeroHash,
+                    FormatFingerprint = ZeroHash,
+                    Format = EmptyParaFormat,
+                    Inlines = IrNodeList.From(new IrInline[] { new IrTextRun("inside", EmptyRunFormat) }),
+                },
+            })),
         _ => throw new Xunit.Sdk.XunitException(
             $"No minimal-instance factory for inline kind '{t.Name}'. Add one to MinimalInline " +
             "and a writer branch to IrDiagnosticJson, then this guard will pass."),

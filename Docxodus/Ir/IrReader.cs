@@ -36,6 +36,7 @@ internal static class IrReader
     private static readonly XName REmbed = Docxodus.R.embed;     // r:embed (relationships)
     private static readonly XName WpExtent = Docxodus.WP.extent; // wp:extent (wordprocessingDrawing)
     private static readonly XName WpDocPr = Docxodus.WP.docPr;   // wp:docPr (wordprocessingDrawing)
+    private static readonly XName WTxbxContent = W + "txbxContent"; // w:txbxContent (textbox body, wps + VML)
 
     // The empty-unmodeled-container digest: CanonicalHash of <unmodeled/> with no children.
     // Cached because it is the fingerprint of every format record that carries no leftover props.
@@ -186,7 +187,7 @@ internal static class IrReader
     {
         public ReadContext(Uri partUri, MainDocumentPart main,
             IrStyleRegistry styles, IrNumberingRegistry numbering,
-            string scope, CommentTracker? commentTracker = null)
+            string scope, CommentTracker? commentTracker = null, int textboxDepth = 0)
         {
             PartUri = partUri;
             Main = main;
@@ -194,7 +195,21 @@ internal static class IrReader
             Numbering = numbering;
             Scope = scope;
             CommentTracker = commentTracker;
+            TextboxDepth = textboxDepth;
         }
+
+        // How many w:txbxContent bodies deep this context is. Bounds textbox nesting recursion
+        // (textboxes can legally nest) the same way MaxSdtDepth bounds content-control nesting.
+        // A textbox walked at the cap is preserved opaquely instead of recursing further.
+        public int TextboxDepth { get; }
+
+        /// <summary>A child context one textbox level deeper. The comment tracker is intentionally
+        /// NOT carried inside a textbox: textbox inner paragraphs are their own blocks with their own
+        /// anchors, and the body-scope comment-range offset bookkeeping (which counts visible text in
+        /// document order against the CURRENT block) has no defined meaning across a textbox boundary —
+        /// matching the reader's existing "no offsets inside a field" stance.</summary>
+        public ReadContext IntoTextbox() =>
+            new(PartUri, Main, Styles, Numbering, Scope, commentTracker: null, TextboxDepth + 1);
 
         public Uri PartUri { get; }
 
@@ -444,6 +459,13 @@ internal static class IrReader
     /// purely to bound recursion against adversarial/corrupt input.
     /// </summary>
     private const int MaxSdtDepth = 64;
+
+    /// <summary>
+    /// Maximum <c>w:txbxContent</c> nesting the reader walks before falling back to an opaque inline.
+    /// Textboxes can legally nest (a shape inside a textbox can itself carry a textbox); the cap
+    /// bounds recursion against adversarial/corrupt input, mirroring <see cref="MaxSdtDepth"/>.
+    /// </summary>
+    private const int MaxTextboxDepth = 16;
 
     private static IrBlock BuildBlock(XElement el, ReadContext ctx)
     {
@@ -899,8 +921,74 @@ internal static class IrReader
             return;
         else if (IsDroppedParagraphChild(child.Name))
             return; // N3: bookmarks can legally appear inside a run too.
+        else if (child.DescendantsAndSelf(WTxbxContent).Any())
+            // A w:pict (VML v:textbox), an mc:AlternateContent wrapping a DrawingML w:drawing AND a VML
+            // w:pict, or any other carrier of textbox bodies: model each w:txbxContent body as an
+            // IrTextbox rather than dropping it opaquely (which is what closes the ContentHash blind
+            // spot). A w:drawing carrying ONLY a textbox (no resolvable blip) reaches here too — it is
+            // NOT promoted to an image by AppendDrawing (that branch is above), so it lands here.
+            AppendTextboxes(child, ctx, sink);
         else
             sink.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)));
+    }
+
+    // --- textbox bodies (w:txbxContent inside w:drawing/wps:txbx or w:pict/v:textbox) -------------
+
+    /// <summary>
+    /// Append one <see cref="IrTextbox"/> per OUTERMOST <c>w:txbxContent</c> reachable from
+    /// <paramref name="carrier"/> (a run child — a <c>w:drawing</c>, a <c>w:pict</c>, or an
+    /// <c>mc:AlternateContent</c> wrapping both), in document order. Each body's block children are
+    /// walked by the normal block walker under the current scope, so every inner <c>w:p</c>/<c>w:tbl</c>
+    /// gets its own anchor and hashes — matching the ORACLE, whose <c>Descendants(w:t)</c> /
+    /// <c>DescendantsAndSelf</c> walks see textbox text and inner-paragraph anchors regardless of the
+    /// DrawingML/VML wrapper. Word emits the same logical textbox twice (an <c>mc:Choice</c> DrawingML
+    /// copy and an <c>mc:Fallback</c> VML copy); this yields one node per copy on purpose, so flat text
+    /// and the anchor set match the oracle's both-copies traversal. Only the OUTERMOST bodies are taken
+    /// here — a nested textbox (a <c>w:txbxContent</c> inside another) is reached when the block walker
+    /// descends into the inner paragraph's runs, so it is modeled once at its true depth. Depth-capped:
+    /// at <see cref="MaxTextboxDepth"/> the body is preserved as a single opaque inline instead of
+    /// recursing further (totality against adversarial nesting).
+    /// </summary>
+    private static void AppendTextboxes(XElement carrier, ReadContext ctx, List<IrInline> sink)
+    {
+        foreach (var txbx in OutermostTextboxBodies(carrier))
+        {
+            if (ctx.TextboxDepth >= MaxTextboxDepth)
+            {
+                sink.Add(new IrOpaqueInline(txbx.Name, IrHasher.CanonicalHash(txbx)));
+                continue;
+            }
+
+            var innerCtx = ctx.IntoTextbox();
+            var blocks = new List<IrBlock>();
+            foreach (var child in txbx.Elements())
+                AppendBlocks(child, innerCtx, blocks);
+            sink.Add(new IrTextbox(IrNodeList.From(blocks)));
+        }
+    }
+
+    /// <summary>
+    /// The <c>w:txbxContent</c> elements reachable from <paramref name="root"/> that are NOT themselves
+    /// nested inside another <c>w:txbxContent</c> — i.e. the outermost bodies. Nested bodies are
+    /// deliberately excluded here because the recursive block walker re-discovers them when it descends
+    /// into an outer body's inner paragraphs (so each is modeled exactly once at its real nesting depth).
+    /// </summary>
+    private static IEnumerable<XElement> OutermostTextboxBodies(XElement root)
+    {
+        // Take a w:txbxContent only when no ANCESTOR (walking up but stopping at the carrier root) is
+        // itself a w:txbxContent — that is the outermost-within-carrier test. DescendantsAndSelf so a
+        // carrier that IS a w:txbxContent (it never is today, but stays correct) is handled too.
+        foreach (var txbx in root.DescendantsAndSelf(WTxbxContent))
+        {
+            var nestedUnderAnotherBody = false;
+            foreach (var anc in txbx.Ancestors())
+            {
+                if (ReferenceEquals(anc, root)) break;
+                if (anc.Name == WTxbxContent) { nestedUnderAnotherBody = true; break; }
+            }
+            if (!nestedUnderAnotherBody)
+                yield return txbx;
+        }
     }
 
     // --- hyperlinks (N14) -------------------------------------------------
@@ -979,8 +1067,15 @@ internal static class IrReader
     /// </summary>
     private static void AppendDrawing(XElement drawing, ReadContext ctx, List<IrInline> sink)
     {
+        // Image promotion and textbox modeling are INDEPENDENT, matching the oracle: a w:drawing can
+        // carry BOTH a resolvable a:blip image AND a wps:txbx textbox body, and the oracle's
+        // Descendants(w:t)/DescendantsAndSelf walks see the textbox text/anchors regardless of the
+        // blip. So we promote the image if one resolves, AND (always) append a textbox per
+        // w:txbxContent body. A drawing with only a textbox (no resolvable blip) yields just the
+        // textbox; a drawing with neither falls back to a single opaque inline.
         var blip = drawing.Descendants(ABlip).FirstOrDefault();
         var embedId = (string?)blip?.Attribute(REmbed);
+        var promotedImage = false;
         if (embedId is not null)
         {
             var resolved = ResolveImagePart(ctx, embedId);
@@ -1003,11 +1098,23 @@ internal static class IrReader
                 {
                     Unid = drawingUnid,
                 });
-                return;
+                promotedImage = true;
             }
         }
 
-        // No resolvable embedded image (VML w:pict, missing rel, etc.): preserve opaquely.
+        // Textbox bodies (if any) are modeled regardless of whether an image was promoted.
+        var hasTextbox = drawing.DescendantsAndSelf(WTxbxContent).Any();
+        if (hasTextbox)
+        {
+            AppendTextboxes(drawing, ctx, sink);
+            return;
+        }
+
+        if (promotedImage)
+            return;
+
+        // No resolvable embedded image and no textbox (missing rel, unmodeled shape, etc.): preserve
+        // the whole drawing opaquely so nothing is lost (totality).
         sink.Add(new IrOpaqueInline(drawing.Name, IrHasher.CanonicalHash(drawing)));
     }
 
@@ -1236,6 +1343,18 @@ internal static class IrReader
                     // format-grade change) so a resized-but-same-bytes image reads as "changed".
                     builder.AppendSentinel(IrContentHashBuilder.SentinelImage);
                     builder.AppendHash(img.ImageBytesHash);
+                    break;
+                case IrTextbox tb:
+                    // Sentinel + each inner block's ContentHash in order (spec §6.1 M1.5 addendum).
+                    // This is what makes textbox text participate in the containing paragraph's
+                    // ContentHash — a textbox text edit now flips the paragraph hash — while the
+                    // sentinel framing keeps textbox text distinct from identical inline text. Inner
+                    // blocks' formatting stays in THEIR OWN fingerprints; it does NOT enter the
+                    // containing paragraph's FormatFingerprint (the diff engine sees inner blocks as
+                    // separately indexed blocks, so folding their formats here would double-count).
+                    builder.AppendSentinel(IrContentHashBuilder.SentinelTextbox);
+                    foreach (var inner in tb.Blocks)
+                        builder.AppendHash(inner.ContentHash);
                     break;
                 case IrOpaqueInline o:
                     builder.AppendSentinel(IrContentHashBuilder.SentinelOpaque);
@@ -2214,6 +2333,15 @@ internal static class IrReader
                 foreach (var cell in row.Cells)
                     foreach (var child in cell.Blocks)
                         IndexBlock(child, index);
+        else if (block is IrParagraph para)
+            // Textbox inner blocks are addressable too (the oracle's DescendantsAndSelf index walk
+            // reaches them). Register each so the AnchorIndex carries the same anchor set the oracle
+            // produces; the recursion bottoms out naturally (inner blocks may themselves be paragraphs
+            // bearing nested textboxes).
+            foreach (var inline in para.Inlines)
+                if (inline is IrTextbox tb)
+                    foreach (var inner in tb.Blocks)
+                        IndexBlock(inner, index);
     }
 
     // --- helpers ----------------------------------------------------------

@@ -67,6 +67,37 @@ internal static class IrTestDocuments
     }
 
     /// <summary>
+    /// Like <see cref="FromBodyXml"/>, but the <c>w:document</c> root also declares the DrawingML / VML /
+    /// markup-compatibility namespaces (<c>a</c>, <c>wp</c>, <c>wps</c>, <c>v</c>, <c>mc</c>, <c>r</c>) so
+    /// a test can express a realistic <c>w:drawing</c>/<c>wps:txbx</c> or <c>w:pict</c>/<c>v:textbox</c>
+    /// textbox shape (including an <c>mc:AlternateContent</c> Choice/Fallback pair) in the body fragment.
+    /// </summary>
+    internal static WmlDocument FromBodyXmlWithDrawingNamespaces(string bodyInnerXml)
+    {
+        const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        const string A = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        const string WpNs = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+        const string Wps = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
+        const string V = "urn:schemas-microsoft-com:vml";
+        const string Mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var documentXml =
+                $"<w:document xmlns:w=\"{W}\" xmlns:r=\"{R}\" xmlns:a=\"{A}\" xmlns:wp=\"{WpNs}\" " +
+                $"xmlns:wps=\"{Wps}\" xmlns:v=\"{V}\" xmlns:mc=\"{Mc}\">" +
+                $"<w:body>{bodyInnerXml}</w:body></w:document>";
+            WritePartXml(main, documentXml);
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
+
+    /// <summary>
     /// Like <see cref="FromBodyXml"/>, but also wires up external hyperlink relationships on the
     /// main document part. Each entry in <paramref name="hyperlinkRels"/> maps a relationship id
     /// (the <c>r:id</c> a <c>w:hyperlink</c> references) to its external target URI, added as an

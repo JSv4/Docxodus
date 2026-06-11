@@ -149,6 +149,17 @@ public class IrMarkdownEquivalenceTests
         "WC020-FootNote-After-1.docx",        // footnote ref + section, revision-accepted by the harness
         // Per-rule pins for the resolved-marker display rules, fldSimple drop, inline-SDT drop,
         // block-level-SDT skip, and tab grouping live in IrMarkdownRuleTests (added this task).
+
+        // --- M1.5: textbox bodies (IrTextbox) — inner paragraphs anchored/indexed with both the
+        // DrawingML mc:Choice and the VML mc:Fallback copy, textbox w:t flowing into the containing
+        // paragraph's (and cell's) TextPreview, mirroring the oracle's Descendants(w:t)/DescendantsAndSelf.
+        "WC044-Text-Box.docx",                // textbox before/after body text; In/Out preview ordering
+        "WC047-Two-Text-Box.docx",            // two textboxes in one paragraph (4 inner-paragraph anchors)
+        "WC048-Text-Box-in-Cell.docx",        // textboxes inside table cells: tc/tr/tbl previews see textbox text
+        // header/footer content-DETECTION fixtures: textbox-only header/footer scopes are now seen by
+        // ScopeHasContent (Descendants(w:t) includes textbox text), so the scope is emitted, not suppressed.
+        "HeaderContent-built.docx",           // header scope whose content is reached via textbox text
+        "FooterContent-built.docx",           // footer scope whose content is reached via textbox text
     };
 
     // --- corpus report (informational; asserts only the must-pass list + totality) ---------------

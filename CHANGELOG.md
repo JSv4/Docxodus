@@ -8,6 +8,22 @@ All notable changes to this project will be documented in this file.
 - **Solution builds no longer race the WASM-mode assembly.** `DocxodusWasm` references `Docxodus` with `WASM_BUILD=true`, so every solution build compiled Docxodus twice into the same `bin/<Config>/net8.0/` output — whichever finished last won, and `Docxodus.Tests` intermittently linked the SkiaSharp-free WASM assembly (`error CS1061: 'ImageInfo' ... 'SaveImage'`). WASM-mode output now builds into isolated `bin/wasm/` + `obj/wasm/` paths; the `dotnet clean` workaround documented in CLAUDE.md is no longer needed.
 
 ### Added
+- **Document IR — M1.5 textbox bodies (`IrTextbox`)** — *internal/experimental.*
+  Textbox bodies (`w:txbxContent` reachable from a DrawingML `w:drawing`/`wps:txbx`
+  or a VML `w:pict`/`v:textbox`, including the `mc:AlternateContent` Choice/Fallback
+  pair Word emits) are no longer opaque: their inner blocks are fully modeled —
+  anchored, hashed (`ContentHash`/`FormatFingerprint`), and registered in the
+  document `AnchorIndex` — by the normal block walker (depth-capped). A new
+  `IrContentHashBuilder.SentinelTextbox` (`0x0B`) folds each inner block's
+  `ContentHash` into the *containing* paragraph's hash, closing the diff-engine
+  blind spot where textbox text was invisible to `ContentHash`. The IR markdown
+  emitter mirrors the oracle exactly (textbox content stays out of the rendered
+  markdown but its `w:t` text flows into `TextPreview`/`ScopeHasContent`/cell text,
+  and its inner paragraphs are indexed), lifting corpus byte-equivalence from
+  **608/668 to 642/668** — every textbox fixture and all five header/footer
+  content-detection fixtures now pass. Image promotion and textbox modeling are
+  independent (a drawing with both a blip and a textbox yields both). No public
+  API / WASM / npm / python surface (still `internal`).
 - **Document IR — Phase 1 (M1.1–M1.4) complete** — *internal/experimental.* The
   read-only, immutable, typed, anchor-identified, normalized in-memory DOCX model
   (`Docxodus/Ir/`, all `internal`) is feature-complete through its Phase-1 gate:

@@ -238,6 +238,21 @@ Computed over a canonical UTF-8 byte stream per block:
 - `IrNoteRef` → its kind sentinel only (`0x05`/`0x06`), **without** the note
   id — ids are positional bookkeeping; note *content* equality is judged in
   the notes scope, and renumbering alone must not flip body hashes.
+- `IrTextbox` (M1.5 addendum) → sentinel `0x0B`, then each inner block's
+  `ContentHash` in order. This makes textbox text participate in the
+  *containing* paragraph's `ContentHash` — a textbox text edit now flips the
+  paragraph hash (the diff-engine blind spot this node closes) — while the
+  sentinel + per-block-hash framing keeps textbox text distinct from identical
+  inline (non-textbox) text. The same logical textbox appears twice in Word's
+  output (a DrawingML `mc:Choice`/`wps:txbx` copy and a VML `mc:Fallback`/
+  `v:textbox` copy); the reader models BOTH (one node each), mirroring the
+  oracle's `Descendants(w:t)` walk, so both copies contribute. **Format note:**
+  the textbox's inner blocks own their own `FormatFingerprint`s and are
+  separately indexed blocks; their formatting does NOT fold into the containing
+  paragraph's `FormatFingerprint` (folding it would double-count what the diff
+  engine already sees as indexed blocks). Image promotion and textbox modeling
+  are independent: a `w:drawing` with both a resolvable `a:blip` and a
+  `wps:txbx` yields an `IrInlineImage` AND an `IrTextbox`.
 - Table: row sentinel `0x02 0x10`, cell sentinel `0x02 0x11`, then each
   cell's child-block content hashes in order; the table's `ContentHash` is
   the hash of that rollup. Paragraph hashes never leak across block

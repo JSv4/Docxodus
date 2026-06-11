@@ -272,18 +272,29 @@ internal static class IrMarkdownEmitter
             switch (b)
             {
                 case IrParagraph p:
-                    // Suppress-mode: drop empty paragraphs from the index (oracle parity).
+                    // Suppress-mode: drop empty paragraphs from the index (oracle parity). Note a
+                    // paragraph whose only "text" lives in a textbox is NOT empty under the oracle's
+                    // index walk: KindFor checks Descendants(w:t), which sees textbox text — so a
+                    // textbox-bearing paragraph keeps its own index entry even in Suppress mode (and
+                    // ParagraphHasVisibleTextOrTextbox reflects that). Its textbox inner blocks are
+                    // still indexed regardless (the oracle reaches them via DescendantsAndSelf).
                     if (settings.EmptyParagraphs == EmptyParagraphMode.Suppress
-                        && !ParagraphHasVisibleText(p))
+                        && !ParagraphHasVisibleTextOrTextbox(p))
                     {
                         // The in-pPr sectPr is metadata, not content — it still appears in the index.
                         if (p.InlineSectionBreakAnchor is { } supSec)
                             yield return (supSec, string.Empty);
+                        foreach (var inner in WalkTextboxAnchors(p, settings))
+                            yield return inner;
                         break;
                     }
                     yield return (p.Anchor, ComputeTextPreview(p));
                     if (p.InlineSectionBreakAnchor is { } sec)
                         yield return (sec, string.Empty);
+                    // Textbox inner blocks are addressable (the oracle's DescendantsAndSelf walk reaches
+                    // them); index them right after the containing paragraph, in inline document order.
+                    foreach (var inner in WalkTextboxAnchors(p, settings))
+                        yield return inner;
                     break;
                 case IrTable t:
                     yield return (t.Anchor, ComputeTextPreview(t));
@@ -308,6 +319,19 @@ internal static class IrMarkdownEmitter
                     break;
             }
         }
+    }
+
+    /// <summary>Yield the index anchors for every textbox inner block of <paramref name="p"/>, in
+    /// inline document order, recursing through the normal block walk (so nested textboxes, tables, and
+    /// their inner paragraphs are all reached) — mirroring the oracle's <c>DescendantsAndSelf</c> index
+    /// walk, which descends into <c>w:txbxContent</c> inner paragraphs.</summary>
+    private static IEnumerable<(IrAnchor Anchor, string Preview)> WalkTextboxAnchors(
+        IrParagraph p, WmlToMarkdownConverterSettings settings)
+    {
+        foreach (var inline in p.Inlines)
+            if (inline is IrTextbox tb)
+                foreach (var inner in WalkAnchorsForIndex(tb.Blocks, settings))
+                    yield return inner;
     }
 
     private static Anchor ToPublicAnchor(IrAnchor a) =>
@@ -350,6 +374,11 @@ internal static class IrMarkdownEmitter
                 {
                     var prefix = HeadingNumberPrefix(p);
                     if (prefix != null) map[p.Anchor.ToString()] = prefix;
+                    // Textbox inner paragraphs are body-scope p/h/li too, so the oracle resolves their
+                    // AutoNumberPrefix as well; descend so the index field matches.
+                    foreach (var inline in p.Inlines)
+                        if (inline is IrTextbox tb)
+                            Visit(tb.Blocks);
                 }
                 else if (b is IrTable t)
                 {
@@ -452,6 +481,15 @@ internal static class IrMarkdownEmitter
                 case IrFieldRun f:
                     AppendInlineText(f.CachedResult, sb);
                     break;
+                case IrTextbox tb:
+                    // Textbox w:t text IS visible to the oracle's Descendants(w:t) — it flows into the
+                    // containing paragraph's TextPreview, into ScopeHasContent (so header/footer
+                    // detection sees textbox-only content), and into table cell text. Append the inner
+                    // blocks' flat text at the textbox's document position. Nested textboxes recurse
+                    // through this same path (an inner paragraph's IrTextbox hits this case again).
+                    foreach (var b in tb.Blocks)
+                        AppendFlatText(b, sb);
+                    break;
                 // tab/break/note-ref/image/opaque: no w:t text.
             }
         }
@@ -479,6 +517,21 @@ internal static class IrMarkdownEmitter
         IrFieldRun f => !f.IsSimpleField && f.CachedResult.Any(RunHasText),
         _ => false,
     };
+
+    /// <summary>
+    /// Whether the paragraph keeps its own AnchorIndex entry under Suppress mode. The oracle's index
+    /// walk drops a paragraph only when <c>Descendants(w:t)</c> is empty — and that walk SEES textbox
+    /// w:t text (and inline-SDT/fldSimple text, which the rendered-text predicate drops). So a
+    /// paragraph whose only text lives in a textbox is NOT dropped from the index, even though its
+    /// rendered markdown line is empty. This is the index-walk parity predicate, distinct from
+    /// <see cref="ParagraphHasVisibleText"/> (the rendered-text predicate used for the markdown spacer).
+    /// </summary>
+    private static bool ParagraphHasVisibleTextOrTextbox(IrParagraph p)
+    {
+        var sb = new StringBuilder();
+        AppendInlineText(p.Inlines, sb); // mirrors Descendants(w:t): includes textbox + SDT + field text
+        return sb.Length > 0;
+    }
 
     // ------------------------------------------------------------------
     // Markdown emission (body scope; multipart scopes land in T3)
@@ -918,6 +971,12 @@ internal static class IrMarkdownEmitter
                     // key. (A w:br inside a formatted run is a rare delimiter-placement edge case left
                     // to triage; note refs carry no formatting toggle.)
                     Add(inline, default);
+                    break;
+                case IrTextbox:
+                    // DROPPED from the rendered markdown: the oracle's GroupInlineRuns walks only
+                    // w:r/w:hyperlink/w:ins/w:del and never descends into a w:drawing/w:pict, so textbox
+                    // content produces no markdown. Its text still counts toward TextPreview/cell text
+                    // (AppendInlineText) and its inner blocks are still indexed (WalkTextboxAnchors).
                     break;
                 // IrInlineImage / IrOpaqueInline: TODO(M1.4-T2). Skipped here.
             }

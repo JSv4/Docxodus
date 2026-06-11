@@ -100,6 +100,32 @@ internal sealed record IrInlineImage(Uri PartUri, IrHash ImageBytesHash, long Wi
 }
 
 /// <summary>
+/// A textbox body: the inner blocks of a <c>w:txbxContent</c> reachable from a <c>w:drawing</c>
+/// (DrawingML <c>wps:txbx</c>) or a <c>w:pict</c> (VML <c>v:textbox</c>). The inner blocks are
+/// FULLY modeled — each is anchored, hashed, fingerprinted, and registered in the document's
+/// <c>AnchorIndex</c> in the containing scope, exactly as a body/cell block would be — so textbox
+/// text is no longer opaque to <see cref="IrBlock.ContentHash"/> (the Phase-2 diff blind spot this
+/// node closes).
+/// </summary>
+/// <remarks>
+/// <para><b>One node per source <c>w:txbxContent</c>.</b> Word emits the same logical textbox twice
+/// inside an <c>mc:AlternateContent</c> — a DrawingML <c>mc:Choice</c> (<c>wps:txbx</c>) and a VML
+/// <c>mc:Fallback</c> (<c>v:textbox</c>). The reader does NOT pick one: it walks every descendant
+/// <c>w:txbxContent</c> in document order and emits one <see cref="IrTextbox"/> per occurrence, so
+/// the IR's flat text and anchor set mirror the ORACLE's <c>Descendants(w:t)</c>/
+/// <c>DescendantsAndSelf</c> walks, which likewise traverse both the Choice and the Fallback.</para>
+/// <para><b>Markdown-invisible, index/preview-visible.</b> The oracle's <c>GroupInlineRuns</c> walks
+/// only <c>w:r</c>/<c>w:hyperlink</c>/<c>w:ins</c>/<c>w:del</c>, so textbox content is DROPPED from the
+/// rendered markdown — but its <c>w:t</c> text still flows into <c>ComputeTextPreview</c>/
+/// <c>ScopeHasContent</c> (both <c>Descendants(w:t)</c>) and its inner paragraphs are indexed via
+/// <c>DescendantsAndSelf</c>. The emitter mirrors all three: it skips this node in run grouping,
+/// includes its inner text in flat-text/preview, and descends into <see cref="Blocks"/> for the index.</para>
+/// <para><b>Equality.</b> Inner blocks compose by value (<see cref="IrNodeList{T}"/>), so two textboxes
+/// with the same modeled inner blocks are equal regardless of source representation (Choice vs Fallback).</para>
+/// </remarks>
+internal sealed record IrTextbox(IrNodeList<IrBlock> Blocks) : IrInline;
+
+/// <summary>
 /// An unmodeled inline element preserved opaquely: its element name plus the canonical hash of
 /// its source XML, so it is still diffable (same/different bytes) without being understood.
 /// </summary>
