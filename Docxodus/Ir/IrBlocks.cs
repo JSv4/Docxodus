@@ -80,6 +80,22 @@ internal sealed record IrParagraph : IrBlock
     /// the same document yield the same deterministic sectPr Unid here, so determinism is preserved.
     /// </summary>
     public IrAnchor? InlineSectionBreakAnchor { get; init; }
+
+    /// <summary>
+    /// The oracle's <c>WmlToMarkdownConverter.IsListItem</c> verdict for this paragraph: a purely
+    /// <em>structural</em> predicate — true iff a <c>w:numPr</c> is present inline (<c>w:pPr/w:numPr</c>)
+    /// OR anywhere up the <c>pStyle → basedOn</c> chain, <b>regardless of whether that numPr carries a
+    /// resolvable <c>numId</c></b>. This is deliberately distinct from <see cref="List"/>
+    /// (<see cref="IrListInfo"/>), which is null when the numPr has no numId / unresolvable numId
+    /// (genuine "no list membership" semantics). The markdown emitter's trailing-blank-line rule keys
+    /// on this structural verdict to reproduce the oracle byte-for-byte for the legal/heading edge
+    /// case where a <c>Heading{N}</c>/<c>Subtitle</c> style chain contributes a bare
+    /// <c>w:numPr</c>/<c>w:ilvl</c> (no numId): the oracle treats it as a list item for spacing while
+    /// the anchor kind is still <c>h</c> and <see cref="List"/> is null. Captured by the reader (which
+    /// has the live package) so the emitter never re-walks the style chain. Equality-participating but
+    /// fully determined by the paragraph's pPr + the document's styles, so deterministic.
+    /// </summary>
+    public bool IsListItemForLayout { get; init; }
 }
 
 /// <summary>A table: its rows plus a digest of the unmodeled `w:tblPr`/`w:tblGrid` properties.</summary>

@@ -747,10 +747,13 @@ internal static class IrMarkdownEmitter
     }
 
     /// <summary>The IR proxy for the oracle's <c>IsListItem</c>, used by the EmitBlocks trailing-blank
-    /// rule: a paragraph is a list item iff its anchor kind is <c>li</c> OR it carries resolved
-    /// numbering facts (<see cref="IrParagraph.List"/> — true for a Heading-with-numPr).</summary>
-    private static bool IsListItemForBlankRule(IrParagraph p) =>
-        p.Anchor.Kind == IrAnchorKind.Li || p.List is not null;
+    /// rule. The reader captures the oracle's exact structural verdict in
+    /// <see cref="IrParagraph.IsListItemForLayout"/> (numPr present inline or via the pStyle chain,
+    /// numId-agnostic), so this is a direct passthrough — it covers both the plain list item
+    /// (anchor kind <c>li</c>) and the heading/Subtitle whose style chain carries a bare numPr with no
+    /// numId (anchor kind <c>h</c>, <see cref="IrParagraph.List"/> null) that the resolved-numbering
+    /// check alone would miss.</summary>
+    private static bool IsListItemForBlankRule(IrParagraph p) => p.IsListItemForLayout;
 
     private static void EmitParagraph(IrParagraph p, StringBuilder sb, EmitCtx ctx)
     {

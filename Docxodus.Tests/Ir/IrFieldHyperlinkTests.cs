@@ -122,10 +122,12 @@ public class IrFieldHyperlinkTests
     }
 
     [Fact]
-    public void Read_UnterminatedField_FallsBackToOpaque()
+    public void Read_UnterminatedField_NoSeparate_FallsBackToOpaque()
     {
-        // begin without a matching end by paragraph close → no IrFieldRun; the captured elements
-        // are preserved as opaque inlines so nothing is lost, and it does not throw.
+        // begin without a matching end AND without a separate by paragraph close → no IrFieldRun;
+        // the instruction-phase captured elements are preserved as opaque inlines so nothing is lost,
+        // and it does not throw. (The text "partial" is instruction-phase plumbing here — no separate
+        // was seen — so it rides in the opaque capture, not a rendered run.)
         var p = Para(
             "<w:p>" +
             "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
@@ -135,6 +137,33 @@ public class IrFieldHyperlinkTests
 
         Assert.Empty(p.Inlines.OfType<IrFieldRun>());
         Assert.NotEmpty(p.Inlines.OfType<IrOpaqueInline>());
+    }
+
+    [Fact]
+    public void Read_UnterminatedField_AfterSeparate_EmitsFieldRunWithResult()
+    {
+        // Regression for HC031/HC022: a complex field that reached its separate but whose closing
+        // end is implied at paragraph close (e.g. a TOC field) must still emit a run-based
+        // IrFieldRun carrying the result — Word displays the last-computed result, and the oracle's
+        // field-unaware Descendants(w:t)/GroupInlineRuns both see it. Dropping it (the old opaque
+        // fallback) silently lost the result text from the TextPreview AND the rendered markdown.
+        var p = Para(
+            "<w:p>" +
+            "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
+            "<w:r><w:instrText> TOC \\o </w:instrText></w:r>" +
+            "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" +
+            "<w:r><w:t>Entry</w:t></w:r>" +
+            "<w:r><w:t> 3</w:t></w:r>" +
+            "</w:p>");
+
+        var field = Assert.Single(p.Inlines.OfType<IrFieldRun>());
+        Assert.Equal(" TOC \\o ", field.Instruction);
+        Assert.False(field.IsSimpleField); // run-based field → result participates in rendering
+        Assert.Equal("Entry 3", TextOf(field.CachedResult));
+        // The paragraph is content-equal to a literal "Entry 3" paragraph (the instruction is
+        // unhashed) — the same invariant a properly-terminated field upholds.
+        var literal = Para("<w:p><w:r><w:t>Entry 3</w:t></w:r></w:p>");
+        Assert.Equal(literal.ContentHash.ToHex(), p.ContentHash.ToHex());
     }
 
     // --- N14: hyperlinks --------------------------------------------------

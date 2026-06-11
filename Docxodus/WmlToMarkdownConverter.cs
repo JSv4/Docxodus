@@ -557,7 +557,7 @@ public static class WmlToMarkdownConverter
             || styleId.Equals("Subtitle", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsListItem(XElement p)
+    internal static bool IsListItem(XElement p)
     {
         // Inline w:numPr wins.
         if (p.Element(W.pPr)?.Element(W.numPr) != null) return true;

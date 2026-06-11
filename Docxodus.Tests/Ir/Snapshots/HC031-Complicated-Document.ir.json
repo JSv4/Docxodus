@@ -1632,16 +1632,44 @@
         {
           "anchor": "p:body:8cb0f1284fcc46c84bccc3785fa9242e",
           "type": "paragraph",
-          "contentHash": "d2e3cf93465156b7ffd257539bc813985102b24bb47121c08f92b61ab34040cd",
-          "formatFingerprint": "73d542b2ffd5fe80b80acab4c8a7a5bd87cf690dcc66b1168d085a410c6bde48",
+          "contentHash": "e281f2a9a8934b5ef7721e501f9effdae1e36702de79bd1df57f65b06d3e39b3",
+          "formatFingerprint": "1563398d69ab3eb5d82031af9dea5daa54455ba70587437ae3308575d016be80",
           "format": {
             "styleId": "TOC1"
           },
           "inlines": [
             {
-              "kind": "opaque",
-              "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}instrText",
-              "hash": "4f9e829352446eb0b7ffdd887d7b469277bbc90a9419414b0ba4572389268d57"
+              "kind": "field",
+              "instruction": " TOC \\o \u00221-3\u0022 \\h \\z \\u ",
+              "cachedResult": [
+                {
+                  "kind": "hyperlink",
+                  "target": "#_Toc402299822",
+                  "inlines": [
+                    {
+                      "kind": "text",
+                      "text": "Heading 1",
+                      "format": {
+                        "styleId": "Hyperlink"
+                      }
+                    },
+                    {
+                      "kind": "tab"
+                    },
+                    {
+                      "kind": "field",
+                      "instruction": " PAGEREF _Toc402299822 \\h ",
+                      "cachedResult": [
+                        {
+                          "kind": "text",
+                          "text": "1",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
             }
           ]
         },

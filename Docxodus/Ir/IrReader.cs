@@ -654,6 +654,11 @@ internal static class IrReader
             Inlines = IrNodeList.From(processed),
             InlineSectionBreakAnchor = inlineSectAnchor,
             ResolvedListMarker = resolvedMarker,
+            // The oracle's structural IsListItem verdict (numPr present inline or via the style chain,
+            // numId-agnostic) — drives the emitter's trailing-blank rule for heading/Subtitle styles
+            // whose chain carries a bare numPr (no numId), where List stays null. See
+            // IrParagraph.IsListItemForLayout.
+            IsListItemForLayout = WmlToMarkdownConverter.IsListItem(p),
             ContentHash = contentHash,
             FormatFingerprint = formatFingerprint,
             Source = ctx.Provenance(p),
@@ -937,24 +942,48 @@ internal static class IrReader
 
         /// <summary>
         /// Flush the walker's accumulated inlines. When the sequence ended mid-field (a
-        /// <c>begin</c> with no matching <c>end</c>), nothing built during that field was committed
-        /// to <c>_output</c> — the instruction-phase run text, hyperlinks, fldSimples, and opaque
-        /// elements were all diverted into <c>_captured</c>. To lose no content we emit every
-        /// captured element as an <see cref="IrOpaqueInline"/> here. (When a field instead
-        /// terminates normally, its instruction-phase plumbing — including any nested
-        /// hyperlink/fldSimple/opaque — is deliberately flattened away and never reaches
-        /// <c>_output</c>; this fallback only fires for the unterminated case, where dropping it
-        /// would be data loss.)
+        /// <c>begin</c> with no matching <c>end</c>) there are two cases:
+        /// <list type="bullet">
+        /// <item><b>The field reached its <c>separate</c></b> (instruction + result, just no closing
+        /// <c>end</c> before the paragraph ends — e.g. a TOC field whose <c>end</c> is implied at
+        /// paragraph close). Word still displays the last-computed result, and the oracle's
+        /// field-unaware <c>GroupInlineRuns</c>/<c>Descendants(w:t)</c> both see that result text. We
+        /// therefore emit a normal run-based <see cref="IrFieldRun"/> (instruction + result), exactly
+        /// as the <c>end</c> handler would — so the result flows into the rendered markdown AND the
+        /// TextPreview, never dropped. The instruction-phase plumbing is flattened away just like a
+        /// terminated field.</item>
+        /// <item><b>The field never reached <c>separate</c></b> (instruction-only, unterminated):
+        /// nothing committed to <c>_output</c> — the instruction-phase run text, hyperlinks,
+        /// fldSimples, and opaque elements were all diverted into <c>_captured</c>. To lose no content
+        /// we re-emit every captured element as an <see cref="IrOpaqueInline"/>.</item>
+        /// </list>
         /// </summary>
         public List<IrInline> Finish()
         {
-            // Unterminated field (begin without matching end): fall back to opaque so no content
-            // is lost. Each captured element is canonical-hashed into an opaque inline.
             if (_fieldDepth > 0)
             {
-                foreach (var el in _captured)
-                    _output.Add(new IrOpaqueInline(el.Name, IrHasher.CanonicalHash(el)));
-                _fieldDepth = 0;
+                if (_inResult)
+                {
+                    // Implied end-at-paragraph-close: commit the field with its result, mirroring the
+                    // "end" handler. EmitInline at depth 0 (we force the depth to 0 first) appends it
+                    // to _output. The result text now reaches both the rendered markdown and the
+                    // TextPreview, matching the oracle's raw Descendants(w:t) view.
+                    _fieldDepth = 0;
+                    EmitInline(new IrFieldRun(
+                        _instruction.ToString(),
+                        IrNodeList.From(new List<IrInline>(_result))));
+                }
+                else
+                {
+                    // Instruction-only unterminated field: re-emit captured plumbing opaquely so no
+                    // content is lost (each captured element is canonical-hashed into an opaque inline).
+                    foreach (var el in _captured)
+                        _output.Add(new IrOpaqueInline(el.Name, IrHasher.CanonicalHash(el)));
+                    _fieldDepth = 0;
+                }
+                _inResult = false;
+                _result.Clear();
+                _captured.Clear();
             }
             return _output;
         }
