@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Document IR — Phase 1 (M1.1–M1.4) complete** — *internal/experimental.* The
+  read-only, immutable, typed, anchor-identified, normalized in-memory DOCX model
+  (`Docxodus/Ir/`, all `internal`) is feature-complete through its Phase-1 gate:
+  core types + reader (M1.1), normalization rules N1–N15 + `ContentHash`/
+  `FormatFingerprint`/`UnmodeledDigest` hashing (M1.2), style/numbering/theme
+  registries + lazy effective formats + all scopes (M1.3), and the markdown
+  projection ported onto the IR as its validating consumer (M1.4). The IR-path
+  markdown emitter reaches **608/668 corpus fixtures byte-equal** with the shipped
+  `WmlToMarkdownConverter` (which stays the untouched production oracle); the 60
+  remaining divergences are fully triaged — accepted oracle bugs (special-char
+  drops, multi-run hyperlink splits, where the IR is *more* correct) plus deferred
+  IR work (textbox/shape body content modeled as opaque, and its downstream
+  header/footer `ScopeHasContent` detection difference). Phase-1 gate met: perf
+  IR-path `Read`+`Emit` 1.90× the oracle's corpus wall time (≤ 2.0× budget,
+  `IrMarkdownPerfBudgetTests`, Trait `Perf`); memory ≈11× the largest-body
+  fixture's main-part XML retained (measured + reported, not gated); architecture
+  doc `docs/architecture/document_ir.md` written. Cutover of the shipped converter
+  to the IR path (decision D3) is **deferred to Phase 2** — the IR path ships as a
+  CI-validated alternative, not the default. No public API / WASM / npm / python
+  surface (Phase 1 is `internal` by design).
 - **Document IR markdown emitter — tables, images, section breaks, settings modes (M1.4 Task 2)** —
   *internal/experimental.* `IrMarkdownEmitter` now ports the projection's table
   rendering (simple tables → GFM pipe tables; merges / nesting / over-long cells →

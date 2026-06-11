@@ -58,6 +58,13 @@ internal sealed record IrParagraph : IrBlock
     /// heading prefixes) to this raw marker, guaranteeing byte-parity with the oracle without
     /// re-implementing the counter walk or peeking at <see cref="IrBlock.Source"/>.
     /// </para>
+    /// <para>
+    /// <b>Equality note.</b> Because this is an init-only record member it participates in
+    /// <see cref="IrParagraph"/>'s record value-equality, which makes that equality <em>stricter</em>
+    /// than <see cref="IrBlock.ContentHash"/> equality (the resolved marker is rendering-derived state,
+    /// not content). Phase-2 diff code must key alignment/equality on the hashes
+    /// (<c>ContentHash</c>/<c>FormatFingerprint</c>), never on record <c>==</c>.
+    /// </para>
     /// </summary>
     public string? ResolvedListMarker { get; init; }
 

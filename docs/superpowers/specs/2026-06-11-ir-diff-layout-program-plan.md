@@ -278,7 +278,7 @@ Direction of record when revisited:
 |---|---|---|---|
 | D1 | IR first, diff second, layout deferred | 2026-06-10 | **Decided** |
 | D2 | IR is `internal`, read-only, lossy-tolerant | 2026-06-11 (spec) | **Decided** |
-| G1 | Phase 1 gate: projection equivalence + perf budget | end M1.4 | Open |
-| D3 | Cut shipped markdown converter over to IR path | at G1 | Open |
+| G1 | Phase 1 gate: projection equivalence + perf budget | end M1.4 | **PASSED** (2026-06-11) — 608/668 byte-equal corpus + fully-triaged remainder (accepted oracle-bug diffs / deferred textbox work); perf 1.90× ≤ 2.0× budget; memory ≈11× XML retained on the largest-body fixture (reported, not gated); arch doc `docs/architecture/document_ir.md` written. Full report in the [M1.4 plan Outcome section](../plans/2026-06-11-ir-m14-markdown-projection-port.md#outcome-phase-1-gate-report). |
+| D3 | Cut shipped markdown converter over to IR path | at G1 | **DEFERRED to Phase 2 / M2.5** (2026-06-11) — emitter parity gaps are exactly the accepted-divergence + deferred-textbox set, and cutover buys nothing until the diff engine exists; keep oracle as the shipped path and the IR path as a CI-validated alternative. Revisit at M2.5. |
 | G2 | Phase 2 go/no-go: native markup renderer viability | ~6 wks into M2.4 | Open |
 | D4 | New diff engine becomes default | post-M2.5 burn-in | Open |
