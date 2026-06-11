@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Internal Document IR groundwork (M1.1)** — *internal/experimental, no public
+  surface.* A typed, normalized, anchor-identified, immutable in-memory model of a
+  Word document under `Docxodus/Ir/`: the IR type model (blocks, inlines, formats,
+  document/scopes), content-derived SHA-256 hashing (`IrHasher` — `ContentHash` +
+  `FormatFingerprint`), and a total body-scope reader (`IrReader.Read`) that
+  preserves anything unmodeled as `Opaque` nodes so it never throws on
+  weird-but-valid OOXML. Adds a stable, hand-written diagnostic JSON projection
+  (`IrDiagnosticJson.Write`, spec §9 — a debugging/test format, **not** a versioned
+  contract) plus conformance tests: reader totality over the entire `TestFiles/`
+  corpus and golden snapshots over curated fixtures. Groundwork for the planned
+  IR/diff-engine program; not referenced by any shipped converter or wrapper yet.
+
 ## [6.4.0] - 2026-05-30
 
 ### Added
