@@ -72,7 +72,7 @@ internal sealed record IrSectionBreak : IrBlock
 /// <summary>
 /// An unmodeled block-level element preserved opaquely. Its <see cref="IrBlock.ContentHash"/> is
 /// the canonical hash of the source XML and its <see cref="IrBlock.FormatFingerprint"/> is the
-/// hash of empty bytes (it has no modeled formatting).
+/// cached empty-unmodeled-container digest (it has no modeled formatting).
 /// </summary>
 internal sealed record IrOpaqueBlock : IrBlock
 {
