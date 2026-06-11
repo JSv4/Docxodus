@@ -112,8 +112,9 @@ internal static class IrEditScriptBuilder
                 {
                     // Emit the DESTINATION op in place; the SOURCE op was interleaved separately.
                     var move = moves[leftIndex[entry.Left!]];
-                    // UNTESTED-UNTIL-T3: MovedModified is never produced before Task 3. Its destination
-                    // op carries the in-move token diff; a plain Moved destination carries none.
+                    // MoveModifyBlock (from a MovedModified alignment, M2.2 Task 3) carries the in-move
+                    // token diff on its destination — tokenize source (left) vs destination (right) so the
+                    // op describes "relocated AND edited"; a plain Moved destination carries none.
                     var tokenDiff = move.OpKind == IrEditOpKind.MoveModifyBlock
                         ? TokenDiffFor(entry.Left!, entry.Right!, settings)
                         : null;

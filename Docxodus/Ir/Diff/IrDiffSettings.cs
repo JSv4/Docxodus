@@ -54,6 +54,50 @@ internal sealed record IrDiffSettings
     public CultureInfo? Culture { get; init; }
 
     /// <summary>
+    /// DIFF-TIME setting. Minimum block similarity (Jaccard over token <c>MatchKey</c> multisets,
+    /// 0.0–1.0) for two blocks left UNPAIRED after a gap's exact refinement to be paired as
+    /// <c>Modified</c> (a "same block, edited" pairing) rather than falling out as separate
+    /// <c>Deleted</c>+<c>Inserted</c>. Default 0.5.
+    /// </summary>
+    /// <remarks>
+    /// <b>Why 0.5.</b> Below half token-overlap, treating two blocks as "the same block edited" produces
+    /// a WORSE edit script than a clean Insert+Delete: a Modified pairing forces a token diff whose
+    /// shared run is a minority of the content, so the diff is mostly Delete-then-Insert anyway but now
+    /// carries the false claim that the destination paragraph is a revision of that particular source
+    /// paragraph (misleading review UIs, bad blame). At ≥0.5 the majority of tokens are shared, so the
+    /// "edited in place" framing is the faithful one. 0.5 is the in-gap floor; cross-gap MOVES demand the
+    /// stricter <see cref="MoveSimilarityThreshold"/> because relocating-and-editing is a stronger claim
+    /// than editing in place.
+    /// </remarks>
+    public double BlockSimilarityThreshold { get; init; } = 0.5;
+
+    /// <summary>
+    /// DIFF-TIME setting. Minimum block similarity (Jaccard over token <c>MatchKey</c> multisets,
+    /// 0.0–1.0) for two GLOBALLY-leftover blocks (one deleted, one inserted, in different gaps) to be
+    /// re-paired as a cross-gap fuzzy move (<c>MovedModified</c>). Default 0.8.
+    /// </summary>
+    /// <remarks>
+    /// Default 0.8 mirrors <c>WmlComparerSettings.MoveSimilarityThreshold</c> (Docxodus/WmlComparer.cs
+    /// ~line 85, "80% word overlap required") so the IR diff's fuzzy-move bar matches the shipped
+    /// comparer's. Strictly higher than <see cref="BlockSimilarityThreshold"/>: a move asserts the block
+    /// relocated AND was edited, a stronger claim than an in-place edit, so it needs stronger evidence.
+    /// </remarks>
+    public double MoveSimilarityThreshold { get; init; } = 0.8;
+
+    /// <summary>
+    /// DIFF-TIME setting. Minimum number of <see cref="IrDiffTokenKind.Word"/> tokens that BOTH sides of
+    /// a candidate cross-gap fuzzy move must carry for it to be considered a <c>MovedModified</c> pair.
+    /// Counts Word-kind tokens only (separators, tabs, breaks, refs, images do not count). Default 3.
+    /// </summary>
+    /// <remarks>
+    /// Default 3 mirrors <c>WmlComparerSettings.MoveMinimumWordCount</c> (Docxodus/WmlComparer.cs
+    /// ~line 92, "very short text is excluded to avoid false positives"). Short fragments (a heading word,
+    /// a list bullet) are similar to too many candidates by coincidence, so excluding them is the
+    /// dominant false-positive guard for move detection.
+    /// </remarks>
+    public int MoveMinimumTokenCount { get; init; } = 3;
+
+    /// <summary>
     /// The default separator set, copied verbatim from <c>WmlComparerSettings.WordSeparators</c>
     /// (Docxodus/WmlComparer.cs ~line 123). The comparer's literal includes duplicate CJK entries;
     /// the set folds them.

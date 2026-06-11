@@ -23,7 +23,8 @@ internal static class IrAlignmentAsserts
     /// <item>FormatOnly ⇒ both present, ContentHash equal, FormatFingerprint differs.</item>
     /// <item>Moved ⇒ both present, ContentHash equal (format may differ).</item>
     /// <item>Modified ⇒ both present (no hash constraint).</item>
-    /// <item>MovedModified ⇒ never produced in M2.1.</item>
+    /// <item>MovedModified ⇒ both present (no hash constraint — M2.2 fuzzy moved+edited;
+    /// ContentHash equality is NOT required and would mean it should have been plain Moved).</item>
     /// <item>Every left/right body block appears in exactly one entry (totality + no duplication),
     /// by reference identity to the input lists.</item>
     /// </list>
@@ -67,7 +68,10 @@ internal static class IrAlignmentAsserts
                     Assert.NotNull(e.Right);
                     break;
                 case IrAlignmentKind.MovedModified:
-                    Assert.Fail("MovedModified must never be produced in M2.1.");
+                    // M2.2 Task 3: fuzzy moved+edited. Both present; ContentHash NOT required equal
+                    // (equal ContentHash would mean it should have classified as plain Moved instead).
+                    Assert.NotNull(e.Left);
+                    Assert.NotNull(e.Right);
                     break;
             }
 

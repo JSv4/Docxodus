@@ -218,6 +218,57 @@ public class IrEditScriptTests
         Assert.Equal(1, moves.Single(o => o.IsMoveSource == true).MoveGroupId);
     }
 
+    // ------------------------------------------------------------------ M2.2 Task 3: MoveModifyBlock (headline)
+
+    [Fact]
+    public void Moved_and_edited_paragraph_is_move_modify_block_with_nested_token_ops()
+    {
+        // THE headline M2.2 capability: a multi-word paragraph relocates from the tail to the front AND is
+        // edited in the same revision. The aligner classifies it MovedModified; the edit script emits a
+        // MoveModifyBlock source + destination, the DESTINATION carrying the in-move token diff (source
+        // tokens vs destination tokens). Apply-verified (the destination reconstructs from the SOURCE
+        // block's tokens via the token diff) and JSON-round-tripped.
+        var l = Doc(
+            "alpha", "beta", "gamma", "delta",
+            "the quick brown fox jumps over hounds");
+        var r = Doc(
+            "the quick brown fox jumps over dogs",
+            "alpha", "beta", "gamma", "delta");
+        var s = BuildVerified(l, r); // apply-verifier + JSON round-trip baked in
+
+        var moves = s.Operations.Where(o => o.Kind == IrEditOpKind.MoveModifyBlock).ToList();
+        Assert.Equal(2, moves.Count); // source + destination
+
+        var source = moves.Single(o => o.IsMoveSource == true);
+        var dest = moves.Single(o => o.IsMoveSource == false);
+        Assert.Equal(source.MoveGroupId, dest.MoveGroupId);
+
+        // Source carries the left anchor and no diff; destination carries the right anchor and the diff.
+        Assert.NotNull(source.LeftAnchor);
+        Assert.Null(source.RightAnchor);
+        Assert.Null(source.TokenDiff);
+        Assert.Null(dest.LeftAnchor);
+        Assert.NotNull(dest.RightAnchor);
+        Assert.NotNull(dest.TokenDiff);
+
+        // The nested token diff is a real edit: an Equal prefix (the shared words) plus a Delete and an
+        // Insert (hounds → dogs).
+        var ops = dest.TokenDiff!.Ops;
+        Assert.Contains(ops, o => o.Kind == IrTokenOpKind.Equal);
+        Assert.Contains(ops, o => o.Kind == IrTokenOpKind.Delete);
+        Assert.Contains(ops, o => o.Kind == IrTokenOpKind.Insert);
+
+        // The destination op is at the front (the moved block's new right position).
+        Assert.Equal(IrEditOpKind.MoveModifyBlock, s.Operations[0].Kind);
+        Assert.False(s.Operations[0].IsMoveSource);
+
+        // Explicit JSON round-trip of the nested token diff (covers the compact-array encoding under a move).
+        var back = IrEditScriptJson.Read(IrEditScriptJson.Write(s));
+        Assert.Equal(s, back);
+        var destBack = back.Operations.Single(o => o.Kind == IrEditOpKind.MoveModifyBlock && o.IsMoveSource == false);
+        Assert.Equal(dest.TokenDiff, destBack.TokenDiff);
+    }
+
     // ------------------------------------------------------------------ boilerplate
 
     [Fact]
@@ -298,13 +349,17 @@ public class IrEditScriptTests
     public void Json_round_trips_a_script_with_every_reachable_kind()
     {
         // A composite case producing Equal, FormatOnly, Modify, Insert, Delete, and Move (src+dest).
-        // The delete and the insert are kept in SEPARATE spine gaps (separated by stable "anchorY"/
-        // "tail" anchors) so neither is absorbed into a positional Modified pairing with the other.
+        // Each non-equal block is isolated in its OWN spine gap by stable "anchorX"/"anchorY"/"tail"
+        // anchors so the M2.2 similarity pairing classifies each unambiguously: the modify sits alone in
+        // a 1×1 gap (the unambiguous-residue fallback pairs it as Modified even though "beta" → "beta
+        // edited" scores below the 0.5 threshold), the delete sits alone (1 free left, 0 free right →
+        // Deleted), and the insert sits alone (0 free left, 1 free right → Inserted).
         var l = FromXml(
             "<w:p><w:r><w:t>alpha</w:t></w:r></w:p>" +          // stays (equal)
             "<w:p><w:r><w:t>fmt</w:t></w:r></w:p>" +            // bolded → format-only
-            "<w:p><w:r><w:t>beta</w:t></w:r></w:p>" +          // edited → modify
-            "<w:p><w:r><w:t>todelete</w:t></w:r></w:p>" +      // deleted
+            "<w:p><w:r><w:t>beta</w:t></w:r></w:p>" +          // edited → modify (alone in a 1×1 gap)
+            "<w:p><w:r><w:t>anchorX</w:t></w:r></w:p>" +       // stable anchor (equal)
+            "<w:p><w:r><w:t>todelete</w:t></w:r></w:p>" +      // deleted (alone in its gap)
             "<w:p><w:r><w:t>anchorY</w:t></w:r></w:p>" +       // stable anchor (equal)
             "<w:p><w:r><w:t>mover</w:t></w:r></w:p>" +         // moved to front
             "<w:p><w:r><w:t>tail</w:t></w:r></w:p>");          // stays (equal)
@@ -313,6 +368,7 @@ public class IrEditScriptTests
             "<w:p><w:r><w:t>alpha</w:t></w:r></w:p>" +
             "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>fmt</w:t></w:r></w:p>" +
             "<w:p><w:r><w:t>beta edited</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>anchorX</w:t></w:r></w:p>" +       // stable anchor (equal)
             "<w:p><w:r><w:t>anchorY</w:t></w:r></w:p>" +       // stable anchor (equal)
             "<w:p><w:r><w:t>inserted</w:t></w:r></w:p>" +      // inserted (own gap, no free left)
             "<w:p><w:r><w:t>tail</w:t></w:r></w:p>");

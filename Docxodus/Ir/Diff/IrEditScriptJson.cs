@@ -87,6 +87,24 @@ internal static class IrEditScriptJson
 
     // ------------------------------------------------------------------ read
 
+    /// <summary>
+    /// Parse JSON produced by <see cref="Write"/> back into an <see cref="IrEditScript"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Crash-on-garbage contract (by design).</b> This is an INTERNAL diagnostic format, not a
+    /// public/untrusted wire protocol. <see cref="Read"/> assumes well-formed input emitted by
+    /// <see cref="Write"/> and performs no tolerant/defensive parsing: malformed input THROWS rather than
+    /// returning a partial or "best-effort" script. Specifically — non-JSON throws
+    /// <see cref="JsonException"/>; a missing <c>operations</c> array, a missing <c>kind</c>, or a
+    /// missing token-op array element throws <see cref="KeyNotFoundException"/>/
+    /// <see cref="System.IndexOutOfRangeException"/>; an unrecognized <c>kind</c> enum name throws
+    /// <see cref="ArgumentException"/>; an unrecognized token-op kind code throws
+    /// <see cref="ArgumentOutOfRangeException"/> (see <see cref="TokenKindFromCode"/>); a wrong JSON value
+    /// type (e.g. string where a number is expected) throws <see cref="InvalidOperationException"/>. We
+    /// surface these loudly so a corrupt diagnostic artifact fails fast at the read site instead of
+    /// silently degrading downstream. Callers that must tolerate arbitrary input should validate/guard
+    /// upstream; do not add silent fallbacks here.</para>
+    /// </remarks>
     public static IrEditScript Read(string json)
     {
         ArgumentNullException.ThrowIfNull(json);
