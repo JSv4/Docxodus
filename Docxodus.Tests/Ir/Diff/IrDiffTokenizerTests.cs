@@ -186,7 +186,7 @@ public class IrDiffTokenizerTests
     // --- atomic kinds + non-collision ------------------------------------
 
     [Fact]
-    public void Tab_break_noteref_have_atomic_kinds()
+    public void Tab_and_break_have_atomic_kinds()
     {
         var p = Para(
             "<w:p><w:r><w:tab/></w:r><w:r><w:br w:type=\"page\"/></w:r></w:p>");

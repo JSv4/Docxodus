@@ -27,12 +27,11 @@ namespace Docxodus.Ir.Diff;
 /// </remarks>
 internal static class IrDiffTokenizer
 {
-    // Atomic-kind MatchKey prefixes. ':' is illegal in the word-text part of a key (separators
-    // never appear inside a Word token, and these prefixes contain ':'/'<' which the normalized
-    // word/separator keys can never produce), so an atomic key can never collide with word text —
-    // e.g. a literal word "tab" produces MatchKey "tab" while an IrTab produces MatchKey "tab".
-    // We prepend U+0001 (a control char outside any real document text) to guarantee non-collision
-    // even for a word like "img" or "fn".
+    // Atomic-kind MatchKeys are prefixed with U+0001. The non-collision guarantee rests on XML 1.0:
+    // U+0001 is an illegal character in XML text content, so no normalized word/separator key —
+    // always derived from w:t text — can ever begin with it. A literal word "tab" yields MatchKey
+    // "tab"; an IrTab yields U+0001 + "tab". (Same justification as the content-hash stream's
+    // sentinel framing, spec §6.1.)
     private const char AtomicSentinel = '\u0001';
 
     public static IReadOnlyList<IrDiffToken> Tokenize(IrParagraph paragraph, IrDiffSettings settings)

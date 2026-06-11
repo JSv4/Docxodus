@@ -51,6 +51,9 @@ internal enum IrDiffTokenKind
 /// <c>IrCommentTarget</c> and <c>DocxSession.ApplyFormat</c> — counting only emitted <c>IrTextRun</c>
 /// characters (including a field's cached-result text), with tab/break/note-ref/image/opaque/textbox
 /// each contributing 0. <see cref="Format"/> is the governing run format (null for non-run kinds).
+/// Deviation from the M2.1 plan sketch (deliberate): the sketched <c>IrHash? AtomHash</c> field is
+/// omitted — atomic content identity is already encoded in <see cref="MatchKey"/> (hash hex inside
+/// the key). Add it back additively if M2.2 wants structured hashes alongside keys.
 /// </summary>
 internal sealed record IrDiffToken(
     IrDiffTokenKind Kind,
