@@ -45,14 +45,31 @@ internal readonly struct IrHash : IEquatable<IrHash>
         return Compute(Encoding.UTF8.GetBytes(text));
     }
 
+    /// <summary>
+    /// Write the 32 raw digest bytes into <paramref name="destination"/> in the same
+    /// big-endian order as <see cref="ToHex"/>. The span must be at least 32 bytes long.
+    /// </summary>
+    public void CopyTo(Span<byte> destination)
+    {
+        BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(0, 8), _a);
+        BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(8, 8), _b);
+        BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(16, 8), _c);
+        BinaryPrimitives.WriteUInt64BigEndian(destination.Slice(24, 8), _d);
+    }
+
+    /// <summary>The 32 raw digest bytes, big-endian (matching <see cref="ToHex"/>).</summary>
+    public byte[] ToBytes()
+    {
+        var bytes = new byte[32];
+        CopyTo(bytes);
+        return bytes;
+    }
+
     /// <summary>Render the digest as 64 lowercase hex characters.</summary>
     public string ToHex()
     {
         Span<byte> digest = stackalloc byte[32];
-        BinaryPrimitives.WriteUInt64BigEndian(digest.Slice(0, 8), _a);
-        BinaryPrimitives.WriteUInt64BigEndian(digest.Slice(8, 8), _b);
-        BinaryPrimitives.WriteUInt64BigEndian(digest.Slice(16, 8), _c);
-        BinaryPrimitives.WriteUInt64BigEndian(digest.Slice(24, 8), _d);
+        CopyTo(digest);
         return Convert.ToHexString(digest).ToLowerInvariant();
     }
 
