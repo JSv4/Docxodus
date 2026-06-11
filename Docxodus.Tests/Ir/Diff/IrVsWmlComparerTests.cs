@@ -52,8 +52,10 @@ namespace Docxodus.Tests.Ir.Diff;
 /// <para><b>Classification</b> (per pair, per direction):</para>
 /// <list type="bullet">
 /// <item><b>MATCH</b> — per-kind <c>normtext</c> multisets are equal for all four kinds.</item>
-/// <item><b>GRANULARITY</b> — multisets differ, but the Inserted and Deleted CHAR BAGS are equal AND the
-/// Moved/FormatChanged multisets match: same content, different atomization.</item>
+/// <item><b>GRANULARITY</b> — multisets differ, but the COMBINED Inserted+Deleted char bag is equal AND the
+/// Moved/FormatChanged multisets match: same content, different atomization. Deliberately loose triage
+/// (within-kind reordering and ins↔del crossings are maskable here); advisory only — no correctness
+/// assertion rides on this classification.</item>
 /// <item><b>DIVERGENT</b> — anything else. Writes a per-pair detail file (gitignored artifacts dir) with the
 /// per-kind set differences and both engines' counts, and is sorted into a known-cause sub-bucket where one
 /// is mechanically detectable (see <see cref="DivergenceCause"/>).</item>
