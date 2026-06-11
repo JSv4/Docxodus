@@ -221,7 +221,17 @@ Computed over a canonical UTF-8 byte stream per block:
   image=0x07 followed by the image part's content hash, opaque=0x0F followed
   by its canonical hash). Sentinels are outside the Unicode text range so no
   text can collide with structure.
-- `IrFieldRun` → the byte stream of its cached-result inlines (recursive).
+- `IrFieldRun` → the byte stream of its cached-result inlines (recursive),
+  unbracketed: a field whose cached result reads "5" is content-equal to a
+  literal "5" (deliberate — the hash captures what a reader sees; the
+  instruction is consumer-visible but unhashed).
+- `IrHyperlink` → sentinel `0x08`, the target string's UTF-8 bytes, sentinel
+  `0x09`, then the child inlines' bytes. Linked text is therefore never
+  content-equal to identical plain text, and a target change is a content
+  change.
+- `IrNoteRef` → its kind sentinel only (`0x05`/`0x06`), **without** the note
+  id — ids are positional bookkeeping; note *content* equality is judged in
+  the notes scope, and renumbering alone must not flip body hashes.
 - Table: row sentinel `0x02 0x10`, cell sentinel `0x02 0x11`, then each
   cell's child-block content hashes in order; the table's `ContentHash` is
   the hash of that rollup. Paragraph hashes never leak across block
