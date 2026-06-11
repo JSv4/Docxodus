@@ -1,6 +1,5 @@
 #nullable enable
 
-using System.Collections.Generic;
 using System.Linq;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
@@ -32,76 +31,11 @@ public class IrBlockAlignerTests
     private static IrBlockAlignment Align(IrDocument l, IrDocument r) =>
         IrBlockAligner.Align(l, r, Default);
 
-    /// <summary>The aligner invariants the plan pins — run against EVERY case's output.</summary>
-    private static void AssertInvariants(IrDocument left, IrDocument right, IrBlockAlignment a)
-    {
-        var leftSeen = new List<IrBlock>();
-        var rightSeen = new List<IrBlock>();
+    /// <summary>The aligner invariants the plan pins — see <see cref="IrAlignmentAsserts"/>.</summary>
+    private static void AssertInvariants(IrDocument left, IrDocument right, IrBlockAlignment a) =>
+        IrAlignmentAsserts.AssertInvariants(left, right, a);
 
-        foreach (var e in a.Entries)
-        {
-            switch (e.Kind)
-            {
-                case IrAlignmentKind.Inserted:
-                    Assert.Null(e.Left);
-                    Assert.NotNull(e.Right);
-                    break;
-                case IrAlignmentKind.Deleted:
-                    Assert.NotNull(e.Left);
-                    Assert.Null(e.Right);
-                    break;
-                case IrAlignmentKind.Unchanged:
-                    Assert.NotNull(e.Left);
-                    Assert.NotNull(e.Right);
-                    Assert.Equal(e.Left!.ContentHash, e.Right!.ContentHash);
-                    Assert.Equal(e.Left!.FormatFingerprint, e.Right!.FormatFingerprint);
-                    break;
-                case IrAlignmentKind.FormatOnly:
-                    Assert.NotNull(e.Left);
-                    Assert.NotNull(e.Right);
-                    Assert.Equal(e.Left!.ContentHash, e.Right!.ContentHash);
-                    Assert.NotEqual(e.Left!.FormatFingerprint, e.Right!.FormatFingerprint);
-                    break;
-                case IrAlignmentKind.Moved:
-                    Assert.NotNull(e.Left);
-                    Assert.NotNull(e.Right);
-                    Assert.Equal(e.Left!.ContentHash, e.Right!.ContentHash);
-                    break;
-                case IrAlignmentKind.Modified:
-                    Assert.NotNull(e.Left);
-                    Assert.NotNull(e.Right);
-                    break;
-                case IrAlignmentKind.MovedModified:
-                    Assert.Fail("MovedModified must never be produced in M2.1.");
-                    break;
-            }
-
-            if (e.Left is not null)
-                leftSeen.Add(e.Left);
-            if (e.Right is not null)
-                rightSeen.Add(e.Right);
-        }
-
-        // Every left/right body block appears in exactly one entry (totality + no duplication).
-        AssertSameMultiset(left.Body.Blocks, leftSeen, "left");
-        AssertSameMultiset(right.Body.Blocks, rightSeen, "right");
-    }
-
-    private static void AssertSameMultiset(IReadOnlyList<IrBlock> expected, List<IrBlock> seen, string side)
-    {
-        Assert.Equal(expected.Count, seen.Count);
-        // Reference identity: the aligner must return the very block instances from the input lists.
-        var pool = new List<IrBlock>(expected);
-        foreach (var b in seen)
-        {
-            int idx = pool.FindIndex(x => ReferenceEquals(x, b));
-            Assert.True(idx >= 0, $"{side} block appeared that was not in the input (or appeared twice).");
-            pool.RemoveAt(idx);
-        }
-        Assert.Empty(pool);
-    }
-
-    private static int Count(IrBlockAlignment a, IrAlignmentKind k) => a.Entries.Count(e => e.Kind == k);
+    private static int Count(IrBlockAlignment a, IrAlignmentKind k) => IrAlignmentAsserts.Count(a, k);
 
     // ------------------------------------------------------------------ identity / edit
 
