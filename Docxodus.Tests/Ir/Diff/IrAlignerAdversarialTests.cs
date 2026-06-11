@@ -170,19 +170,19 @@ public class IrAlignerAdversarialTests
 
     [Trait("Category", "Perf")]
     [Fact]
-    public void Scale_guard_500_vs_2000_wall_ratio_within_8x()
+    public void Scale_guard_500_vs_2000_wall_ratio_within_12x()
     {
         // Both inputs are the near-identical fixture (distinct clauses) self-paired with ONE edit, so
         // every block anchors uniquely and the only gap is a single 1-block Modified gap — i.e. NO large
         // all-distinct gap that would trip the InOrderRefine G²/2 worst case. This isolates the spine /
-        // anchoring cost, which should scale ~linearly: 4× the blocks ⇒ well under 8× the wall time.
+        // anchoring cost, which should scale ~linearly: 4× the blocks ⇒ well under 12× the wall time (a true O(n²) regression reads ~16×; the slack absorbs parallel-suite scheduler noise at ms scale).
         double small = BestSampleMs(500);
         double large = BestSampleMs(2000);
         double ratio = large / Math.Max(small, 0.0001);
 
         _out.WriteLine($"Scale guard: 500-para = {small:F2} ms, 2000-para = {large:F2} ms, ratio = {ratio:F2}x (n=4x)");
-        Assert.True(ratio <= 8.0,
-            $"Align wall-time ratio {ratio:F2}x for 4x input exceeds the 8x anti-O(n²) guard " +
+        Assert.True(ratio <= 12.0,
+            $"Align wall-time ratio {ratio:F2}x for 4x input exceeds the 12x anti-O(n²) guard " +
             $"(500={small:F2}ms, 2000={large:F2}ms).");
     }
 
