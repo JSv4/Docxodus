@@ -175,9 +175,11 @@ public class IrBlockAlignerTests
     {
         // "epsilon" relocates from the tail to the front (Moved); "beta" → edited text in place. The
         // edit stays inside a stable spine gap (between alpha and gamma) so it surfaces as Modified
-        // independently of the move. (When a move instead reshuffles the gap boundaries so the edited
-        // pair lands in DIFFERENT gaps, the exact-hash aligner classifies the edit as Delete+Insert
-        // rather than Modified — a documented M2.1 consequence of gap-positional pairing.)
+        // independently of the move. (In M2.1 this relied on blind positional pairing; in M2.2 the edit
+        // is the lone 1×1-gap residue, paired as Modified by the unambiguous-residue fallback. When an
+        // edited paragraph instead RELOCATES into a different gap, M2.2's cross-gap fuzzy pass recovers it
+        // as MovedModified — see Cross_gap_move_and_edit_is_moved_modified — rather than the M2.1
+        // Delete+Insert.)
         var l = Doc("alpha", "beta", "gamma", "delta", "epsilon");
         var r = Doc("epsilon", "alpha", "beta-edited", "gamma", "delta");
         var a = Align(l, r);
@@ -245,6 +247,172 @@ public class IrBlockAlignerTests
         Assert.Equal(0, Count(a, IrAlignmentKind.Moved));
         Assert.Equal(0, Count(a, IrAlignmentKind.Modified));
         AssertInvariants(l, r, a);
+    }
+
+    // ------------------------------------------------------------------ M2.2 Task 3: similarity pairing + fuzzy moves
+
+    [Fact]
+    public void Cross_gap_move_and_edit_is_moved_modified()
+    {
+        // A multi-word paragraph relocates from the TAIL to the FRONT and is edited in the same revision.
+        // M2.1's exact-hash anchoring cannot recognize this (the content hash changed, so no off-spine
+        // anchor), and the source/destination land in DIFFERENT spine gaps — so M2.1 produced Delete +
+        // Insert. M2.2's cross-gap fuzzy pass re-pairs them: ≥3 words on both sides, similarity ≥ 0.8
+        // (only one word changed of seven) → MovedModified.
+        var l = Doc(
+            "alpha", "beta", "gamma", "delta",
+            "the quick brown fox jumps over hounds");
+        var r = Doc(
+            "the quick brown fox jumps over dogs",
+            "alpha", "beta", "gamma", "delta");
+        var a = Align(l, r);
+
+        Assert.Equal(1, Count(a, IrAlignmentKind.MovedModified));
+        Assert.Equal(4, Count(a, IrAlignmentKind.Unchanged));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Moved));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Inserted));
+
+        var mm = a.Entries.Single(e => e.Kind == IrAlignmentKind.MovedModified);
+        Assert.Equal("the quick brown fox jumps over hounds", Text(mm.Left!));
+        Assert.Equal("the quick brown fox jumps over dogs", Text(mm.Right!));
+        // The destination entry sits at the moved block's RIGHT position (the front).
+        Assert.Equal(IrAlignmentKind.MovedModified, a.Entries[0].Kind);
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Cross_gap_below_similarity_threshold_stays_delete_insert()
+    {
+        // Same shape as the MovedModified case, but the tail paragraph is REWRITTEN (shares too few words
+        // with the front insertion: well under the 0.8 MoveSimilarityThreshold). No fuzzy move — the two
+        // stay a clean Delete + Insert rather than a misleading "relocated + edited" claim.
+        var l = Doc(
+            "alpha", "beta", "gamma", "delta",
+            "the quick brown fox jumps over hounds");
+        var r = Doc(
+            "an entirely unrelated sentence with different words throughout",
+            "alpha", "beta", "gamma", "delta");
+        var a = Align(l, r);
+
+        Assert.Equal(0, Count(a, IrAlignmentKind.MovedModified));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Moved));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Inserted));
+        Assert.Equal(4, Count(a, IrAlignmentKind.Unchanged));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Cross_gap_below_minimum_token_count_stays_delete_insert()
+    {
+        // A highly-similar relocation, but BOTH sides have only two Word tokens — under the default
+        // MoveMinimumTokenCount of 3. Short fragments are excluded from move detection (they coincidentally
+        // match too many candidates), so this stays Delete + Insert despite the high similarity.
+        var l = Doc("alpha", "beta", "gamma", "delta", "hello world");
+        var r = Doc("hello earth", "alpha", "beta", "gamma", "delta");
+        var a = Align(l, r);
+
+        Assert.Equal(0, Count(a, IrAlignmentKind.MovedModified));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Moved));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Inserted));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Cross_gap_exact_relocation_residue_classifies_as_moved_not_moved_modified()
+    {
+        // Defensive case for the exact-equal guard in DetectCrossGapMoves. Off-spine anchoring normally
+        // catches an exact relocation as plain Moved before the cross-gap pass runs, so a score-1.0 +
+        // equal-ContentHash residue is not expected to reach the cross-gap pass — but IF it does, it must
+        // classify as Moved (no edit to re-diff), never MovedModified. We force a residue by making the
+        // relocated content NON-UNIQUE on one side: "shared phrase here now" appears twice on the left
+        // (so it is not a unique anchor and is NOT consumed by anchoring) and once on the right.
+        var l = Doc(
+            "shared phrase here now", "alpha", "beta", "gamma",
+            "shared phrase here now");
+        var r = Doc(
+            "shared phrase here now", "alpha", "beta", "gamma");
+        var a = Align(l, r);
+
+        // One copy stays Unchanged (anchored); the surplus left copy is deleted. No false MovedModified.
+        Assert.Equal(0, Count(a, IrAlignmentKind.MovedModified));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void In_gap_cross_positioned_edit_pairs_as_modified()
+    {
+        // Two paragraphs are edited AND swapped WITHIN a single spine gap (between alpha and omega). M2.1's
+        // blind positional pairing would have paired them by position — pairing edited-P1 with edited-P2's
+        // slot and vice-versa, producing two low-quality Modified pairs. M2.2's in-gap similarity pairing
+        // matches each edited paragraph to its true counterpart by score, so both surface as faithful
+        // Modified pairs (each ≥ 0.5 similarity to its real original, far above its similarity to the
+        // other). This is the upgrade of the M2.1 gap-positional limitation.
+        var l = Doc(
+            "alpha",
+            "the quick brown fox jumps high",
+            "a lazy sleepy dog rests here",
+            "omega");
+        var r = Doc(
+            "alpha",
+            "a lazy sleepy dog rests there",      // edit of P2 (one word), now in P1's slot
+            "the quick brown fox leaps high",     // edit of P1 (one word), now in P2's slot
+            "omega");
+        var a = Align(l, r);
+
+        Assert.Equal(2, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(2, Count(a, IrAlignmentKind.Unchanged));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Inserted));
+
+        // Each Modified pair joins an edited paragraph to its TRUE original (by content), not its slot-mate.
+        var modifies = a.Entries.Where(e => e.Kind == IrAlignmentKind.Modified).ToList();
+        Assert.Contains(modifies, e =>
+            Text(e.Left!).Contains("quick brown fox") && Text(e.Right!).Contains("quick brown fox"));
+        Assert.Contains(modifies, e =>
+            Text(e.Left!).Contains("lazy sleepy dog") && Text(e.Right!).Contains("lazy sleepy dog"));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Boilerplate_adversarial_yields_zero_false_moves()
+    {
+        // A boilerplate-heavy edit: 8 identical clauses, one deleted, plus a short distinct edit. The
+        // similarity + cross-gap passes must NOT manufacture moves out of the repeated boilerplate.
+        var l = Doc(
+            "Standard clause.", "Standard clause.", "Standard clause.", "Standard clause.",
+            "Standard clause.", "Standard clause.", "Standard clause.", "Standard clause.",
+            "unique closing remark goes here");
+        var r = Doc(
+            "Standard clause.", "Standard clause.", "Standard clause.", "Standard clause.",
+            "Standard clause.", "Standard clause.", "Standard clause.",
+            "unique closing remark goes here");
+        var a = Align(l, r);
+
+        Assert.Equal(0, Count(a, IrAlignmentKind.Moved));
+        Assert.Equal(0, Count(a, IrAlignmentKind.MovedModified));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Deleted));  // the one removed boilerplate copy
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Cross_gap_move_detection_is_deterministic()
+    {
+        var l = Doc(
+            "alpha", "beta", "gamma",
+            "the quick brown fox jumps over hounds");
+        var r = Doc(
+            "the quick brown fox jumps over dogs",
+            "alpha", "beta", "gamma");
+
+        var a1 = Align(l, r);
+        var a2 = Align(l, r);
+        Assert.True(a1.Entries.SequenceEqual(a2.Entries),
+            "Cross-gap fuzzy move detection must be deterministic across Align calls.");
+        Assert.Equal(1, Count(a1, IrAlignmentKind.MovedModified));
+        AssertInvariants(l, r, a1);
     }
 
     // ------------------------------------------------------------------ table as unit

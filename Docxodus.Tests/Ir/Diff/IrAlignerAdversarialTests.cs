@@ -101,11 +101,20 @@ public class IrAlignerAdversarialTests
         sw.Stop();
 
         IrAlignmentAsserts.AssertInvariants(l, r, a);
-        // No exact-hash anchors exist; everything resolves in one big head↔tail gap as positional
-        // Modified pairs (200) with no surplus, zero Moved.
-        Assert.Equal(200, Count(a, IrAlignmentKind.Modified));
+        // M2.2 Task 3 re-baseline. No exact-hash anchors exist; everything resolves in one big head↔tail
+        // gap. The two sides share NOTHING (every left line is "Original paragraph i …", every right line
+        // is "Completely different replacement line i …"), so every candidate pair scores 0 < the 0.5
+        // BlockSimilarityThreshold and NONE pair as Modified. The 1×1 unambiguous-residue fallback does not
+        // apply (200 free on each side, not 1×1). So the correct classification is 200 Deleted + 200
+        // Inserted — claiming 200 in-place Modified edits (the M2.1 blind-positional behavior this pass
+        // replaces) would falsely assert each replacement line is a revision of the i-th original line.
+        // Cross-gap move detection finds nothing either (no pair clears the 0.8 MoveSimilarityThreshold).
+        Assert.Equal(0, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(200, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(200, Count(a, IrAlignmentKind.Inserted));
         Assert.Equal(0, Count(a, IrAlignmentKind.Unchanged));
         Assert.Equal(0, Count(a, IrAlignmentKind.Moved));
+        Assert.Equal(0, Count(a, IrAlignmentKind.MovedModified));
         _out.WriteLine($"Fully-rewritten 200x200: {IrAlignmentAsserts.Histogram(a)} in {sw.ElapsedMilliseconds} ms");
         Assert.True(sw.ElapsedMilliseconds < 5000, $"Rewrite align took {sw.ElapsedMilliseconds} ms — too slow.");
     }

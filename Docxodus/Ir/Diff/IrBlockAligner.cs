@@ -30,11 +30,22 @@ internal static class IrBlockAligner
     /// Align the body block lists of <paramref name="left"/> and <paramref name="right"/>.
     /// </summary>
     public static IrBlockAlignment Align(IrDocument left, IrDocument right, IrDiffSettings settings)
-    {
-        _ = settings; // accepted for future-proofing; M2.1 alignment is hash-only (see remarks).
+        => AlignBlocks(left.Body.Blocks, right.Body.Blocks, settings);
 
-        var leftBlocks = left.Body.Blocks;
-        var rightBlocks = right.Body.Blocks;
+    /// <summary>
+    /// Align two raw block lists (M2.2 Task 4 generalization). The public <see cref="Align"/> calls this
+    /// with the bodies; <see cref="IrTableDiffer"/> calls it on a table CELL's block list to recurse the
+    /// same machinery into cell contents. Identical semantics — anchoring, LIS spine, gap fill, fuzzy
+    /// moves — just over an arbitrary block list rather than a document body.
+    /// </summary>
+    public static IrBlockAlignment AlignBlocks(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrDiffSettings settings)
+    {
+        // M2.2 Task 3: settings now drive similarity-based in-gap pairing + cross-gap fuzzy moves.
+        // One per-call similarity scorer carries the tokenization cache (each block tokenized at most
+        // once across all the candidate-pair scorings below).
+        var similarity = new IrBlockSimilarity(settings);
+
         int nLeft = leftBlocks.Count;
         int nRight = rightBlocks.Count;
 
@@ -48,12 +59,15 @@ internal static class IrBlockAligner
         Array.Fill(rightMatch, -1);
 
         // --- Anchor pass A: key (ContentHash, FormatFingerprint), unique-each-side → candidate Unchanged.
-        // --- Anchor pass B: key ContentHash alone (over A-unpaired), unique-each-side → candidate FormatOnly.
+        // --- Anchor pass B: key ContentHash alone (over A-unpaired), unique-each-side → Unchanged or
+        //     FormatOnly decided by FormatEqual (boundary-normalized modeled-only under ModeledOnly; the
+        //     stored fingerprint under Full). M2.2 Task 4: this is where unmodeled-rPr noise that flipped
+        //     the stored fingerprint (lang/bCs/iCs/…) is reclassified Unchanged instead of FormatOnly.
         var candidates = new List<Candidate>();
         CollectAnchors(leftBlocks, rightBlocks, KeyAB, IrAlignmentKind.Unchanged,
-            leftMatch, rightMatch, candidates);
+            leftMatch, rightMatch, candidates, settings);
         CollectAnchors(leftBlocks, rightBlocks, KeyContentOnly, IrAlignmentKind.FormatOnly,
-            leftMatch, rightMatch, candidates);
+            leftMatch, rightMatch, candidates, settings);
 
         // --- Spine: longest increasing subsequence over candidates (sorted by left index) by right
         // index. On-spine candidates keep their anchor kind (Unchanged/FormatOnly); off-spine become Moved.
@@ -87,7 +101,12 @@ internal static class IrBlockAligner
             .OrderBy(p => p.Left)
             .ToList();
 
-        FillGaps(leftBlocks, rightBlocks, spinePairs, leftKind, rightKind, leftMatch, rightMatch);
+        FillGaps(leftBlocks, rightBlocks, spinePairs, leftKind, rightKind, leftMatch, rightMatch, similarity, settings);
+
+        // --- Cross-gap fuzzy moves: over the GLOBAL leftover Deleted × Inserted sets (after all gap
+        // fill), re-pair similar blocks as Moved / MovedModified. Runs AFTER gap fill so it sees the
+        // final Deleted/Inserted leftovers, never blocks already consumed in-place.
+        DetectCrossGapMoves(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch, similarity, settings);
 
         // --- Emit in right order with left-anchored deletion interleave.
         var entries = EmitEntries(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch);
@@ -106,14 +125,17 @@ internal static class IrBlockAligner
 
     /// <summary>
     /// Find blocks whose key occurs exactly once on each side (among blocks not already paired),
-    /// pairing them up as candidates of <paramref name="anchorKind"/>. For the FormatOnly pass, a
-    /// pair whose fingerprints actually match is skipped (it was already an A candidate or would be a
-    /// redundant Unchanged) — only genuine same-content/different-format pairs become FormatOnly.
+    /// pairing them up. Pass A (<paramref name="anchorKind"/> = Unchanged, key includes the fingerprint)
+    /// only ever pairs exact content+format matches. Pass B (<paramref name="anchorKind"/> = FormatOnly,
+    /// ContentHash-only key) pairs content-equal blocks and then DECIDES the kind via
+    /// <see cref="FormatEqual"/>: format-equal (boundary-normalized modeled-only under ModeledOnly, the
+    /// stored fingerprint under Full) → Unchanged, else FormatOnly. This is what makes unmodeled-rPr
+    /// noise that flips the stored fingerprint reclassify as Unchanged under the default policy.
     /// </summary>
     private static void CollectAnchors(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
         Func<IrBlock, (IrHash, IrHash)> key, IrAlignmentKind anchorKind,
-        int[] leftMatch, int[] rightMatch, List<Candidate> candidates)
+        int[] leftMatch, int[] rightMatch, List<Candidate> candidates, IrDiffSettings settings)
     {
         var leftByKey = BuildUniqueIndex(leftBlocks, leftMatch, key);
         var rightByKey = BuildUniqueIndex(rightBlocks, rightMatch, key);
@@ -131,14 +153,34 @@ internal static class IrBlockAligner
             if (rightMatch[rj] != -1)
                 continue;
 
-            if (anchorKind == IrAlignmentKind.FormatOnly &&
-                leftBlocks[i].FormatFingerprint.Equals(rightBlocks[rj].FormatFingerprint))
-                continue; // identical content+format would be Unchanged, not FormatOnly
+            // Pass B refines its content-equal pair into Unchanged (format-equal) or FormatOnly.
+            var resolvedKind = anchorKind == IrAlignmentKind.FormatOnly
+                ? (FormatEqual(leftBlocks[i], rightBlocks[rj], settings)
+                    ? IrAlignmentKind.Unchanged : IrAlignmentKind.FormatOnly)
+                : anchorKind;
 
             leftMatch[i] = rj;
             rightMatch[rj] = i;
-            candidates.Add(new Candidate(i, rj, anchorKind));
+            candidates.Add(new Candidate(i, rj, resolvedKind));
         }
+    }
+
+    /// <summary>
+    /// Diff-time format equality of two content-equal blocks under the settings' format-comparison
+    /// policy. Under <see cref="IrFormatComparison.Full"/> (and for any non-paragraph pair) it is the
+    /// stored block <c>FormatFingerprint</c>. Under <see cref="IrFormatComparison.ModeledOnly"/> for a
+    /// paragraph pair it is the BOUNDARY-NORMALIZED modeled-only block signature — the per-token
+    /// (MatchKey, modeled-format) sequence — which is invariant to the run-resegmentation churn that
+    /// flips the stored fingerprint (the M2.1 finding), so unmodeled rPr noise no longer reads as a
+    /// format change.
+    /// </summary>
+    private static bool FormatEqual(IrBlock left, IrBlock right, IrDiffSettings settings)
+    {
+        if (settings.FormatComparison == IrFormatComparison.ModeledOnly
+            && left is IrParagraph lp && right is IrParagraph rp)
+            return IrModeledFormat.BlockSignature(lp, settings) == IrModeledFormat.BlockSignature(rp, settings);
+
+        return left.FormatFingerprint.Equals(right.FormatFingerprint);
     }
 
     /// <summary>
@@ -227,19 +269,20 @@ internal static class IrBlockAligner
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
         List<(int Left, int Right)> spinePairs,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
-        int[] leftMatch, int[] rightMatch)
+        int[] leftMatch, int[] rightMatch,
+        IrBlockSimilarity similarity, IrDiffSettings settings)
     {
         int prevLeft = -1, prevRight = -1;
         foreach (var (sl, sr) in spinePairs)
         {
             FillOneGap(leftBlocks, rightBlocks, prevLeft + 1, sl, prevRight + 1, sr,
-                leftKind, rightKind, leftMatch, rightMatch);
+                leftKind, rightKind, leftMatch, rightMatch, similarity, settings);
             prevLeft = sl;
             prevRight = sr;
         }
         // Tail gap (after the last spine pair, or the whole document if there were no spine pairs).
         FillOneGap(leftBlocks, rightBlocks, prevLeft + 1, leftBlocks.Count, prevRight + 1, rightBlocks.Count,
-            leftKind, rightKind, leftMatch, rightMatch);
+            leftKind, rightKind, leftMatch, rightMatch, similarity, settings);
     }
 
     /// <summary>
@@ -247,14 +290,17 @@ internal static class IrBlockAligner
     /// [rightFrom, rightTo). Refinement first (cheap, deterministic, still linear): in-order pair
     /// equal (ContentHash,FormatFingerprint) keys as Unchanged then equal ContentHash as FormatOnly —
     /// this resolves "N identical boilerplate paragraphs, one deleted" to N-1 Unchanged + 1 Deleted
-    /// with zero Moved/Modified. Then positional-pair the remaining free blocks as Modified; surplus
-    /// left → Deleted, surplus right → Inserted.
+    /// with zero Moved/Modified. Then SIMILARITY-pair the remaining free blocks as Modified (M2.2
+    /// Task 3, replacing the M2.1 blind positional pairing); surplus left → Deleted, surplus right →
+    /// Inserted. The similarity pairing is what lets a cross-positioned in-gap edit land as Modified
+    /// instead of falling out as Delete+Insert when the gap's free blocks are not aligned positionally.
     /// </summary>
     private static void FillOneGap(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
         int leftFrom, int leftTo, int rightFrom, int rightTo,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
-        int[] leftMatch, int[] rightMatch)
+        int[] leftMatch, int[] rightMatch,
+        IrBlockSimilarity similarity, IrDiffSettings settings)
     {
         var freeLeft = new List<int>();
         for (int i = leftFrom; i < leftTo; i++)
@@ -265,32 +311,115 @@ internal static class IrBlockAligner
             if (rightMatch[j] == -1)
                 freeRight.Add(j);
 
-        // Refinement pass 1: in-order exact (content+format) pairing → Unchanged.
+        // Refinement pass 1: in-order content-equal + format-equal pairing → Unchanged.
         InOrderRefine(leftBlocks, rightBlocks, freeLeft, freeRight, leftKind, rightKind, leftMatch, rightMatch,
-            requireFormatEqual: true, kind: IrAlignmentKind.Unchanged);
-        // Refinement pass 2: in-order content-only pairing → FormatOnly.
+            requireFormatEqual: true, kind: IrAlignmentKind.Unchanged, settings: settings);
+        // Refinement pass 2: in-order content-equal + format-DIFFERING pairing → FormatOnly.
         InOrderRefine(leftBlocks, rightBlocks, freeLeft, freeRight, leftKind, rightKind, leftMatch, rightMatch,
-            requireFormatEqual: false, kind: IrAlignmentKind.FormatOnly);
+            requireFormatEqual: false, kind: IrAlignmentKind.FormatOnly, settings: settings);
 
         // Drop the now-consumed entries, preserving order.
         freeLeft.RemoveAll(i => leftMatch[i] != -1);
         freeRight.RemoveAll(j => rightMatch[j] != -1);
 
-        // Positional pairing of the remainder → Modified; surplus → Deleted / Inserted.
-        int pairCount = Math.Min(freeLeft.Count, freeRight.Count);
-        for (int p = 0; p < pairCount; p++)
+        // Similarity pairing of the remainder → Modified; leftovers → Deleted / Inserted.
+        //
+        // Greedy best-score: repeatedly take the highest-scoring free left×right pair whose score is
+        // ≥ BlockSimilarityThreshold; consume both; repeat. Ties break by smallest left index, then
+        // smallest right index (so the choice is a deterministic function of the gap's block order).
+        // Cost: each round scans the (≤ |freeLeft|·|freeRight|) candidate grid once; with at most
+        // min(|freeLeft|,|freeRight|) rounds, that is gap-bounded G²·(tokenization) — the same G²/2-class
+        // bound the in-order refinement documents — and the per-call tokenization cache means every block
+        // in the gap is tokenized at most once regardless of how many candidate pairs reference it.
+        SimilarityPair(leftBlocks, rightBlocks, freeLeft, freeRight, leftKind, rightKind,
+            leftMatch, rightMatch, similarity, settings.BlockSimilarityThreshold);
+
+        // Collect what the similarity pass left unpaired (still in ascending index order).
+        var leftoverLeft = new List<int>();
+        foreach (int li in freeLeft)
+            if (leftMatch[li] == -1)
+                leftoverLeft.Add(li);
+        var leftoverRight = new List<int>();
+        foreach (int rj in freeRight)
+            if (rightMatch[rj] == -1)
+                leftoverRight.Add(rj);
+
+        // Unambiguous 1×1 residue → Modified regardless of score. When exactly ONE free left and ONE free
+        // right survive the threshold, there is no competing candidate to disambiguate: classifying the
+        // lone pair as "the same block, edited" is the only sensible reading (and is what M2.1's positional
+        // pairing did for an isolated edit). The BlockSimilarityThreshold exists to choose AMONG candidates
+        // and to reject leftovers when there is a surplus on one side — not to demote a solitary in-place
+        // edit (e.g. "beta" → "BETA-edited") to Delete+Insert. A genuine cross-gap relocation never reaches
+        // here as a 1×1 gap residue (it occupies DIFFERENT gaps, handled by DetectCrossGapMoves), so this
+        // does not manufacture false in-place edits out of moves.
+        if (leftoverLeft.Count == 1 && leftoverRight.Count == 1)
         {
-            int li = freeLeft[p];
-            int rj = freeRight[p];
+            int li = leftoverLeft[0];
+            int rj = leftoverRight[0];
             leftKind[li] = IrAlignmentKind.Modified;
             rightKind[rj] = IrAlignmentKind.Modified;
             leftMatch[li] = rj;
             rightMatch[rj] = li;
+            return;
         }
-        for (int p = pairCount; p < freeLeft.Count; p++)
-            leftKind[freeLeft[p]] = IrAlignmentKind.Deleted;
-        for (int p = pairCount; p < freeRight.Count; p++)
-            rightKind[freeRight[p]] = IrAlignmentKind.Inserted;
+
+        // Otherwise the leftovers fall out as Deleted / Inserted (a surplus on one side, or a multi-block
+        // residue where below-threshold pairs are deliberately split rather than positionally guessed).
+        foreach (int li in leftoverLeft)
+            leftKind[li] = IrAlignmentKind.Deleted;
+        foreach (int rj in leftoverRight)
+            rightKind[rj] = IrAlignmentKind.Inserted;
+    }
+
+    /// <summary>
+    /// Greedy best-score one-to-one pairing of <paramref name="freeLeft"/> × <paramref name="freeRight"/>
+    /// as <see cref="IrAlignmentKind.Modified"/>: repeatedly pick the highest-scoring still-free pair with
+    /// score ≥ <paramref name="threshold"/> (ties: smallest left index, then smallest right index),
+    /// consume both, repeat until no qualifying pair remains. Leaves the unpaired blocks for the caller to
+    /// classify Deleted/Inserted. Deterministic: the pick is a pure function of the score grid + index
+    /// tie-break, and scoring is cached so the grid is cheap to rescan each round.
+    /// </summary>
+    private static void SimilarityPair(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
+        List<int> freeLeft, List<int> freeRight,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
+        int[] leftMatch, int[] rightMatch,
+        IrBlockSimilarity similarity, double threshold)
+    {
+        while (true)
+        {
+            double bestScore = threshold;
+            int bestLeft = -1, bestRight = -1;
+            bool found = false;
+            foreach (int li in freeLeft)
+            {
+                if (leftMatch[li] != -1)
+                    continue;
+                foreach (int rj in freeRight)
+                {
+                    if (rightMatch[rj] != -1)
+                        continue;
+                    double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
+                    // Strictly-greater wins; on a tie keep the first seen (freeLeft / freeRight are in
+                    // ascending index order), which is exactly "smallest left, then smallest right".
+                    if (score > bestScore || (!found && score >= threshold))
+                    {
+                        bestScore = score;
+                        bestLeft = li;
+                        bestRight = rj;
+                        found = true;
+                    }
+                }
+            }
+
+            if (!found)
+                return;
+
+            leftKind[bestLeft] = IrAlignmentKind.Modified;
+            rightKind[bestRight] = IrAlignmentKind.Modified;
+            leftMatch[bestLeft] = bestRight;
+            rightMatch[bestRight] = bestLeft;
+        }
     }
 
     /// <summary>
@@ -310,7 +439,7 @@ internal static class IrBlockAligner
         List<int> freeLeft, List<int> freeRight,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
         int[] leftMatch, int[] rightMatch,
-        bool requireFormatEqual, IrAlignmentKind kind)
+        bool requireFormatEqual, IrAlignmentKind kind, IrDiffSettings settings)
     {
         foreach (int rj in freeRight)
         {
@@ -322,7 +451,7 @@ internal static class IrBlockAligner
                     continue;
                 if (!leftBlocks[candLeft].ContentHash.Equals(rightBlocks[rj].ContentHash))
                     continue;
-                bool formatEqual = leftBlocks[candLeft].FormatFingerprint.Equals(rightBlocks[rj].FormatFingerprint);
+                bool formatEqual = FormatEqual(leftBlocks[candLeft], rightBlocks[rj], settings);
                 if (requireFormatEqual != formatEqual)
                     continue; // Unchanged needs format-equal; FormatOnly needs format-differ
 
@@ -332,6 +461,98 @@ internal static class IrBlockAligner
                 rightMatch[rj] = candLeft;
                 break;
             }
+        }
+    }
+
+    // ------------------------------------------------------------------ cross-gap fuzzy moves
+
+    /// <summary>
+    /// M2.2 Task 3 cross-gap fuzzy move detection. After ALL gap fill, the only remaining Deleted (left)
+    /// and Inserted (right) blocks are content that found no in-place counterpart. A relocated-and-edited
+    /// block lands here as a Deleted at its old position + an Inserted at its new position. We re-pair such
+    /// blocks: among the global leftover Deleted × Inserted candidates, a pair with ≥
+    /// <see cref="IrDiffSettings.MoveMinimumTokenCount"/> Word tokens on BOTH sides and similarity ≥
+    /// <see cref="IrDiffSettings.MoveSimilarityThreshold"/> becomes a move.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Greedy + deterministic.</b> Same discipline as in-gap pairing: repeatedly take the
+    /// highest-scoring qualifying pair (ties: smallest left index, then smallest right index), consume
+    /// both, repeat. Each block is consumed at most once.</para>
+    /// <para><b>Move vs MovedModified.</b> A qualifying pair is normally <see cref="IrAlignmentKind.MovedModified"/>
+    /// — the edit script re-token-diffs it (move + nested edits, the capability WmlComparer cannot
+    /// express). A score of exactly 1.0 means the token multisets are identical; if additionally the
+    /// ContentHashes are equal the blocks are exact-content relocations, which must classify as plain
+    /// <see cref="IrAlignmentKind.Moved"/> (a MovedModified with an all-Equal token diff would be a lie
+    /// about there being an edit). In practice exact-content moves are already caught by off-spine
+    /// anchoring and never reach here, but the guard makes the classification correct regardless.</para>
+    /// <para><b>Cost.</b> Bounded by the global leftover counts D × I, not the document size: the
+    /// dominant boilerplate / clean-edit cases leave few leftovers. Tokenization is cached (shared with
+    /// in-gap pairing), so each leftover block is tokenized at most once across both passes.</para>
+    /// </remarks>
+    private static void DetectCrossGapMoves(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
+        int[] leftMatch, int[] rightMatch,
+        IrBlockSimilarity similarity, IrDiffSettings settings)
+    {
+        // Collect global leftovers in ascending index order (drives the deterministic tie-break).
+        var deleted = new List<int>();
+        for (int i = 0; i < leftBlocks.Count; i++)
+            if (leftKind[i] == IrAlignmentKind.Deleted)
+                deleted.Add(i);
+        var inserted = new List<int>();
+        for (int j = 0; j < rightBlocks.Count; j++)
+            if (rightKind[j] == IrAlignmentKind.Inserted)
+                inserted.Add(j);
+
+        if (deleted.Count == 0 || inserted.Count == 0)
+            return;
+
+        double threshold = settings.MoveSimilarityThreshold;
+        int minTokens = settings.MoveMinimumTokenCount;
+
+        while (true)
+        {
+            double bestScore = threshold;
+            int bestLeft = -1, bestRight = -1;
+            bool found = false;
+            foreach (int li in deleted)
+            {
+                if (leftMatch[li] != -1)
+                    continue;
+                if (similarity.WordCount(leftBlocks[li]) < minTokens)
+                    continue; // too short to be a reliable move (mirrors MoveMinimumWordCount)
+                foreach (int rj in inserted)
+                {
+                    if (rightMatch[rj] != -1)
+                        continue;
+                    if (similarity.WordCount(rightBlocks[rj]) < minTokens)
+                        continue;
+                    double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
+                    if (score > bestScore || (!found && score >= threshold))
+                    {
+                        bestScore = score;
+                        bestLeft = li;
+                        bestRight = rj;
+                        found = true;
+                    }
+                }
+            }
+
+            if (!found)
+                return;
+
+            // Exact-content relocation (score 1.0 + equal ContentHash) is plain Moved, not MovedModified:
+            // there is genuinely no edit to re-diff. Everything else is MovedModified (the edit script
+            // re-token-diffs it).
+            bool exact = bestScore >= 1.0 &&
+                leftBlocks[bestLeft].ContentHash.Equals(rightBlocks[bestRight].ContentHash);
+            var kind = exact ? IrAlignmentKind.Moved : IrAlignmentKind.MovedModified;
+
+            leftKind[bestLeft] = kind;
+            rightKind[bestRight] = kind;
+            leftMatch[bestLeft] = bestRight;
+            rightMatch[bestRight] = bestLeft;
         }
     }
 
