@@ -238,3 +238,75 @@ now.** Rationale:
 
 Net: keep oracle = shipped path, IR path = validated internal alternative; D3
 resolved as **defer**, G1 **passed**.
+
+### M1.5 perf addendum
+
+M1.5 Task 3 was a profile-driven read/emit perf pass against the same opt-in
+corpus benchmark (`DOCXODUS_RUN_PERF=1`, best-of-3, 668 fixtures, same prepared
+inputs). The M1.4 gate recorded **1.90×**; a re-measure on the M1.5 branch read
+**1.94×** (textbox nodes + jitter). Target for this pass: **≤ 1.6×**.
+
+**Methodology.** A temporary env-gated (`DOCXODUS_IR_PROFILE=1`) Stopwatch
+accumulator wrapped each candidate phase of `IrReader.Read` + the per-paragraph
+hot spots, dumped as `ms total / call count` over 3 corpus passes (2004 reads).
+Profile FIRST, optimise the measured top item only. The scaffold was removed
+before commit; the numbers below are the measured before/after.
+
+**Profile (ms total over 3 corpus passes = 2004 reads):**
+
+| Phase | Before | After | Note |
+|---|---:|---:|---|
+| copy + revision-normalise | 15,610 | 3,786 | the fix target |
+| unid-assign | 8,120 | 7,807 | shared with oracle; untouched |
+| body-walk (total) | 5,495 | 5,499 | contains the per-paragraph rows below |
+| &nbsp;&nbsp;p:ListMarker (RetrieveListItem) | 2,268 | 2,289 | symmetric with oracle; untouched |
+| &nbsp;&nbsp;p:WalkInlines | 798 | 792 | untouched |
+| &nbsp;&nbsp;p:Fingerprint | 560 | 576 | IR-only; left (well under budget after fix) |
+| &nbsp;&nbsp;p:ContentHash | 198 | 189 | IR-only; left |
+| &nbsp;&nbsp;p:KindFor | 71 | 81 | untouched |
+| registries | 921 | 847 | already short-circuits missing parts; untouched |
+
+**Root cause + fix (one optimisation, measured).** The dominant asymmetry was
+that `IrReader.Read` ran `RevisionProcessor.AcceptRevisions` **unconditionally**
+(default `RevisionView.Accept`) — a full open/clone/walk/re-serialise package
+round-trip — on *every* document, including the revision-free majority, a cost
+the oracle (`WmlToMarkdownConverter.Convert`) never pays. `ApplyRevisionView` now
+guards the Accept/Reject branch with a cheap in-memory `HasRevisionMarkup`
+descendant scan and skips the round-trip when no revision markup is present. The
+scan name set for the *skip* decision is a strict **superset** of every element
+`Accept/RejectRevisions` acts on (run/paragraph ins/del/move, the `*PrChange`
+property-revision markers, table `cellIns`/`cellDel`/`cellMerge` + `tblGridChange`,
+and the `customXml*RangeStart` range markers), so "no markup found" provably
+implies the processor would have changed nothing — output stays byte-identical.
+The `FailIfPresent` throw branch keeps its original narrow M1.1 name set
+unchanged (so `IrReaderTests.Read_UnknownElement_BecomesOpaque`, which feeds a
+`w:customXmlInsRangeStart` under `FailIfPresent` and expects it preserved opaque,
+still passes). That single change cut the copy+revision phase from 15,610 ms to
+3,786 ms (−11.8 s over 3 passes).
+
+Tried-and-reverted / considered-and-rejected: (a) short-circuiting
+`ResolveListMarkerText` for non-list paragraphs — **rejected**, the oracle and IR
+both resolve every body p/h/li (style-based numbering means inline-`numPr`
+absence is not a list-item test), so it is symmetric, not IR overhead; (b)
+restricting marker resolution to the body scope — **rejected**, non-body headings
+/list items are emitted with their resolved marker too, so nulling them would
+change output; (c) reusing a single SHA-256 hasher in `UnidHelper.ShortHash` —
+**not pursued**, it is shared oracle code (speeds both paths, no ratio gain) and
+out of the IR scope; (d) folding the `HasRevisionMarkup` open into the main
+package open to avoid a second open — **not pursued**, unnecessary once the ratio
+landed at 1.16×.
+
+**Result (best-of-3, corpus, `DOCXODUS_RUN_PERF=1`):**
+
+| Metric | Oracle (`Convert`) | IR path (`Read`+`Emit`) | Ratio | Prior | Budget |
+|---|---:|---:|---:|---:|---:|
+| Corpus wall time | 5,491 ms | 6,506 ms | **1.16–1.18×** | 1.94× | ≤ 1.5× **PASS** |
+
+The full-benchmark gate (`MaxIrToOracleRatio`) was tightened **2.0× → 1.5×**
+(measured best 1.16×, ~30% slack for CI variance). The default GC-quiet smoke
+check (`≤ 8×` order-of-magnitude guard) is unchanged.
+
+**Equivalence + suite (zero behaviour change confirmed):** corpus markdown
+equivalence held at **642 / 668** (0 skipped, 0 emitter-threw, 668/668 totality);
+the IR suite is **230/230** green; the full `Docxodus.Tests` run is **1761
+passed, 1 skipped, 0 failed**; Release build (`TreatWarningsAsErrors`) clean.

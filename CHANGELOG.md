@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Document IR — M1.5 read perf pass.** *Internal/experimental.* `IrReader.Read` no longer runs `RevisionProcessor.AcceptRevisions` unconditionally: the default `RevisionView.Accept`/`Reject` path now skips the full open/clone/walk/re-serialize package round-trip on the revision-free majority of documents via a cheap in-memory revision-markup scan (the scan name set is a strict superset of every element `RevisionProcessor` acts on, so "no markup" provably means a no-op — output is byte-identical). This cut the corpus IR-vs-oracle wall-time ratio from ~1.94× to ~1.16× (best-of-3, 668 fixtures); the opt-in perf gate (`DOCXODUS_RUN_PERF=1`) was tightened from 2.0× to 1.5×. Equivalence held at 642/668 and the IR suite stayed green. No public API change.
 - **Solution builds no longer race the WASM-mode assembly.** `DocxodusWasm` references `Docxodus` with `WASM_BUILD=true`, so every solution build compiled Docxodus twice into the same `bin/<Config>/net8.0/` output — whichever finished last won, and `Docxodus.Tests` intermittently linked the SkiaSharp-free WASM assembly (`error CS1061: 'ImageInfo' ... 'SaveImage'`). WASM-mode output now builds into isolated `bin/wasm/` + `obj/wasm/` paths; the `dotnet clean` workaround documented in CLAUDE.md is no longer needed.
 
 ### Added

@@ -39,7 +39,11 @@ public class IrMarkdownPerfBudgetTests
     private static readonly DirectoryInfo TestFilesDir = new("../../../../TestFiles/");
 
     // Tolerant: warm-up pass first, Stopwatch totals, generous bound (CI jitter, cold JIT, shared box).
-    private const double MaxIrToOracleRatio = 2.0;
+    // M1.5 Task 3 (profile-driven read/emit perf pass) dropped the corpus ratio from ~1.94× to ~1.16×
+    // by skipping the unconditional RevisionProcessor round-trip on revision-free documents (the single
+    // largest per-Read cost, which the oracle never paid). With the measured best-of-3 at 1.16–1.18×
+    // there is ample slack to tighten the bound from 2.0× to 1.5× while still absorbing CI variance.
+    private const double MaxIrToOracleRatio = 1.5;
 
     private readonly ITestOutputHelper _output;
 

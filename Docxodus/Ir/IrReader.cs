@@ -397,33 +397,66 @@ internal static class IrReader
         switch (view)
         {
             case RevisionView.FailIfPresent:
-                if (HasRevisionMarkup(working))
+                // Original (M1.1) throw contract: the narrow ins/del/move/*PrChange set. NOT widened —
+                // IrReaderTests.Read_UnknownElement_BecomesOpaque deliberately feeds a
+                // w:customXmlInsRangeStart under FailIfPresent expecting it to survive as an opaque
+                // block, i.e. it is intentionally NOT treated as "present revision markup" here.
+                if (HasRevisionMarkup(working, FailIfPresentNameSet))
                     throw new DocxodusException(
                         "Document contains tracked revisions and RevisionView is FailIfPresent.");
                 return working;
+
             case RevisionView.Accept:
-                return RevisionProcessor.AcceptRevisions(working);
             case RevisionView.Reject:
-                return RevisionProcessor.RejectRevisions(working);
+                // Accepting/rejecting revisions on a document with NO revision markup is a pure no-op
+                // round-trip (RevisionProcessor opens, clones, walks, and re-serializes the whole
+                // package only to change nothing). A cheap in-memory descendant scan lets the common
+                // revision-free document skip that round-trip — the single largest per-Read cost.
+                // The scan set is a strict SUPERSET of every element Accept/RejectRevisions acts on
+                // (run/paragraph ins/del/move, the *PrChange property-revision markers, table cell/grid
+                // revisions, and the customXml*RangeStart range markers), so "no markup found" provably
+                // implies the processor would not have changed a byte — output stays identical.
+                if (!HasRevisionMarkup(working, ProcessorActsOnNameSet))
+                    return working;
+                return view == RevisionView.Accept
+                    ? RevisionProcessor.AcceptRevisions(working)
+                    : RevisionProcessor.RejectRevisions(working);
+
             default:
                 return working;
         }
     }
 
-    private static readonly XName[] RevisionElementNames =
+    // The narrow M1.1 FailIfPresent set (unchanged — preserves the documented throw contract).
+    private static readonly HashSet<XName> FailIfPresentNameSet = new()
     {
         W + "ins", W + "del", W + "moveFrom", W + "moveTo", W + "rPrChange", W + "pPrChange",
     };
 
-    private static bool HasRevisionMarkup(WmlDocument working)
+    // Every element name RevisionProcessor.Accept/RejectRevisions reacts to. A strict superset so a
+    // "no markup" scan result guarantees the processor is a no-op (see the Accept/Reject skip above).
+    private static readonly HashSet<XName> ProcessorActsOnNameSet = new()
+    {
+        W + "ins", W + "del", W + "moveFrom", W + "moveTo",
+        W + "moveFromRangeStart", W + "moveFromRangeEnd", W + "moveToRangeStart", W + "moveToRangeEnd",
+        W + "rPrChange", W + "pPrChange", W + "sectPrChange", W + "tblPrChange", W + "tblGridChange",
+        W + "trPrChange", W + "tcPrChange", W + "numberingChange",
+        W + "cellIns", W + "cellDel", W + "cellMerge",
+        W + "customXmlInsRangeStart", W + "customXmlDelRangeStart",
+        W + "customXmlMoveFromRangeStart", W + "customXmlMoveToRangeStart",
+    };
+
+    private static bool HasRevisionMarkup(WmlDocument working, HashSet<XName> names)
     {
         using var stream = new OpenXmlMemoryStreamDocument(working);
         using var wdoc = stream.GetWordprocessingDocument();
         var root = wdoc.MainDocumentPart?.GetXDocument().Root;
         if (root is null)
             return false;
-        var names = new HashSet<XName>(RevisionElementNames);
-        return root.DescendantsAndSelf().Any(e => names.Contains(e.Name));
+        foreach (var e in root.DescendantsAndSelf())
+            if (names.Contains(e.Name))
+                return true;
+        return false;
     }
 
     // --- block dispatch ---------------------------------------------------
