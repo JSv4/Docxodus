@@ -107,6 +107,19 @@ trees from different physical files with identical content compare equal. The
 stay alive exactly as long as the snapshot (the memory consequence is in the
 budget below).
 
+**Optional retention — `IrReaderOptions.RetainSources` (default `true`).** Pinning
+the XML DOM is convenient for diagnostics/raw round-tripping but roots ~11× the part
+XML for the snapshot's lifetime. The Phase-2 diff engine and bulk pipelines don't
+need element-level provenance, so retention is opt-out: with `RetainSources=false`,
+`Sources` is empty and every node's `Source` is a single shared empty `IrProvenance`
+(`Element`/`PartUri` null, zero per-node allocation), letting the working
+`XDocument`s be collected once `Read` returns (≈11× → ≈2.7× retained — see the gate
+addendum). The part URI a consumer needs at scope/block granularity survives as a
+**scope-level** fact, promoted to `IrScope.PartUri` (and `IrCommentStore.PartUri`),
+populated in BOTH modes; the markdown emitter prefers those over per-node provenance.
+Retention is a pure memory knob — anchors, `ContentHash`, and `FormatFingerprint` are
+byte-identical across modes.
+
 ## Normalization
 
 The reader applies normalization rules **N1–N15** before any node is
@@ -131,7 +144,8 @@ change; different → content change.**
 - **`ContentHash`** — text identity (what a reader sees), computed over a
   canonical UTF-8 byte stream (spec §6.1). Non-text inlines contribute a
   **sentinel byte sequence** `0x01 <kind-byte>` (tab=0x01, breaks=0x02/03/04,
-  note refs=0x05/06, image=0x07 + image part hash, opaque=0x0F + canonical hash)
+  note refs=0x05/06, image=0x07 + image part hash, textbox=0x0B + each inner
+  block's content hash, opaque=0x0F + canonical hash)
   — sentinels live outside the Unicode text range so text can never collide with
   structure. Hyperlinks frame their target between `0x08`/`0x09` sentinels so
   linked text is never content-equal to identical plain text and a target change
@@ -207,16 +221,19 @@ fenced summaries, section thematic breaks, multipart `# Headers`/`# Footers`/
 `ResolvedListMarker`), and the `EmptyParagraphs`/`AnchorIdRendering` settings
 modes.
 
-**Equivalence: 608/668 corpus fixtures byte-equal** (markdown + body anchor
-index). The 60 remaining divergences are controller-adjudicated; the dispositions
-and the full triage table are in the
+**Equivalence: 642/668 corpus fixtures byte-equal** (markdown + body anchor
+index; 608/668 at the Phase-1 gate, lifted to 642 by M1.5 textbox modeling). The
+remaining divergences are controller-adjudicated; the dispositions and the full
+triage table are in the
 [M1.4 gate report](../superpowers/plans/2026-06-11-ir-m14-markdown-projection-port.md#outcome-phase-1-gate-report).
 Two classes are **accepted** divergences (oracle bugs — the IR output is *more*
 correct): special-character drops and multi-run hyperlink splits. The rest are
-**deferred** IR work, dominated by the **textbox/shape-body gap** (textbox
-content is modeled as opaque, so the markdown body and the header/footer
-`ScopeHasContent` content-detection gate both differ from the oracle, which peeks
-at raw `w:t` inside the textbox). The harness (`IrMarkdownEquivalenceTests`,
+**deferred** small-fixture-sweep IR work (CC/revision spacing, heading-numPr
+display, TOC field text). The former dominant gap — the **textbox/shape-body
+gap** — is now closed: textbox bodies are modeled as `IrTextbox` (inner blocks
+anchored/hashed/indexed; sentinel `0x0B`), so both the markdown body and the
+header/footer `ScopeHasContent` content-detection gate match the oracle's raw
+`w:t` view. The harness (`IrMarkdownEquivalenceTests`,
 Trait `Corpus`) drives both paths over the corpus, writes per-fixture diffs to
 the gitignored `EquivalenceArtifacts/`, and is the loop driver, not just a
 pass/fail gate. The perf budget lives in `IrMarkdownPerfBudgetTests` (Trait
@@ -236,23 +253,29 @@ parallel run), with a GC-quiet smoke check as the default-run guard.
   under a documented "experimental" banner.
 - **v2 candidates, explicitly deferred:** revision-aware IR (`w:ins`/`w:del` as
   nodes for as-is tracked-changes projection), bookmarks as ranges,
-  content-control metadata as typed facts, **textbox/shape body content**, and an
-  IR→OOXML writer beyond the Phase 2 renderer's needs.
+  content-control metadata as typed facts, and an IR→OOXML writer beyond the
+  Phase 2 renderer's needs. (Textbox/shape body content is now modeled — see
+  `IrTextbox`, M1.5 — and is no longer deferred.)
 
 ## Current Limitations
 
-- **Textbox / shape body content is opaque** — the single largest source of
-  markdown-equivalence divergences (body rendering + header/footer content
-  detection). Fixing it requires modeling textbox bodies as scopes; deferred.
+- **Textbox bodies are modeled inline, not as a separate scope.** `IrTextbox`
+  carries the inner blocks at the containing paragraph's inline position (anchored
+  in the containing scope, hashed, indexed) rather than as a distinct
+  textbox/shape scope. This matches the oracle's `Descendants`/`DescendantsAndSelf`
+  view and closes the `ContentHash` blind spot; a dedicated shape scope (with
+  shape geometry/anchoring facts) remains possible future work.
 - **No as-is projection of tracked-changes documents** — `RevisionView` defaults
   to Accept; an as-is (revision-aware) view is a v2 item. The equivalence harness
   pre-accepts revisions once and feeds the same bytes to both paths to compare
   like-for-like.
-- **Memory footprint is above the ≤3× reference target.** A snapshot costs
-  roughly (pinned XML DOM via `Sources`) + (IR nodes); the largest-body corpus
-  fixture retains ≈11× its main-part XML size (measured, reported — see the gate
-  report). Acceptable for an internal Phase 1 model; a candidate for the Phase 2
-  budget if it bites.
+- **Memory footprint is above the ≤3× reference target in the default (retained)
+  mode.** A retained snapshot costs roughly (pinned XML DOM via `Sources`) + (IR
+  nodes); the largest-body corpus fixture retains ≈11× its main-part XML size
+  (measured, reported — see the gate report). M1.5 made this opt-out:
+  `RetainSources=false` drops the pinned DOM and brings the same fixture to ≈2.7×
+  (see Provenance above + the gate addendum), which is the mode Phase-2 bulk
+  consumers should use.
 - **`numStyleLink` numbering indirection** and several v2 model facts above are
   not yet resolved.
 

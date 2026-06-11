@@ -60,6 +60,28 @@ public class IrMarkdownRuleTests
     }
 
     [Fact]
+    public void Rule_HeadingWithStyleChainNumPr_NoNumId_TrailingBlankBeforeTable()
+    {
+        // Regression for HC007/HW010: a Subtitle/Heading style whose pStyle chain carries a bare
+        // w:numPr (w:ilvl, NO w:numId) is treated by the oracle's structural IsListItem as a list item
+        // — so EmitBlocks emits an extra trailing blank line after it when the next block is NOT a list
+        // item (here a table). The paragraph's anchor kind is still "h" and its resolved List is null
+        // (no numId → no membership), so the emitter must key the blank rule on the structural verdict
+        // (IrParagraph.IsListItemForLayout), not on resolved numbering. A second paragraph + table keep
+        // the boundary explicit.
+        var body =
+            "<w:p><w:pPr><w:pStyle w:val=\"Subtitle\"/></w:pPr><w:r><w:t>Weekly</w:t></w:r></w:p>" +
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"100\"/></w:tblGrid>" +
+            "<w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
+            "<w:p><w:r><w:t>after</w:t></w:r></w:p>";
+        var styles =
+            "<w:style w:type=\"paragraph\" w:styleId=\"Subtitle\"><w:name w:val=\"Subtitle\"/>" +
+            "<w:basedOn w:val=\"Normal\"/><w:pPr><w:numPr><w:ilvl w:val=\"1\"/></w:numPr></w:pPr></w:style>" +
+            "<w:style w:type=\"paragraph\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>";
+        AssertEquivalent(IrTestDocuments.FromBodyAndStylesXml(body, styles));
+    }
+
+    [Fact]
     public void Rule_Bold()
     {
         AssertEquivalent(IrTestDocuments.FromBodyXml(

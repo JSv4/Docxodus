@@ -1,0 +1,619 @@
+{
+  "scopes": [
+    {
+      "scope": "body",
+      "blocks": [
+        {
+          "anchor": "p:body:ea6343481f122111d8064912629804c3",
+          "type": "paragraph",
+          "contentHash": "8dafc43687cac962111f2f339a35c11455709e4cb73f3c8c73bcff56958a73b3",
+          "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:a5ea3cab122e06ddb0fe999125397ec9",
+          "type": "paragraph",
+          "contentHash": "260c66d6c3d0ecc990769cb1132e161d234b0341a4a1a3d155a436c5e818e9b8",
+          "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "textbox",
+              "blocks": [
+                {
+                  "anchor": "tbl:body:5d99c3b0aa2e37a3afaf2c38bbf47e7c",
+                  "type": "table",
+                  "contentHash": "9758ece2c118076edc5ceca59544483d8fc348253d0326d2a356a4aea98be695",
+                  "formatFingerprint": "c58707cbc2b8d20471d35eddbf2792139e5970826ce2cb9f5f4a0303e32bd000",
+                  "unmodeledTablePropsDigest": "bb89f6010930f9284059a5066c818b7e47947c65fb3d5fdc8de6c52d540ee3fc",
+                  "rows": [
+                    {
+                      "anchor": "tr:body:2f13025b6984bbd3ee7e99093ee475e1",
+                      "contentHash": "06d8c2fedd935c170d78c33c5a65cfada39e78d680aaac392282876252153da6",
+                      "cells": [
+                        {
+                          "anchor": "tc:body:b5d37e87c119b22dcddb8831a7b1c6c8",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "2e0b98f39ce1a540fb156610b8f4426309273654f33d53d3c81b22373381f985",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:63588f9161f87e510ab01c57510e434f",
+                              "type": "paragraph",
+                              "contentHash": "c7be1ed902fb8dd4d48997c6452f5d7e509fbcdbe2808b16bcf4edce4c07d14e",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "This is a test",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tc:body:9655888bf42568fae8df2098abcf38f7",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "c89145a291a901c5ee832f0ed88d2fce7e3966be484a8594a7bb51a2b683531b",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:1401f95a76199e68592c30d85b5c48de",
+                              "type": "paragraph",
+                              "contentHash": "fd1fc905ccc03e52ca0b4718e0008912564526ea9d79fc66f84c748a131b541e",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "This is another test.",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anchor": "tr:body:abf7ccc9007925d0169e31512c156aa6",
+                      "contentHash": "de3bec6adb785f01091d93787f3422e19ceeb0aceacebef408f18ef462af735f",
+                      "cells": [
+                        {
+                          "anchor": "tc:body:8569175d45ee76ee0288e863a0cf1527",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "764aec76ac9b6b9324d8ece30eec6cc84e66abc536c2eed92846cdbaaf19a27f",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:c6883e57997e335d35db6c0a37f1deb0",
+                              "type": "paragraph",
+                              "contentHash": "8dafc43687cac962111f2f339a35c11455709e4cb73f3c8c73bcff56958a73b3",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "Video provides a powerful way to help you prove your point.",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tc:body:54241bccceccb433d90fa4a28b91685a",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "e696fb0547e06bbac8a5553193da2874efce7633e093619da05db710a6f6a136",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:bd07477e84a1b4acbc2fe2f5792481c7",
+                              "type": "paragraph",
+                              "contentHash": "5985d11d12cb6888b5448e18ab812808a170a5a2ccd2ef1a4a9a91681c69cbc7",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "You can also type a keyword.",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anchor": "tr:body:6f43780244c364b83717b60908b8f8d3",
+                      "contentHash": "0d35fdb2468008c20e5fbf32ccf4984c0e403a39ccdc52c8a3e505c4f7c982ed",
+                      "cells": [
+                        {
+                          "anchor": "tc:body:8196e9e7109a4b2399b0968f6ac6fc19",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "5dd3c599e10f7c5080a671ca7875219d49105e571ad18c648166a1dbbc16365d",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:8749d3661d992c138da88073bfe22c24",
+                              "type": "paragraph",
+                              "contentHash": "eff9e7c928e9a30cc8ab021b4c90f4b822eef5ba4b8e93f53db1d57e3602421d",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "make your document look professionally produced",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tc:body:c4c3e381d3b65915ee8fa1099e1b0c99",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "95e5e8d7e7cfe06229e289d8e5bd0f9be78f8c7a476bf579ca1e9badaca7a800",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:a374724993b572099a400ab7146f2995",
+                              "type": "paragraph",
+                              "contentHash": "34818b8cadf0475fd04063394026db6231298dc6458cdcc072f8062c4bd3b36f",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "designs that compleme",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anchor": "tr:body:5154d8d425298dd6d026ddc6b2b16560",
+                      "contentHash": "3e61cfb19e5324aeafba7c598b10ea5d8a930811144886b6b25d5131edc0f8f7",
+                      "cells": [
+                        {
+                          "anchor": "tc:body:9cb75275bec4129cbabf30a6c2de325d",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "bfddd938ab88ea6c8969745cade2fefb35da136ce5d631100d045bc7358285b9",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:a2ebc4a2e1ddb98192abfb7d08cab2b2",
+                              "type": "paragraph",
+                              "contentHash": "2b83acb8a0f95999b4b6cbbeedfcdfc6c6485517ad0d2b589bdd598ca1b5cc23",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "for the video that best fits",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tc:body:3e07cbf402fe2426c1121969a9f72175",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "38b25f4e9a3b7678ab082f9cd1a0aa696738a25e1fa0e8489120af724209b878",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:d73ef2da57b72aa6c6421a5bdac3594f",
+                              "type": "paragraph",
+                              "contentHash": "26d036b78e7a387bf18edcb081f77584a37a2aa0d0c91e32fa87cc32066126c4",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "footer, cover page",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anchor": "tr:body:6bda8d3169209926995f2bc82e9962aa",
+                      "contentHash": "d9122dcb64543a6bd603ce22a12a5e460350f39efdf06197343efc051dd3d420",
+                      "cells": [
+                        {
+                          "anchor": "tc:body:63e4a8a9279a22ebc39b7fe3dacaeb62",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "5d41f504786717f48cb45f21dfa9c5fbdb1481b274d9754d75dd960f1c1c1215",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:e9e1f8391c59fd5993f07ffb82f3f682",
+                              "type": "paragraph",
+                              "contentHash": "36d955cb414e8e787e72a4e53e496ad724a2ade3f2342b16f3670e0be1b260ac",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "complement each othe",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tc:body:105fe9656519a091a212eb2484684dab",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:2d8b5d0c7a64d028e3a6b80491bd74be",
+                              "type": "paragraph",
+                              "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                              "formatFingerprint": "92927429f4f50d31e6e3be3dde3a5183c9f4b3b1ab89160eda81b49ae1df74b1",
+                              "format": {},
+                              "inlines": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "p:body:416eeb2a4c56d9139ae1f16f1235490e",
+                  "type": "paragraph",
+                  "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                  "formatFingerprint": "92927429f4f50d31e6e3be3dde3a5183c9f4b3b1ab89160eda81b49ae1df74b1",
+                  "format": {},
+                  "inlines": []
+                }
+              ]
+            },
+            {
+              "kind": "textbox",
+              "blocks": [
+                {
+                  "anchor": "tbl:body:63e6f2f37c960ac00fe5679daba6c794",
+                  "type": "table",
+                  "contentHash": "9758ece2c118076edc5ceca59544483d8fc348253d0326d2a356a4aea98be695",
+                  "formatFingerprint": "c58707cbc2b8d20471d35eddbf2792139e5970826ce2cb9f5f4a0303e32bd000",
+                  "unmodeledTablePropsDigest": "bb89f6010930f9284059a5066c818b7e47947c65fb3d5fdc8de6c52d540ee3fc",
+                  "rows": [
+                    {
+                      "anchor": "tr:body:0b4d1bad7f7fae877776d9b1b98ca2d5",
+                      "contentHash": "06d8c2fedd935c170d78c33c5a65cfada39e78d680aaac392282876252153da6",
+                      "cells": [
+                        {
+                          "anchor": "tc:body:7ef199b258a6ff284a40a284a90c79fd",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "2e0b98f39ce1a540fb156610b8f4426309273654f33d53d3c81b22373381f985",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:a6fa34770b97c5a63bcc8a1fccd6dae0",
+                              "type": "paragraph",
+                              "contentHash": "c7be1ed902fb8dd4d48997c6452f5d7e509fbcdbe2808b16bcf4edce4c07d14e",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "This is a test",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tc:body:c65c8d5d4a1a5004e82170dc71e5959c",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "c89145a291a901c5ee832f0ed88d2fce7e3966be484a8594a7bb51a2b683531b",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:e4e06c3d30d07072c4175ddeac584c36",
+                              "type": "paragraph",
+                              "contentHash": "fd1fc905ccc03e52ca0b4718e0008912564526ea9d79fc66f84c748a131b541e",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "This is another test.",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anchor": "tr:body:62e22a1ec4daea88bf3eecebfb0ced1d",
+                      "contentHash": "de3bec6adb785f01091d93787f3422e19ceeb0aceacebef408f18ef462af735f",
+                      "cells": [
+                        {
+                          "anchor": "tc:body:98c07980b92b27e609a6beb39e73fe7c",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "764aec76ac9b6b9324d8ece30eec6cc84e66abc536c2eed92846cdbaaf19a27f",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:9072e78c6794144491e540e0490c8ec6",
+                              "type": "paragraph",
+                              "contentHash": "8dafc43687cac962111f2f339a35c11455709e4cb73f3c8c73bcff56958a73b3",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "Video provides a powerful way to help you prove your point.",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tc:body:cd906c7bdd1af461175829b8205a06dc",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "e696fb0547e06bbac8a5553193da2874efce7633e093619da05db710a6f6a136",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:d86cbd45c3b6042bba42dab304684304",
+                              "type": "paragraph",
+                              "contentHash": "5985d11d12cb6888b5448e18ab812808a170a5a2ccd2ef1a4a9a91681c69cbc7",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "You can also type a keyword.",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anchor": "tr:body:2885b2f856c92016d4623a0e858fd0c1",
+                      "contentHash": "0d35fdb2468008c20e5fbf32ccf4984c0e403a39ccdc52c8a3e505c4f7c982ed",
+                      "cells": [
+                        {
+                          "anchor": "tc:body:20aace3332b928017243e21ded740f18",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "5dd3c599e10f7c5080a671ca7875219d49105e571ad18c648166a1dbbc16365d",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:84fb4320449f9b130a469f5d3a6ad679",
+                              "type": "paragraph",
+                              "contentHash": "eff9e7c928e9a30cc8ab021b4c90f4b822eef5ba4b8e93f53db1d57e3602421d",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "make your document look professionally produced",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tc:body:bedf2da44fd0ec89957fdae14d5e6ffa",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "95e5e8d7e7cfe06229e289d8e5bd0f9be78f8c7a476bf579ca1e9badaca7a800",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:9f4b15dc1e388438293430696dbb7b21",
+                              "type": "paragraph",
+                              "contentHash": "34818b8cadf0475fd04063394026db6231298dc6458cdcc072f8062c4bd3b36f",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "designs that compleme",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anchor": "tr:body:45cff27259ffb0d5d974852b78c21a27",
+                      "contentHash": "3e61cfb19e5324aeafba7c598b10ea5d8a930811144886b6b25d5131edc0f8f7",
+                      "cells": [
+                        {
+                          "anchor": "tc:body:c4c7770a32242b28f8315956ae154efb",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "bfddd938ab88ea6c8969745cade2fefb35da136ce5d631100d045bc7358285b9",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:3c6c7c1464a51ac4e4b7a1b002c2c98c",
+                              "type": "paragraph",
+                              "contentHash": "2b83acb8a0f95999b4b6cbbeedfcdfc6c6485517ad0d2b589bdd598ca1b5cc23",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "for the video that best fits",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tc:body:e12fe6cafaf7101c880b725b48c44bbf",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "38b25f4e9a3b7678ab082f9cd1a0aa696738a25e1fa0e8489120af724209b878",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:da374837a89069cb466bf2b440514ecf",
+                              "type": "paragraph",
+                              "contentHash": "26d036b78e7a387bf18edcb081f77584a37a2aa0d0c91e32fa87cc32066126c4",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "footer, cover page",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    },
+                    {
+                      "anchor": "tr:body:3c50e121d12d53f300e149825fa7b55d",
+                      "contentHash": "d9122dcb64543a6bd603ce22a12a5e460350f39efdf06197343efc051dd3d420",
+                      "cells": [
+                        {
+                          "anchor": "tc:body:dcb2982bc439689f058c7f9622139ae3",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "5d41f504786717f48cb45f21dfa9c5fbdb1481b274d9754d75dd960f1c1c1215",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:8794baee814c0120d3e997ecf705f6f3",
+                              "type": "paragraph",
+                              "contentHash": "36d955cb414e8e787e72a4e53e496ad724a2ade3f2342b16f3670e0be1b260ac",
+                              "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+                              "format": {},
+                              "inlines": [
+                                {
+                                  "kind": "text",
+                                  "text": "complement each othe",
+                                  "format": {}
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tc:body:738078de468444dfb8fe7ae2b1d29f12",
+                          "gridSpan": 1,
+                          "vMerge": "None",
+                          "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                          "blocks": [
+                            {
+                              "anchor": "p:body:e5f6cd11bc5f12641520fe98be6667b1",
+                              "type": "paragraph",
+                              "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                              "formatFingerprint": "92927429f4f50d31e6e3be3dde3a5183c9f4b3b1ab89160eda81b49ae1df74b1",
+                              "format": {},
+                              "inlines": []
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "p:body:c82e6e1b9cfd0e0f2adb823a10473d04",
+                  "type": "paragraph",
+                  "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                  "formatFingerprint": "92927429f4f50d31e6e3be3dde3a5183c9f4b3b1ab89160eda81b49ae1df74b1",
+                  "format": {},
+                  "inlines": []
+                }
+              ]
+            },
+            {
+              "kind": "text",
+              "text": "When you click Online Video, you can paste in the embed code for the video you want to add.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:d0651b5982d04690df5e05a38fe68bb0",
+          "type": "paragraph",
+          "contentHash": "42572b4e881f249cf9bf597ec9f4f3171fe1a57739904a42cd50f33861e729ff",
+          "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "You can also type a keyword to search online for the video that best fits your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:ed1cfe2613eb22a0282da7359c7721a7",
+          "type": "paragraph",
+          "contentHash": "6db490be8d0509c507016c823e67bdcbfb2d0064816dd16865e3495abee579a2",
+          "formatFingerprint": "d54358386a95f933cb1f0514daa071fd31510244bff32236bc605b0bdb349fc5",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:c0d14b853fb01c607fedc4b39eec5b7f",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "92927429f4f50d31e6e3be3dde3a5183c9f4b3b1ab89160eda81b49ae1df74b1",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "sec:body:05042b17662bdf691f11e7ffac876855",
+          "type": "sectionBreak",
+          "contentHash": "ff37a2c5c7011b9a844f2168306251145f271458a09acb28611f943296e051ac",
+          "formatFingerprint": "bb0976a404efe14c0569335e8feacb1fb31991cbe551de9bb8578a85b654f18f",
+          "format": {
+            "pageWidthTwips": 11906,
+            "pageHeightTwips": 16838,
+            "marginTopTwips": 1440,
+            "marginBottomTwips": 1440,
+            "marginLeftTwips": 1440,
+            "marginRightTwips": 1440
+          }
+        }
+      ]
+    }
+  ]
+}

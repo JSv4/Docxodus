@@ -36,6 +36,7 @@ internal static class IrReader
     private static readonly XName REmbed = Docxodus.R.embed;     // r:embed (relationships)
     private static readonly XName WpExtent = Docxodus.WP.extent; // wp:extent (wordprocessingDrawing)
     private static readonly XName WpDocPr = Docxodus.WP.docPr;   // wp:docPr (wordprocessingDrawing)
+    private static readonly XName WTxbxContent = W + "txbxContent"; // w:txbxContent (textbox body, wps + VML)
 
     // The empty-unmodeled-container digest: CanonicalHash of <unmodeled/> with no children.
     // Cached because it is the fingerprint of every format record that carries no leftover props.
@@ -105,7 +106,14 @@ internal static class IrReader
         var styles = BuildStyleRegistry(main);
         var numbering = BuildNumberingRegistry(main);
 
-        var sources = new Dictionary<Uri, XDocument> { [partUri] = mainXDoc };
+        // Sources pins the parsed XDocuments so per-node IrProvenance.Element pointers stay alive. When
+        // RetainSources is off we leave it EMPTY: the working XDocuments still exist for the duration of
+        // this Read (the walk needs them), but nothing in the returned snapshot roots them, so they
+        // become collectible once Read returns. Part-URI facts survive via IrScope.PartUri instead.
+        var retain = options.RetainSources;
+        var sources = new Dictionary<Uri, XDocument>();
+        if (retain)
+            sources[partUri] = mainXDoc;
 
         // --- body scope (always walked; the IrDocument requires a body) -------------------------
         // Comment targets (N15) are recorded only while walking the BODY: the markdown projection's
@@ -113,7 +121,8 @@ internal static class IrReader
         var commentTracker = options.Scopes.HasFlag(IrScopes.Comments)
             ? new CommentTracker()
             : null;
-        var bodyCtx = new ReadContext(partUri, main, styles, numbering, "body", commentTracker);
+        var bodyCtx = new ReadContext(partUri, main, styles, numbering, "body", commentTracker,
+            retainSources: retain);
 
         var body = root.Element(W + "body")
             ?? throw new DocxodusException("Document has no w:body element.");
@@ -140,9 +149,9 @@ internal static class IrReader
         if (options.Scopes.HasFlag(IrScopes.HeadersFooters))
         {
             headers = ReadHeaderFooterScopes(main, body, styles, numbering, sources, anchorIndex,
-                main.HeaderParts.Cast<OpenXmlPart>(), "hdr", W + "headerReference");
+                main.HeaderParts.Cast<OpenXmlPart>(), "hdr", W + "headerReference", retain);
             footers = ReadHeaderFooterScopes(main, body, styles, numbering, sources, anchorIndex,
-                main.FooterParts.Cast<OpenXmlPart>(), "ftr", W + "footerReference");
+                main.FooterParts.Cast<OpenXmlPart>(), "ftr", W + "footerReference", retain);
         }
 
         // --- footnote / endnote scopes (rule M1.3) ----------------------------------------------
@@ -151,19 +160,20 @@ internal static class IrReader
         if (options.Scopes.HasFlag(IrScopes.Notes))
         {
             footnotes = ReadNoteStore(main, main.FootnotesPart, styles, numbering, sources,
-                anchorIndex, "fn", W + "footnote");
+                anchorIndex, "fn", W + "footnote", retain);
             endnotes = ReadNoteStore(main, main.EndnotesPart, styles, numbering, sources,
-                anchorIndex, "en", W + "endnote");
+                anchorIndex, "en", W + "endnote", retain);
         }
 
         // --- comment scope (rule M1.3 + N15 record-half) ----------------------------------------
         var comments = IrCommentStore.Empty;
         if (options.Scopes.HasFlag(IrScopes.Comments))
-            comments = ReadCommentStore(main, styles, numbering, sources, anchorIndex, commentTracker!);
+            comments = ReadCommentStore(main, styles, numbering, sources, anchorIndex, commentTracker!,
+                retain);
 
         return new IrDocument
         {
-            Body = new IrScope("body", IrNodeList.From(blocks)),
+            Body = new IrScope("body", IrNodeList.From(blocks), partUri),
             Headers = headers,
             Footers = footers,
             Footnotes = footnotes,
@@ -186,7 +196,8 @@ internal static class IrReader
     {
         public ReadContext(Uri partUri, MainDocumentPart main,
             IrStyleRegistry styles, IrNumberingRegistry numbering,
-            string scope, CommentTracker? commentTracker = null)
+            string scope, CommentTracker? commentTracker = null, int textboxDepth = 0,
+            bool retainSources = true)
         {
             PartUri = partUri;
             Main = main;
@@ -194,7 +205,29 @@ internal static class IrReader
             Numbering = numbering;
             Scope = scope;
             CommentTracker = commentTracker;
+            TextboxDepth = textboxDepth;
+            RetainSources = retainSources;
         }
+
+        // Whether per-node provenance pins the source XElement (IrReaderOptions.RetainSources). When
+        // false, Provenance() hands back the shared empty instance so the parsed XML can be collected
+        // after Read returns. The part URI is still carried (PartUri above) because it is promoted to
+        // the scope level regardless of this flag.
+        public bool RetainSources { get; }
+
+        // How many w:txbxContent bodies deep this context is. Bounds textbox nesting recursion
+        // (textboxes can legally nest) the same way MaxSdtDepth bounds content-control nesting.
+        // A textbox walked at the cap is preserved opaquely instead of recursing further.
+        public int TextboxDepth { get; }
+
+        /// <summary>A child context one textbox level deeper. The comment tracker is intentionally
+        /// NOT carried inside a textbox: textbox inner paragraphs are their own blocks with their own
+        /// anchors, and the body-scope comment-range offset bookkeeping (which counts visible text in
+        /// document order against the CURRENT block) has no defined meaning across a textbox boundary —
+        /// matching the reader's existing "no offsets inside a field" stance.</summary>
+        public ReadContext IntoTextbox() =>
+            new(PartUri, Main, Styles, Numbering, Scope, commentTracker: null, TextboxDepth + 1,
+                RetainSources);
 
         public Uri PartUri { get; }
 
@@ -220,8 +253,13 @@ internal static class IrReader
         public Dictionary<string, (Uri PartUri, IrHash BytesHash)> ImageHashCache { get; } =
             new(StringComparer.Ordinal);
 
+        // Retained mode pins the source element + part URI on a fresh provenance; retention-off mode
+        // hands back the shared empty instance (no element, no part URI — those facts live at the scope
+        // level now) so the parsed XDocument becomes collectible after Read.
         public IrProvenance Provenance(XElement element) =>
-            new() { Element = element, PartUri = PartUri };
+            RetainSources
+                ? new IrProvenance { Element = element, PartUri = PartUri }
+                : IrProvenance.Empty;
     }
 
     // --- comment range tracking (N15 record-half) -------------------------
@@ -359,33 +397,132 @@ internal static class IrReader
         switch (view)
         {
             case RevisionView.FailIfPresent:
-                if (HasRevisionMarkup(working))
+                // Original (M1.1) throw contract: the narrow ins/del/move/*PrChange set. NOT widened —
+                // IrReaderTests.Read_UnknownElement_BecomesOpaque deliberately feeds a
+                // w:customXmlInsRangeStart under FailIfPresent expecting it to survive as an opaque
+                // block, i.e. it is intentionally NOT treated as "present revision markup" here.
+                if (HasRevisionMarkup(working, FailIfPresentNameSet))
                     throw new DocxodusException(
                         "Document contains tracked revisions and RevisionView is FailIfPresent.");
                 return working;
+
             case RevisionView.Accept:
-                return RevisionProcessor.AcceptRevisions(working);
             case RevisionView.Reject:
-                return RevisionProcessor.RejectRevisions(working);
+                // Accepting/rejecting revisions on a document with NO revision markup is a pure no-op
+                // round-trip (RevisionProcessor opens, clones, walks, and re-serializes the whole
+                // package only to change nothing). A cheap in-memory descendant scan lets the common
+                // revision-free document skip that round-trip — the single largest per-Read cost.
+                // The scan set (ProcessorActsOnNameSet) is a strict SUPERSET of every element
+                // Accept/RejectRevisions acts on (run/paragraph ins/del/move, the *PrChange and
+                // tblPrExChange property-revision markers, table cell/grid revisions, deleted text
+                // markers, and the customXml*RangeStart range markers), and the scan covers EVERY part
+                // the reader consumes (main + headers + footers + footnotes + endnotes + comments) —
+                // exactly the parts RevisionProcessor itself transforms. So "no markup found" provably
+                // implies the processor would not have changed a byte — output stays identical. See the
+                // masking analysis on ProcessorActsOnNameSet for why w:instrText/w:t are deliberately
+                // omitted (covered by their w:ins ancestor).
+                if (!HasRevisionMarkup(working, ProcessorActsOnNameSet))
+                    return working;
+                return view == RevisionView.Accept
+                    ? RevisionProcessor.AcceptRevisions(working)
+                    : RevisionProcessor.RejectRevisions(working);
+
             default:
                 return working;
         }
     }
 
-    private static readonly XName[] RevisionElementNames =
+    // The narrow M1.1 FailIfPresent set (unchanged — preserves the documented throw contract).
+    private static readonly HashSet<XName> FailIfPresentNameSet = new()
     {
         W + "ins", W + "del", W + "moveFrom", W + "moveTo", W + "rPrChange", W + "pPrChange",
     };
 
-    private static bool HasRevisionMarkup(WmlDocument working)
+    // Every element name RevisionProcessor.Accept/RejectRevisions reacts to. A strict superset so a
+    // "no markup" scan result guarantees the processor is a no-op (see the Accept/Reject skip above).
+    //
+    // SET-DRIFT CONTRACT: this set MUST list every element name RevisionProcessor's transforms
+    // dispatch on by name. If RevisionProcessor.cs gains/loses a revision element, update BOTH this
+    // set AND the hardcoded list in IrRevisionSkipTests.ProcessorActsOnNameSet_MatchesProcessor.
+    // Source of truth: the `element.Name == W.*` dispatch in RevisionProcessor.cs
+    // (ReverseRevisionsTransform ~ln 96-450 / 604-1252; AcceptAllOtherRevisionsTransform ~ln 1680-1731).
+    //
+    // Masking analysis for elements RevisionProcessor transforms but that are NOT listed here because a
+    // listed ancestor provably covers them:
+    //   - w:instrText: only transformed by the Reject path (RevisionProcessor.cs:1223) and ONLY when
+    //     rri.InInsert is set, which is reached exclusively inside a w:ins subtree (the InInsert flag is
+    //     set when recursing through w:ins; see ReverseRevisionsTransform). No w:ins ⇒ no transform, and
+    //     w:ins IS scanned. Genuinely masked, so omitted.
+    //   - w:t: same — only rewritten to w:delText under rri.InInsert (RevisionProcessor.cs:1232), masked
+    //     by w:ins. (Scanning w:t would defeat the optimization entirely; every document has w:t.)
+    // By contrast w:delText (RevisionProcessor.cs:1241 / :1729) and w:delInstrText
+    // (RevisionProcessor.cs:1214 / :1728) are transformed UNCONDITIONALLY by name — the code does NOT
+    // gate them on a w:del/w:ins ancestor. Schema-valid documents only place them under w:del, but the
+    // skip's soundness guarantee must not rely on producer validity, so both are listed here.
+    private static readonly HashSet<XName> ProcessorActsOnNameSet = new()
+    {
+        W + "ins", W + "del", W + "moveFrom", W + "moveTo",
+        W + "moveFromRangeStart", W + "moveFromRangeEnd", W + "moveToRangeStart", W + "moveToRangeEnd",
+        W + "rPrChange", W + "pPrChange", W + "sectPrChange", W + "tblPrChange", W + "tblGridChange",
+        W + "trPrChange", W + "tcPrChange", W + "tblPrExChange", W + "numberingChange",
+        W + "cellIns", W + "cellDel", W + "cellMerge",
+        W + "delText", W + "delInstrText",
+        W + "customXmlInsRangeStart", W + "customXmlDelRangeStart",
+        W + "customXmlMoveFromRangeStart", W + "customXmlMoveToRangeStart",
+        // RangeEnd markers are removed unconditionally by Accept (RevisionProcessor.cs:1693-1698).
+        // Schema-valid documents always pair them with a scanned RangeStart, but — same standard as
+        // delText above — soundness must not rely on producer validity, so they are listed too.
+        W + "customXmlInsRangeEnd", W + "customXmlDelRangeEnd",
+        W + "customXmlMoveFromRangeEnd", W + "customXmlMoveToRangeEnd",
+    };
+
+    // The hardcoded revision-element list the set-drift guard test asserts against. Kept internal so
+    // IrRevisionSkipTests can compare it to ProcessorActsOnNameSet without reflecting over the private
+    // field — both must change together when RevisionProcessor's dispatch changes.
+    internal static IReadOnlyCollection<XName> ProcessorActsOnNamesForTest => ProcessorActsOnNameSet;
+
+    // A w:ins child of w:numPr (inserted numbering, RevisionProcessor.cs:96) is itself a w:ins element,
+    // so the local-name "ins" scan above already catches it — no separate numPr probe is needed. The
+    // scan matches by full XName via DescendantsAndSelf, which visits that nested w:ins like any other.
+    private static bool HasRevisionMarkup(WmlDocument working, HashSet<XName> names)
     {
         using var stream = new OpenXmlMemoryStreamDocument(working);
         using var wdoc = stream.GetWordprocessingDocument();
-        var root = wdoc.MainDocumentPart?.GetXDocument().Root;
-        if (root is null)
+        var main = wdoc.MainDocumentPart;
+        if (main is null)
             return false;
-        var names = new HashSet<XName>(RevisionElementNames);
-        return root.DescendantsAndSelf().Any(e => names.Contains(e.Name));
+        // The reader consumes the main part AND headers/footers/footnotes/endnotes/comments, and
+        // RevisionProcessor processes every one of those parts too. Scanning only the main part would
+        // let a header-only (or footnote-only, …) revision slip past the skip, so the processor's
+        // transform would be silently bypassed. Scan exactly the parts the reader walks.
+        foreach (var part in RevisionScannablePartsOf(main))
+        {
+            var root = part.GetXDocument().Root;
+            if (root is null)
+                continue;
+            foreach (var e in root.DescendantsAndSelf())
+                if (names.Contains(e.Name))
+                    return true;
+        }
+        return false;
+    }
+
+    // The parts whose revision markup the skip must account for: the main document plus every part the
+    // reader pulls block content from (headers, footers, footnotes, endnotes, comments). Mirrors the
+    // parts walked in Read (main.HeaderParts/FooterParts/FootnotesPart/EndnotesPart/CommentsPart).
+    private static IEnumerable<OpenXmlPart> RevisionScannablePartsOf(MainDocumentPart main)
+    {
+        yield return main;
+        foreach (var h in main.HeaderParts)
+            yield return h;
+        foreach (var f in main.FooterParts)
+            yield return f;
+        if (main.FootnotesPart is not null)
+            yield return main.FootnotesPart;
+        if (main.EndnotesPart is not null)
+            yield return main.EndnotesPart;
+        if (main.WordprocessingCommentsPart is not null)
+            yield return main.WordprocessingCommentsPart;
     }
 
     // --- block dispatch ---------------------------------------------------
@@ -444,6 +581,13 @@ internal static class IrReader
     /// purely to bound recursion against adversarial/corrupt input.
     /// </summary>
     private const int MaxSdtDepth = 64;
+
+    /// <summary>
+    /// Maximum <c>w:txbxContent</c> nesting the reader walks before falling back to an opaque inline.
+    /// Textboxes can legally nest (a shape inside a textbox can itself carry a textbox); the cap
+    /// bounds recursion against adversarial/corrupt input, mirroring <see cref="MaxSdtDepth"/>.
+    /// </summary>
+    private const int MaxTextboxDepth = 16;
 
     private static IrBlock BuildBlock(XElement el, ReadContext ctx)
     {
@@ -510,6 +654,11 @@ internal static class IrReader
             Inlines = IrNodeList.From(processed),
             InlineSectionBreakAnchor = inlineSectAnchor,
             ResolvedListMarker = resolvedMarker,
+            // The oracle's structural IsListItem verdict (numPr present inline or via the style chain,
+            // numId-agnostic) — drives the emitter's trailing-blank rule for heading/Subtitle styles
+            // whose chain carries a bare numPr (no numId), where List stays null. See
+            // IrParagraph.IsListItemForLayout.
+            IsListItemForLayout = WmlToMarkdownConverter.IsListItem(p),
             ContentHash = contentHash,
             FormatFingerprint = formatFingerprint,
             Source = ctx.Provenance(p),
@@ -793,24 +942,48 @@ internal static class IrReader
 
         /// <summary>
         /// Flush the walker's accumulated inlines. When the sequence ended mid-field (a
-        /// <c>begin</c> with no matching <c>end</c>), nothing built during that field was committed
-        /// to <c>_output</c> — the instruction-phase run text, hyperlinks, fldSimples, and opaque
-        /// elements were all diverted into <c>_captured</c>. To lose no content we emit every
-        /// captured element as an <see cref="IrOpaqueInline"/> here. (When a field instead
-        /// terminates normally, its instruction-phase plumbing — including any nested
-        /// hyperlink/fldSimple/opaque — is deliberately flattened away and never reaches
-        /// <c>_output</c>; this fallback only fires for the unterminated case, where dropping it
-        /// would be data loss.)
+        /// <c>begin</c> with no matching <c>end</c>) there are two cases:
+        /// <list type="bullet">
+        /// <item><b>The field reached its <c>separate</c></b> (instruction + result, just no closing
+        /// <c>end</c> before the paragraph ends — e.g. a TOC field whose <c>end</c> is implied at
+        /// paragraph close). Word still displays the last-computed result, and the oracle's
+        /// field-unaware <c>GroupInlineRuns</c>/<c>Descendants(w:t)</c> both see that result text. We
+        /// therefore emit a normal run-based <see cref="IrFieldRun"/> (instruction + result), exactly
+        /// as the <c>end</c> handler would — so the result flows into the rendered markdown AND the
+        /// TextPreview, never dropped. The instruction-phase plumbing is flattened away just like a
+        /// terminated field.</item>
+        /// <item><b>The field never reached <c>separate</c></b> (instruction-only, unterminated):
+        /// nothing committed to <c>_output</c> — the instruction-phase run text, hyperlinks,
+        /// fldSimples, and opaque elements were all diverted into <c>_captured</c>. To lose no content
+        /// we re-emit every captured element as an <see cref="IrOpaqueInline"/>.</item>
+        /// </list>
         /// </summary>
         public List<IrInline> Finish()
         {
-            // Unterminated field (begin without matching end): fall back to opaque so no content
-            // is lost. Each captured element is canonical-hashed into an opaque inline.
             if (_fieldDepth > 0)
             {
-                foreach (var el in _captured)
-                    _output.Add(new IrOpaqueInline(el.Name, IrHasher.CanonicalHash(el)));
-                _fieldDepth = 0;
+                if (_inResult)
+                {
+                    // Implied end-at-paragraph-close: commit the field with its result, mirroring the
+                    // "end" handler. EmitInline at depth 0 (we force the depth to 0 first) appends it
+                    // to _output. The result text now reaches both the rendered markdown and the
+                    // TextPreview, matching the oracle's raw Descendants(w:t) view.
+                    _fieldDepth = 0;
+                    EmitInline(new IrFieldRun(
+                        _instruction.ToString(),
+                        IrNodeList.From(new List<IrInline>(_result))));
+                }
+                else
+                {
+                    // Instruction-only unterminated field: re-emit captured plumbing opaquely so no
+                    // content is lost (each captured element is canonical-hashed into an opaque inline).
+                    foreach (var el in _captured)
+                        _output.Add(new IrOpaqueInline(el.Name, IrHasher.CanonicalHash(el)));
+                    _fieldDepth = 0;
+                }
+                _inResult = false;
+                _result.Clear();
+                _captured.Clear();
             }
             return _output;
         }
@@ -899,8 +1072,74 @@ internal static class IrReader
             return;
         else if (IsDroppedParagraphChild(child.Name))
             return; // N3: bookmarks can legally appear inside a run too.
+        else if (child.DescendantsAndSelf(WTxbxContent).Any())
+            // A w:pict (VML v:textbox), an mc:AlternateContent wrapping a DrawingML w:drawing AND a VML
+            // w:pict, or any other carrier of textbox bodies: model each w:txbxContent body as an
+            // IrTextbox rather than dropping it opaquely (which is what closes the ContentHash blind
+            // spot). A w:drawing carrying ONLY a textbox (no resolvable blip) reaches here too — it is
+            // NOT promoted to an image by AppendDrawing (that branch is above), so it lands here.
+            AppendTextboxes(child, ctx, sink);
         else
             sink.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)));
+    }
+
+    // --- textbox bodies (w:txbxContent inside w:drawing/wps:txbx or w:pict/v:textbox) -------------
+
+    /// <summary>
+    /// Append one <see cref="IrTextbox"/> per OUTERMOST <c>w:txbxContent</c> reachable from
+    /// <paramref name="carrier"/> (a run child — a <c>w:drawing</c>, a <c>w:pict</c>, or an
+    /// <c>mc:AlternateContent</c> wrapping both), in document order. Each body's block children are
+    /// walked by the normal block walker under the current scope, so every inner <c>w:p</c>/<c>w:tbl</c>
+    /// gets its own anchor and hashes — matching the ORACLE, whose <c>Descendants(w:t)</c> /
+    /// <c>DescendantsAndSelf</c> walks see textbox text and inner-paragraph anchors regardless of the
+    /// DrawingML/VML wrapper. Word emits the same logical textbox twice (an <c>mc:Choice</c> DrawingML
+    /// copy and an <c>mc:Fallback</c> VML copy); this yields one node per copy on purpose, so flat text
+    /// and the anchor set match the oracle's both-copies traversal. Only the OUTERMOST bodies are taken
+    /// here — a nested textbox (a <c>w:txbxContent</c> inside another) is reached when the block walker
+    /// descends into the inner paragraph's runs, so it is modeled once at its true depth. Depth-capped:
+    /// at <see cref="MaxTextboxDepth"/> the body is preserved as a single opaque inline instead of
+    /// recursing further (totality against adversarial nesting).
+    /// </summary>
+    private static void AppendTextboxes(XElement carrier, ReadContext ctx, List<IrInline> sink)
+    {
+        foreach (var txbx in OutermostTextboxBodies(carrier))
+        {
+            if (ctx.TextboxDepth >= MaxTextboxDepth)
+            {
+                sink.Add(new IrOpaqueInline(txbx.Name, IrHasher.CanonicalHash(txbx)));
+                continue;
+            }
+
+            var innerCtx = ctx.IntoTextbox();
+            var blocks = new List<IrBlock>();
+            foreach (var child in txbx.Elements())
+                AppendBlocks(child, innerCtx, blocks);
+            sink.Add(new IrTextbox(IrNodeList.From(blocks)));
+        }
+    }
+
+    /// <summary>
+    /// The <c>w:txbxContent</c> elements reachable from <paramref name="root"/> that are NOT themselves
+    /// nested inside another <c>w:txbxContent</c> — i.e. the outermost bodies. Nested bodies are
+    /// deliberately excluded here because the recursive block walker re-discovers them when it descends
+    /// into an outer body's inner paragraphs (so each is modeled exactly once at its real nesting depth).
+    /// </summary>
+    private static IEnumerable<XElement> OutermostTextboxBodies(XElement root)
+    {
+        // Take a w:txbxContent only when no ANCESTOR (walking up but stopping at the carrier root) is
+        // itself a w:txbxContent — that is the outermost-within-carrier test. DescendantsAndSelf so a
+        // carrier that IS a w:txbxContent (it never is today, but stays correct) is handled too.
+        foreach (var txbx in root.DescendantsAndSelf(WTxbxContent))
+        {
+            var nestedUnderAnotherBody = false;
+            foreach (var anc in txbx.Ancestors())
+            {
+                if (ReferenceEquals(anc, root)) break;
+                if (anc.Name == WTxbxContent) { nestedUnderAnotherBody = true; break; }
+            }
+            if (!nestedUnderAnotherBody)
+                yield return txbx;
+        }
     }
 
     // --- hyperlinks (N14) -------------------------------------------------
@@ -979,8 +1218,15 @@ internal static class IrReader
     /// </summary>
     private static void AppendDrawing(XElement drawing, ReadContext ctx, List<IrInline> sink)
     {
+        // Image promotion and textbox modeling are INDEPENDENT, matching the oracle: a w:drawing can
+        // carry BOTH a resolvable a:blip image AND a wps:txbx textbox body, and the oracle's
+        // Descendants(w:t)/DescendantsAndSelf walks see the textbox text/anchors regardless of the
+        // blip. So we promote the image if one resolves, AND (always) append a textbox per
+        // w:txbxContent body. A drawing with only a textbox (no resolvable blip) yields just the
+        // textbox; a drawing with neither falls back to a single opaque inline.
         var blip = drawing.Descendants(ABlip).FirstOrDefault();
         var embedId = (string?)blip?.Attribute(REmbed);
+        var promotedImage = false;
         if (embedId is not null)
         {
             var resolved = ResolveImagePart(ctx, embedId);
@@ -1003,11 +1249,23 @@ internal static class IrReader
                 {
                     Unid = drawingUnid,
                 });
-                return;
+                promotedImage = true;
             }
         }
 
-        // No resolvable embedded image (VML w:pict, missing rel, etc.): preserve opaquely.
+        // Textbox bodies (if any) are modeled regardless of whether an image was promoted.
+        var hasTextbox = drawing.DescendantsAndSelf(WTxbxContent).Any();
+        if (hasTextbox)
+        {
+            AppendTextboxes(drawing, ctx, sink);
+            return;
+        }
+
+        if (promotedImage)
+            return;
+
+        // No resolvable embedded image and no textbox (missing rel, unmodeled shape, etc.): preserve
+        // the whole drawing opaquely so nothing is lost (totality).
         sink.Add(new IrOpaqueInline(drawing.Name, IrHasher.CanonicalHash(drawing)));
     }
 
@@ -1236,6 +1494,18 @@ internal static class IrReader
                     // format-grade change) so a resized-but-same-bytes image reads as "changed".
                     builder.AppendSentinel(IrContentHashBuilder.SentinelImage);
                     builder.AppendHash(img.ImageBytesHash);
+                    break;
+                case IrTextbox tb:
+                    // Sentinel + each inner block's ContentHash in order (spec §6.1 M1.5 addendum).
+                    // This is what makes textbox text participate in the containing paragraph's
+                    // ContentHash — a textbox text edit now flips the paragraph hash — while the
+                    // sentinel framing keeps textbox text distinct from identical inline text. Inner
+                    // blocks' formatting stays in THEIR OWN fingerprints; it does NOT enter the
+                    // containing paragraph's FormatFingerprint (the diff engine sees inner blocks as
+                    // separately indexed blocks, so folding their formats here would double-count).
+                    builder.AppendSentinel(IrContentHashBuilder.SentinelTextbox);
+                    foreach (var inner in tb.Blocks)
+                        builder.AppendHash(inner.ContentHash);
                     break;
                 case IrOpaqueInline o:
                     builder.AppendSentinel(IrContentHashBuilder.SentinelOpaque);
@@ -1802,7 +2072,7 @@ internal static class IrReader
     private static IrNodeList<IrHeaderFooter> ReadHeaderFooterScopes(
         MainDocumentPart main, XElement body, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        IEnumerable<OpenXmlPart> parts, string scopePrefix, XName referenceName)
+        IEnumerable<OpenXmlPart> parts, string scopePrefix, XName referenceName, bool retain)
     {
         var result = new List<IrHeaderFooter>();
         int i = 1;
@@ -1815,17 +2085,20 @@ internal static class IrReader
                 if (root is null)
                     continue;
 
-                var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName);
+                var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName,
+                    retainSources: retain);
                 var blocks = new List<IrBlock>();
                 foreach (var child in root.Elements())
                     AppendBlocks(child, ctx, blocks);
 
                 foreach (var b in blocks)
                     IndexBlock(b, anchorIndex);
-                sources[part.Uri] = part.GetXDocument();
+                if (retain)
+                    sources[part.Uri] = part.GetXDocument();
 
                 var kind = ResolveHeaderFooterKind(main, body, part, referenceName);
-                result.Add(new IrHeaderFooter(scopeName, kind, new IrScope(scopeName, IrNodeList.From(blocks))));
+                result.Add(new IrHeaderFooter(scopeName, kind,
+                    new IrScope(scopeName, IrNodeList.From(blocks), part.Uri)));
             }
             catch (Exception e) when (IsTolerableRegistryException(e))
             {
@@ -1872,7 +2145,7 @@ internal static class IrReader
     private static IrNoteStore ReadNoteStore(
         MainDocumentPart main, OpenXmlPart? part, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        string scopeName, XName noteName)
+        string scopeName, XName noteName, bool retain)
     {
         if (part is null)
             return IrNoteStore.Empty;
@@ -1883,7 +2156,8 @@ internal static class IrReader
             if (root is null)
                 return IrNoteStore.Empty;
 
-            var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName);
+            var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName,
+                retainSources: retain);
             var notes = new Dictionary<string, IrScope>(StringComparer.Ordinal);
             // Insertion-ordered map id → the note element's own pt:Unid (the projection's label source).
             var noteUnids = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -1902,11 +2176,12 @@ internal static class IrReader
                 foreach (var b in blocks)
                     IndexBlock(b, anchorIndex);
 
-                notes[id] = new IrScope(scopeName, IrNodeList.From(blocks));
+                notes[id] = new IrScope(scopeName, IrNodeList.From(blocks), part.Uri);
                 noteUnids[id] = Unid(noteEl);
             }
 
-            sources[part.Uri] = part.GetXDocument();
+            if (retain)
+                sources[part.Uri] = part.GetXDocument();
             return new IrNoteStore(notes, noteUnids);
         }
         catch (Exception e) when (IsTolerableRegistryException(e))
@@ -1927,7 +2202,7 @@ internal static class IrReader
     private static IrCommentStore ReadCommentStore(
         MainDocumentPart main, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        CommentTracker tracker)
+        CommentTracker tracker, bool retain)
     {
         var part = main.WordprocessingCommentsPart;
         if (part is null)
@@ -1939,7 +2214,8 @@ internal static class IrReader
             if (root is null)
                 return IrCommentStore.Empty;
 
-            var ctx = new ReadContext(part.Uri, main, styles, numbering, "cmt");
+            var ctx = new ReadContext(part.Uri, main, styles, numbering, "cmt",
+                retainSources: retain);
             var comments = new List<IrComment>();
 
             foreach (var commentEl in root.Elements(W + "comment"))
@@ -1962,8 +2238,9 @@ internal static class IrReader
                     IrNodeList.From(blocks), IrNodeList.From(targets)));
             }
 
-            sources[part.Uri] = part.GetXDocument();
-            return new IrCommentStore(IrNodeList.From(comments));
+            if (retain)
+                sources[part.Uri] = part.GetXDocument();
+            return new IrCommentStore(IrNodeList.From(comments), part.Uri);
         }
         catch (Exception e) when (IsTolerableRegistryException(e))
         {
@@ -2214,6 +2491,15 @@ internal static class IrReader
                 foreach (var cell in row.Cells)
                     foreach (var child in cell.Blocks)
                         IndexBlock(child, index);
+        else if (block is IrParagraph para)
+            // Textbox inner blocks are addressable too (the oracle's DescendantsAndSelf index walk
+            // reaches them). Register each so the AnchorIndex carries the same anchor set the oracle
+            // produces; the recursion bottoms out naturally (inner blocks may themselves be paragraphs
+            // bearing nested textboxes).
+            foreach (var inline in para.Inlines)
+                if (inline is IrTextbox tb)
+                    foreach (var inner in tb.Blocks)
+                        IndexBlock(inner, index);
     }
 
     // --- helpers ----------------------------------------------------------

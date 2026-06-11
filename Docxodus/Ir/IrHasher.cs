@@ -293,6 +293,13 @@ internal sealed class IrContentHashBuilder
     public const byte SentinelHyperlink = 0x08;
     public const byte SentinelHyperlinkTargetEnd = 0x09;
 
+    // Textbox framing (spec §6.1 M1.5 addendum): a w:txbxContent body. The sentinel is followed by
+    // each inner block's 32-byte ContentHash in order (AppendHash), so a textbox's text participates
+    // in the containing paragraph's ContentHash — closing the blind spot where textbox text was
+    // invisible to the diff engine — yet stays distinguishable from identical inline (non-textbox)
+    // text because the sentinel and per-block hash framing can never be reproduced by literal runs.
+    public const byte SentinelTextbox = 0x0B;
+
     public const byte SentinelOpaque = 0x0F;
 
     // Structure markers (written after a 0x02 lead byte) — table structure.

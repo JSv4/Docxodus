@@ -23,6 +23,14 @@ namespace Docxodus.Ir;
 /// </remarks>
 internal sealed class IrProvenance
 {
+    /// <summary>
+    /// A single shared instance carrying no element/part — used for every node when the reader runs
+    /// with <see cref="IrReaderOptions.RetainSources"/> = <c>false</c>. Sharing one instance means
+    /// retention-off reads pay zero per-node provenance allocation, and because provenance is
+    /// equality-neutral (see the type remarks) reusing it never perturbs any node's value/hash.
+    /// </summary>
+    public static readonly IrProvenance Empty = new();
+
     /// <summary>The source OOXML element this IR node was read from, if known.</summary>
     public XElement? Element { get; init; }
 

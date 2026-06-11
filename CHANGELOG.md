@@ -5,9 +5,47 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Document IR — M1.5 pre-Phase-2 hardening (sweep + revision-skip soundness).** *Internal/experimental.* Two principled sweep fixes lifted corpus markdown byte-equivalence **642 → 648/668** (each adds a rule pin; both strictly improve IR fidelity): (1) the EmitBlocks trailing-blank-line rule now keys on the oracle's *structural* `IsListItem` verdict (`w:numPr` present inline or via the `pStyle→basedOn` chain, **numId-agnostic**), captured by the reader as `IrParagraph.IsListItemForLayout` — so a `Subtitle`/`Heading{N}` style whose chain carries a bare `<w:numPr><w:ilvl/></w:numPr>` (no `numId`) gets the same spacing the oracle gives it, while its resolved `List` correctly stays null (closes HC007/HW010 + the HC005/HC048 cascades); (2) a complex field that reached its `separate` but whose closing `end` is implied at paragraph close (a TOC field) now emits a faithful run-based `IrFieldRun` carrying the computed result instead of dropping it to an opaque capture — so the result text reaches both the rendered markdown and `TextPreview`, matching the oracle's raw `Descendants(w:t)` view (closes HC022/HC031; HC031 snapshot regenerated + reviewed). The remaining 20 divergences are all accepted oracle-bug-family (special-char drops, multi-run hyperlink/emphasis splits, customXml-range content-control acceptance — every case where the IR is *more* correct), bundled with the D3 cutover. Separately, the `IrReader.Read` revision-skip scan that avoids the `RevisionProcessor` round-trip on revision-free documents was made **provably sound**: its element set is now a true superset of every name `RevisionProcessor` dispatches on (was missing `w:tblPrExChange`, the unconditionally-rewritten `w:delText`/`w:delInstrText`, and the full move/cell/customXml-RangeEnd set) and it scans every part the reader walks (was `MainDocumentPart`-only, missing header/footer/footnote/endnote/comment-only revisions). New `IrRevisionSkipTests` add behavioral guards (`tblPrExChange`-only and header-only insertion reads match `RevisionProcessor.AcceptRevisions`) plus a set-drift guard pinning the scan set to `RevisionProcessor`'s dispatch so it cannot silently rot. No public API change.
 - **Solution builds no longer race the WASM-mode assembly.** `DocxodusWasm` references `Docxodus` with `WASM_BUILD=true`, so every solution build compiled Docxodus twice into the same `bin/<Config>/net8.0/` output — whichever finished last won, and `Docxodus.Tests` intermittently linked the SkiaSharp-free WASM assembly (`error CS1061: 'ImageInfo' ... 'SaveImage'`). WASM-mode output now builds into isolated `bin/wasm/` + `obj/wasm/` paths; the `dotnet clean` workaround documented in CLAUDE.md is no longer needed.
 
 ### Added
+- **Document IR — M1.5 pre-Phase-2 hardening (textboxes, memory, perf).** *Internal/experimental.* Three additive items prepared the IR for the Phase-2 diff engine; combined with the M1.5 sweep (see Fixed) they lifted corpus markdown byte-equivalence **608/668 → 648/668** and put the IR within perf/memory budget with a sound, hash-complete model:
+  - **Textbox bodies (`IrTextbox`).** Textbox bodies (`w:txbxContent` reachable from a
+    DrawingML `w:drawing`/`wps:txbx` or a VML `w:pict`/`v:textbox`, including the
+    `mc:AlternateContent` Choice/Fallback pair Word emits) are no longer opaque: their
+    inner blocks are fully modeled — anchored, hashed
+    (`ContentHash`/`FormatFingerprint`), and registered in the document `AnchorIndex` —
+    by the normal block walker (depth-capped). A new
+    `IrContentHashBuilder.SentinelTextbox` (`0x0B`) folds each inner block's
+    `ContentHash` into the *containing* paragraph's hash, closing the diff-engine blind
+    spot where textbox text was invisible to `ContentHash`. The emitter mirrors the
+    oracle exactly (textbox content stays out of the rendered markdown but its `w:t`
+    flows into `TextPreview`/`ScopeHasContent`/cell text, and its inner paragraphs are
+    indexed). This was the dominant equivalence lift of the milestone (**608 → 642**),
+    closing every textbox fixture and all five header/footer content-detection
+    fixtures. Image promotion and textbox modeling are independent.
+  - **Optional provenance retention (`RetainSources`).** New
+    `IrReaderOptions.RetainSources` (default `true`). When `false`,
+    `IrDocument.Sources` is empty and every node's `IrProvenance.Element` is null (a
+    shared empty provenance instance, zero per-node allocation), so the parsed
+    `XDocument`s become collectible once `IrReader.Read` returns — dropping the largest
+    fixture's retained snapshot from **≈11.1× to ≈2.7× the main-part XML size**
+    (live-heap delta; reported, not gated). Part-URI facts survive in both modes via
+    the additive scope-level `IrScope.PartUri` / `IrCommentStore.PartUri` (the emitter
+    prefers these over per-node provenance). Content is provably identical across modes
+    — anchors, `ContentHash`, `FormatFingerprint` unchanged (verified corpus-wide + in
+    `IrRetentionTests`); diagnostic JSON byte-stable. The Phase-2 diff engine and bulk
+    pipelines should read with `RetainSources=false`.
+  - **Read perf pass.** `IrReader.Read` no longer runs
+    `RevisionProcessor.AcceptRevisions` unconditionally: the default
+    `RevisionView.Accept`/`Reject` path skips the full open/clone/walk/re-serialize
+    package round-trip on the revision-free majority of documents via the cheap
+    in-memory revision-markup scan made sound under Fixed (so "no markup" means a
+    byte-identical no-op). This cut the corpus IR-vs-oracle wall-time ratio **~1.94× →
+    ~1.16×** (best-of-3, 668 fixtures); the opt-in perf gate (`DOCXODUS_RUN_PERF=1`)
+    was tightened 2.0× → 1.5×.
+
+  No public API / WASM / npm / python surface (M1.5 is `internal` by design).
 - **Document IR — Phase 1 (M1.1–M1.4) complete** — *internal/experimental.* The
   read-only, immutable, typed, anchor-identified, normalized in-memory DOCX model
   (`Docxodus/Ir/`, all `internal`) is feature-complete through its Phase-1 gate:

@@ -73,14 +73,14 @@ internal static class IrMarkdownEmitter
         var autoNumber = BuildAutoNumberResolver(ir);
 
         // --- body ---
-        var bodyPartUri = ResolveBodyPartUri(ir);
+        var bodyPartUri = ResolveScopePartUri(ir, ir.Body);
         foreach (var (anchor, preview) in WalkAnchorsForIndex(ir.Body.Blocks, settings))
             AddIndexEntry(index, anchor, bodyPartUri, preview, autoNumber);
 
         // --- headers / footers (each in part-enumeration order) ---
         foreach (var hf in ir.Headers.Concat(ir.Footers))
         {
-            var partUri = ResolveScopePartUri(ir, hf.Scope.Blocks);
+            var partUri = ResolveScopePartUri(ir, hf.Scope);
             foreach (var (anchor, preview) in WalkAnchorsForIndex(hf.Scope.Blocks, settings))
                 AddIndexEntry(index, anchor, partUri, preview, autoNumber);
         }
@@ -150,7 +150,10 @@ internal static class IrMarkdownEmitter
     {
         if (store.Notes.Count == 0) return;
         var scope = IrAnchor.KindToken(kind);
-        var partUri = ResolveScopePartUriBySuffix(ir, scope == "fn" ? "/footnotes.xml" : "/endnotes.xml");
+        // Prefer the scope-level part URI carried on the note scopes (populated in both retention
+        // modes); fall back to a Sources suffix scan for any legacy scope with no PartUri.
+        var partUri = store.Notes.Values.Select(s => s.PartUri).FirstOrDefault(u => u is not null)?.ToString()
+            ?? ResolveScopePartUriBySuffix(ir, scope == "fn" ? "/footnotes.xml" : "/endnotes.xml");
         foreach (var (noteId, noteScope) in store.Notes)
         {
             if (!store.NoteUnids.TryGetValue(noteId, out var unid)) continue;
@@ -170,9 +173,17 @@ internal static class IrMarkdownEmitter
             : text;
     }
 
-    private static string ResolveScopePartUri(IrDocument ir, IrNodeList<IrBlock> blocks)
+    /// <summary>
+    /// The part URI for a scope's anchor-index entries. Prefers the scope-level
+    /// <see cref="IrScope.PartUri"/> (populated in BOTH retention modes); falls back to per-block
+    /// provenance (retained mode only), then to a <see cref="IrDocument.Sources"/> scan, then to the
+    /// conventional main-part path. The scope-level fact is what keeps this correct when
+    /// <c>RetainSources=false</c> empties <see cref="IrDocument.Sources"/> and per-node provenance.
+    /// </summary>
+    private static string ResolveScopePartUri(IrDocument ir, IrScope scope)
     {
-        foreach (var b in blocks)
+        if (scope.PartUri is { } scopeUri) return scopeUri.ToString();
+        foreach (var b in scope.Blocks)
             if (b.Source.PartUri is { } uri) return uri.ToString();
         return ir.Sources.Keys.FirstOrDefault()?.ToString() ?? "/word/document.xml";
     }
@@ -189,7 +200,9 @@ internal static class IrMarkdownEmitter
 
     private static string ResolveCommentsPartUri(IrDocument ir)
     {
-        // Comment blocks carry their part provenance; fall back to a Sources scan by suffix.
+        // Prefer the comment store's scope-level part URI (populated in both retention modes); then
+        // per-block provenance (retained mode only); then a Sources scan by suffix.
+        if (ir.Comments.PartUri is { } storeUri) return storeUri.ToString();
         foreach (var c in ir.Comments.Comments)
             foreach (var b in c.Blocks)
                 if (b.Source.PartUri is { } uri) return uri.ToString();
@@ -272,18 +285,29 @@ internal static class IrMarkdownEmitter
             switch (b)
             {
                 case IrParagraph p:
-                    // Suppress-mode: drop empty paragraphs from the index (oracle parity).
+                    // Suppress-mode: drop empty paragraphs from the index (oracle parity). Note a
+                    // paragraph whose only "text" lives in a textbox is NOT empty under the oracle's
+                    // index walk: KindFor checks Descendants(w:t), which sees textbox text — so a
+                    // textbox-bearing paragraph keeps its own index entry even in Suppress mode (and
+                    // ParagraphHasVisibleTextOrTextbox reflects that). Its textbox inner blocks are
+                    // still indexed regardless (the oracle reaches them via DescendantsAndSelf).
                     if (settings.EmptyParagraphs == EmptyParagraphMode.Suppress
-                        && !ParagraphHasVisibleText(p))
+                        && !ParagraphHasVisibleTextOrTextbox(p))
                     {
                         // The in-pPr sectPr is metadata, not content — it still appears in the index.
                         if (p.InlineSectionBreakAnchor is { } supSec)
                             yield return (supSec, string.Empty);
+                        foreach (var inner in WalkTextboxAnchors(p, settings))
+                            yield return inner;
                         break;
                     }
                     yield return (p.Anchor, ComputeTextPreview(p));
                     if (p.InlineSectionBreakAnchor is { } sec)
                         yield return (sec, string.Empty);
+                    // Textbox inner blocks are addressable (the oracle's DescendantsAndSelf walk reaches
+                    // them); index them right after the containing paragraph, in inline document order.
+                    foreach (var inner in WalkTextboxAnchors(p, settings))
+                        yield return inner;
                     break;
                 case IrTable t:
                     yield return (t.Anchor, ComputeTextPreview(t));
@@ -308,6 +332,19 @@ internal static class IrMarkdownEmitter
                     break;
             }
         }
+    }
+
+    /// <summary>Yield the index anchors for every textbox inner block of <paramref name="p"/>, in
+    /// inline document order, recursing through the normal block walk (so nested textboxes, tables, and
+    /// their inner paragraphs are all reached) — mirroring the oracle's <c>DescendantsAndSelf</c> index
+    /// walk, which descends into <c>w:txbxContent</c> inner paragraphs.</summary>
+    private static IEnumerable<(IrAnchor Anchor, string Preview)> WalkTextboxAnchors(
+        IrParagraph p, WmlToMarkdownConverterSettings settings)
+    {
+        foreach (var inline in p.Inlines)
+            if (inline is IrTextbox tb)
+                foreach (var inner in WalkAnchorsForIndex(tb.Blocks, settings))
+                    yield return inner;
     }
 
     private static Anchor ToPublicAnchor(IrAnchor a) =>
@@ -350,6 +387,11 @@ internal static class IrMarkdownEmitter
                 {
                     var prefix = HeadingNumberPrefix(p);
                     if (prefix != null) map[p.Anchor.ToString()] = prefix;
+                    // Textbox inner paragraphs are body-scope p/h/li too, so the oracle resolves their
+                    // AutoNumberPrefix as well; descend so the index field matches.
+                    foreach (var inline in p.Inlines)
+                        if (inline is IrTextbox tb)
+                            Visit(tb.Blocks);
                 }
                 else if (b is IrTable t)
                 {
@@ -377,20 +419,6 @@ internal static class IrMarkdownEmitter
         var trimmed = raw.TrimEnd();
         if (trimmed.Length == 1 && !char.IsLetterOrDigit(trimmed, 0)) return null;
         return trimmed.Length == 0 ? null : trimmed;
-    }
-
-    private static string ResolveBodyPartUri(IrDocument ir)
-    {
-        // Prefer the provenance pin carried on the first body block.
-        foreach (var b in ir.Body.Blocks)
-        {
-            var uri = b.Source.PartUri;
-            if (uri is not null) return uri.ToString();
-        }
-        // Fallback: the single source whose part is the main document part. Sources is keyed by URI;
-        // the main document part is conventionally "/word/document.xml".
-        var main = ir.Sources.Keys.FirstOrDefault(u => u.ToString().EndsWith("/document.xml", StringComparison.Ordinal));
-        return main?.ToString() ?? ir.Sources.Keys.FirstOrDefault()?.ToString() ?? "/word/document.xml";
     }
 
     // ------------------------------------------------------------------
@@ -452,6 +480,15 @@ internal static class IrMarkdownEmitter
                 case IrFieldRun f:
                     AppendInlineText(f.CachedResult, sb);
                     break;
+                case IrTextbox tb:
+                    // Textbox w:t text IS visible to the oracle's Descendants(w:t) — it flows into the
+                    // containing paragraph's TextPreview, into ScopeHasContent (so header/footer
+                    // detection sees textbox-only content), and into table cell text. Append the inner
+                    // blocks' flat text at the textbox's document position. Nested textboxes recurse
+                    // through this same path (an inner paragraph's IrTextbox hits this case again).
+                    foreach (var b in tb.Blocks)
+                        AppendFlatText(b, sb);
+                    break;
                 // tab/break/note-ref/image/opaque: no w:t text.
             }
         }
@@ -479,6 +516,21 @@ internal static class IrMarkdownEmitter
         IrFieldRun f => !f.IsSimpleField && f.CachedResult.Any(RunHasText),
         _ => false,
     };
+
+    /// <summary>
+    /// Whether the paragraph keeps its own AnchorIndex entry under Suppress mode. The oracle's index
+    /// walk drops a paragraph only when <c>Descendants(w:t)</c> is empty — and that walk SEES textbox
+    /// w:t text (and inline-SDT/fldSimple text, which the rendered-text predicate drops). So a
+    /// paragraph whose only text lives in a textbox is NOT dropped from the index, even though its
+    /// rendered markdown line is empty. This is the index-walk parity predicate, distinct from
+    /// <see cref="ParagraphHasVisibleText"/> (the rendered-text predicate used for the markdown spacer).
+    /// </summary>
+    private static bool ParagraphHasVisibleTextOrTextbox(IrParagraph p)
+    {
+        var sb = new StringBuilder();
+        AppendInlineText(p.Inlines, sb); // mirrors Descendants(w:t): includes textbox + SDT + field text
+        return sb.Length > 0;
+    }
 
     // ------------------------------------------------------------------
     // Markdown emission (body scope; multipart scopes land in T3)
@@ -695,10 +747,13 @@ internal static class IrMarkdownEmitter
     }
 
     /// <summary>The IR proxy for the oracle's <c>IsListItem</c>, used by the EmitBlocks trailing-blank
-    /// rule: a paragraph is a list item iff its anchor kind is <c>li</c> OR it carries resolved
-    /// numbering facts (<see cref="IrParagraph.List"/> — true for a Heading-with-numPr).</summary>
-    private static bool IsListItemForBlankRule(IrParagraph p) =>
-        p.Anchor.Kind == IrAnchorKind.Li || p.List is not null;
+    /// rule. The reader captures the oracle's exact structural verdict in
+    /// <see cref="IrParagraph.IsListItemForLayout"/> (numPr present inline or via the pStyle chain,
+    /// numId-agnostic), so this is a direct passthrough — it covers both the plain list item
+    /// (anchor kind <c>li</c>) and the heading/Subtitle whose style chain carries a bare numPr with no
+    /// numId (anchor kind <c>h</c>, <see cref="IrParagraph.List"/> null) that the resolved-numbering
+    /// check alone would miss.</summary>
+    private static bool IsListItemForBlankRule(IrParagraph p) => p.IsListItemForLayout;
 
     private static void EmitParagraph(IrParagraph p, StringBuilder sb, EmitCtx ctx)
     {
@@ -918,6 +973,12 @@ internal static class IrMarkdownEmitter
                     // key. (A w:br inside a formatted run is a rare delimiter-placement edge case left
                     // to triage; note refs carry no formatting toggle.)
                     Add(inline, default);
+                    break;
+                case IrTextbox:
+                    // DROPPED from the rendered markdown: the oracle's GroupInlineRuns walks only
+                    // w:r/w:hyperlink/w:ins/w:del and never descends into a w:drawing/w:pict, so textbox
+                    // content produces no markdown. Its text still counts toward TextPreview/cell text
+                    // (AppendInlineText) and its inner blocks are still indexed (WalkTextboxAnchors).
                     break;
                 // IrInlineImage / IrOpaqueInline: TODO(M1.4-T2). Skipped here.
             }

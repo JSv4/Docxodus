@@ -29,7 +29,11 @@ internal sealed record IrNoteStore(
 }
 
 /// <summary>The set of document comments, each modeled as an <see cref="IrComment"/>.</summary>
-internal sealed record IrCommentStore(IrNodeList<IrComment> Comments)
+/// <remarks><see cref="PartUri"/> is the comments part's URI, populated in BOTH retention modes
+/// (the comment scope's analogue of <see cref="IrScope.PartUri"/>) so the markdown emitter can label
+/// <c>{#cmt:…}</c> anchors without depending on <see cref="IrDocument.Sources"/>, which is empty when
+/// <see cref="IrReaderOptions.RetainSources"/> is off.</remarks>
+internal sealed record IrCommentStore(IrNodeList<IrComment> Comments, System.Uri? PartUri = null)
 {
     public static readonly IrCommentStore Empty = new(IrNodeList.Empty<IrComment>());
 }

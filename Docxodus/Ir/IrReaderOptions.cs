@@ -50,4 +50,24 @@ internal sealed class IrReaderOptions
     /// <see cref="IrScopes.Body"/> is honored and the remaining flags are accepted and ignored.
     /// </summary>
     public IrScopes Scopes { get; init; } = IrScopes.All;
+
+    /// <summary>
+    /// Whether per-node provenance pins are retained in the snapshot (default <c>true</c> — current
+    /// behavior). When <c>true</c>, every node's <see cref="IrProvenance.Element"/> points at its
+    /// source <see cref="System.Xml.Linq.XElement"/> and <see cref="IrDocument.Sources"/> pins the
+    /// parsed <see cref="System.Xml.Linq.XDocument"/> per part — convenient for diagnostics and raw
+    /// round-tripping, but it roots the entire parsed XML for the lifetime of the snapshot (~11× the
+    /// part XML size resident).
+    /// <para>
+    /// When <c>false</c>, <see cref="IrDocument.Sources"/> is empty and every node's
+    /// <see cref="IrProvenance.Element"/> is <c>null</c> (a single shared empty provenance instance is
+    /// used, so nodes cost zero per-node provenance allocation), letting the parsed XML become
+    /// collectible once <see cref="IrReader.Read"/> returns — halving-or-better the snapshot's resident
+    /// footprint. Part-URI-level facts SURVIVE: <see cref="IrScope.PartUri"/> is populated in both
+    /// modes, and image part URIs/bytes hashes (resolved during the walk) are unaffected. The Phase-2
+    /// diff engine and bulk pipelines, which do not need element-level provenance, should read with
+    /// this set to <c>false</c>.
+    /// </para>
+    /// </summary>
+    public bool RetainSources { get; init; } = true;
 }

@@ -289,4 +289,192 @@ public class IrReaderTests
         Assert.Equal(p1.ContentHash.ToHex(), p2.ContentHash.ToHex());
         Assert.Equal(p1.FormatFingerprint.ToHex(), p2.FormatFingerprint.ToHex());
     }
+
+    // --- textbox bodies (M1.5) -------------------------------------------------
+
+    private static IrTextbox SingleTextbox(IrParagraph p) =>
+        p.Inlines.OfType<IrTextbox>().Single();
+
+    [Fact]
+    public void Read_TextboxInDrawing_InnerParagraphModeledAndAnchored()
+    {
+        // A w:drawing carrying a wps:txbx → w:txbxContent body with one inner paragraph. No blip, so
+        // the drawing is NOT promoted to an image — its textbox body is modeled instead.
+        var doc = IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p><w:r><w:drawing><wp:inline><a:graphic><a:graphicData>" +
+            "<wps:wsp><wps:txbx><w:txbxContent>" +
+            "<w:p><w:r><w:t>Inside</w:t></w:r></w:p>" +
+            "</w:txbxContent></wps:txbx></wps:wsp>" +
+            "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>");
+        var ir = IrReader.Read(doc);
+
+        var outer = ir.Body.Blocks.OfType<IrParagraph>().Single();
+        var textbox = SingleTextbox(outer);
+        var inner = Assert.IsType<IrParagraph>(textbox.Blocks.Single());
+
+        Assert.Equal("Inside", string.Concat(inner.Inlines.OfType<IrTextRun>().Select(r => r.Text)));
+        Assert.Equal(IrAnchorKind.P, inner.Anchor.Kind);
+        Assert.Equal("body", inner.Anchor.Scope);
+        Assert.Equal(32, inner.Anchor.Unid.Length);
+
+        // The inner paragraph is registered in the document AnchorIndex (oracle DescendantsAndSelf parity).
+        Assert.Same(inner, ir.FindByAnchor(inner.Anchor));
+    }
+
+    [Fact]
+    public void Read_TextboxInPict_VmlVariantModeled()
+    {
+        // The VML w:pict/v:textbox variant must be modeled identically (the reader keys on the
+        // w:txbxContent descendant, regardless of the DrawingML-vs-VML wrapper).
+        var doc = IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>" +
+            "<w:p><w:r><w:t>VmlInside</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>");
+        var ir = IrReader.Read(doc);
+
+        var outer = ir.Body.Blocks.OfType<IrParagraph>().Single();
+        var inner = Assert.IsType<IrParagraph>(SingleTextbox(outer).Blocks.Single());
+        Assert.Equal("VmlInside", string.Concat(inner.Inlines.OfType<IrTextRun>().Select(r => r.Text)));
+        Assert.Same(inner, ir.FindByAnchor(inner.Anchor));
+    }
+
+    [Fact]
+    public void Read_AlternateContent_BothChoiceAndFallbackTextboxesModeled()
+    {
+        // Word emits the same logical textbox twice: a DrawingML mc:Choice (wps:txbx) and a VML
+        // mc:Fallback (v:textbox). The reader models BOTH (mirroring the oracle's both-copies walk),
+        // so two IrTextbox nodes appear in document order.
+        var doc = IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p><w:r><mc:AlternateContent>" +
+            "<mc:Choice Requires=\"wps\"><w:drawing><wp:inline><a:graphic><a:graphicData>" +
+            "<wps:wsp><wps:txbx><w:txbxContent><w:p><w:r><w:t>In</w:t></w:r></w:p>" +
+            "</w:txbxContent></wps:txbx></wps:wsp>" +
+            "</a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>" +
+            "<mc:Fallback><w:pict><v:shape><v:textbox><w:txbxContent>" +
+            "<w:p><w:r><w:t>In</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback>" +
+            "</mc:AlternateContent></w:r><w:r><w:t>Out</w:t></w:r></w:p>");
+        var ir = IrReader.Read(doc);
+
+        var outer = ir.Body.Blocks.OfType<IrParagraph>().Single();
+        var textboxes = outer.Inlines.OfType<IrTextbox>().ToList();
+        Assert.Equal(2, textboxes.Count);
+        foreach (var tb in textboxes)
+        {
+            var inner = Assert.IsType<IrParagraph>(tb.Blocks.Single());
+            Assert.Equal("In", string.Concat(inner.Inlines.OfType<IrTextRun>().Select(r => r.Text)));
+        }
+        // Both inner paragraphs have DISTINCT anchors (different XML subtrees → different Unids) and
+        // both are indexed — no collision.
+        var innerAnchors = textboxes
+            .Select(tb => ((IrParagraph)tb.Blocks.Single()).Anchor.ToString()).ToList();
+        Assert.Equal(2, innerAnchors.Distinct().Count());
+        foreach (var a in innerAnchors)
+            Assert.True(ir.AnchorIndex.ContainsKey(a));
+    }
+
+    [Fact]
+    public void Read_TextboxWithTable_InnerTableModeledAndIndexed()
+    {
+        var doc = IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>" +
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"100\"/></w:tblGrid>" +
+            "<w:tr><w:tc><w:p><w:r><w:t>CellText</w:t></w:r></w:p></w:tc></w:tr>" +
+            "</w:tbl>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>");
+        var ir = IrReader.Read(doc);
+
+        var outer = ir.Body.Blocks.OfType<IrParagraph>().Single();
+        var innerTable = Assert.IsType<IrTable>(SingleTextbox(outer).Blocks.Single());
+        var cellPara = Assert.IsType<IrParagraph>(innerTable.Rows.Single().Cells.Single().Blocks.Single());
+        Assert.Equal("CellText", string.Concat(cellPara.Inlines.OfType<IrTextRun>().Select(r => r.Text)));
+        // The inner table, its cell paragraph, and the table's own anchor are all indexed.
+        Assert.Same(innerTable, ir.FindByAnchor(innerTable.Anchor));
+        Assert.Same(cellPara, ir.FindByAnchor(cellPara.Anchor));
+    }
+
+    [Fact]
+    public void Read_DrawingWithBlipAndTextbox_YieldsBothImageAndTextbox()
+    {
+        // A w:drawing carrying BOTH a resolvable a:blip image AND a wps:txbx textbox: image promotion
+        // and textbox modeling are INDEPENDENT (oracle parity — both the blip and the txbxContent text
+        // are seen). The inline list carries an IrInlineImage AND an IrTextbox.
+        var doc = IrTestDocuments.FromBodyXmlWithImageParts(
+            "<w:p><w:r><w:drawing><wp:inline>" +
+            "<wp:extent cx=\"100\" cy=\"100\"/>" +
+            "<a:graphic><a:graphicData>" +
+            "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">" +
+            "<pic:blipFill><a:blip r:embed=\"rIdImg\"/></pic:blipFill></pic:pic>" +
+            "<wps:wsp xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">" +
+            "<wps:txbx><w:txbxContent><w:p><w:r><w:t>InBox</w:t></w:r></w:p></w:txbxContent></wps:txbx></wps:wsp>" +
+            "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>",
+            ("rIdImg", IrTestDocuments.TinyPng));
+        var ir = IrReader.Read(doc);
+
+        var outer = ir.Body.Blocks.OfType<IrParagraph>().Single();
+        Assert.Single(outer.Inlines.OfType<IrInlineImage>());
+        var inner = Assert.IsType<IrParagraph>(SingleTextbox(outer).Blocks.Single());
+        Assert.Equal("InBox", string.Concat(inner.Inlines.OfType<IrTextRun>().Select(r => r.Text)));
+    }
+
+    [Fact]
+    public void Read_NestedTextbox_RespectsDepthCapWithoutThrowing()
+    {
+        // Build a textbox nested far beyond the textbox depth cap (16): a chain of w:pict/v:textbox/
+        // w:txbxContent wrapping a w:p with text at the bottom. The reader must not throw (totality);
+        // beyond the cap the deepest body is preserved opaquely rather than recursing further.
+        const int depth = 40;
+        var inner = "<w:p><w:r><w:t>Bottom</w:t></w:r></w:p>";
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < depth; i++)
+            sb.Append("<w:pict><v:shape><v:textbox><w:txbxContent>");
+        sb.Append(inner);
+        for (int i = 0; i < depth; i++)
+            sb.Append("</w:txbxContent></v:textbox></v:shape></w:pict>");
+        var body = $"<w:p><w:r>{sb}</w:r></w:p>";
+
+        var ex = Record.Exception(() =>
+            IrReader.Read(IrTestDocuments.FromBodyXmlWithDrawingNamespaces(body)));
+        Assert.Null(ex);
+
+        // The outermost paragraph still carries exactly one textbox, and the nesting bottoms out in an
+        // opaque inline (no unbounded recursion / stack overflow).
+        var ir = IrReader.Read(IrTestDocuments.FromBodyXmlWithDrawingNamespaces(body));
+        var outer = ir.Body.Blocks.OfType<IrParagraph>().Single();
+        Assert.Single(outer.Inlines.OfType<IrTextbox>());
+    }
+
+    [Fact]
+    public void Read_TextboxTextChange_FlipsContainingParagraphContentHash()
+    {
+        var make = new System.Func<string, IrParagraph>(text =>
+            IrReader.Read(IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+                "<w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>" +
+                $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" +
+                "</w:txbxContent></v:textbox></v:shape></w:pict></w:r>" +
+                "<w:r><w:t>Outside</w:t></w:r></w:p>"))
+                .Body.Blocks.OfType<IrParagraph>().Single());
+
+        var a = make("Alpha");
+        var b = make("Beta");
+        // Textbox-only text edit flips the CONTAINING paragraph's ContentHash (blind spot closed).
+        Assert.NotEqual(a.ContentHash.ToHex(), b.ContentHash.ToHex());
+    }
+
+    [Fact]
+    public void Read_TextboxText_DistinctFromInlineTextOfSameContent()
+    {
+        // Sentinel framing keeps textbox text distinct from identical inline (non-textbox) text:
+        // "X" in a textbox must not content-hash-equal "X" as a plain run.
+        var textbox = IrReader.Read(IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>" +
+            "<w:p><w:r><w:t>X</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>"))
+            .Body.Blocks.OfType<IrParagraph>().First();
+        var plain = IrReader.Read(IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>X</w:t></w:r></w:p>"))
+            .Body.Blocks.OfType<IrParagraph>().Single();
+
+        Assert.NotEqual(textbox.ContentHash.ToHex(), plain.ContentHash.ToHex());
+    }
 }

@@ -122,13 +122,24 @@ public class IrCorpusTests
         yield return new object[] { "DB002-Sections-With-Headers.docx" };
         // Complex/large document — broad coverage of mixed content.
         yield return new object[] { "HC031-Complicated-Document.docx" };
+        // Textbox (M1.5) — w:txbxContent body modeled as IrTextbox: inner paragraph anchored + hashed,
+        // emitted twice (DrawingML mc:Choice + VML mc:Fallback) mirroring the oracle's both-copies walk.
+        yield return new object[] { "WC044-Text-Box.docx" };
+        // Table-in-textbox (M1.5) — an inner w:tbl inside a textbox body: exercises the recursive block
+        // walk + index registration through a textbox containing a table (rows/cells/cell blocks).
+        yield return new object[] { "WC050-Table-in-Text-Box.docx" };
     }
 
     [Theory]
     [MemberData(nameof(CuratedFixtures))]
     public void Read_CuratedFixtures_MatchGoldenSnapshots(string fixtureName)
     {
-        var doc = new WmlDocument(Path.Combine(TestFilesDir.FullName, fixtureName));
+        // Fixtures live both at the TestFiles/ root and in subfolders (e.g. WC/); resolve by name.
+        var file = File.Exists(Path.Combine(TestFilesDir.FullName, fixtureName))
+            ? new FileInfo(Path.Combine(TestFilesDir.FullName, fixtureName))
+            : TestFilesDir.GetFiles(fixtureName, SearchOption.AllDirectories)
+                .OrderBy(f => f.FullName, StringComparer.Ordinal).First();
+        var doc = new WmlDocument(file.FullName);
         var json = IrDiagnosticJson.Write(IrReader.Read(doc));
 
         var snapshotPath = Path.Combine(SnapshotsDir(), Path.GetFileNameWithoutExtension(fixtureName) + ".ir.json");
