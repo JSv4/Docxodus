@@ -267,7 +267,8 @@ internal static class IrReader
         var kind = kindToken is null ? IrAnchorKind.P : IrAnchor.KindFromToken(kindToken);
 
         var pPr = p.Element(W + "pPr");
-        var (paraFormat, listInfo) = MapParaFormat(pPr, ctx);
+        var paraFormat = MapParaFormat(pPr);
+        var listInfo = pPr is null ? null : ResolveListInfo(pPr, ctx);
 
         // Walk the paragraph's children (skipping w:pPr) through the shared inline walker, which
         // handles run content, hyperlinks (N14), and the field state machine (N9), then applies
@@ -887,10 +888,19 @@ internal static class IrReader
 
     // --- paragraph format -------------------------------------------------
 
-    private static (IrParaFormat Format, IrListInfo? List) MapParaFormat(XElement? pPr, ReadContext ctx)
+    /// <summary>
+    /// Map a <c>w:pPr</c> element into the modeled <see cref="IrParaFormat"/> subset (§5.1). This is
+    /// ctx-free and list-resolution-free so the effective-format resolver
+    /// (<see cref="IrEffectiveFormats"/>) can reuse it on a style's or docDefaults' cloned
+    /// <c>w:pPr</c> exactly as the body walk does on a paragraph's direct <c>w:pPr</c> — there is one
+    /// pPr→IrParaFormat mapping, never a duplicate. List membership (which needs the numbering
+    /// registry) is resolved separately by <see cref="ResolveListInfo"/>. Returns the empty-digest
+    /// format when <paramref name="pPr"/> is null.
+    /// </summary>
+    internal static IrParaFormat MapParaFormat(XElement? pPr)
     {
         if (pPr is null)
-            return (new IrParaFormat { UnmodeledDigest = EmptyUnmodeledDigest }, null);
+            return new IrParaFormat { UnmodeledDigest = EmptyUnmodeledDigest };
 
         string? styleId = AttrVal(pPr.Element(W + "pStyle"));
 
@@ -937,8 +947,6 @@ internal static class IrReader
         bool? keepLines = Toggle(pPr.Element(W + "keepLines"));
         bool? pageBreakBefore = Toggle(pPr.Element(W + "pageBreakBefore"));
 
-        IrListInfo? listInfo = ResolveListInfo(pPr, ctx);
-
         // Unmodeled leftovers: every pPr child not consumed by a modeled field above.
         // numPr is read for the IrListInfo facts but is intentionally NOT in PPrConsumed, so it
         // stays in this digest: IrListInfo is not hashed, and numPr has always ridden in the
@@ -962,7 +970,7 @@ internal static class IrReader
             PageBreakBefore = pageBreakBefore,
             UnmodeledDigest = digest,
         };
-        return (format, listInfo);
+        return format;
     }
 
     // --- list resolution (M1.3) -------------------------------------------
@@ -1051,7 +1059,14 @@ internal static class IrReader
 
     // --- run format -------------------------------------------------------
 
-    private static IrRunFormat MapRunFormat(XElement? rPr, XElement? extraUnmodeled = null)
+    /// <summary>
+    /// Map a <c>w:rPr</c> element into the modeled <see cref="IrRunFormat"/> subset (§5.1). Ctx-free
+    /// so <see cref="IrEffectiveFormats"/> can reuse it on a style's / docDefaults' cloned
+    /// <c>w:rPr</c> — one rPr→IrRunFormat mapping, no duplication. The optional
+    /// <paramref name="extraUnmodeled"/> is a glyph-bearing run child (a <c>w:sym</c>) folded into
+    /// the digest; effective resolution never passes it.
+    /// </summary>
+    internal static IrRunFormat MapRunFormat(XElement? rPr, XElement? extraUnmodeled = null)
     {
         if (rPr is null && extraUnmodeled is null)
             return new IrRunFormat { UnmodeledDigest = EmptyUnmodeledDigest };

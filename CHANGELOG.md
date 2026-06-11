@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Document IR effective-format resolution (M1.3)** — *internal/experimental.*
+  New `IrEffectiveFormats(IrDocument)` resolves the *effective* paragraph/run
+  format non-destructively by cascading docDefaults → the paragraph/character
+  style chain (`basedOn`, applied root-first, cycle-guarded, depth ≤ 16) → direct
+  properties, merging per field with later-non-null-wins. `w:rFonts/@w:asciiTheme`
+  indirection on a mapped layer resolves through the theme fonts
+  (major\*→MajorAscii, minor\*→MinorAscii). Toggle properties are last-writer-wins
+  at this fidelity tier (a documented divergence from OOXML toggle-XOR, deferred to
+  M1.4+). Style-layer `w:pPr`/`w:rPr` map through the same `IrReader.MapParaFormat`/
+  `MapRunFormat` mappers as direct props (refactored to internal statics); the
+  effective record's `UnmodeledDigest` is the direct record's. Hash-neutral (no
+  reader output change; snapshots byte-stable). Per-style-chain memo cache,
+  lock-guarded.
 - **Internal Document IR groundwork (M1.1)** — *internal/experimental, no public
   surface.* A typed, normalized, anchor-identified, immutable in-memory model of a
   Word document under `Docxodus/Ir/`: the IR type model (blocks, inlines, formats,
