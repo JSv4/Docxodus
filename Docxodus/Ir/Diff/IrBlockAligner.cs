@@ -38,7 +38,7 @@ internal static class IrBlockAligner
         int nLeft = leftBlocks.Count;
         int nRight = rightBlocks.Count;
 
-        // pairedLeft[i] / pairedRight[j] hold the kind once a block is consumed (anchor or gap fill);
+        // leftKind[i] / rightKind[j] hold the kind once a block is consumed (anchor or gap fill);
         // null means "still free". leftMatch[i] = the right index it paired with (or -1).
         var leftKind = new IrAlignmentKind?[nLeft];
         var rightKind = new IrAlignmentKind?[nRight];
@@ -299,9 +299,11 @@ internal static class IrBlockAligner
     /// (content-equal, plus format-equal for Unchanged / format-differ for FormatOnly). This is the
     /// greedy first-to-first matching the plan specifies — it resolves repeated-boilerplate gaps
     /// (identical content+format) into one-to-one Unchanged pairs with the surplus falling out as
-    /// Deleted/Inserted, with zero Moved/Modified. It is O(gap²) in the worst case but the dominant
-    /// boilerplate case (a single shared key) is effectively linear; gaps are bounded by the spacing
-    /// between unique anchors, so this never reintroduces a global O(n²).
+    /// Deleted/Inserted, with zero Moved/Modified. It is O(gap²) in the worst case — a single
+    /// all-distinct-content gap of size G costs ~G²/2 comparisons, i.e. ~2M at G≈2000 (sub-ms) —
+    /// but the dominant boilerplate case (a single shared key) is effectively linear; gaps are
+    /// bounded by the spacing between unique anchors, so this never reintroduces a global O(n²).
+    /// Scale-guard fixtures (Task 3) should size inputs against that G²/2 bound deliberately.
     /// </summary>
     private static void InOrderRefine(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
