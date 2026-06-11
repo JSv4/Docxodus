@@ -65,4 +65,38 @@ internal static class IrTestDocuments
         }
         return new WmlDocument("ir-test.docx", ms.ToArray());
     }
+
+    /// <summary>
+    /// A document whose <c>w:body</c> inner XML is <paramref name="bodyInnerXml"/> and whose
+    /// <c>w:styles</c> inner XML (the content between <c>&lt;w:styles&gt;</c> and
+    /// <c>&lt;/w:styles&gt;</c>) is <paramref name="stylesInnerXml"/>. Lets a test wire up a style
+    /// chain (e.g. a style carrying <c>w:numPr</c>, optionally via <c>w:basedOn</c>) that a body
+    /// paragraph references by <c>w:pStyle</c>.
+    /// </summary>
+    internal static WmlDocument FromBodyAndStylesXml(string bodyInnerXml, string stylesInnerXml)
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            var stylesPart = main.AddNewPart<StyleDefinitionsPart>();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var stylesXml = $"<w:styles xmlns:w=\"{W}\">{stylesInnerXml}</w:styles>";
+            using (var stylesStream = stylesPart.GetStream(FileMode.Create, FileAccess.Write))
+            using (var stylesWriter = new StreamWriter(stylesStream))
+            {
+                stylesWriter.Write(stylesXml);
+            }
+
+            var documentXml =
+                $"<w:document xmlns:w=\"{W}\"><w:body>{bodyInnerXml}</w:body></w:document>";
+            using (var partStream = main.GetStream(FileMode.Create, FileAccess.Write))
+            using (var writer = new StreamWriter(partStream))
+            {
+                writer.Write(documentXml);
+            }
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
 }

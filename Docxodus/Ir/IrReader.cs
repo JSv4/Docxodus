@@ -31,6 +31,27 @@ internal static class IrReader
     private static readonly IrHash EmptyUnmodeledDigest =
         IrHasher.CanonicalHash(new XElement("unmodeled"));
 
+    // Constant consumed-name sets for the unmodeled-digest computation, hoisted so each
+    // paragraph/run/section read does not reallocate them.
+    private static readonly HashSet<XName> PPrConsumed = new()
+    {
+        W + "pStyle", W + "jc", W + "ind", W + "spacing", W + "outlineLvl",
+        W + "keepNext", W + "keepLines", W + "pageBreakBefore",
+    };
+
+    // The always-consumed rPr children. w:vertAlign is consumed conditionally (only when it maps
+    // to a modeled sub/superscript); MapRunFormat handles that case without per-run allocation.
+    private static readonly HashSet<XName> RPrConsumed = new()
+    {
+        W + "rStyle", W + "b", W + "i", W + "strike", W + "dstrike", W + "caps",
+        W + "smallCaps", W + "vanish", W + "u", W + "sz", W + "color", W + "highlight",
+    };
+
+    private static readonly HashSet<XName> SectPrConsumed = new()
+    {
+        W + "pgSz", W + "pgMar", W + "type",
+    };
+
     /// <summary>
     /// Read <paramref name="doc"/> into an <see cref="IrDocument"/>. The caller's
     /// <see cref="WmlDocument.DocumentByteArray"/> is left byte-for-byte unchanged.
@@ -56,6 +77,14 @@ internal static class IrReader
         var root = mainXDoc.Root
             ?? throw new DocxodusException("MainDocumentPart has no root element.");
         UnidHelper.AssignToAllElementsDeterministic(root);
+
+        // Stash the owning part on the root so WmlToMarkdownConverter.KindFor → IsListItem can
+        // reach the StyleDefinitionsPart and walk the pStyle → basedOn chain. Without it, a
+        // paragraph that is a list item only via style inheritance (no inline w:numPr) classifies
+        // as `p` instead of `li`, breaking anchor-kind parity with the markdown projection (which
+        // stashes the same annotation in BuildAnchorIndex).
+        if (root.Annotation<OpenXmlPart>() == null)
+            root.AddAnnotation(main);
 
         var partUri = main.Uri;
         var ctx = new ReadContext(partUri);
@@ -356,12 +385,7 @@ internal static class IrReader
         // Unmodeled leftovers: every pPr child not consumed by a modeled field above.
         // numPr is consumed for list facts but ALSO kept here so numbering still affects the
         // fingerprint until M1.3 resolution. w:rPr (mark props) and mid-doc w:sectPr stay too.
-        var consumed = new HashSet<XName>
-        {
-            W + "pStyle", W + "jc", W + "ind", W + "spacing", W + "outlineLvl",
-            W + "keepNext", W + "keepLines", W + "pageBreakBefore",
-        };
-        var digest = UnmodeledDigest(pPr, consumed);
+        var digest = UnmodeledDigest(pPr, PPrConsumed);
 
         var format = new IrParaFormat
         {
@@ -413,17 +437,12 @@ internal static class IrReader
         string? colorHex = AttrVal(rPr.Element(W + "color"));
         string? highlight = AttrVal(rPr.Element(W + "highlight"));
 
-        // Consumed rPr children. w:rFonts is only partially consumed (ascii); keep it in the
-        // unmodeled digest so its other faces (hAnsi/cs/eastAsia) still affect the fingerprint.
-        // w:vertAlign="baseline" likewise stays unmodeled (handled below).
-        var consumed = new HashSet<XName>
-        {
-            W + "rStyle", W + "b", W + "i", W + "strike", W + "dstrike", W + "caps",
-            W + "smallCaps", W + "vanish", W + "u", W + "sz", W + "color", W + "highlight",
-        };
-        if (vertAlign is not null)
-            consumed.Add(W + "vertAlign");
-        var digest = UnmodeledDigest(rPr, consumed);
+        // Consumed rPr children come from the static RPrConsumed set. w:rFonts is only partially
+        // consumed (ascii); keep it in the unmodeled digest so its other faces (hAnsi/cs/eastAsia)
+        // still affect the fingerprint. w:vertAlign is consumed only when it maps to a modeled
+        // sub/superscript; vertAlign="baseline" stays unmodeled. Pass it as a conditional extra so
+        // no per-run set is allocated.
+        var digest = UnmodeledDigest(rPr, RPrConsumed, vertAlign is not null ? W + "vertAlign" : null);
 
         return new IrRunFormat
         {
@@ -599,8 +618,7 @@ internal static class IrReader
 
         string? sectionType = AttrVal(sectPr.Element(W + "type"));
 
-        var consumed = new HashSet<XName> { W + "pgSz", W + "pgMar", W + "type" };
-        var digest = UnmodeledDigest(sectPr, consumed);
+        var digest = UnmodeledDigest(sectPr, SectPrConsumed);
 
         var format = new IrSectionFormat
         {
@@ -660,12 +678,16 @@ internal static class IrReader
 
     /// <summary>
     /// Canonical-hash a synthetic <c>&lt;unmodeled&gt;</c> container holding clones of every child
-    /// of <paramref name="props"/> whose name is NOT in <paramref name="consumed"/>. When there are
-    /// no leftovers the result is the cached empty-container digest (§6.4).
+    /// of <paramref name="props"/> whose name is NOT in <paramref name="consumed"/> and is not the
+    /// optional <paramref name="alsoConsumed"/> name (used for conditionally-consumed children so
+    /// callers need not allocate a fresh set). When there are no leftovers the result is the cached
+    /// empty-container digest (§6.4).
     /// </summary>
-    private static IrHash UnmodeledDigest(XElement props, HashSet<XName> consumed)
+    private static IrHash UnmodeledDigest(XElement props, HashSet<XName> consumed, XName? alsoConsumed = null)
     {
-        var leftovers = props.Elements().Where(e => !consumed.Contains(e.Name)).ToList();
+        var leftovers = props.Elements()
+            .Where(e => !consumed.Contains(e.Name) && e.Name != alsoConsumed)
+            .ToList();
         if (leftovers.Count == 0)
             return EmptyUnmodeledDigest;
 

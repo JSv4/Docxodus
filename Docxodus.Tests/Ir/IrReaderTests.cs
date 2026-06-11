@@ -216,6 +216,62 @@ public class IrReaderTests
     }
 
     [Fact]
+    public void Read_StyleInheritedListItem_ClassifiedAsLi()
+    {
+        // The paragraph carries NO inline w:numPr; it is a list item only because its pStyle
+        // ("MyListPara") is basedOn "ListBase", whose pPr carries w:numPr. KindFor → IsListItem
+        // must walk the styles part (reachable via the part annotation IrReader stashes) to see it.
+        const string styles =
+            "<w:style w:type=\"paragraph\" w:styleId=\"ListBase\">" +
+            "<w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"1\"/></w:numPr></w:pPr></w:style>" +
+            "<w:style w:type=\"paragraph\" w:styleId=\"MyListPara\">" +
+            "<w:basedOn w:val=\"ListBase\"/></w:style>";
+        const string body =
+            "<w:p><w:pPr><w:pStyle w:val=\"MyListPara\"/></w:pPr>" +
+            "<w:r><w:t>item</w:t></w:r></w:p>";
+
+        var doc = IrTestDocuments.FromBodyAndStylesXml(body, styles);
+        var ir = IrReader.Read(doc);
+
+        var para = ir.Body.Blocks.OfType<IrParagraph>().Single();
+        Assert.Equal(IrAnchorKind.Li, para.Anchor.Kind);
+
+        // Determinism: reading the same bytes again yields identical anchors (and kind).
+        var ir2 = IrReader.Read(doc);
+        var para2 = ir2.Body.Blocks.OfType<IrParagraph>().Single();
+        Assert.Equal(para.Anchor.ToString(), para2.Anchor.ToString());
+        Assert.Equal(IrAnchorKind.Li, para2.Anchor.Kind);
+    }
+
+    [Fact]
+    public void Read_UnmodeledFormatting_FlipsFingerprintOnly()
+    {
+        // rPr case: w:rFonts w:hAnsi is unmodeled (only w:ascii is modeled), so text is identical
+        // (ContentHash equal) but the unmodeled digest — hence FormatFingerprint — differs.
+        var rPlain = IrReader.Read(IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>same</w:t></w:r></w:p>"));
+        var rUnmodeled = IrReader.Read(IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:rPr><w:rFonts w:hAnsi=\"Arial\"/></w:rPr><w:t>same</w:t></w:r></w:p>"));
+
+        var rp1 = rPlain.Body.Blocks.OfType<IrParagraph>().Single();
+        var rp2 = rUnmodeled.Body.Blocks.OfType<IrParagraph>().Single();
+        Assert.Equal(rp1.ContentHash.ToHex(), rp2.ContentHash.ToHex());
+        Assert.NotEqual(rp1.FormatFingerprint.ToHex(), rp2.FormatFingerprint.ToHex());
+
+        // pPr case: w:kinsoku is an unmodeled paragraph property. Same shape: content equal,
+        // fingerprint differs.
+        var pPlain = IrReader.Read(IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>same</w:t></w:r></w:p>"));
+        var pUnmodeled = IrReader.Read(IrTestDocuments.FromBodyXml(
+            "<w:p><w:pPr><w:kinsoku/></w:pPr><w:r><w:t>same</w:t></w:r></w:p>"));
+
+        var pp1 = pPlain.Body.Blocks.OfType<IrParagraph>().Single();
+        var pp2 = pUnmodeled.Body.Blocks.OfType<IrParagraph>().Single();
+        Assert.Equal(pp1.ContentHash.ToHex(), pp2.ContentHash.ToHex());
+        Assert.NotEqual(pp1.FormatFingerprint.ToHex(), pp2.FormatFingerprint.ToHex());
+    }
+
+    [Fact]
     public void Read_ProofErr_DoesNotAffectHashes()
     {
         var without = IrReader.Read(IrTestDocuments.FromBodyXml(
