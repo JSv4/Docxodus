@@ -16,6 +16,20 @@ All notable changes to this project will be documented in this file.
   contract) plus conformance tests: reader totality over the entire `TestFiles/`
   corpus and golden snapshots over curated fixtures. Groundwork for the planned
   IR/diff-engine program; not referenced by any shipped converter or wrapper yet.
+- **Document IR normalization rules (M1.2, partial)** — *internal/experimental.*
+  `IrReader` now applies five more §5.2 normalization rules so equality-irrelevant
+  OOXML noise stops affecting hashes: **N3** drops `w:bookmarkStart`/`w:bookmarkEnd`
+  (at paragraph level and inside runs); **N4** drops `w:lastRenderedPageBreak`
+  (layout cache); **N7** maps `w:noBreakHyphen`→U+2011 and `w:softHyphen`→U+00AD as
+  text that participates in N5 coalescing; **N8** maps `w:sym` with a parseable hex
+  `@w:char` to that BMP code point as text, folding the whole `w:sym` element
+  (including `@w:font`) into the run's `UnmodeledDigest` so the glyph font still
+  flips the `FormatFingerprint` (unparseable `w:sym` stays `Opaque`); and the
+  strip half of **N15** drops comment plumbing (`w:commentRangeStart`/`End`,
+  `w:commentReference`) from the inline stream (target-span recording into the
+  comment store lands in M1.3). All five previously surfaced as `IrOpaqueInline`
+  and perturbed hashes. Golden snapshots regenerated accordingly; block anchors are
+  unchanged.
 
 ## [6.4.0] - 2026-05-30
 

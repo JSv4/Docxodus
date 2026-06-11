@@ -4,7 +4,7 @@
     {
       "anchor": "li:body:80eeb57d4716a852c01ad1a72f142bdb",
       "type": "paragraph",
-      "contentHash": "0caafdf4b1b9e32e4e1af987eea48fc0bd093fef9a1730e303570300728d30ef",
+      "contentHash": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
       "formatFingerprint": "d33fdaa9e29db96f9a4cb65406fcb528d518bbe8d6109df4a80178472d574838",
       "list": {
         "numId": 1,
@@ -15,16 +15,6 @@
         "styleId": "Listeafsnit"
       },
       "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "77c263f81e054f79c9bf6816a98d1d3d995c332292ff39343db5ceb96f6c5ab3"
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "dc12feba94c659fd4ce51b8388e12e118bbe69f5af796a137dafe8a4c4dffd51"
-        },
         {
           "kind": "text",
           "text": "a",

@@ -4,22 +4,12 @@
     {
       "anchor": "h:body:bf0abe02bcae62f2bf89bf28c759685c",
       "type": "paragraph",
-      "contentHash": "91a5a0e45efd6f5c7937825eea812c873d735863948ddc3d2bb3a5c5bd5f2339",
+      "contentHash": "f14b9bab4d212cf7fb625cd29e3366226625fda4ab050e0fcfce9d74d5f30a56",
       "formatFingerprint": "e710e9b17d1f8887b9d74a1e25633b351568e04348318838a726ca2f50604986",
       "format": {
         "styleId": "Title"
       },
       "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "77c263f81e054f79c9bf6816a98d1d3d995c332292ff39343db5ceb96f6c5ab3"
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "dc12feba94c659fd4ce51b8388e12e118bbe69f5af796a137dafe8a4c4dffd51"
-        },
         {
           "kind": "text",
           "text": "An Overview Paper",
@@ -189,8 +179,8 @@
     {
       "anchor": "p:body:c58a695748745379ca385c4568c0b3bf",
       "type": "paragraph",
-      "contentHash": "ce525da178511633d4408c65ae6e8b43324cc0f774a85a6cddef878f112b6707",
-      "formatFingerprint": "9ca10238b38ceb962d1f8851211318587953f7e314d5b8836d55a9073e9f3f49",
+      "contentHash": "5e888a1ecf9c914f0555882ae7ffdf6c0147c4bcb8bac6350f151754637fa908",
+      "formatFingerprint": "22cb36ca3cb695831557cd189df2db18e63e8f4f5f465e48c78467096629688e",
       "format": {
         "styleId": "Note"
       },
@@ -202,19 +192,7 @@
         },
         {
           "kind": "text",
-          "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, ",
-          "format": {
-            "bold": false
-          }
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}lastRenderedPageBreak",
-          "hash": "ae38844301d4a1f59998502b97a2e900de63ba232495b70f2c6d93c89cd75cb7"
-        },
-        {
-          "kind": "text",
-          "text": "lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab. You can also format text directly by using the other controls on the Home tab. Most controls offer a choice of using the look from the current theme or using a format that you specify directly. To change the overall look of your document, choose new Theme elements on the Page Layout tab. To change the looks available in the Quick Style gallery, use the Change Current Quick Style Set command.",
+          "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab. You can also format text directly by using the other controls on the Home tab. Most controls offer a choice of using the look from the current theme or using a format that you specify directly. To change the overall look of your document, choose new Theme elements on the Page Layout tab. To change the looks available in the Quick Style gallery, use the Change Current Quick Style Set command.",
           "format": {
             "bold": false
           }

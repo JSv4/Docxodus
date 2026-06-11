@@ -245,7 +245,7 @@
     {
       "anchor": "tbl:body:1a45e2fbb3b8f8b210fdc984f054c9b8",
       "type": "table",
-      "contentHash": "94bd315a295b6167f00fcb30c3dd3e66999be3569d51bdacf96e4269db8f3d3e",
+      "contentHash": "b47dc5f30729b9da6a5f8324d80961cc4caa0a5efe8b402522061b97696e1c47",
       "formatFingerprint": "53e7b07376b4f169e2dfd7022b7843c4da7de79a92d4541db8c0f85b763e79db",
       "unmodeledTablePropsDigest": "764b1b85ea877f964661c43caf9faee9f8221b1d2bbcbda227819fb0c18c34db",
       "rows": [
@@ -323,26 +323,21 @@
         },
         {
           "anchor": "tr:body:252eb99fb6b6d940011b00fbf1f36083",
-          "contentHash": "bcedcb8f9914e913b0b53fb01928c805fd7ae9f2f14e3ff7d20a2e351ba04ee7",
+          "contentHash": "cda52c50b646bafe6178ec57d3983091534888416fbb0fb99f325ac05a67d13c",
           "cells": [
             {
               "anchor": "tc:body:d611ad45ce9fc9de24236bad44615416",
               "gridSpan": 2,
               "vMerge": "None",
-              "contentHash": "b29832932a0216b931ea38531e85fe40c264ab6438616cf9a481f305ec5e5168",
+              "contentHash": "064fabd51ed16631b77e449dbaa6b57b8d067afccc3c6e052b21130861b6a074",
               "blocks": [
                 {
                   "anchor": "p:body:6b6759311e1d76301d3f01feca0bc225",
                   "type": "paragraph",
-                  "contentHash": "19f9a4d8f0763d2cd82ba39f5fd155d0a7e582a0058526b3a164b324a55a86be",
+                  "contentHash": "ad57366865126e55649ecb23ae1d48887544976efea46a48eb5d85a6eeb4d306",
                   "formatFingerprint": "3e5dee40e901d6bd661bd2f6ed7e0281bcad95c443355db8df64aa5958ac4be8",
                   "format": {},
                   "inlines": [
-                    {
-                      "kind": "opaque",
-                      "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-                      "hash": "0b3c25697b620567f64b007fc2cedbc9d61850dbf3739f4f8b42bb99eeda8d4a"
-                    },
                     {
                       "kind": "text",
                       "text": "100",

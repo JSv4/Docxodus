@@ -4,24 +4,14 @@
     {
       "anchor": "p:body:bc7ea8ca7b384f45cc06836609b17a6b",
       "type": "paragraph",
-      "contentHash": "04b9d3d637f00c2c36def904d050365f0a6256b0cab8bfa3cd616b81cd2e064a",
+      "contentHash": "7dcca11f63220bce9b24580c2d951f5fe094753d321aa095912757321f5be67e",
       "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
       "format": {},
       "inlines": [
         {
           "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "77c263f81e054f79c9bf6816a98d1d3d995c332292ff39343db5ceb96f6c5ab3"
-        },
-        {
-          "kind": "opaque",
           "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing",
           "hash": "e3e701b4c2caed2c18a68fea65523c413c1a5e0bcb0a9819d3191f1fa4c009c4"
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "dc12feba94c659fd4ce51b8388e12e118bbe69f5af796a137dafe8a4c4dffd51"
         }
       ]
     },

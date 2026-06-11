@@ -201,6 +201,8 @@ internal static class IrReader
                 AppendRun(child, inlines);
             else if (child.Name == W + "proofErr")
                 continue; // rule N2: pure noise, never emit.
+            else if (IsDroppedParagraphChild(child.Name))
+                continue; // rules N3 (bookmarks) / N15 (comment range plumbing).
             else
                 inlines.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)));
         }
@@ -238,10 +240,62 @@ internal static class IrReader
                 inlines.Add(new IrTab(runFormat));
             else if (child.Name == W + "br")
                 inlines.Add(new IrBreak(BreakKind(child)));
+            else if (child.Name == W + "noBreakHyphen")
+                // N7: non-breaking hyphen → text U+2011, carrying the run format so it coalesces
+                // with adjacent same-format text in the post-process pass.
+                inlines.Add(new IrTextRun("‑", runFormat));
+            else if (child.Name == W + "softHyphen")
+                // N7: soft hyphen → text U+00AD, same coalescing semantics as above.
+                inlines.Add(new IrTextRun("­", runFormat));
+            else if (child.Name == W + "sym")
+                AppendSym(child, rPr, runFormat, inlines); // N8.
+            else if (child.Name == W + "lastRenderedPageBreak")
+                continue; // N4: layout cache, not content.
+            else if (child.Name == W + "commentReference")
+                // N15 (strip half): comment plumbing never affects ContentHash.
+                // M1.3: record the comment id into the comments store here.
+                continue;
+            else if (IsDroppedParagraphChild(child.Name))
+                continue; // N3: bookmarks can legally appear inside a run too.
             else
                 inlines.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)));
         }
     }
+
+    /// <summary>
+    /// N8: map <c>w:sym</c> to text. When <c>@w:char</c> parses as a BMP hex code point, emit the
+    /// single character as an <see cref="IrTextRun"/>. The symbol's <c>@w:font</c> is glyph-bearing
+    /// formatting, so the whole <c>w:sym</c> element is folded into a per-character run format
+    /// (cloned into the unmodeled-digest container) — it must influence the FORMAT fingerprint, not
+    /// just vanish. If <c>@w:char</c> is missing or unparseable, fall back to opaque.
+    /// </summary>
+    private static void AppendSym(XElement sym, XElement? rPr, IrRunFormat baseFormat, List<IrInline> inlines)
+    {
+        var charAttr = (string?)sym.Attribute(W + "char");
+        if (charAttr is not null
+            && int.TryParse(charAttr, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var code)
+            && code is >= 0 and <= 0xFFFF)
+        {
+            // BMP code point (Word's symbol convention uses the F000-F0FF private-use range): emit
+            // the codepoint as a single char verbatim — no surrogate handling needed.
+            var text = ((char)code).ToString();
+            var symFormat = MapRunFormat(rPr, extraUnmodeled: sym);
+            inlines.Add(new IrTextRun(text, symFormat));
+            return;
+        }
+
+        inlines.Add(new IrOpaqueInline(sym.Name, IrHasher.CanonicalHash(sym)));
+    }
+
+    /// <summary>
+    /// Paragraph/run children that rules N3 (bookmarks) and N15 (comment range plumbing) drop from
+    /// the inline stream entirely. Recoverable via block provenance; never affect any hash.
+    /// </summary>
+    private static bool IsDroppedParagraphChild(XName name) =>
+        name == W + "bookmarkStart"
+        || name == W + "bookmarkEnd"
+        || name == W + "commentRangeStart"   // N15: M1.3 records the target span into the comment store.
+        || name == W + "commentRangeEnd";
 
     private static IrBreakKind BreakKind(XElement br)
     {
@@ -408,10 +462,14 @@ internal static class IrReader
 
     // --- run format -------------------------------------------------------
 
-    private static IrRunFormat MapRunFormat(XElement? rPr)
+    private static IrRunFormat MapRunFormat(XElement? rPr, XElement? extraUnmodeled = null)
     {
-        if (rPr is null)
+        if (rPr is null && extraUnmodeled is null)
             return new IrRunFormat { UnmodeledDigest = EmptyUnmodeledDigest };
+
+        if (rPr is null)
+            // No run props, but a glyph-bearing extra (a w:sym): the digest is just that element.
+            return new IrRunFormat { UnmodeledDigest = ExtraUnmodeledDigest(extraUnmodeled!) };
 
         string? styleId = AttrVal(rPr.Element(W + "rStyle"));
         bool? bold = Toggle(rPr.Element(W + "b"));
@@ -442,7 +500,8 @@ internal static class IrReader
         // still affect the fingerprint. w:vertAlign is consumed only when it maps to a modeled
         // sub/superscript; vertAlign="baseline" stays unmodeled. Pass it as a conditional extra so
         // no per-run set is allocated.
-        var digest = UnmodeledDigest(rPr, RPrConsumed, vertAlign is not null ? W + "vertAlign" : null);
+        var digest = UnmodeledDigest(rPr, RPrConsumed, vertAlign is not null ? W + "vertAlign" : null,
+            extraUnmodeled);
 
         return new IrRunFormat
         {
@@ -683,17 +742,29 @@ internal static class IrReader
     /// callers need not allocate a fresh set). When there are no leftovers the result is the cached
     /// empty-container digest (§6.4).
     /// </summary>
-    private static IrHash UnmodeledDigest(XElement props, HashSet<XName> consumed, XName? alsoConsumed = null)
+    private static IrHash UnmodeledDigest(XElement props, HashSet<XName> consumed,
+        XName? alsoConsumed = null, XElement? extra = null)
     {
         var leftovers = props.Elements()
             .Where(e => !consumed.Contains(e.Name) && e.Name != alsoConsumed)
             .ToList();
-        if (leftovers.Count == 0)
+        if (leftovers.Count == 0 && extra is null)
             return EmptyUnmodeledDigest;
 
         var container = new XElement("unmodeled");
         foreach (var e in leftovers)
             container.Add(new XElement(e));
+        if (extra is not null)
+            container.Add(new XElement(extra));
+        return IrHasher.CanonicalHash(container);
+    }
+
+    /// <summary>Digest of an <c>&lt;unmodeled&gt;</c> container holding a single extra element
+    /// (used when a glyph-bearing run child like <c>w:sym</c> must influence the fingerprint of a
+    /// run that has no <c>w:rPr</c> of its own).</summary>
+    private static IrHash ExtraUnmodeledDigest(XElement extra)
+    {
+        var container = new XElement("unmodeled", new XElement(extra));
         return IrHasher.CanonicalHash(container);
     }
 

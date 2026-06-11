@@ -4,21 +4,10 @@
     {
       "anchor": "p:body:cfa93cdf4e7fb096d9423de5d510ab1a",
       "type": "paragraph",
-      "contentHash": "534b1ea7151f56f98251ec4981d36f76c9c54119f397cee2ddbbccdbd9f418f8",
+      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "formatFingerprint": "68f3da4b6180f4ba7619aa41c4ce8b4f526da9456f03afdf4b2d1faefa92c2d4",
       "format": {},
-      "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "7975d4bf9f1de3836d7456b2394ca48f9a6e7fc4dd8a7a8f960b5bbd5820b0c0"
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "dc12feba94c659fd4ce51b8388e12e118bbe69f5af796a137dafe8a4c4dffd51"
-        }
-      ]
+      "inlines": []
     },
     {
       "anchor": "p:body:c0d14b853fb01c607fedc4b39eec5b7f",
@@ -1198,7 +1187,7 @@
     {
       "anchor": "p:body:441719aa17687725033d756b76ed1e89",
       "type": "paragraph",
-      "contentHash": "ce8391558b8450d65ca3ffbe0863edc938468c55df5b3c9a328173b01832030d",
+      "contentHash": "f414e14b26fdecb7039aa5669f53b1a4e65fb9c8cf1479db8ae896a88e9bfeb9",
       "formatFingerprint": "76a26634502fdd5810ef94cebd192ab9ca2bcd7e79c5508cf5e1d0cba9f1122a",
       "format": {
         "indentLeftTwips": 720,
@@ -1208,11 +1197,6 @@
         }
       },
       "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}lastRenderedPageBreak",
-          "hash": "ae38844301d4a1f59998502b97a2e900de63ba232495b70f2c6d93c89cd75cb7"
-        },
         {
           "kind": "text",
           "text": "Consider stage IV  in the below chromatogram as stage III, stage-IV dimer as ",
@@ -1231,7 +1215,7 @@
     {
       "anchor": "p:body:2647f7e35e8b6c1d185e36b6cd01c5f2",
       "type": "paragraph",
-      "contentHash": "b0aec84ba8b3465c97a6ceb6758c251276170d01e6490fba31eae5a04d8e21ca",
+      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "formatFingerprint": "f33a2228a3f8eea0a0811f6f460fce3f46998ce1126df919d79ed53e54bf53c0",
       "format": {
         "justification": "Both",
@@ -1241,18 +1225,7 @@
           "rule": "Auto"
         }
       },
-      "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "b4d6bf55327de5f70989f92c59f159cc443b0f2ad12123962026c20bd0fc93d3"
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "b5fc1cc6454d6a16d01dfbabce4a92cddf186392274e0aba1ca1371a34ed8b91"
-        }
-      ]
+      "inlines": []
     },
     {
       "anchor": "p:body:f7823d1b83104327fe1c401692f08f21",

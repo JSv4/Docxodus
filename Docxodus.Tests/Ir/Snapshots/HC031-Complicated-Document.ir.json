@@ -54,21 +54,10 @@
     {
       "anchor": "p:body:5a4ae35fbf203edf47f680776c6b914f",
       "type": "paragraph",
-      "contentHash": "f79a6a2a5a85ccf0ce0b5960c5029eae5c0b3f34bff202ca9994e64f1332856d",
+      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
       "format": {},
-      "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "77c263f81e054f79c9bf6816a98d1d3d995c332292ff39343db5ceb96f6c5ab3"
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "dc12feba94c659fd4ce51b8388e12e118bbe69f5af796a137dafe8a4c4dffd51"
-        }
-      ]
+      "inlines": []
     },
     {
       "anchor": "p:body:4fb92c3285e795f2749cc4d42be840a4",
@@ -120,17 +109,12 @@
     {
       "anchor": "h:body:4d423c81a3f84b13637927ce8b8687b8",
       "type": "paragraph",
-      "contentHash": "a81f9b8a95a45f24b9f4b52f56a4709eb8b2f1dabc5a9ca452fdf1f2beede5b8",
+      "contentHash": "481e7d2a3f70258e7b3f894eccaa737ef6690188bc3aafb820d31d2aa3468e9e",
       "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
       "format": {
         "styleId": "Heading1"
       },
       "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}lastRenderedPageBreak",
-          "hash": "ae38844301d4a1f59998502b97a2e900de63ba232495b70f2c6d93c89cd75cb7"
-        },
         {
           "kind": "text",
           "text": "Heading1",
@@ -519,7 +503,7 @@
     {
       "anchor": "li:body:fc488a8f3b4cad8df305904bb9e46e3a",
       "type": "paragraph",
-      "contentHash": "3e29e502402ec3ee52d8862672d592f645be002d4729b8aa732e63a6ec7e3ac4",
+      "contentHash": "42572b4e881f249cf9bf597ec9f4f3171fe1a57739904a42cd50f33861e729ff",
       "formatFingerprint": "6e525c1a4a22b2151ba1ccdfe7e92e153d3a3eb8f884f126974f34f7efd883ba",
       "list": {
         "numId": 2,
@@ -530,11 +514,6 @@
         "styleId": "ListParagraph"
       },
       "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}lastRenderedPageBreak",
-          "hash": "ae38844301d4a1f59998502b97a2e900de63ba232495b70f2c6d93c89cd75cb7"
-        },
         {
           "kind": "text",
           "text": "You can also type a keyword to search online for the video that best fits your document.",
@@ -914,23 +893,13 @@
     {
       "anchor": "p:body:73cdfd44f05f36aeb2b7a9f0235ce69d",
       "type": "paragraph",
-      "contentHash": "5fec4b1a1abe14301642872cb734c2b2f1ae49a31a040b392182df43b41e89bb",
-      "formatFingerprint": "7689163276704fe0f2c8781555cab979f6328958e8c346a63e7c945868734fae",
+      "contentHash": "7c7ec6686e1b779f393b0df186070ad58ee4e1593c64fc38db0d7dd18eef16ae",
+      "formatFingerprint": "b0eed4e88374ddc0ae6d7fb3b0cab7dcb1f4e98f421026049484e063990e82f5",
       "format": {},
       "inlines": [
         {
           "kind": "text",
-          "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document. To make your document look professionally produced, Word ",
-          "format": {}
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}lastRenderedPageBreak",
-          "hash": "ae38844301d4a1f59998502b97a2e900de63ba232495b70f2c6d93c89cd75cb7"
-        },
-        {
-          "kind": "text",
-          "text": "provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar.",
+          "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document. To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar.",
           "format": {}
         }
       ]
@@ -1082,26 +1051,16 @@
     {
       "anchor": "p:body:51e849612d166c4757dc5a004b2716ea",
       "type": "paragraph",
-      "contentHash": "70d41ae52838abfbb0ab4aacccf43ff88f2df21f637fca9f17c0daf56b45a13d",
+      "contentHash": "6f7dc5d96170d013ba3b7a83d319b578e4d2869b3042b3e62735c5aff22d2324",
       "formatFingerprint": "2c0b22f3f27a3826df070d416afc91402fc8cb30b8d46b8c7b2f11f6602ffb29",
       "format": {},
       "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "bfb70a72d1b16fe8250faa807f3bdda7db8559ce89b2b623a4e969c97c7327bd"
-        },
         {
           "kind": "text",
           "text": "This is the bookmark here.",
           "format": {
             "highlight": "yellow"
           }
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "3a4cd9a12604028d8adfa029837a58873ef7d579d0ec1274b1ce4532b1d080af"
         },
         {
           "kind": "text",
@@ -1454,38 +1413,13 @@
     {
       "anchor": "p:body:206cf2ebb043785902b1ea55d58ea611",
       "type": "paragraph",
-      "contentHash": "2ca2e4ee01415f8fd3133e23c05de9fdf416c8cab075ab950d36d94cef6f972b",
-      "formatFingerprint": "3c65d1b7918edbae4ddacf1293a8ef39fd612cc94eeac37f5a798ca5e8fd891c",
+      "contentHash": "2871bbcabc29f3e33ec552199f04f9f94c40e1df85afed79df8db8faf729952b",
+      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
       "format": {},
       "inlines": [
         {
           "kind": "text",
-          "text": "When ",
-          "format": {}
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}commentRangeStart",
-          "hash": "8c82c6075f94da66b8c46ae192183f1ff4756f1b7a6f7d1406f0a1bdeaa3d2a4"
-        },
-        {
-          "kind": "text",
-          "text": "you click Online Video",
-          "format": {}
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}commentRangeEnd",
-          "hash": "ddb6edba64f92224a11aafc23f66a7648552d421121c7b329f97e229a66d4fe5"
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}commentReference",
-          "hash": "fc95336ca9f4ec5e5ae49a9bc38836c5aaf8775de3886832ef90cb4fd44c399c"
-        },
-        {
-          "kind": "text",
-          "text": ", you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
+          "text": "When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",
           "format": {}
         }
       ]
@@ -1538,104 +1472,64 @@
     {
       "anchor": "h:body:49c91b4cfbf62c36b81201636fabee36",
       "type": "paragraph",
-      "contentHash": "3a317fe91d90347575f019b1cea67b7c406cc7ea6f5fee50a458e8d04a5e022a",
+      "contentHash": "d95e9370ef74ec209bedb1f6a57044525776464c572c93d7709a2fd46d7e3527",
       "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
       "format": {
         "styleId": "Heading1"
       },
       "inlines": [
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "87ca173d6c596aeb9f12a3f2298a8f4210d5412893a9c6a150bf993c7c62be2a"
-        },
-        {
           "kind": "text",
           "text": "Heading 1",
           "format": {}
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "6ae596ad57984614519374d47f11819a395964e59c8d2a66468a7ac210c6e403"
         }
       ]
     },
     {
       "anchor": "h:body:2c56a902f7cb0b2935feabb0e0c5b34c",
       "type": "paragraph",
-      "contentHash": "38af43d136fc8266ebd3db92be4159a9c9188e04b07100855f06f2108f350de5",
+      "contentHash": "3291955e900530da1940bdce97fa0f944e26627f2174172d0e4d97ed9c5510c0",
       "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
       "format": {
         "styleId": "Heading2"
       },
       "inlines": [
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "0eb9aa67aab616a9731a1d07e42ea0a148792cfa8b8603a36e65d9d0d835ee0a"
-        },
-        {
           "kind": "text",
           "text": "Heading 2",
           "format": {}
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "767303347d9f6de9f3c41e05e00e5e3c8f39eed27e910cd9695496e587996257"
         }
       ]
     },
     {
       "anchor": "h:body:8cdcc1b5a798cff8620cf8fe5c766745",
       "type": "paragraph",
-      "contentHash": "c4e6fa021548155960f9c9392fb3c992e7c4c7d08d22f631910c6a846e9a4434",
+      "contentHash": "615d319fb526ac3d4316c796cd77f457a325db3b2a76ab9c8151d9f93eac634d",
       "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
       "format": {
         "styleId": "Heading1"
       },
       "inlines": [
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "21ca73b92d16f5f37e70e78b4d616085ed1ae08cb42a577483195aa91278f0d2"
-        },
-        {
           "kind": "text",
           "text": "Heading 1 again",
           "format": {}
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "ff622112715c49384c70fdba5703b9feec6ac33cb7c00f4352d0ac5bbbba5691"
         }
       ]
     },
     {
       "anchor": "h:body:e3148ee2dbe7f582b8196e6285e1b981",
       "type": "paragraph",
-      "contentHash": "3830893391fa534a9b84c05347f2d84b3c1697142216716069edb6eb288f4e83",
+      "contentHash": "d3b7d7a96552ece4af0ac63606981cd217346a40151beef558abea3591033559",
       "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
       "format": {
         "styleId": "Heading2"
       },
       "inlines": [
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "2172ac90952c53772a5927b144e1cfdc6d70fc76ddb8b8b467cb67ed1dc3eeb4"
-        },
-        {
           "kind": "text",
           "text": "Heading 2 again",
           "format": {}
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "05e1ad06deb95540fd60454165a395920f7fba3e0d98ec39270d2e68b793c5f1"
         }
       ]
     },
@@ -1658,15 +1552,10 @@
     {
       "anchor": "p:body:3a98d0ad62ee495486c2833901b0459e",
       "type": "paragraph",
-      "contentHash": "59200183fa3d6e084ddcedc67afb20b81ee4141173d722c1611ca372127843ac",
+      "contentHash": "1b942364d5a26d1d056179080c9b0a6506bda390ba33159737ad9354156a3ebc",
       "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
       "format": {},
       "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}lastRenderedPageBreak",
-          "hash": "ae38844301d4a1f59998502b97a2e900de63ba232495b70f2c6d93c89cd75cb7"
-        },
         {
           "kind": "text",
           "text": "This is a section that is in landscape mode.",
@@ -1685,15 +1574,10 @@
     {
       "anchor": "p:body:35716f820d13f7051237a664260dd2a5",
       "type": "paragraph",
-      "contentHash": "9a477eb2f926c262d0bcc8d4aaa9d04f4829a5e3ea317d6d1ceb4b13db6b5f4b",
+      "contentHash": "b8b57b3aa8c989f5adb0de0d480586d3f28be2b32a6f3533fbee983a9291905b",
       "formatFingerprint": "e1f502b9431cf440ff00836ddb2824f508098206b6d7c573af1a0fd94e3c60fb",
       "format": {},
       "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}lastRenderedPageBreak",
-          "hash": "ae38844301d4a1f59998502b97a2e900de63ba232495b70f2c6d93c89cd75cb7"
-        },
         {
           "kind": "text",
           "text": "This is in the following section.",
@@ -1704,17 +1588,12 @@
     {
       "anchor": "p:body:63856fa569284949adbd3c14f2644d35",
       "type": "paragraph",
-      "contentHash": "8db3cc5e93409ec542e45a8b843b6ca0995622e9b8eac1908a1e324dee0f6124",
+      "contentHash": "6a00f0d48028be6894c3d264f6a58549b06e72439ccbfe9d97a3f374c0b27c89",
       "formatFingerprint": "de6656490769299d899139c5b3810eb1263f1d3698e02d3afbd6ce8660b4ae8a",
       "format": {
         "spacingAfterTwips": 480
       },
       "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}lastRenderedPageBreak",
-          "hash": "ae38844301d4a1f59998502b97a2e900de63ba232495b70f2c6d93c89cd75cb7"
-        },
         {
           "kind": "text",
           "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document.",

@@ -242,21 +242,10 @@
     {
       "anchor": "p:body:5a4ae35fbf203edf47f680776c6b914f",
       "type": "paragraph",
-      "contentHash": "f79a6a2a5a85ccf0ce0b5960c5029eae5c0b3f34bff202ca9994e64f1332856d",
+      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
       "format": {},
-      "inlines": [
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkStart",
-          "hash": "77c263f81e054f79c9bf6816a98d1d3d995c332292ff39343db5ceb96f6c5ab3"
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}bookmarkEnd",
-          "hash": "dc12feba94c659fd4ce51b8388e12e118bbe69f5af796a137dafe8a4c4dffd51"
-        }
-      ]
+      "inlines": []
     },
     {
       "anchor": "p:body:b432afdf18dfa311a0929c4aa714b4fa",
