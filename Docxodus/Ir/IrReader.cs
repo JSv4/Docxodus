@@ -11,17 +11,18 @@ using DocumentFormat.OpenXml.Packaging;
 namespace Docxodus.Ir;
 
 /// <summary>
-/// Reads an OOXML word-processing document into the Document IR for the body scope (spec §5,
-/// M1.1 subset). The reader is <em>total</em>: any body child it does not model is preserved as an
-/// <see cref="IrOpaqueBlock"/> (or <see cref="IrOpaqueInline"/> at run level), so it never throws
-/// on weird-but-valid OOXML. It never mutates the caller's document — it works over a private copy.
+/// Reads an OOXML word-processing document into the Document IR (spec §5). The reader is
+/// <em>total</em>: any child it does not model is preserved as an <see cref="IrOpaqueBlock"/> (or
+/// <see cref="IrOpaqueInline"/> at run level), so it never throws on weird-but-valid OOXML. It never
+/// mutates the caller's document — it works over a private copy.
 /// </summary>
 /// <remarks>
 /// Pipeline: copy the caller's bytes → normalize tracked revisions per
 /// <see cref="IrReaderOptions.RevisionView"/> → open the copy → assign deterministic Unids
-/// (same call <c>WmlToMarkdownConverter</c> makes) → walk <c>w:body</c> children in document order.
-/// In M1.1 only <see cref="IrScopes.Body"/> is honored; headers/footers, notes, and comments are
-/// emitted as empty stores.
+/// (same call <c>WmlToMarkdownConverter</c> makes) → walk <c>w:body</c> children in document order →
+/// walk the remaining requested scopes (headers/footers, footnotes/endnotes, comments) in the SAME
+/// part order as <c>WmlToMarkdownConverter.BuildAnchorIndex</c>. <see cref="IrReaderOptions.Scopes"/>
+/// selects which scopes are read; unselected scopes are emitted as empty stores/lists.
 /// </remarks>
 internal static class IrReader
 {
@@ -103,28 +104,68 @@ internal static class IrReader
         // style-chain numPr lookup; the numbering registry resolves the facts.
         var styles = BuildStyleRegistry(main);
         var numbering = BuildNumberingRegistry(main);
-        var ctx = new ReadContext(partUri, main, styles, numbering);
+
+        var sources = new Dictionary<Uri, XDocument> { [partUri] = mainXDoc };
+
+        // --- body scope (always walked; the IrDocument requires a body) -------------------------
+        // Comment targets (N15) are recorded only while walking the BODY: the markdown projection's
+        // comment ranges live in the main document part, so cross-scope ranges are out of scope.
+        var commentTracker = options.Scopes.HasFlag(IrScopes.Comments)
+            ? new CommentTracker()
+            : null;
+        var bodyCtx = new ReadContext(partUri, main, styles, numbering, "body", commentTracker);
 
         var body = root.Element(W + "body")
             ?? throw new DocxodusException("Document has no w:body element.");
 
         var blocks = new List<IrBlock>();
         foreach (var child in body.Elements())
-            AppendBlocks(child, ctx, blocks);
+            AppendBlocks(child, bodyCtx, blocks);
+        // Each paragraph finishes itself (BuildParagraph), so any range still open at end-of-body has
+        // its provisional spans buffered but never committed — an orphan start, discarded (totality).
 
-        // 5. Anchor index over blocks only (rows/cells are positional, not blocks).
+        // 5. Anchor index over ALL scopes' blocks (rows/cells are positional, not blocks). Collision
+        // checking spans scopes — two distinct scopes producing the same kind:scope:unid string is an
+        // invariant violation, but in practice each scope's name disambiguates.
         var anchorIndex = new Dictionary<string, IrBlock>(StringComparer.Ordinal);
         foreach (var b in blocks)
             IndexBlock(b, anchorIndex);
 
-        var sources = new Dictionary<Uri, XDocument> { [partUri] = mainXDoc };
+        // --- header / footer scopes (rule M1.3) -------------------------------------------------
+        var headers = IrNodeList.Empty<IrHeaderFooter>();
+        var footers = IrNodeList.Empty<IrHeaderFooter>();
+        if (options.Scopes.HasFlag(IrScopes.HeadersFooters))
+        {
+            headers = ReadHeaderFooterScopes(main, body, styles, numbering, sources, anchorIndex,
+                main.HeaderParts.Cast<OpenXmlPart>(), "hdr", W + "headerReference");
+            footers = ReadHeaderFooterScopes(main, body, styles, numbering, sources, anchorIndex,
+                main.FooterParts.Cast<OpenXmlPart>(), "ftr", W + "footerReference");
+        }
+
+        // --- footnote / endnote scopes (rule M1.3) ----------------------------------------------
+        var footnotes = IrNoteStore.Empty;
+        var endnotes = IrNoteStore.Empty;
+        if (options.Scopes.HasFlag(IrScopes.Notes))
+        {
+            footnotes = ReadNoteStore(main, main.FootnotesPart, styles, numbering, sources,
+                anchorIndex, "fn", W + "footnote");
+            endnotes = ReadNoteStore(main, main.EndnotesPart, styles, numbering, sources,
+                anchorIndex, "en", W + "endnote");
+        }
+
+        // --- comment scope (rule M1.3 + N15 record-half) ----------------------------------------
+        var comments = IrCommentStore.Empty;
+        if (options.Scopes.HasFlag(IrScopes.Comments))
+            comments = ReadCommentStore(main, styles, numbering, sources, anchorIndex, commentTracker!);
 
         return new IrDocument
         {
             Body = new IrScope("body", IrNodeList.From(blocks)),
-            Footnotes = IrNoteStore.Empty,
-            Endnotes = IrNoteStore.Empty,
-            Comments = IrCommentStore.Empty,
+            Headers = headers,
+            Footers = footers,
+            Footnotes = footnotes,
+            Endnotes = endnotes,
+            Comments = comments,
             Styles = styles,
             Numbering = numbering,
             ThemeFonts = BuildThemeFonts(main),
@@ -141,17 +182,29 @@ internal static class IrReader
     private sealed class ReadContext
     {
         public ReadContext(Uri partUri, MainDocumentPart main,
-            IrStyleRegistry styles, IrNumberingRegistry numbering)
+            IrStyleRegistry styles, IrNumberingRegistry numbering,
+            string scope, CommentTracker? commentTracker = null)
         {
             PartUri = partUri;
             Main = main;
             Styles = styles;
             Numbering = numbering;
+            Scope = scope;
+            CommentTracker = commentTracker;
         }
 
         public Uri PartUri { get; }
 
         public MainDocumentPart Main { get; }
+
+        // The IR scope name carried into every anchor produced under this context ("body", "hdr1",
+        // "ftr1", "fn", "en", "cmt"). Threaded so header/note/comment blocks get scope-tagged anchors
+        // matching the markdown projection's BuildAnchorIndex naming.
+        public string Scope { get; }
+
+        // N15 comment-range tracker, non-null only while walking the BODY scope with comments
+        // requested. Records (block anchor, char span) targets as commentRange markers are seen.
+        public CommentTracker? CommentTracker { get; }
 
         // Registries for list resolution (numPr → IrNum → IrAbstractNum → level format) and the
         // pStyle → basedOn walk that finds style-inherited numbering.
@@ -166,6 +219,134 @@ internal static class IrReader
 
         public IrProvenance Provenance(XElement element) =>
             new() { Element = element, PartUri = PartUri };
+    }
+
+    // --- comment range tracking (N15 record-half) -------------------------
+
+    /// <summary>
+    /// Records <c>w:commentRangeStart</c>/<c>End</c>/<c>w:commentReference</c> spans seen during the
+    /// BODY walk into per-comment-id <see cref="IrCommentTarget"/> lists (rule N15). The comment
+    /// plumbing elements are still DROPPED from the inline stream (so they never touch ContentHash —
+    /// M1.2 behavior is unchanged); this tracker only *observes* their positions.
+    /// <para/>
+    /// <b>Char-offset rule.</b> An offset is the count of <em>visible text characters</em> emitted so
+    /// far within the current block — the summed lengths of the block's <see cref="IrTextRun"/>s. Tabs,
+    /// breaks, images, note refs, field/opaque inlines, and all non-text inlines count as 0. This is
+    /// the simplest rule that is stable under the N5 run-coalescing pass (which never changes the total
+    /// text length of a block) and is documented on <see cref="IrCommentTarget"/>.
+    /// <para/>
+    /// <b>Cross-block ranges.</b> When a paragraph ends with ranges still open, each open range is
+    /// closed at the paragraph's end offset (one <see cref="IrCommentTarget"/> for the touched block)
+    /// and re-opened at offset 0 of the next block, so a range spanning N blocks yields N targets — one
+    /// per touched block (spec §12 open-question #2, resolved this way).
+    /// <para/>
+    /// Totality: an orphan range-start (no matching end, or no matching comment) is discarded silently;
+    /// a <c>commentReference</c> for a comment with no ranges records a zero-length target at the
+    /// reference's offset.
+    /// </summary>
+    private sealed class CommentTracker
+    {
+        // An open range's per-block accumulation: the targets touched so far (provisional until the
+        // matching commentRangeEnd is seen) plus the start offset within the CURRENT block.
+        private sealed class OpenRangeState
+        {
+            public readonly List<IrCommentTarget> Provisional = new();
+            public int StartInCurrentBlock;
+        }
+
+        // commentId → completed (end-seen) targets, in document order.
+        private readonly Dictionary<string, List<IrCommentTarget>> _targets = new(StringComparer.Ordinal);
+        // commentId → range currently open (spanning zero or more blocks until its end).
+        private readonly Dictionary<string, OpenRangeState> _open = new(StringComparer.Ordinal);
+        // commentIds that have at least one commentReference (for the zero-length fallback when the
+        // comment has no committed range). id → first reference (block, offset).
+        private readonly Dictionary<string, (IrAnchor Block, int Offset)> _danglingRefs =
+            new(StringComparer.Ordinal);
+
+        private IrAnchor _currentBlock;
+        private int _charOffset;
+
+        /// <summary>Begin a new block: reset the char counter and re-open carried-over ranges at 0.</summary>
+        public void BeginParagraph(IrAnchor blockAnchor)
+        {
+            _currentBlock = blockAnchor;
+            _charOffset = 0;
+            foreach (var range in _open.Values)
+                range.StartInCurrentBlock = 0;
+        }
+
+        /// <summary>Advance the char counter by an emitted text run's length.</summary>
+        public void Advance(int textLength) => _charOffset += textLength;
+
+        /// <summary>Open a comment range at the current offset within the current block.</summary>
+        public void OpenRange(string id)
+        {
+            if (id.Length == 0)
+                return;
+            // A duplicate start for an already-open id is malformed; keep the first (totality).
+            if (!_open.ContainsKey(id))
+                _open[id] = new OpenRangeState { StartInCurrentBlock = _charOffset };
+        }
+
+        /// <summary>Close a comment range at the current offset, committing its provisional per-block
+        /// targets (including the final block's) into the completed set.</summary>
+        public void CloseRange(string id)
+        {
+            if (id.Length == 0)
+                return;
+            if (_open.TryGetValue(id, out var range))
+            {
+                range.Provisional.Add(new IrCommentTarget(_currentBlock, range.StartInCurrentBlock, _charOffset));
+                foreach (var t in range.Provisional)
+                    AddTarget(id, t);
+                _open.Remove(id);
+            }
+            // A stray end with no matching start is discarded silently (totality).
+        }
+
+        /// <summary>Record a comment reference offset; resolved to a zero-length target at end-of-read
+        /// only if the comment had no committed range.</summary>
+        public void Reference(string id)
+        {
+            if (id.Length == 0)
+                return;
+            if (!_danglingRefs.ContainsKey(id))
+                _danglingRefs[id] = (_currentBlock, _charOffset);
+        }
+
+        /// <summary>End the current block: for each still-open range, buffer the touched span for this
+        /// block as PROVISIONAL (committed only if/when the range's end is later seen) and re-open it
+        /// at offset 0 of the next block. A range whose end never arrives leaves its provisional spans
+        /// uncommitted — i.e. an orphan range-start is discarded silently (totality).</summary>
+        public void FinishParagraph()
+        {
+            foreach (var range in _open.Values)
+                range.Provisional.Add(new IrCommentTarget(_currentBlock, range.StartInCurrentBlock, _charOffset));
+        }
+
+        /// <summary>
+        /// The targets for a given comment id. A comment with no committed range but a recorded
+        /// reference yields a single zero-length target at the reference offset. Targets for comment
+        /// ids that no <c>w:comment</c> claims are simply never queried (orphan ranges dropped).
+        /// </summary>
+        public IReadOnlyList<IrCommentTarget> TargetsFor(string commentId)
+        {
+            if (_targets.TryGetValue(commentId, out var list) && list.Count > 0)
+                return list;
+            if (_danglingRefs.TryGetValue(commentId, out var r))
+                return new[] { new IrCommentTarget(r.Block, r.Offset, r.Offset) };
+            return Array.Empty<IrCommentTarget>();
+        }
+
+        private void AddTarget(string id, IrCommentTarget target)
+        {
+            if (!_targets.TryGetValue(id, out var list))
+            {
+                list = new List<IrCommentTarget>();
+                _targets[id] = list;
+            }
+            list.Add(target);
+        }
     }
 
     // --- revisions --------------------------------------------------------
@@ -256,8 +437,8 @@ internal static class IrReader
 
     private static string Unid(XElement el) => (string?)el.Attribute(PtOpenXml.Unid) ?? "";
 
-    private static IrAnchor AnchorFor(IrAnchorKind kind, XElement el) =>
-        new(kind, "body", Unid(el));
+    private static IrAnchor AnchorFor(IrAnchorKind kind, XElement el, ReadContext ctx) =>
+        new(kind, ctx.Scope, Unid(el));
 
     // --- paragraph --------------------------------------------------------
 
@@ -270,17 +451,24 @@ internal static class IrReader
         var paraFormat = MapParaFormat(pPr);
         var listInfo = pPr is null ? null : ResolveListInfo(pPr, ctx);
 
+        // N15: announce the block to the comment tracker so range offsets accumulate against this
+        // paragraph's anchor, then close any range still open at paragraph end (carrying it into the
+        // next block at offset 0 for cross-block ranges).
+        var anchor = AnchorFor(kind, p, ctx);
+        ctx.CommentTracker?.BeginParagraph(anchor);
+
         // Walk the paragraph's children (skipping w:pPr) through the shared inline walker, which
         // handles run content, hyperlinks (N14), and the field state machine (N9), then applies
         // the N10 empty-drop + N5 coalescing post-process to the top-level inline list.
         var processed = WalkInlines(p.Elements().Where(c => c.Name != W + "pPr"), ctx);
+        ctx.CommentTracker?.FinishParagraph();
 
         var contentHash = ComputeParagraphContentHash(processed);
         var formatFingerprint = IrHasher.FingerprintBlock(paraFormat, RunFormatsInOrder(processed));
 
         return new IrParagraph
         {
-            Anchor = AnchorFor(kind, p),
+            Anchor = anchor,
             Format = paraFormat,
             List = listInfo,
             Inlines = IrNodeList.From(processed),
@@ -378,14 +566,38 @@ internal static class IrReader
             {
                 // N2: pure noise, never emit.
             }
+            else if (child.Name == W + "commentRangeStart" || child.Name == W + "commentRangeEnd")
+            {
+                // N15: comment-range plumbing is dropped from the inline stream (no ContentHash
+                // impact) but its position is recorded into the comment-target tracker, only while
+                // walking the body and never inside a field (offset semantics there are undefined).
+                HandleCommentRangeMarker(child);
+            }
             else if (IsDroppedParagraphChild(child.Name))
             {
-                // N3 (bookmarks) / N15 (comment range plumbing).
+                // N3 (bookmarks).
             }
             else
             {
                 EmitInline(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)), child);
             }
+        }
+
+        /// <summary>
+        /// Record a paragraph-level <c>w:commentRangeStart</c>/<c>End</c> into the tracker (rule N15).
+        /// Only fires while walking the body scope (tracker non-null) and outside a field capture
+        /// (where char offsets are undefined). The element is otherwise dropped — it never reaches the
+        /// inline stream or any hash.
+        /// </summary>
+        private void HandleCommentRangeMarker(XElement marker)
+        {
+            if (_ctx.CommentTracker is null || _fieldDepth > 0)
+                return;
+            var id = (string?)marker.Attribute(W + "id") ?? "";
+            if (marker.Name == W + "commentRangeStart")
+                _ctx.CommentTracker.OpenRange(id);
+            else
+                _ctx.CommentTracker.CloseRange(id);
         }
 
         private void FeedRun(XElement r)
@@ -402,6 +614,20 @@ internal static class IrReader
                     HandleFldChar(child);
                     continue;
                 }
+                // N15: run-level comment plumbing. commentRangeStart/End/Reference are dropped from
+                // the inline stream (no ContentHash impact) but their positions are recorded into the
+                // tracker — outside fields only (offset semantics inside a field are undefined).
+                if (child.Name == W + "commentRangeStart" || child.Name == W + "commentRangeEnd")
+                {
+                    HandleCommentRangeMarker(child);
+                    continue;
+                }
+                if (child.Name == W + "commentReference")
+                {
+                    if (_ctx.CommentTracker is not null && _fieldDepth == 0)
+                        _ctx.CommentTracker.Reference((string?)child.Attribute(W + "id") ?? "");
+                    continue; // never emitted; never hashed.
+                }
                 if (_fieldDepth > 0)
                 {
                     _captured.Add(child);
@@ -415,12 +641,36 @@ internal static class IrReader
                         continue;
                     }
                     // Post-separate: divert run content into the field result.
-                    EmitRunChild(child, rPr, runFormat, _ctx, _result);
+                    EmitAndTrack(child, rPr, runFormat, _result);
                     continue;
                 }
 
-                EmitRunChild(child, rPr, runFormat, _ctx, _output);
+                EmitAndTrack(child, rPr, runFormat, _output);
             }
+        }
+
+        /// <summary>
+        /// Emit a run child into <paramref name="sink"/> and advance the comment-target char counter
+        /// (rule N15) by the visible-text length the child contributed — measured as the growth in
+        /// <see cref="IrTextRun"/> characters appended to <paramref name="sink"/>. Non-text inlines
+        /// (tab, break, image, note ref, opaque) contribute 0, matching the documented offset rule.
+        /// </summary>
+        private void EmitAndTrack(XElement child, XElement? rPr, IrRunFormat runFormat, List<IrInline> sink)
+        {
+            var tracker = _ctx.CommentTracker;
+            if (tracker is null)
+            {
+                EmitRunChild(child, rPr, runFormat, _ctx, sink);
+                return;
+            }
+            int before = sink.Count;
+            EmitRunChild(child, rPr, runFormat, _ctx, sink);
+            int added = 0;
+            for (int i = before; i < sink.Count; i++)
+                if (sink[i] is IrTextRun tr)
+                    added += tr.Text.Length;
+            if (added > 0)
+                tracker.Advance(added);
         }
 
         private void HandleFldChar(XElement fldChar)
@@ -1187,7 +1437,7 @@ internal static class IrReader
 
         return new IrTable
         {
-            Anchor = AnchorFor(IrAnchorKind.Tbl, tbl),
+            Anchor = AnchorFor(IrAnchorKind.Tbl, tbl, ctx),
             Rows = IrNodeList.From(rows),
             UnmodeledTablePropsDigest = tablePropsDigest,
             ContentHash = contentHash,
@@ -1211,7 +1461,7 @@ internal static class IrReader
             rowBuilder.AppendHash(cell.ContentHash);
         }
 
-        var row = new IrRow(AnchorFor(IrAnchorKind.Tr, tr), IrNodeList.From(cells), rowBuilder.Build())
+        var row = new IrRow(AnchorFor(IrAnchorKind.Tr, tr, ctx), IrNodeList.From(cells), rowBuilder.Build())
         {
             Source = ctx.Provenance(tr),
         };
@@ -1244,7 +1494,7 @@ internal static class IrReader
         }
 
         var cell = new IrCell(
-            AnchorFor(IrAnchorKind.Tc, tc),
+            AnchorFor(IrAnchorKind.Tc, tc, ctx),
             IrNodeList.From(blocks),
             gridSpan,
             vMerge,
@@ -1306,7 +1556,7 @@ internal static class IrReader
 
         return new IrSectionBreak
         {
-            Anchor = AnchorFor(IrAnchorKind.Sec, sectPr),
+            Anchor = AnchorFor(IrAnchorKind.Sec, sectPr, ctx),
             Format = format,
             ContentHash = contentBuilder.Build(),
             FormatFingerprint = IrHasher.FingerprintSectionFormat(format),
@@ -1319,12 +1569,214 @@ internal static class IrReader
     private static IrOpaqueBlock BuildOpaqueBlock(XElement el, ReadContext ctx) =>
         new()
         {
-            Anchor = AnchorFor(IrAnchorKind.Unk, el),
+            Anchor = AnchorFor(IrAnchorKind.Unk, el, ctx),
             ElementName = el.Name,
             ContentHash = IrHasher.CanonicalHash(el),
             FormatFingerprint = EmptyUnmodeledDigest,
             Source = ctx.Provenance(el),
         };
+
+    // --- header / footer / note / comment scopes (rule M1.3) --------------
+
+    /// <summary>
+    /// Prepare a non-body part's root for the IR walk exactly as the body and the markdown projection
+    /// do: assign deterministic Unids over the whole subtree and stash the owning part as an
+    /// <see cref="OpenXmlPart"/> annotation on the root (so <c>KindFor → IsListItem</c> can reach the
+    /// main part's <c>StyleDefinitionsPart</c> through the part's package). Idempotent on the
+    /// annotation. Returns the part's root, or null when the part has no readable root (tolerated).
+    /// </summary>
+    private static XElement? PreparePartRoot(OpenXmlPart part)
+    {
+        var root = part.GetXDocument().Root;
+        if (root is null)
+            return null;
+        UnidHelper.AssignToAllElementsDeterministic(root);
+        if (root.Annotation<OpenXmlPart>() == null)
+            root.AddAnnotation(part);
+        return root;
+    }
+
+    /// <summary>
+    /// Read the header (or footer) parts into <see cref="IrHeaderFooter"/> records, scope-named
+    /// <c>hdr1</c>/<c>hdr2</c>… (or <c>ftr1</c>…) in the SAME enumeration order as
+    /// <c>WmlToMarkdownConverter.BuildAnchorIndex</c> (<c>main.HeaderParts</c>/<c>FooterParts</c>).
+    /// Each part's root is prepared (Unids + annotation), its element children are walked by the block
+    /// walker under the scope name, its <see cref="XDocument"/> joins <paramref name="sources"/>, and
+    /// its blocks are indexed into <paramref name="anchorIndex"/>. The occurrence
+    /// <see cref="IrHeaderFooterKind"/> is resolved from the body section properties' references
+    /// (<paramref name="referenceName"/> = <c>w:headerReference</c>/<c>w:footerReference</c>) whose
+    /// <c>@r:id</c> points at the part's relationship id; an unreferenced part defaults to
+    /// <see cref="IrHeaderFooterKind.Default"/>. Whole-part walks are tolerance-wrapped (a malformed
+    /// part is skipped, not fatal) so corpus totality holds across all scopes.
+    /// </summary>
+    private static IrNodeList<IrHeaderFooter> ReadHeaderFooterScopes(
+        MainDocumentPart main, XElement body, IrStyleRegistry styles, IrNumberingRegistry numbering,
+        Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
+        IEnumerable<OpenXmlPart> parts, string scopePrefix, XName referenceName)
+    {
+        var result = new List<IrHeaderFooter>();
+        int i = 1;
+        foreach (var part in parts)
+        {
+            var scopeName = $"{scopePrefix}{i++}";
+            try
+            {
+                var root = PreparePartRoot(part);
+                if (root is null)
+                    continue;
+
+                var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName);
+                var blocks = new List<IrBlock>();
+                foreach (var child in root.Elements())
+                    AppendBlocks(child, ctx, blocks);
+
+                foreach (var b in blocks)
+                    IndexBlock(b, anchorIndex);
+                sources[part.Uri] = part.GetXDocument();
+
+                var kind = ResolveHeaderFooterKind(main, body, part, referenceName);
+                result.Add(new IrHeaderFooter(scopeName, kind, new IrScope(scopeName, IrNodeList.From(blocks))));
+            }
+            catch (Exception e) when (IsTolerableRegistryException(e))
+            {
+                // A malformed header/footer part is skipped; totality over the corpus depends on it.
+            }
+        }
+        return IrNodeList.From(result);
+    }
+
+    /// <summary>
+    /// Resolve a header/footer part's occurrence kind from the body section properties. The first
+    /// <paramref name="referenceName"/> reference (across all body <c>w:sectPr</c>) whose <c>@r:id</c>
+    /// resolves to <paramref name="part"/> wins: <c>@w:type</c> <c>first</c>/<c>even</c> map to the
+    /// matching kind, everything else (including <c>default</c> and absent) to
+    /// <see cref="IrHeaderFooterKind.Default"/>. A part no section references → Default.
+    /// </summary>
+    private static IrHeaderFooterKind ResolveHeaderFooterKind(
+        MainDocumentPart main, XElement body, OpenXmlPart part, XName referenceName)
+    {
+        string? relId = null;
+        try { relId = main.GetIdOfPart(part); }
+        catch (Exception e) when (IsTolerableRegistryException(e)) { return IrHeaderFooterKind.Default; }
+
+        foreach (var sectPr in body.Descendants(W + "sectPr"))
+            foreach (var reference in sectPr.Elements(referenceName))
+                if ((string?)reference.Attribute(R + "id") == relId)
+                    return (string?)reference.Attribute(W + "type") switch
+                    {
+                        "first" => IrHeaderFooterKind.First,
+                        "even" => IrHeaderFooterKind.Even,
+                        _ => IrHeaderFooterKind.Default,
+                    };
+        return IrHeaderFooterKind.Default;
+    }
+
+    /// <summary>
+    /// Read a footnotes (or endnotes) part into an <see cref="IrNoteStore"/> keyed by note id
+    /// (<c>@w:id</c>). Word-reserved separator/continuation notes are skipped exactly as the projection
+    /// skips them (<see cref="WmlToMarkdownConverter.IsBoilerplateNote"/>). Each real note's block
+    /// children are walked under the scope name (<c>fn</c>/<c>en</c>), indexed, and its part's
+    /// <see cref="XDocument"/> joins <paramref name="sources"/>. A missing part → empty store; the
+    /// whole walk is tolerance-wrapped.
+    /// </summary>
+    private static IrNoteStore ReadNoteStore(
+        MainDocumentPart main, OpenXmlPart? part, IrStyleRegistry styles, IrNumberingRegistry numbering,
+        Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
+        string scopeName, XName noteName)
+    {
+        if (part is null)
+            return IrNoteStore.Empty;
+
+        try
+        {
+            var root = PreparePartRoot(part);
+            if (root is null)
+                return IrNoteStore.Empty;
+
+            var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName);
+            var notes = new Dictionary<string, IrScope>(StringComparer.Ordinal);
+
+            foreach (var noteEl in root.Elements(noteName))
+            {
+                if (WmlToMarkdownConverter.IsBoilerplateNote(noteEl))
+                    continue;
+                var id = (string?)noteEl.Attribute(W + "id");
+                if (id is null || notes.ContainsKey(id))
+                    continue; // an id-less note is unreferenceable; first wins on a duplicate id.
+
+                var blocks = new List<IrBlock>();
+                foreach (var child in noteEl.Elements())
+                    AppendBlocks(child, ctx, blocks);
+                foreach (var b in blocks)
+                    IndexBlock(b, anchorIndex);
+
+                notes[id] = new IrScope(scopeName, IrNodeList.From(blocks));
+            }
+
+            sources[part.Uri] = part.GetXDocument();
+            return new IrNoteStore(notes);
+        }
+        catch (Exception e) when (IsTolerableRegistryException(e))
+        {
+            return IrNoteStore.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Read the comments part into an <see cref="IrCommentStore"/>. Per <c>w:comment</c>: an anchor of
+    /// kind <see cref="IrAnchorKind.Cmt"/> in scope <c>cmt</c> (unid from the comment element's
+    /// <c>pt:Unid</c>), <c>@w:author</c> (?? ""), optional <c>@w:initials</c>/<c>@w:date</c> (verbatim),
+    /// the comment's block children walked under the <c>cmt</c> scope, and the N15 targets recorded
+    /// during the body walk (<see cref="CommentTracker.TargetsFor"/>). The part's
+    /// <see cref="XDocument"/> joins <paramref name="sources"/>. A missing part → empty store; the walk
+    /// is tolerance-wrapped.
+    /// </summary>
+    private static IrCommentStore ReadCommentStore(
+        MainDocumentPart main, IrStyleRegistry styles, IrNumberingRegistry numbering,
+        Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
+        CommentTracker tracker)
+    {
+        var part = main.WordprocessingCommentsPart;
+        if (part is null)
+            return IrCommentStore.Empty;
+
+        try
+        {
+            var root = PreparePartRoot(part);
+            if (root is null)
+                return IrCommentStore.Empty;
+
+            var ctx = new ReadContext(part.Uri, main, styles, numbering, "cmt");
+            var comments = new List<IrComment>();
+
+            foreach (var commentEl in root.Elements(W + "comment"))
+            {
+                var anchor = new IrAnchor(IrAnchorKind.Cmt, "cmt", Unid(commentEl));
+                var author = (string?)commentEl.Attribute(W + "author") ?? "";
+                var initials = (string?)commentEl.Attribute(W + "initials");
+                var date = (string?)commentEl.Attribute(W + "date");
+
+                var blocks = new List<IrBlock>();
+                foreach (var child in commentEl.Elements())
+                    AppendBlocks(child, ctx, blocks);
+                foreach (var b in blocks)
+                    IndexBlock(b, anchorIndex);
+
+                var commentId = (string?)commentEl.Attribute(W + "id") ?? "";
+                var targets = tracker.TargetsFor(commentId);
+
+                comments.Add(new IrComment(anchor, author, initials, date,
+                    IrNodeList.From(blocks), IrNodeList.From(targets)));
+            }
+
+            sources[part.Uri] = part.GetXDocument();
+            return new IrCommentStore(IrNodeList.From(comments));
+        }
+        catch (Exception e) when (IsTolerableRegistryException(e))
+        {
+            return IrCommentStore.Empty;
+        }
+    }
 
     // --- registries (styles / numbering / theme) --------------------------
 

@@ -41,8 +41,10 @@ public class IrDiagnosticJsonTests
         using var parsed = JsonDocument.Parse(json);
         var root = parsed.RootElement;
 
-        Assert.Equal("body", root.GetProperty("scope").GetString());
-        var blocks = root.GetProperty("blocks");
+        // Document level is now {"scopes":[…]} with the body entry first.
+        var bodyScope = root.GetProperty("scopes")[0];
+        Assert.Equal("body", bodyScope.GetProperty("scope").GetString());
+        var blocks = bodyScope.GetProperty("blocks");
         Assert.Equal(JsonValueKind.Array, blocks.ValueKind);
 
         // Two paragraphs, each carrying an anchor, content hash, and the right text.
@@ -70,8 +72,9 @@ public class IrDiagnosticJsonTests
 
         // Parsing throws if the output is not well-formed JSON.
         using var parsed = JsonDocument.Parse(json);
-        Assert.Equal("body", parsed.RootElement.GetProperty("scope").GetString());
-        Assert.True(parsed.RootElement.GetProperty("blocks").GetArrayLength() > 0);
+        var bodyScope = parsed.RootElement.GetProperty("scopes")[0];
+        Assert.Equal("body", bodyScope.GetProperty("scope").GetString());
+        Assert.True(bodyScope.GetProperty("blocks").GetArrayLength() > 0);
     }
 
     // --- writer/reader lockstep completeness guard ------------------------
@@ -239,7 +242,7 @@ public class IrDiagnosticJsonTests
         var json = RenderInline(img);
 
         using var parsed = JsonDocument.Parse(json);
-        var image = parsed.RootElement.GetProperty("blocks")[0]
+        var image = parsed.RootElement.GetProperty("scopes")[0].GetProperty("blocks")[0]
             .GetProperty("inlines")[0];
         Assert.Equal("image", image.GetProperty("kind").GetString());
         var partUri = image.GetProperty("partUri").GetString()!;

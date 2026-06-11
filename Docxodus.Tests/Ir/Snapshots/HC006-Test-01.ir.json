@@ -1,111 +1,139 @@
 {
-  "scope": "body",
-  "blocks": [
+  "scopes": [
     {
-      "anchor": "tbl:body:c8d7175430d2890a576660d37129f163",
-      "type": "table",
-      "contentHash": "7e1a77c8a90f266faccaf71dba8819feb8cf1d93db62d57a9a451917f8d124fd",
-      "formatFingerprint": "c9f8bc92a83a8a3eab34aaf59d1255439aa778c1a0cdc0052895603573003e8c",
-      "unmodeledTablePropsDigest": "7ded96e4edb430db50a31263d5506f276443c31a2f39db1cf4a2ee1f86336c12",
-      "rows": [
+      "scope": "body",
+      "blocks": [
         {
-          "anchor": "tr:body:e8bdb46a6049b85bf736a116172aa698",
-          "contentHash": "13d5e943c60bd607906c56d982cd4f48c1d0b135db64ffcc23fa208b016877a6",
-          "cells": [
+          "anchor": "tbl:body:c8d7175430d2890a576660d37129f163",
+          "type": "table",
+          "contentHash": "7e1a77c8a90f266faccaf71dba8819feb8cf1d93db62d57a9a451917f8d124fd",
+          "formatFingerprint": "c9f8bc92a83a8a3eab34aaf59d1255439aa778c1a0cdc0052895603573003e8c",
+          "unmodeledTablePropsDigest": "7ded96e4edb430db50a31263d5506f276443c31a2f39db1cf4a2ee1f86336c12",
+          "rows": [
             {
-              "anchor": "tc:body:7e5725c56b3c6a509d2e7f94eb039700",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
-              "blocks": [
+              "anchor": "tr:body:e8bdb46a6049b85bf736a116172aa698",
+              "contentHash": "13d5e943c60bd607906c56d982cd4f48c1d0b135db64ffcc23fa208b016877a6",
+              "cells": [
                 {
-                  "anchor": "p:body:018d54064fd7a55841a2c383d5dca4f2",
-                  "type": "paragraph",
-                  "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                  "formatFingerprint": "b82e9073eb72fc7c1dd6c47ba0792c98536a8e17778d40e79a2c4735173d470e",
-                  "format": {
-                    "styleId": "NoSpacing"
-                  },
-                  "inlines": []
-                }
-              ]
-            },
-            {
-              "anchor": "tc:body:2dd410b9b660c7d324f4fd9b821728d9",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
-              "blocks": [
-                {
-                  "anchor": "p:body:065d814cbac93071abaef7255f52ad85",
-                  "type": "paragraph",
-                  "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                  "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
-                  "format": {},
-                  "inlines": []
-                }
-              ]
-            },
-            {
-              "anchor": "tc:body:cd1109d22610639c5b2e9bd4ae570c7a",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "adc58a8fb1a6c3e9fa1103f645bc3295344d2b51c91ec91f341360adae46e07e",
-              "blocks": [
-                {
-                  "anchor": "tbl:body:ecdc7455b679338a8b06caae78d6d4e7",
-                  "type": "table",
-                  "contentHash": "f4e066c2097860636bef4add07364784a5070b6821858ea26b7dce3523bf69d1",
-                  "formatFingerprint": "5fb82fea7a75f0960b730004f3181251410dec5253b5500cbe45983d856fc651",
-                  "unmodeledTablePropsDigest": "30381dc29a246d822cbeaeed5a904222b29f44180c8b199e3e5cc271d4ba6a10",
-                  "rows": [
+                  "anchor": "tc:body:7e5725c56b3c6a509d2e7f94eb039700",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                  "blocks": [
                     {
-                      "anchor": "tr:body:920185e2bb442660353f2893111a9c38",
-                      "contentHash": "50614d5859db762a94598858f0f0246d48b7660b1d2c471e63c8643c1f5d8c2d",
-                      "cells": [
+                      "anchor": "p:body:018d54064fd7a55841a2c383d5dca4f2",
+                      "type": "paragraph",
+                      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                      "formatFingerprint": "b82e9073eb72fc7c1dd6c47ba0792c98536a8e17778d40e79a2c4735173d470e",
+                      "format": {
+                        "styleId": "NoSpacing"
+                      },
+                      "inlines": []
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:2dd410b9b660c7d324f4fd9b821728d9",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:065d814cbac93071abaef7255f52ad85",
+                      "type": "paragraph",
+                      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                      "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+                      "format": {},
+                      "inlines": []
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:cd1109d22610639c5b2e9bd4ae570c7a",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "adc58a8fb1a6c3e9fa1103f645bc3295344d2b51c91ec91f341360adae46e07e",
+                  "blocks": [
+                    {
+                      "anchor": "tbl:body:ecdc7455b679338a8b06caae78d6d4e7",
+                      "type": "table",
+                      "contentHash": "f4e066c2097860636bef4add07364784a5070b6821858ea26b7dce3523bf69d1",
+                      "formatFingerprint": "5fb82fea7a75f0960b730004f3181251410dec5253b5500cbe45983d856fc651",
+                      "unmodeledTablePropsDigest": "30381dc29a246d822cbeaeed5a904222b29f44180c8b199e3e5cc271d4ba6a10",
+                      "rows": [
                         {
-                          "anchor": "tc:body:f00a0ca5ce7ad17623a7f6cf59d56367",
-                          "gridSpan": 1,
-                          "vMerge": "None",
-                          "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
-                          "blocks": [
+                          "anchor": "tr:body:920185e2bb442660353f2893111a9c38",
+                          "contentHash": "50614d5859db762a94598858f0f0246d48b7660b1d2c471e63c8643c1f5d8c2d",
+                          "cells": [
                             {
-                              "anchor": "p:body:bc300d1f11822a650f4f8da6d94c68ad",
-                              "type": "paragraph",
-                              "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                              "formatFingerprint": "b82e9073eb72fc7c1dd6c47ba0792c98536a8e17778d40e79a2c4735173d470e",
-                              "format": {
-                                "styleId": "NoSpacing"
-                              },
-                              "inlines": []
+                              "anchor": "tc:body:f00a0ca5ce7ad17623a7f6cf59d56367",
+                              "gridSpan": 1,
+                              "vMerge": "None",
+                              "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                              "blocks": [
+                                {
+                                  "anchor": "p:body:bc300d1f11822a650f4f8da6d94c68ad",
+                                  "type": "paragraph",
+                                  "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                                  "formatFingerprint": "b82e9073eb72fc7c1dd6c47ba0792c98536a8e17778d40e79a2c4735173d470e",
+                                  "format": {
+                                    "styleId": "NoSpacing"
+                                  },
+                                  "inlines": []
+                                }
+                              ]
                             }
                           ]
-                        }
-                      ]
-                    },
-                    {
-                      "anchor": "tr:body:34fa28778a8350ebf22c4d0d76e548cc",
-                      "contentHash": "9768e60b58ff929331a0466dfe44bb8c0c88673dc93717bf709f2ab2e4650feb",
-                      "cells": [
+                        },
                         {
-                          "anchor": "tc:body:4a8f89ab2fcdce25f10bbe89011b7deb",
-                          "gridSpan": 1,
-                          "vMerge": "None",
-                          "contentHash": "2f95be7a3e15696802b3806213ea2986150ce0c305fde026b3549a7089600c5f",
-                          "blocks": [
+                          "anchor": "tr:body:34fa28778a8350ebf22c4d0d76e548cc",
+                          "contentHash": "9768e60b58ff929331a0466dfe44bb8c0c88673dc93717bf709f2ab2e4650feb",
+                          "cells": [
                             {
-                              "anchor": "h:body:d5804e1ffb34f10334118539bedbea0b",
-                              "type": "paragraph",
-                              "contentHash": "430998b0cdc79e1cd914fcffd2ec4b018325602887b95ace40f5beb8bab51fc2",
-                              "formatFingerprint": "e710e9b17d1f8887b9d74a1e25633b351568e04348318838a726ca2f50604986",
-                              "format": {
-                                "styleId": "Title"
-                              },
-                              "inlines": [
+                              "anchor": "tc:body:4a8f89ab2fcdce25f10bbe89011b7deb",
+                              "gridSpan": 1,
+                              "vMerge": "None",
+                              "contentHash": "2f95be7a3e15696802b3806213ea2986150ce0c305fde026b3549a7089600c5f",
+                              "blocks": [
                                 {
-                                  "kind": "text",
-                                  "text": "Business Trip Checklist",
-                                  "format": {}
+                                  "anchor": "h:body:d5804e1ffb34f10334118539bedbea0b",
+                                  "type": "paragraph",
+                                  "contentHash": "430998b0cdc79e1cd914fcffd2ec4b018325602887b95ace40f5beb8bab51fc2",
+                                  "formatFingerprint": "e710e9b17d1f8887b9d74a1e25633b351568e04348318838a726ca2f50604986",
+                                  "format": {
+                                    "styleId": "Title"
+                                  },
+                                  "inlines": [
+                                    {
+                                      "kind": "text",
+                                      "text": "Business Trip Checklist",
+                                      "format": {}
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        },
+                        {
+                          "anchor": "tr:body:82261a954a4567f13f4fc503f98d24bd",
+                          "contentHash": "50614d5859db762a94598858f0f0246d48b7660b1d2c471e63c8643c1f5d8c2d",
+                          "cells": [
+                            {
+                              "anchor": "tc:body:f0d5c650c4669df2019dfc308f4cb6cf",
+                              "gridSpan": 1,
+                              "vMerge": "None",
+                              "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
+                              "blocks": [
+                                {
+                                  "anchor": "p:body:f40a72bdb081b0f11b5aa98368e118c5",
+                                  "type": "paragraph",
+                                  "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                                  "formatFingerprint": "b82e9073eb72fc7c1dd6c47ba0792c98536a8e17778d40e79a2c4735173d470e",
+                                  "format": {
+                                    "styleId": "NoSpacing"
+                                  },
+                                  "inlines": []
                                 }
                               ]
                             }
@@ -114,705 +142,714 @@
                       ]
                     },
                     {
-                      "anchor": "tr:body:82261a954a4567f13f4fc503f98d24bd",
-                      "contentHash": "50614d5859db762a94598858f0f0246d48b7660b1d2c471e63c8643c1f5d8c2d",
-                      "cells": [
+                      "anchor": "p:body:810666ba9ebe7bda6e925051708b6f65",
+                      "type": "paragraph",
+                      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                      "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+                      "format": {},
+                      "inlines": []
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:5843bf10be9a055dbcd5dcb38d908f3f",
+          "type": "paragraph",
+          "contentHash": "de8adaf865af045389f81b549bb4ce279f81bb4c9c38f09f39fdea6149761d26",
+          "formatFingerprint": "4ffd52930660c7fe9b1a4757eea9a509548418ea3960aa59da9dcc85195b7b19",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 0,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": true
+          },
+          "format": {
+            "styleId": "Heading1",
+            "spacingBeforeTwips": 620
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "While You Are Away: Preparing the Office",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "tbl:body:1a45e2fbb3b8f8b210fdc984f054c9b8",
+          "type": "table",
+          "contentHash": "93e03e648aee895491fbc60e420071a9bb2b3786126559be34bc5b074d2f3a5b",
+          "formatFingerprint": "ac1f30d7007dc6f3010684e5c449abc59607bfcd33dda0bde9189f8c30b1d36b",
+          "unmodeledTablePropsDigest": "76c76b6485025b85e77a3b0d0d5178b4ef46a578be9f710744545e3a1f64db7c",
+          "rows": [
+            {
+              "anchor": "tr:body:7c8023eee1329d28746ffc26d91cf695",
+              "contentHash": "ea33b1e4866a6e6bedce65c7a8cb7603efe1649cddfcfbd63c637bb04bdb1bd5",
+              "cells": [
+                {
+                  "anchor": "tc:body:3595bc5ae367117e296d78d17399786a",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "b850ca4498f43c88f1d9dd8eeacbbe1a147314be31315a47ffe7139d3e135400",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:b4ff5a65b58cf03806cf62ead7f6d529",
+                      "type": "paragraph",
+                      "contentHash": "af02423f30e88c260dae37f46be7f2aeb254120b83b288f32830de4a7e94fa47",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
                         {
-                          "anchor": "tc:body:f0d5c650c4669df2019dfc308f4cb6cf",
-                          "gridSpan": 1,
-                          "vMerge": "None",
-                          "contentHash": "b08ba84dbc61fd4abe080e924df6f66d08c266e2fe1784ee9f5ec281a79d7e8a",
-                          "blocks": [
-                            {
-                              "anchor": "p:body:f40a72bdb081b0f11b5aa98368e118c5",
-                              "type": "paragraph",
-                              "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                              "formatFingerprint": "b82e9073eb72fc7c1dd6c47ba0792c98536a8e17778d40e79a2c4735173d470e",
-                              "format": {
-                                "styleId": "NoSpacing"
-                              },
-                              "inlines": []
-                            }
-                          ]
+                          "kind": "text",
+                          "text": "Organize any necessary meetings to take place on your trip; book appointments and meeting rooms.",
+                          "format": {}
                         }
                       ]
                     }
                   ]
-                },
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:252eb99fb6b6d940011b00fbf1f36083",
+              "contentHash": "70c76d796cc1b876f42dd169e7bf764bcc6bcd580aa0ac13fcad63c085d76f03",
+              "cells": [
                 {
-                  "anchor": "p:body:810666ba9ebe7bda6e925051708b6f65",
-                  "type": "paragraph",
-                  "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-                  "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
-                  "format": {},
-                  "inlines": []
+                  "anchor": "tc:body:d611ad45ce9fc9de24236bad44615416",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "a42294fd715fdf6df52d5c6370e71fa8baa7c728bd7a397752451370c7bde75f",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:181977148dac3e394dd34d371ed46e0e",
+                      "type": "paragraph",
+                      "contentHash": "278dc731f1780517559f05b61cca61aec8e1309a47cd3f7c5babdf3067fad44a",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "If traveling internationally, obtain any necessary paperwork and vaccinations.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:33f8bd80ed7b5e6ba5cb4b71536fdbf8",
+              "contentHash": "5ac74733f43aad868a20d876ae25bb28ab985d779b7fba02a9edfd570e39e0e2",
+              "cells": [
+                {
+                  "anchor": "tc:body:224578c16824aeff9a2dfc944ada3538",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "d9ff9cf6e37c96ced2e476f9d35d351d38b701e353b91f65ced107fa80acbc87",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:1dab51415efb944afc60a220e0f181ff",
+                      "type": "paragraph",
+                      "contentHash": "8a79c2443ea21489681d06fbb3f4af25bea303de12a0b09fd7d098e52cca34bc",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Familiarize yourself with local business customs common at destination.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:781c597974e8157b8e6c34c8f2d628d2",
+              "contentHash": "e9f3c8d4ebf12318cc0928810a14fc70e89094e7ce9b2b930e5130859fb4641d",
+              "cells": [
+                {
+                  "anchor": "tc:body:2e8679d009d7c38b209b250cf2f1f9e7",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "f8169ea63ac2d7a0fed5ef33bfb586e0b433507cc2cbba9a1bb533ec7e373e3a",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:b7917010d4f9df12f1d9dc128fc69dc2",
+                      "type": "paragraph",
+                      "contentHash": "e02ef5113773d8b4523c471c5061cf52dc6149816a7ad1c971ff84d874d9c550",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Confirm appointments, schedules, reservations, etc.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:1ae18185fc7a2b0ddaf6d45c627156b2",
+              "contentHash": "a0b093c8e07f99baacb50733e9d71f65e9cf22a82bf2c0312d2932146d9cb141",
+              "cells": [
+                {
+                  "anchor": "tc:body:a10838254cd87fa9d2c1f0ac6e6588cd",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "618af4780aae850d2243e0f94491bf5826637110c4401a40fd8f9ae613806be6",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:432b93fff898ef2199ccbcc59856f8a0",
+                      "type": "paragraph",
+                      "contentHash": "9e13e197e290fc63d814140e391a9a184f1e2fb304e73323c89cad464eca3a56",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Tie up any loose ends at the office (finish up projects; set up out-of-office replies; notify or remind coworkers about your departure).",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:fab3ca41052d9b3af1ec62ee96a8ce7b",
+          "type": "paragraph",
+          "contentHash": "37191775a23e25b0e0f1265dc6298ed11b78a01009086b56a062bce935c72f6e",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 0,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": true
+          },
+          "format": {
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "While You Are Away: Preparing the Home",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "tbl:body:ed710a8d2bbbef26e1199ee064990d07",
+          "type": "table",
+          "contentHash": "bb8dc834764d270af46fee1fcfb461b0b253ca19dc1f45d38142e73db9c2e9f2",
+          "formatFingerprint": "723dedf56c2870650342218f5754edd6b3442ed47b6698ddeb37a82d89eb2864",
+          "unmodeledTablePropsDigest": "109c480f3f08ddc3d860d88864b627a4f268c42ca3476911d11144f59c9189d4",
+          "rows": [
+            {
+              "anchor": "tr:body:5c3ad602a9fa9596a55e87365ca73287",
+              "contentHash": "cbee678de6983009a6c0b48d69952c58da5c1bfd0e1d9ad54ebc52cd56063fd1",
+              "cells": [
+                {
+                  "anchor": "tc:body:7cde5cdcf5b439d01313cef936b3542a",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "d67210eed169330880cbeb9454c2fad41720c19f574f5bd1ee0a6e16517eb0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:2de675e1d1b152cb6a6bd451f8bc1fef",
+                      "type": "paragraph",
+                      "contentHash": "bec9cc500e37f73738a5e49a4ff3ffd1e8311cb065635142022e74bbd712c61e",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Arrange for child, pet, and plant care; communicate needs and schedules.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:9eb6d127bc5deda43268f8c63d357134",
+              "contentHash": "c41cd93fdc206c3e026a95f6cbefb69a68994f9877f25f79523a7f6a5bc6ca7a",
+              "cells": [
+                {
+                  "anchor": "tc:body:ba9e21f5f7e21ed9792555bdc79362b1",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "5a0f8f52725e9578df01681c5dcb0e25d215afc1d45fcb24a8f9ea84b9cb14fe",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:89a0658eb863d0792c4a8731f830776d",
+                      "type": "paragraph",
+                      "contentHash": "1ae087013aba3f11fe12fe000ae8a56c13aa2703fb3237de4ba8636a1bf04d61",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Pause routine deliveries.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:f2bbc19ce4a9bdf1234dbdcf45ba9b1c",
+              "contentHash": "6601d613896a8b820ffe1763956e0546f8fde913e8b121ca4c95f0a72400b2cc",
+              "cells": [
+                {
+                  "anchor": "tc:body:b79a88d527ade343e92b7cab89788151",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "4da78f110c4adbe50ce78110afb2778ad7d5670d0e73b464d9e7caafa472ca77",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:2c5e8bc9583cf3443f9ab16e7861e184",
+                      "type": "paragraph",
+                      "contentHash": "23141cec7d458889b5e6c79b7cf5edbbf1062e46592ae325e02e4eb1277f2831",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Make your home seem lived-in while away by putting lights and a radio on timers.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:995c8431b93266d02c2e65653014387f",
+              "contentHash": "b55cc8ab73cce5cd8c7d8937263d1a982f114eafde27c164f7d8751911c87f42",
+              "cells": [
+                {
+                  "anchor": "tc:body:693c744a20a1dda5931dbcb3b106b6c4",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "808cea8435b3b2ebff93c7b85c80cca78d867f772f8122e6620899937abb07b4",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:6eb11eca6d9cbc223de1d5521ebe783c",
+                      "type": "paragraph",
+                      "contentHash": "b8f42784f01b07cb11cccf4bcc235252ec617ba858c351c1c0d87f1d3ea905ac",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Turn down thermostat.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:2b9b8199639ff230665c490f415811b1",
+              "contentHash": "3a160cf12f841ecffe7b51355f9334357089525d00bd9b3153f5f9a941407739",
+              "cells": [
+                {
+                  "anchor": "tc:body:974d9c1d5ca2e534c159a068abf53cc4",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "4e964c8472a3152bf6f9ade42d65ecff5898e367cf6e3b1fedd191019efff8d0",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:25c363acb6a7e78e662f6359f280e634",
+                      "type": "paragraph",
+                      "contentHash": "ac9ebd2ac2c1e4aa948460fab9d3c26f638fa416d9756ff0c1bf9f3d6058e547",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Leave house and car keys, and your complete itinerary, with a trusted friend.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:28e74ca9ac00d1e710d6b9fb7e583676",
+          "type": "paragraph",
+          "contentHash": "d87301f080d6116f73474f1abed56abccb82de17bc2c1e0c5fa6fe1c411c8ed1",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 0,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": true
+          },
+          "format": {
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Packing for the Trip",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "tbl:body:424cd00b277aabe4113400a4a8388e5d",
+          "type": "table",
+          "contentHash": "7eeaf0154f577110b58a10c5bf4f93021a9356c9fdc433213d12eb74cb5b5643",
+          "formatFingerprint": "fc42392372f76ac65099bcc459cbd7cc7cca3de1c82e0625acc9bd9f1bdeb1ab",
+          "unmodeledTablePropsDigest": "fa4d8558a214cff7991a128e49b9b086778e5062f05dd8fcd0d981a0f886ad5d",
+          "rows": [
+            {
+              "anchor": "tr:body:f0b5a44e85fef0ff808cf32afcdd440c",
+              "contentHash": "a347985f66ce7ba8b149f73f02c0f67d78d020721872335118028b806a764da3",
+              "cells": [
+                {
+                  "anchor": "tc:body:2e5deba83004443a74ce168ab1e43ce9",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "4431ddf66accc2e79b41712ad6e557dda71e3a1097dfcd42e50acc0185584ff3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:12235cd7d3b6d1aa8976a79c1abfb3d7",
+                      "type": "paragraph",
+                      "contentHash": "c2f7b6d518f450583d09f060afc62517ef8a3aca73011757e1e9aae144dc0332",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Make a list of the specific items of clothing you\u2019ll need to pack for your trip to suit the various functions you\u2019ll attend.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:9a00f1bead990bc40da06ea2e465ec37",
+              "contentHash": "b41ff5ea28d46fc953a445c284192ae8fabba0474881659ffa427020cf62fdc7",
+              "cells": [
+                {
+                  "anchor": "tc:body:e0231b539a4fc3d1a4f511b519aa2f66",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "cd7d029a5c79bc7a3e4bb6ce5c322b651ee48b573b38f5dbdae617ec00188c7a",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:506ddb1247373fdc4ca61894d63f3b53",
+                      "type": "paragraph",
+                      "contentHash": "7947ab259e59341a5a9b14fc1b3876b20616425ef3390523762bd66cba93e543",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Try to pack everything you need in a carry-on bag, to avoid the possibility of lost luggage.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:b68178d4a4012b48488eb7e5de38561c",
+              "contentHash": "9bb7dea3a08a8d8d2a1d1bf63db13cdd42eb4e52aafaae0d9b61506fbc08a510",
+              "cells": [
+                {
+                  "anchor": "tc:body:a62b8c9b5254ae587868504979aec6d1",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "e5f6135f139f8c1a2efb7c59414fa58be17d66c172b5fd2314b6d839bef858b7",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:1abe4edd6cea612dc8a942e1fa300b4e",
+                      "type": "paragraph",
+                      "contentHash": "ff9876363a3a6bf34d2297aa0acb27a73a9bdbc241bf77c7f025a8ff31500893",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "If you check your bag, pack a second set of business clothes and toiletries in a carry-on bag, in case of lost luggage.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:8f20c49db8a27d94c6d10f647cfcb799",
+          "type": "paragraph",
+          "contentHash": "2aa6372027f526d2f5eca614fabaf1d904be49abbd558ad4e14ea73284beb17c",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+          "list": {
+            "numId": 1,
+            "abstractNumId": 0,
+            "ilvl": 0,
+            "numberFormat": "decimal",
+            "fromStyle": true
+          },
+          "format": {
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "What to Leave for Family and Caregivers at Home",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "tbl:body:ea676197adc387d6c64aac725e9692ee",
+          "type": "table",
+          "contentHash": "4e9804bc17f2477ef361a0244bdaebdfedae0b1298f0e312fee301b07b8761d0",
+          "formatFingerprint": "01750aaca3f780e218d3d6fc73d0b705a728efd13c7ca852fb124f32618f0292",
+          "unmodeledTablePropsDigest": "96221296266bd8011f0c9977402162536358558d5a52f8250a17c492506ab4cf",
+          "rows": [
+            {
+              "anchor": "tr:body:de6496a2724263a48bae91b6049fadd9",
+              "contentHash": "41047b1b6fb85da10051696c2b4fe932a0b032e8a69c3ec998fdd7b2a30e722e",
+              "cells": [
+                {
+                  "anchor": "tc:body:bdf80b6c139c43a07a40b87287d161d7",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "ce8d6ad24f930f23f13b6c56a7e40d2989a5f2204ed48a5bb04639b420a53d68",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:dca980a59ac9db7f323d9f2d1bcf1f40",
+                      "type": "paragraph",
+                      "contentHash": "ae9240a81ad41cc2850c946a8c4b947c4b76a87c463bc6c7b415b41b1fd80aeb",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Leave your contact information\u2014including the names, addresses, and phone numbers of the hotels where you are staying\u2014with a family member, so they can reach you while you\u2019re away.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:9326b0f11487d5cfd73e55554a40a630",
+              "contentHash": "f13c1062ba553812751c5916cabe08fecf7c4909671101ae8a8ae3f05f4d1302",
+              "cells": [
+                {
+                  "anchor": "tc:body:a37a1a828ad16dca5b41c6a7eac5b439",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "65f839d1d3e20e577595a02b21d9ecbeec5d3f1f98047bd03b913f9fbf8d69de",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:75b74381e62d8c95d4525953ad438ee3",
+                      "type": "paragraph",
+                      "contentHash": "cb0dcccdc7e321700f28a9590ef0d9608c9b4352c3b45b45398438b71b327bd9",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Phone numbers (all contact numbers for you; doctor/vet; pharmacy; mechanic; school/daycare; helpful friends/neighbors; alarm company).",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:bd2f4c2fb41921e0a86e2fda0c5f53d2",
+              "contentHash": "ad115bee56c52f635aa8ba4a20459c53e4465e5e69b879f8ed3993450e573c34",
+              "cells": [
+                {
+                  "anchor": "tc:body:5f957e9f54f422c7051c1b131400def0",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "d972fa825363ac00f3c6241b91ebc97b0cfbe592b10a2af8b54082dd39eac90d",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:867058fa901ceaf7f9786e52af77428f",
+                      "type": "paragraph",
+                      "contentHash": "7d6327b84579d05983be90a8b14e22e29e54a6251e9c58a73f1d7117240f335d",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Cash for groceries and emergencies.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:f7a58f79e7d86802de9711967bea9804",
+              "contentHash": "1e40582368de010a74baed01b74ed40b141d97781acac6969cd4498a9e8eb72b",
+              "cells": [
+                {
+                  "anchor": "tc:body:a1fc3d2611422d4e779b1522d86d1730",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "1a6d3c74da3c267e019f647f820509392271f66fd266d9037bbf45c350ed3acc",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:cf1d2f35c47b9fccd7b5592d5f4a0799",
+                      "type": "paragraph",
+                      "contentHash": "d72ef8f9bd8b857a3b76d5a79846df81241ecb1bd53f7597b793f6e5b9e32778",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Consent for medical treatment forms and insurance cards.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:933923954acd4ae619d469db0dd3a51f",
+          "type": "paragraph",
+          "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": []
+        },
+        {
+          "anchor": "sec:body:2d883fe7b8b4c54b1903db70cd05e4cd",
+          "type": "sectionBreak",
+          "contentHash": "02ea77bb5c34ecc777c7d81839a5fd812f2b242a7d08d14ae8c7268d4b6a5197",
+          "formatFingerprint": "80ce4f028677b5484fed00a3692200c24f99779e6d87ce3f1a7d274427562df1",
+          "format": {
+            "pageWidthTwips": 12240,
+            "pageHeightTwips": 15840,
+            "marginTopTwips": 1080,
+            "marginBottomTwips": 720,
+            "marginLeftTwips": 2232,
+            "marginRightTwips": 1080
+          }
+        }
+      ]
+    },
+    {
+      "scope": "ftr1",
+      "kind": "Default",
+      "blocks": [
+        {
+          "anchor": "p:ftr1:e01ce0b072c8863742df17af294d5dd0",
+          "type": "paragraph",
+          "contentHash": "b2172e20df3711d87a12d093beb8a9b9d25db6837f897495a2ef8cfc2c5dcd39",
+          "formatFingerprint": "00cae6a9a47d2e9933d725c3d09b360ba94112e6d77b7f7c667f311513bd07a6",
+          "format": {
+            "styleId": "Footer"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Page ",
+              "format": {}
+            },
+            {
+              "kind": "field",
+              "instruction": " PAGE   \\* MERGEFORMAT ",
+              "cachedResult": [
+                {
+                  "kind": "text",
+                  "text": "3",
+                  "format": {}
                 }
               ]
             }
           ]
         }
       ]
-    },
-    {
-      "anchor": "h:body:5843bf10be9a055dbcd5dcb38d908f3f",
-      "type": "paragraph",
-      "contentHash": "de8adaf865af045389f81b549bb4ce279f81bb4c9c38f09f39fdea6149761d26",
-      "formatFingerprint": "4ffd52930660c7fe9b1a4757eea9a509548418ea3960aa59da9dcc85195b7b19",
-      "list": {
-        "numId": 1,
-        "abstractNumId": 0,
-        "ilvl": 0,
-        "numberFormat": "decimal",
-        "fromStyle": true
-      },
-      "format": {
-        "styleId": "Heading1",
-        "spacingBeforeTwips": 620
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "While You Are Away: Preparing the Office",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "tbl:body:1a45e2fbb3b8f8b210fdc984f054c9b8",
-      "type": "table",
-      "contentHash": "93e03e648aee895491fbc60e420071a9bb2b3786126559be34bc5b074d2f3a5b",
-      "formatFingerprint": "ac1f30d7007dc6f3010684e5c449abc59607bfcd33dda0bde9189f8c30b1d36b",
-      "unmodeledTablePropsDigest": "76c76b6485025b85e77a3b0d0d5178b4ef46a578be9f710744545e3a1f64db7c",
-      "rows": [
-        {
-          "anchor": "tr:body:7c8023eee1329d28746ffc26d91cf695",
-          "contentHash": "ea33b1e4866a6e6bedce65c7a8cb7603efe1649cddfcfbd63c637bb04bdb1bd5",
-          "cells": [
-            {
-              "anchor": "tc:body:3595bc5ae367117e296d78d17399786a",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "b850ca4498f43c88f1d9dd8eeacbbe1a147314be31315a47ffe7139d3e135400",
-              "blocks": [
-                {
-                  "anchor": "p:body:b4ff5a65b58cf03806cf62ead7f6d529",
-                  "type": "paragraph",
-                  "contentHash": "af02423f30e88c260dae37f46be7f2aeb254120b83b288f32830de4a7e94fa47",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Organize any necessary meetings to take place on your trip; book appointments and meeting rooms.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:252eb99fb6b6d940011b00fbf1f36083",
-          "contentHash": "70c76d796cc1b876f42dd169e7bf764bcc6bcd580aa0ac13fcad63c085d76f03",
-          "cells": [
-            {
-              "anchor": "tc:body:d611ad45ce9fc9de24236bad44615416",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "a42294fd715fdf6df52d5c6370e71fa8baa7c728bd7a397752451370c7bde75f",
-              "blocks": [
-                {
-                  "anchor": "p:body:181977148dac3e394dd34d371ed46e0e",
-                  "type": "paragraph",
-                  "contentHash": "278dc731f1780517559f05b61cca61aec8e1309a47cd3f7c5babdf3067fad44a",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "If traveling internationally, obtain any necessary paperwork and vaccinations.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:33f8bd80ed7b5e6ba5cb4b71536fdbf8",
-          "contentHash": "5ac74733f43aad868a20d876ae25bb28ab985d779b7fba02a9edfd570e39e0e2",
-          "cells": [
-            {
-              "anchor": "tc:body:224578c16824aeff9a2dfc944ada3538",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "d9ff9cf6e37c96ced2e476f9d35d351d38b701e353b91f65ced107fa80acbc87",
-              "blocks": [
-                {
-                  "anchor": "p:body:1dab51415efb944afc60a220e0f181ff",
-                  "type": "paragraph",
-                  "contentHash": "8a79c2443ea21489681d06fbb3f4af25bea303de12a0b09fd7d098e52cca34bc",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Familiarize yourself with local business customs common at destination.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:781c597974e8157b8e6c34c8f2d628d2",
-          "contentHash": "e9f3c8d4ebf12318cc0928810a14fc70e89094e7ce9b2b930e5130859fb4641d",
-          "cells": [
-            {
-              "anchor": "tc:body:2e8679d009d7c38b209b250cf2f1f9e7",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "f8169ea63ac2d7a0fed5ef33bfb586e0b433507cc2cbba9a1bb533ec7e373e3a",
-              "blocks": [
-                {
-                  "anchor": "p:body:b7917010d4f9df12f1d9dc128fc69dc2",
-                  "type": "paragraph",
-                  "contentHash": "e02ef5113773d8b4523c471c5061cf52dc6149816a7ad1c971ff84d874d9c550",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Confirm appointments, schedules, reservations, etc.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:1ae18185fc7a2b0ddaf6d45c627156b2",
-          "contentHash": "a0b093c8e07f99baacb50733e9d71f65e9cf22a82bf2c0312d2932146d9cb141",
-          "cells": [
-            {
-              "anchor": "tc:body:a10838254cd87fa9d2c1f0ac6e6588cd",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "618af4780aae850d2243e0f94491bf5826637110c4401a40fd8f9ae613806be6",
-              "blocks": [
-                {
-                  "anchor": "p:body:432b93fff898ef2199ccbcc59856f8a0",
-                  "type": "paragraph",
-                  "contentHash": "9e13e197e290fc63d814140e391a9a184f1e2fb304e73323c89cad464eca3a56",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Tie up any loose ends at the office (finish up projects; set up out-of-office replies; notify or remind coworkers about your departure).",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "anchor": "h:body:fab3ca41052d9b3af1ec62ee96a8ce7b",
-      "type": "paragraph",
-      "contentHash": "37191775a23e25b0e0f1265dc6298ed11b78a01009086b56a062bce935c72f6e",
-      "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
-      "list": {
-        "numId": 1,
-        "abstractNumId": 0,
-        "ilvl": 0,
-        "numberFormat": "decimal",
-        "fromStyle": true
-      },
-      "format": {
-        "styleId": "Heading1"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "While You Are Away: Preparing the Home",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "tbl:body:ed710a8d2bbbef26e1199ee064990d07",
-      "type": "table",
-      "contentHash": "bb8dc834764d270af46fee1fcfb461b0b253ca19dc1f45d38142e73db9c2e9f2",
-      "formatFingerprint": "723dedf56c2870650342218f5754edd6b3442ed47b6698ddeb37a82d89eb2864",
-      "unmodeledTablePropsDigest": "109c480f3f08ddc3d860d88864b627a4f268c42ca3476911d11144f59c9189d4",
-      "rows": [
-        {
-          "anchor": "tr:body:5c3ad602a9fa9596a55e87365ca73287",
-          "contentHash": "cbee678de6983009a6c0b48d69952c58da5c1bfd0e1d9ad54ebc52cd56063fd1",
-          "cells": [
-            {
-              "anchor": "tc:body:7cde5cdcf5b439d01313cef936b3542a",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "d67210eed169330880cbeb9454c2fad41720c19f574f5bd1ee0a6e16517eb0a3",
-              "blocks": [
-                {
-                  "anchor": "p:body:2de675e1d1b152cb6a6bd451f8bc1fef",
-                  "type": "paragraph",
-                  "contentHash": "bec9cc500e37f73738a5e49a4ff3ffd1e8311cb065635142022e74bbd712c61e",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Arrange for child, pet, and plant care; communicate needs and schedules.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:9eb6d127bc5deda43268f8c63d357134",
-          "contentHash": "c41cd93fdc206c3e026a95f6cbefb69a68994f9877f25f79523a7f6a5bc6ca7a",
-          "cells": [
-            {
-              "anchor": "tc:body:ba9e21f5f7e21ed9792555bdc79362b1",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "5a0f8f52725e9578df01681c5dcb0e25d215afc1d45fcb24a8f9ea84b9cb14fe",
-              "blocks": [
-                {
-                  "anchor": "p:body:89a0658eb863d0792c4a8731f830776d",
-                  "type": "paragraph",
-                  "contentHash": "1ae087013aba3f11fe12fe000ae8a56c13aa2703fb3237de4ba8636a1bf04d61",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Pause routine deliveries.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:f2bbc19ce4a9bdf1234dbdcf45ba9b1c",
-          "contentHash": "6601d613896a8b820ffe1763956e0546f8fde913e8b121ca4c95f0a72400b2cc",
-          "cells": [
-            {
-              "anchor": "tc:body:b79a88d527ade343e92b7cab89788151",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "4da78f110c4adbe50ce78110afb2778ad7d5670d0e73b464d9e7caafa472ca77",
-              "blocks": [
-                {
-                  "anchor": "p:body:2c5e8bc9583cf3443f9ab16e7861e184",
-                  "type": "paragraph",
-                  "contentHash": "23141cec7d458889b5e6c79b7cf5edbbf1062e46592ae325e02e4eb1277f2831",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Make your home seem lived-in while away by putting lights and a radio on timers.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:995c8431b93266d02c2e65653014387f",
-          "contentHash": "b55cc8ab73cce5cd8c7d8937263d1a982f114eafde27c164f7d8751911c87f42",
-          "cells": [
-            {
-              "anchor": "tc:body:693c744a20a1dda5931dbcb3b106b6c4",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "808cea8435b3b2ebff93c7b85c80cca78d867f772f8122e6620899937abb07b4",
-              "blocks": [
-                {
-                  "anchor": "p:body:6eb11eca6d9cbc223de1d5521ebe783c",
-                  "type": "paragraph",
-                  "contentHash": "b8f42784f01b07cb11cccf4bcc235252ec617ba858c351c1c0d87f1d3ea905ac",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Turn down thermostat.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:2b9b8199639ff230665c490f415811b1",
-          "contentHash": "3a160cf12f841ecffe7b51355f9334357089525d00bd9b3153f5f9a941407739",
-          "cells": [
-            {
-              "anchor": "tc:body:974d9c1d5ca2e534c159a068abf53cc4",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "4e964c8472a3152bf6f9ade42d65ecff5898e367cf6e3b1fedd191019efff8d0",
-              "blocks": [
-                {
-                  "anchor": "p:body:25c363acb6a7e78e662f6359f280e634",
-                  "type": "paragraph",
-                  "contentHash": "ac9ebd2ac2c1e4aa948460fab9d3c26f638fa416d9756ff0c1bf9f3d6058e547",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Leave house and car keys, and your complete itinerary, with a trusted friend.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "anchor": "h:body:28e74ca9ac00d1e710d6b9fb7e583676",
-      "type": "paragraph",
-      "contentHash": "d87301f080d6116f73474f1abed56abccb82de17bc2c1e0c5fa6fe1c411c8ed1",
-      "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
-      "list": {
-        "numId": 1,
-        "abstractNumId": 0,
-        "ilvl": 0,
-        "numberFormat": "decimal",
-        "fromStyle": true
-      },
-      "format": {
-        "styleId": "Heading1"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "Packing for the Trip",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "tbl:body:424cd00b277aabe4113400a4a8388e5d",
-      "type": "table",
-      "contentHash": "7eeaf0154f577110b58a10c5bf4f93021a9356c9fdc433213d12eb74cb5b5643",
-      "formatFingerprint": "fc42392372f76ac65099bcc459cbd7cc7cca3de1c82e0625acc9bd9f1bdeb1ab",
-      "unmodeledTablePropsDigest": "fa4d8558a214cff7991a128e49b9b086778e5062f05dd8fcd0d981a0f886ad5d",
-      "rows": [
-        {
-          "anchor": "tr:body:f0b5a44e85fef0ff808cf32afcdd440c",
-          "contentHash": "a347985f66ce7ba8b149f73f02c0f67d78d020721872335118028b806a764da3",
-          "cells": [
-            {
-              "anchor": "tc:body:2e5deba83004443a74ce168ab1e43ce9",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "4431ddf66accc2e79b41712ad6e557dda71e3a1097dfcd42e50acc0185584ff3",
-              "blocks": [
-                {
-                  "anchor": "p:body:12235cd7d3b6d1aa8976a79c1abfb3d7",
-                  "type": "paragraph",
-                  "contentHash": "c2f7b6d518f450583d09f060afc62517ef8a3aca73011757e1e9aae144dc0332",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Make a list of the specific items of clothing you\u2019ll need to pack for your trip to suit the various functions you\u2019ll attend.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:9a00f1bead990bc40da06ea2e465ec37",
-          "contentHash": "b41ff5ea28d46fc953a445c284192ae8fabba0474881659ffa427020cf62fdc7",
-          "cells": [
-            {
-              "anchor": "tc:body:e0231b539a4fc3d1a4f511b519aa2f66",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "cd7d029a5c79bc7a3e4bb6ce5c322b651ee48b573b38f5dbdae617ec00188c7a",
-              "blocks": [
-                {
-                  "anchor": "p:body:506ddb1247373fdc4ca61894d63f3b53",
-                  "type": "paragraph",
-                  "contentHash": "7947ab259e59341a5a9b14fc1b3876b20616425ef3390523762bd66cba93e543",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Try to pack everything you need in a carry-on bag, to avoid the possibility of lost luggage.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:b68178d4a4012b48488eb7e5de38561c",
-          "contentHash": "9bb7dea3a08a8d8d2a1d1bf63db13cdd42eb4e52aafaae0d9b61506fbc08a510",
-          "cells": [
-            {
-              "anchor": "tc:body:a62b8c9b5254ae587868504979aec6d1",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "e5f6135f139f8c1a2efb7c59414fa58be17d66c172b5fd2314b6d839bef858b7",
-              "blocks": [
-                {
-                  "anchor": "p:body:1abe4edd6cea612dc8a942e1fa300b4e",
-                  "type": "paragraph",
-                  "contentHash": "ff9876363a3a6bf34d2297aa0acb27a73a9bdbc241bf77c7f025a8ff31500893",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "If you check your bag, pack a second set of business clothes and toiletries in a carry-on bag, in case of lost luggage.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "anchor": "h:body:8f20c49db8a27d94c6d10f647cfcb799",
-      "type": "paragraph",
-      "contentHash": "2aa6372027f526d2f5eca614fabaf1d904be49abbd558ad4e14ea73284beb17c",
-      "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
-      "list": {
-        "numId": 1,
-        "abstractNumId": 0,
-        "ilvl": 0,
-        "numberFormat": "decimal",
-        "fromStyle": true
-      },
-      "format": {
-        "styleId": "Heading1"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "What to Leave for Family and Caregivers at Home",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "tbl:body:ea676197adc387d6c64aac725e9692ee",
-      "type": "table",
-      "contentHash": "4e9804bc17f2477ef361a0244bdaebdfedae0b1298f0e312fee301b07b8761d0",
-      "formatFingerprint": "01750aaca3f780e218d3d6fc73d0b705a728efd13c7ca852fb124f32618f0292",
-      "unmodeledTablePropsDigest": "96221296266bd8011f0c9977402162536358558d5a52f8250a17c492506ab4cf",
-      "rows": [
-        {
-          "anchor": "tr:body:de6496a2724263a48bae91b6049fadd9",
-          "contentHash": "41047b1b6fb85da10051696c2b4fe932a0b032e8a69c3ec998fdd7b2a30e722e",
-          "cells": [
-            {
-              "anchor": "tc:body:bdf80b6c139c43a07a40b87287d161d7",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "ce8d6ad24f930f23f13b6c56a7e40d2989a5f2204ed48a5bb04639b420a53d68",
-              "blocks": [
-                {
-                  "anchor": "p:body:dca980a59ac9db7f323d9f2d1bcf1f40",
-                  "type": "paragraph",
-                  "contentHash": "ae9240a81ad41cc2850c946a8c4b947c4b76a87c463bc6c7b415b41b1fd80aeb",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Leave your contact information\u2014including the names, addresses, and phone numbers of the hotels where you are staying\u2014with a family member, so they can reach you while you\u2019re away.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:9326b0f11487d5cfd73e55554a40a630",
-          "contentHash": "f13c1062ba553812751c5916cabe08fecf7c4909671101ae8a8ae3f05f4d1302",
-          "cells": [
-            {
-              "anchor": "tc:body:a37a1a828ad16dca5b41c6a7eac5b439",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "65f839d1d3e20e577595a02b21d9ecbeec5d3f1f98047bd03b913f9fbf8d69de",
-              "blocks": [
-                {
-                  "anchor": "p:body:75b74381e62d8c95d4525953ad438ee3",
-                  "type": "paragraph",
-                  "contentHash": "cb0dcccdc7e321700f28a9590ef0d9608c9b4352c3b45b45398438b71b327bd9",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Phone numbers (all contact numbers for you; doctor/vet; pharmacy; mechanic; school/daycare; helpful friends/neighbors; alarm company).",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:bd2f4c2fb41921e0a86e2fda0c5f53d2",
-          "contentHash": "ad115bee56c52f635aa8ba4a20459c53e4465e5e69b879f8ed3993450e573c34",
-          "cells": [
-            {
-              "anchor": "tc:body:5f957e9f54f422c7051c1b131400def0",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "d972fa825363ac00f3c6241b91ebc97b0cfbe592b10a2af8b54082dd39eac90d",
-              "blocks": [
-                {
-                  "anchor": "p:body:867058fa901ceaf7f9786e52af77428f",
-                  "type": "paragraph",
-                  "contentHash": "7d6327b84579d05983be90a8b14e22e29e54a6251e9c58a73f1d7117240f335d",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Cash for groceries and emergencies.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "anchor": "tr:body:f7a58f79e7d86802de9711967bea9804",
-          "contentHash": "1e40582368de010a74baed01b74ed40b141d97781acac6969cd4498a9e8eb72b",
-          "cells": [
-            {
-              "anchor": "tc:body:a1fc3d2611422d4e779b1522d86d1730",
-              "gridSpan": 1,
-              "vMerge": "None",
-              "contentHash": "1a6d3c74da3c267e019f647f820509392271f66fd266d9037bbf45c350ed3acc",
-              "blocks": [
-                {
-                  "anchor": "p:body:cf1d2f35c47b9fccd7b5592d5f4a0799",
-                  "type": "paragraph",
-                  "contentHash": "d72ef8f9bd8b857a3b76d5a79846df81241ecb1bd53f7597b793f6e5b9e32778",
-                  "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
-                  "format": {
-                    "styleId": "List"
-                  },
-                  "inlines": [
-                    {
-                      "kind": "text",
-                      "text": "Consent for medical treatment forms and insurance cards.",
-                      "format": {}
-                    }
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "anchor": "p:body:933923954acd4ae619d469db0dd3a51f",
-      "type": "paragraph",
-      "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-      "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
-      "format": {},
-      "inlines": []
-    },
-    {
-      "anchor": "sec:body:2d883fe7b8b4c54b1903db70cd05e4cd",
-      "type": "sectionBreak",
-      "contentHash": "02ea77bb5c34ecc777c7d81839a5fd812f2b242a7d08d14ae8c7268d4b6a5197",
-      "formatFingerprint": "80ce4f028677b5484fed00a3692200c24f99779e6d87ce3f1a7d274427562df1",
-      "format": {
-        "pageWidthTwips": 12240,
-        "pageHeightTwips": 15840,
-        "marginTopTwips": 1080,
-        "marginBottomTwips": 720,
-        "marginLeftTwips": 2232,
-        "marginRightTwips": 1080
-      }
     }
   ]
 }

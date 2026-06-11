@@ -21,9 +21,13 @@ internal enum RevisionView
 }
 
 /// <summary>
-/// Which document scopes the reader walks. Only <see cref="Body"/> is honored in M1.1; the other
-/// flags are accepted and ignored so callers can already express intent (header/footer, note, and
-/// comment scopes are read in M1.2).
+/// Which document scopes the reader walks. All flags are honored: <see cref="Body"/> reads
+/// <c>w:body</c>; <see cref="HeadersFooters"/> reads the header/footer parts (scopes
+/// <c>hdr1</c>/<c>ftr1</c>…); <see cref="Notes"/> reads footnotes + endnotes (scopes <c>fn</c>/
+/// <c>en</c>); <see cref="Comments"/> reads the comments part (scope <c>cmt</c>) and records N15
+/// comment-range targets during the body walk. The body is always read because
+/// <see cref="IrDocument.Body"/> is required; an unselected non-body scope is emitted as an empty
+/// store/list.
 /// </summary>
 [Flags]
 internal enum IrScopes

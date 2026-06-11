@@ -745,7 +745,7 @@ public static class WmlToMarkdownConverter
         }
     }
 
-    private static bool IsBoilerplateNote(XElement note)
+    internal static bool IsBoilerplateNote(XElement note)
     {
         var type = (string?)note.Attribute(W.type);
         return type is "separator" or "continuationSeparator";

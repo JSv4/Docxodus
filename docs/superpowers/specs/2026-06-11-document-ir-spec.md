@@ -472,8 +472,15 @@ triaged, per the program plan's normalization-churn mitigation).
 
 1. Whether `IrHyperlink` should be a block-spanning wrapper or flattened with
    per-run link targets (current lean: wrapper, matching OOXML nesting).
-2. Comment target spans when the range crosses block boundaries — one
-   `IrCommentTarget` per touched block vs a (startAnchor, endAnchor) pair.
+2. ~~Comment target spans when the range crosses block boundaries — one
+   `IrCommentTarget` per touched block vs a (startAnchor, endAnchor) pair.~~
+   **Resolved (M1.3):** one `IrCommentTarget` per touched block. A cross-block
+   range closes at the first block's end offset and re-opens at offset 0 of each
+   subsequent block until the `commentRangeEnd`, so a range spanning N blocks
+   yields N targets. Char offsets count visible `IrTextRun` characters only
+   (tabs/breaks/images/fields/opaque inlines count 0) — stable under the N5
+   coalescing pass. Orphan range-starts are discarded; a `commentReference` for a
+   comment with no ranges records a zero-length target at the reference offset.
 3. Whether `IrSectionBreak` should also surface header/footer *content*
    linkage or just references (lean: references in v1; layout needs content
    linkage but layout is deferred).

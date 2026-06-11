@@ -1,297 +1,301 @@
 {
-  "scope": "body",
-  "blocks": [
+  "scopes": [
     {
-      "anchor": "h:body:bf0abe02bcae62f2bf89bf28c759685c",
-      "type": "paragraph",
-      "contentHash": "f14b9bab4d212cf7fb625cd29e3366226625fda4ab050e0fcfce9d74d5f30a56",
-      "formatFingerprint": "e710e9b17d1f8887b9d74a1e25633b351568e04348318838a726ca2f50604986",
-      "format": {
-        "styleId": "Title"
-      },
-      "inlines": [
+      "scope": "body",
+      "blocks": [
         {
-          "kind": "text",
-          "text": "An Overview Paper",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "h:body:4389bef9b5e7746ca82c93647ed2f6c0",
-      "type": "paragraph",
-      "contentHash": "d4b1ea5708dd532930a85188b45aff6f0a3ed458500c7577e0127a538eb0d100",
-      "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
-      "format": {
-        "styleId": "Heading1"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "Overview",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "p:body:e2ba598bab8e14cba34b253ffda5518e",
-      "type": "paragraph",
-      "contentHash": "bbd6d9561dca87ec1496fbda82fe855833dfffa93c03f3a6ff0ba98177121036",
-      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
-      "format": {},
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab.",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "p:body:c0a06e2cff28989c9e613008f28a3e77",
-      "type": "paragraph",
-      "contentHash": "58c551376be06e02b9893d5c3eb2fc782d5bf6832f22d6729ce39c104ae5f5a7",
-      "formatFingerprint": "4df17a1b4772cf840d1a1b53583aedb44be72260a1542e1c4c12bf462352d42f",
-      "format": {
-        "styleId": "Note"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "Note: ",
-          "format": {}
+          "anchor": "h:body:bf0abe02bcae62f2bf89bf28c759685c",
+          "type": "paragraph",
+          "contentHash": "f14b9bab4d212cf7fb625cd29e3366226625fda4ab050e0fcfce9d74d5f30a56",
+          "formatFingerprint": "e710e9b17d1f8887b9d74a1e25633b351568e04348318838a726ca2f50604986",
+          "format": {
+            "styleId": "Title"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "An Overview Paper",
+              "format": {}
+            }
+          ]
         },
         {
-          "kind": "text",
-          "text": "Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Maecenas porttitor congue massa. Fusce posuere, magna sed pulvinar ultricies, purus lectus malesuada libero, sit amet commodo magna eros quis urna. Nunc viverra imperdiet enim. Fusce est. Vivamus a tellus.",
+          "anchor": "h:body:4389bef9b5e7746ca82c93647ed2f6c0",
+          "type": "paragraph",
+          "contentHash": "d4b1ea5708dd532930a85188b45aff6f0a3ed458500c7577e0127a538eb0d100",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
           "format": {
-            "bold": false
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Overview",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:e2ba598bab8e14cba34b253ffda5518e",
+          "type": "paragraph",
+          "contentHash": "bbd6d9561dca87ec1496fbda82fe855833dfffa93c03f3a6ff0ba98177121036",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:c0a06e2cff28989c9e613008f28a3e77",
+          "type": "paragraph",
+          "contentHash": "58c551376be06e02b9893d5c3eb2fc782d5bf6832f22d6729ce39c104ae5f5a7",
+          "formatFingerprint": "4df17a1b4772cf840d1a1b53583aedb44be72260a1542e1c4c12bf462352d42f",
+          "format": {
+            "styleId": "Note"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Note: ",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": "Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Maecenas porttitor congue massa. Fusce posuere, magna sed pulvinar ultricies, purus lectus malesuada libero, sit amet commodo magna eros quis urna. Nunc viverra imperdiet enim. Fusce est. Vivamus a tellus.",
+              "format": {
+                "bold": false
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:6e7a5b86548a916d758b6db36852edf1",
+          "type": "paragraph",
+          "contentHash": "04fd78a332a1f2993afe2940b95e72e99af7e0ac5ebcd63e4192635e019b0850",
+          "formatFingerprint": "f09c741a16fc4821f139ec1724eee5bae819533ffa8cba102be6dd9d25120f1f",
+          "format": {
+            "styleId": "Note"
+          },
+          "inlines": [
+            {
+              "kind": "image",
+              "partUri": "/word/media/image1.tmp",
+              "imageBytesHash": "cf08418a918d1ff7fd4fa6e7fdf4db044e2801b8ec6ee37530ed6d953d5033f8",
+              "widthEmu": 3019425,
+              "heightEmu": 1625522,
+              "altText": "Picture 4"
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:d2ff48c08fe24f158a330b777898e618",
+          "type": "paragraph",
+          "contentHash": "0c4da46df753307ba8e4bcaccd6639dbcacf12c5108d90a1e44c22371a8426ea",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+          "format": {
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "First Section",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:e55327eaea639d82c2f4327b0de41d85",
+          "type": "paragraph",
+          "contentHash": "6752e7066e619923a47c85f6f61b49fbc91e80bc474226d4fb755888f1c2c5ba",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:295a6629e52d1082657263626e273555",
+          "type": "paragraph",
+          "contentHash": "6b9fa95d1e4cd1abcc6bf3c03184cd38d97b825dd2c730ae19cb78a8180aaa14",
+          "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
+          "format": {
+            "styleId": "Heading2"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Technologies",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:28d8f40980c583393bc6db85051e484c",
+          "type": "paragraph",
+          "contentHash": "bbd6d9561dca87ec1496fbda82fe855833dfffa93c03f3a6ff0ba98177121036",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:ae30bcc7381aa44bfe4388af24b2f68b",
+          "type": "paragraph",
+          "contentHash": "a3ecb35d5ec1e91a4b6f13c9dcedba10c2f041d1993735d1fa945acd6d2fe543",
+          "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
+          "format": {
+            "styleId": "Heading2"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Procedures",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:f376b82203c3402750ab184ab4de0a8a",
+          "type": "paragraph",
+          "contentHash": "aae9f9aaadce10ccc8b89a287e5e64ada5d98a54191eecf617b399387f740cae",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Maecenas porttitor congue massa. Fusce posuere, magna sed pulvinar ultricies, purus lectus malesuada libero, sit amet commodo magna eros quis urna. Nunc viverra imperdiet enim. Fusce est. Vivamus a tellus.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:c58a695748745379ca385c4568c0b3bf",
+          "type": "paragraph",
+          "contentHash": "5e888a1ecf9c914f0555882ae7ffdf6c0147c4bcb8bac6350f151754637fa908",
+          "formatFingerprint": "22cb36ca3cb695831557cd189df2db18e63e8f4f5f465e48c78467096629688e",
+          "format": {
+            "styleId": "Note"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Note: ",
+              "format": {}
+            },
+            {
+              "kind": "text",
+              "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab. You can also format text directly by using the other controls on the Home tab. Most controls offer a choice of using the look from the current theme or using a format that you specify directly. To change the overall look of your document, choose new Theme elements on the Page Layout tab. To change the looks available in the Quick Style gallery, use the Change Current Quick Style Set command.",
+              "format": {
+                "bold": false
+              }
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:000b350a90341ae59e27cd6b6469c84b",
+          "type": "paragraph",
+          "contentHash": "05c1d22a4667c80dd61112cdd1a6934a0ea909df62066e461d740a331a36a39c",
+          "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
+          "format": {
+            "styleId": "Heading2"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Contraindications",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:c09e9f4ed42a92af9c50653d2f70392c",
+          "type": "paragraph",
+          "contentHash": "dbce72ce24eae99f98d945e71f99b364784f49aaee94e705f4ca9857fc0326fd",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab. You can also format text directly by using the other controls on the Home tab. Most controls offer a choice of using the look from the current theme or using a format that you specify directly.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:db39746482d68145ed0965effe660cc6",
+          "type": "paragraph",
+          "contentHash": "adfd9e086c49a4b7484d9391105733f3301ac0220185db74a25a4cc484369b8e",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "image",
+              "partUri": "/word/media/image2.tmp",
+              "imageBytesHash": "f2a9310b0715ed7d3cab2386cef9af09e4ff955efa436901f0405f06f2426d8e",
+              "widthEmu": 899160,
+              "heightEmu": 2247900,
+              "altText": "Picture 5"
+            }
+          ]
+        },
+        {
+          "anchor": "h:body:c767f1b485538a39ad944b2692e063eb",
+          "type": "paragraph",
+          "contentHash": "8e76a94ac8320d515375e625bef1829238b097ecbd33611b59eeefd4ffefebfb",
+          "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
+          "format": {
+            "styleId": "Heading1"
+          },
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Summary",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:46e3465641220670ed0fb0205be6e6e8",
+          "type": "paragraph",
+          "contentHash": "dbce72ce24eae99f98d945e71f99b364784f49aaee94e705f4ca9857fc0326fd",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab. You can also format text directly by using the other controls on the Home tab. Most controls offer a choice of using the look from the current theme or using a format that you specify directly.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "sec:body:05042b17662bdf691f11e7ffac876855",
+          "type": "sectionBreak",
+          "contentHash": "c8a82d618fc4ede01c0e9c36898debe3139f383dde0eb5bce97a272ee5729fdb",
+          "formatFingerprint": "e05907240f700491233fd61ff4a8239fe8d9caf71b69e617a962b0b790365221",
+          "format": {
+            "pageWidthTwips": 12240,
+            "pageHeightTwips": 15840,
+            "marginTopTwips": 1440,
+            "marginBottomTwips": 1440,
+            "marginLeftTwips": 1440,
+            "marginRightTwips": 1440
           }
         }
       ]
-    },
-    {
-      "anchor": "p:body:6e7a5b86548a916d758b6db36852edf1",
-      "type": "paragraph",
-      "contentHash": "04fd78a332a1f2993afe2940b95e72e99af7e0ac5ebcd63e4192635e019b0850",
-      "formatFingerprint": "f09c741a16fc4821f139ec1724eee5bae819533ffa8cba102be6dd9d25120f1f",
-      "format": {
-        "styleId": "Note"
-      },
-      "inlines": [
-        {
-          "kind": "image",
-          "partUri": "/word/media/image1.tmp",
-          "imageBytesHash": "cf08418a918d1ff7fd4fa6e7fdf4db044e2801b8ec6ee37530ed6d953d5033f8",
-          "widthEmu": 3019425,
-          "heightEmu": 1625522,
-          "altText": "Picture 4"
-        }
-      ]
-    },
-    {
-      "anchor": "h:body:d2ff48c08fe24f158a330b777898e618",
-      "type": "paragraph",
-      "contentHash": "0c4da46df753307ba8e4bcaccd6639dbcacf12c5108d90a1e44c22371a8426ea",
-      "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
-      "format": {
-        "styleId": "Heading1"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "First Section",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "p:body:e55327eaea639d82c2f4327b0de41d85",
-      "type": "paragraph",
-      "contentHash": "6752e7066e619923a47c85f6f61b49fbc91e80bc474226d4fb755888f1c2c5ba",
-      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
-      "format": {},
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document.",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "h:body:295a6629e52d1082657263626e273555",
-      "type": "paragraph",
-      "contentHash": "6b9fa95d1e4cd1abcc6bf3c03184cd38d97b825dd2c730ae19cb78a8180aaa14",
-      "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
-      "format": {
-        "styleId": "Heading2"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "Technologies",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "p:body:28d8f40980c583393bc6db85051e484c",
-      "type": "paragraph",
-      "contentHash": "bbd6d9561dca87ec1496fbda82fe855833dfffa93c03f3a6ff0ba98177121036",
-      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
-      "format": {},
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab.",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "h:body:ae30bcc7381aa44bfe4388af24b2f68b",
-      "type": "paragraph",
-      "contentHash": "a3ecb35d5ec1e91a4b6f13c9dcedba10c2f041d1993735d1fa945acd6d2fe543",
-      "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
-      "format": {
-        "styleId": "Heading2"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "Procedures",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "p:body:f376b82203c3402750ab184ab4de0a8a",
-      "type": "paragraph",
-      "contentHash": "aae9f9aaadce10ccc8b89a287e5e64ada5d98a54191eecf617b399387f740cae",
-      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
-      "format": {},
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "Lorem ipsum dolor sit amet, consectetuer adipiscing elit. Maecenas porttitor congue massa. Fusce posuere, magna sed pulvinar ultricies, purus lectus malesuada libero, sit amet commodo magna eros quis urna. Nunc viverra imperdiet enim. Fusce est. Vivamus a tellus.",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "p:body:c58a695748745379ca385c4568c0b3bf",
-      "type": "paragraph",
-      "contentHash": "5e888a1ecf9c914f0555882ae7ffdf6c0147c4bcb8bac6350f151754637fa908",
-      "formatFingerprint": "22cb36ca3cb695831557cd189df2db18e63e8f4f5f465e48c78467096629688e",
-      "format": {
-        "styleId": "Note"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "Note: ",
-          "format": {}
-        },
-        {
-          "kind": "text",
-          "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab. You can also format text directly by using the other controls on the Home tab. Most controls offer a choice of using the look from the current theme or using a format that you specify directly. To change the overall look of your document, choose new Theme elements on the Page Layout tab. To change the looks available in the Quick Style gallery, use the Change Current Quick Style Set command.",
-          "format": {
-            "bold": false
-          }
-        }
-      ]
-    },
-    {
-      "anchor": "h:body:000b350a90341ae59e27cd6b6469c84b",
-      "type": "paragraph",
-      "contentHash": "05c1d22a4667c80dd61112cdd1a6934a0ea909df62066e461d740a331a36a39c",
-      "formatFingerprint": "1bb7c1cdef0e5071bf9cadbb33e3337713e32415011165943c771b6dbe8052cc",
-      "format": {
-        "styleId": "Heading2"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "Contraindications",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "p:body:c09e9f4ed42a92af9c50653d2f70392c",
-      "type": "paragraph",
-      "contentHash": "dbce72ce24eae99f98d945e71f99b364784f49aaee94e705f4ca9857fc0326fd",
-      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
-      "format": {},
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab. You can also format text directly by using the other controls on the Home tab. Most controls offer a choice of using the look from the current theme or using a format that you specify directly.",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "p:body:db39746482d68145ed0965effe660cc6",
-      "type": "paragraph",
-      "contentHash": "adfd9e086c49a4b7484d9391105733f3301ac0220185db74a25a4cc484369b8e",
-      "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
-      "format": {},
-      "inlines": [
-        {
-          "kind": "image",
-          "partUri": "/word/media/image2.tmp",
-          "imageBytesHash": "f2a9310b0715ed7d3cab2386cef9af09e4ff955efa436901f0405f06f2426d8e",
-          "widthEmu": 899160,
-          "heightEmu": 2247900,
-          "altText": "Picture 5"
-        }
-      ]
-    },
-    {
-      "anchor": "h:body:c767f1b485538a39ad944b2692e063eb",
-      "type": "paragraph",
-      "contentHash": "8e76a94ac8320d515375e625bef1829238b097ecbd33611b59eeefd4ffefebfb",
-      "formatFingerprint": "8b77f9661d6438431c993ed49bf42fcef41c5779b612d5d685391a08438f1f64",
-      "format": {
-        "styleId": "Heading1"
-      },
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "Summary",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "p:body:46e3465641220670ed0fb0205be6e6e8",
-      "type": "paragraph",
-      "contentHash": "dbce72ce24eae99f98d945e71f99b364784f49aaee94e705f4ca9857fc0326fd",
-      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
-      "format": {},
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "On the Insert tab, the galleries include items that are designed to coordinate with the overall look of your document. You can use these galleries to insert tables, headers, footers, lists, cover pages, and other document building blocks. When you create pictures, charts, or diagrams, they also coordinate with your current document look. You can easily change the formatting of selected text in the document text by choosing a look for the selected text from the Quick Styles gallery on the Home tab. You can also format text directly by using the other controls on the Home tab. Most controls offer a choice of using the look from the current theme or using a format that you specify directly.",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "sec:body:05042b17662bdf691f11e7ffac876855",
-      "type": "sectionBreak",
-      "contentHash": "c8a82d618fc4ede01c0e9c36898debe3139f383dde0eb5bce97a272ee5729fdb",
-      "formatFingerprint": "e05907240f700491233fd61ff4a8239fe8d9caf71b69e617a962b0b790365221",
-      "format": {
-        "pageWidthTwips": 12240,
-        "pageHeightTwips": 15840,
-        "marginTopTwips": 1440,
-        "marginBottomTwips": 1440,
-        "marginLeftTwips": 1440,
-        "marginRightTwips": 1440
-      }
     }
   ]
 }

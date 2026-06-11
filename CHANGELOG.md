@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Document IR remaining scopes + comment targets (M1.3)** —
+  *internal/experimental.* `IrReader` now honors all `IrScopes` flags and reads
+  the header/footer, footnote/endnote, and comment scopes in addition to the body.
+  Header/footer parts are enumerated in the same order as the markdown projection
+  (`hdr1`/`ftr1`… scope names), each walked by the shared block walker into
+  `IrDocument.Headers`/`Footers` with an occurrence kind resolved from the body
+  section `w:headerReference`/`w:footerReference`. Footnotes/endnotes populate
+  `IrNoteStore` keyed by note id (Word-reserved separator/continuation notes
+  skipped via the projection's `IsBoilerplateNote`). Comments populate
+  `IrCommentStore` with author/initials/date and blocks, plus N15 comment-range
+  *targets*: `w:commentRangeStart`/`End`/`w:commentReference` positions tracked
+  during the body walk into per-block `IrCommentTarget(blockAnchor, startChar,
+  endChar)` records (visible-`IrTextRun`-char offsets; one target per block for
+  cross-block ranges; zero-length target for a reference with no range; orphan
+  starts discarded). Comment plumbing stays dropped from the inline stream, so
+  body `ContentHash`/`FormatFingerprint` are byte-stable. The diagnostic JSON
+  document level is now `{"scopes":[…]}` (body first, then hdr\*/ftr\*/fn/en/cmt);
+  all snapshots regenerated (body content/anchors/hashes unchanged modulo the
+  wrapper). Corpus totality holds 668/668 reading every scope.
 - **Document IR effective-format resolution (M1.3)** — *internal/experimental.*
   New `IrEffectiveFormats(IrDocument)` resolves the *effective* paragraph/run
   format non-destructively by cascading docDefaults → the paragraph/character

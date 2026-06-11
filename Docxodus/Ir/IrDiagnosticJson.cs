@@ -27,7 +27,13 @@ internal static class IrDiagnosticJson
 {
     private static readonly JsonWriterOptions Options = new() { Indented = true };
 
-    /// <summary>Render <paramref name="document"/>'s body scope as diagnostic JSON.</summary>
+    /// <summary>
+    /// Render <paramref name="document"/>'s scopes as diagnostic JSON. The top level is
+    /// <c>{"scopes":[…]}</c> with entries in a fixed order: <c>body</c>, then each header
+    /// (<c>hdr1</c>…) and footer (<c>ftr1</c>…) in part order, then footnotes (<c>fn</c>) and
+    /// endnotes (<c>en</c>), then comments (<c>cmt</c>). A body-only document renders just the body
+    /// entry; non-body scopes appear only when they hold content.
+    /// </summary>
     public static string Write(IrDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
@@ -36,15 +42,114 @@ internal static class IrDiagnosticJson
         using (var writer = new Utf8JsonWriter(buffer, Options))
         {
             writer.WriteStartObject();
-            writer.WriteString("scope", document.Body.Name);
-            writer.WriteStartArray("blocks");
-            foreach (var block in document.Body.Blocks)
-                WriteBlock(writer, block);
+            writer.WriteStartArray("scopes");
+
+            WriteBlockScope(writer, document.Body.Name, document.Body.Blocks);
+
+            foreach (var header in document.Headers)
+                WriteBlockScope(writer, header.ScopeName, header.Scope.Blocks, header.Kind);
+            foreach (var footer in document.Footers)
+                WriteBlockScope(writer, footer.ScopeName, footer.Scope.Blocks, footer.Kind);
+
+            WriteNoteScope(writer, "fn", document.Footnotes);
+            WriteNoteScope(writer, "en", document.Endnotes);
+            WriteCommentScope(writer, document.Comments);
+
             writer.WriteEndArray();
             writer.WriteEndObject();
         }
 
         return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    // --- scopes -----------------------------------------------------------
+
+    private static void WriteBlockScope(Utf8JsonWriter writer, string scope,
+        IrNodeList<IrBlock> blocks, IrHeaderFooterKind? kind = null)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("scope", scope);
+        if (kind is { } k)
+            writer.WriteString("kind", k.ToString());
+        writer.WriteStartArray("blocks");
+        foreach (var block in blocks)
+            WriteBlock(writer, block);
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteNoteScope(Utf8JsonWriter writer, string scope, IrNoteStore store)
+    {
+        if (store.Notes.Count == 0)
+            return;
+
+        writer.WriteStartObject();
+        writer.WriteString("scope", scope);
+        writer.WriteStartObject("notes");
+        // Deterministic order: notes sorted by numeric id when possible, else ordinal by string.
+        foreach (var id in SortNoteIds(store.Notes.Keys))
+        {
+            writer.WriteStartArray(id);
+            foreach (var block in store.Notes[id].Blocks)
+                WriteBlock(writer, block);
+            writer.WriteEndArray();
+        }
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+    }
+
+    private static System.Collections.Generic.IEnumerable<string> SortNoteIds(
+        System.Collections.Generic.IEnumerable<string> ids)
+    {
+        var list = new System.Collections.Generic.List<string>(ids);
+        list.Sort((a, b) =>
+        {
+            bool aNum = int.TryParse(a, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var ai);
+            bool bNum = int.TryParse(b, System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture, out var bi);
+            if (aNum && bNum)
+                return ai.CompareTo(bi);
+            if (aNum != bNum)
+                return aNum ? -1 : 1; // numeric ids before non-numeric.
+            return string.CompareOrdinal(a, b);
+        });
+        return list;
+    }
+
+    private static void WriteCommentScope(Utf8JsonWriter writer, IrCommentStore store)
+    {
+        if (store.Comments.Count == 0)
+            return;
+
+        writer.WriteStartObject();
+        writer.WriteString("scope", "cmt");
+        writer.WriteStartArray("comments");
+        foreach (var comment in store.Comments)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("anchor", comment.Anchor.ToString());
+            writer.WriteString("author", comment.Author);
+            if (comment.Initials is { } initials) writer.WriteString("initials", initials);
+            if (comment.Date is { } date) writer.WriteString("date", date);
+            writer.WriteStartArray("targets");
+            foreach (var target in comment.Targets)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("blockAnchor", target.BlockAnchor.ToString());
+                writer.WriteNumber("startChar", target.StartChar);
+                writer.WriteNumber("endChar", target.EndChar);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteStartArray("blocks");
+            foreach (var block in comment.Blocks)
+                WriteBlock(writer, block);
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+        writer.WriteEndArray();
+        writer.WriteEndObject();
     }
 
     // --- blocks -----------------------------------------------------------

@@ -237,4 +237,111 @@ internal static class IrTestDocuments
         0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR length + type
         0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
     };
+
+    private const string RNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    /// <summary>
+    /// A document with one header part and one footer part, each holding a single text paragraph, and
+    /// a body section that references both (default type). Used for header/footer scope parity tests.
+    /// </summary>
+    internal static WmlDocument WithHeaderAndFooter(
+        string headerText, string footerText, string bodyText = "Body paragraph")
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var headerPart = main.AddNewPart<HeaderPart>();
+            var headerId = main.GetIdOfPart(headerPart);
+            WritePartXml(headerPart,
+                $"<w:hdr xmlns:w=\"{W}\"><w:p><w:r><w:t xml:space=\"preserve\">{headerText}</w:t></w:r></w:p></w:hdr>");
+
+            var footerPart = main.AddNewPart<FooterPart>();
+            var footerId = main.GetIdOfPart(footerPart);
+            WritePartXml(footerPart,
+                $"<w:ftr xmlns:w=\"{W}\"><w:p><w:r><w:t xml:space=\"preserve\">{footerText}</w:t></w:r></w:p></w:ftr>");
+
+            var bodyXml =
+                $"<w:document xmlns:w=\"{W}\" xmlns:r=\"{RNs}\"><w:body>" +
+                $"<w:p><w:r><w:t xml:space=\"preserve\">{bodyText}</w:t></w:r></w:p>" +
+                "<w:sectPr>" +
+                $"<w:headerReference w:type=\"default\" r:id=\"{headerId}\"/>" +
+                $"<w:footerReference w:type=\"default\" r:id=\"{footerId}\"/>" +
+                "</w:sectPr></w:body></w:document>";
+            WritePartXml(main, bodyXml);
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
+
+    /// <summary>
+    /// A document with a footnotes part and an endnotes part. Each part carries the two Word-reserved
+    /// boilerplate notes (separator id=-1, continuationSeparator id=0) plus one real note (id=1) whose
+    /// single paragraph holds the supplied text. The body references the footnote/endnote via runs.
+    /// </summary>
+    internal static WmlDocument WithFootnoteAndEndnote(string footnoteText, string endnoteText)
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var fnPart = main.AddNewPart<FootnotesPart>();
+            WritePartXml(fnPart,
+                $"<w:footnotes xmlns:w=\"{W}\">" +
+                "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>" +
+                "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>" +
+                $"<w:footnote w:id=\"1\"><w:p><w:r><w:t xml:space=\"preserve\">{footnoteText}</w:t></w:r></w:p></w:footnote>" +
+                "</w:footnotes>");
+
+            var enPart = main.AddNewPart<EndnotesPart>();
+            WritePartXml(enPart,
+                $"<w:endnotes xmlns:w=\"{W}\">" +
+                "<w:endnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:endnote>" +
+                "<w:endnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote>" +
+                $"<w:endnote w:id=\"1\"><w:p><w:r><w:t xml:space=\"preserve\">{endnoteText}</w:t></w:r></w:p></w:endnote>" +
+                "</w:endnotes>");
+
+            var bodyXml =
+                $"<w:document xmlns:w=\"{W}\"><w:body>" +
+                "<w:p><w:r><w:t>Body.</w:t></w:r>" +
+                "<w:r><w:rPr><w:rStyle w:val=\"FootnoteReference\"/></w:rPr><w:footnoteReference w:id=\"1\"/></w:r>" +
+                "<w:r><w:endnoteReference w:id=\"1\"/></w:r></w:p>" +
+                "</w:body></w:document>";
+            WritePartXml(main, bodyXml);
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
+
+    /// <summary>
+    /// A document with a comments part holding one comment (author/initials/date) and a body whose
+    /// supplied inner XML wires up the <c>w:commentRangeStart</c>/<c>End</c>/<c>w:commentReference</c>
+    /// plumbing. The body inner XML is inserted verbatim, so a test can place comment ranges exactly.
+    /// </summary>
+    internal static WmlDocument WithComment(
+        string author, string initials, string date, string commentText, string bodyInnerXml)
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var commentsPart = main.AddNewPart<WordprocessingCommentsPart>();
+            WritePartXml(commentsPart,
+                $"<w:comments xmlns:w=\"{W}\">" +
+                $"<w:comment w:id=\"0\" w:author=\"{author}\" w:initials=\"{initials}\" w:date=\"{date}\">" +
+                $"<w:p><w:r><w:t xml:space=\"preserve\">{commentText}</w:t></w:r></w:p>" +
+                "</w:comment></w:comments>");
+
+            var bodyXml = $"<w:document xmlns:w=\"{W}\"><w:body>{bodyInnerXml}</w:body></w:document>";
+            WritePartXml(main, bodyXml);
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
 }

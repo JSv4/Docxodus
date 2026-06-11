@@ -1,50 +1,54 @@
 {
-  "scope": "body",
-  "blocks": [
+  "scopes": [
     {
-      "anchor": "p:body:bc7ea8ca7b384f45cc06836609b17a6b",
-      "type": "paragraph",
-      "contentHash": "1174d900d68f2de9c81bee2e17f392dbe977642fee9f68906d66a6cea291e7ac",
-      "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
-      "format": {},
-      "inlines": [
+      "scope": "body",
+      "blocks": [
         {
-          "kind": "image",
-          "partUri": "/word/media/image1.PNG",
-          "imageBytesHash": "db12e3ce62c8babad549d29f252a1adbefa9e45033fc3845856f6b8ed3c4b5ff",
-          "widthEmu": 419158,
-          "heightEmu": 314369,
-          "altText": "Picture 1"
+          "anchor": "p:body:bc7ea8ca7b384f45cc06836609b17a6b",
+          "type": "paragraph",
+          "contentHash": "1174d900d68f2de9c81bee2e17f392dbe977642fee9f68906d66a6cea291e7ac",
+          "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "image",
+              "partUri": "/word/media/image1.PNG",
+              "imageBytesHash": "db12e3ce62c8babad549d29f252a1adbefa9e45033fc3845856f6b8ed3c4b5ff",
+              "widthEmu": 419158,
+              "heightEmu": 314369,
+              "altText": "Picture 1"
+            }
+          ]
+        },
+        {
+          "anchor": "p:body:6239274905bd3e62f1650621bae85bf8",
+          "type": "paragraph",
+          "contentHash": "5eb6f4d9d8ef75a75bf672d159a21a0750a241433170fe99344941cd762260bf",
+          "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+          "format": {},
+          "inlines": [
+            {
+              "kind": "text",
+              "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document. To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
+              "format": {}
+            }
+          ]
+        },
+        {
+          "anchor": "sec:body:05042b17662bdf691f11e7ffac876855",
+          "type": "sectionBreak",
+          "contentHash": "87688e82547fb01ee9ab48d4739fb0f1dab9d22ab3009c0c8fa49a9504d06999",
+          "formatFingerprint": "e05907240f700491233fd61ff4a8239fe8d9caf71b69e617a962b0b790365221",
+          "format": {
+            "pageWidthTwips": 12240,
+            "pageHeightTwips": 15840,
+            "marginTopTwips": 1440,
+            "marginBottomTwips": 1440,
+            "marginLeftTwips": 1440,
+            "marginRightTwips": 1440
+          }
         }
       ]
-    },
-    {
-      "anchor": "p:body:6239274905bd3e62f1650621bae85bf8",
-      "type": "paragraph",
-      "contentHash": "5eb6f4d9d8ef75a75bf672d159a21a0750a241433170fe99344941cd762260bf",
-      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
-      "format": {},
-      "inlines": [
-        {
-          "kind": "text",
-          "text": "Video provides a powerful way to help you prove your point. When you click Online Video, you can paste in the embed code for the video you want to add. You can also type a keyword to search online for the video that best fits your document. To make your document look professionally produced, Word provides header, footer, cover page, and text box designs that complement each other. For example, you can add a matching cover page, header, and sidebar. Click Insert and then choose the elements you want from the different galleries.",
-          "format": {}
-        }
-      ]
-    },
-    {
-      "anchor": "sec:body:05042b17662bdf691f11e7ffac876855",
-      "type": "sectionBreak",
-      "contentHash": "87688e82547fb01ee9ab48d4739fb0f1dab9d22ab3009c0c8fa49a9504d06999",
-      "formatFingerprint": "e05907240f700491233fd61ff4a8239fe8d9caf71b69e617a962b0b790365221",
-      "format": {
-        "pageWidthTwips": 12240,
-        "pageHeightTwips": 15840,
-        "marginTopTwips": 1440,
-        "marginBottomTwips": 1440,
-        "marginLeftTwips": 1440,
-        "marginRightTwips": 1440
-      }
     }
   ]
 }
