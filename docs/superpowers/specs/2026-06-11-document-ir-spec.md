@@ -373,7 +373,7 @@ internal sealed record IrRunFormat
     public IrVertAlign? VertAlign { get; init; }       // Subscript | Superscript
     public string? FontAscii { get; init; }            // as written; theme-resolved only in effective
     public int? SizeHalfPoints { get; init; }
-    public string? ColorHex { get; init; }             // "auto" preserved as null + AutoColor flag
+    public string? ColorHex { get; init; }             // as written, including the literal "auto"
     public string? Highlight { get; init; }
     public bool? Caps { get; init; }
     public bool? SmallCaps { get; init; }
@@ -398,8 +398,10 @@ internal sealed record IrParaFormat
     public required IrHash UnmodeledDigest { get; init; }
 }
 
-internal sealed record IrListInfo(int NumId, int AbstractNumId, int Ilvl,
+internal sealed record IrListInfo(int NumId, int? AbstractNumId, int Ilvl,
                                   string NumberFormat, int? StartOverride, bool FromStyle);
+// AbstractNumId is null until numbering resolution lands (M1.3) — null means "not yet
+// resolved", never a sentinel that could collide with a real abstractNumId.
 ```
 
 `IrListInfo` carries exactly the facts `GetBlockMetadata`/`GetListMembership`
