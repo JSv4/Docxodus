@@ -412,10 +412,15 @@ internal static class IrReader
                 // round-trip (RevisionProcessor opens, clones, walks, and re-serializes the whole
                 // package only to change nothing). A cheap in-memory descendant scan lets the common
                 // revision-free document skip that round-trip — the single largest per-Read cost.
-                // The scan set is a strict SUPERSET of every element Accept/RejectRevisions acts on
-                // (run/paragraph ins/del/move, the *PrChange property-revision markers, table cell/grid
-                // revisions, and the customXml*RangeStart range markers), so "no markup found" provably
-                // implies the processor would not have changed a byte — output stays identical.
+                // The scan set (ProcessorActsOnNameSet) is a strict SUPERSET of every element
+                // Accept/RejectRevisions acts on (run/paragraph ins/del/move, the *PrChange and
+                // tblPrExChange property-revision markers, table cell/grid revisions, deleted text
+                // markers, and the customXml*RangeStart range markers), and the scan covers EVERY part
+                // the reader consumes (main + headers + footers + footnotes + endnotes + comments) —
+                // exactly the parts RevisionProcessor itself transforms. So "no markup found" provably
+                // implies the processor would not have changed a byte — output stays identical. See the
+                // masking analysis on ProcessorActsOnNameSet for why w:instrText/w:t are deliberately
+                // omitted (covered by their w:ins ancestor).
                 if (!HasRevisionMarkup(working, ProcessorActsOnNameSet))
                     return working;
                 return view == RevisionView.Accept
@@ -435,28 +440,84 @@ internal static class IrReader
 
     // Every element name RevisionProcessor.Accept/RejectRevisions reacts to. A strict superset so a
     // "no markup" scan result guarantees the processor is a no-op (see the Accept/Reject skip above).
+    //
+    // SET-DRIFT CONTRACT: this set MUST list every element name RevisionProcessor's transforms
+    // dispatch on by name. If RevisionProcessor.cs gains/loses a revision element, update BOTH this
+    // set AND the hardcoded list in IrRevisionSkipTests.ProcessorActsOnNameSet_MatchesProcessor.
+    // Source of truth: the `element.Name == W.*` dispatch in RevisionProcessor.cs
+    // (ReverseRevisionsTransform ~ln 96-450 / 604-1252; AcceptAllOtherRevisionsTransform ~ln 1680-1731).
+    //
+    // Masking analysis for elements RevisionProcessor transforms but that are NOT listed here because a
+    // listed ancestor provably covers them:
+    //   - w:instrText: only transformed by the Reject path (RevisionProcessor.cs:1223) and ONLY when
+    //     rri.InInsert is set, which is reached exclusively inside a w:ins subtree (the InInsert flag is
+    //     set when recursing through w:ins; see ReverseRevisionsTransform). No w:ins ⇒ no transform, and
+    //     w:ins IS scanned. Genuinely masked, so omitted.
+    //   - w:t: same — only rewritten to w:delText under rri.InInsert (RevisionProcessor.cs:1232), masked
+    //     by w:ins. (Scanning w:t would defeat the optimization entirely; every document has w:t.)
+    // By contrast w:delText (RevisionProcessor.cs:1241 / :1729) and w:delInstrText
+    // (RevisionProcessor.cs:1214 / :1728) are transformed UNCONDITIONALLY by name — the code does NOT
+    // gate them on a w:del/w:ins ancestor. Schema-valid documents only place them under w:del, but the
+    // skip's soundness guarantee must not rely on producer validity, so both are listed here.
     private static readonly HashSet<XName> ProcessorActsOnNameSet = new()
     {
         W + "ins", W + "del", W + "moveFrom", W + "moveTo",
         W + "moveFromRangeStart", W + "moveFromRangeEnd", W + "moveToRangeStart", W + "moveToRangeEnd",
         W + "rPrChange", W + "pPrChange", W + "sectPrChange", W + "tblPrChange", W + "tblGridChange",
-        W + "trPrChange", W + "tcPrChange", W + "numberingChange",
+        W + "trPrChange", W + "tcPrChange", W + "tblPrExChange", W + "numberingChange",
         W + "cellIns", W + "cellDel", W + "cellMerge",
+        W + "delText", W + "delInstrText",
         W + "customXmlInsRangeStart", W + "customXmlDelRangeStart",
         W + "customXmlMoveFromRangeStart", W + "customXmlMoveToRangeStart",
     };
 
+    // The hardcoded revision-element list the set-drift guard test asserts against. Kept internal so
+    // IrRevisionSkipTests can compare it to ProcessorActsOnNameSet without reflecting over the private
+    // field — both must change together when RevisionProcessor's dispatch changes.
+    internal static IReadOnlyCollection<XName> ProcessorActsOnNamesForTest => ProcessorActsOnNameSet;
+
+    // A w:ins child of w:numPr (inserted numbering, RevisionProcessor.cs:96) is itself a w:ins element,
+    // so the local-name "ins" scan above already catches it — no separate numPr probe is needed. The
+    // scan matches by full XName via DescendantsAndSelf, which visits that nested w:ins like any other.
     private static bool HasRevisionMarkup(WmlDocument working, HashSet<XName> names)
     {
         using var stream = new OpenXmlMemoryStreamDocument(working);
         using var wdoc = stream.GetWordprocessingDocument();
-        var root = wdoc.MainDocumentPart?.GetXDocument().Root;
-        if (root is null)
+        var main = wdoc.MainDocumentPart;
+        if (main is null)
             return false;
-        foreach (var e in root.DescendantsAndSelf())
-            if (names.Contains(e.Name))
-                return true;
+        // The reader consumes the main part AND headers/footers/footnotes/endnotes/comments, and
+        // RevisionProcessor processes every one of those parts too. Scanning only the main part would
+        // let a header-only (or footnote-only, …) revision slip past the skip, so the processor's
+        // transform would be silently bypassed. Scan exactly the parts the reader walks.
+        foreach (var part in RevisionScannablePartsOf(main))
+        {
+            var root = part.GetXDocument().Root;
+            if (root is null)
+                continue;
+            foreach (var e in root.DescendantsAndSelf())
+                if (names.Contains(e.Name))
+                    return true;
+        }
         return false;
+    }
+
+    // The parts whose revision markup the skip must account for: the main document plus every part the
+    // reader pulls block content from (headers, footers, footnotes, endnotes, comments). Mirrors the
+    // parts walked in Read (main.HeaderParts/FooterParts/FootnotesPart/EndnotesPart/CommentsPart).
+    private static IEnumerable<OpenXmlPart> RevisionScannablePartsOf(MainDocumentPart main)
+    {
+        yield return main;
+        foreach (var h in main.HeaderParts)
+            yield return h;
+        foreach (var f in main.FooterParts)
+            yield return f;
+        if (main.FootnotesPart is not null)
+            yield return main.FootnotesPart;
+        if (main.EndnotesPart is not null)
+            yield return main.EndnotesPart;
+        if (main.WordprocessingCommentsPart is not null)
+            yield return main.WordprocessingCommentsPart;
     }
 
     // --- block dispatch ---------------------------------------------------

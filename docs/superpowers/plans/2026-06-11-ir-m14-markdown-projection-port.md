@@ -284,6 +284,26 @@ unchanged (so `IrReaderTests.Read_UnknownElement_BecomesOpaque`, which feeds a
 still passes). That single change cut the copy+revision phase from 15,610 ms to
 3,786 ms (−11.8 s over 3 passes).
 
+**Soundness addendum (M15 hardening — review follow-up).** Review found the
+original skip scan unsound in two ways, both now fixed (the perf win is intact):
+(1) the element set was *not* a strict superset — it omitted `w:tblPrExChange`
+(transformed at `RevisionProcessor.cs:320-325`/`:1725`, can appear with no other
+scanned element) and the unconditionally-rewritten `w:delText`/`w:delInstrText`
+(`RevisionProcessor.cs:1214`/`:1241`/`:1728-1729`); all three are now in
+`ProcessorActsOnNameSet`. A `w:ins` child of `w:numPr` (inserted numbering,
+`RevisionProcessor.cs:96`) is itself a `w:ins`, so the existing local-name scan
+already covered it. `w:instrText`/`w:t` are deliberately omitted — they are only
+transformed inside a `w:ins` subtree (gated on `rri.InInsert`), which is scanned.
+(2) the scan walked **only `MainDocumentPart`**, but the reader (and
+`RevisionProcessor`) also consume headers, footers, footnotes, endnotes, and
+comments — a header-only revision silently skipped processing. The scan now walks
+every part the reader walks. Guards added in `IrRevisionSkipTests`: two behavioral
+(`tblPrExChange`-only and header-only-`w:ins` reads match
+`RevisionProcessor.AcceptRevisions` output) plus a set-drift test pinning the
+element list to `RevisionProcessor`'s dispatch. Post-fix corpus ratio re-measured
+at **1.16×** (`DOCXODUS_RUN_PERF=1`) — the extra part scans are negligible, gate
+still ≤ 1.5× **PASS**.
+
 Tried-and-reverted / considered-and-rejected: (a) short-circuiting
 `ResolveListMarkerText` for non-list paragraphs — **rejected**, the oracle and IR
 both resolve every body p/h/li (style-based numbering means inline-`numPr`

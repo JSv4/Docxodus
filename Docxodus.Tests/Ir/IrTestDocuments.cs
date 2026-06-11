@@ -163,6 +163,36 @@ internal static class IrTestDocuments
     }
 
     /// <summary>
+    /// A document whose <c>w:body</c> inner XML is <paramref name="bodyInnerXml"/> and that also wires
+    /// up a single <see cref="HeaderPart"/> whose <c>w:hdr</c> inner XML is
+    /// <paramref name="headerInnerXml"/>, referenced from the body's trailing <c>w:sectPr</c> via a
+    /// default <c>w:headerReference</c>. Lets a test place revision markup in a header part only.
+    /// </summary>
+    internal static WmlDocument FromBodyAndHeaderXml(string bodyInnerXml, string headerInnerXml)
+    {
+        const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            const string headerRelId = "rIdHdr1";
+            var headerPart = main.AddNewPart<HeaderPart>(headerRelId);
+            WritePartXml(headerPart, $"<w:hdr xmlns:w=\"{W}\">{headerInnerXml}</w:hdr>");
+
+            var documentXml =
+                $"<w:document xmlns:w=\"{W}\" xmlns:r=\"{R}\"><w:body>{bodyInnerXml}" +
+                $"<w:sectPr><w:headerReference w:type=\"default\" r:id=\"{headerRelId}\"/>" +
+                "<w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:body></w:document>";
+            WritePartXml(main, documentXml);
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
+
+    /// <summary>
     /// A document whose <c>w:body</c>, <c>w:styles</c>, and <c>w:numbering</c> inner XML are each
     /// supplied directly, plus an optional theme. A null <paramref name="numberingInnerXml"/> omits
     /// the <see cref="NumberingDefinitionsPart"/> entirely; a null
