@@ -245,6 +245,9 @@ internal static class IrDiagnosticJson
                 writer.WriteString("anchor", cell.Anchor.ToString());
                 writer.WriteNumber("gridSpan", cell.GridSpan);
                 writer.WriteString("vMerge", cell.VMerge.ToString());
+                // Only emit the row-SDT flag when set, so the common direct-cell snapshots stay quiet.
+                if (cell.FromRowSdt)
+                    writer.WriteBoolean("fromRowSdt", true);
                 writer.WriteString("contentHash", cell.ContentHash.ToHex());
                 writer.WriteStartArray("blocks");
                 foreach (var child in cell.Blocks)

@@ -709,34 +709,52 @@ internal static class IrMarkdownEmitter
         if (ctx.Settings.TableMode == TableRenderMode.AlwaysGfm) return true;
 
         var max = ctx.Settings.TableInlineCellMax;
+        // Merged-cell checks mirror the oracle's tbl.Descendants(w:gridSpan)/Descendants(w:vMerge):
+        // they reach into SDT-delivered rows/cells, so probe ALL rows and ALL cells here.
         foreach (var row in tbl.Rows)
-        {
             foreach (var cell in row.Cells)
             {
-                // Merged cells: gridSpan>1 (horizontal) or any vMerge (vertical) → opaque.
                 if (cell.GridSpan > 1) return false;
                 if (cell.VMerge != IrVMerge.None) return false;
-                // Nested table directly inside a cell → opaque.
+            }
+        // Nested-table and per-cell length checks mirror tbl.Elements(w:tr).Elements(w:tc)[.Elements(w:tbl)]
+        // — direct rows AND direct cells only — so a nested table or over-long cell that an SDT delivers
+        // does NOT disqualify GFM. Restrict to the oracle-visible rows/cells.
+        foreach (var row in OracleVisibleRows(tbl))
+            foreach (var cell in OracleVisibleCells(row))
+            {
                 if (cell.Blocks.Any(b => b is IrTable)) return false;
-                // Per-cell raw-text length cap.
                 if (CellTextRaw(cell).Length > max) return false;
             }
-        }
         return true;
     }
+
+    /// <summary>The rows the oracle's table walk SEES — direct <c>w:tr</c> children only
+    /// (<c>tbl.Elements(w:tr)</c>). Excludes rows a table-level <c>w:sdt</c> delivered
+    /// (<see cref="IrRow.FromTableSdt"/>), which the IR keeps + indexes for fidelity but the oracle's
+    /// table markdown never renders.</summary>
+    private static IEnumerable<IrRow> OracleVisibleRows(IrTable tbl) =>
+        tbl.Rows.Where(r => !r.FromTableSdt);
+
+    /// <summary>The cells of a row the oracle's table walk SEES — direct <c>w:tc</c> children only
+    /// (<c>Elements(w:tr).Elements(w:tc)</c>). Excludes cells a row-level <c>w:sdt</c> delivered
+    /// (<see cref="IrCell.FromRowSdt"/>), which the IR keeps for content fidelity but the oracle's
+    /// table markdown never renders.</summary>
+    private static IEnumerable<IrCell> OracleVisibleCells(IrRow row) =>
+        row.Cells.Where(c => !c.FromRowSdt);
 
     private static void EmitGfmTable(IrTable tbl, string anchor, StringBuilder sb, EmitCtx ctx)
     {
         if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLine(); }
-        var rows = tbl.Rows.ToList();
+        var rows = OracleVisibleRows(tbl).ToList();
         if (rows.Count == 0) return;
 
-        var headerCells = rows[0].Cells.Select(CellTextForGfm).ToList();
+        var headerCells = OracleVisibleCells(rows[0]).Select(CellTextForGfm).ToList();
         sb.Append("| ").Append(string.Join(" | ", headerCells)).AppendLine(" |");
         sb.Append('|').Append(string.Concat(Enumerable.Repeat(" --- |", headerCells.Count))).AppendLine();
         foreach (var r in rows.Skip(1))
         {
-            var cells = r.Cells.Select(CellTextForGfm);
+            var cells = OracleVisibleCells(r).Select(CellTextForGfm);
             sb.Append("| ").Append(string.Join(" | ", cells)).AppendLine(" |");
         }
         sb.AppendLine();
@@ -744,8 +762,11 @@ internal static class IrMarkdownEmitter
 
     private static void EmitOpaqueTable(IrTable tbl, string anchor, StringBuilder sb)
     {
-        var rows = tbl.Rows.Count;
-        var cols = tbl.Rows.FirstOrDefault()?.Cells.Count ?? 0;
+        // rows/cols mirror the oracle's tbl.Elements(w:tr).Count() and the first direct row's direct
+        // cell count — SDT-delivered rows/cells are excluded from both.
+        var visibleRows = OracleVisibleRows(tbl).ToList();
+        var rows = visibleRows.Count;
+        var cols = visibleRows.FirstOrDefault() is { } first ? OracleVisibleCells(first).Count() : 0;
         if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLine(); }
         sb.AppendLine("```table");
         sb.Append("rows: ").Append(rows).AppendLine();

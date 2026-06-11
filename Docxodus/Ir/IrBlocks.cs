@@ -64,6 +64,20 @@ internal sealed record IrTable : IrBlock
 internal sealed record IrRow(IrAnchor Anchor, IrNodeList<IrCell> Cells, IrHash ContentHash)
 {
     public IrProvenance Source { get; init; } = new();
+
+    /// <summary>
+    /// True when this row was delivered by a table-level <c>w:sdt</c> wrapping a <c>w:tr</c> (e.g. a
+    /// repeating-section content control), rather than being a direct <c>w:tr</c> child of the
+    /// <c>w:tbl</c>. Equality-participating (the same table read twice yields the same flag; a row
+    /// moving in/out of an SDT wrapper is a structural change the diff engine must see).
+    /// <para>
+    /// The markdown emitter's table walk excludes SDT-delivered rows so it mirrors the ORACLE
+    /// (<c>WmlToMarkdownConverter</c> walks <c>tbl.Elements(w:tr)</c> — direct rows only — so it never
+    /// renders an SDT-delivered row). The IR keeps the row (no content loss) and indexes it (the
+    /// oracle's anchor index DOES include it, since that walk uses <c>Descendants</c>).
+    /// </para>
+    /// </summary>
+    public bool FromTableSdt { get; init; }
 }
 
 /// <summary>
@@ -74,6 +88,23 @@ internal sealed record IrCell(IrAnchor Anchor, IrNodeList<IrBlock> Blocks,
                               int GridSpan, IrVMerge VMerge, IrHash ContentHash)
 {
     public IrProvenance Source { get; init; } = new();
+
+    /// <summary>
+    /// True when this cell was delivered by a row-level <c>w:sdt</c> wrapping a <c>w:tc</c>
+    /// (the SDT-unwrap discipline in <c>IrReader.BuildRow</c>), rather than being a direct
+    /// <c>w:tc</c> child of the <c>w:tr</c>. It is EQUALITY-PARTICIPATING (a positional structural
+    /// fact: the same row read twice yields the same flag, and a cell moving in/out of an SDT
+    /// wrapper is a genuine structural change the Phase 2 diff engine must see — so the cell is
+    /// present in the IR and its ContentHash).
+    /// <para>
+    /// The markdown emitter's GFM/opaque table walk excludes SDT-delivered cells so it mirrors the
+    /// ORACLE exactly: <c>WmlToMarkdownConverter</c>'s table path walks
+    /// <c>Elements(w:tr).Elements(w:tc)</c> — direct <c>w:tc</c> children only — so it never sees a
+    /// cell an SDT delivers. The IR's richer view keeps the cell (no content loss); the emitter
+    /// narrows to the oracle's view for byte parity.
+    /// </para>
+    /// </summary>
+    public bool FromRowSdt { get; init; }
 }
 
 /// <summary>A section break carrying its direct section formatting (`w:sectPr`).</summary>

@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Docxodus.Ir;
@@ -26,9 +27,82 @@ public class IrMarkdownEquivalenceTests
 {
     private static readonly DirectoryInfo TestFilesDir = new("../../../../TestFiles/");
 
+    private static readonly string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
     private readonly ITestOutputHelper _output;
 
     public IrMarkdownEquivalenceTests(ITestOutputHelper output) => _output = output;
+
+    // --- revision-view policy (M1.4-T3 sub-task 2) -------------------------------------------------
+    //
+    // Equivalence is asserted over revision-FREE inputs by design. The oracle projects a document
+    // AS-IS (its EmitInlineRuns accepts revisions inline: ins → plain text, del → dropped), while the
+    // IR's RevisionView defaults to Accept (RevisionProcessor.AcceptRevisions rewrites the package
+    // structurally before the read). For documents carrying tracked changes those two acceptance
+    // paths can diverge (moved content, paragraph-mark revisions, etc.). v1 IR deliberately has no
+    // as-is projection of tracked-changes docs (spec §5.1); as-is projection is a v2 IR item
+    // (spec §11). To compare like-for-like we pre-accept revisions ONCE here and feed the SAME
+    // accepted bytes to BOTH the oracle and the IR path — so the oracle sees an already-accepted
+    // document (its inline acceptance becomes a no-op) and the IR's Accept re-pass is idempotent.
+
+    /// <summary>
+    /// Return input bytes suitable for an apples-to-apples comparison: if <paramref name="file"/>
+    /// carries tracked-change markup, return a copy with revisions accepted once
+    /// (<see cref="RevisionProcessor.AcceptRevisions(WmlDocument)"/>); otherwise return the file's
+    /// bytes verbatim. The returned <see cref="WmlDocument"/> is a fresh instance each call so the
+    /// oracle (which mutates bytes to persist Unids) and the IR path never share mutable state.
+    /// </summary>
+    private static WmlDocument PrepareInput(FileInfo file)
+    {
+        var doc = new WmlDocument(file.FullName);
+        return HasRevisionMarkup(doc) ? RevisionProcessor.AcceptRevisions(doc) : doc;
+    }
+
+    private static readonly XName[] RevisionElementNames =
+    {
+        // The same set IrReader.HasRevisionMarkup uses: the tracked-change markup whose presence
+        // means the two acceptance paths could diverge.
+        XName.Get("ins", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        XName.Get("del", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        XName.Get("moveFrom", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        XName.Get("moveTo", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        XName.Get("rPrChange", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        XName.Get("pPrChange", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        XName.Get("tblPrChange", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        XName.Get("trPrChange", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        XName.Get("tcPrChange", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        XName.Get("sectPrChange", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+        XName.Get("numberingChange", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+    };
+
+    private static bool HasRevisionMarkup(WmlDocument doc)
+    {
+        try
+        {
+            using var stream = new OpenXmlMemoryStreamDocument(doc);
+            using var wdoc = stream.GetWordprocessingDocument();
+            var names = new HashSet<XName>(RevisionElementNames);
+            foreach (var part in EnumerableScopeRoots(wdoc))
+                if (part is not null && part.DescendantsAndSelf().Any(e => names.Contains(e.Name)))
+                    return true;
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static IEnumerable<System.Xml.Linq.XElement?> EnumerableScopeRoots(WordprocessingDocument wdoc)
+    {
+        var main = wdoc.MainDocumentPart;
+        if (main is null) yield break;
+        yield return main.GetXDocument().Root;
+        foreach (var h in main.HeaderParts) yield return h.GetXDocument().Root;
+        foreach (var f in main.FooterParts) yield return f.GetXDocument().Root;
+        if (main.FootnotesPart is not null) yield return main.FootnotesPart.GetXDocument().Root;
+        if (main.EndnotesPart is not null) yield return main.EndnotesPart.GetXDocument().Root;
+    }
 
     /// <summary>
     /// The curated set of genuinely body-simple fixtures (plain paragraphs / headings / bulleted
@@ -85,12 +159,26 @@ public class IrMarkdownEquivalenceTests
         {
             if (!CanOpen(file)) { skipped++; continue; }
 
+            // Revision-view policy (see PrepareInput): pre-accept revisions once for fixtures that
+            // carry tracked changes, and feed the SAME accepted bytes to both paths.
+            WmlDocument prepared;
+            try
+            {
+                prepared = PrepareInput(file);
+            }
+            catch (Exception ex)
+            {
+                _output.WriteLine($"[prepare-skip] {file.Name}: {ex.GetType().Name}");
+                skipped++;
+                continue;
+            }
+
             string oracleMd;
             IReadOnlyDictionary<string, AnchorTarget> oracleIndex;
             try
             {
                 // The oracle mutates the document bytes (persists Unids) — run it on a copy.
-                var oracleDoc = new WmlDocument(new WmlDocument(file.FullName));
+                var oracleDoc = new WmlDocument(prepared);
                 var projection = WmlToMarkdownConverter.Convert(oracleDoc, new WmlToMarkdownConverterSettings());
                 oracleMd = projection.Markdown;
                 oracleIndex = projection.AnchorIndex;
@@ -107,7 +195,7 @@ public class IrMarkdownEquivalenceTests
             IReadOnlyDictionary<string, AnchorTarget> irIndex;
             try
             {
-                var ir = IrReader.Read(new WmlDocument(file.FullName));
+                var ir = IrReader.Read(new WmlDocument(prepared));
                 var result = IrMarkdownEmitter.Emit(ir, new WmlToMarkdownConverterSettings());
                 irMd = result.Markdown;
                 irIndex = result.AnchorIndex;
@@ -154,14 +242,16 @@ public class IrMarkdownEquivalenceTests
     [MemberData(nameof(MustPassFixtures))]
     public void MarkdownEquivalence_MustPassFixtures(string fixtureName)
     {
-        var path = TestFilesDir.GetFiles(fixtureName, SearchOption.AllDirectories)
+        var file = TestFilesDir.GetFiles(fixtureName, SearchOption.AllDirectories)
             .OrderBy(f => f.FullName, StringComparer.Ordinal)
-            .First().FullName;
+            .First();
 
-        var oracleDoc = new WmlDocument(new WmlDocument(path));
+        var prepared = PrepareInput(file);
+
+        var oracleDoc = new WmlDocument(prepared);
         var projection = WmlToMarkdownConverter.Convert(oracleDoc, new WmlToMarkdownConverterSettings());
 
-        var ir = IrReader.Read(new WmlDocument(path));
+        var ir = IrReader.Read(new WmlDocument(prepared));
         var result = IrMarkdownEmitter.Emit(ir, new WmlToMarkdownConverterSettings());
 
         Assert.Equal(projection.Markdown, result.Markdown);

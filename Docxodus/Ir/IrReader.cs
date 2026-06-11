@@ -1427,21 +1427,30 @@ internal static class IrReader
         var rowHashes = new List<IrHash>();
         var cellFingerprints = new List<IrHash>();
 
-        foreach (var tr in tbl.Elements(W + "tr"))
+        // Rows are usually direct w:tr children, but a table-level w:sdt (e.g. a repeating-section
+        // content control) can wrap a w:tr. The oracle's table markdown (tbl.Elements(w:tr)) drops
+        // those rows, but its anchor index (Descendants) keeps them — and the IR must not lose the
+        // row's content. Unwrap table-level SDTs to their w:tr children, flag the delivered rows
+        // FromTableSdt, and let the emitter narrow back to the oracle's direct-row view for parity.
+        foreach (var (tr, fromSdt) in EnumerateTableRows(tbl))
         {
             var (row, cellFingerprintsForRow) = BuildRow(tr, ctx);
+            if (fromSdt)
+                row = row with { FromTableSdt = true };
             rows.Add(row);
             rowHashes.Add(row.ContentHash);
             cellFingerprints.AddRange(cellFingerprintsForRow);
         }
 
-        // Non-tr children of the table (tblPr, tblGrid) + non-tc children of each tr (trPr)
-        // fold into one unmodeled container so any table-level prop change flips the fingerprint.
+        // Non-tr children of the table (tblPr, tblGrid) + non-tc children of each tr (trPr) fold into
+        // one unmodeled container so any table-level prop change flips the fingerprint. A row-delivering
+        // w:sdt wrapper is excluded — its meaningful content (the rows) is now modeled above, so folding
+        // the wrapper too would double-count and re-introduce the very content the rows path captures.
         var unmodeledContainer = new XElement("unmodeled");
-        foreach (var child in tbl.Elements().Where(e => e.Name != W + "tr"))
+        foreach (var child in tbl.Elements().Where(e => e.Name != W + "tr" && e.Name != W + "sdt"))
             unmodeledContainer.Add(new XElement(child));
-        foreach (var tr in tbl.Elements(W + "tr"))
-            foreach (var child in tr.Elements().Where(e => e.Name != W + "tc"))
+        foreach (var (tr, _) in EnumerateTableRows(tbl))
+            foreach (var child in tr.Elements().Where(e => e.Name != W + "tc" && e.Name != W + "sdt"))
                 unmodeledContainer.Add(new XElement(child));
         var tablePropsDigest = IrHasher.CanonicalHash(unmodeledContainer);
 
@@ -1474,9 +1483,18 @@ internal static class IrReader
         var rowBuilder = new IrContentHashBuilder();
         rowBuilder.AppendStructure(IrContentHashBuilder.StructureRow);
 
-        foreach (var tc in tr.Elements(W + "tc"))
+        // A row's children are usually direct w:tc elements, but a w:sdt (content control) can wrap
+        // a w:tc as a row-level child — Word does this for repeating-section content controls. The
+        // oracle's TABLE path (Elements(w:tr).Elements(w:tc)) is blind to those cells and drops them
+        // from its view; the IR must NOT lose content (the Phase 2 diff engine needs every cell in
+        // the ContentHash), so we unwrap row-level SDTs to their w:tc children here, reusing the
+        // established SDT-unwrap discipline + depth cap. Each SDT-delivered cell is flagged
+        // FromRowSdt so the markdown emitter can mirror the oracle's narrower view for byte parity.
+        foreach (var (tc, fromSdt) in EnumerateRowCells(tr))
         {
             var (cell, fingerprints) = BuildCell(tc, ctx);
+            if (fromSdt)
+                cell = cell with { FromRowSdt = true };
             cells.Add(cell);
             cellFingerprints.AddRange(fingerprints);
             rowBuilder.AppendHash(cell.ContentHash);
@@ -1487,6 +1505,69 @@ internal static class IrReader
             Source = ctx.Provenance(tr),
         };
         return (row, cellFingerprints);
+    }
+
+    /// <summary>
+    /// Yield the rows of a table in document order, unwrapping any table-level <c>w:sdt</c> to its
+    /// <c>w:sdtContent</c>'s <c>w:tr</c> children (recursively, depth-capped). A direct <c>w:tr</c>
+    /// yields <c>fromSdt=false</c>; an SDT-delivered row yields <c>fromSdt=true</c>. Non-tr, non-sdt
+    /// table children (<c>w:tblPr</c>/<c>w:tblGrid</c>) are skipped here (folded into the unmodeled
+    /// digest by <see cref="BuildTable"/>).
+    /// </summary>
+    private static IEnumerable<(XElement Tr, bool FromSdt)> EnumerateTableRows(XElement tbl)
+    {
+        foreach (var child in tbl.Elements())
+        {
+            if (child.Name == W + "tr")
+                yield return (child, false);
+            else if (child.Name == W + "sdt")
+                foreach (var tr in UnwrapSdtChildren(child, W + "tr", depth: 0))
+                    yield return (tr, true);
+        }
+    }
+
+    /// <summary>
+    /// Yield the cells of a row in document order, unwrapping any row-level <c>w:sdt</c> to its
+    /// <c>w:sdtContent</c>'s <c>w:tc</c> children (recursively, depth-capped by <see cref="MaxSdtDepth"/>).
+    /// A direct <c>w:tc</c> yields <c>fromSdt=false</c>; a cell delivered by an SDT yields
+    /// <c>fromSdt=true</c>. Non-tc, non-sdt row children (e.g. <c>w:trPr</c>) are skipped — they are
+    /// folded into the table's unmodeled-props digest by <see cref="BuildTable"/>. A pathologically
+    /// deep SDT nest stops unwrapping at the cap (any deeper <c>w:tc</c> is simply not surfaced — the
+    /// same bound the block walker uses), preserving totality.
+    /// </summary>
+    private static IEnumerable<(XElement Tc, bool FromSdt)> EnumerateRowCells(XElement tr)
+    {
+        foreach (var child in tr.Elements())
+        {
+            if (child.Name == W + "tc")
+                yield return (child, false);
+            else if (child.Name == W + "sdt")
+                foreach (var tc in UnwrapSdtChildren(child, W + "tc", depth: 0))
+                    yield return (tc, true);
+        }
+    }
+
+    /// <summary>
+    /// Yield the <paramref name="targetName"/> elements (<c>w:tr</c> or <c>w:tc</c>) reachable through a
+    /// <c>w:sdt</c>'s <c>w:sdtContent</c>, recursing through nested SDTs up to <see cref="MaxSdtDepth"/>.
+    /// Beyond the cap, deeper targets are simply not surfaced (the same bound the block walker uses),
+    /// preserving totality against adversarial nesting.
+    /// </summary>
+    private static IEnumerable<XElement> UnwrapSdtChildren(XElement sdt, XName targetName, int depth)
+    {
+        if (depth >= MaxSdtDepth)
+            yield break;
+        var content = sdt.Element(W + "sdtContent");
+        if (content is null)
+            yield break;
+        foreach (var inner in content.Elements())
+        {
+            if (inner.Name == targetName)
+                yield return inner;
+            else if (inner.Name == W + "sdt")
+                foreach (var t in UnwrapSdtChildren(inner, targetName, depth + 1))
+                    yield return t;
+        }
     }
 
     private static (IrCell Cell, List<IrHash> Fingerprints) BuildCell(XElement tc, ReadContext ctx)

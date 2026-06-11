@@ -182,14 +182,41 @@
         {
           "anchor": "tbl:body:1a45e2fbb3b8f8b210fdc984f054c9b8",
           "type": "table",
-          "contentHash": "93e03e648aee895491fbc60e420071a9bb2b3786126559be34bc5b074d2f3a5b",
-          "formatFingerprint": "ac1f30d7007dc6f3010684e5c449abc59607bfcd33dda0bde9189f8c30b1d36b",
-          "unmodeledTablePropsDigest": "76c76b6485025b85e77a3b0d0d5178b4ef46a578be9f710744545e3a1f64db7c",
+          "contentHash": "3aba1ce0ea120318954b33c470df1111a1d2407e5dd1cb8302c2b30525b616c8",
+          "formatFingerprint": "5c0956bfef857b5cf96921a6550608504d802c271ec1eb643af8d1f8a3ba06ad",
+          "unmodeledTablePropsDigest": "5d218e3d9aba9b2df3e567b3073d70870ed6fe635cee89755272d35c943a23f6",
           "rows": [
             {
               "anchor": "tr:body:7c8023eee1329d28746ffc26d91cf695",
-              "contentHash": "ea33b1e4866a6e6bedce65c7a8cb7603efe1649cddfcfbd63c637bb04bdb1bd5",
+              "contentHash": "cb08c9ec9b6cc349f0bc0d74534f1542e721c86df2dd0bb2b9e81f326ebb5446",
               "cells": [
+                {
+                  "anchor": "tc:body:6c3f383236b1f91448d3a43cba0c1f6b",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "4ab18e685f41cc0856fe8306bdf99d7883b36c83d8b06080be3aac99e3856054",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:6fb1ebf466bc8f66ee29f6d14c1c715e",
+                      "type": "paragraph",
+                      "contentHash": "a14d8c420c6d9f247107de0c175ea69fd999fbedcb81146435ddf26450148eea",
+                      "formatFingerprint": "2b200d00fd0d341ec1acd0283d34967c8c83e9f5e23bd0bbfc3d68c6d778057c",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2612",
+                          "format": {
+                            "fontAscii": "MS Gothic"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:3595bc5ae367117e296d78d17399786a",
                   "gridSpan": 1,
@@ -218,8 +245,33 @@
             },
             {
               "anchor": "tr:body:252eb99fb6b6d940011b00fbf1f36083",
-              "contentHash": "70c76d796cc1b876f42dd169e7bf764bcc6bcd580aa0ac13fcad63c085d76f03",
+              "contentHash": "bf84d61a6f556b10ddc672f9c2cf214d9f6cd473d86b61b6af241d54fb4a195b",
               "cells": [
+                {
+                  "anchor": "tc:body:89e5656e51869ee98eb6ed534ac8e588",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:3ef21b8745bd55c953c1881dd6520666",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:d611ad45ce9fc9de24236bad44615416",
                   "gridSpan": 1,
@@ -248,8 +300,33 @@
             },
             {
               "anchor": "tr:body:33f8bd80ed7b5e6ba5cb4b71536fdbf8",
-              "contentHash": "5ac74733f43aad868a20d876ae25bb28ab985d779b7fba02a9edfd570e39e0e2",
+              "contentHash": "e50bf11dbfa0dcd4dc30699e8451387e002025c228eaaff351d8a57ef53adfff",
               "cells": [
+                {
+                  "anchor": "tc:body:6fc36b56bdb2ef88a3c8ba24b860c2d1",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:23f3047d54afdd7ccceafb5fdeb023fd",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:224578c16824aeff9a2dfc944ada3538",
                   "gridSpan": 1,
@@ -278,8 +355,33 @@
             },
             {
               "anchor": "tr:body:781c597974e8157b8e6c34c8f2d628d2",
-              "contentHash": "e9f3c8d4ebf12318cc0928810a14fc70e89094e7ce9b2b930e5130859fb4641d",
+              "contentHash": "e6bf750fe3c4ff04ded3576771b36ebe0512d3921c79a1c34fecafd0200ad19b",
               "cells": [
+                {
+                  "anchor": "tc:body:b4be8bac8134112e9a54b306d882ca53",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:e1d27024a93c9b7c42af6e455eecee99",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:2e8679d009d7c38b209b250cf2f1f9e7",
                   "gridSpan": 1,
@@ -308,8 +410,33 @@
             },
             {
               "anchor": "tr:body:1ae18185fc7a2b0ddaf6d45c627156b2",
-              "contentHash": "a0b093c8e07f99baacb50733e9d71f65e9cf22a82bf2c0312d2932146d9cb141",
+              "contentHash": "7a1a08d12278df7735df0c913c6fd36cd22a4463329d7c005c81367e267b5012",
               "cells": [
+                {
+                  "anchor": "tc:body:00ff789d19e26ac0cee8d4df526c6201",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:ed3ff50f3fd2dcd6636857c4dac05706",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:a10838254cd87fa9d2c1f0ac6e6588cd",
                   "gridSpan": 1,
@@ -328,6 +455,61 @@
                         {
                           "kind": "text",
                           "text": "Tie up any loose ends at the office (finish up projects; set up out-of-office replies; notify or remind coworkers about your departure).",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:f27b17ae7d1c9b209844a0e779a34dda",
+              "contentHash": "2a5805e7f10158c16fd1da3812f6f51bd1da6e33ef952f9459fdb870044bbb0d",
+              "cells": [
+                {
+                  "anchor": "tc:body:f66db04baec7690f47aa1d6df42ac407",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:264b595f29a3b5124ddd1e94ca33547c",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:17d5fc574408827d664c445279a46abc",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "4c39b3174d445fa520905cd30bd39433ae546fff33efb27e8b99f668b605a9dd",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:3838dfb7e5456d19345ecac39a624088",
+                      "type": "paragraph",
+                      "contentHash": "2ff4f915faa714e1cc865d1ed5299c61acc3e423f46158c18678ad4a82dc190b",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Print out hard copies of presentations, agendas, and important documents.",
                           "format": {}
                         }
                       ]
@@ -364,14 +546,41 @@
         {
           "anchor": "tbl:body:ed710a8d2bbbef26e1199ee064990d07",
           "type": "table",
-          "contentHash": "bb8dc834764d270af46fee1fcfb461b0b253ca19dc1f45d38142e73db9c2e9f2",
-          "formatFingerprint": "723dedf56c2870650342218f5754edd6b3442ed47b6698ddeb37a82d89eb2864",
-          "unmodeledTablePropsDigest": "109c480f3f08ddc3d860d88864b627a4f268c42ca3476911d11144f59c9189d4",
+          "contentHash": "1b5ce2df2708dfb9efaaf4a384d023af944746cf7e48cb73645958031ee0bd4d",
+          "formatFingerprint": "ef8595aed9f7e96843517d26039941ab36d40d44119bdaed5e826605e83ba7be",
+          "unmodeledTablePropsDigest": "680f22e03b74365e2c295c16bb9f01bc36aadbc0b9e77f238b04222500c909ab",
           "rows": [
             {
               "anchor": "tr:body:5c3ad602a9fa9596a55e87365ca73287",
-              "contentHash": "cbee678de6983009a6c0b48d69952c58da5c1bfd0e1d9ad54ebc52cd56063fd1",
+              "contentHash": "3c3343148a256a9e2d3f7f7d1d8dcfc5e43cb74cf11b10c7bba0dd69a579f62f",
               "cells": [
+                {
+                  "anchor": "tc:body:a2be6cc2fe9f8f975e240786b3945141",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:df085baffd55ed42c4474f3a87be3b54",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "2b200d00fd0d341ec1acd0283d34967c8c83e9f5e23bd0bbfc3d68c6d778057c",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {
+                            "fontAscii": "MS Gothic"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:7cde5cdcf5b439d01313cef936b3542a",
                   "gridSpan": 1,
@@ -400,8 +609,33 @@
             },
             {
               "anchor": "tr:body:9eb6d127bc5deda43268f8c63d357134",
-              "contentHash": "c41cd93fdc206c3e026a95f6cbefb69a68994f9877f25f79523a7f6a5bc6ca7a",
+              "contentHash": "d36bd3f136d18ff27336778003d1f622ae2334bec8c030d2f7e2e4115767e4ab",
               "cells": [
+                {
+                  "anchor": "tc:body:b0d544ab1b30d17f9524549964562919",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:d9f367f612d847d9131e7eb0ff3ee842",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:ba9e21f5f7e21ed9792555bdc79362b1",
                   "gridSpan": 1,
@@ -430,8 +664,33 @@
             },
             {
               "anchor": "tr:body:f2bbc19ce4a9bdf1234dbdcf45ba9b1c",
-              "contentHash": "6601d613896a8b820ffe1763956e0546f8fde913e8b121ca4c95f0a72400b2cc",
+              "contentHash": "17e35a547d73e29a33c2bb240dc1142f3499f17396726e22913b0433de4081bc",
               "cells": [
+                {
+                  "anchor": "tc:body:e7ce5e05a031d794a0eeb9844a119360",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:9f0800381a89e141ab54fd4a7b482b7c",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:b79a88d527ade343e92b7cab89788151",
                   "gridSpan": 1,
@@ -460,8 +719,33 @@
             },
             {
               "anchor": "tr:body:995c8431b93266d02c2e65653014387f",
-              "contentHash": "b55cc8ab73cce5cd8c7d8937263d1a982f114eafde27c164f7d8751911c87f42",
+              "contentHash": "fce400203fb9956653e5f32c3f1429ffe51763468488c0b096f4b8256c9e1c7b",
               "cells": [
+                {
+                  "anchor": "tc:body:5381c85bcc514a9b8b45eb24960c86f6",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:2eff21ff57b6977a5cd67e6aa421c4bb",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:693c744a20a1dda5931dbcb3b106b6c4",
                   "gridSpan": 1,
@@ -490,8 +774,33 @@
             },
             {
               "anchor": "tr:body:2b9b8199639ff230665c490f415811b1",
-              "contentHash": "3a160cf12f841ecffe7b51355f9334357089525d00bd9b3153f5f9a941407739",
+              "contentHash": "0d330c2435a20e17921898f2ee77d86c9c2c23bbe2b787e23b5f29d0d9e4b34c",
               "cells": [
+                {
+                  "anchor": "tc:body:2ea752fd6413bf33e65e8f0b78fc9507",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:41746a5e425a1a8849c7993196fa6d04",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:974d9c1d5ca2e534c159a068abf53cc4",
                   "gridSpan": 1,
@@ -510,6 +819,61 @@
                         {
                           "kind": "text",
                           "text": "Leave house and car keys, and your complete itinerary, with a trusted friend.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:65faaa82125d3d378f060287169cfa52",
+              "contentHash": "f235d8a0ab9c334299613af2aab50f4ee2f27ec8be96fce6905e043607c89a5c",
+              "cells": [
+                {
+                  "anchor": "tc:body:2a7e6df917a053657a65b387738a2619",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:4720ea5954288a0b1642ac7a9967b7b9",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:59123904bd2f871f194f118e0fcc6f46",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "657bf1be4249496567a19e18f03414017c57ccfb3dd2b35767ff6f74e48637d9",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:3fee36a50967ddf786033989f5ab4ad8",
+                      "type": "paragraph",
+                      "contentHash": "0a295cfb90b833b5ac0f27bad415a06c3bc45f28eb0020ddaa1e0296710f9e74",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Lock windows, garages, and doors.",
                           "format": {}
                         }
                       ]
@@ -546,14 +910,41 @@
         {
           "anchor": "tbl:body:424cd00b277aabe4113400a4a8388e5d",
           "type": "table",
-          "contentHash": "7eeaf0154f577110b58a10c5bf4f93021a9356c9fdc433213d12eb74cb5b5643",
-          "formatFingerprint": "fc42392372f76ac65099bcc459cbd7cc7cca3de1c82e0625acc9bd9f1bdeb1ab",
-          "unmodeledTablePropsDigest": "fa4d8558a214cff7991a128e49b9b086778e5062f05dd8fcd0d981a0f886ad5d",
+          "contentHash": "5b92ea1137d9ec80db2c391b0b933d6f2d28a22d184ff2d1360bf480331a2042",
+          "formatFingerprint": "38e9dd68e32e60dde0efe9f91a6cd7acc883affcb70b7941d17db10605ed8623",
+          "unmodeledTablePropsDigest": "b7fe28ea3f6b13a8b8798faefd05b707945b77f2d933271aab527c68c162f094",
           "rows": [
             {
               "anchor": "tr:body:f0b5a44e85fef0ff808cf32afcdd440c",
-              "contentHash": "a347985f66ce7ba8b149f73f02c0f67d78d020721872335118028b806a764da3",
+              "contentHash": "d649faf03d057556c9684bcffb209a661097bdc3c87f248abee9e04119b7fda0",
               "cells": [
+                {
+                  "anchor": "tc:body:ba05ecd0646606395175140d9e3ed987",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:bc952f9b708260995c86304f3c56f111",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "2b200d00fd0d341ec1acd0283d34967c8c83e9f5e23bd0bbfc3d68c6d778057c",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {
+                            "fontAscii": "MS Gothic"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:2e5deba83004443a74ce168ab1e43ce9",
                   "gridSpan": 1,
@@ -582,8 +973,33 @@
             },
             {
               "anchor": "tr:body:9a00f1bead990bc40da06ea2e465ec37",
-              "contentHash": "b41ff5ea28d46fc953a445c284192ae8fabba0474881659ffa427020cf62fdc7",
+              "contentHash": "3f28dbffcc1bf3187ddcf051b79469ccaa7962bd00fa6654b884dde32f9c9bc4",
               "cells": [
+                {
+                  "anchor": "tc:body:2b0c2f155ba0713745d924f09d32f51f",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:bb554fbb0554666b6d61c558b264da8e",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:e0231b539a4fc3d1a4f511b519aa2f66",
                   "gridSpan": 1,
@@ -612,8 +1028,33 @@
             },
             {
               "anchor": "tr:body:b68178d4a4012b48488eb7e5de38561c",
-              "contentHash": "9bb7dea3a08a8d8d2a1d1bf63db13cdd42eb4e52aafaae0d9b61506fbc08a510",
+              "contentHash": "7705c2183c49b5c80c94985f3283169d5176441020cfbd1ca37d7a7bda158494",
               "cells": [
+                {
+                  "anchor": "tc:body:b27f6e08f8b173e77801870fac281ca1",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:abc896e3907259bd0149415247843ffe",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:a62b8c9b5254ae587868504979aec6d1",
                   "gridSpan": 1,
@@ -632,6 +1073,61 @@
                         {
                           "kind": "text",
                           "text": "If you check your bag, pack a second set of business clothes and toiletries in a carry-on bag, in case of lost luggage.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:edfbe4e27b8d8b559c6a8eb79d4c8943",
+              "contentHash": "9bc5673502279435690958aa264b4653885c277d2c193efa4425587f8881d566",
+              "cells": [
+                {
+                  "anchor": "tc:body:faa46ba78fc7b8c5ca7f4eca2d912e98",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:d10386502388e5e14abd8bd3a37ba220",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:2ac0c0b7c6304618813e2eedee89ecd8",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "0d608dc7d8ddc630e5b70ab966dea190b6a9beee58a0a7b1e849614f061def13",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:5fc950ca4c0de8256a8d158c9530b7e2",
+                      "type": "paragraph",
+                      "contentHash": "78eec17843d30d08aba0d2d3289863b2fa8397282848d1be61894443486a592e",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Print several copies of this checklist, and save a copy on your computer\u2019s hard drive to refer to when planning your next trip. Storing the checklist on your computer is the easiest way to make updates to it when necessary.",
                           "format": {}
                         }
                       ]
@@ -668,14 +1164,41 @@
         {
           "anchor": "tbl:body:ea676197adc387d6c64aac725e9692ee",
           "type": "table",
-          "contentHash": "4e9804bc17f2477ef361a0244bdaebdfedae0b1298f0e312fee301b07b8761d0",
-          "formatFingerprint": "01750aaca3f780e218d3d6fc73d0b705a728efd13c7ca852fb124f32618f0292",
-          "unmodeledTablePropsDigest": "96221296266bd8011f0c9977402162536358558d5a52f8250a17c492506ab4cf",
+          "contentHash": "4250009daab714f0a0d99b0c8b33d48056488e9055970c965f81f1f31e560e7b",
+          "formatFingerprint": "846f93bd62459ff64663da15977e389efa9446af62606211c28929ffab1d130e",
+          "unmodeledTablePropsDigest": "72b5d9629d7360669e09ee5ad085fa4b1b0b29d32b54aaba4c998675a3c7ce21",
           "rows": [
             {
               "anchor": "tr:body:de6496a2724263a48bae91b6049fadd9",
-              "contentHash": "41047b1b6fb85da10051696c2b4fe932a0b032e8a69c3ec998fdd7b2a30e722e",
+              "contentHash": "f1159234df2fdca84776e5bb6fbda865678a343ebd313c88dfdf950f02f0a5d2",
               "cells": [
+                {
+                  "anchor": "tc:body:3ccae8c44fde874bae8df634f5e80640",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:c94dc103b7bcf60a5bd917755ece0c91",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "2b200d00fd0d341ec1acd0283d34967c8c83e9f5e23bd0bbfc3d68c6d778057c",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {
+                            "fontAscii": "MS Gothic"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:bdf80b6c139c43a07a40b87287d161d7",
                   "gridSpan": 1,
@@ -704,8 +1227,33 @@
             },
             {
               "anchor": "tr:body:9326b0f11487d5cfd73e55554a40a630",
-              "contentHash": "f13c1062ba553812751c5916cabe08fecf7c4909671101ae8a8ae3f05f4d1302",
+              "contentHash": "77da3a153446d3b8f2e69e0280498e0a0df7b02ad149843b507a416674f34832",
               "cells": [
+                {
+                  "anchor": "tc:body:9f2c03f60a5c591fe05547a55ef262e0",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:5fcb91da5f42a241a6dfa9c1866806b0",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:a37a1a828ad16dca5b41c6a7eac5b439",
                   "gridSpan": 1,
@@ -734,8 +1282,33 @@
             },
             {
               "anchor": "tr:body:bd2f4c2fb41921e0a86e2fda0c5f53d2",
-              "contentHash": "ad115bee56c52f635aa8ba4a20459c53e4465e5e69b879f8ed3993450e573c34",
+              "contentHash": "7498ad8c13620d0b057144b6c6ff3873b8dcfee685bc5c81f0bd921adb8f6796",
               "cells": [
+                {
+                  "anchor": "tc:body:f7596b064b0bd2856ef8b0c60dbc7a9d",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:a82c26a6b7b7f1fe7537cd0d84ad7b9c",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:5f957e9f54f422c7051c1b131400def0",
                   "gridSpan": 1,
@@ -764,8 +1337,33 @@
             },
             {
               "anchor": "tr:body:f7a58f79e7d86802de9711967bea9804",
-              "contentHash": "1e40582368de010a74baed01b74ed40b141d97781acac6969cd4498a9e8eb72b",
+              "contentHash": "97ce23478f9dec693ad312706f2667a6c5ce48cbdccc172976220fe420a85ec2",
               "cells": [
+                {
+                  "anchor": "tc:body:4cf9d6001f847f5fa4ca617beafdc82f",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:9894bee6b90217512ba754300724b738",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
                 {
                   "anchor": "tc:body:a1fc3d2611422d4e779b1522d86d1730",
                   "gridSpan": 1,
@@ -784,6 +1382,61 @@
                         {
                           "kind": "text",
                           "text": "Consent for medical treatment forms and insurance cards.",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "anchor": "tr:body:d30d243adb69610a1c0158bb8a406cdd",
+              "contentHash": "f9d3b8adfd0f0ec1ae9c4f65caf39926931261f853317885ff83f557edbfde3d",
+              "cells": [
+                {
+                  "anchor": "tc:body:e4342bf31733939e9e61a94413a7621b",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "fromRowSdt": true,
+                  "contentHash": "1c468c9b5912e5d1bcad9f94b4e6097c6c239108d0aa9252a158542aa3ecd0a3",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:ca71494f2a5b225410660a6b7c384ac5",
+                      "type": "paragraph",
+                      "contentHash": "45cb70c209f0e7a9d8556e4283e196dafb83871ed3a8a61d9617da7424af106d",
+                      "formatFingerprint": "0fbb0c79c076347935e709d5d1eef11898f1cccb64b051f398ece2165ff219e4",
+                      "format": {
+                        "styleId": "Checkbox"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "\u2610",
+                          "format": {}
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "anchor": "tc:body:07479067821a3a9ff1f3f4ced32d41b7",
+                  "gridSpan": 1,
+                  "vMerge": "None",
+                  "contentHash": "54ae3c697e8229c96817804ef3a56ce2f6726b4cbcba36c99daa52a56e4b057f",
+                  "blocks": [
+                    {
+                      "anchor": "p:body:96694aadf855f0e8766419942543357a",
+                      "type": "paragraph",
+                      "contentHash": "6adaccbf020d64f2b90c90617b87bd520c64a2cec9e89ef3dd0c1b76a4901a6b",
+                      "formatFingerprint": "e0d59df3fef6ab6289f8a716ad6941522983c790a25e03dbb83fdc68b48be541",
+                      "format": {
+                        "styleId": "List"
+                      },
+                      "inlines": [
+                        {
+                          "kind": "text",
+                          "text": "Your travel itinerary.",
                           "format": {}
                         }
                       ]

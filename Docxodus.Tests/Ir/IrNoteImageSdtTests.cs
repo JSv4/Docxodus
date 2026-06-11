@@ -288,4 +288,61 @@ public class IrNoteImageSdtTests
         // opaquely rather than fully unwrapped to a paragraph).
         Assert.NotEmpty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
     }
+
+    // --- row-level SDT cell unwrap (M1.4-T3 content-loss fix) -------------------------------------
+
+    [Fact]
+    public void Read_RowLevelSdt_WrappedCell_PresentInIrAndHashed()
+    {
+        // A w:sdt wrapping a w:tc as a row child: the oracle's table walk (Elements(tr).Elements(tc))
+        // is blind to it, but the IR must NOT lose the cell — it appears in the row, flagged
+        // FromRowSdt, and participates in the row/cell ContentHash.
+        var doc = Read(
+            "<w:tbl><w:tr>" +
+            "<w:tc><w:p><w:r><w:t>direct</w:t></w:r></w:p></w:tc>" +
+            "<w:sdt><w:sdtContent>" +
+            "<w:tc><w:p><w:r><w:t>wrapped</w:t></w:r></w:p></w:tc>" +
+            "</w:sdtContent></w:sdt>" +
+            "</w:tr></w:tbl>");
+
+        var table = Assert.Single(doc.Body.Blocks.OfType<IrTable>());
+        var row = Assert.Single(table.Rows);
+        Assert.Equal(2, row.Cells.Count);
+
+        var direct = row.Cells[0];
+        var wrapped = row.Cells[1];
+        Assert.False(direct.FromRowSdt);
+        Assert.True(wrapped.FromRowSdt);
+        Assert.Equal("wrapped", CellText(wrapped));
+
+        // The SDT-delivered cell is hashed: dropping it would change the row ContentHash, so a row
+        // with only the direct cell must NOT hash equal to this two-cell row.
+        var droppedDoc = Read(
+            "<w:tbl><w:tr>" +
+            "<w:tc><w:p><w:r><w:t>direct</w:t></w:r></w:p></w:tc>" +
+            "</w:tr></w:tbl>");
+        var droppedRow = Assert.Single(droppedDoc.Body.Blocks.OfType<IrTable>().Single().Rows);
+        Assert.NotEqual(droppedRow.ContentHash, row.ContentHash);
+    }
+
+    [Fact]
+    public void Read_RowLevelSdt_NestedWrapper_Unwrapped()
+    {
+        // sdt-in-sdt wrapping a w:tc at row level: still surfaced as a FromRowSdt cell.
+        var doc = Read(
+            "<w:tbl><w:tr>" +
+            "<w:sdt><w:sdtContent><w:sdt><w:sdtContent>" +
+            "<w:tc><w:p><w:r><w:t>deep</w:t></w:r></w:p></w:tc>" +
+            "</w:sdtContent></w:sdt></w:sdtContent></w:sdt>" +
+            "</w:tr></w:tbl>");
+
+        var row = Assert.Single(doc.Body.Blocks.OfType<IrTable>().Single().Rows);
+        var cell = Assert.Single(row.Cells);
+        Assert.True(cell.FromRowSdt);
+        Assert.Equal("deep", CellText(cell));
+    }
+
+    private static string CellText(IrCell cell) =>
+        string.Concat(cell.Blocks.OfType<IrParagraph>()
+            .SelectMany(p => p.Inlines.OfType<IrTextRun>()).Select(r => r.Text));
 }
