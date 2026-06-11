@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Document IR markdown emitter — tables, images, section breaks, settings modes (M1.4 Task 2)** —
+  *internal/experimental.* `IrMarkdownEmitter` now ports the projection's table
+  rendering (simple tables → GFM pipe tables; merges / nesting / over-long cells →
+  the opaque ` ```table rows/cols ` block, via the oracle's exact `CanRenderAsGfm`
+  simplicity predicate and `CellTextForGfm` escaping), in-paragraph section breaks
+  (`{#sec:scope:unid}` + `---` thematic break), the `tbl`/`tr`/`tc`/`sec` anchor-index
+  entries (with `TextPreview` parity), and the `AnchorIdRendering`
+  (FullUnid/Abbreviated/Sequential, same per-(kind,scope) `AnchorIdMap` construction
+  order) and `EmptyParagraphs` settings modes. Images and unmodeled block elements
+  project to nothing, matching the oracle (which emits no `w:drawing`/opaque-block
+  markup). Two additive IR extensions back the port: `IrInlineImage.Unid` (the source
+  `w:drawing`'s `pt:Unid`, equality-neutral) and `IrParagraph.InlineSectionBreakAnchor`
+  (the in-pPr `w:sectPr`'s anchor, captured by the reader so the emitter/index can
+  reproduce the section transition the body walk's pPr skip otherwise hides). Corpus
+  equivalence rises from 205 to 344/668 byte-equal; emitter still never throws.
 - **Document IR markdown emitter scaffold + equivalence harness (M1.4 Task 1)** —
   *internal/experimental.* New `IrMarkdownEmitter.Emit(IrDocument, settings)`
   reimplements the markdown projection as an IR consumer (the shipped

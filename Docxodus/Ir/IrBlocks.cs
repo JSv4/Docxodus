@@ -36,6 +36,19 @@ internal sealed record IrParagraph : IrBlock
     public required IrParaFormat Format { get; init; }
     public IrListInfo? List { get; init; }
     public required IrNodeList<IrInline> Inlines { get; init; }
+
+    /// <summary>
+    /// When this paragraph's `w:pPr` carries a `w:sectPr` (an in-document section transition), the
+    /// anchor of that section break (its own `pt:Unid`, kind `sec`). Null for the common case of a
+    /// paragraph with no section transition. Captured by the reader so the markdown projection can
+    /// emit the `{#sec:…}` + thematic-break that Word renders at the section boundary, and so the
+    /// anchor index carries the `sec` entry — both of which the oracle derives from the same in-pPr
+    /// sectPr. The trailing top-level body `w:sectPr` (last-section metadata, not a transition) is a
+    /// standalone <see cref="IrSectionBreak"/> block instead, never this field. The paragraph's
+    /// content/format hashes are unaffected (the pPr walk already excludes the sectPr); two reads of
+    /// the same document yield the same deterministic sectPr Unid here, so determinism is preserved.
+    /// </summary>
+    public IrAnchor? InlineSectionBreakAnchor { get; init; }
 }
 
 /// <summary>A table: its rows plus a digest of the unmodeled `w:tblPr`/`w:tblGrid` properties.</summary>

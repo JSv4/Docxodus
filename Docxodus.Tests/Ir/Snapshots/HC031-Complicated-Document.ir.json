@@ -1755,6 +1755,7 @@
           "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "formatFingerprint": "9472813d5f7c6d8fe9e69daa7dc97c0ed1184dfc8f9db7f23e3a6e1774f0bf16",
           "format": {},
+          "inlineSectionBreak": "sec:body:30a9c50899948316c5a51ea7ce004618",
           "inlines": []
         },
         {
@@ -1777,6 +1778,7 @@
           "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "formatFingerprint": "72eaef3febe46ce3e48e86333ac362eeedbc0985637ed46c84e0cad9ee92f76e",
           "format": {},
+          "inlineSectionBreak": "sec:body:69bb975fdaf8cf4b3d1b8d076a5c3a23",
           "inlines": []
         },
         {
@@ -1785,6 +1787,7 @@
           "contentHash": "b8b57b3aa8c989f5adb0de0d480586d3f28be2b32a6f3533fbee983a9291905b",
           "formatFingerprint": "e1f502b9431cf440ff00836ddb2824f508098206b6d7c573af1a0fd94e3c60fb",
           "format": {},
+          "inlineSectionBreak": "sec:body:35f9cad328bb029bde63e7f4a8a3595b",
           "inlines": [
             {
               "kind": "text",

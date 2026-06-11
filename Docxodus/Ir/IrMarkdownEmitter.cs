@@ -52,89 +52,178 @@ internal static class IrMarkdownEmitter
         ArgumentNullException.ThrowIfNull(ir);
         ArgumentNullException.ThrowIfNull(settings);
 
-        var index = BuildAnchorIndex(ir, settings);
-        var markdown = EmitMarkdown(ir, settings);
+        var (index, renderMap) = BuildAnchorIndex(ir, settings);
+        var markdown = EmitMarkdown(ir, settings, renderMap);
         return new IrMarkdownResult { Markdown = markdown, AnchorIndex = index };
     }
 
     // ------------------------------------------------------------------
-    // Anchor index (Task 1: body scope only)
+    // Anchor index (body scope; mirrors the oracle's BuildAnchorIndex order + AnchorIdMap)
     // ------------------------------------------------------------------
 
-    private static IReadOnlyDictionary<string, AnchorTarget> BuildAnchorIndex(
-        IrDocument ir, WmlToMarkdownConverterSettings settings)
+    private static (IReadOnlyDictionary<string, AnchorTarget> Index, AnchorIdMap RenderMap)
+        BuildAnchorIndex(IrDocument ir, WmlToMarkdownConverterSettings settings)
     {
         var index = new Dictionary<string, AnchorTarget>(StringComparer.Ordinal);
 
-        // Body scope only for Task 1. The body part URI is the provenance pin on the first block's
-        // Source; fall back to scanning Sources for the main document part.
+        // Body scope only (multipart scopes land in T3). The body part URI is the provenance pin on
+        // the first block's Source; fall back to scanning Sources for the main document part.
         var partUri = ResolveBodyPartUri(ir);
 
-        foreach (var block in WalkBlocksForIndex(ir.Body.Blocks))
+        foreach (var (anchor, preview) in WalkAnchorsForIndex(ir.Body.Blocks, settings))
         {
-            var anchor = AnchorOf(block);
-            if (anchor is null) continue;
-
-            // Suppress-mode parity: drop empty paragraphs (no visible text) from the index too.
-            // Task 1 is default settings (AnchorOnly) so this branch is normally inert, but mirror
-            // the oracle's BuildAnchorIndex so the field is honored when Task 2 turns it on.
-            if (settings.EmptyParagraphs == EmptyParagraphMode.Suppress
-                && block is IrParagraph p
-                && !ParagraphHasVisibleText(p))
-                continue;
-
-            var id = anchor.Value.ToString();
+            var id = anchor.ToString();
             if (index.ContainsKey(id)) continue;
 
-            var publicAnchor = ToPublicAnchor(anchor.Value);
             index[id] = new AnchorTarget
             {
-                Anchor = publicAnchor,
+                Anchor = ToPublicAnchor(anchor),
                 PartUri = partUri,
-                Unid = anchor.Value.Unid,
-                TextPreview = ComputeTextPreview(block),
+                Unid = anchor.Unid,
+                TextPreview = preview,
                 // AutoNumberPrefix: the oracle resolves this via ListNumberResolver's counter walk.
-                // TODO(M1.4-T3): port the counter walk onto IR list facts. For Task 1 we leave it
-                // null and EXCLUDE it from must-pass index comparison (documented in the harness).
+                // TODO(M1.4-T3): port the counter walk onto IR list facts. For now leave it null and
+                // EXCLUDE it from must-pass index comparison (documented in the harness).
                 AutoNumberPrefix = null,
             };
         }
 
-        return index;
+        // Build the AnchorIdMap. Mirror the oracle exactly: the map is constructed by iterating
+        // index.Values in INSERTION order (which the walk above keeps identical to the oracle's
+        // DescendantsAndSelf order), so Abbreviated prefixes and Sequential counters match byte-for-byte.
+        var renderMap = BuildAnchorIdMap(index, settings);
+
+        // Dual-key the index with the rendered id substituted (oracle parity).
+        if (settings.AnchorIdRendering != AnchorIdRendering.FullUnid)
+        {
+            var aliases = new Dictionary<string, AnchorTarget>(StringComparer.Ordinal);
+            foreach (var (_, target) in index)
+            {
+                var rendered = renderMap.Render(target.Unid);
+                if (rendered == target.Unid) continue;
+                var aliasKey = $"{target.Anchor.Kind}:{target.Anchor.Scope}:{rendered}";
+                aliases[aliasKey] = target;
+            }
+            foreach (var (key, target) in aliases)
+                index[key] = target;
+        }
+
+        return (index, renderMap);
     }
 
-    /// <summary>Block-tree walk matching the oracle's DescendantsAndSelf order for index purposes:
-    /// each block, and (for tables) the table then its rows then cells then cell blocks. Task 1 only
-    /// asserts parity on paragraph anchors, but we walk tables so the index is structurally complete
-    /// once Task 2 lands.</summary>
-    private static IEnumerable<object> WalkBlocksForIndex(IrNodeList<IrBlock> blocks)
+    /// <summary>
+    /// Per-projection map from full Unid → rendered id, ported from the oracle's
+    /// <c>WmlToMarkdownConverter.AnchorIdMap</c>. <see cref="Render"/> returns the full Unid unchanged
+    /// for <see cref="AnchorIdRendering.FullUnid"/> or an unknown Unid (defensive fallback).
+    /// </summary>
+    internal sealed class AnchorIdMap
     {
-        foreach (var b in blocks)
+        private readonly Dictionary<string, string> _map = new(StringComparer.Ordinal);
+        public string Render(string fullUnid) => _map.TryGetValue(fullUnid, out var r) ? r : fullUnid;
+        internal void Set(string fullUnid, string renderedUnid) => _map[fullUnid] = renderedUnid;
+    }
+
+    /// <summary>Port of the oracle's AnchorIdMap construction: Abbreviated = shortest unique
+    /// per-(kind,scope) prefix with a 4-char floor; Sequential = 1-based per-(kind,scope) counter in
+    /// insertion (document) order; FullUnid = empty map (Render is identity).</summary>
+    private static AnchorIdMap BuildAnchorIdMap(
+        Dictionary<string, AnchorTarget> index, WmlToMarkdownConverterSettings settings)
+    {
+        var renderMap = new AnchorIdMap();
+        if (settings.AnchorIdRendering == AnchorIdRendering.Abbreviated)
         {
-            yield return b;
-            if (b is IrTable t)
+            foreach (var bucket in index.Values.GroupBy(t => (t.Anchor.Kind, t.Anchor.Scope)))
             {
-                foreach (var row in t.Rows)
+                var members = bucket.ToList();
+                if (members.Count == 0) continue;
+                int n = 4;
+                while (true)
                 {
-                    yield return row;
-                    foreach (var cell in row.Cells)
+                    var prefixes = new HashSet<string>(StringComparer.Ordinal);
+                    bool unique = true;
+                    foreach (var t in members)
                     {
-                        yield return cell;
-                        foreach (var inner in WalkBlocksForIndex(cell.Blocks))
-                            yield return inner;
+                        var prefix = t.Unid.Length >= n ? t.Unid.Substring(0, n) : t.Unid;
+                        if (!prefixes.Add(prefix)) { unique = false; break; }
                     }
+                    if (unique) break;
+                    n++;
+                    if (n >= 32) break;
+                }
+                foreach (var t in members)
+                {
+                    var prefix = t.Unid.Length >= n ? t.Unid.Substring(0, n) : t.Unid;
+                    renderMap.Set(t.Unid, prefix);
                 }
             }
         }
+        else if (settings.AnchorIdRendering == AnchorIdRendering.Sequential)
+        {
+            var counters = new Dictionary<(string Kind, string Scope), int>();
+            foreach (var t in index.Values)
+            {
+                var bucket = (t.Anchor.Kind, t.Anchor.Scope);
+                if (!counters.TryGetValue(bucket, out var num)) num = 0;
+                num++;
+                counters[bucket] = num;
+                renderMap.Set(t.Unid, num.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+        return renderMap;
     }
 
-    private static IrAnchor? AnchorOf(object node) => node switch
+    /// <summary>
+    /// Walk the body blocks yielding each addressable anchor with its TextPreview, in the oracle's
+    /// <c>DescendantsAndSelf</c> order: a paragraph (then its in-pPr <c>sec</c> if any), a table then
+    /// its rows then cells then cell blocks, a standalone section break, an opaque block. Empty
+    /// preview for sectPr/opaque (no <c>w:t</c> descendants), mirroring the oracle. Suppress-mode
+    /// drops empty paragraphs from the index too.
+    /// </summary>
+    private static IEnumerable<(IrAnchor Anchor, string Preview)> WalkAnchorsForIndex(
+        IrNodeList<IrBlock> blocks, WmlToMarkdownConverterSettings settings)
     {
-        IrBlock b => b.Anchor,
-        IrRow r => r.Anchor,
-        IrCell c => c.Anchor,
-        _ => null,
-    };
+        foreach (var b in blocks)
+        {
+            switch (b)
+            {
+                case IrParagraph p:
+                    // Suppress-mode: drop empty paragraphs from the index (oracle parity).
+                    if (settings.EmptyParagraphs == EmptyParagraphMode.Suppress
+                        && !ParagraphHasVisibleText(p))
+                    {
+                        // The in-pPr sectPr is metadata, not content — it still appears in the index.
+                        if (p.InlineSectionBreakAnchor is { } supSec)
+                            yield return (supSec, string.Empty);
+                        break;
+                    }
+                    yield return (p.Anchor, ComputeTextPreview(p));
+                    if (p.InlineSectionBreakAnchor is { } sec)
+                        yield return (sec, string.Empty);
+                    break;
+                case IrTable t:
+                    yield return (t.Anchor, ComputeTextPreview(t));
+                    foreach (var row in t.Rows)
+                    {
+                        yield return (row.Anchor, ComputeTextPreview(row));
+                        foreach (var cell in row.Cells)
+                        {
+                            yield return (cell.Anchor, ComputeTextPreview(cell));
+                            foreach (var inner in WalkAnchorsForIndex(cell.Blocks, settings))
+                                yield return inner;
+                        }
+                    }
+                    break;
+                case IrSectionBreak s:
+                    // Trailing/standalone body sectPr: indexed (empty preview), not rendered.
+                    yield return (s.Anchor, string.Empty);
+                    break;
+                case IrOpaqueBlock o:
+                    // KindFor returns null for unmodeled block elements, so the oracle does NOT index
+                    // them. Match that: emit no index entry for opaque blocks.
+                    break;
+            }
+        }
+    }
 
     private static Anchor ToPublicAnchor(IrAnchor a) =>
         new(a.ToString(), IrAnchor.KindToken(a.Kind), a.Scope, a.Unid);
@@ -225,13 +314,14 @@ internal static class IrMarkdownEmitter
     }
 
     // ------------------------------------------------------------------
-    // Markdown emission (Task 1: body scope only)
+    // Markdown emission (body scope; multipart scopes land in T3)
     // ------------------------------------------------------------------
 
-    private static string EmitMarkdown(IrDocument ir, WmlToMarkdownConverterSettings settings)
+    private static string EmitMarkdown(
+        IrDocument ir, WmlToMarkdownConverterSettings settings, AnchorIdMap renderMap)
     {
         var sb = new StringBuilder();
-        var ctx = new EmitCtx { Settings = settings, Scope = "body" };
+        var ctx = new EmitCtx { Settings = settings, Scope = "body", AnchorIdMap = renderMap };
 
         // The body scope opens with the fixed, non-addressable "# Document" marker, then a blank line.
         sb.AppendLine("# Document");
@@ -239,9 +329,9 @@ internal static class IrMarkdownEmitter
 
         EmitBlocks(ir.Body.Blocks, sb, ctx);
 
-        // NOTE(Task 2/3): multipart scopes (headers/footers/notes/comments) and the scope dividers
-        // are not emitted here yet. On the must-pass body-simple fixtures the oracle's other scopes
-        // are empty/suppressed so this still reaches byte-equality; richer fixtures are off-list.
+        // NOTE(T3): multipart scopes (headers/footers/notes/comments) and the scope dividers are not
+        // emitted here yet. On the must-pass body fixtures the oracle's other scopes are
+        // empty/suppressed so this still reaches byte-equality; richer fixtures are off-list.
         return sb.ToString();
     }
 
@@ -249,6 +339,7 @@ internal static class IrMarkdownEmitter
     {
         public required WmlToMarkdownConverterSettings Settings { get; init; }
         public required string Scope { get; init; }
+        public required AnchorIdMap AnchorIdMap { get; init; }
     }
 
     private static void EmitBlocks(IrNodeList<IrBlock> blocks, StringBuilder sb, EmitCtx ctx)
@@ -265,13 +356,14 @@ internal static class IrMarkdownEmitter
                 if (p.Anchor.Kind == IrAnchorKind.Li && !nextIsListItem)
                     sb.AppendLine();
             }
-            else if (b is IrTable)
+            else if (b is IrTable t)
             {
-                // TODO(M1.4-T2): GFM/opaque table rendering. Clearly-wrong placeholder for now.
-                sb.AppendLine("<!-- IR-EMIT-UNPORTED: table -->");
-                sb.AppendLine();
+                EmitTable(t, sb, ctx);
             }
-            // IrSectionBreak (top-level): TODO(M1.4-T2) section breaks. IrOpaqueBlock: TODO(M1.4-T2).
+            // IrSectionBreak (standalone/trailing body sectPr): the oracle's EmitBlocks treats a
+            // top-level w:sectPr as a no-op (it is last-section metadata, not a transition). Match it.
+            // IrOpaqueBlock: the oracle's EmitBlocks only dispatches w:p/w:tbl/w:sectPr — any other
+            // top-level element is silently skipped. Match that too (no markdown, no index entry).
         }
     }
 
@@ -290,14 +382,14 @@ internal static class IrMarkdownEmitter
             EmitInlineRuns(p, sb, ctx);
             sb.AppendLine();
             sb.AppendLine();
-            // TODO(M1.4-T2): EmitInlineSectionBreak.
+            EmitInlineSectionBreak(p, sb, ctx);
             return;
         }
 
         if (p.Anchor.Kind == IrAnchorKind.Li)
         {
             EmitListItem(p, sb, ctx);
-            // TODO(M1.4-T2): EmitInlineSectionBreak.
+            EmitInlineSectionBreak(p, sb, ctx);
             return;
         }
 
@@ -305,7 +397,8 @@ internal static class IrMarkdownEmitter
         var mode = ctx.Settings.EmptyParagraphs;
         if (mode == EmptyParagraphMode.Suppress && !ParagraphHasVisibleText(p))
         {
-            // TODO(M1.4-T2): EmitInlineSectionBreak even when the spacer is dropped.
+            // The spacer is dropped, but a section transition is metadata, not content — still emit it.
+            EmitInlineSectionBreak(p, sb, ctx);
             return;
         }
 
@@ -323,7 +416,24 @@ internal static class IrMarkdownEmitter
         }
         sb.AppendLine();
         sb.AppendLine();
-        // TODO(M1.4-T2): EmitInlineSectionBreak.
+        EmitInlineSectionBreak(p, sb, ctx);
+    }
+
+    /// <summary>
+    /// Mirror the oracle's <c>EmitInlineSectionBreak</c>: when the paragraph carries an in-pPr
+    /// <c>w:sectPr</c> (captured by the reader as <see cref="IrParagraph.InlineSectionBreakAnchor"/>),
+    /// emit the section anchor token (unless AnchorMode==None) followed by a <c>---</c> thematic break.
+    /// </summary>
+    private static void EmitInlineSectionBreak(IrParagraph p, StringBuilder sb, EmitCtx ctx)
+    {
+        if (p.InlineSectionBreakAnchor is not { } sec) return;
+        if (ctx.Settings.AnchorMode != AnchorRenderMode.None)
+        {
+            var rendered = ctx.AnchorIdMap.Render(sec.Unid);
+            sb.Append("{#sec:").Append(ctx.Scope).Append(':').Append(rendered).AppendLine("}");
+        }
+        sb.AppendLine("---");
+        sb.AppendLine();
     }
 
     private static void EmitListItem(IrParagraph p, StringBuilder sb, EmitCtx ctx)
@@ -560,11 +670,104 @@ internal static class IrMarkdownEmitter
         return int.TryParse(digits, out var n) && n >= 1 && n <= 9 ? n : 1;
     }
 
+    /// <summary>Build the block anchor prefix (with trailing space), substituting the rendered Unid
+    /// per the AnchorIdMap, or empty string when AnchorMode==None. Mirrors the oracle's
+    /// <c>AnchorPrefix</c> (which renders <c>{#kind:scope:rendered}</c>).</summary>
     private static string AnchorPrefix(IrAnchor anchor, EmitCtx ctx)
     {
         if (ctx.Settings.AnchorMode == AnchorRenderMode.None) return string.Empty;
-        // Default settings => FullUnid rendering: the rendered token uses the full Unid verbatim.
-        // TODO(M1.4-T2): Abbreviated/Sequential rendering via an AnchorIdMap equivalent.
-        return $"{{#{anchor.ToString()}}} ";
+        var rendered = ctx.AnchorIdMap.Render(anchor.Unid);
+        return $"{{#{IrAnchor.KindToken(anchor.Kind)}:{anchor.Scope}:{rendered}}} ";
+    }
+
+    // ------------------------------------------------------------------
+    // Tables — ported from the oracle's EmitTable / CanRenderAsGfm / EmitGfmTable /
+    // EmitOpaqueTable / CellTextForGfm / CellTextRaw. Simple tables → GFM pipe tables;
+    // merges/nesting/over-long cells → an opaque ```table rows/cols summary.
+    // ------------------------------------------------------------------
+
+    private static void EmitTable(IrTable tbl, StringBuilder sb, EmitCtx ctx)
+    {
+        // The oracle takes AnchorPrefix(tbl).TrimEnd() — the {#tbl:…} token without the trailing space.
+        var anchor = AnchorPrefix(tbl.Anchor, ctx).TrimEnd();
+        if (ctx.Settings.TableMode == TableRenderMode.AlwaysOpaque || !CanRenderAsGfm(tbl, ctx))
+        {
+            EmitOpaqueTable(tbl, anchor, sb);
+            return;
+        }
+        EmitGfmTable(tbl, anchor, sb, ctx);
+    }
+
+    /// <summary>
+    /// Port of the oracle's <c>CanRenderAsGfm</c> simplicity predicate: any gridSpan&gt;1 or any
+    /// vMerge disqualifies; a nested table in any cell disqualifies; any first-level cell whose raw
+    /// text exceeds <see cref="WmlToMarkdownConverterSettings.TableInlineCellMax"/> disqualifies.
+    /// <see cref="TableRenderMode.AlwaysGfm"/> bypasses all checks.
+    /// </summary>
+    private static bool CanRenderAsGfm(IrTable tbl, EmitCtx ctx)
+    {
+        if (ctx.Settings.TableMode == TableRenderMode.AlwaysGfm) return true;
+
+        var max = ctx.Settings.TableInlineCellMax;
+        foreach (var row in tbl.Rows)
+        {
+            foreach (var cell in row.Cells)
+            {
+                // Merged cells: gridSpan>1 (horizontal) or any vMerge (vertical) → opaque.
+                if (cell.GridSpan > 1) return false;
+                if (cell.VMerge != IrVMerge.None) return false;
+                // Nested table directly inside a cell → opaque.
+                if (cell.Blocks.Any(b => b is IrTable)) return false;
+                // Per-cell raw-text length cap.
+                if (CellTextRaw(cell).Length > max) return false;
+            }
+        }
+        return true;
+    }
+
+    private static void EmitGfmTable(IrTable tbl, string anchor, StringBuilder sb, EmitCtx ctx)
+    {
+        if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLine(); }
+        var rows = tbl.Rows.ToList();
+        if (rows.Count == 0) return;
+
+        var headerCells = rows[0].Cells.Select(CellTextForGfm).ToList();
+        sb.Append("| ").Append(string.Join(" | ", headerCells)).AppendLine(" |");
+        sb.Append('|').Append(string.Concat(Enumerable.Repeat(" --- |", headerCells.Count))).AppendLine();
+        foreach (var r in rows.Skip(1))
+        {
+            var cells = r.Cells.Select(CellTextForGfm);
+            sb.Append("| ").Append(string.Join(" | ", cells)).AppendLine(" |");
+        }
+        sb.AppendLine();
+    }
+
+    private static void EmitOpaqueTable(IrTable tbl, string anchor, StringBuilder sb)
+    {
+        var rows = tbl.Rows.Count;
+        var cols = tbl.Rows.FirstOrDefault()?.Cells.Count ?? 0;
+        if (anchor.Length > 0) { sb.Append(anchor); sb.AppendLine(); }
+        sb.AppendLine("```table");
+        sb.Append("rows: ").Append(rows).AppendLine();
+        sb.Append("cols: ").Append(cols).AppendLine();
+        sb.AppendLine("```");
+        sb.AppendLine();
+    }
+
+    /// <summary>Raw flat cell text — the <c>w:t</c> concat, mirroring the oracle's <c>CellTextRaw</c>
+    /// (which is <c>Descendants(W.t)</c>). In the IR that is the cell's flat inline text.</summary>
+    private static string CellTextRaw(IrCell cell)
+    {
+        var sb = new StringBuilder();
+        foreach (var b in cell.Blocks) AppendFlatText(b, sb);
+        return sb.ToString();
+    }
+
+    /// <summary>Port of the oracle's <c>CellTextForGfm</c>: collapse newlines to spaces, escape pipes,
+    /// trim, and substitute a single space for an empty cell so the pipe layout stays well-formed.</summary>
+    private static string CellTextForGfm(IrCell cell)
+    {
+        var raw = CellTextRaw(cell).Replace('\n', ' ').Replace('\r', ' ').Replace("|", @"\|").Trim();
+        return raw.Length == 0 ? " " : raw;
     }
 }

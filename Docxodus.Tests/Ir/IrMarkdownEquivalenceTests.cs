@@ -53,6 +53,14 @@ public class IrMarkdownEquivalenceTests
         "HC024-Tabs-01.docx",      // w:tab → 4 spaces
         "HC039-Bold.docx",         // **bold** delimiter
         "HC035-Strike-Through.docx", // ~~strike~~ delimiter
+        // M1.4-T2: bulleted lists (review follow-up), tables, and images.
+        "HC010-Test-05.docx",      // bulleted list items (·-format) → "-" markers + 2-space indent
+        "CA005-Table.docx",        // simple table → GFM pipe table + tbl/tr/tc index entries
+        "CA014-Complex-Table.docx", // 8x9 table over the cell cap → opaque ```table rows/cols block
+        "HC042-Image-Png.docx",    // inline image: oracle emits no image markup; IR matches (no img line)
+        // A clean body-only in-pPr sectPr corpus fixture does not exist (every TestFiles sectPr
+        // fixture is also multipart or revision-tainted — T3 territory), so the {#sec:…} + thematic
+        // break is pinned programmatically in IrMarkdownRuleTests.Rule_InlineSectionBreak instead.
     };
 
     // --- corpus report (informational; asserts only the must-pass list + totality) ---------------

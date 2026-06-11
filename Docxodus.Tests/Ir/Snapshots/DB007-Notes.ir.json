@@ -87,7 +87,8 @@
               "imageBytesHash": "cf08418a918d1ff7fd4fa6e7fdf4db044e2801b8ec6ee37530ed6d953d5033f8",
               "widthEmu": 3019425,
               "heightEmu": 1625522,
-              "altText": "Picture 4"
+              "altText": "Picture 4",
+              "unid": "f2c60824fcac8558c14a108461e79481"
             }
           ]
         },
@@ -247,7 +248,8 @@
               "imageBytesHash": "f2a9310b0715ed7d3cab2386cef9af09e4ff955efa436901f0405f06f2426d8e",
               "widthEmu": 899160,
               "heightEmu": 2247900,
-              "altText": "Picture 5"
+              "altText": "Picture 5",
+              "unid": "8ea7ee8b18e49586bdf4862ac21a366b"
             }
           ]
         },

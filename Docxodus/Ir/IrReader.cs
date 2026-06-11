@@ -469,12 +469,22 @@ internal static class IrReader
         var contentHash = ComputeParagraphContentHash(processed);
         var formatFingerprint = IrHasher.FingerprintBlock(paraFormat, RunFormatsInOrder(processed));
 
+        // An in-pPr w:sectPr marks an in-document section transition (the markdown projection emits a
+        // {#sec:…} + thematic break after the paragraph and indexes the sectPr). Capture its anchor so
+        // the emitter and anchor index can reproduce that without re-walking the skipped pPr. The
+        // trailing top-level body sectPr is a standalone IrSectionBreak block, handled elsewhere.
+        var inlineSectPr = pPr?.Element(W + "sectPr");
+        IrAnchor? inlineSectAnchor = inlineSectPr is null
+            ? null
+            : AnchorFor(IrAnchorKind.Sec, inlineSectPr, ctx);
+
         return new IrParagraph
         {
             Anchor = anchor,
             Format = paraFormat,
             List = listInfo,
             Inlines = IrNodeList.From(processed),
+            InlineSectionBreakAnchor = inlineSectAnchor,
             ContentHash = contentHash,
             FormatFingerprint = formatFingerprint,
             Source = ctx.Provenance(p),
@@ -899,7 +909,15 @@ internal static class IrReader
                 string? altText = (string?)docPr?.Attribute("descr")
                     ?? (string?)docPr?.Attribute("name");
 
-                sink.Add(new IrInlineImage(image.PartUri, image.BytesHash, cx, cy, altText));
+                // The w:drawing's pt:Unid is the IR's img-anchor identity (M1.4-T2). Deterministic
+                // Unids were assigned over the whole part before the walk, so this is present and
+                // stable for any drawing in the document. Equality-neutral on IrInlineImage.
+                var drawingUnid = (string?)drawing.Attribute(PtOpenXml.Unid);
+
+                sink.Add(new IrInlineImage(image.PartUri, image.BytesHash, cx, cy, altText)
+                {
+                    Unid = drawingUnid,
+                });
                 return;
             }
         }

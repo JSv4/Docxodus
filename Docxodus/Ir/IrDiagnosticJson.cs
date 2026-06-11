@@ -220,6 +220,9 @@ internal static class IrDiagnosticJson
         writer.WritePropertyName("format");
         WriteParaFormat(writer, p.Format);
 
+        if (p.InlineSectionBreakAnchor is { } sectAnchor)
+            writer.WriteString("inlineSectionBreak", sectAnchor.ToString());
+
         writer.WriteStartArray("inlines");
         foreach (var inline in p.Inlines)
             WriteInline(writer, inline);
@@ -305,6 +308,7 @@ internal static class IrDiagnosticJson
                 writer.WriteNumber("widthEmu", img.WidthEmu);
                 writer.WriteNumber("heightEmu", img.HeightEmu);
                 if (img.AltText is { } altText) writer.WriteString("altText", altText);
+                if (img.Unid is { } imgUnid) writer.WriteString("unid", imgUnid);
                 break;
             case IrOpaqueInline o:
                 writer.WriteString("kind", "opaque");

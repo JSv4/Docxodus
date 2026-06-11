@@ -41,8 +41,31 @@ internal sealed record IrFieldRun(string Instruction, IrNodeList<IrInline> Cache
 /// <summary>A footnote/endnote reference (`w:footnoteReference`/`w:endnoteReference`).</summary>
 internal sealed record IrNoteRef(IrNoteKind Kind, string NoteId) : IrInline;
 
-/// <summary>An inline image: the image part, a hash of its bytes, EMU dimensions, and alt text.</summary>
-internal sealed record IrInlineImage(Uri PartUri, IrHash ImageBytesHash, long WidthEmu, long HeightEmu, string? AltText) : IrInline;
+/// <summary>
+/// An inline image: the image part, a hash of its bytes, EMU dimensions, alt text, and the
+/// addressable <see cref="Unid"/> of the source <c>w:drawing</c> (its <c>pt:Unid</c>, captured by the
+/// reader; null when the drawing carried none). The Unid is the IR's <c>img</c>-anchor identity for
+/// the markdown projection (M1.4-T2). It is equality-neutral metadata: two images with identical
+/// bytes/extent/alt but different Unids are still the same VALUE for diff/hash purposes, so it is
+/// excluded from record equality (the reader feeds image equality off bytes/extent/alt, not position).
+/// </summary>
+internal sealed record IrInlineImage(Uri PartUri, IrHash ImageBytesHash, long WidthEmu, long HeightEmu, string? AltText) : IrInline
+{
+    /// <summary>The source <c>w:drawing</c>'s <c>pt:Unid</c>, or null when absent. Equality-neutral
+    /// (see type remarks): does not participate in the record's structural equality.</summary>
+    public string? Unid { get; init; }
+
+    public bool Equals(IrInlineImage? other) =>
+        other is not null
+        && PartUri == other.PartUri
+        && ImageBytesHash == other.ImageBytesHash
+        && WidthEmu == other.WidthEmu
+        && HeightEmu == other.HeightEmu
+        && AltText == other.AltText;
+
+    public override int GetHashCode() =>
+        HashCode.Combine(PartUri, ImageBytesHash, WidthEmu, HeightEmu, AltText);
+}
 
 /// <summary>
 /// An unmodeled inline element preserved opaquely: its element name plus the canonical hash of
