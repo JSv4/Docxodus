@@ -132,6 +132,58 @@ internal static class IrTestDocuments
     }
 
     /// <summary>
+    /// A document whose <c>w:body</c>, <c>w:styles</c>, and <c>w:numbering</c> inner XML are each
+    /// supplied directly, plus an optional theme. A null <paramref name="numberingInnerXml"/> omits
+    /// the <see cref="NumberingDefinitionsPart"/> entirely; a null
+    /// <paramref name="themeFontSchemeInnerXml"/> omits the <see cref="ThemePart"/>. When a theme is
+    /// supplied, <paramref name="themeFontSchemeInnerXml"/> is the inner XML of <c>a:fontScheme</c>
+    /// (e.g. <c>&lt;a:majorFont&gt;&lt;a:latin typeface="Calibri Light"/&gt;&lt;/a:majorFont&gt;…</c>).
+    /// </summary>
+    internal static WmlDocument FromParts(
+        string bodyInnerXml,
+        string stylesInnerXml = "",
+        string? numberingInnerXml = null,
+        string? themeFontSchemeInnerXml = null)
+    {
+        const string A = "http://schemas.openxmlformats.org/drawingml/2006/main";
+
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            var stylesPart = main.AddNewPart<StyleDefinitionsPart>();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            WritePartXml(stylesPart, $"<w:styles xmlns:w=\"{W}\">{stylesInnerXml}</w:styles>");
+
+            if (numberingInnerXml is not null)
+            {
+                var numberingPart = main.AddNewPart<NumberingDefinitionsPart>();
+                WritePartXml(numberingPart, $"<w:numbering xmlns:w=\"{W}\">{numberingInnerXml}</w:numbering>");
+            }
+
+            if (themeFontSchemeInnerXml is not null)
+            {
+                var themePart = main.AddNewPart<ThemePart>();
+                WritePartXml(themePart,
+                    $"<a:theme xmlns:a=\"{A}\" name=\"t\"><a:themeElements>" +
+                    $"<a:fontScheme name=\"fs\">{themeFontSchemeInnerXml}</a:fontScheme>" +
+                    "</a:themeElements></a:theme>");
+            }
+
+            WritePartXml(main, $"<w:document xmlns:w=\"{W}\"><w:body>{bodyInnerXml}</w:body></w:document>");
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
+
+    private static void WritePartXml(OpenXmlPart part, string xml)
+    {
+        using var stream = part.GetStream(FileMode.Create, FileAccess.Write);
+        using var writer = new StreamWriter(stream);
+        writer.Write(xml);
+    }
+
+    /// <summary>
     /// A document whose <c>w:body</c> inner XML is <paramref name="bodyInnerXml"/>, with one or more
     /// <see cref="ImagePart"/>s added to the main document part. Each entry in
     /// <paramref name="imageParts"/> maps a relationship id (the <c>r:embed</c> an <c>a:blip</c>

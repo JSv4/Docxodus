@@ -119,9 +119,9 @@ internal static class IrReader
             Footnotes = IrNoteStore.Empty,
             Endnotes = IrNoteStore.Empty,
             Comments = IrCommentStore.Empty,
-            Styles = IrStyleRegistry.Empty,
-            Numbering = IrNumberingRegistry.Empty,
-            ThemeFonts = IrThemeFonts.Empty,
+            Styles = BuildStyleRegistry(main),
+            Numbering = BuildNumberingRegistry(main),
+            ThemeFonts = BuildThemeFonts(main),
             AnchorIndex = anchorIndex,
             Sources = sources,
         };
@@ -1217,6 +1217,236 @@ internal static class IrReader
             FormatFingerprint = EmptyUnmodeledDigest,
             Source = ctx.Provenance(el),
         };
+
+    // --- registries (styles / numbering / theme) --------------------------
+
+    // The set of exceptions tolerated while building any registry — the same narrow band
+    // ResolveImagePart catches. A malformed/missing part or a malformed individual entry is
+    // skipped rather than aborting the read; systemic faults (OOM etc.) still escape. Totality
+    // over the corpus depends on this: registry building now runs for every file.
+    private static bool IsTolerableRegistryException(Exception e) =>
+        e is KeyNotFoundException or ArgumentException or System.IO.IOException
+            or InvalidOperationException or NotSupportedException or System.Xml.XmlException;
+
+    /// <summary>
+    /// Build the <see cref="IrStyleRegistry"/> from the main part's <c>StyleDefinitionsPart</c>.
+    /// Each <c>w:style</c> contributes one <see cref="IrStyle"/> (first wins on a duplicate
+    /// <c>@w:styleId</c>; a style with no id is skipped as malformed). The default paragraph style
+    /// id is the first <c>w:style type="paragraph" w:default="1"</c>. Document defaults come from
+    /// <c>w:docDefaults</c>. A missing/malformed part tolerates to <see cref="IrStyleRegistry.Empty"/>.
+    /// </summary>
+    private static IrStyleRegistry BuildStyleRegistry(MainDocumentPart main)
+    {
+        try
+        {
+            var stylesPart = main.StyleDefinitionsPart;
+            if (stylesPart is null)
+                return IrStyleRegistry.Empty;
+
+            var root = stylesPart.GetXDocument().Root;
+            if (root is null)
+                return IrStyleRegistry.Empty;
+
+            var styles = new Dictionary<string, IrStyle>(StringComparer.Ordinal);
+            string? defaultParagraphStyleId = null;
+
+            foreach (var styleEl in root.Elements(W + "style"))
+            {
+                IrStyle? style;
+                try
+                {
+                    var id = (string?)styleEl.Attribute(W + "styleId");
+                    if (id is null)
+                        continue; // malformed: a style without an id is unreferenceable, skip it.
+
+                    var type = (string?)styleEl.Attribute(W + "type") ?? "paragraph";
+                    // @w:default is an OOXML toggle attribute (absent → false; "1"/"true"/"on" →
+                    // true; "0"/"false"/"off" → false).
+                    var isDefault = (string?)styleEl.Attribute(W + "default") is "1" or "true" or "on";
+
+                    style = new IrStyle(
+                        Id: id,
+                        Name: AttrVal(styleEl.Element(W + "name")),
+                        BasedOn: AttrVal(styleEl.Element(W + "basedOn")),
+                        Type: type,
+                        IsDefault: isDefault)
+                    {
+                        PPr = CloneOrNull(styleEl.Element(W + "pPr")),
+                        RPr = CloneOrNull(styleEl.Element(W + "rPr")),
+                    };
+                }
+                catch (Exception e) when (IsTolerableRegistryException(e))
+                {
+                    continue; // skip a single malformed entry, keep reading.
+                }
+
+                if (!styles.TryAdd(style.Id, style))
+                    continue; // first wins on duplicate id.
+
+                if (defaultParagraphStyleId is null && style.IsDefault && style.Type == "paragraph")
+                    defaultParagraphStyleId = style.Id;
+            }
+
+            var docDefaults = root.Element(W + "docDefaults");
+            var docDefaultsPPr = CloneOrNull(
+                docDefaults?.Element(W + "pPrDefault")?.Element(W + "pPr"));
+            var docDefaultsRPr = CloneOrNull(
+                docDefaults?.Element(W + "rPrDefault")?.Element(W + "rPr"));
+
+            return new IrStyleRegistry(styles, defaultParagraphStyleId, docDefaultsPPr, docDefaultsRPr);
+        }
+        catch (Exception e) when (IsTolerableRegistryException(e))
+        {
+            return IrStyleRegistry.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Build the <see cref="IrNumberingRegistry"/> from the main part's
+    /// <c>NumberingDefinitionsPart</c>. <c>w:abstractNum</c> → <see cref="IrAbstractNum"/> (levels
+    /// keyed by ilvl); <c>w:num</c> → <see cref="IrNum"/> (abstractNumId + start overrides). First
+    /// wins on duplicate abstractNumId/numId. An abstractNum carrying a <c>w:numStyleLink</c>
+    /// indirection is recorded with whatever levels it has (possibly none) — see the TODO below; we
+    /// do not chase the indirection at this tier. A missing/malformed part tolerates to
+    /// <see cref="IrNumberingRegistry.Empty"/>.
+    /// </summary>
+    private static IrNumberingRegistry BuildNumberingRegistry(MainDocumentPart main)
+    {
+        try
+        {
+            var numberingPart = main.NumberingDefinitionsPart;
+            if (numberingPart is null)
+                return IrNumberingRegistry.Empty;
+
+            var root = numberingPart.GetXDocument().Root;
+            if (root is null)
+                return IrNumberingRegistry.Empty;
+
+            var abstractNums = new Dictionary<int, IrAbstractNum>();
+            foreach (var absEl in root.Elements(W + "abstractNum"))
+            {
+                try
+                {
+                    var absId = IntAttr(absEl, W + "abstractNumId");
+                    if (absId is null)
+                        continue;
+                    if (abstractNums.ContainsKey(absId.Value))
+                        continue; // first wins.
+
+                    // TODO(M1.4+): numStyleLink indirection — an abstractNum with a w:numStyleLink
+                    // borrows its levels from another abstractNum via a paragraph style. We do NOT
+                    // resolve that multi-hop chain here; such an abstractNum lands with whatever
+                    // explicit levels it carries (often none).
+                    var levels = new Dictionary<int, IrNumLevel>();
+                    foreach (var lvlEl in absEl.Elements(W + "lvl"))
+                    {
+                        try
+                        {
+                            var ilvl = IntAttr(lvlEl, W + "ilvl");
+                            if (ilvl is null)
+                                continue;
+                            if (levels.ContainsKey(ilvl.Value))
+                                continue; // first wins.
+
+                            levels[ilvl.Value] = new IrNumLevel(
+                                Ilvl: ilvl.Value,
+                                NumberFormat: AttrVal(lvlEl.Element(W + "numFmt")) ?? "decimal",
+                                Start: IntAttr(lvlEl.Element(W + "start"), W + "val"),
+                                LvlText: AttrVal(lvlEl.Element(W + "lvlText")))
+                            {
+                                PPr = CloneOrNull(lvlEl.Element(W + "pPr")),
+                            };
+                        }
+                        catch (Exception e) when (IsTolerableRegistryException(e))
+                        {
+                            continue; // skip a single malformed level.
+                        }
+                    }
+
+                    abstractNums[absId.Value] = new IrAbstractNum(absId.Value, levels);
+                }
+                catch (Exception e) when (IsTolerableRegistryException(e))
+                {
+                    continue; // skip a single malformed abstractNum.
+                }
+            }
+
+            var nums = new Dictionary<int, IrNum>();
+            foreach (var numEl in root.Elements(W + "num"))
+            {
+                try
+                {
+                    var numId = IntAttr(numEl, W + "numId");
+                    if (numId is null)
+                        continue;
+                    if (nums.ContainsKey(numId.Value))
+                        continue; // first wins.
+
+                    var absId = IntAttr(numEl.Element(W + "abstractNumId"), W + "val");
+                    if (absId is null)
+                        continue; // a num with no abstractNumId reference is unusable.
+
+                    var startOverrides = new Dictionary<int, int>();
+                    foreach (var ovrEl in numEl.Elements(W + "lvlOverride"))
+                    {
+                        var ilvl = IntAttr(ovrEl, W + "ilvl");
+                        var startOverride = IntAttr(ovrEl.Element(W + "startOverride"), W + "val");
+                        if (ilvl is not null && startOverride is not null
+                            && !startOverrides.ContainsKey(ilvl.Value))
+                            startOverrides[ilvl.Value] = startOverride.Value; // first wins.
+                    }
+
+                    nums[numId.Value] = new IrNum(numId.Value, absId.Value, startOverrides);
+                }
+                catch (Exception e) when (IsTolerableRegistryException(e))
+                {
+                    continue; // skip a single malformed num.
+                }
+            }
+
+            return new IrNumberingRegistry(nums, abstractNums);
+        }
+        catch (Exception e) when (IsTolerableRegistryException(e))
+        {
+            return IrNumberingRegistry.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Build the <see cref="IrThemeFonts"/> from the main part's <c>ThemePart</c>'s
+    /// <c>a:fontScheme</c>: major (heading) and minor (body) Latin/ASCII typefaces. A
+    /// missing/malformed part tolerates to <see cref="IrThemeFonts.Empty"/>.
+    /// </summary>
+    private static IrThemeFonts BuildThemeFonts(MainDocumentPart main)
+    {
+        try
+        {
+            var themePart = main.ThemePart;
+            if (themePart is null)
+                return IrThemeFonts.Empty;
+
+            var root = themePart.GetXDocument().Root;
+            var fontScheme = root?.Descendants(Docxodus.A.fontScheme).FirstOrDefault();
+            if (fontScheme is null)
+                return IrThemeFonts.Empty;
+
+            string? major = (string?)fontScheme.Element(Docxodus.A.majorFont)
+                ?.Element(Docxodus.A.latin)?.Attribute("typeface");
+            string? minor = (string?)fontScheme.Element(Docxodus.A.minorFont)
+                ?.Element(Docxodus.A.latin)?.Attribute("typeface");
+
+            if (major is null && minor is null)
+                return IrThemeFonts.Empty;
+            return new IrThemeFonts(major, minor);
+        }
+        catch (Exception e) when (IsTolerableRegistryException(e))
+        {
+            return IrThemeFonts.Empty;
+        }
+    }
+
+    /// <summary>Deep clone of <paramref name="el"/> (detached from its source tree), or null.</summary>
+    private static XElement? CloneOrNull(XElement? el) => el is null ? null : new XElement(el);
 
     // --- anchor index -----------------------------------------------------
 
