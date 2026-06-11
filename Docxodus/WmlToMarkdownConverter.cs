@@ -534,7 +534,7 @@ public static class WmlToMarkdownConverter
     /// Classify an element to its anchor <c>kind</c>. Returns <c>null</c> for elements that
     /// are not addressable by the projection (runs, inline children, formatting properties).
     /// </summary>
-    private static string? KindFor(XElement el)
+    internal static string? KindFor(XElement el)
     {
         var n = el.Name;
         if (n == W.p) return IsHeading(el) ? "h" : IsListItem(el) ? "li" : "p";
