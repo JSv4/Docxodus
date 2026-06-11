@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 
@@ -25,6 +26,7 @@ namespace Docxodus.Ir;
 internal static class IrReader
 {
     private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    private static readonly XNamespace R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
     // The empty-unmodeled-container digest: CanonicalHash of <unmodeled/> with no children.
     // Cached because it is the fingerprint of every format record that carries no leftover props.
@@ -192,23 +194,10 @@ internal static class IrReader
         var pPr = p.Element(W + "pPr");
         var (paraFormat, listInfo) = MapParaFormat(pPr);
 
-        var inlines = new List<IrInline>();
-        foreach (var child in p.Elements())
-        {
-            if (child.Name == W + "pPr")
-                continue;
-            if (child.Name == W + "r")
-                AppendRun(child, inlines);
-            else if (child.Name == W + "proofErr")
-                continue; // rule N2: pure noise, never emit.
-            else if (IsDroppedParagraphChild(child.Name))
-                continue; // rules N3 (bookmarks) / N15 (comment range plumbing).
-            else
-                inlines.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)));
-        }
-
-        // Post-process: drop empty text runs (N10), then coalesce adjacent equal-format runs (N5).
-        var processed = CoalesceRuns(DropEmptyTextRuns(inlines));
+        // Walk the paragraph's children (skipping w:pPr) through the shared inline walker, which
+        // handles run content, hyperlinks (N14), and the field state machine (N9), then applies
+        // the N10 empty-drop + N5 coalescing post-process to the top-level inline list.
+        var processed = WalkInlines(p.Elements().Where(c => c.Name != W + "pPr"), ctx);
 
         var contentHash = ComputeParagraphContentHash(processed);
         var formatFingerprint = IrHasher.FingerprintBlock(paraFormat, RunFormatsInOrder(processed));
@@ -225,41 +214,282 @@ internal static class IrReader
         };
     }
 
-    private static void AppendRun(XElement r, List<IrInline> inlines)
-    {
-        var rPr = r.Element(W + "rPr");
-        var runFormat = MapRunFormat(rPr);
+    // --- inline walk (runs, hyperlinks N14, fields N9) --------------------
 
-        foreach (var child in r.Elements())
+    /// <summary>
+    /// Walk a flat sequence of inline-level OOXML elements (a paragraph's or a
+    /// <c>w:hyperlink</c>'s children) into the typed inline list, applying the N9 field state
+    /// machine and N14 hyperlink promotion inline, then the N10 empty-drop and N5 coalescing
+    /// post-process. The same logic serves both the paragraph top level and hyperlink interiors,
+    /// so empty-drop/coalescing happen within each inline list independently (a hyperlink's runs
+    /// coalesce among themselves, not across the link boundary).
+    /// </summary>
+    private static List<IrInline> WalkInlines(IEnumerable<XElement> children, ReadContext ctx)
+    {
+        var walker = new InlineWalker(ctx);
+        foreach (var child in children)
+            walker.Feed(child);
+        var emitted = walker.Finish();
+        return CoalesceRuns(DropEmptyTextRuns(emitted));
+    }
+
+    /// <summary>
+    /// Stateful walker driving the field (N9) state machine across a paragraph's / hyperlink's
+    /// child sequence. Non-field inlines are emitted directly; between a <c>w:fldChar
+    /// fldCharType="begin"</c> and its matching <c>end</c>, run content is diverted into a
+    /// captured field (instruction text while in the pre-separate phase, result inlines after a
+    /// <c>separate</c>). Fields can nest: an inner <c>begin</c> seen while already capturing is
+    /// depth-counted and flattened into the outermost field (its instr text appends to the outer
+    /// instruction, its result inlines append to the outer result) — the simplest behavior that
+    /// loses no content. A <c>begin</c> with no matching <c>end</c> by the end of the sequence
+    /// falls back to emitting every captured element as an opaque inline so nothing is lost.
+    /// </summary>
+    private sealed class InlineWalker
+    {
+        private readonly ReadContext _ctx;
+        private readonly List<IrInline> _output = new();
+
+        // Field capture state. _fieldDepth > 0 means we are inside one or more nested fields.
+        private int _fieldDepth;
+        private bool _inResult;                 // true once the (outermost) field hit "separate".
+        private readonly StringBuilder _instruction = new();
+        private readonly List<IrInline> _result = new();
+        // Raw captured elements, kept so an unterminated field can fall back to opaque losslessly.
+        private readonly List<XElement> _captured = new();
+
+        public InlineWalker(ReadContext ctx) => _ctx = ctx;
+
+        public void Feed(XElement child)
         {
-            if (child.Name == W + "rPr")
-                continue;
-            if (child.Name == W + "t")
-                inlines.Add(new IrTextRun(child.Value, runFormat));
-            else if (child.Name == W + "tab")
-                inlines.Add(new IrTab(runFormat));
-            else if (child.Name == W + "br")
-                inlines.Add(new IrBreak(BreakKind(child)));
-            else if (child.Name == W + "noBreakHyphen")
-                // N7: non-breaking hyphen → text U+2011, carrying the run format so it coalesces
-                // with adjacent same-format text in the post-process pass.
-                inlines.Add(new IrTextRun("‑", runFormat));
-            else if (child.Name == W + "softHyphen")
-                // N7: soft hyphen → text U+00AD, same coalescing semantics as above.
-                inlines.Add(new IrTextRun("­", runFormat));
-            else if (child.Name == W + "sym")
-                AppendSym(child, rPr, runFormat, inlines); // N8.
-            else if (child.Name == W + "lastRenderedPageBreak")
-                continue; // N4: layout cache, not content.
-            else if (child.Name == W + "commentReference")
-                // N15 (strip half): comment plumbing never affects ContentHash.
-                // M1.3: record the comment id into the comments store here.
-                continue;
+            if (child.Name == W + "r")
+            {
+                FeedRun(child);
+            }
+            else if (child.Name == W + "hyperlink")
+            {
+                EmitInline(BuildHyperlink(child, _ctx));
+            }
+            else if (child.Name == W + "fldSimple")
+            {
+                EmitInline(BuildFldSimple(child, _ctx));
+            }
+            else if (child.Name == W + "proofErr")
+            {
+                // N2: pure noise, never emit.
+            }
             else if (IsDroppedParagraphChild(child.Name))
-                continue; // N3: bookmarks can legally appear inside a run too.
+            {
+                // N3 (bookmarks) / N15 (comment range plumbing).
+            }
             else
-                inlines.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)));
+            {
+                EmitInline(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)));
+            }
         }
+
+        private void FeedRun(XElement r)
+        {
+            var rPr = r.Element(W + "rPr");
+            var runFormat = MapRunFormat(rPr);
+
+            foreach (var child in r.Elements())
+            {
+                if (child.Name == W + "rPr")
+                    continue;
+                if (child.Name == W + "fldChar")
+                {
+                    HandleFldChar(child);
+                    continue;
+                }
+                if (_fieldDepth > 0)
+                {
+                    _captured.Add(child);
+                    if (!_inResult)
+                    {
+                        // Pre-separate: accumulate instruction text (w:instrText / w:delInstrText).
+                        if (child.Name == W + "instrText" || child.Name == W + "delInstrText")
+                            _instruction.Append(child.Value);
+                        // Other pre-separate content is field plumbing; ignore for the instruction
+                        // string but keep captured for the unterminated-field fallback.
+                        continue;
+                    }
+                    // Post-separate: divert run content into the field result.
+                    EmitRunChild(child, rPr, runFormat, _result);
+                    continue;
+                }
+
+                EmitRunChild(child, rPr, runFormat, _output);
+            }
+        }
+
+        private void HandleFldChar(XElement fldChar)
+        {
+            var type = (string?)fldChar.Attribute(W + "fldCharType");
+            switch (type)
+            {
+                case "begin":
+                    _fieldDepth++;
+                    // Inner begins flatten into the outer field (depth-counted), so only the
+                    // outermost begin resets the capture buffers.
+                    if (_fieldDepth == 1)
+                    {
+                        _inResult = false;
+                        _instruction.Clear();
+                        _result.Clear();
+                        _captured.Clear();
+                    }
+                    break;
+                case "separate":
+                    // Only the outermost separate flips us into result-capture. Inner separates
+                    // are swallowed (their result content flattens into the outer result).
+                    if (_fieldDepth == 1)
+                        _inResult = true;
+                    break;
+                case "end":
+                    if (_fieldDepth == 0)
+                        break; // stray end with no begin: ignore (totality).
+                    _fieldDepth--;
+                    if (_fieldDepth == 0)
+                    {
+                        // Outermost field closed: emit one IrFieldRun. CachedResult is empty for
+                        // instruction-only fields (no separate seen).
+                        EmitInline(new IrFieldRun(
+                            _instruction.ToString(),
+                            IrNodeList.From(new List<IrInline>(_result))));
+                        _inResult = false;
+                        _result.Clear();
+                        _captured.Clear();
+                    }
+                    break;
+                default:
+                    break; // unknown fldCharType: ignore.
+            }
+        }
+
+        public List<IrInline> Finish()
+        {
+            // Unterminated field (begin without matching end): fall back to opaque so no content
+            // is lost. Each captured element is canonical-hashed into an opaque inline.
+            if (_fieldDepth > 0)
+            {
+                foreach (var el in _captured)
+                    _output.Add(new IrOpaqueInline(el.Name, IrHasher.CanonicalHash(el)));
+                _fieldDepth = 0;
+            }
+            return _output;
+        }
+
+        // Emit a typed inline at the current nesting level — into the field result when capturing
+        // a result, otherwise into the top-level output.
+        private void EmitInline(IrInline inline)
+        {
+            if (_fieldDepth > 0 && _inResult)
+                _result.Add(inline);
+            else if (_fieldDepth > 0)
+                // A nested hyperlink/fldSimple/opaque appearing in the instruction phase is field
+                // plumbing; drop it from the modeled stream (still recoverable via provenance).
+                { }
+            else
+                _output.Add(inline);
+        }
+    }
+
+    /// <summary>
+    /// Map a single run child (text, tab, break, special hyphens, sym, comment plumbing) into
+    /// <paramref name="sink"/>. Shared by the top-level walk and the field-result diversion so a
+    /// field's cached result is read with identical run semantics.
+    /// </summary>
+    private static void EmitRunChild(XElement child, XElement? rPr, IrRunFormat runFormat, List<IrInline> sink)
+    {
+        if (child.Name == W + "t")
+            sink.Add(new IrTextRun(child.Value, runFormat));
+        else if (child.Name == W + "tab")
+            sink.Add(new IrTab(runFormat));
+        else if (child.Name == W + "br")
+            sink.Add(new IrBreak(BreakKind(child)));
+        else if (child.Name == W + "noBreakHyphen")
+            // N7: non-breaking hyphen → text U+2011, carrying the run format so it coalesces
+            // with adjacent same-format text in the post-process pass.
+            sink.Add(new IrTextRun("‑", runFormat));
+        else if (child.Name == W + "softHyphen")
+            // N7: soft hyphen → text U+00AD, same coalescing semantics as above.
+            sink.Add(new IrTextRun("­", runFormat));
+        else if (child.Name == W + "sym")
+            AppendSym(child, rPr, runFormat, sink); // N8.
+        else if (child.Name == W + "lastRenderedPageBreak")
+            return; // N4: layout cache, not content.
+        else if (child.Name == W + "commentReference")
+            // N15 (strip half): comment plumbing never affects ContentHash.
+            // TODO(M1.3): record the comment id into the comments store here.
+            return;
+        else if (IsDroppedParagraphChild(child.Name))
+            return; // N3: bookmarks can legally appear inside a run too.
+        else
+            sink.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)));
+    }
+
+    // --- hyperlinks (N14) -------------------------------------------------
+
+    /// <summary>
+    /// N14: promote a <c>w:hyperlink</c> to an <see cref="IrHyperlink"/>. Child <c>w:r</c> content
+    /// is walked through the SAME inline walker as direct paragraph runs (so empty-drop + N5
+    /// coalescing apply within the link's own inline list). Target resolution: an <c>@r:id</c>
+    /// resolves against the main part's hyperlink relationships to the external URI (a missing
+    /// relationship tolerates to <c>Target = null</c>); an <c>@w:anchor</c> internal link uses the
+    /// convention <c>Target = "#" + anchor</c>. <see cref="IrHyperlink.InternalTarget"/> stays null
+    /// in M1.2 — resolving the bookmark→anchor mapping is future work (TODO(M1.3+)).
+    /// </summary>
+    private static IrHyperlink BuildHyperlink(XElement hyperlink, ReadContext ctx)
+    {
+        var inlines = WalkInlines(hyperlink.Elements(), ctx);
+
+        string? target = null;
+        var relId = (string?)hyperlink.Attribute(R + "id");
+        if (relId is not null)
+        {
+            target = ResolveHyperlinkRel(hyperlink, relId); // null when the relationship is missing.
+        }
+        else
+        {
+            var anchor = (string?)hyperlink.Attribute(W + "anchor");
+            if (anchor is not null)
+                target = "#" + anchor;
+        }
+
+        // TODO(M1.3+): resolve @w:anchor to the target block's IrAnchor and set InternalTarget.
+        return new IrHyperlink(target, InternalTarget: null, IrNodeList.From(inlines));
+    }
+
+    /// <summary>
+    /// Resolve a hyperlink <c>@r:id</c> to its external URI via the owning part's hyperlink
+    /// relationships, mirroring <c>WmlToMarkdownConverter.LookupRelationshipUrl</c>: the part is
+    /// stashed on the document root as an <see cref="OpenXmlPart"/> annotation by
+    /// <see cref="Read"/>. Returns null when the part or relationship is absent (missing-rel
+    /// tolerance — a dangling r:id must not throw).
+    /// </summary>
+    private static string? ResolveHyperlinkRel(XElement el, string relId)
+    {
+        var root = el.AncestorsAndSelf().Last();
+        var part = root.Annotation<OpenXmlPart>();
+        if (part is null)
+            return null;
+        foreach (var rel in part.HyperlinkRelationships)
+            if (rel.Id == relId)
+                return rel.Uri.ToString();
+        return null;
+    }
+
+    // --- fields (N9) ------------------------------------------------------
+
+    /// <summary>
+    /// N9: promote a <c>w:fldSimple</c> to an <see cref="IrFieldRun"/>. The <c>@w:instr</c> is the
+    /// instruction string; the child <c>w:r</c> content is walked normally into the cached result.
+    /// </summary>
+    private static IrFieldRun BuildFldSimple(XElement fldSimple, ReadContext ctx)
+    {
+        var instruction = (string?)fldSimple.Attribute(W + "instr") ?? "";
+        var result = WalkInlines(fldSimple.Elements(), ctx);
+        return new IrFieldRun(instruction, IrNodeList.From(result));
     }
 
     /// <summary>
@@ -267,14 +497,16 @@ internal static class IrReader
     /// single character as an <see cref="IrTextRun"/>. The symbol's <c>@w:font</c> is glyph-bearing
     /// formatting, so the whole <c>w:sym</c> element is folded into a per-character run format
     /// (cloned into the unmodeled-digest container) — it must influence the FORMAT fingerprint, not
-    /// just vanish. If <c>@w:char</c> is missing or unparseable, fall back to opaque.
+    /// just vanish. If <c>@w:char</c> is missing or unparseable, fall back to opaque. C0 control
+    /// code points (&lt; U+0020, including U+0000) are also rejected to opaque: they cannot appear
+    /// as legal XML text content and would collide with the content-hash sentinel lead bytes.
     /// </summary>
     private static void AppendSym(XElement sym, XElement? rPr, IrRunFormat baseFormat, List<IrInline> inlines)
     {
         var charAttr = (string?)sym.Attribute(W + "char");
         if (charAttr is not null
             && int.TryParse(charAttr, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var code)
-            && code is >= 0 and <= 0xFFFF)
+            && code is >= 0x20 and <= 0xFFFF)
         {
             // BMP code point (Word's symbol convention uses the F000-F0FF private-use range): emit
             // the codepoint as a single char verbatim — no surrogate handling needed.
@@ -294,7 +526,7 @@ internal static class IrReader
     private static bool IsDroppedParagraphChild(XName name) =>
         name == W + "bookmarkStart"
         || name == W + "bookmarkEnd"
-        || name == W + "commentRangeStart"   // N15: M1.3 records the target span into the comment store.
+        || name == W + "commentRangeStart"   // N15: TODO(M1.3) records the target span into the comment store.
         || name == W + "commentRangeEnd";
 
     private static IrBreakKind BreakKind(XElement br)
@@ -331,7 +563,12 @@ internal static class IrReader
         return result;
     }
 
-    /// <summary>The run format carried by each inline that has one, in inline order.</summary>
+    /// <summary>
+    /// The run format carried by each inline that has one, in inline order. Recurses into
+    /// <see cref="IrHyperlink.Inlines"/> and <see cref="IrFieldRun.CachedResult"/> so a hyperlink's
+    /// or field-result's run formats participate in the paragraph's run-format sequence in place
+    /// (a bolded link word flips the block fingerprint exactly as a bolded plain word does).
+    /// </summary>
     private static IEnumerable<IrRunFormat> RunFormatsInOrder(IEnumerable<IrInline> inlines)
     {
         foreach (var inline in inlines)
@@ -340,6 +577,12 @@ internal static class IrReader
             {
                 case IrTextRun r: yield return r.Format; break;
                 case IrTab t: yield return t.Format; break;
+                case IrHyperlink h:
+                    foreach (var f in RunFormatsInOrder(h.Inlines)) yield return f;
+                    break;
+                case IrFieldRun fld:
+                    foreach (var f in RunFormatsInOrder(fld.CachedResult)) yield return f;
+                    break;
             }
         }
     }
@@ -347,6 +590,27 @@ internal static class IrReader
     private static IrHash ComputeParagraphContentHash(IEnumerable<IrInline> inlines)
     {
         var builder = new IrContentHashBuilder();
+        AppendInlinesToContentHash(inlines, builder);
+        return builder.Build();
+    }
+
+    /// <summary>
+    /// Append the canonical content-hash byte stream of <paramref name="inlines"/> into
+    /// <paramref name="builder"/> (spec §6.1). Recursive so nested inlines (hyperlink children,
+    /// field cached results) stream through the SAME per-inline dispatch as the top level.
+    /// Semantics worth noting:
+    /// <list type="bullet">
+    /// <item><see cref="IrFieldRun"/> contributes ONLY its cached-result inlines' bytes —
+    /// transparently, with no sentinels and no instruction bytes — so a PAGE field showing "5" is
+    /// content-equal to a literal "5" (the hash captures what a reader sees; the instruction is
+    /// consumer-visible but unhashed).</item>
+    /// <item><see cref="IrHyperlink"/> is bracketed: sentinel <c>0x08</c>, the target bytes,
+    /// sentinel <c>0x09</c>, then its child inlines' bytes — so a target change is a content change
+    /// and linked text is never content-equal to identical plain text.</item>
+    /// </list>
+    /// </summary>
+    private static void AppendInlinesToContentHash(IEnumerable<IrInline> inlines, IrContentHashBuilder builder)
+    {
         foreach (var inline in inlines)
         {
             switch (inline)
@@ -365,13 +629,22 @@ internal static class IrReader
                         _ => IrContentHashBuilder.SentinelLineBreak,
                     });
                     break;
+                case IrHyperlink h:
+                    builder.AppendSentinel(IrContentHashBuilder.SentinelHyperlink);
+                    builder.AppendText(h.Target ?? "");
+                    builder.AppendSentinel(IrContentHashBuilder.SentinelHyperlinkTargetEnd);
+                    AppendInlinesToContentHash(h.Inlines, builder);
+                    break;
+                case IrFieldRun fld:
+                    // Transparent: cached-result bytes only, no sentinels, no instruction.
+                    AppendInlinesToContentHash(fld.CachedResult, builder);
+                    break;
                 case IrOpaqueInline o:
                     builder.AppendSentinel(IrContentHashBuilder.SentinelOpaque);
                     builder.AppendHash(o.CanonicalHash);
                     break;
             }
         }
-        return builder.Build();
     }
 
     // --- paragraph format -------------------------------------------------

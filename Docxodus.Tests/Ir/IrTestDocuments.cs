@@ -67,6 +67,37 @@ internal static class IrTestDocuments
     }
 
     /// <summary>
+    /// Like <see cref="FromBodyXml"/>, but also wires up external hyperlink relationships on the
+    /// main document part. Each entry in <paramref name="hyperlinkRels"/> maps a relationship id
+    /// (the <c>r:id</c> a <c>w:hyperlink</c> references) to its external target URI, added as an
+    /// external relationship so <c>part.HyperlinkRelationships</c> resolves it.
+    /// </summary>
+    internal static WmlDocument FromBodyXmlWithHyperlinks(
+        string bodyInnerXml,
+        params (string RelId, string Uri)[] hyperlinkRels)
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var documentXml =
+                $"<w:document xmlns:w=\"{W}\"><w:body>{bodyInnerXml}</w:body></w:document>";
+            using (var partStream = main.GetStream(FileMode.Create, FileAccess.Write))
+            using (var writer = new StreamWriter(partStream))
+            {
+                writer.Write(documentXml);
+            }
+
+            foreach (var (relId, uri) in hyperlinkRels)
+                main.AddHyperlinkRelationship(new System.Uri(uri, System.UriKind.RelativeOrAbsolute), true, relId);
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
+
+    /// <summary>
     /// A document whose <c>w:body</c> inner XML is <paramref name="bodyInnerXml"/> and whose
     /// <c>w:styles</c> inner XML (the content between <c>&lt;w:styles&gt;</c> and
     /// <c>&lt;/w:styles&gt;</c>) is <paramref name="stylesInnerXml"/>. Lets a test wire up a style

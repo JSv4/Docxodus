@@ -154,10 +154,11 @@ public class IrReaderTests
     [Fact]
     public void Read_UnknownElement_BecomesOpaque()
     {
+        // w:sdt is still an unmodeled block (N12/SDT-unwrap lands in M1.2 Task 3); w:ptab
+        // (an absolute-position tab) is an unmodeled inline.
         var doc = IrTestDocuments.FromBodyXml(
             "<w:sdt><w:sdtContent><w:p><w:r><w:t>x</w:t></w:r></w:p></w:sdtContent></w:sdt>" +
-            "<w:p><w:hyperlink r:id=\"rId9\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
-            "<w:r><w:t>link</w:t></w:r></w:hyperlink></w:p>");
+            "<w:p><w:r><w:ptab w:relativeTo=\"margin\" w:alignment=\"left\" w:leader=\"none\"/></w:r></w:p>");
         var ir = IrReader.Read(doc);
 
         Assert.Contains(ir.Body.Blocks, b => b is IrOpaqueBlock);

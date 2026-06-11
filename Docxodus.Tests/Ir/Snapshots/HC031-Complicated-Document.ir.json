@@ -848,14 +848,13 @@
     {
       "anchor": "p:body:c98273b1ef6ac5d6fbc2857427c14261",
       "type": "paragraph",
-      "contentHash": "fb675c359683979e27e4af8f9edc13e11f6a8c3dabfaa9edbd6571e92f98eced",
-      "formatFingerprint": "f0607f064007a2abae9ca027a7d87f4783b6b3a4d8d7ed6f6dfcfb13986dbf1e",
+      "contentHash": "4e7de5f3f8fd80bd7a44553b45dc07ec275bcbf473ae9de2e6b91dda275dd665",
+      "formatFingerprint": "39cf31b573843c0776cfc046eb6c2574ef169dbb878616fa3db39e0bbbd1a02a",
       "format": {},
       "inlines": [
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hyperlink",
-          "hash": "270a5be8ebd4093572a3fbc3dbcd7d80119dffc1c4fa117b93307512bf62e82e"
+          "kind": "unsupported",
+          "type": "IrHyperlink"
         }
       ]
     },
@@ -1004,14 +1003,13 @@
     {
       "anchor": "p:body:1a0db1b5fdf712e207f59ccc0a52e62e",
       "type": "paragraph",
-      "contentHash": "589faf867b1ed38c005f2c92dad14065b447d7f1bce5ac704e2b65892b585d0d",
-      "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
+      "contentHash": "0f6b8f9cbc9406d9fa2ef216ede8b3ae1a212410515f0b304cf0245021b09994",
+      "formatFingerprint": "a591954d65002e7beaaed55bc44f11b9e24a0d6a502bb6eddf689937d11257f6",
       "format": {},
       "inlines": [
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hyperlink",
-          "hash": "b6825f0c89ef2aa0f43ad1de3087798c34479c60f940da219c263adbbd88ce3c"
+          "kind": "unsupported",
+          "type": "IrHyperlink"
         },
         {
           "kind": "text",
@@ -1086,34 +1084,13 @@
     {
       "anchor": "p:body:272fb51fcafe40253f9007af9b418758",
       "type": "paragraph",
-      "contentHash": "fff3a1981df0973c721f54209f83a06b53084a9a56deab486e4dc5cd037ddcf3",
+      "contentHash": "3b9a199c1e366d3af57a32cda257dd916e7e129651f423a76e9e99fbd56c10b9",
       "formatFingerprint": "da50a79f36b9550ecc94a77c8f1ef9463d550105c5c30f2b9229cf0404054367",
       "format": {},
       "inlines": [
         {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}fldChar",
-          "hash": "943da8efa8ce90c552ca9ca80a600439ce83f483caa4e79910996fbf09e0de28"
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}instrText",
-          "hash": "493b8ed854a1d3349c2799b96f6e585489659465ac39d4cdf427be343126cac2"
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}fldChar",
-          "hash": "9003745e5c952f92741d6218e53be7fb8fde36f76b4f435977c2f60bfe9b7e9c"
-        },
-        {
-          "kind": "text",
-          "text": "Tuesday, July 28, 2015",
-          "format": {}
-        },
-        {
-          "kind": "opaque",
-          "element": "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}fldChar",
-          "hash": "810103b161c2bdf7d2bf865b96ca0bdae2e86f44ef9d1f57544054f5653006dd"
+          "kind": "unsupported",
+          "type": "IrFieldRun"
         }
       ]
     },

@@ -30,6 +30,24 @@ All notable changes to this project will be documented in this file.
   comment store lands in M1.3). All five previously surfaced as `IrOpaqueInline`
   and perturbed hashes. Golden snapshots regenerated accordingly; block anchors are
   unchanged.
+- **Document IR fields & hyperlinks (M1.2, N9 + N14)** — *internal/experimental.*
+  `IrReader` now promotes two more constructs from `Opaque` to typed inlines.
+  **N14**: `w:hyperlink` → `IrHyperlink` — child runs are walked through the same
+  inline pipeline as direct paragraph runs (empty-drop + N5 coalescing within the
+  link), an `@r:id` resolves against the main part's hyperlink relationships to the
+  external URI (a missing relationship tolerates to `Target=null`), and `@w:anchor`
+  internal links use the convention `Target = "#" + anchor` (`InternalTarget`
+  bookmark resolution is deferred). The target is bracketed into `ContentHash`
+  (sentinels `0x08`/`0x09`), so a target change is a content change and linked text
+  is never content-equal to identical plain text; the link's run formats participate
+  in the block `FormatFingerprint` in order. **N9**: `w:fldSimple` and complex
+  `w:fldChar begin/separate/end` run sequences → `IrFieldRun(Instruction,
+  CachedResult)` via a depth-counting field state machine (nested fields flatten
+  into the outermost; an unterminated `begin` falls back to opaque losslessly). A
+  field contributes only its cached-result bytes to `ContentHash` (no instruction,
+  no sentinels), so a `PAGE` field showing "5" is content-equal to a literal "5".
+  HC031 golden snapshot regenerated; block anchors unchanged. (The diagnostic JSON
+  still renders the new inline kinds as `"unsupported"` until the M1.2 writer task.)
 
 ## [6.4.0] - 2026-05-30
 

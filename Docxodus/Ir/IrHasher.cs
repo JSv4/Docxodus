@@ -286,6 +286,13 @@ internal sealed class IrContentHashBuilder
     public const byte SentinelFootnoteRef = 0x05;
     public const byte SentinelEndnoteRef = 0x06;
     public const byte SentinelImage = 0x07;
+
+    // Hyperlink framing (spec §6.1, N14): the target string is bracketed between these two
+    // sentinels so linked text never collides with identical plain text and a target change is
+    // a content change. The child inlines' bytes follow after the closing sentinel.
+    public const byte SentinelHyperlink = 0x08;
+    public const byte SentinelHyperlinkTargetEnd = 0x09;
+
     public const byte SentinelOpaque = 0x0F;
 
     // Structure markers (written after a 0x02 lead byte) — table structure.
