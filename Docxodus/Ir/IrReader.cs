@@ -469,6 +469,11 @@ internal static class IrReader
         W + "delText", W + "delInstrText",
         W + "customXmlInsRangeStart", W + "customXmlDelRangeStart",
         W + "customXmlMoveFromRangeStart", W + "customXmlMoveToRangeStart",
+        // RangeEnd markers are removed unconditionally by Accept (RevisionProcessor.cs:1693-1698).
+        // Schema-valid documents always pair them with a scanned RangeStart, but — same standard as
+        // delText above — soundness must not rely on producer validity, so they are listed too.
+        W + "customXmlInsRangeEnd", W + "customXmlDelRangeEnd",
+        W + "customXmlMoveFromRangeEnd", W + "customXmlMoveToRangeEnd",
     };
 
     // The hardcoded revision-element list the set-drift guard test asserts against. Kept internal so

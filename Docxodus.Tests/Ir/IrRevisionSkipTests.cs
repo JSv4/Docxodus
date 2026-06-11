@@ -34,6 +34,21 @@ public class IrRevisionSkipTests
     }
 
     /// <summary>
+    /// Read through the (skip-eligible) Accept path and serialize the FULL IR as diagnostic JSON.
+    /// Unlike the markdown projection, this captures every node hash — including opaque canonical
+    /// hashes, which is where un-stripped revision markup shows up when the projection happens not to
+    /// render the affected content (e.g. tblPrEx property exceptions).
+    /// </summary>
+    private static string AcceptReadJson(WmlDocument doc)
+    {
+        var ir = IrReader.Read(doc, new IrReaderOptions { RevisionView = RevisionView.Accept });
+        return IrDiagnosticJson.Write(ir);
+    }
+
+    private static string PreAcceptedReadJson(WmlDocument doc) =>
+        AcceptReadJson(RevisionProcessor.AcceptRevisions(doc));
+
+    /// <summary>
     /// Pre-accept the revisions with the full RevisionProcessor round-trip, then Accept-read (now a
     /// genuine no-op, so the skip firing here is correct). This is the oracle the skip-eligible read
     /// must match byte-for-byte.
@@ -66,6 +81,11 @@ public class IrRevisionSkipTests
             "<w:p><w:r><w:t>after</w:t></w:r></w:p>";
         var doc = IrTestDocuments.FromBodyXml(body);
 
+        // Diagnostic JSON, not markdown: the projection never renders tblPrEx styling, so a markdown
+        // comparison passes vacuously even when the skip wrongly fires and the IR reads the
+        // tblPrExChange markup un-stripped. The JSON's opaque canonical hashes DO differ in that case
+        // (the tainted tblPrEx hashes differently), making this assertion fail on an unsound scan set.
+        Assert.Equal(PreAcceptedReadJson(doc), AcceptReadJson(doc));
         Assert.Equal(PreAcceptedReadMarkdown(doc), AcceptReadMarkdown(doc));
     }
 
@@ -123,9 +143,12 @@ public class IrRevisionSkipTests
             W + "cellIns", W + "cellDel", W + "cellMerge",
             // deleted text / field markers (transformed unconditionally by name in RevisionProcessor)
             W + "delText", W + "delInstrText",
-            // custom-XML range-start markers
+            // custom-XML range markers (Start and End — End is removed unconditionally by Accept,
+            // RevisionProcessor.cs:1693-1698, so producer-validity pairing must not be assumed)
             W + "customXmlInsRangeStart", W + "customXmlDelRangeStart",
             W + "customXmlMoveFromRangeStart", W + "customXmlMoveToRangeStart",
+            W + "customXmlInsRangeEnd", W + "customXmlDelRangeEnd",
+            W + "customXmlMoveFromRangeEnd", W + "customXmlMoveToRangeEnd",
         };
 
         var actual = new HashSet<XName>(IrReader.ProcessorActsOnNamesForTest);
