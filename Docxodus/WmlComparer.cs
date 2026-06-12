@@ -2106,7 +2106,9 @@ namespace Docxodus
             return node;
         }
 
-        private static void CopyMissingStylesFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
+        // internal (was private): reused by Docxodus.Ir.Diff.IrMarkupRenderer for styles continuity when
+        // assembling a tracked-revisions document from the LEFT package + RIGHT-side inserted content.
+        internal static void CopyMissingStylesFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
         {
             var revisionsStylesXDoc = wDocTo.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
             var afterStylesXDoc = wDocFrom.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
@@ -2135,7 +2137,10 @@ namespace Docxodus
         /// the numbering definitions from the revised document are preserved in the comparison result.
         /// Fixes GitHub issue: https://github.com/dotnet/Open-XML-SDK/issues/1634
         /// </summary>
-        private static void CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
+        // internal (was private): reused by Docxodus.Ir.Diff.IrMarkupRenderer for numbering continuity
+        // (esp. legal-numbering preservation, GitHub #1634) when right-only content carries numbering the
+        // LEFT package lacks.
+        internal static void CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
         {
             var fromNumberingPart = wDocFrom.MainDocumentPart.NumberingDefinitionsPart;
             if (fromNumberingPart == null)
@@ -6198,7 +6203,10 @@ namespace Docxodus
             return elementList;
         }
 
-        private static XElement MoveRelatedPartsToDestination(PackagePart partOfDeletedContent, PackagePart partInNewDocument,
+        // internal (was private): reused by Docxodus.Ir.Diff.IrMarkupRenderer to import right-side media
+        // (image embeds on inserted/equal content) into the left-based output package, rewriting the cloned
+        // element's relationship ids in place. Self-contained part-copy + fresh-rId mint + recursive xml fixup.
+        internal static XElement MoveRelatedPartsToDestination(PackagePart partOfDeletedContent, PackagePart partInNewDocument,
             XElement contentElement)
         {
             var elementsToUpdate = contentElement
@@ -6215,6 +6223,12 @@ namespace Docxodus
                 foreach (var att in attributesToUpdate)
                 {
                     var rId = (string)att;
+
+                    // An r:id can also name a HYPERLINK or EXTERNAL relationship (e.g. w:hyperlink/@r:id) rather
+                    // than a part relationship; PackagePart.GetRelationship throws for those. Skip any rId that
+                    // is not a part relationship here — the caller is responsible for hyperlink/external rels.
+                    if (!partOfDeletedContent.RelationshipExists(rId))
+                        continue;
 
                     var relationshipForDeletedPart = partOfDeletedContent.GetRelationship(rId);
                     if (relationshipForDeletedPart == null)
