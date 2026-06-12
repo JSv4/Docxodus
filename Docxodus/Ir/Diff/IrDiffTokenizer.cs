@@ -130,15 +130,34 @@ internal static class IrDiffTokenizer
     /// Separator tokens (one Separator token per separator char). Advances <paramref name="charOffset"/>
     /// by the run's raw length.
     /// </summary>
+    /// <remarks>
+    /// <para><b>NBSP conflation happens at SPLIT time, not just in the match key.</b> When
+    /// <see cref="IrDiffSettings.ConflateBreakingAndNonbreakingSpaces"/> is true, U+00A0 (non-breaking
+    /// space) is treated as a word separator EQUIVALENT to an ordinary space — even though it is not a
+    /// member of <see cref="IrDiffSettings.WordSeparators"/>. This matches WmlComparer, which conflates
+    /// NBSP→space BEFORE its word split: in <c>l'article&#160;1</c> (NBSP) vs <c>l'article 1</c> (space)
+    /// the only change is the space character, so both must tokenize to the SAME word/separator boundaries
+    /// — <c>{l'article}{sep}{1}</c> — and the resulting Separator token's match key normalizes to <c>" "</c>.
+    /// Folding only in the post-split match key (as a NBSP-inside-a-word) would leave the two sides with
+    /// DIFFERENT token boundaries (one word <c>l'article&#160;1</c> vs three tokens), producing a spurious
+    /// diff. The Separator token's raw <see cref="IrDiffToken.Text"/> preserves the original U+00A0 so the
+    /// rendered output is byte-faithful. When the setting is false, U+00A0 is an ordinary word character
+    /// (its previous behavior).</para>
+    /// </remarks>
     private static void EmitTextRun(
         string text, IrRunFormat format, IrDiffSettings settings, string? linkSuffix,
         List<IrDiffToken> tokens, ref int charOffset)
     {
+        bool nbspIsSeparator = settings.ConflateBreakingAndNonbreakingSpaces;
+
+        bool IsSeparator(char c) =>
+            settings.WordSeparators.Contains(c) || (nbspIsSeparator && c == '\u00A0');
+
         int i = 0;
         while (i < text.Length)
         {
             char c = text[i];
-            if (settings.WordSeparators.Contains(c))
+            if (IsSeparator(c))
             {
                 int start = charOffset + i;
                 string raw = c.ToString();
@@ -150,7 +169,7 @@ internal static class IrDiffTokenizer
             else
             {
                 int wordStart = i;
-                while (i < text.Length && !settings.WordSeparators.Contains(text[i]))
+                while (i < text.Length && !IsSeparator(text[i]))
                     i++;
                 string raw = text.Substring(wordStart, i - wordStart);
                 int start = charOffset + wordStart;

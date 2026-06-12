@@ -113,19 +113,42 @@ public class IrParityScoreboardTests
         // that splits the change into more revisions. The split is in the ENGINE'S edit script (the grain is
         // untouchable); render-time coalescing already merges separator-bridged regions but cannot UN-match a
         // genuine (if coincidental) equal token without re-running the diff at a coarser grain.
-        ["WC-1170"] = "IR token differ matches a coincidental interior word (` provides`), splitting one del+ins into +1 — engine grain, render-time cannot un-match.",
-        ["WC-1190"] = "Same coincidental-interior-match split as WC-1170 (+1) — engine grain.",
+        ["WC-1170"] = "WC007-Longest-At-End: `Video provides.` → a long paragraph. The IR token differ matches the COINCIDENTAL shared word `Video` (the source `Video` against the `Video` in the after-text's `Online Video`), so it splits the change into ins `When you click Online ` + del ` provides` + ins `, you can paste …` (3) where WmlComparer's whole-doc LCS reports one del + one ins (2). The +1 is the engine's edit-script grain; render-time cannot un-match the genuine equal `Video` token.",
+        ["WC-1190"] = "WC007-Moved-into-Table: the `Video provides.` paragraph is moved into a table. The IR aligner reports the whole paragraph as del `Video provides.` + ins `Video provides.` PLUS a zero-width empty insert for the new table-cell paragraph boundary (3) vs WmlComparer's 2 — engine reader/grain, NOT the WC-1170 coincidental-word mechanism.",
         ["WC-1210"] = "Para-before-table: IR splits the changed phrase one finer than WmlComparer's LCS (+1) — engine grain.",
         ["WC-1420"] = "Math-heavy paragraph: IR token grain splits a math-adjacent run one finer than WmlComparer (+1) — engine grain.",
         ["WC-1430"] = "Math-heavy paragraph: +1 finer split vs WmlComparer's LCS — engine grain.",
         ["WC-1440"] = "Image+math+para: IR reports the math/run boundary at a finer grain (+3) — engine grain.",
         ["WC-1450"] = "Table-4-row-image: IR row/run grain is finer than WmlComparer's LCS (+2) — engine grain.",
-        ["WC-1940"] = "SmartArt-only paragraph insert/delete (empty text) WmlComparer does not count, plus a finer body-text split (+2) — engine reader/grain.",
+        // WC-1940 (WC052-SmartArt-Same vs -Mod): IR 4 vs WmlComparer 2 (+2). The real edit is two body-text
+        // deletes (` too`, ` it`) which BOTH engines report. IR adds TWO spurious empty-text revisions: a pure
+        // DeleteBlock `"" (L set, R unset)` and a pure InsertBlock `"" (L unset, R set)` over SmartArt-only
+        // paragraphs (graphicData uri=…/diagram, no image/math/text). These paragraphs are UNCHANGED but the
+        // diagram's relationship-id renumbers between revisions, so their opaque content hashes differ and the
+        // aligner pairs them as delete+insert instead of Equal — an engine READER/aligner artifact, not a
+        // render-grain one. The existing zero-width prune CANNOT be extended to drop them: it is scoped to
+        // `sec:` section-break anchors precisely because an empty-text paragraph DeleteBlock over a pure-SmartArt
+        // paragraph is INDISTINGUISHABLE (same block kind IrParagraph, same empty text, same L-set/R-unset
+        // anchor shape) from WC-1320's empty-text SmartArt-paragraph delete that WmlComparer DOES count
+        // (expected 1). Pruning by that shape would regress WC-1320/WC-1230/WC-1240. The fix belongs in the
+        // reader/aligner (stabilize SmartArt opaque hashing across rel-id renumber), out of render scope.",
+        ["WC-1940"] = "WC052-SmartArt-Same: IR 4 vs WmlComparer 2 (+2). Real edit = two body deletes (` too`, ` it`) both engines agree on. IR adds two SPURIOUS empty-text revisions — a pure DeleteBlock and a pure InsertBlock over UNCHANGED pure-SmartArt paragraphs whose diagram rel-ids renumber, so their opaque hashes differ and the aligner pairs them del+ins instead of Equal. Cannot be zero-width-pruned: an empty pure-SmartArt paragraph delete is indistinguishable in shape (IrParagraph, empty text, L-set/R-unset) from WC-1320's empty SmartArt-paragraph delete that WmlComparer DOES count — pruning regresses WC-1320/1230/1240. Reader/aligner fix (stable SmartArt hashing), out of render scope.",
         ["WC-1950"] = "Text-in-cell: IR splits the cell-text phrase finer than WmlComparer's LCS (+2) — engine grain.",
 
         // ---- Engine token-differ degenerates where WmlComparer keeps shared words (under-trim residual).
-        ["WC-1710"] = "Endnote phrase: word-boundary trim leaves IR one revision SHORT of WmlComparer (-1) — WmlComparer attributes an extra boundary word the IR LCS shares. Engine grain.",
-        ["WC-1720"] = "Reverse of WC-1710, same -1 boundary-word attribution difference — engine grain.",
+        // WC-1710/1720 (WC034-Endnotes-Before vs -After3): IR 6 vs WmlComparer 7 (-1). TWO distinct
+        // differences net out: (a) WmlComparer reports the body word `Video` as a del+ins PAIR (+2 of its 7)
+        // because the endnote-reference renumber in that paragraph perturbs its whole-doc LCS — the text
+        // `Video` is unchanged, so IR (correctly) reports NO body revision there; (b) inside the changed
+        // endnote, IR's render-time word-boundary affix trim coalesces `This is an endnote with a change`
+        // into ONE del `This is an` + ins `New` modify region, where WmlComparer splits it into `New endnote`
+        // + ` with a change` (a finer endnote-text grain). Net IR = 6, WmlComparer = 7. The body `Video`
+        // over-report is the oracle's; the endnote-grain difference is the engine's. Loosening the affix trim
+        // to recover the endnote split would REGRESS the many +1 over-report rows that rely on it (WC-1170,
+        // WC-1210, WC-1420/1430, WC-1950) — verified to inflate them. Kept as a deviation; the trim word it
+        // absorbs is the endnote sentence's shared `endnote`/`with a change` boundary run.",
+        ["WC-1710"] = "Endnote-After3: IR 6 vs WmlComparer 7 (-1). (a) WmlComparer spuriously reports the UNCHANGED body word `Video` as del+ins (endnote-ref renumber perturbs its LCS); IR correctly reports none there. (b) Inside the changed endnote, IR's word-boundary affix trim coalesces `This is an endnote with a change` into one del `This is an`+ins `New` region where WmlComparer splits `New endnote`+` with a change` finer. Loosening the trim to recover the split REGRESSES the +1 over-report rows (WC-1170/1210/1420/1430/1950) that depend on it — kept as a deviation.",
+        ["WC-1720"] = "Reverse of WC-1710 (After3 → Before), same two-part −1: oracle's spurious `Video` del+ins on the unchanged body word plus IR's affix-trim coalescing the endnote sentence one region coarser than WmlComparer. Same trim/over-report tension — kept as a deviation.",
 
         // ---- Reader: textbox VML/DrawingML duplication NOT collapsed by the adjacent-pair dedup.
         // Word emits one logical textbox as a DrawingML mc:Choice + a VML mc:Fallback. The render-time dedup
@@ -143,9 +166,15 @@ public class IrParityScoreboardTests
         ["WC-1750"] = "Endnote-with-table: the two endnote tables are NOT paired as Modified by the aligner (they fall out as whole-table delete+insert), so the per-cell edits WmlComparer reports (6) collapse to whole-table del+ins (3). Aligner pairing — untouchable at render time.",
         ["WC-1760"] = "Reverse of WC-1750, same aligner table-pairing under-report (6 vs 3) — engine alignment.",
 
-        // ---- WmlComparer under-reports (the IR side is arguably MORE correct).
-        ["WC-1970"] = "French apostrophe/numbering edit (l'article → l'article 1): WmlComparer reports ZERO revisions (a documented oracle miss on the apostrophe); IR correctly detects the real content change (2). Reproducing 0 would mean emulating an oracle BUG that hides a true edit — declined.",
-        ["WC-1980"] = "Reverse/sibling of WC-1970, same WmlComparer apostrophe under-report (0 vs 2); IR is more correct — declined to emulate the oracle bug.",
+        // NOTE — WC-1970/WC-1980 (WC055/WC056 French "l'article 1" → "l'article 1", a pure
+        // space→NBSP edit) were FORMERLY catalogued here as a WmlComparer "oracle under-report". That was a
+        // MISDIAGNOSIS: WmlComparer's 0 revisions is CORRECT — under ConflateBreakingAndNonbreakingSpaces an
+        // NBSP↔space swap is not a content change. The IR engine's spurious 2 revisions were a real tokenizer
+        // BUG: it folded NBSP→space only in the post-split match key, so the NBSP side glued "l'article 1"
+        // into ONE word while the space side split it into three tokens — different boundaries, spurious diff.
+        // Fixed in IrDiffTokenizer (NBSP is now a separator at SPLIT time when conflating); both rows now
+        // genuinely PASS (0 == 0) and are no longer deviations. See IrDiffTokenizerTests
+        // Nbsp_conflation_on_* and the dated correction in the M2.3 plan Outcome.
     };
 
     // ---------------------------------------------------------------------- WC003: revisionCount parity

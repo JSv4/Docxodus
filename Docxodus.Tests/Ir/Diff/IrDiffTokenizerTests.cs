@@ -107,15 +107,19 @@ public class IrDiffTokenizerTests
     [Fact]
     public void Nbsp_conflation_on_matches_space()
     {
-        // U+00A0 is NOT in the separator set, so "a\u00A0b" is one word; conflation folds the NBSP
-        // in the key to a regular space so it equals the space-separated word's key.
-        // (Space IS a separator, so "a b" splits into Word/Sep/Word; NBSP is NOT, so "a\u00A0b" is one
-        // word. The behavior under test is the key fold: the NBSP word's key uses a regular space.)
+        // With conflation ON, U+00A0 splits as a separator EQUIVALENT to ' ' (the WC-1970/1980 fix), so
+        // "a\u00A0b" tokenizes to {Word a}{Separator}{Word b} \u2014 IDENTICAL boundaries to the space-separated
+        // "a b". The separator token's raw Text preserves the NBSP; its MatchKey folds to a regular space,
+        // making the whole MatchKey sequence equal to the space form's.
         var on = new IrDiffSettings { ConflateBreakingAndNonbreakingSpaces = true };
-        var nbsp = Tok(TextPara("a\u00A0b"), on)[0];
-        Assert.Equal(IrDiffTokenKind.Word, nbsp.Kind);
-        Assert.Equal("a\u00A0b", nbsp.Text);     // raw preserved
-        Assert.Equal("a b", nbsp.MatchKey);       // folded to a regular space
+        var nbsp = Tok(TextPara("a\u00A0b"), on);
+        var space = Tok(TextPara("a b"), on);
+        Assert.Equal(
+            new[] { IrDiffTokenKind.Word, IrDiffTokenKind.Separator, IrDiffTokenKind.Word },
+            nbsp.Select(t => t.Kind));
+        Assert.Equal("\u00A0", nbsp[1].Text);                          // raw NBSP preserved
+        Assert.Equal(" ", nbsp[1].MatchKey);                            // folded to a regular space
+        Assert.Equal(space.Select(t => t.MatchKey), nbsp.Select(t => t.MatchKey)); // identical key sequence
     }
 
     [Fact]
@@ -126,6 +130,45 @@ public class IrDiffTokenizerTests
         Assert.NotEqual(
             Tok(TextPara("a b"), off)[0].MatchKey,
             Tok(TextPara("a\u00A0b"), off)[0].MatchKey);
+    }
+
+    [Fact]
+    public void Nbsp_conflation_on_splits_nbsp_as_a_separator_char()
+    {
+        // The fix (WC-1970/1980): with conflation ON, U+00A0 must SPLIT at tokenize time exactly like an
+        // ordinary space \u2014 even though it is not a WordSeparators member. "x\u00A0y" therefore tokenizes
+        // to {Word "x"}{Separator}{Word "y"}, NOT to a single word "x\u00A0y". The Separator token's raw
+        // Text preserves the original NBSP, while its MatchKey normalizes to a regular space.
+        var on = new IrDiffSettings { ConflateBreakingAndNonbreakingSpaces = true };
+        var tokens = Tok(TextPara("x\u00A0y"), on);
+        Assert.Equal(
+            new[] { IrDiffTokenKind.Word, IrDiffTokenKind.Separator, IrDiffTokenKind.Word },
+            tokens.Select(t => t.Kind));
+        Assert.Equal(new[] { "x", "\u00A0", "y" }, tokens.Select(t => t.Text)); // raw NBSP preserved
+        Assert.Equal(" ", tokens[1].MatchKey);                                  // key folds to a space
+    }
+
+    [Fact]
+    public void Nbsp_conflation_on_yields_identical_matchkey_sequence_to_space()
+    {
+        // A pure space\u2194NBSP edit must produce an IDENTICAL token MatchKey sequence under conflation, so the
+        // diff sees zero content change. This is exactly the WC055/WC056 "l'article 1" vs "l'article\u00A01"
+        // case: WmlComparer reports 0 revisions and is CORRECT; the IR engine must agree.
+        var on = new IrDiffSettings { ConflateBreakingAndNonbreakingSpaces = true };
+        var spaceKeys = Tok(TextPara("l'article 1"), on).Select(t => t.MatchKey);
+        var nbspKeys = Tok(TextPara("l'article\u00A01"), on).Select(t => t.MatchKey);
+        Assert.Equal(spaceKeys, nbspKeys);
+    }
+
+    [Fact]
+    public void Nbsp_conflation_off_yields_distinct_matchkey_sequence_from_space()
+    {
+        // With the setting OFF, current behavior holds: NBSP is an ordinary word char, so "a\u00A0b" is one
+        // word while "a b" splits into three tokens \u2014 the MatchKey SEQUENCES differ (a real content change).
+        var off = new IrDiffSettings { ConflateBreakingAndNonbreakingSpaces = false };
+        var spaceKeys = Tok(TextPara("a b"), off).Select(t => t.MatchKey).ToList();
+        var nbspKeys = Tok(TextPara("a\u00A0b"), off).Select(t => t.MatchKey).ToList();
+        Assert.NotEqual(spaceKeys, nbspKeys);
     }
 
     [Fact]

@@ -112,10 +112,17 @@ public class IrVsWmlComparerTests
         ScopeGapNewEmpty,
 
         /// <summary>
-        /// The OLD engine surfaced NOTHING (old total = 0) while the IR engine reported revisions. WmlComparer
-        /// under-reported (e.g. WC055/WC056 French apostrophe edits the old engine misses). Here the IR side is
-        /// arguably MORE correct; flagged so the controller can confirm before treating these as "new-engine
-        /// over-reporting".
+        /// The OLD engine surfaced NOTHING (old total = 0) while the IR engine reported revisions. The
+        /// heuristic flags these for the controller to confirm whether WmlComparer under-reported (IR more
+        /// correct) or the IR over-reported (IR bug).
+        /// <para><b>Correction (2026-06-11):</b> the original WC055/WC056 ("French apostrophe") example here was
+        /// a MISDIAGNOSIS. Those pairs are a pure space→NBSP edit; under
+        /// <see cref="IrDiffSettings.ConflateBreakingAndNonbreakingSpaces"/> that is NOT a content change, so
+        /// WmlComparer's 0 was CORRECT and the IR's revisions were a tokenizer bug (NBSP folded only in the
+        /// post-split match key, splitting token boundaries differently on the two sides). Fixed in
+        /// <c>IrDiffTokenizer</c> (NBSP is a separator at split time when conflating); WC055/WC056 now MATCH at
+        /// 0 and are NO LONGER an <c>OldEmpty</c> pair. The bucket itself remains valid for genuine
+        /// WmlComparer under-reports.</para>
         /// </summary>
         OldEmpty,
 

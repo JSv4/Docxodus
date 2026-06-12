@@ -60,7 +60,9 @@ build green.
   pair MATCH / GRANULARITY / DIVERGENT, with 8 mechanical DIVERGENT cause buckets. The **dominant DIVERGENT
   cause is `ScopeGapNewEmpty`** — the IR body-only diff path produces nothing for edits living in textbox /
   footnote / endnote scopes (WC036/WC037/WC044–WC051/WC059/WC060/WC063/WC065–WC067). Other buckets:
-  `OldEmpty` (WmlComparer under-reports, e.g. WC055/WC056 French apostrophe — IR is more correct),
+  `OldEmpty` (WmlComparer reports 0 while IR reports edits; the heuristic ASSUMED IR more correct here, but
+  for WC055/WC056 that was wrong — see the 2026-06-11 correction below: those were an IR NBSP-tokenizer bug,
+  now fixed, and both MATCH WmlComparer at 0),
   `MoveSemantics`, `FormatOnly`, `SpecialChars` (WmlComparer's documented U+2011/U+00AD/PUA drops),
   `PunctuationBoundary`, `OpaqueGap`, `TokenSpanGranularity` (the dominant residual — the engines agree on
   the changed letters but attribute different amounts of surrounding context). Asserts totality only (zero
@@ -158,6 +160,15 @@ IrRevisionRenderer`, `WmlComparerSettings → IrDiffSettings` mapping), soft-ass
 | `ScopeGapNewEmpty` (got 0) | 8 | WC-1600, WC-1660, WC-1670, WC-1680, WC-1750, WC-1760, WC-2050, WC-2060 | Edit lives entirely in footnote/endnote scope; IR body-only diff path reaches none of it ⇒ 0 revisions. |
 | Partial scope under-report (got < expected) | 13 | WC-1410, WC-1620, WC-1630, WC-1640, WC-1650, WC-1710, WC-1720, WC-1730, WC-1740, WC-1920, WC-1930, WC-2010, WC-2020 | Footnote/endnote + text-box-in-cell pairs: IR sees the body part of the change but not the note/textbox part ⇒ fewer revisions. |
 | `TokenSpanGranularity` / table-cell over-report (got > expected) | 27 | WC-1100, WC-1120, WC-1170, WC-1180, WC-1190, WC-1210, WC-1220, WC-1270, WC-1280, WC-1310, WC-1350, WC-1360, WC-1370, WC-1420, WC-1430, WC-1440, WC-1450, WC-1580, WC-1610, WC-1830, WC-1840, WC-1900, WC-1940, WC-1950, WC-1960, WC-1970, WC-1980 | IR atomizes a change into more revision spans than WmlComparer (off-by-1/2 punctuation-boundary + per-cell table granularity, e.g. WC-1950 21≫2, WC-1940 7≫2). WC-1960/1970/1980 are `OldEmpty` (WmlComparer reports 0 — IR arguably more correct). |
+
+> **Correction (2026-06-11, M2.4 review).** The `OldEmpty` reading of **WC-1970/WC-1980** above was a
+> MISDIAGNOSIS and is RETRACTED. WC055/WC056 are a pure space→NBSP edit (`l'article 1` → `l'article` +
+> NBSP + `1`). Under `ConflateBreakingAndNonbreakingSpaces` that is NOT a content change, so WmlComparer's
+> 0 revisions is CORRECT — it was never under-reporting. The IR's 2 revisions were a real `IrDiffTokenizer`
+> BUG: NBSP was folded to space only in the post-split match key, so the NBSP side glued `l'article 1` into
+> one word while the space side split it three ways — different token boundaries, spurious diff. Fixed by
+> treating NBSP as a separator at SPLIT time when conflating; both now genuinely MATCH at 0. (WC-1960 is a
+> separate, unrelated table-cell case and remains correct at 0.)
 | Move-via-anchoring (DetectMoves off-switch is partial) | 2 | `MoveDetection_ShortText_BelowMinimum`, `MoveDetection_Disabled` | Exact-content paragraph relocations are caught by the aligner's off-spine anchoring regardless of `MoveSimilarityThreshold`/min-words, so the adapter's `DetectMoves=false` (threshold→2.0) and below-min cases still render `Moved`. Documented engine difference, not a mapping bug. |
 
 ### M2.4 burn-down (priority order — which buckets unlock the most)
@@ -177,6 +188,10 @@ IrRevisionRenderer`, `WmlComparerSettings → IrDiffSettings` mapping), soft-ass
    the ported expectations — a **user/controller decision**, since "parity" here means matching a count the
    IR arguably improves on. Flag: WC-1960/1970/1980 (`OldEmpty`) should NOT be "fixed" toward WmlComparer's
    under-report.
+   > **Correction (2026-06-11):** WC-1970/1980 were NOT WmlComparer under-reports — they were an IR tokenizer
+   > NBSP-conflation bug (a space→NBSP edit wrongly diffed). Fixed at split time; both now MATCH WmlComparer
+   > at 0 and are removed from the deviation catalog. Only WC-1960 remains a genuine 0 (unrelated). The
+   > apostrophe family is resolved as a real engine fix, not a documented oracle deviation.
 4. **Move off-switch fidelity.** Add a real `DetectMoves` gate that also suppresses exact-content
    anchoring-moves (not just fuzzy moves), closing the 2 move failures. Small, isolated.
 

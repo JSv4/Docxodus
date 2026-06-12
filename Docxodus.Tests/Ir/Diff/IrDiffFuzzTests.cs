@@ -41,8 +41,10 @@ namespace Docxodus.Tests.Ir.Diff;
 /// WmlComparer emits rPrChange revisions the IR renderer models differently) are EXCLUDED, because the
 /// cross-engine equivalence relation does not hold for those kinds by construction. For a comparable case we
 /// compare under the Task 2 combined-char-bag equivalence (<see cref="RevisionEquivalence"/>). A mismatch is
-/// NOT an automatic failure — the two engines legitimately atomize and under-report differently (e.g.
-/// WmlComparer's documented French-apostrophe under-report). We FAIL ONLY on the one asymmetric signal that
+/// NOT an automatic failure — the two engines legitimately atomize and report at different grains (and
+/// WmlComparer has documented oracle quirks, e.g. its U+2011/U+00AD/PUA special-char drops). (The former
+/// "French-apostrophe under-report" example here was retracted 2026-06-11: that was an IR NBSP-tokenizer
+/// bug, since fixed, not an oracle under-report.) We FAIL ONLY on the one asymmetric signal that
 /// is a genuine regression: the NEW engine surfaced NOTHING while the OLD engine saw real content
 /// (one-sided-new-empty). All other mismatches are counted, characterized, and written to the artifacts
 /// dir.</para>
