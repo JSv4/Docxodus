@@ -61,21 +61,22 @@ namespace Docxodus.Ir.Diff;
 /// <item><see cref="IrEditOpKind.ModifyBlock"/> with a paragraph token diff → per-span run wrapping (the fine
 /// path). Equal/FormatChanged spans → right-side runs as-is; Insert spans → <c>w:ins</c>; Delete spans →
 /// <c>w:del</c>/<c>delText</c>.</item>
-/// <item><see cref="IrEditOpKind.FormatOnlyBlock"/> → the right block verbatim (Task 3 has no <c>w:rPrChange</c>;
-/// the block is content-equal so accept/reject both yield correct TEXT — see the FormatChanged gap below).</item>
+/// <item><see cref="IrEditOpKind.FormatOnlyBlock"/> → the right block with each run stamped a
+/// <c>w:rPrChange</c> carrying the LEFT run's old <c>w:rPr</c> (Task 4): accept keeps the right formatting,
+/// reject restores the left.</item>
 /// <item>A TABLE ModifyBlock, a non-paragraph Modified pair, moves, and notes → a conservative whole-block
 /// <c>w:del</c> of the LEFT block immediately followed by a <c>w:ins</c> of the RIGHT block. Accept keeps the
 /// right (correct), reject keeps the left (correct); the text-level invariant holds. Task 4 replaces these
 /// with native table/move/note markup.</item>
 /// </list></para>
 ///
-/// <para><b>FormatChanged-span gap (precise).</b> A <see cref="IrTokenOpKind.FormatChanged"/> span is
-/// TEXT-equal on both sides but FORMAT-differing. Task 3 renders it as the RIGHT-side runs with NO
-/// <c>w:rPrChange</c>. Consequence: reject-all then restores the right-side FORMATTING on those runs (the
-/// LEFT formatting is lost) while restoring the correct TEXT. Because THE INVARIANT compares per-block
-/// <c>ContentHash</c> (which is text/structure, NOT modeled run format), it still holds. Task 4 closes this
-/// by emitting <c>w:rPrChange</c> carrying the old rPr so reject restores the left formatting too. Likewise a
-/// FormatOnly block reject yields right formatting; same Task-4 gap, same invariant safety.</para>
+/// <para><b>FormatChanged-span markup (Task 4).</b> A <see cref="IrTokenOpKind.FormatChanged"/> span is
+/// TEXT-equal on both sides but FORMAT-differing. It renders as the RIGHT-side runs (accepted-state
+/// formatting), each stamped a <c>w:rPrChange</c> whose inner <c>w:rPr</c> is the LEFT run's old formatting
+/// (recovered positionally from the left source run at the aligned char). Accept drops the rPrChange (keeps
+/// the right format); reject swaps the run's rPr to the rPrChange's inner rPr (restores the left format). The
+/// strengthened invariant compares the boundary-normalized modeled-only block format signature on BOTH sides,
+/// so format round-trips, not just text.</para>
 ///
 /// <para><b>Note scopes (Task 4).</b> <see cref="IrEditScript.NoteOps"/> are NOT rendered into footnote/
 /// endnote part markup yet. The body still round-trips; note-scope markup + id uniqueness across scopes is
@@ -204,8 +205,10 @@ internal static class IrMarkupRenderer
                 break;
 
             case IrEditOpKind.FormatOnlyBlock:
-                // Text-equal, format-differing. Task 3 has no rPrChange: emit the right block verbatim.
-                EmitVerbatim(op.RightAnchor, state.Right, state, sink, fromRight: true);
+                // Text-equal, block-format-differing. Emit the right paragraph but stamp each run with a
+                // w:rPrChange carrying the LEFT run's old rPr (so reject restores the left formatting). A
+                // non-paragraph FormatOnly pair (no run model) falls through to a verbatim right emit.
+                EmitFormatOnlyParagraph(op, state, sink);
                 break;
 
             case IrEditOpKind.InsertBlock:
@@ -423,6 +426,45 @@ internal static class IrMarkupRenderer
         rPr.AddFirst(new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes()));
     }
 
+    /// <summary>
+    /// Emit a FormatOnly paragraph: the RIGHT paragraph's text/structure with each run stamped a
+    /// <c>w:rPrChange</c> carrying the LEFT run's old <c>w:rPr</c> at the aligned char position. The two
+    /// paragraphs are ContentHash-equal (same text), so the left char at offset k matches the right char at
+    /// offset k and the left rPr is recoverable positionally. Accept keeps the right formatting; reject
+    /// restores the left. A non-paragraph FormatOnly pair (no run model) emits the right block verbatim.
+    /// </summary>
+    private static void EmitFormatOnlyParagraph(IrEditOp op, RenderState state, List<XElement> sink)
+    {
+        var rightPara = SourceElement(op.RightAnchor, state.Right);
+        var leftPara = SourceElement(op.LeftAnchor, state.Left);
+        if (rightPara == null || rightPara.Name != W.p || leftPara == null || leftPara.Name != W.p)
+        {
+            EmitVerbatim(op.RightAnchor, state.Right, state, sink, fromRight: true);
+            return;
+        }
+
+        var leftRuns = new SourceRunModel(leftPara);
+        var newPara = new XElement(W.p);
+        var rightPPr = rightPara.Element(W.pPr);
+        if (rightPPr != null)
+            newPara.Add(StripUnids(new XElement(rightPPr)));
+
+        int cursor = 0;
+        foreach (var child in rightPara.Elements().Where(e => e.Name != W.pPr))
+        {
+            var clone = StripUnids(new XElement(child));
+            state.RegisterMediaReferences(clone);
+            if (clone.Name == W.r)
+            {
+                var oldRPr = leftRuns.RPrAtChar(cursor);
+                ApplyRPrChange(clone, oldRPr, state);
+                cursor += RunTextLength(clone);
+            }
+            newPara.Add(clone);
+        }
+        sink.Add(newPara);
+    }
+
     // ----------------------------------------------------------------- fine modify path
 
     /// <summary>
@@ -470,32 +512,58 @@ internal static class IrMarkupRenderer
                 case IrTokenOpKind.Equal:
                 case IrTokenOpKind.FormatChanged:
                 {
-                    // Right-side runs as-is (FormatChanged: no rPrChange in Task 3 — documented gap). BUT a
-                    // span that is "Equal" by MATCH KEY can still differ in RAW text — the tokenizer conflates
-                    // NBSP↔space and case-folds keys, so e.g. a left space vs right NBSP at the same position is
-                    // an Equal token op whose raw bytes differ. Emitting the unwrapped right run there would make
-                    // reject-all keep the RIGHT byte (NBSP) instead of restoring the LEFT (space). So when the
-                    // span's raw left/right text is NOT byte-identical, fall back to del(left)+ins(right) for
-                    // that span — the accept/reject invariant then holds byte-for-byte. (This subsumes the
-                    // FormatChanged case's text too; only its FORMAT is the documented Task-4 gap, not its text.)
+                    // Right-side runs as-is. BUT a span that is "Equal" by MATCH KEY can still differ in RAW
+                    // text — the tokenizer conflates NBSP↔space and case-folds keys, so e.g. a left space vs
+                    // right NBSP at the same position is an Equal token op whose raw bytes differ. Emitting the
+                    // unwrapped right run there would make reject-all keep the RIGHT byte (NBSP) instead of
+                    // restoring the LEFT (space). So when the span's raw left/right text is NOT byte-identical,
+                    // fall back to del(left)+ins(right) for that span — the accept/reject text invariant then
+                    // holds byte-for-byte.
                     var (rs, re) = RightSpanChars(rightTokens, tokenOp);
                     var (ls, le) = LeftSpanChars(leftTokens, tokenOp);
                     string rawRight = RawSpanText(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
                     string rawLeft = RawSpanText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
-                    if (string.Equals(rawLeft, rawRight, StringComparison.Ordinal))
+                    if (!string.Equals(rawLeft, rawRight, StringComparison.Ordinal))
+                    {
+                        foreach (var r in leftRuns.Slice(ls, le))
+                            content.Add(WrapRunLevel(r, RevKind.Del, state));
+                        foreach (var r in rightRuns.Slice(rs, re))
+                            content.Add(WrapRunLevel(r, RevKind.Ins, state));   // registers media on its clone
+                    }
+                    else if (tokenOp.Kind == IrTokenOpKind.FormatChanged)
+                    {
+                        // Text-equal, FORMAT-differing: emit the RIGHT runs (accepted-state formatting) and stamp
+                        // each with a w:rPrChange carrying the LEFT (old) modeled rPr. Accept drops the rPrChange
+                        // (keeps right format); reject swaps the run's rPr to the rPrChange's inner rPr (restores
+                        // the left format). The old rPr is rebuilt from the LEFT token's modeled IrRunFormat at
+                        // the aligned position, so the modeled-only block format signature round-trips.
+                        // rawLeft == rawRight here, so the left/right char spans carry identical text and the
+                        // left char at offset k matches the right char at offset k. For each emitted right run
+                        // covering right chars [cursor, cursor+len), clone the LEFT run's rPr at the aligned left
+                        // char (ls + (cursor-rs)) as the old formatting, preserving modeled AND unmodeled left rPr.
+                        int cursor = rs;
+                        foreach (var r in rightRuns.Slice(rs, re))
+                        {
+                            state.RegisterMediaReferences(r);
+                            // Only a w:r carries run formatting — bookmarks/zero-width markers pass through
+                            // untouched (stamping an rPr onto them is schema-invalid).
+                            if (r.Name == W.r)
+                            {
+                                int leftChar = ls + (cursor - rs);
+                                var oldRPr = leftRuns.RPrAtChar(leftChar);
+                                ApplyRPrChange(r, oldRPr, state);
+                            }
+                            content.Add(r);
+                            cursor += RunTextLength(r);
+                        }
+                    }
+                    else
                     {
                         foreach (var r in rightRuns.Slice(rs, re))
                         {
                             state.RegisterMediaReferences(r);
                             content.Add(r);
                         }
-                    }
-                    else
-                    {
-                        foreach (var r in leftRuns.Slice(ls, le))
-                            content.Add(WrapRunLevel(r, RevKind.Del, state));
-                        foreach (var r in rightRuns.Slice(rs, re))
-                            content.Add(WrapRunLevel(r, RevKind.Ins, state));   // registers media on its clone
                     }
                     break;
                 }
@@ -565,6 +633,34 @@ internal static class IrMarkupRenderer
     {
         foreach (var t in runLevel.DescendantsAndSelf(W.t).ToList())
             t.Name = W.delText;
+    }
+
+    // ----------------------------------------------------------------- rPrChange (format change)
+
+    /// <summary>The number of <c>w:t</c> characters a rebuilt run carries (for advancing the char cursor).</summary>
+    private static int RunTextLength(XElement run) =>
+        run.Elements(W.t).Sum(t => t.Value.Length);
+
+    /// <summary>
+    /// Stamp <paramref name="run"/> (a RIGHT-side run rebuilt over a FormatChanged span) with a
+    /// <c>w:rPrChange</c> carrying <paramref name="oldRPr"/> (the LEFT/old run properties). The rPrChange is
+    /// the LAST child of the run's <c>w:rPr</c> (schema order). Accept drops it (run keeps its right rPr);
+    /// reject swaps the run's rPr to the rPrChange's inner rPr (restoring the left formatting). When the run
+    /// has no <c>w:rPr</c> yet, an empty one is created so the right-side (accepted) format is "no rPr".
+    /// </summary>
+    private static void ApplyRPrChange(XElement run, XElement? oldRPr, RenderState state)
+    {
+        var rPr = run.Element(W.rPr);
+        if (rPr == null)
+        {
+            rPr = new XElement(W.rPr);
+            run.AddFirst(rPr);
+        }
+        // Idempotence: never stack rPrChange markers.
+        rPr.Elements(W.rPrChange).Remove();
+        // The inner rPr is the OLD properties; an absent/empty old rPr is encoded as an empty w:rPr.
+        var inner = oldRPr != null ? StripUnids(new XElement(W.rPr, oldRPr.Attributes(), oldRPr.Elements())) : new XElement(W.rPr);
+        rPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), inner));
     }
 
     // ----------------------------------------------------------------- helpers
@@ -861,6 +957,26 @@ internal static class IrMarkupRenderer
             }
             FlushRun();
             return result;
+        }
+
+        /// <summary>The <c>w:rPr</c> of the source run whose text covers char position <paramref name="at"/>,
+        /// cloned (or null if that run has none / no segment covers the position). Used to recover the LEFT/old
+        /// run properties for a FormatChanged span's <c>w:rPrChange</c>.</summary>
+        public XElement? RPrAtChar(int at)
+        {
+            // Prefer a RunText segment that strictly contains [at, at+1); fall back to a segment starting at `at`.
+            Segment? hit = null;
+            foreach (var seg in _segments)
+            {
+                if (seg.Kind == SegmentKind.RunText && seg.Start <= at && at < seg.End)
+                {
+                    hit = seg;
+                    break;
+                }
+            }
+            hit ??= _segments.FirstOrDefault(s => s.Start <= at && (at < s.End || (s.IsZeroWidth && s.Start == at)));
+            var rPr = hit?.Element.Element(W.rPr);
+            return rPr != null ? new XElement(rPr) : null;
         }
 
         private static bool PreserveSpace(string s) =>

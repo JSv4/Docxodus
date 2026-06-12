@@ -87,6 +87,45 @@ public class IrMarkupRendererTests
         }
     }
 
+    /// <summary>The per-paragraph BOUNDARY-NORMALIZED modeled-only format signature sequence over a document's
+    /// body, descending into table cells, in document order. This is the FORMAT fingerprint the strengthened
+    /// invariant compares (Task 4 — w:rPrChange): two ContentHash-equal paragraphs compare format-equal iff
+    /// their per-token modeled formats agree, independent of run boundaries (so run-resegmentation from
+    /// rPrChange wrapping does not spuriously flip it). Non-paragraph blocks contribute their ContentHash only
+    /// (no run model / no modeled run format to compare).</summary>
+    private static List<string> BodyFormatSignatures(WmlDocument doc)
+    {
+        var ir = IrReader.Read(doc, ReadOpts);
+        var settings = new IrDiffSettings();
+        var sigs = new List<string>();
+        var blocks = ir.Body.Blocks.ToList();
+        if (blocks.Count > 0 && blocks[^1] is IrSectionBreak)
+            blocks.RemoveAt(blocks.Count - 1);
+        foreach (var block in blocks)
+            CollectFormatSignatures(block, settings, sigs);
+        return sigs;
+    }
+
+    private static void CollectFormatSignatures(IrBlock block, IrDiffSettings settings, List<string> sink)
+    {
+        switch (block)
+        {
+            case IrParagraph p:
+                sink.Add("pf:" + IrModeledFormat.BlockSignature(p, settings));
+                break;
+            case IrTable t:
+                sink.Add("tblf:" + t.ContentHash.ToHex());
+                foreach (var row in t.Rows)
+                    foreach (var cell in row.Cells)
+                        foreach (var b in cell.Blocks)
+                            CollectFormatSignatures(b, settings, sink);
+                break;
+            default:
+                sink.Add(block.GetType().Name + "f:" + block.ContentHash.ToHex());
+                break;
+        }
+    }
+
     /// <summary>Assert the rendered markup round-trips: accept ≡ right body, reject ≡ left body (ContentHash).</summary>
     private static void AssertRoundTrip(WmlDocument left, WmlDocument right, IrDiffSettings? settings = null, string? label = null)
     {
@@ -104,6 +143,18 @@ public class IrMarkupRendererTests
             $"ACCEPT≠RIGHT {label}\n  accept: [{string.Join(", ", acceptHashes)}]\n  right:  [{string.Join(", ", rightHashes)}]");
         Assert.True(rejectHashes.SequenceEqual(leftHashes),
             $"REJECT≠LEFT {label}\n  reject: [{string.Join(", ", rejectHashes)}]\n  left:   [{string.Join(", ", leftHashes)}]");
+
+        // STRENGTHENED (Task 4): format must round-trip too. Accept restores the RIGHT modeled formatting,
+        // reject the LEFT — proven by the boundary-normalized modeled-only format signature (so w:rPrChange and
+        // FormatOnly blocks restore the correct rPr on the appropriate side).
+        var acceptFmt = BodyFormatSignatures(accepted);
+        var rightFmt = BodyFormatSignatures(right);
+        var rejectFmt = BodyFormatSignatures(rejected);
+        var leftFmt = BodyFormatSignatures(left);
+        Assert.True(acceptFmt.SequenceEqual(rightFmt),
+            $"ACCEPT-FORMAT≠RIGHT {label}\n  accept: [{string.Join(", ", acceptFmt)}]\n  right:  [{string.Join(", ", rightFmt)}]");
+        Assert.True(rejectFmt.SequenceEqual(leftFmt),
+            $"REJECT-FORMAT≠LEFT {label}\n  reject: [{string.Join(", ", rejectFmt)}]\n  left:   [{string.Join(", ", leftFmt)}]");
     }
 
     // ----------------------------------------------------------------- targeted unit shapes
@@ -278,6 +329,140 @@ public class IrMarkupRendererTests
         AssertRoundTrip(left, right, label: "zero-width-boundary");
     }
 
+    // ----------------------------------------------------------------- format change (w:rPrChange)
+
+    [Fact]
+    public void Render_format_change_emits_rPrChange_with_old_rPr_and_round_trips_format()
+    {
+        // Same text, run gains bold: a FormatChanged span. The right run keeps bold (accepted state) and
+        // carries a w:rPrChange whose inner w:rPr is the LEFT (non-bold) formatting. Accept ⇒ bold, reject ⇒
+        // non-bold — proven by both the text AND format round-trip invariant.
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>sample text here</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>sample text here</w:t></w:r></w:p>");
+
+        var rendered = RenderMarkup(left, right);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var rPrChanges = wd.MainDocumentPart!.GetXDocument().Descendants(W.rPrChange).ToList();
+        Assert.NotEmpty(rPrChanges);
+        // The rPrChange carries the OLD rPr; here the old side is non-bold, so its inner rPr has no w:b.
+        var inner = rPrChanges[0].Element(W.rPr);
+        Assert.NotNull(inner);
+        Assert.Null(inner!.Element(W.b));
+        // Required attributes.
+        foreach (var c in rPrChanges)
+        {
+            Assert.NotNull(c.Attribute(W.id));
+            Assert.NotNull(c.Attribute(W.author));
+            Assert.NotNull(c.Attribute(W.date));
+        }
+        AssertRoundTrip(left, right, label: "format-change-add-bold");
+    }
+
+    [Fact]
+    public void Render_format_change_remove_bold_round_trips_format()
+    {
+        // Bold → non-bold: the OLD rPr must carry w:b so reject restores bold.
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>sample text here</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>sample text here</w:t></w:r></w:p>");
+
+        var rendered = RenderMarkup(left, right);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var rPrChange = wd.MainDocumentPart!.GetXDocument().Descendants(W.rPrChange).FirstOrDefault();
+        Assert.NotNull(rPrChange);
+        Assert.NotNull(rPrChange!.Element(W.rPr)!.Element(W.b));   // old (bold) preserved
+        AssertRoundTrip(left, right, label: "format-change-remove-bold");
+    }
+
+    /// <summary>
+    /// A dedicated FORMAT-MUTATION fuzz seed class (Task 4): every seed bolds N random words across the
+    /// generated paragraphs, producing pure FormatChanged spans. Exercises the w:rPrChange path at scale and
+    /// asserts the strengthened format round-trip invariant holds (accept ⇒ right format, reject ⇒ left).
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Fuzz")]
+    public void Fuzz_format_mutation_seeds_round_trip_format()
+    {
+        const int seedCount = 30;
+        var settings = new IrDiffSettings();
+        var failures = new List<string>();
+        int passed = 0;
+
+        for (int seed = 1; seed <= seedCount; seed++)
+        {
+            var (left, right, desc) = MakeFormatMutationPair(seed);
+            try
+            {
+                var rendered = RenderMarkup(left, right, settings);
+                var acc = RevisionProcessor.AcceptRevisions(rendered);
+                var rej = RevisionProcessor.RejectRevisions(rendered);
+                if (!BodyContentHashes(acc).SequenceEqual(BodyContentHashes(right)))
+                    failures.Add($"seed {seed}: ACCEPT≠RIGHT [{desc}]");
+                else if (!BodyContentHashes(rej).SequenceEqual(BodyContentHashes(left)))
+                    failures.Add($"seed {seed}: REJECT≠LEFT [{desc}]");
+                else if (!BodyFormatSignatures(acc).SequenceEqual(BodyFormatSignatures(right)))
+                    failures.Add($"seed {seed}: ACCEPT-FORMAT≠RIGHT [{desc}]");
+                else if (!BodyFormatSignatures(rej).SequenceEqual(BodyFormatSignatures(left)))
+                    failures.Add($"seed {seed}: REJECT-FORMAT≠LEFT [{desc}]");
+                else
+                    passed++;
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"seed {seed}: THREW {ex.GetType().Name}: {ex.Message} [{desc}]");
+            }
+        }
+
+        _out.WriteLine($"Format-mutation fuzz: {passed}/{seedCount} seeds passed, {failures.Count} failures");
+        foreach (var f in failures.Take(30))
+            _out.WriteLine("  FAIL " + f);
+        Assert.True(failures.Count == 0, $"{failures.Count}/{seedCount} format-mutation seeds failed.");
+    }
+
+    /// <summary>Deterministically generate a (plain, formatted) document pair where the right side adds bold/
+    /// italic/color to a seed-chosen subset of runs — pure FormatChanged spans (text identical).</summary>
+    private static (WmlDocument Left, WmlDocument Right, string Desc) MakeFormatMutationPair(int seed)
+    {
+        var rng = new Random(seed);
+        string[] bank = { "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel" };
+        int paraCount = 1 + rng.Next(3);
+        var leftSb = new System.Text.StringBuilder();
+        var rightSb = new System.Text.StringBuilder();
+        var desc = new System.Text.StringBuilder();
+        for (int p = 0; p < paraCount; p++)
+        {
+            leftSb.Append("<w:p>");
+            rightSb.Append("<w:p>");
+            int runCount = 2 + rng.Next(4);
+            for (int r = 0; r < runCount; r++)
+            {
+                string word = bank[rng.Next(bank.Length)] + (r < runCount - 1 ? " " : "");
+                // Escape nothing — bank words are plain ASCII.
+                leftSb.Append($"<w:r><w:t xml:space=\"preserve\">{word}</w:t></w:r>");
+                int pick = rng.Next(4);   // 0 = unchanged, 1 = bold, 2 = italic, 3 = color
+                string rPr = pick switch
+                {
+                    1 => "<w:rPr><w:b/></w:rPr>",
+                    2 => "<w:rPr><w:i/></w:rPr>",
+                    3 => "<w:rPr><w:color w:val=\"FF0000\"/></w:rPr>",
+                    _ => "",
+                };
+                if (pick != 0) desc.Append($"p{p}r{r}:{pick} ");
+                rightSb.Append($"<w:r>{rPr}<w:t xml:space=\"preserve\">{word}</w:t></w:r>");
+            }
+            leftSb.Append("</w:p>");
+            rightSb.Append("</w:p>");
+        }
+        return (IrTestDocuments.FromBodyXml(leftSb.ToString()),
+                IrTestDocuments.FromBodyXml(rightSb.ToString()),
+                desc.Length == 0 ? "no-format-change" : desc.ToString().Trim());
+    }
+
     // ----------------------------------------------------------------- corpus invariant (92 × 2)
 
     /// <summary>
@@ -340,12 +525,18 @@ public class IrMarkupRendererTests
                 try
                 {
                     var rendered = RenderMarkup(l, r, settings);
-                    var accept = BodyContentHashes(RevisionProcessor.AcceptRevisions(rendered));
-                    var reject = BodyContentHashes(RevisionProcessor.RejectRevisions(rendered));
+                    var acceptedDoc = RevisionProcessor.AcceptRevisions(rendered);
+                    var rejectedDoc = RevisionProcessor.RejectRevisions(rendered);
+                    var accept = BodyContentHashes(acceptedDoc);
+                    var reject = BodyContentHashes(rejectedDoc);
                     if (!accept.SequenceEqual(BodyContentHashes(r)))
                         failure = $"{key} [{dir}] ACCEPT≠RIGHT";
                     else if (!reject.SequenceEqual(BodyContentHashes(l)))
                         failure = $"{key} [{dir}] REJECT≠LEFT";
+                    else if (!BodyFormatSignatures(acceptedDoc).SequenceEqual(BodyFormatSignatures(r)))
+                        failure = $"{key} [{dir}] ACCEPT-FORMAT≠RIGHT";
+                    else if (!BodyFormatSignatures(rejectedDoc).SequenceEqual(BodyFormatSignatures(l)))
+                        failure = $"{key} [{dir}] REJECT-FORMAT≠LEFT";
                 }
                 catch (Exception ex)
                 {
@@ -398,12 +589,18 @@ public class IrMarkupRendererTests
             try
             {
                 var rendered = RenderMarkup(fuzzCase.Left, fuzzCase.Right, settings);
-                var accept = BodyContentHashes(RevisionProcessor.AcceptRevisions(rendered));
-                var reject = BodyContentHashes(RevisionProcessor.RejectRevisions(rendered));
+                var acceptedDoc = RevisionProcessor.AcceptRevisions(rendered);
+                var rejectedDoc = RevisionProcessor.RejectRevisions(rendered);
+                var accept = BodyContentHashes(acceptedDoc);
+                var reject = BodyContentHashes(rejectedDoc);
                 if (!accept.SequenceEqual(BodyContentHashes(fuzzCase.Right)))
                     failures.Add($"seed {seed}: ACCEPT≠RIGHT [{fuzzCase.DescribeMutations()}]");
                 else if (!reject.SequenceEqual(BodyContentHashes(fuzzCase.Left)))
                     failures.Add($"seed {seed}: REJECT≠LEFT [{fuzzCase.DescribeMutations()}]");
+                else if (!BodyFormatSignatures(acceptedDoc).SequenceEqual(BodyFormatSignatures(fuzzCase.Right)))
+                    failures.Add($"seed {seed}: ACCEPT-FORMAT≠RIGHT [{fuzzCase.DescribeMutations()}]");
+                else if (!BodyFormatSignatures(rejectedDoc).SequenceEqual(BodyFormatSignatures(fuzzCase.Left)))
+                    failures.Add($"seed {seed}: REJECT-FORMAT≠LEFT [{fuzzCase.DescribeMutations()}]");
                 else
                     passed++;
             }
