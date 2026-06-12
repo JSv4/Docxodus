@@ -346,6 +346,148 @@ public class IrRevisionRendererTests
         Assert.Equal(a, b);
     }
 
+    // ------------------------------------------------------------------ M2.4 Task 2: granularity + moves
+
+    private static readonly IrDiffSettings Compatible = new() { RevisionGranularity = RevisionGranularity.WmlComparerCompatible };
+
+    /// <summary>
+    /// Prelim (a): a paragraph with TWO textboxes, one of which is removed in the right document. The masked
+    /// placeholder-token Delete that the removal produces in the paragraph's own token diff has NO surface text
+    /// (a textbox placeholder is a non-text token), so it MUST NOT surface as a spurious empty Deleted — the
+    /// real change is the removed textbox's inner blocks, reported through the nested textbox diff. We assert
+    /// the revisions are exactly the removed textbox's inner content (here one Deleted of its text), with no
+    /// zero-width Inserted/Deleted anywhere.
+    /// </summary>
+    [Fact]
+    public void Two_textboxes_one_removed_yields_nested_ops_only_no_spurious_empty_revision()
+    {
+        var l = TwoTextboxParagraph("First box", "Second box");
+        var r = OneTextboxParagraph("First box");
+
+        foreach (var settings in new[] { Default, Compatible })
+        {
+            var revs = Render(l, r, settings).ToList();
+
+            // No zero-width ins/del — the masked placeholder Delete is suppressed.
+            Assert.DoesNotContain(revs, x =>
+                x.Type is IrRevisionType.Inserted or IrRevisionType.Deleted && x.Text.Length == 0);
+
+            // The only change is the removed second textbox's interior, reported as a Deleted carrying its text.
+            var del = Assert.Single(revs.Where(x => x.Type == IrRevisionType.Deleted));
+            Assert.Contains("Second box", del.Text);
+            Assert.DoesNotContain(revs, x => x.Type == IrRevisionType.Inserted);
+        }
+    }
+
+    /// <summary>
+    /// Compatible mode coalesces a paragraph's alternating per-word del/ins token ops into ONE Deleted + ONE
+    /// Inserted contiguous region (separators between changed words bridged), where Fine mode emits one
+    /// revision per word. Same content, different atomization — the WmlComparer-grade projection.
+    /// </summary>
+    [Fact]
+    public void Compatible_mode_coalesces_adjacent_word_ops_into_one_del_one_ins()
+    {
+        var l = Doc("This is now foo bar baz");
+        var r = Doc("This is what are the chances");
+
+        var fine = Render(l, r, Default).ToList();
+        var compat = Render(l, r, Compatible).ToList();
+
+        // Fine: one Deleted + one Inserted per changed word (three each here).
+        Assert.True(fine.Count(x => x.Type == IrRevisionType.Deleted) >= 3);
+
+        // Compatible: a single contiguous Deleted + single Inserted region.
+        Assert.Equal(1, compat.Count(x => x.Type == IrRevisionType.Deleted));
+        Assert.Equal(1, compat.Count(x => x.Type == IrRevisionType.Inserted));
+        Assert.Equal("now foo bar baz", compat.Single(x => x.Type == IrRevisionType.Deleted).Text);
+        Assert.Equal("what are the chances", compat.Single(x => x.Type == IrRevisionType.Inserted).Text);
+    }
+
+    /// <summary>
+    /// Compatible mode trims the common word-boundary prefix/suffix a whole-block degenerate del+ins shares,
+    /// attributing the change only to the differing middle (the WmlComparer grain). `This is a test.`/`This.`
+    /// share the word `This` and the punctuation `.`, so only ` is a test` is Deleted.
+    /// </summary>
+    [Fact]
+    public void Compatible_mode_trims_common_word_affixes_on_whole_block_replace()
+    {
+        var l = FromXml("<w:p><w:r><w:t>This is a test.</w:t></w:r></w:p>");
+        var r = FromXml("<w:p><w:r><w:t>This.</w:t></w:r></w:p>");
+
+        var compat = Render(l, r, Compatible).ToList();
+        var del = Assert.Single(compat.Where(x => x.Type == IrRevisionType.Deleted));
+        Assert.Equal(" is a test", del.Text);
+        Assert.DoesNotContain(compat, x => x.Type == IrRevisionType.Inserted); // the insert side trimmed to empty
+    }
+
+    /// <summary>
+    /// The word-affix trim must NOT cut inside a word: `Title`/`Title1` share the char prefix `Title`, but
+    /// since that splits the word `Title1` (no boundary after `Title` on the right), both stay whole — a
+    /// Deleted `Title` and an Inserted `Title1` (two revisions), matching WmlComparer.
+    /// </summary>
+    [Fact]
+    public void Compatible_mode_affix_trim_never_splits_a_word()
+    {
+        var l = FromXml("<w:p><w:r><w:t>Title</w:t></w:r></w:p>");
+        var r = FromXml("<w:p><w:r><w:t>Title1</w:t></w:r></w:p>");
+
+        var compat = Render(l, r, Compatible).ToList();
+        Assert.Equal("Title", Assert.Single(compat.Where(x => x.Type == IrRevisionType.Deleted)).Text);
+        Assert.Equal("Title1", Assert.Single(compat.Where(x => x.Type == IrRevisionType.Inserted)).Text);
+    }
+
+    /// <summary>
+    /// The DetectMoves render switch (<see cref="IrDiffSettings.RenderMoves"/> = false) relabels a move's two
+    /// halves as a plain Deleted (source) + Inserted (destination) pair, with NO Moved revision — the engine
+    /// still aligns the relocation as a move; only the projection changes.
+    /// </summary>
+    [Fact]
+    public void RenderMoves_false_projects_moves_as_inserted_deleted_pairs()
+    {
+        var l = Doc("Paragraph one with enough words for a move.", "Static paragraph that does not move here.");
+        var r = Doc("Static paragraph that does not move here.", "Paragraph one with enough words for a move.");
+
+        var moved = Render(l, r, new IrDiffSettings()).Where(x => x.Type == IrRevisionType.Moved).ToList();
+        Assert.NotEmpty(moved); // default renders the relocation as Moved
+
+        var noMoves = new IrDiffSettings { RenderMoves = false };
+        var relabelled = Render(l, r, noMoves).ToList();
+        Assert.DoesNotContain(relabelled, x => x.Type == IrRevisionType.Moved);
+        Assert.Contains(relabelled, x => x.Type == IrRevisionType.Inserted);
+        Assert.Contains(relabelled, x => x.Type == IrRevisionType.Deleted);
+    }
+
+    /// <summary>Fine mode is unaffected by the move-minimum-word render guard; compatible mode demotes a move
+    /// whose block has fewer than <see cref="IrDiffSettings.MoveMinimumTokenCount"/> words to ins+del.</summary>
+    [Fact]
+    public void Compatible_mode_demotes_short_moves_below_minimum_word_count()
+    {
+        var l = Doc("Hi all", "A longer static paragraph that stays put here.");
+        var r = Doc("A longer static paragraph that stays put here.", "Hi all");
+
+        var compat = Render(l, r, Compatible).ToList();
+        // "Hi all" is two words < default minimum 3, so it must not render as a Moved.
+        Assert.DoesNotContain(compat, x =>
+            x.Type == IrRevisionType.Moved && (x.Text.Contains("Hi") || x.Text.Contains("all")));
+    }
+
+    // --- textbox doc builders (one inner paragraph per textbox; placeholder tokens carry no surface text) ---
+
+    private static IrDocument TwoTextboxParagraph(string box1, string box2) =>
+        IrReader.Read(IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p>" + TextboxRun(box1) + TextboxRun(box2) + "</w:p>"), NoSources);
+
+    private static IrDocument OneTextboxParagraph(string box1) =>
+        IrReader.Read(IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p>" + TextboxRun(box1) + "</w:p>"), NoSources);
+
+    private static string TextboxRun(string text) =>
+        "<w:r><w:drawing><wp:inline><a:graphic><a:graphicData>" +
+        "<wps:wsp><wps:txbx><w:txbxContent>" +
+        $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>" +
+        "</w:txbxContent></wps:txbx></wps:wsp>" +
+        "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r>";
+
     // ------------------------------------------------------------------ WC corpus totality smoke
 
     [Trait("Category", "Corpus")]

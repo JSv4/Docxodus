@@ -84,8 +84,30 @@ internal static class IrRevisionRenderer
                 foreach (var op in noteDiff.Ops)
                     RenderBlockOp(op, ctx, revisions);
 
+        // Section-break zero-width prune (M2.4 Task 2, prelim a). A whole-block Inserted/Deleted over a
+        // SECTION-BREAK block (a `sec:` anchor) carries no surface text and is a structural-only change that
+        // WmlComparer does not report as a revision. Suppress it in compatible mode so it never inflates the
+        // count (WC-1960). Math/image/opaque BLOCK ins/del are NOT pruned — those carry no token text either
+        // but WmlComparer DOES count them (WC-1230/WC-1320), so they must survive. This prune is scoped to
+        // section breaks only, and only in compatible mode, so Fine output stays byte-stable.
+        //
+        // Token-level zero-width ins/del (a masked-textbox placeholder Delete inside a Modified paragraph's
+        // token diff — empty text, non-text Textbox token) are suppressed at the SOURCE in RenderTokenOps for
+        // BOTH modes: a placeholder token carries no surface text, so reporting it as an empty Inserted/Deleted
+        // is a spurious revision regardless of granularity (the real textbox change is reported through the
+        // nested TextboxDiffs). See the two-textbox test.
+        if (settings.RevisionGranularity == RevisionGranularity.WmlComparerCompatible)
+            revisions.RemoveAll(IsSectionBreakZeroWidth);
+
         return IrNodeList.From(revisions);
     }
+
+    /// <summary>An empty-text Inserted/Deleted over a section-break block (a structural-only `sec:` change
+    /// WmlComparer does not surface).</summary>
+    private static bool IsSectionBreakZeroWidth(IrRevision r) =>
+        r.Type is IrRevisionType.Inserted or IrRevisionType.Deleted && r.Text.Length == 0 &&
+        ((r.RightAnchor?.StartsWith("sec:", System.StringComparison.Ordinal) ?? false) ||
+         (r.LeftAnchor?.StartsWith("sec:", System.StringComparison.Ordinal) ?? false));
 
     /// <summary>Per-render immutable context: the two docs (for anchor→block lookup), settings, and the
     /// MoveGroupId→source-anchor map (for MoveModify destinations to resolve left-token text).</summary>
@@ -155,13 +177,92 @@ internal static class IrRevisionRenderer
         // ops. The placeholder-token change was masked out of the token diff above, so the textbox change
         // is reported exactly once — here, from the inner blocks' text.
         if (op.TextboxDiffs is { } textboxDiffs)
-            foreach (var tbxDiff in textboxDiffs)
-                foreach (var blockOp in tbxDiff.Ops)
-                    RenderBlockOp(blockOp, ctx, sink);
+            RenderTextboxDiffs(textboxDiffs, ctx, sink);
 
         // A non-paragraph, non-table Modified pair (opaque / section break) has no sub-block model and
         // no token diff — it produces no token-level revisions (its content change is not describable at
         // this granularity by this surface; M2.4 OOXML markup is the place for it).
+    }
+
+    /// <summary>
+    /// Render a Modified paragraph's textbox-interior diffs. In Fine mode every textbox diff renders straight
+    /// through. In WmlComparer-compatible mode we DEDUP the Choice/Fallback duplicate: Word emits one logical
+    /// textbox twice inside an <c>mc:AlternateContent</c> — a DrawingML <c>mc:Choice</c> and a VML
+    /// <c>mc:Fallback</c> with byte-identical inner content — and the IR reader (by design, to mirror the
+    /// oracle's both-branch text walk) emits an <see cref="IrTextbox"/> per occurrence, so the two adjacent
+    /// textbox diffs render to IDENTICAL revision sequences. WmlComparer MC-preprocesses its input and sees
+    /// only the Choice branch, reporting the change once. We reproduce that at render time by collapsing a
+    /// textbox diff whose rendered revisions are value-equal to those of the IMMEDIATELY PRECEDING textbox diff
+    /// (the Choice/Fallback adjacency). This is a render-time projection choice — the edit script's textbox
+    /// diffs are untouched, and Fine mode still reports both, preserving the oracle parity the reader defends.
+    /// </summary>
+    private static void RenderTextboxDiffs(
+        IrNodeList<IrTextboxDiff> textboxDiffs, in Context ctx, List<IrRevision> sink)
+    {
+        if (ctx.Settings.RevisionGranularity != RevisionGranularity.WmlComparerCompatible)
+        {
+            foreach (var tbxDiff in textboxDiffs)
+                foreach (var blockOp in tbxDiff.Ops)
+                    RenderBlockOp(blockOp, ctx, sink);
+            return;
+        }
+
+        // Render each textbox diff to its own revision batch first, so we can compare adjacent batches.
+        var batches = new List<List<IrRevision>>(textboxDiffs.Count);
+        foreach (var tbxDiff in textboxDiffs)
+        {
+            var batch = new List<IrRevision>();
+            foreach (var blockOp in tbxDiff.Ops)
+                RenderBlockOp(blockOp, ctx, batch);
+            batches.Add(batch);
+        }
+
+        // Collapse Choice/Fallback PAIRS. Word emits each logical textbox as TWO adjacent IrTextbox inlines
+        // (DrawingML Choice then VML Fallback) with byte-identical content, so they form consecutive PAIRS in
+        // document order. We pair-walk: when batch[i+1] duplicates batch[i], emit batch[i] and SKIP its
+        // duplicate (advance by 2); otherwise emit batch[i] alone (advance by 1, covering a lone textbox with
+        // no fallback). This is robust to two DISTINCT textboxes that happen to share identical edits — they
+        // are positions (Choice_A, Fallback_A, Choice_B, Fallback_B), and pair-walking dedups A and B
+        // separately rather than greedily merging A's fallback with B (the WC037 two-textbox case).
+        int k = 0;
+        while (k < batches.Count)
+        {
+            sink.AddRange(batches[k]);
+            bool dup = k + 1 < batches.Count && SameRevisionContent(batches[k], batches[k + 1]);
+            k += dup ? 2 : 1;
+        }
+    }
+
+    /// <summary>True iff two revision batches carry the same ordered (Type, Text) content — the Choice/Fallback
+    /// duplicate test. Anchors are deliberately ignored (they differ between the DrawingML and VML branches).</summary>
+    private static bool SameRevisionContent(List<IrRevision> a, List<IrRevision> b)
+    {
+        if (a.Count != b.Count || a.Count == 0)
+            return false;
+        for (int i = 0; i < a.Count; i++)
+            if (a[i].Type != b[i].Type || !string.Equals(a[i].Text, b[i].Text, System.StringComparison.Ordinal))
+                return false;
+        return true;
+    }
+
+    /// <summary>
+    /// True iff (compatible mode only) the moved block's text has FEWER than
+    /// <see cref="IrDiffSettings.MoveMinimumTokenCount"/> whitespace-delimited words — the threshold below
+    /// which WmlComparer excludes a relocation from move detection to avoid short-text false positives. In
+    /// Fine mode this always returns false (the engine's move classification is reported verbatim).
+    /// </summary>
+    private static bool BelowMoveMinimum(string text, IrDiffSettings settings)
+    {
+        if (settings.RevisionGranularity != RevisionGranularity.WmlComparerCompatible)
+            return false;
+        int words = 0;
+        bool inWord = false;
+        foreach (char c in text)
+        {
+            if (char.IsWhiteSpace(c)) { inWord = false; }
+            else if (!inWord) { inWord = true; words++; }
+        }
+        return words < settings.MoveMinimumTokenCount;
     }
 
     private static void RenderMoveOp(IrEditOp op, in Context ctx, List<IrRevision> sink)
@@ -171,6 +272,23 @@ internal static class IrRevisionRenderer
         string text = isSource
             ? BlockText(op.LeftAnchor, ctx.Left, ctx.Settings)
             : BlockText(op.RightAnchor, ctx.Right, ctx.Settings);
+
+        // A move is RELABELLED as Inserted+Deleted (not Moved) when either move rendering is off
+        // (DetectMoves=false) OR — in compatible mode — the moved block is BELOW the minimum word count
+        // WmlComparer requires for a move (very short text is excluded to avoid false positives). The IR
+        // aligner's exact off-spine anchoring catches a short exact relocation as a move regardless of the
+        // minimum (that gates only the fuzzy similarity pass), so the minimum is enforced here at render time.
+        bool demoteToInsDel = !ctx.Settings.RenderMoves || BelowMoveMinimum(text, ctx.Settings);
+        if (demoteToInsDel)
+        {
+            // The engine still ALIGNED this as a move; we only change how it is reported. A MoveModify
+            // destination's in-move token edits are dropped: the whole destination block is reported as one
+            // Inserted, exactly as WmlComparer reports a non-move insertion of relocated content.
+            sink.Add(isSource
+                ? new IrRevision(IrRevisionType.Deleted, text, ctx.Author, ctx.Date, LeftAnchor: op.LeftAnchor)
+                : new IrRevision(IrRevisionType.Inserted, text, ctx.Author, ctx.Date, RightAnchor: op.RightAnchor));
+            return;
+        }
 
         sink.Add(new IrRevision(IrRevisionType.Moved, text, ctx.Author, ctx.Date,
             MoveGroupId: op.MoveGroupId, IsMoveSource: isSource,
@@ -201,6 +319,12 @@ internal static class IrRevisionRenderer
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
         string? leftAnchor, string? rightAnchor, in Context ctx, List<IrRevision> sink)
     {
+        if (ctx.Settings.RevisionGranularity == RevisionGranularity.WmlComparerCompatible)
+        {
+            RenderTokenOpsCompatible(tokenDiff, leftTokens, rightTokens, leftAnchor, rightAnchor, ctx, sink);
+            return;
+        }
+
         foreach (var tokenOp in tokenDiff.Ops)
         {
             switch (tokenOp.Kind)
@@ -209,22 +333,287 @@ internal static class IrRevisionRenderer
                     break;
 
                 case IrTokenOpKind.Insert:
+                {
+                    // Suppress a masked-textbox placeholder insert: a Textbox-kind token carries no surface
+                    // text and its real change is reported through the nested TextboxDiffs, so reporting it as
+                    // an (empty) Inserted is a spurious double-report (prelim a, both modes). Other non-text
+                    // tokens (Image/Opaque/math) are NOT suppressed — WmlComparer reports those as revisions.
+                    if (IsMaskedTextboxSpan(rightTokens, tokenOp.RightStart, tokenOp.RightEnd))
+                        break;
                     sink.Add(new IrRevision(IrRevisionType.Inserted,
                         RawText(rightTokens, tokenOp.RightStart, tokenOp.RightEnd), ctx.Author, ctx.Date,
                         LeftAnchor: leftAnchor, RightAnchor: rightAnchor));
                     break;
+                }
 
                 case IrTokenOpKind.Delete:
+                {
+                    if (IsMaskedTextboxSpan(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd))
+                        break;
                     sink.Add(new IrRevision(IrRevisionType.Deleted,
                         RawText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd), ctx.Author, ctx.Date,
                         LeftAnchor: leftAnchor, RightAnchor: rightAnchor));
                     break;
+                }
 
                 case IrTokenOpKind.FormatChanged:
                     RenderFormatChangedSpan(tokenOp, leftTokens, rightTokens, leftAnchor, rightAnchor, ctx, sink);
                     break;
             }
         }
+    }
+
+    // ------------------------------------------------------------------ compatible-mode token coalescing
+
+    /// <summary>
+    /// WmlComparer-compatible projection of a token diff (M2.4 Task 2). WmlComparer's revisions come from the
+    /// produced document's contiguous <c>w:ins</c>/<c>w:del</c> regions — ONE revision per maximal contiguous
+    /// changed region, separators included. We reproduce that here by walking the token-op stream and grouping
+    /// consecutive Insert/Delete ops into a single changed REGION, BRIDGING across any Equal op that is purely
+    /// separators (whitespace/punctuation between two changed words — part of WmlComparer's contiguous region).
+    /// An Equal op carrying any Word token, or a FormatChanged op, is a true region boundary: it flushes the
+    /// current region. Per region we emit at most one Deleted then one Inserted, after trimming the common
+    /// char prefix/suffix the two share (WmlComparer keeps the unchanged edges). FormatChanged ops render
+    /// exactly as in Fine mode (their own sub-run revisions), preserving format-change parity.
+    /// </summary>
+    private static void RenderTokenOpsCompatible(
+        IrTokenDiff tokenDiff,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        string? leftAnchor, string? rightAnchor, in Context ctx, List<IrRevision> sink)
+    {
+        var region = new Region();
+
+        foreach (var tokenOp in tokenDiff.Ops)
+        {
+            switch (tokenOp.Kind)
+            {
+                case IrTokenOpKind.Equal:
+                    if (IsPureSeparatorSpan(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd))
+                    {
+                        // A pure-separator Equal MIGHT bridge two changed regions. Hold it; commit only if a
+                        // changed op follows while a region is open. (If no region is open, a leading
+                        // pure-separator Equal is just unchanged content.)
+                        if (region.Open)
+                            region.HoldSeparator(
+                                RawText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd),
+                                RawText(rightTokens, tokenOp.RightStart, tokenOp.RightEnd));
+                    }
+                    else
+                    {
+                        // An Equal op bearing a Word token is a true boundary — flush the open region.
+                        region.Flush(leftAnchor, rightAnchor, ctx, sink);
+                    }
+                    break;
+
+                case IrTokenOpKind.Insert:
+                    // A masked-textbox placeholder insert is reported through the nested TextboxDiffs, never as
+                    // a token revision — skip it entirely (it neither opens a region nor contributes text).
+                    if (IsMaskedTextboxSpan(rightTokens, tokenOp.RightStart, tokenOp.RightEnd))
+                        break;
+                    region.AddInsert(RawText(rightTokens, tokenOp.RightStart, tokenOp.RightEnd));
+                    break;
+
+                case IrTokenOpKind.Delete:
+                    if (IsMaskedTextboxSpan(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd))
+                        break;
+                    region.AddDelete(RawText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd));
+                    break;
+
+                case IrTokenOpKind.FormatChanged:
+                    // FormatChanged is a region boundary: flush, then emit the format revisions as in Fine mode.
+                    region.Flush(leftAnchor, rightAnchor, ctx, sink);
+                    RenderFormatChangedSpan(tokenOp, leftTokens, rightTokens, leftAnchor, rightAnchor, ctx, sink);
+                    break;
+            }
+        }
+
+        region.Flush(leftAnchor, rightAnchor, ctx, sink);
+    }
+
+    /// <summary>
+    /// A mutable accumulator for ONE contiguous WmlComparer-style changed region: the deleted/inserted text,
+    /// which sides were touched (so a real-but-textless edit like a math/image token still emits a revision),
+    /// and a held pure-separator Equal awaiting a bridge decision.
+    /// </summary>
+    private sealed class Region
+    {
+        private readonly StringBuilder _del = new();
+        private readonly StringBuilder _ins = new();
+        private bool _hadDelete;
+        private bool _hadInsert;
+        private string _pendingSepLeft = string.Empty;
+        private string _pendingSepRight = string.Empty;
+        private bool _hasPendingSep;
+
+        /// <summary>True once any Delete/Insert op has joined this region.</summary>
+        public bool Open => _hadDelete || _hadInsert;
+
+        /// <summary>Hold a pure-separator Equal: it bridges into BOTH sides only if a same-region changed op
+        /// follows (committed by the next <see cref="AddDelete"/>/<see cref="AddInsert"/>).</summary>
+        public void HoldSeparator(string left, string right)
+        {
+            _pendingSepLeft = left;
+            _pendingSepRight = right;
+            _hasPendingSep = true;
+        }
+
+        public void AddDelete(string text)
+        {
+            CommitPendingSeparator();
+            _del.Append(text);
+            _hadDelete = true;
+        }
+
+        public void AddInsert(string text)
+        {
+            CommitPendingSeparator();
+            _ins.Append(text);
+            _hadInsert = true;
+        }
+
+        private void CommitPendingSeparator()
+        {
+            if (!_hasPendingSep)
+                return;
+            _del.Append(_pendingSepLeft);
+            _ins.Append(_pendingSepRight);
+            _hasPendingSep = false;
+            _pendingSepLeft = _pendingSepRight = string.Empty;
+        }
+
+        /// <summary>
+        /// Emit the open region as a Deleted (if a delete touched it) then an Inserted (if an insert touched
+        /// it), then reset. A side that was touched but is textless (a math/image token) still emits — matching
+        /// WmlComparer's null-text revision.
+        /// </summary>
+        public void Flush(string? leftAnchor, string? rightAnchor, in Context ctx, List<IrRevision> sink)
+        {
+            if (Open)
+            {
+                string delText = _del.ToString();
+                string insText = _ins.ToString();
+
+                // Word-boundary common-affix trim. When both sides carry text, WmlComparer attributes the
+                // change only to the differing words and keeps the shared head/tail unchanged. We trim the
+                // longest common char prefix and suffix, BACKED OFF to a word boundary so we never split a
+                // word (cutting `Test`/`st` at the common `t` would mis-report `Te` — the back-off keeps the
+                // whole differing word). A side that trims to empty is wholly common and emits no revision.
+                // This recovers WmlComparer's grain for both whole-block degenerate diffs (`This is a test.`/
+                // `This.` → ` is a test`) and trailing-word edits (`before too.`/`before.` → ` too`), without
+                // touching a real isolated token region (`34`/`4`, which shares no word-boundary affix).
+                bool emitByText = _hadDelete && _hadInsert && delText.Length > 0 && insText.Length > 0;
+                if (emitByText)
+                {
+                    TrimCommonWordAffixes(ref delText, ref insText, ctx.Settings);
+                    if (delText.Length > 0)
+                        sink.Add(new IrRevision(IrRevisionType.Deleted, delText, ctx.Author, ctx.Date,
+                            LeftAnchor: leftAnchor, RightAnchor: rightAnchor));
+                    if (insText.Length > 0)
+                        sink.Add(new IrRevision(IrRevisionType.Inserted, insText, ctx.Author, ctx.Date,
+                            LeftAnchor: leftAnchor, RightAnchor: rightAnchor));
+                }
+                else
+                {
+                    // A side that was TOUCHED emits a revision even when textless (a math/image token carries
+                    // no raw text but WmlComparer still reports it as a null-text revision). Order Deleted-
+                    // then-Inserted matches WmlComparer's per-region w:del-then-w:ins ordering.
+                    if (_hadDelete)
+                        sink.Add(new IrRevision(IrRevisionType.Deleted, delText, ctx.Author, ctx.Date,
+                            LeftAnchor: leftAnchor, RightAnchor: rightAnchor));
+                    if (_hadInsert)
+                        sink.Add(new IrRevision(IrRevisionType.Inserted, insText, ctx.Author, ctx.Date,
+                            LeftAnchor: leftAnchor, RightAnchor: rightAnchor));
+                }
+            }
+
+            _del.Clear();
+            _ins.Clear();
+            _hadDelete = _hadInsert = false;
+            _hasPendingSep = false;
+            _pendingSepLeft = _pendingSepRight = string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Trim the longest common char prefix and then suffix shared by <paramref name="del"/> and
+    /// <paramref name="ins"/>, BACKED OFF to a word boundary so neither trim cuts inside a word. A boundary
+    /// is legal where the trim edge falls between a separator/whitespace char and a word char (or at string
+    /// end). The prefix is trimmed first, then the suffix over the remainder, so they never overlap.
+    /// </summary>
+    private static void TrimCommonWordAffixes(ref string del, ref string ins, IrDiffSettings settings)
+    {
+        int n = System.Math.Min(del.Length, ins.Length);
+
+        // Longest common char prefix, then back off so the cut lands on a word boundary in BOTH strings —
+        // checking BOTH is essential: `Title`/`Title1` share the char prefix `Title`, but the cut after it is
+        // a word boundary in `Title` (string end) yet splits the word `Title1`, so WmlComparer keeps both
+        // whole (no trim). `This`/`This.` share `This` and the cut is a boundary in both, so it trims.
+        int prefix = 0;
+        while (prefix < n && del[prefix] == ins[prefix])
+            prefix++;
+        while (prefix > 0 && !(IsWordBoundaryBefore(del, prefix) && IsWordBoundaryBefore(ins, prefix)))
+            prefix--;
+
+        // Longest common char suffix over what remains after the prefix, backed off the same way.
+        int remaining = n - prefix;
+        int suffix = 0;
+        while (suffix < remaining && del[del.Length - 1 - suffix] == ins[ins.Length - 1 - suffix])
+            suffix++;
+        while (suffix > 0 &&
+               (!IsWordBoundaryBefore(del, del.Length - suffix) ||
+                !IsWordBoundaryBefore(ins, ins.Length - suffix)))
+            suffix--;
+
+        del = del.Substring(prefix, del.Length - prefix - suffix);
+        ins = ins.Substring(prefix, ins.Length - prefix - suffix);
+    }
+
+    /// <summary>
+    /// True iff position <paramref name="i"/> in <paramref name="s"/> is a word boundary — i.e. cutting here
+    /// does not split a run of word characters. A cut is legal at the string edge, or when the chars straddling
+    /// the cut are not BOTH word characters (so the boundary falls next to whitespace or punctuation). This
+    /// matches WmlComparer's atom granularity, where punctuation like <c>.</c> is its own atom and so a legal
+    /// trim edge — note the IR <c>WordSeparators</c> set is deliberately NOT used here (it excludes ASCII
+    /// <c>.</c>, which WmlComparer nonetheless atomizes).
+    /// </summary>
+    private static bool IsWordBoundaryBefore(string s, int i)
+    {
+        if (i <= 0 || i >= s.Length)
+            return true;
+        return !(IsWordChar(s[i - 1]) && IsWordChar(s[i]));
+    }
+
+    /// <summary>A "word" char for the affix-trim back-off: a letter or digit. Everything else (whitespace,
+    /// punctuation) is a potential atom boundary.</summary>
+    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c);
+
+    /// <summary>
+    /// True iff every token in the half-open span is a <see cref="IrDiffTokenKind.Textbox"/> placeholder — a
+    /// masked textbox whose real change is reported through the nested <c>TextboxDiffs</c>, so its token-op
+    /// must NOT also surface as an (empty) Inserted/Deleted. A span mixing a textbox with surface text is NOT
+    /// masked (it carries real content); a non-textbox non-text token (Image/Opaque/math) is NOT masked
+    /// either — WmlComparer reports those.
+    /// </summary>
+    private static bool IsMaskedTextboxSpan(IReadOnlyList<IrDiffToken> tokens, int start, int end)
+    {
+        if (start >= end)
+            return false;
+        for (int i = start; i < end; i++)
+            if (tokens[i].Kind != IrDiffTokenKind.Textbox)
+                return false;
+        return true;
+    }
+
+    /// <summary>True iff every token in the half-open span is a <see cref="IrDiffTokenKind.Separator"/> — a
+    /// pure inter-word separator run that WmlComparer's contiguous region spans (no Word token to break it).</summary>
+    private static bool IsPureSeparatorSpan(IReadOnlyList<IrDiffToken> tokens, int start, int end)
+    {
+        if (start >= end)
+            return false;
+        for (int i = start; i < end; i++)
+            if (tokens[i].Kind != IrDiffTokenKind.Separator)
+                return false;
+        return true;
     }
 
     /// <summary>
@@ -390,6 +779,14 @@ internal static class IrRevisionRenderer
                     string text = isSource
                         ? RowText(rowOp.LeftRowAnchor, ctx.Left, ctx.Settings)
                         : RowText(rowOp.RightRowAnchor, ctx.Right, ctx.Settings);
+                    if (!ctx.Settings.RenderMoves)
+                    {
+                        // DetectMoves=false: a moved row renders as a Deleted (source) + Inserted (dest) pair.
+                        sink.Add(isSource
+                            ? new IrRevision(IrRevisionType.Deleted, text, ctx.Author, ctx.Date, LeftAnchor: rowOp.LeftRowAnchor)
+                            : new IrRevision(IrRevisionType.Inserted, text, ctx.Author, ctx.Date, RightAnchor: rowOp.RightRowAnchor));
+                        break;
+                    }
                     sink.Add(new IrRevision(IrRevisionType.Moved, text, ctx.Author, ctx.Date,
                         MoveGroupId: rowOp.MoveGroupId, IsMoveSource: isSource,
                         LeftAnchor: isSource ? rowOp.LeftRowAnchor : null,

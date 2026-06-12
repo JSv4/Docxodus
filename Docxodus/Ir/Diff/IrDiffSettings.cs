@@ -40,6 +40,45 @@ internal enum IrFormatComparison
 }
 
 /// <summary>
+/// RENDER-TIME revision granularity policy (M2.4 Task 2). A purely <see cref="IrRevisionRenderer"/>-level
+/// transform: it changes HOW the (unchanged) edit script is PROJECTED to consumer revisions, never the
+/// script itself, the aligner, or the token diff. The edit script's grain is the engine's truth and is
+/// untouchable; this only governs coalescing/trimming on the way out.
+/// </summary>
+internal enum RevisionGranularity
+{
+    /// <summary>
+    /// The engine's native, finest-grain projection (the DEFAULT and the M2.3 behavior): one revision per
+    /// token-op span. A paragraph whose every word changed yields one Inserted + one Deleted per word. This
+    /// is the faithful mirror of the edit script — byte-stable across releases — and the right grain for
+    /// consumers that want the engine's actual atomization (review UIs that map a revision to a token span,
+    /// blame, structured indexers).
+    /// </summary>
+    Fine,
+
+    /// <summary>
+    /// A render-time projection that reproduces <c>WmlComparer.GetRevisions</c>'s coarser atomization, so an
+    /// IR-rendered revision SET is count/text-comparable to the shipped comparer's. WmlComparer's revisions
+    /// come from contiguous <c>w:ins</c>/<c>w:del</c> regions of the produced document — one revision per
+    /// maximal contiguous changed region — so this mode, per Modified block:
+    /// <list type="number">
+    /// <item><b>Coalesces</b> adjacent same-kind token-op revisions into one, INCLUDING across an Equal
+    /// op that is PURELY separators (whitespace/punctuation) sitting between two changed words — those
+    /// separators are part of WmlComparer's contiguous region. An Equal op containing any Word token is a
+    /// true region boundary and is NOT bridged.</item>
+    /// <item><b>Trims</b> the common character prefix and suffix shared by a coalesced region's deleted and
+    /// inserted text (WmlComparer keeps the common edges unchanged and only marks the differing middle),
+    /// dropping a side that becomes empty.</item>
+    /// <item><b>Prunes</b> zero-width revisions (empty <see cref="IrRevision.Text"/> Inserted/Deleted) that
+    /// arise from non-text placeholder tokens (masked textbox placeholders, section breaks) — WmlComparer
+    /// reports no revision for a content-less change at this surface.</item>
+    /// </list>
+    /// Move and FormatChanged revisions are passed through untouched; only Inserted/Deleted are coalesced.
+    /// </summary>
+    WmlComparerCompatible,
+}
+
+/// <summary>
 /// Diff-time settings for the IR diff engine (Phase 2). These govern how IR paragraphs are
 /// tokenized and compared; they are <b>not</b> document facts. Per the IR spec (§1 non-goals,
 /// "Not the diff's tokenization"), word splitting, case folding, and separator policy are
@@ -75,6 +114,26 @@ internal sealed record IrDiffSettings
     /// record equality at the token level; the stored block FormatFingerprint at the block level).
     /// </remarks>
     public IrFormatComparison FormatComparison { get; init; } = IrFormatComparison.ModeledOnly;
+
+    /// <summary>
+    /// RENDER-TIME setting (M2.4 Task 2). How <see cref="IrRevisionRenderer"/> projects the edit script to
+    /// consumer revisions. Default <see cref="Docxodus.Ir.Diff.RevisionGranularity.Fine"/> (the engine's
+    /// native one-revision-per-token-span grain — byte-stable). The adapter that targets
+    /// <c>WmlComparer.GetRevisions</c> parity sets
+    /// <see cref="Docxodus.Ir.Diff.RevisionGranularity.WmlComparerCompatible"/>. This NEVER affects the edit
+    /// script, the aligner, or the token diff — only the rendered revision list.
+    /// </summary>
+    public RevisionGranularity RevisionGranularity { get; init; } = RevisionGranularity.Fine;
+
+    /// <summary>
+    /// RENDER-TIME setting (M2.4 Task 2). When false, <see cref="IrRevisionRenderer"/> renders
+    /// <c>Moved</c>/<c>MoveModify</c> ops as an Inserted (at the destination) + Deleted (at the source) PAIR
+    /// instead of a <c>Moved</c> pair — the projection a consumer that has move detection turned off expects.
+    /// Default true. This is the render-time analogue of <c>WmlComparerSettings.DetectMoves</c>; the engine
+    /// alignment is unchanged (a relocated block is still ALIGNED as a move — we only relabel its projection),
+    /// so it works regardless of how the move arose (aligner off-spine anchoring OR fuzzy similarity).
+    /// </summary>
+    public bool RenderMoves { get; init; } = true;
 
     /// <summary>
     /// DIFF-TIME setting. Characters that split an <c>IrTextRun</c>'s text into word vs. separator

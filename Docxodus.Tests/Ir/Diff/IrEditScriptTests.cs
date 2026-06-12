@@ -408,4 +408,56 @@ public class IrEditScriptTests
         var modifyBack = back.Operations.Single(o => o.Kind == IrEditOpKind.ModifyBlock);
         Assert.Equal(modify.TokenDiff, modifyBack.TokenDiff);
     }
+
+    /// <summary>
+    /// Prelim (b): explicit JSON round-trip of a HAND-BUILT script carrying <see cref="IrTextboxDiff"/>s — a
+    /// ModifyBlock whose paragraph holds two textboxes (one edited via a nested token diff, one whose surplus
+    /// block is all-Deleted). Record equality after Write→Read proves the textboxDiffs branch of
+    /// <see cref="IrEditScriptJson"/> serializes and parses losslessly, and a second Write is byte-identical
+    /// (determinism). Hand-built rather than diff-derived so the textbox-diff shape is pinned independently of
+    /// how the builder happens to produce it.
+    /// </summary>
+    [Fact]
+    public void Json_round_trips_a_hand_built_script_with_textbox_diffs()
+    {
+        // Textbox 1: an interior edit — a token diff with Equal + Delete + Insert spans.
+        var editedBox = new IrTextboxDiff(IrNodeList.From(new[]
+        {
+            new IrEditOp(IrEditOpKind.ModifyBlock, "p:tbx:box1para", "p:tbx:box1para2",
+                new IrTokenDiff(IrNodeList.From(new[]
+                {
+                    new IrTokenOp(IrTokenOpKind.Equal, 0, 1, 0, 1),
+                    new IrTokenOp(IrTokenOpKind.Delete, 1, 2, 1, 1),
+                    new IrTokenOp(IrTokenOpKind.Insert, 2, 2, 1, 2),
+                })),
+                null, null),
+        }));
+
+        // Textbox 2: a removed textbox — its lone inner block is all-Deleted.
+        var removedBox = new IrTextboxDiff(IrNodeList.From(new[]
+        {
+            new IrEditOp(IrEditOpKind.DeleteBlock, "p:tbx:box2para", null, null, null, null),
+        }));
+
+        var op = new IrEditOp(
+            IrEditOpKind.ModifyBlock, "p:body:host", "p:body:host2",
+            new IrTokenDiff(IrNodeList.From(new[] { new IrTokenOp(IrTokenOpKind.Equal, 0, 1, 0, 1) })),
+            null, null, null,
+            IrNodeList.From(new[] { editedBox, removedBox }));
+
+        var script = new IrEditScript(IrNodeList.From(new[] { op }));
+
+        var json = IrEditScriptJson.Write(script);
+        var back = IrEditScriptJson.Read(json);
+
+        Assert.Equal(script, back); // full record equality, including the nested textboxDiffs
+        Assert.Equal(json, IrEditScriptJson.Write(back)); // deterministic re-write
+
+        // Spot-check the round-tripped textbox diffs survived structurally.
+        var backOp = Assert.Single(back.Operations);
+        Assert.NotNull(backOp.TextboxDiffs);
+        Assert.Equal(2, backOp.TextboxDiffs!.Count);
+        Assert.Equal(IrEditOpKind.ModifyBlock, backOp.TextboxDiffs[0].Ops.Single().Kind);
+        Assert.Equal(IrEditOpKind.DeleteBlock, backOp.TextboxDiffs[1].Ops.Single().Kind);
+    }
 }

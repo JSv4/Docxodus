@@ -70,6 +70,15 @@ public class IrVsWmlComparerTests
 {
     private static readonly IrDiffSettings NewDiff = new();
 
+    /// <summary>
+    /// The render-time WmlComparer-compatible projection (M2.4 Task 2). The differential harness runs the
+    /// SAME edit script through this granularity as a SECOND classification pass: under compatible-mode
+    /// coalescing/trim/dedup the TokenSpanGranularity bucket (the dominant DIVERGENT family — same content,
+    /// finer atomization) collapses, which the secondary triage table makes visible. The primary (Fine) pass
+    /// keeps its role as the engine-truth measurement; the assertions ride on it.
+    /// </summary>
+    private static readonly IrDiffSettings CompatDiff = new() { RevisionGranularity = RevisionGranularity.WmlComparerCompatible };
+
     /// <summary>Same author on both engines so the author field never contributes a spurious difference.</summary>
     private const string Author = "Open-Xml-PowerTools";
 
@@ -182,6 +191,7 @@ public class IrVsWmlComparerTests
         ClearStaleDetails(artifactsDir);
 
         var results = new List<PairResult>();
+        var compatResults = new List<PairResult>(); // M2.4 Task 2 — same edit script, compatible-mode render
         int newErrors = 0;
         var newErrorLabels = new List<string>();
 
@@ -189,8 +199,8 @@ public class IrVsWmlComparerTests
         {
             // Each WC file is read once per engine per direction. The OLD engine consumes WmlDocument bytes
             // off disk; the NEW engine consumes the IR. Both directions: (base→variant) and (variant→base).
-            RunDirection(baseName, variantName, artifactsDir, results, ref newErrors, newErrorLabels);
-            RunDirection(variantName, baseName, artifactsDir, results, ref newErrors, newErrorLabels);
+            RunDirection(baseName, variantName, artifactsDir, results, compatResults, ref newErrors, newErrorLabels);
+            RunDirection(variantName, baseName, artifactsDir, results, compatResults, ref newErrors, newErrorLabels);
         }
 
         sw.Stop();
@@ -222,8 +232,29 @@ public class IrVsWmlComparerTests
         _out.WriteLine("");
         _out.WriteLine($"Detail files for DIVERGENT pairs written to: {artifactsDir}");
 
+        // ----- compatible-mode differential (M2.4 Task 2) -------------------------------------------------
+        // The SAME engine edit script, rendered under WmlComparer-compatible granularity, classified against
+        // the SAME old-engine bags. The point of the second table: the TokenSpanGranularity bucket — pairs
+        // that are "same content, finer atomization" under Fine mode — collapses into MATCH/GRANULARITY when
+        // the renderer coalesces to WmlComparer's grain. Reported side by side so the collapse is visible.
+        _out.WriteLine("");
+        _out.WriteLine("===== TRIAGE TABLE — Fine vs WmlComparerCompatible (both render modes) =====");
+        _out.WriteLine($"  {"Classification",-14} {"Fine",6} {"Compat",8}");
+        foreach (var cls in Enum.GetValues<Classification>())
+            _out.WriteLine($"  {cls,-14} {results.Count(r => r.Class == cls),6} {compatResults.Count(r => r.Class == cls),8}");
+        _out.WriteLine("");
+        _out.WriteLine("DIVERGENT sub-buckets — Fine vs Compat:");
+        foreach (var cause in Enum.GetValues<DivergenceCause>())
+        {
+            int fine = results.Count(r => r.Class == Classification.Divergent && r.Cause == cause);
+            int compat = compatResults.Count(r => r.Class == Classification.Divergent && r.Cause == cause);
+            if (fine > 0 || compat > 0)
+                _out.WriteLine($"  {cause,-22} {fine,6} {compat,8}");
+        }
+
         // ----- assertions: totality only (controller adjudicates the triage; NO match-rate threshold) ----
         Assert.Equal(2 * pairs.Count, results.Count); // totality: every pair classified, both directions
+        Assert.Equal(results.Count, compatResults.Count); // the compatible-mode pass classifies every pair too
         Assert.True(newErrors == 0,
             $"NEW engine threw on {newErrors} comparison(s) — a regression: {string.Join(", ", newErrorLabels)}");
         foreach (var r in results.Where(r => r.Class == Classification.Divergent))
@@ -233,7 +264,7 @@ public class IrVsWmlComparerTests
 
     private void RunDirection(
         string leftName, string rightName, string artifactsDir,
-        List<PairResult> results, ref int newErrors, List<string> newErrorLabels)
+        List<PairResult> results, List<PairResult> compatResults, ref int newErrors, List<string> newErrorLabels)
     {
         string label = $"{Stem(leftName)} -> {Stem(rightName)}";
 
@@ -246,6 +277,7 @@ public class IrVsWmlComparerTests
         catch (Exception ex)
         {
             results.Add(new PairResult(label, Classification.OldError, null, -1, -1));
+            compatResults.Add(new PairResult(label, Classification.OldError, null, -1, -1));
             WriteOldErrorDetail(artifactsDir, label, ex);
             return;
         }
@@ -267,6 +299,7 @@ public class IrVsWmlComparerTests
             newErrors++;
             newErrorLabels.Add(label);
             results.Add(new PairResult(label, Classification.Divergent, DivergenceCause.Unclassified, oldBags.Total, -1));
+            compatResults.Add(new PairResult(label, Classification.Divergent, DivergenceCause.Unclassified, oldBags.Total, -1));
             WriteNewErrorDetail(artifactsDir, label, ex);
             return;
         }
@@ -277,6 +310,14 @@ public class IrVsWmlComparerTests
 
         results.Add(new PairResult(label, cls, cls == Classification.Divergent ? cause : null,
             oldBags.Total, newBags.Total));
+
+        // Compatible-mode pass: render the SAME edit script at WmlComparer-compatible granularity and classify
+        // against the SAME old bags. No new detail files (the Fine pass owns those); totals-only here.
+        var compatRevs = IrRevisionRenderer.Render(script, irLeft, irRight, CompatDiff);
+        var compatBags = RevisionBags.FromIr(compatRevs);
+        var (compatCls, compatCause) = Classify(oldBags, compatBags, script, irLeft);
+        compatResults.Add(new PairResult(label, compatCls, compatCls == Classification.Divergent ? compatCause : null,
+            oldBags.Total, compatBags.Total));
     }
 
     private static RevisionBags RunOldEngine(string leftName, string rightName)

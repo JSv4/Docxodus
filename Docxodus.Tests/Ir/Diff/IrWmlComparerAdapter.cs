@@ -62,16 +62,18 @@ internal static class IrWmlComparerAdapter
     /// counts Word-kind tokens; the comparer counts words — the same quantity for these fixtures).</item>
     /// </list>
     ///
-    /// <para><b>Mapped with a caveat.</b></para>
+    /// <para><b>Mapped at render time (M2.4 Task 2).</b></para>
     /// <list type="bullet">
-    /// <item><c>DetectMoves</c> → there is no IR "enable moves" boolean: cross-gap fuzzy moves are gated by
-    /// <see cref="IrDiffSettings.MoveSimilarityThreshold"/> / <see cref="IrDiffSettings.MoveMinimumTokenCount"/>.
-    /// When <c>DetectMoves=false</c> we push the threshold ABOVE 1.0 (<see cref="DisableMovesThreshold"/>),
-    /// which no Jaccard score can meet, switching off the FUZZY move pass. <b>It does NOT switch off
-    /// exact-content relocations caught by the aligner's off-spine anchoring</b> (a structural property of
-    /// the IR aligner, not a tunable), so an exact paragraph swap can still render as <c>Moved</c> under
-    /// <c>DetectMoves=false</c>. This is a documented engine difference the scoreboard measures, not a
-    /// mapping bug — see <c>MoveDetection_Disabled_ShouldNotDetectMoves</c>.</item>
+    /// <item><c>DetectMoves</c> → <see cref="IrDiffSettings.RenderMoves"/>. The engine ALWAYS aligns a
+    /// relocated block as a move; <see cref="IrDiffSettings.RenderMoves"/> only controls whether the renderer
+    /// PROJECTS it as a <c>Moved</c> pair or as a plain Inserted+Deleted pair. When <c>DetectMoves=false</c>
+    /// we set <see cref="IrDiffSettings.RenderMoves"/> false, so EVERY aligned move — whether caught by the
+    /// aligner's off-spine anchoring OR the fuzzy similarity pass — renders as Inserted+Deleted. This is the
+    /// faithful render-time analogue of the comparer's switch (the earlier threshold-pushing approach could
+    /// only gate the fuzzy pass and left exact relocations rendering as Moved; that gap is now closed).</item>
+    /// <item><c>RevisionGranularity</c> → <see cref="Docxodus.Ir.Diff.RevisionGranularity.WmlComparerCompatible"/>,
+    /// unconditionally — the adapter exists to be count/text-comparable to <c>GetRevisions</c>, so it always
+    /// renders in the comparer's coarser contiguous-region grain.</item>
     /// </list>
     ///
     /// <para><b>Unmappable (no IR analogue — left at IR defaults).</b></para>
@@ -95,25 +97,28 @@ internal static class IrWmlComparerAdapter
     /// </summary>
     public static IrDiffSettings MapSettings(WmlComparerSettings settings)
     {
-        double moveThreshold = settings.DetectMoves
-            ? settings.MoveSimilarityThreshold
-            : DisableMovesThreshold;
-
         return new IrDiffSettings
         {
             AuthorForRevisions = settings.AuthorForRevisions,
             CaseInsensitive = settings.CaseInsensitive,
             Culture = settings.CultureInfo,
             ConflateBreakingAndNonbreakingSpaces = settings.ConflateBreakingAndNonbreakingSpaces,
-            MoveSimilarityThreshold = moveThreshold,
+            MoveSimilarityThreshold = settings.MoveSimilarityThreshold,
             MoveMinimumTokenCount = settings.MoveMinimumWordCount,
+
+            // M2.4 Task 2 — render-time WmlComparer parity. The adapter targets the shipped comparer's
+            // GetRevisions surface, so it renders in WmlComparer-compatible granularity (contiguous-region
+            // coalescing + common-affix trim + zero-width prune) rather than the engine's native fine grain.
+            RevisionGranularity = RevisionGranularity.WmlComparerCompatible,
+
+            // DetectMoves is a RENDER-TIME relabel here (M2.4 Task 2): when off, the renderer projects an
+            // aligned move's two halves as a plain Inserted+Deleted pair instead of a Moved pair. The engine
+            // alignment is unchanged — this is purely how the move is reported — so it switches off move
+            // SEMANTICS regardless of how the move arose (aligner off-spine anchoring OR fuzzy similarity),
+            // which the threshold-pushing approach could not do (it only gated the fuzzy pass). The move
+            // detection thresholds still map 1:1 above so a move that IS rendered respects the caller's
+            // similarity/min-word tuning.
+            RenderMoves = settings.DetectMoves,
         };
     }
-
-    /// <summary>
-    /// The fuzzy-move threshold used to switch the cross-gap move pass OFF for <c>DetectMoves=false</c>:
-    /// a value strictly greater than 1.0, which no Jaccard similarity (∈ [0,1]) can satisfy. Exact-content
-    /// relocations caught by aligner anchoring are unaffected (see <see cref="MapSettings"/>).
-    /// </summary>
-    public const double DisableMovesThreshold = 2.0;
 }
