@@ -113,6 +113,13 @@ internal static class IrMarkupRenderer
         foreach (var op in script.Operations)
             RenderBlockOp(op, state, bodyBlocks);
 
+        // SimplifyMoveMarkup (Task 4): rewrite native move markup as del/ins + strip range markers, a
+        // post-pass mirroring WmlComparer.SimplifyMoveMarkupToDelIns (a Word-compat workaround). Operates on
+        // the assembled blocks in place before they enter the package.
+        if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
+            foreach (var block in bodyBlocks)
+                SimplifyMoveMarkup(block);
+
         // Drop the assembled blocks into a clone of the LEFT package, preserving its trailing top-level
         // w:sectPr (last-section metadata). Copy the RIGHT document's missing styles/numbering for continuity
         // (mirrors WmlComparer: right-only styles/legal numbering must survive in the merged output).
@@ -225,14 +232,27 @@ internal static class IrMarkupRenderer
 
             case IrEditOpKind.MoveBlock:
             case IrEditOpKind.MoveModifyBlock:
-                // Task 4 emits native w:moveFrom/w:moveTo. Task 3 conservative fallback: a move is a
-                // delete-here + insert-there pair that round-trips identically. The SOURCE op (left anchor)
-                // emits a whole-block del; the DESTINATION op (right anchor) a whole-block ins. They are
-                // already placed separately in script order by the builder, so each half renders on its own.
-                if (op.IsMoveSource == true)
-                    EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                // When move rendering is OFF (the DetectMoves=false analogue), a move is projected as a plain
+                // delete-here + insert-there pair: the SOURCE op (left anchor) emits a whole-block del, the
+                // DESTINATION op (right anchor) a whole-block ins. With move rendering ON, emit NATIVE move
+                // markup: source → moveFromRange + w:moveFrom; destination → moveToRange + w:moveTo (a
+                // MoveModify destination nests ins/del inside the moveTo for the in-move edits). Both halves
+                // share a deterministic w:name keyed by MoveGroupId.
+                if (!state.Settings.RenderMoves)
+                {
+                    if (op.IsMoveSource == true)
+                        EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                    else
+                        EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+                }
+                else if (op.IsMoveSource == true)
+                {
+                    EmitMoveSource(op, state, sink);
+                }
                 else
-                    EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+                {
+                    EmitMoveDestination(op, state, sink);
+                }
                 break;
         }
     }
@@ -260,6 +280,178 @@ internal static class IrMarkupRenderer
             EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
         if (op.RightAnchor != null)
             EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+    }
+
+    /// <summary>In-place rewrite of native move markup under one block to plain del/ins (mirrors
+    /// <see cref="WmlComparer"/>'s <c>SimplifyMoveMarkupToDelIns</c>): <c>w:moveFrom</c> → <c>w:del</c>,
+    /// <c>w:moveTo</c> → <c>w:ins</c> (attributes + children preserved), and all four range markers removed.</summary>
+    private static void SimplifyMoveMarkup(XElement block)
+    {
+        foreach (var moveFrom in block.DescendantsAndSelf(W.moveFrom).ToList())
+            moveFrom.ReplaceWith(new XElement(W.del, moveFrom.Attributes(), moveFrom.Nodes()));
+        foreach (var moveTo in block.DescendantsAndSelf(W.moveTo).ToList())
+            moveTo.ReplaceWith(new XElement(W.ins, moveTo.Attributes(), moveTo.Nodes()));
+        block.DescendantsAndSelf()
+            .Where(e => e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd ||
+                        e.Name == W.moveToRangeStart || e.Name == W.moveToRangeEnd)
+            .Remove();
+    }
+
+    // ----------------------------------------------------------------- native move markup
+
+    /// <summary>
+    /// Emit the SOURCE half of a move: the LEFT paragraph bracketed by <c>w:moveFromRangeStart</c>/
+    /// <c>w:moveFromRangeEnd</c> (sharing one range id + the group's <c>w:name</c>) with every run wrapped in
+    /// <c>w:moveFrom</c> and the paragraph mark marked deleted. Accept removes the moved-from content (it
+    /// relocated); reject restores it. Mirrors <see cref="WmlComparer"/>'s emission.
+    /// </summary>
+    private static void EmitMoveSource(IrEditOp op, RenderState state, List<XElement> sink)
+    {
+        var src = SourceElement(op.LeftAnchor, state.Left);
+        if (src == null || src.Name != W.p || op.MoveGroupId is not { } gid)
+        {
+            // Defensive fallback: a non-paragraph or group-less move source degrades to a whole-block delete.
+            EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+            return;
+        }
+        var para = StripUnids(new XElement(src));
+        MarkWholeParagraphAs(para, RevKind.MoveFrom, state);
+        BracketParagraphWithMoveRange(para, isFrom: true, state.MoveName(gid), state);
+        sink.Add(para);
+    }
+
+    /// <summary>
+    /// Emit the DESTINATION half of a move: the RIGHT paragraph bracketed by <c>w:moveToRangeStart</c>/
+    /// <c>w:moveToRangeEnd</c> with content wrapped in <c>w:moveTo</c> and the paragraph mark marked inserted.
+    /// A plain <see cref="IrEditOpKind.MoveBlock"/> wraps every run in <c>w:moveTo</c>; a
+    /// <see cref="IrEditOpKind.MoveModifyBlock"/> (the destination carries a token diff) renders the in-move
+    /// edits as NESTED <c>w:ins</c>/<c>w:del</c> inside the moveTo range — moved-and-unchanged text in
+    /// <c>w:moveTo</c>, newly-inserted text in <c>w:ins</c>, removed text in <c>w:del</c>.
+    /// </summary>
+    private static void EmitMoveDestination(IrEditOp op, RenderState state, List<XElement> sink)
+    {
+        var src = SourceElement(op.RightAnchor, state.Right);
+        if (src == null || src.Name != W.p || op.MoveGroupId is not { } gid)
+        {
+            EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+            return;
+        }
+        string moveName = state.MoveName(gid);
+
+        if (op.Kind == IrEditOpKind.MoveModifyBlock && op.TokenDiff is { } tokenDiff &&
+            op.TextboxDiffs is null && ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph)
+        {
+            // Build the destination paragraph from the token diff, like RenderModifiedParagraph, but with the
+            // moved-and-equal spans wrapped in w:moveTo (instead of left unwrapped) so the whole relocated
+            // content vanishes on reject and appears on accept. Insert spans → w:ins, Delete spans → w:del.
+            var para = BuildMoveModifyDestination(op, tokenDiff, state);
+            if (para != null)
+            {
+                MarkParagraphMark(para, RevKind.MoveTo, state);
+                BracketParagraphWithMoveRange(para, isFrom: false, moveName, state);
+                sink.Add(para);
+                return;
+            }
+        }
+
+        var dest = StripUnids(new XElement(src));
+        state.RegisterMediaReferences(dest);
+        MarkWholeParagraphAs(dest, RevKind.MoveTo, state);
+        BracketParagraphWithMoveRange(dest, isFrom: false, moveName, state);
+        sink.Add(dest);
+    }
+
+    /// <summary>Build a MoveModify destination paragraph from its token diff: Equal/FormatChanged spans →
+    /// <c>w:moveTo</c> (moved-and-unchanged), Insert spans → <c>w:ins</c>, Delete spans → <c>w:del</c>. Returns
+    /// null if the source elements are unexpectedly missing (caller falls back to a plain whole-paragraph
+    /// moveTo).</summary>
+    private static XElement? BuildMoveModifyDestination(IrEditOp op, IrTokenDiff tokenDiff, RenderState state)
+    {
+        var leftPara = SourceElement(op.LeftAnchor, state.Left);
+        var rightPara = SourceElement(op.RightAnchor, state.Right);
+        if (leftPara == null || rightPara == null)
+            return null;
+
+        var leftRuns = new SourceRunModel(leftPara);
+        var rightRuns = new SourceRunModel(rightPara);
+        var leftTokens = ParagraphTokens(op.LeftAnchor, state.Left, state.Settings);
+        var rightTokens = ParagraphTokens(op.RightAnchor, state.Right, state.Settings);
+
+        var newPara = new XElement(W.p);
+        var rightPPr = rightPara.Element(W.pPr);
+        if (rightPPr != null)
+            newPara.Add(StripUnids(new XElement(rightPPr)));
+
+        var content = new List<XElement>();
+        foreach (var tokenOp in tokenDiff.Ops)
+        {
+            switch (tokenOp.Kind)
+            {
+                case IrTokenOpKind.Equal:
+                case IrTokenOpKind.FormatChanged:
+                {
+                    var (rs, re) = RightSpanChars(rightTokens, tokenOp);
+                    foreach (var r in rightRuns.Slice(rs, re))
+                        content.Add(WrapRunLevel(r, RevKind.MoveTo, state));   // moved-and-unchanged
+                    break;
+                }
+                case IrTokenOpKind.Insert:
+                {
+                    var (s, e) = RightSpanChars(rightTokens, tokenOp);
+                    foreach (var r in rightRuns.Slice(s, e))
+                        content.Add(WrapRunLevel(r, RevKind.Ins, state));
+                    break;
+                }
+                case IrTokenOpKind.Delete:
+                {
+                    var (s, e) = LeftSpanChars(leftTokens, tokenOp);
+                    foreach (var r in leftRuns.Slice(s, e))
+                        content.Add(WrapRunLevel(r, RevKind.Del, state));
+                    break;
+                }
+            }
+        }
+        newPara.Add(content);
+        return newPara;
+    }
+
+    /// <summary>Wrap every run-level child of a paragraph in the given move/revision kind (like
+    /// <see cref="MarkWholeParagraph"/> but kind-parameterized) and mark the paragraph mark accordingly.</summary>
+    private static void MarkWholeParagraphAs(XElement para, RevKind kind, RenderState state)
+    {
+        var pPr = para.Element(W.pPr);
+        var runChildren = para.Elements().Where(e => e.Name != W.pPr).ToList();
+        foreach (var child in runChildren)
+            child.Remove();
+        var wrapped = runChildren.Select(c => WrapRunLevel(c, kind, state)).ToList();
+        if (pPr != null)
+            pPr.AddAfterSelf(wrapped);
+        else
+            para.AddFirst(wrapped);
+        MarkParagraphMark(para, kind, state);
+    }
+
+    /// <summary>Bracket a paragraph's run-level content with a move range: insert a
+    /// <c>w:moveFromRangeStart</c>/<c>w:moveToRangeStart</c> (id + name + author + date) as the first run-level
+    /// child (after pPr) and the matching <c>…RangeEnd</c> (same id) as the last child.</summary>
+    private static void BracketParagraphWithMoveRange(XElement para, bool isFrom, string moveName, RenderState state)
+    {
+        int rangeId = state.NextId();
+        var startName = isFrom ? W.moveFromRangeStart : W.moveToRangeStart;
+        var endName = isFrom ? W.moveFromRangeEnd : W.moveToRangeEnd;
+        var start = new XElement(startName,
+            new XAttribute(W.id, rangeId),
+            new XAttribute(W.name, moveName),
+            new XAttribute(W.author, state.Settings.AuthorForRevisions),
+            new XAttribute(W.date, state.Settings.DateTimeForRevisions));
+        var end = new XElement(endName, new XAttribute(W.id, rangeId));
+
+        var pPr = para.Element(W.pPr);
+        if (pPr != null)
+            pPr.AddAfterSelf(start);
+        else
+            para.AddFirst(start);
+        para.Add(end);
     }
 
     // ----------------------------------------------------------------- paragraph emission
@@ -379,10 +571,11 @@ internal static class IrMarkupRenderer
         // A w:hyperlink (and sdt/smartTag) is NOT a valid child of w:ins/w:del — the schema requires the
         // hyperlink OUTSIDE: w:hyperlink > w:ins > w:r. So for a container, keep the wrapper and wrap its inner
         // run-level children individually. For a plain run-level element (w:r, bookmark, …) wrap it directly.
+        bool insGrade = !IsDeleteGrade(kind);
         if (runLevel.Name == W.hyperlink || runLevel.Name == W.sdt || runLevel.Name == W.smartTag)
         {
             var container = new XElement(runLevel.Name, runLevel.Attributes());
-            if (kind == RevKind.Ins)
+            if (insGrade)
                 state.RegisterMediaReferences(container);   // hyperlink r:id rides on the container element
             // Wrap every run-level CHILD; structural children (e.g. sdtPr) pass through untouched.
             foreach (var child in runLevel.Elements())
@@ -396,17 +589,19 @@ internal static class IrMarkupRenderer
         }
 
         var clone = new XElement(runLevel);
-        if (kind == RevKind.Del)
+        if (IsDeleteGrade(kind))
             ConvertTextToDelText(clone);
-        var rev = new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes(), clone);
-        if (kind == RevKind.Ins)
+        var rev = new XElement(RevElementName(kind), state.RevisionAttributes(), clone);
+        if (insGrade)
             state.RegisterMediaReferences(clone);   // the cloned run is the live tree node media import remaps
         return rev;
     }
 
     /// <summary>Mark a paragraph's end-of-paragraph mark inserted/deleted: an EMPTY <c>w:ins</c>/<c>w:del</c>
     /// inside <c>w:pPr/w:rPr</c> (the encoding <see cref="RevisionProcessor"/> recognizes — accept of a
-    /// deleted mark merges the paragraph with the following one; reject restores it).</summary>
+    /// deleted mark merges the paragraph with the following one; reject restores it). The paragraph mark
+    /// supports only <c>w:ins</c>/<c>w:del</c>, so a move FROM marks the mark deleted (del-grade) and a move
+    /// TO marks it inserted (ins-grade).</summary>
     private static void MarkParagraphMark(XElement para, RevKind kind, RenderState state)
     {
         var pPr = para.Element(W.pPr);
@@ -421,9 +616,10 @@ internal static class IrMarkupRenderer
             rPr = new XElement(W.rPr);
             pPr.AddFirst(rPr);   // rPr is the first child of pPr per schema order
         }
+        var markName = IsDeleteGrade(kind) ? W.del : W.ins;
         // Remove any pre-existing ins/del marker (idempotence) then add the new one FIRST inside rPr.
         rPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del).Remove();
-        rPr.AddFirst(new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes()));
+        rPr.AddFirst(new XElement(markName, state.RevisionAttributes()));
     }
 
     /// <summary>
@@ -746,7 +942,21 @@ internal static class IrMarkupRenderer
         return el;
     }
 
-    private enum RevKind { Ins, Del }
+    private enum RevKind { Ins, Del, MoveFrom, MoveTo }
+
+    /// <summary>The OOXML revision-wrapper element name for a <see cref="RevKind"/>.</summary>
+    private static XName RevElementName(RevKind kind) => kind switch
+    {
+        RevKind.Ins => W.ins,
+        RevKind.Del => W.del,
+        RevKind.MoveFrom => W.moveFrom,
+        RevKind.MoveTo => W.moveTo,
+        _ => W.ins,
+    };
+
+    /// <summary>True for the "delete-grade" kinds whose <c>w:t</c> must become <c>w:delText</c> (the moved-FROM
+    /// content is removed on accept, like a deletion).</summary>
+    private static bool IsDeleteGrade(RevKind kind) => kind is RevKind.Del or RevKind.MoveFrom;
 
     // ----------------------------------------------------------------- per-call state
 
@@ -784,6 +994,26 @@ internal static class IrMarkupRenderer
             new XAttribute(W.id, _nextId++),
             new XAttribute(W.date, Settings.DateTimeForRevisions),
         };
+
+        /// <summary>A fresh revision id (for move-range markers, which carry only an id, not the full triple).</summary>
+        public int NextId() => _nextId++;
+
+        private readonly Dictionary<int, string> _moveNames = new();
+        private int _nextMoveName = 1;
+
+        /// <summary>The deterministic <c>w:name</c> ("move1", "move2", …) shared by a move group's FROM and TO
+        /// halves, keyed by <see cref="IrEditOp.MoveGroupId"/>. Allocated in first-seen order per render, so the
+        /// source and destination ops (which carry the same group id) resolve to the SAME name regardless of
+        /// which renders first. Mirrors WmlComparer's "move{n}" convention.</summary>
+        public string MoveName(int moveGroupId)
+        {
+            if (!_moveNames.TryGetValue(moveGroupId, out var name))
+            {
+                name = "move" + _nextMoveName++;
+                _moveNames[moveGroupId] = name;
+            }
+            return name;
+        }
 
         /// <summary>Record a RIGHT-sourced clone for media import iff it references any relationship id (an
         /// image embed/link). The recorded element is the live tree node; importing happens post-assembly.</summary>

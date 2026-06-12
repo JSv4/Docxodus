@@ -136,6 +136,16 @@ internal sealed record IrDiffSettings
     public bool RenderMoves { get; init; } = true;
 
     /// <summary>
+    /// MARKUP-RENDER setting (M2.4 Task 4). When true, <see cref="IrMarkupRenderer"/> rewrites the native
+    /// <c>w:moveFrom</c>/<c>w:moveTo</c> markup it produces into plain <c>w:del</c>/<c>w:ins</c> and strips the
+    /// move range markers, as a post-pass over the assembled document. The render-time analogue of
+    /// <c>WmlComparerSettings.SimplifyMoveMarkup</c> (a Word-compatibility workaround for renderers that do not
+    /// honor native move markup). Default false — native move markup is emitted. Only meaningful when
+    /// <see cref="RenderMoves"/> is true (otherwise no move markup is produced to simplify).
+    /// </summary>
+    public bool SimplifyMoveMarkup { get; init; }
+
+    /// <summary>
     /// DIFF-TIME setting. Characters that split an <c>IrTextRun</c>'s text into word vs. separator
     /// tokens. Each separator character becomes its own <see cref="IrDiffTokenKind.Separator"/> token
     /// (matching <c>WmlComparer</c>'s atom granularity — one atom per separator char).
