@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Validation;
 using Docxodus;
@@ -172,6 +173,33 @@ public class IrMarkupRendererTests
         Assert.NotEmpty(body.Descendants(W.ins));
         Assert.NotEmpty(body.Descendants(W.del));
         AssertRoundTrip(left, right, label: "modify-paragraph");
+    }
+
+    [Fact]
+    public void Render_split_run_fragment_with_boundary_whitespace_carries_xml_space_preserve()
+    {
+        // "the quick brown fox" → "the slow brown fox": the single source run is split at the changed-word
+        // boundary into an Equal prefix run ("the ") and an Equal suffix run (" brown fox"). A fragment whose
+        // text has a leading or trailing space MUST carry xml:space="preserve" or Word collapses the boundary
+        // whitespace, corrupting the round-trip text. Assert the attribute is present on a boundary fragment.
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>the quick brown fox</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>the slow brown fox</w:t></w:r></w:p>");
+
+        var rendered = RenderMarkup(left, right);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+
+        XNamespace xmlNs = XNamespace.Xml;
+        // Find a w:t whose text has boundary whitespace and confirm it preserves space. The split produces at
+        // least one such fragment ("the " trailing, or " brown fox" leading) on the Equal (unwrapped) runs.
+        var boundaryTexts = wd.MainDocumentPart!.GetXDocument().Descendants(W.t)
+            .Where(t => t.Value.Length > 0 && (char.IsWhiteSpace(t.Value[0]) || char.IsWhiteSpace(t.Value[^1])))
+            .ToList();
+        Assert.NotEmpty(boundaryTexts);
+        Assert.All(boundaryTexts, t =>
+            Assert.Equal("preserve", (string?)t.Attribute(xmlNs + "space")));
     }
 
     [Fact]

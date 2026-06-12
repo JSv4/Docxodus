@@ -6206,8 +6206,17 @@ namespace Docxodus
         // internal (was private): reused by Docxodus.Ir.Diff.IrMarkupRenderer to import right-side media
         // (image embeds on inserted/equal content) into the left-based output package, rewriting the cloned
         // element's relationship ids in place. Self-contained part-copy + fresh-rId mint + recursive xml fixup.
+        //
+        // <paramref name="skipDanglingRelationships"/> scopes a behavior change to the IR caller ONLY. For the
+        // old engine (the WmlComparer.Compare pipeline, default false) a content element that references an rId
+        // resolving to NO relationship in its source part is a corrupt/incoherent document, and the historic
+        // contract is a LOUD failure — that path is restored here. The IR renderer (true) assembles its output
+        // on the LEFT package and pre-imports hyperlink/external relationships separately
+        // (ImportHyperlinkAndExternalRelationships), so by the time it calls in, a remaining unresolvable rId is
+        // a benign dangling reference on cloned right-side content whose TEXT is unchanged — it must be skipped,
+        // not thrown, because the ContentHash round-trip still holds (precise rId remap is tracked separately).
         internal static XElement MoveRelatedPartsToDestination(PackagePart partOfDeletedContent, PackagePart partInNewDocument,
-            XElement contentElement)
+            XElement contentElement, bool skipDanglingRelationships = false)
         {
             var elementsToUpdate = contentElement
                 .Descendants()
@@ -6224,11 +6233,18 @@ namespace Docxodus
                 {
                     var rId = (string)att;
 
-                    // An r:id can also name a HYPERLINK or EXTERNAL relationship (e.g. w:hyperlink/@r:id) rather
-                    // than a part relationship; PackagePart.GetRelationship throws for those. Skip any rId that
-                    // is not a part relationship here — the caller is responsible for hyperlink/external rels.
+                    // A DANGLING rId — one that names no relationship at all in this source part — is the trigger.
+                    // (Hyperlink/external rels are recreated by the caller BEFORE this runs, so a surviving
+                    // unresolvable rId here is genuinely dangling, NOT an external-hyperlink rel.) The old engine
+                    // treats that as a corrupt document and fails loudly; only the IR caller, which tolerates a
+                    // dangling reference on unchanged-text content, opts into skipping it.
                     if (!partOfDeletedContent.RelationshipExists(rId))
-                        continue;
+                    {
+                        if (skipDanglingRelationships)
+                            continue;
+                        throw new FileFormatException(
+                            $"Content references relationship id '{rId}' that does not exist in the source part.");
+                    }
 
                     var relationshipForDeletedPart = partOfDeletedContent.GetRelationship(rId);
                     if (relationshipForDeletedPart == null)
@@ -6287,7 +6303,7 @@ namespace Docxodus
                             using (var stream = newPart.GetStream())
                             {
                                 newPartXDoc = XDocument.Load(stream);
-                                MoveRelatedPartsToDestination(relatedPackagePart, newPart, newPartXDoc.Root);
+                                MoveRelatedPartsToDestination(relatedPackagePart, newPart, newPartXDoc.Root, skipDanglingRelationships);
                             }
                             using (var stream = newPart.GetStream())
                                 newPartXDoc.Save(stream);

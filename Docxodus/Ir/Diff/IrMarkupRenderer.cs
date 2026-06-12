@@ -162,7 +162,7 @@ internal static class IrMarkupRenderer
                     var leftPkgPart = streamDoc.GetPackage().GetPart(main.Uri);
                     var rightPkgPart = rightStream.GetPackage().GetPart(rightMain.Uri);
                     foreach (var clone in state.RightSourcedClones)
-                        WmlComparer.MoveRelatedPartsToDestination(rightPkgPart, leftPkgPart, clone);
+                        WmlComparer.MoveRelatedPartsToDestination(rightPkgPart, leftPkgPart, clone, skipDanglingRelationships: true);
                 }
 
                 // Strip ALL engine-internal pt:Unid bookkeeping attributes from the assembled body (cloned runs
