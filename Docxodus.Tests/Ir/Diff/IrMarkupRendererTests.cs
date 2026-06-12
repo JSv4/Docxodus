@@ -642,11 +642,6 @@ public class IrMarkupRendererTests
         // Hyperlink TARGET change where the right rId COLLIDES with a different left rId (needs rId remap, not
         // same-id recreation). Task-4: hyperlink relationship remap.
         "WC019-Hyperlink-Before.docx↔WC019-Hyperlink-After-2.docx",
-        // TABLE-structural: a paragraph moved INTO a table, and a modify adjacent to a table — proper row/cell
-        // revision markup (Task 4) is needed; the whole-table del+ins fallback leaves an empty shell on the
-        // toggled side. Task-4: table row/cell revision markup.
-        "WC007-Unmodified.docx↔WC007-Moved-into-Table.docx",
-        "WC010-Para-Before-Table-Unmodified.docx↔WC010-Para-Before-Table-Mod.docx",
         // Body-level non-paragraph (bookmark/perm) insert/delete — opaque body-level elements have no run model
         // to revision-mark; WmlComparer handles these specially. Task-4: body-level marker revisions.
         "WC-BodyBookmarks-Before.docx↔WC-BodyBookmarks-After.docx",

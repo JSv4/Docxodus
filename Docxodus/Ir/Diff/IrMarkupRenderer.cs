@@ -274,12 +274,199 @@ internal static class IrMarkupRenderer
             return;
         }
 
+        // A Modified TABLE pair with a nested table diff renders row/cell-precise markup (Task 4).
+        if (op.TableDiff is { } tableDiff &&
+            ResolveBlock(op.LeftAnchor, state.Left) is IrTable &&
+            ResolveBlock(op.RightAnchor, state.Right) is IrTable)
+        {
+            if (RenderModifiedTable(op, tableDiff, state, sink))
+                return;
+            // fall through to the conservative fallback if the fine table path bailed
+        }
+
         // Conservative fallback: delete the left block, insert the right block. Order matters only for human
         // reading; accept→right, reject→left both hold. A missing side (shouldn't happen for Modify) is skipped.
         if (op.LeftAnchor != null)
             EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
         if (op.RightAnchor != null)
             EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+    }
+
+    /// <summary>
+    /// Render a Modified table pair from its <see cref="IrTableDiff"/> (Task 4): build the new table from the
+    /// RIGHT table's shell (tblPr/tblGrid) with rows assembled per <see cref="IrRowOp"/> — EqualRow passthrough,
+    /// InsertRow → <c>w:trPr/w:ins</c> + run-wrapped, DeleteRow → <c>w:trPr/w:del</c> + run-wrapped, ModifyRow →
+    /// cell-precise via the nested cell/block ops. Returns false (caller falls back) if a needed source row is
+    /// unresolvable — the fallback still round-trips.
+    /// </summary>
+    private static bool RenderModifiedTable(IrEditOp op, IrTableDiff tableDiff, RenderState state, List<XElement> sink)
+    {
+        var rightTbl = SourceElement(op.RightAnchor, state.Right);
+        var leftTbl = SourceElement(op.LeftAnchor, state.Left);
+        if (rightTbl == null || leftTbl == null || rightTbl.Name != W.tbl || leftTbl.Name != W.tbl)
+            return false;
+
+        // Index the source rows by anchor so a row op resolves to its source w:tr.
+        var leftRowsByAnchor = IndexRows(ResolveBlock(op.LeftAnchor, state.Left) as IrTable);
+        var rightRowsByAnchor = IndexRows(ResolveBlock(op.RightAnchor, state.Right) as IrTable);
+
+        var newTbl = new XElement(W.tbl);
+        // Carry the table's non-row prelude (tblPr, tblGrid, …) from the right shell.
+        foreach (var pre in rightTbl.Elements().Where(e => e.Name != W.tr))
+            newTbl.Add(StripUnids(new XElement(pre)));
+
+        foreach (var rowOp in tableDiff.RowOps)
+        {
+            switch (rowOp.Kind)
+            {
+                case IrRowOpKind.EqualRow:
+                {
+                    if (!rightRowsByAnchor.TryGetValue(rowOp.RightRowAnchor ?? "", out var src)) return false;
+                    var row = StripUnids(new XElement(src));
+                    state.RegisterMediaReferences(row);
+                    newTbl.Add(row);
+                    break;
+                }
+                case IrRowOpKind.InsertRow:
+                {
+                    if (!rightRowsByAnchor.TryGetValue(rowOp.RightRowAnchor ?? "", out var src)) return false;
+                    var row = StripUnids(new XElement(src));
+                    state.RegisterMediaReferences(row);
+                    MarkWholeRow(row, RevKind.Ins, state);
+                    newTbl.Add(row);
+                    break;
+                }
+                case IrRowOpKind.DeleteRow:
+                {
+                    if (!leftRowsByAnchor.TryGetValue(rowOp.LeftRowAnchor ?? "", out var src)) return false;
+                    var row = StripUnids(new XElement(src));
+                    MarkWholeRow(row, RevKind.Del, state);
+                    newTbl.Add(row);
+                    break;
+                }
+                case IrRowOpKind.ModifyRow:
+                {
+                    if (!rightRowsByAnchor.TryGetValue(rowOp.RightRowAnchor ?? "", out var rightSrc)) return false;
+                    if (!RenderModifyRow(rowOp, rightSrc, state, newTbl))
+                        return false;
+                    break;
+                }
+                case IrRowOpKind.MovedRow:
+                    // A relocated exact-content row: render as DeleteRow at source + InsertRow at destination
+                    // (the two MovedRow ops carry the left/right anchors respectively). This keeps the content
+                    // round-trip without native row-move markup (out of Task-4 scope).
+                    if (rowOp.IsMoveSource == true && rowOp.LeftRowAnchor is { } lr && leftRowsByAnchor.TryGetValue(lr, out var ms))
+                    {
+                        var row = StripUnids(new XElement(ms));
+                        MarkWholeRow(row, RevKind.Del, state);
+                        newTbl.Add(row);
+                    }
+                    else if (rowOp.RightRowAnchor is { } rr && rightRowsByAnchor.TryGetValue(rr, out var md))
+                    {
+                        var row = StripUnids(new XElement(md));
+                        state.RegisterMediaReferences(row);
+                        MarkWholeRow(row, RevKind.Ins, state);
+                        newTbl.Add(row);
+                    }
+                    else return false;
+                    break;
+            }
+        }
+
+        sink.Add(newTbl);
+        return true;
+    }
+
+    /// <summary>Render a ModifyRow: build the new row from the RIGHT row shell, replacing each paired cell's
+    /// content per its block ops, and whole-marking an unpaired (column-surplus) cell. Returns false to bail to
+    /// the caller's fallback if the structure can't be resolved.</summary>
+    private static bool RenderModifyRow(IrRowOp rowOp, XElement rightRowSrc, RenderState state, XElement newTbl)
+    {
+        // Without a per-cell op list, emit the right row as-is (content-equal row that fell into a ModifyRow by
+        // row-property change only) — still round-trips.
+        if (rowOp.CellOps == null)
+        {
+            var row0 = StripUnids(new XElement(rightRowSrc));
+            state.RegisterMediaReferences(row0);
+            newTbl.Add(row0);
+            return true;
+        }
+
+        var newRow = new XElement(W.tr);
+        foreach (var pre in rightRowSrc.Elements().Where(e => e.Name != W.tc))
+            newRow.Add(StripUnids(new XElement(pre)));
+
+        var rightCells = rightRowSrc.Elements(W.tc).ToList();
+        int ci = 0;
+        foreach (var cellOp in rowOp.CellOps)
+        {
+            if (ci >= rightCells.Count)
+                break;
+            var cellSrc = rightCells[ci++];
+            var newCell = new XElement(W.tc);
+            foreach (var pre in cellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+                newCell.Add(StripUnids(new XElement(pre)));
+
+            if (cellOp.BlockOps != null)
+            {
+                // Render the cell's block ops with the same dispatch the body uses (paragraph token diffs, etc.).
+                var cellSink = new List<XElement>();
+                foreach (var bop in cellOp.BlockOps)
+                    RenderBlockOp(bop, state, cellSink);
+                // A cell must contain at least one block-level child; if the ops produced none, keep the right
+                // cell's content verbatim so the table stays schema-valid.
+                if (cellSink.Count == 0)
+                    foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+                        cellSink.Add(StripUnids(new XElement(b)));
+                newCell.Add(cellSink);
+            }
+            else
+            {
+                foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+                    newCell.Add(StripUnids(new XElement(b)));
+            }
+            newRow.Add(newCell);
+        }
+        // Append any right cells the cell-op list did not cover (column surplus) verbatim.
+        for (; ci < rightCells.Count; ci++)
+            newRow.Add(StripUnids(new XElement(rightCells[ci])));
+
+        state.RegisterMediaReferences(newRow);
+        newTbl.Add(newRow);
+        return true;
+    }
+
+    /// <summary>Mark a whole table row inserted/deleted: a <c>w:trPr/w:ins</c>|<c>w:del</c> marker (APPENDED in
+    /// trPr — the row-revision markers are near the end of the property order) plus every paragraph in the row
+    /// run-and-mark wrapped. Accept/reject then add/remove the entire row (and the empty-table cleanup drops the
+    /// table if it was the last row).</summary>
+    private static void MarkWholeRow(XElement tr, RevKind kind, RenderState state)
+    {
+        var trPr = tr.Element(W.trPr);
+        if (trPr == null)
+        {
+            trPr = new XElement(W.trPr);
+            tr.AddFirst(trPr);
+        }
+        trPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del).Remove();
+        trPr.Add(new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes()));
+        foreach (var p in tr.Descendants(W.p).ToList())
+            MarkWholeParagraph(p, kind, state);
+    }
+
+    /// <summary>Index a table's rows by their anchor string for source-row lookup during table rendering.</summary>
+    private static Dictionary<string, XElement> IndexRows(IrTable? table)
+    {
+        var map = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        if (table == null)
+            return map;
+        foreach (var row in table.Rows)
+        {
+            var src = row.Source.Element;
+            if (src != null)
+                map[row.Anchor.ToString()] = src;
+        }
+        return map;
     }
 
     /// <summary>In-place rewrite of native move markup under one block to plain del/ins (mirrors

@@ -1744,6 +1744,20 @@ namespace Docxodus
                     element.Elements(W.trPr).Elements(W.del).Any())
                     return null;
 
+                // Accept revisions for a wholly-deleted table: a w:tbl that HAS w:tr children but EVERY one of
+                // them is row-deleted (w:trPr/w:del) would otherwise collapse to an empty <w:tbl> shell (an
+                // invalid table — a table requires ≥1 row). Drop the whole table so a fully-deleted (or, under
+                // reject, a fully-inserted) table leaves nothing behind, not a remnant shell. This is the
+                // table-level analogue of the per-row rule above and is required for the accept/reject content
+                // round-trip of a whole inserted/deleted table.
+
+                if (element.Name == W.tbl)
+                {
+                    var rows = element.Elements(W.tr).ToList();
+                    if (rows.Count > 0 && rows.All(tr => tr.Elements(W.trPr).Elements(W.del).Any()))
+                        return null;
+                }
+
                 // Accept deleted text in paragraphs.
 
                 if (element.Name == W.del)
