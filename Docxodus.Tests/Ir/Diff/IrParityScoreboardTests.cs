@@ -79,7 +79,7 @@ public class IrParityScoreboardTests
         // PASS/FAIL is the measurement; there is deliberately NO 100% threshold until M2.4 closes the
         // gate — but the M2.3 baseline is a RATCHET: parity may only go up. Raise the floor as M2.4
         // burn-down lands; never lower it.
-        const int ParityFloor = 129; // M2.3 baseline (129/179 = 72.1%)
+        const int ParityFloor = 133; // M2.4 Task 1 — scope-complete diffing (footnotes/endnotes/textboxes): 133/179
         Assert.True(board.Total > 0, "Scoreboard scored no cases.");
         Assert.Equal(board.Total, board.Pass + board.Fail);
         Assert.True(board.Pass >= ParityFloor,

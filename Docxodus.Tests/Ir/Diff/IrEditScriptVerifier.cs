@@ -86,6 +86,10 @@ internal static class IrEditScriptVerifier
                     // row/cell anchors + reconstruct the right table row-by-row/cell-by-cell from it.
                     if (leftBlock is IrTable lt && rightBlock is IrTable rt && op.TableDiff is { } tableDiff)
                         VerifyTableDiff(lt, rt, tableDiff, settings);
+                    // A Modified PARAGRAPH pair carrying textbox diffs (M2.4 Task 1): validate each
+                    // textbox's inner block ops reconstruct the right textbox's blocks.
+                    if (leftBlock is IrParagraph lpar && rightBlock is IrParagraph rpar && op.TextboxDiffs is { } tbxDiffs)
+                        VerifyTextboxDiffs(lpar, rpar, tbxDiffs, settings);
                     // Block-level: a non-paragraph Modify's content genuinely differs (it's Modified), so
                     // the block-sequence check sources truth from the right block (table reconstruction is
                     // proven in depth by VerifyTableDiff above).
@@ -163,6 +167,89 @@ internal static class IrEditScriptVerifier
                 // For Insert / non-paragraph Modify the source IS the right block (content legitimately
                 // sourced from the right IR), so the check is identity there by design.
                 Assert.Equal(actual.ContentHash, sourceBlock.ContentHash);
+            }
+        }
+
+        // Note scopes (M2.4 Task 1): every footnote/endnote diff reconstructs its matched note's right
+        // blocks from the left note's blocks (or all-insert/all-delete for an unmatched note).
+        VerifyNoteOps(left, right, script, settings);
+    }
+
+    // ------------------------------------------------------------------ note scopes (M2.4 Task 1)
+
+    /// <summary>
+    /// Verify the script's per-note diffs. For each <see cref="IrNoteDiff"/>: resolve its note id in the
+    /// correct (footnote/endnote) store on each side; reconstruct the note's right block text sequence from
+    /// the left note's blocks + the note's ops (reusing the cell-block reconstruction machinery) and assert
+    /// it equals the right note's block text. An unmatched note has empty left or right blocks.
+    /// </summary>
+    private static void VerifyNoteOps(IrDocument left, IrDocument right, IrEditScript script, IrDiffSettings settings)
+    {
+        if (script.NoteOps is not { } noteOps)
+            return;
+
+        foreach (var noteDiff in noteOps)
+        {
+            var leftStore = noteDiff.Kind == IrNoteKind.Footnote ? left.Footnotes : left.Endnotes;
+            var rightStore = noteDiff.Kind == IrNoteKind.Footnote ? right.Footnotes : right.Endnotes;
+
+            var leftBlocks = leftStore.Notes.TryGetValue(noteDiff.NoteId, out var ls)
+                ? ls.Blocks : IrNodeList.Empty<IrBlock>();
+            var rightBlocks = rightStore.Notes.TryGetValue(noteDiff.NoteId, out var rs)
+                ? rs.Blocks : IrNodeList.Empty<IrBlock>();
+
+            // At least one side must hold the note (the diff would not exist otherwise).
+            Assert.True(leftBlocks.Count > 0 || rightBlocks.Count > 0,
+                $"note {noteDiff.Kind}:{noteDiff.NoteId} resolves to no blocks on either side.");
+
+            var reconstructed = ReconstructBlocks(leftBlocks, rightBlocks, noteDiff.Ops, settings);
+            var expected = BlockTexts(rightBlocks, settings);
+            Assert.Equal(expected, reconstructed);
+        }
+    }
+
+    // ------------------------------------------------------------------ textbox interiors (M2.4 Task 1)
+
+    /// <summary>
+    /// Verify a Modified paragraph's textbox diffs: collect each paragraph's textboxes in document order,
+    /// pair them positionally, and assert each diff's inner block ops reconstruct the paired right textbox's
+    /// block text (or the lone surplus textbox's all-insert/all-delete reconstruction).
+    /// </summary>
+    private static void VerifyTextboxDiffs(
+        IrParagraph left, IrParagraph right, IrNodeList<IrTextboxDiff> diffs, IrDiffSettings settings)
+    {
+        var leftBoxes = CollectTextboxes(left.Inlines);
+        var rightBoxes = CollectTextboxes(right.Inlines);
+
+        // One diff per textbox slot: paired boxes first, then the surplus on whichever side is longer.
+        Assert.Equal(Math.Max(leftBoxes.Count, rightBoxes.Count), diffs.Count);
+
+        for (int i = 0; i < diffs.Count; i++)
+        {
+            var lb = i < leftBoxes.Count ? leftBoxes[i].Blocks : IrNodeList.Empty<IrBlock>();
+            var rb = i < rightBoxes.Count ? rightBoxes[i].Blocks : IrNodeList.Empty<IrBlock>();
+            var reconstructed = ReconstructBlocks(lb, rb, diffs[i].Ops, settings);
+            var expected = BlockTexts(rb, settings);
+            Assert.Equal(expected, reconstructed);
+        }
+    }
+
+    private static List<IrTextbox> CollectTextboxes(IReadOnlyList<IrInline> inlines)
+    {
+        var boxes = new List<IrTextbox>();
+        WalkForTextboxes(inlines, boxes);
+        return boxes;
+    }
+
+    private static void WalkForTextboxes(IReadOnlyList<IrInline> inlines, List<IrTextbox> sink)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrTextbox tbx: sink.Add(tbx); break;
+                case IrFieldRun field: WalkForTextboxes(field.CachedResult, sink); break;
+                case IrHyperlink link: WalkForTextboxes(link.Inlines, sink); break;
             }
         }
     }
@@ -425,7 +512,24 @@ internal static class IrEditScriptVerifier
         block is IrParagraph p ? Tokens(p, settings) : null;
 
     private static IReadOnlyList<string> Tokens(IrParagraph p, IrDiffSettings settings) =>
-        IrDiffTokenizer.Tokenize(p, settings).Select(t => t.MatchKey).ToList();
+        MaskTextboxKeys(IrDiffTokenizer.Tokenize(p, settings)).Select(t => t.MatchKey).ToList();
+
+    /// <summary>
+    /// The text view masks every Textbox placeholder token's MatchKey to one constant (M2.4 Task 1): a
+    /// textbox change is verified through the op's nested <see cref="IrEditOp.TextboxDiffs"/>, and the
+    /// builder masks the placeholder out of the paragraph's own token diff, so the paragraph-text
+    /// reconstruction must mask it too (the real per-textbox key differs when the interior changed). For an
+    /// unchanged textbox the masking is a harmless no-op (both sides already share the same constant).
+    /// </summary>
+    private const string MaskedTextboxKey = "tbx";
+
+    private static IReadOnlyList<IrDiffToken> MaskTextboxKeys(IReadOnlyList<IrDiffToken> tokens)
+    {
+        var masked = new List<IrDiffToken>(tokens.Count);
+        foreach (var t in tokens)
+            masked.Add(t.Kind == IrDiffTokenKind.Textbox ? t with { MatchKey = MaskedTextboxKey } : t);
+        return masked;
+    }
 
     /// <summary>
     /// Reconstruct the right paragraph's token sequence by applying <paramref name="tokenDiff"/> to the
@@ -440,8 +544,10 @@ internal static class IrEditScriptVerifier
             return null; // non-paragraph Modified: compared by ContentHash
         Assert.NotNull(tokenDiff); // a paragraph Modified pair MUST carry a token diff
 
-        var leftTokens = IrDiffTokenizer.Tokenize(lp, settings);
-        var rightTokens = IrDiffTokenizer.Tokenize(rp, settings);
+        // Mask textbox placeholder keys so the diff (built over masked tokens when textboxes nest) verifies
+        // against the same masked view; harmless when no textbox is present.
+        var leftTokens = MaskTextboxKeys(IrDiffTokenizer.Tokenize(lp, settings));
+        var rightTokens = MaskTextboxKeys(IrDiffTokenizer.Tokenize(rp, settings));
 
         // Enforce the full TokenDiff totality/coverage/per-kind battery here too, so the apply-verifier
         // does NOT pass on a structurally-broken-but-text-equal diff (non-tiling spans, wrong-length

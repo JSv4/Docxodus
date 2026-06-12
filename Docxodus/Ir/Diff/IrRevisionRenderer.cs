@@ -74,6 +74,16 @@ internal static class IrRevisionRenderer
         var revisions = new List<IrRevision>();
         foreach (var op in script.Operations)
             RenderBlockOp(op, ctx, revisions);
+
+        // Note scopes (M2.4 Task 1): footnotes then endnotes, in the script's deterministic note order.
+        // Each note's block ops render through the SAME block-op machinery as the body — its fn/en blocks
+        // are in the shared AnchorIndex, so anchor→block/token resolution works unchanged, and the note's
+        // distinct fn/en anchors carry the scope context into every revision.
+        if (script.NoteOps is { } noteOps)
+            foreach (var noteDiff in noteOps)
+                foreach (var op in noteDiff.Ops)
+                    RenderBlockOp(op, ctx, revisions);
+
         return IrNodeList.From(revisions);
     }
 
@@ -139,6 +149,16 @@ internal static class IrRevisionRenderer
             var rightTokens = ParagraphTokens(op.RightAnchor, ctx.Right, ctx.Settings);
             RenderTokenOps(tokenDiff, leftTokens, rightTokens, op.LeftAnchor, op.RightAnchor, ctx, sink);
         }
+
+        // Textbox interiors (M2.4 Task 1): a Modified paragraph carrying textbox diffs recurses each
+        // textbox's inner block ops through the SAME block-op machinery, AFTER the paragraph's own token
+        // ops. The placeholder-token change was masked out of the token diff above, so the textbox change
+        // is reported exactly once — here, from the inner blocks' text.
+        if (op.TextboxDiffs is { } textboxDiffs)
+            foreach (var tbxDiff in textboxDiffs)
+                foreach (var blockOp in tbxDiff.Ops)
+                    RenderBlockOp(blockOp, ctx, sink);
+
         // A non-paragraph, non-table Modified pair (opaque / section break) has no sub-block model and
         // no token diff — it produces no token-level revisions (its content change is not describable at
         // this granularity by this surface; M2.4 OOXML markup is the place for it).
@@ -444,7 +464,21 @@ internal static class IrRevisionRenderer
     /// </summary>
     private static string RowTextByScan(string anchor, IrDocument doc, IrDiffSettings settings)
     {
-        foreach (var block in doc.Body.Blocks)
+        if (RowTextInBlocks(anchor, doc.Body.Blocks, settings) is { } bodyText)
+            return bodyText;
+        // Note scopes (M2.4 Task 1): a footnote/endnote may contain a table whose rows are not block-indexed.
+        foreach (var scope in doc.Footnotes.Notes.Values)
+            if (RowTextInBlocks(anchor, scope.Blocks, settings) is { } t)
+                return t;
+        foreach (var scope in doc.Endnotes.Notes.Values)
+            if (RowTextInBlocks(anchor, scope.Blocks, settings) is { } t)
+                return t;
+        return string.Empty;
+    }
+
+    private static string? RowTextInBlocks(string anchor, IrNodeList<IrBlock> blocks, IrDiffSettings settings)
+    {
+        foreach (var block in blocks)
         {
             if (block is IrTable table)
             {
@@ -459,7 +493,7 @@ internal static class IrRevisionRenderer
                 }
             }
         }
-        return string.Empty;
+        return null;
     }
 
     private static void AppendRowText(StringBuilder sb, IrRow row, IrDiffSettings settings)

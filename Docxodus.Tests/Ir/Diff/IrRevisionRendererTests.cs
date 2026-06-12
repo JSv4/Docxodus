@@ -428,11 +428,24 @@ public class IrRevisionRendererTests
 
     private static bool RowOrCellAnchorExists(string anchor, IrDocument doc)
     {
-        foreach (var block in doc.Body.Blocks)
-        {
+        if (BlocksHaveTableAnchor(doc.Body.Blocks, anchor))
+            return true;
+        // Note scopes (M2.4 Task 1): a footnote/endnote can itself contain a table, whose row/cell anchors
+        // are not block-indexed; scan the note stores' blocks too.
+        foreach (var scope in doc.Footnotes.Notes.Values)
+            if (BlocksHaveTableAnchor(scope.Blocks, anchor))
+                return true;
+        foreach (var scope in doc.Endnotes.Notes.Values)
+            if (BlocksHaveTableAnchor(scope.Blocks, anchor))
+                return true;
+        return false;
+    }
+
+    private static bool BlocksHaveTableAnchor(IEnumerable<IrBlock> blocks, string anchor)
+    {
+        foreach (var block in blocks)
             if (block is IrTable table && TableHasAnchor(table, anchor))
                 return true;
-        }
         return false;
     }
 

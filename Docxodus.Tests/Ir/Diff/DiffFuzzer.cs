@@ -58,6 +58,10 @@ internal static class DiffFuzzer
 
         /// <summary>Delete a table row. (Comparable class.)</summary>
         DeleteRow,
+
+        /// <summary>Replace the text of the document's footnote. (Comparable class — WmlComparer diffs
+        /// footnote scopes via GetRevisions, so a footnote-text edit is cross-engine comparable.)</summary>
+        EditFootnote,
     }
 
     /// <summary>
@@ -80,6 +84,7 @@ internal static class DiffFuzzer
             MutationKind.EditTableCell => $"EditTableCell(row={Index}, col={Target}, \"{Payload}\")",
             MutationKind.InsertRow => $"InsertRow(at={Index}, \"{Payload}\")",
             MutationKind.DeleteRow => $"DeleteRow(row={Index})",
+            MutationKind.EditFootnote => $"EditFootnote(-> \"{Payload}\")",
             _ => Kind.ToString(),
         };
     }
@@ -152,6 +157,7 @@ internal static class DiffFuzzer
     {
         public List<Para> Paragraphs = new();
         public Table? Table; // appended after the paragraphs when present
+        public string? FootnoteText; // a single footnote (id=1) when present; the EditFootnote mutation edits it
     }
 
     // ---------------------------------------------------------------------- generation
@@ -162,7 +168,7 @@ internal static class DiffFuzzer
         var rng = new Random(seed);
 
         var model = GenerateBase(rng, out int baseParaCount, out bool hasTable);
-        var leftBytes = IrTestDocuments.FromBodyXml(ToBodyXml(model));
+        var leftBytes = Serialize(model);
 
         var mutations = GenerateMutations(rng, model);
         var applied = new List<Mutation>();
@@ -170,10 +176,17 @@ internal static class DiffFuzzer
             if (Apply(model, m))
                 applied.Add(m);
 
-        var rightBytes = IrTestDocuments.FromBodyXml(ToBodyXml(model));
+        var rightBytes = Serialize(model);
 
         return new FuzzCase(seed, leftBytes, rightBytes, baseParaCount, hasTable, applied);
     }
+
+    /// <summary>Serialize the model to DOCX bytes, routing through the footnote-carrying builder when the
+    /// model has a footnote (so the footnote scope is read + diffed) and the plain body builder otherwise.</summary>
+    private static WmlDocument Serialize(DocModel model) =>
+        model.FootnoteText is { } fn
+            ? IrTestDocuments.FromBodyXmlWithFootnote(ToBodyXml(model), fn)
+            : IrTestDocuments.FromBodyXml(ToBodyXml(model));
 
     private static DocModel GenerateBase(Random rng, out int paraCount, out bool hasTable)
     {
@@ -206,6 +219,10 @@ internal static class DiffFuzzer
                 });
         }
 
+        // ~25% chance the document carries a footnote (so the footnote-scope diff path is exercised).
+        if (rng.Next(4) == 0)
+            model.FootnoteText = string.Join(" ", SoupWords(rng, rng.Next(3, 8)));
+
         return model;
     }
 
@@ -214,13 +231,13 @@ internal static class DiffFuzzer
         int count = rng.Next(1, 6); // 1..5 mutations
         var list = new List<Mutation>();
         for (int i = 0; i < count; i++)
-            list.Add(PickMutation(rng, model.Table is not null));
+            list.Add(PickMutation(rng, model.Table is not null, model.FootnoteText is not null));
         return list;
     }
 
-    private static Mutation PickMutation(Random rng, bool hasTable)
+    private static Mutation PickMutation(Random rng, bool hasTable, bool hasFootnote)
     {
-        // Weighted pick. Table mutations only enter the pool when a table exists.
+        // Weighted pick. Table/footnote mutations only enter the pool when that scope exists.
         var pool = new List<MutationKind>
         {
             MutationKind.EditWord, MutationKind.EditWord,
@@ -235,6 +252,8 @@ internal static class DiffFuzzer
             pool.Add(MutationKind.InsertRow);
             pool.Add(MutationKind.DeleteRow);
         }
+        if (hasFootnote)
+            pool.Add(MutationKind.EditFootnote);
 
         var kind = pool[rng.Next(pool.Count)];
         // Operands are resolved at APPLY time against the live model (indices must be in range then), so we
@@ -242,7 +261,7 @@ internal static class DiffFuzzer
         return kind switch
         {
             MutationKind.EditWord or MutationKind.InsertParagraph or MutationKind.EditTableCell
-                or MutationKind.InsertRow =>
+                or MutationKind.InsertRow or MutationKind.EditFootnote =>
                 new Mutation(kind, Payload: BankWord(rng), Index: rng.Next(0, 1_000), Target: rng.Next(0, 1_000)),
             _ => new Mutation(kind, Index: rng.Next(0, 1_000), Target: rng.Next(0, 1_000)),
         };
@@ -349,6 +368,17 @@ internal static class DiffFuzzer
                     return false; // keep at least one row
                 int ri = m.Index % t.Rows.Count;
                 t.Rows.RemoveAt(ri);
+                return true;
+            }
+
+            case MutationKind.EditFootnote:
+            {
+                if (model.FootnoteText is null)
+                    return false;
+                string replacement = m.Payload! + " " + (m.Payload! + "-fn");
+                if (model.FootnoteText == replacement)
+                    replacement += "x"; // guarantee an actual change
+                model.FootnoteText = replacement;
                 return true;
             }
 

@@ -44,6 +44,13 @@ internal static class IrEditScriptJson
             foreach (var op in script.Operations)
                 WriteOp(writer, op);
             writer.WriteEndArray();
+            if (script.NoteOps is { } noteOps)
+            {
+                writer.WriteStartArray("noteOps");
+                foreach (var noteOp in noteOps)
+                    WriteNoteDiff(writer, noteOp);
+                writer.WriteEndArray();
+            }
             writer.WriteEndObject();
         }
 
@@ -68,6 +75,34 @@ internal static class IrEditScriptJson
             writer.WritePropertyName("tableDiff");
             WriteTableDiff(writer, tableDiff);
         }
+        if (op.TextboxDiffs is { } textboxDiffs)
+        {
+            writer.WriteStartArray("textboxDiffs");
+            foreach (var tbxDiff in textboxDiffs)
+            {
+                writer.WriteStartObject();
+                writer.WriteStartArray("ops");
+                foreach (var blockOp in tbxDiff.Ops)
+                    WriteOp(writer, blockOp);
+                writer.WriteEndArray();
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
+        writer.WriteEndObject();
+    }
+
+    // ------------------------------------------------------------------ note diff
+
+    private static void WriteNoteDiff(Utf8JsonWriter writer, IrNoteDiff diff)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("kind", diff.Kind.ToString());
+        writer.WriteString("noteId", diff.NoteId);
+        writer.WriteStartArray("ops");
+        foreach (var op in diff.Ops)
+            WriteOp(writer, op);
+        writer.WriteEndArray();
         writer.WriteEndObject();
     }
 
@@ -164,7 +199,27 @@ internal static class IrEditScriptJson
         var ops = new List<IrEditOp>();
         foreach (var opElement in root.GetProperty("operations").EnumerateArray())
             ops.Add(ReadOp(opElement));
-        return new IrEditScript(IrNodeList.From(ops));
+
+        IrNodeList<IrNoteDiff>? noteOps = null;
+        if (root.TryGetProperty("noteOps", out var noteOpsElement))
+        {
+            var list = new List<IrNoteDiff>();
+            foreach (var noteElement in noteOpsElement.EnumerateArray())
+                list.Add(ReadNoteDiff(noteElement));
+            noteOps = IrNodeList.From(list);
+        }
+
+        return new IrEditScript(IrNodeList.From(ops), noteOps);
+    }
+
+    private static IrNoteDiff ReadNoteDiff(JsonElement element)
+    {
+        var kind = Enum.Parse<IrNoteKind>(element.GetProperty("kind").GetString()!);
+        string noteId = element.GetProperty("noteId").GetString()!;
+        var ops = new List<IrEditOp>();
+        foreach (var opElement in element.GetProperty("ops").EnumerateArray())
+            ops.Add(ReadOp(opElement));
+        return new IrNoteDiff(kind, noteId, IrNodeList.From(ops));
     }
 
     private static IrEditOp ReadOp(JsonElement element)
@@ -176,7 +231,20 @@ internal static class IrEditScriptJson
         bool? isMoveSource = element.TryGetProperty("isMoveSource", out var s) ? s.GetBoolean() : null;
         IrTokenDiff? tokenDiff = element.TryGetProperty("tokenDiff", out var t) ? ReadTokenDiff(t) : null;
         IrTableDiff? tableDiff = element.TryGetProperty("tableDiff", out var td) ? ReadTableDiff(td) : null;
-        return new IrEditOp(kind, leftAnchor, rightAnchor, tokenDiff, moveGroupId, isMoveSource, tableDiff);
+        IrNodeList<IrTextboxDiff>? textboxDiffs = null;
+        if (element.TryGetProperty("textboxDiffs", out var tbx))
+        {
+            var list = new List<IrTextboxDiff>();
+            foreach (var tbxElement in tbx.EnumerateArray())
+            {
+                var inner = new List<IrEditOp>();
+                foreach (var blockElement in tbxElement.GetProperty("ops").EnumerateArray())
+                    inner.Add(ReadOp(blockElement));
+                list.Add(new IrTextboxDiff(IrNodeList.From(inner)));
+            }
+            textboxDiffs = IrNodeList.From(list);
+        }
+        return new IrEditOp(kind, leftAnchor, rightAnchor, tokenDiff, moveGroupId, isMoveSource, tableDiff, textboxDiffs);
     }
 
     private static IrTableDiff ReadTableDiff(JsonElement element)

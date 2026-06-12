@@ -338,6 +338,42 @@ internal static class IrTestDocuments
     }
 
     /// <summary>
+    /// Like <see cref="FromBodyXml"/>, but also wires up a <see cref="FootnotesPart"/> whose real note
+    /// (id=1) holds <paramref name="footnoteText"/> in a single paragraph (plus the two Word-reserved
+    /// boilerplate notes), and appends a footnote-reference run to the body so the note is referenced. Used
+    /// by the diff fuzzer's footnote-edit mutation: the body XML is supplied verbatim, the footnote ref is
+    /// appended in its own trailing paragraph so it does not perturb the body paragraphs the fuzzer mutates.
+    /// </summary>
+    internal static WmlDocument FromBodyXmlWithFootnote(string bodyInnerXml, string footnoteText)
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var fnPart = main.AddNewPart<FootnotesPart>();
+            WritePartXml(fnPart,
+                $"<w:footnotes xmlns:w=\"{W}\">" +
+                "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>" +
+                "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>" +
+                $"<w:footnote w:id=\"1\"><w:p><w:r><w:t xml:space=\"preserve\">{Escape(footnoteText)}</w:t></w:r></w:p></w:footnote>" +
+                "</w:footnotes>");
+
+            var documentXml =
+                $"<w:document xmlns:w=\"{W}\"><w:body>{bodyInnerXml}" +
+                "<w:p><w:r><w:footnoteReference w:id=\"1\"/></w:r></w:p>" +
+                "</w:body></w:document>";
+            WritePartXml(main, documentXml);
+        }
+        return new WmlDocument("ir-test.docx", ms.ToArray());
+    }
+
+    private static string Escape(string s) =>
+        s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+
+    /// <summary>
     /// A document with a footnotes part and an endnotes part. Each part carries the two Word-reserved
     /// boilerplate notes (separator id=-1, continuationSeparator id=0) plus one real note (id=1) whose
     /// single paragraph holds the supplied text. The body references the footnote/endnote via runs.

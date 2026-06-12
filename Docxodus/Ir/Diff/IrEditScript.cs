@@ -101,7 +101,41 @@ internal sealed record IrEditOp(
     IrTokenDiff? TokenDiff,
     int? MoveGroupId,
     bool? IsMoveSource,
-    IrTableDiff? TableDiff = null);
+    IrTableDiff? TableDiff = null,
+    IrNodeList<IrTextboxDiff>? TextboxDiffs = null);
+
+/// <summary>
+/// The nested inner-block diff of ONE textbox pair inside a Modified paragraph (M2.4 Task 1). A paragraph
+/// can contain several textboxes (one <see cref="IrTextbox"/> placeholder token each); when a Modified
+/// paragraph pair's textbox placeholders differ, the textboxes are paired POSITIONALLY within the
+/// paragraph (the i-th left textbox with the i-th right textbox), their inner block lists aligned with the
+/// SAME <see cref="IrBlockAligner.AlignBlocks"/> machinery the body/cell paths use, and the resulting
+/// block ops attached here — mirroring the <see cref="IrTableDiff"/> nesting on a Modified table pair.
+/// </summary>
+/// <remarks>
+/// <para><b>Positional pairing.</b> Textboxes pair by their document order within the paragraph. A textbox
+/// surplus on one side (the paragraph gained/lost a textbox) yields a diff whose <see cref="Ops"/> are all
+/// inserts (right-only) or all deletes (left-only) over that lone textbox's blocks.</para>
+/// <para><b>No double-reporting.</b> When a paragraph carries textbox diffs, the paragraph's own
+/// <see cref="IrEditOp.TokenDiff"/> is rebuilt to treat the differing placeholder tokens as Equal, so the
+/// textbox change is reported ONCE — through these nested ops, not also as a token insert/delete of the
+/// opaque placeholder (which has no surface text anyway). Documented on
+/// <see cref="IrEditScriptBuilder"/>.</para>
+/// </remarks>
+internal sealed record IrTextboxDiff(IrNodeList<IrEditOp> Ops);
+
+/// <summary>
+/// The block-level diff of ONE note scope (a single footnote or endnote, M2.4 Task 1). Carries the note's
+/// kind + id (so a consumer can resolve it back to the store and so the renderer can stamp the scope
+/// context) and the ordered block edit ops produced by aligning the matched note's left/right block lists.
+/// </summary>
+/// <remarks>
+/// <para><b>Whole-note insert/delete.</b> A note present on only one side has no counterpart to align: a
+/// right-only note's <see cref="Ops"/> are all <see cref="IrEditOpKind.InsertBlock"/> over its blocks; a
+/// left-only note's are all <see cref="IrEditOpKind.DeleteBlock"/>. A matched note runs the full block
+/// aligner over its two block lists, exactly like a cell.</para>
+/// </remarks>
+internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrEditOp> Ops);
 
 /// <summary>
 /// The kind of a row-level operation in an <see cref="IrTableDiff"/> (M2.2 Task 4). Rows carry a
@@ -176,5 +210,14 @@ internal sealed record IrTableDiff(IrNodeList<IrRowOp> RowOps);
 /// <para><b>Apply invariant.</b> Applying the script to the left IR reconstructs the right body at the
 /// text level (per-block token text for paragraphs, ContentHash for non-paragraph blocks). This is
 /// proven by the test-side <c>IrEditScriptVerifier</c> over every synthetic case and the full WC corpus.</para>
+/// <para><b>Note scopes (M2.4 Task 1).</b> <see cref="NoteOps"/> carries the per-note block diffs for the
+/// footnote and endnote scopes, in a DETERMINISTIC document order appended AFTER the body
+/// <see cref="Operations"/>: footnotes first (by note id, numeric ascending), then endnotes (by note id,
+/// numeric ascending). This mirrors <see cref="WmlComparer.GetRevisions"/>'s coverage exactly — body, then
+/// footnotes, then endnotes (it does NOT diff header/footer scopes, so neither do we). Each
+/// <see cref="IrNoteDiff"/>'s anchors live in the note's own <c>fn</c>/<c>en</c> scope, so they never
+/// collide with body anchors.</para>
 /// </remarks>
-internal sealed record IrEditScript(IrNodeList<IrEditOp> Operations);
+internal sealed record IrEditScript(
+    IrNodeList<IrEditOp> Operations,
+    IrNodeList<IrNoteDiff>? NoteOps = null);
