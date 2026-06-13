@@ -747,9 +747,10 @@ public class IrMarkupRendererTests
     /// markup, which is correct for every body/table/move/format/note construct the edit script expresses. Each
     /// entry below carries its PRECISE root cause. This allowlist is a RATCHET — the invariant test asserts
     /// EVERY other pair round-trips AND that no allowlisted pair UNEXPECTEDLY passes (a fixed-early pair must be
-    /// removed). The Task-4 burndown drove this from 11 to these 6 distinct root causes (the WC034 foot+end
-    /// share one cause; SmartArt has three fixtures of one cause), all reader/aligner/rId-remap level and
-    /// adjudicated as out of renderer scope — the same class as the WC-1710/WC-1940 parity-scoreboard deviations.
+    /// removed). The Task-4 burndown drove this from 11 to 6 distinct root causes; M2.5 Task 3 then closed WC019
+    /// (RevisionProcessor reject del/ins under w:hyperlink + empty-hyperlink-shell drop), leaving 3 entries:
+    /// WC034 foot+end (note renumber/reorder markup — share one cause), WC022 (adjacent-empty-paragraph
+    /// alignment ordering), and WC-BodyBookmarks (endnote→footnote note-store conversion).
     /// </summary>
     private static readonly HashSet<string> Task4BlockedPairs = new(StringComparer.Ordinal)
     {
@@ -796,26 +797,19 @@ public class IrMarkupRendererTests
         // sensitivity in the block aligner, NOT a bookmark or rel-id issue — deferred to M2.5 (sub-paragraph /
         // empty-mark alignment grain, the same class as WC-1830). The bookmark-modeling half is CLOSED.
         "WC022-Image-Math-Para-Before.docx↔WC022-Image-Math-Para-After.docx",
-        // DEVIATION — hyperlink TARGET change where the right hyperlink's rId COLLIDES with a DIFFERENT left rId
-        // (Before → ericwhite.com, After → ericwhite2.com, BOTH as rId4).
-        //
-        // M2.4b Workstream D PARTIALLY fixed this and re-diagnosed the residual: the true rId REMAP is now
-        // IMPLEMENTED — ImportHyperlinkAndExternalRelationships detects the collision (the id already names a
-        // DIFFERENT-URI left relationship), mints a fresh id, recreates the right target under it, and rewrites
-        // the cloned w:hyperlink/@r:id (verified: ACCEPT now yields the correct ericwhite2.com link via the
-        // remapped relationship — the old same-id-recreation gap is closed). The RESIDUAL blocker is downstream
-        // and SEPARATE: the w:del/w:ins this fixture's link edit produces live INSIDE the w:hyperlink container
-        // (the schema forbids a hyperlink inside w:ins/w:del, so the revision markers nest within it), and the
-        // shared RevisionProcessor's reject/accept transforms do not fully process revisions nested inside a
-        // w:hyperlink — REJECT leaves the LEFT link's w:delText unconverted and the RIGHT link's w:ins unremoved,
-        // so reject ≠ left. (WmlComparer SIDESTEPS this entirely: its PreProcessMarkup runs MarkupSimplifier with
-        // RemoveHyperlinks=true, stripping ALL hyperlinks to plain text before comparing — its accepted output
-        // has NO hyperlink at all, verified. The IR deliberately PRESERVES hyperlinks for fidelity, so it must
-        // round-trip the nested revision markup the oracle never emits.) Closing the round-trip needs
-        // RevisionProcessor to process w:del/w:ins nested in w:hyperlink — a shared-accept-path change beyond the
-        // renderer's rId-remap scope, deferred to M2.5. The rId-remap half is done; the nested-revision-in-link
-        // round-trip is the surviving deviation.
-        "WC019-Hyperlink-Before.docx↔WC019-Hyperlink-After-2.docx",
+        // (M2.5 Task 3 — CLOSED) hyperlink TARGET+TEXT change where the right hyperlink's rId COLLIDES with a
+        // DIFFERENT left rId (Before → ericwhite.com, After → ericwhite2.com, BOTH as rId4). The true rId REMAP
+        // landed in M2.4b WS-D (ImportHyperlinkAndExternalRelationships mints a fresh id and rewrites the cloned
+        // @r:id). The residual blocker was the shared RevisionProcessor: a hyperlink-text edit nests w:del/w:ins
+        // INSIDE the w:hyperlink (the schema forbids a hyperlink inside w:ins/w:del, so the markers live within
+        // it), and REJECT's del→ins / ins→del reversal rules were gated to parent==w:p, never firing under a
+        // w:hyperlink — so reject left the deleted link's content unrestored and the inserted link's content
+        // unremoved. Fixed by (1) extending those two REJECT rules to also fire when parent==w:hyperlink
+        // (additive — WmlComparer never produces del/ins-in-hyperlink because it strips hyperlinks pre-compare,
+        // so no existing case is affected), and (2) dropping an EMPTY w:hyperlink shell (no surviving run
+        // content) in the accept transform (the artifact of the IR's del-old-link/ins-new-link shape). Both
+        // directions now round-trip clean (ACCEPT==RIGHT, REJECT==LEFT, content + format). Removed from the
+        // allowlist; the full old-engine RevisionProcessor/WmlComparer suite stays green.
         // DEVIATION — WC-BodyBookmarks-After carries MANY body-level bookmarkStart/End markers (named section
         // bookmarks as direct w:body children) AND converts the document's endnotes to footnotes. M2.4b
         // Workstream D's block-level bookmark drop (see WC022 above) removes the body-level bookmark markers from

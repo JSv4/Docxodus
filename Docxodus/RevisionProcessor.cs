@@ -628,8 +628,13 @@ namespace Docxodus
       </w:r>
     </w:p>
 #endif
+                // A deleted run directly under a w:p OR under a w:hyperlink (a deleted hyperlink-text run; the
+                // schema nests the revision marker INSIDE the link, so its parent is w:hyperlink, not w:p). Reject
+                // restores it by reversing w:del → w:ins. The hyperlink case is what the IR produces for a
+                // changed/removed hyperlink (WmlComparer never hits it — it strips hyperlinks pre-compare via
+                // RemoveHyperlinks — so this only ADDS handling for a previously-unhandled valid shape).
                 if (element.Name == W.del &&
-                    parent.Name == W.p)
+                    (parent.Name == W.p || parent.Name == W.hyperlink))
                 {
                     return new XElement(W.ins,
                         element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
@@ -707,8 +712,11 @@ namespace Docxodus
       </w:r>
     </w:p>
 #endif
+                // An inserted run directly under a w:p OR under a w:hyperlink (an inserted hyperlink-text run).
+                // Reject removes the insertion by reversing w:ins → w:del. The hyperlink case is the symmetric
+                // partner of the deleted-hyperlink-run rule above (see its note) — additive, valid-shape only.
                 if (element.Name == W.ins &&
-                    parent.Name == W.p)
+                    (parent.Name == W.p || parent.Name == W.hyperlink))
                 {
                     var newRri = new ReverseRevisionsInfo() { InInsert = true };
                     return new XElement(W.del,
@@ -1669,6 +1677,16 @@ namespace Docxodus
             return node;
         }
 
+        /// <summary>True iff a (transformed) element still carries a run or other inline content child — used to
+        /// decide whether an emptied <c>w:hyperlink</c> shell (all its runs deleted/inserted-then-collapsed)
+        /// should survive. A hyperlink with only bookmark/proofErr/other zero-content markers, or nothing, is
+        /// dropped. Conservative: any <c>w:r</c>, <c>w:smartTag</c>, <c>w:ins</c>, <c>w:del</c>, or nested
+        /// <c>w:hyperlink</c> child counts as content.</summary>
+        private static bool HasRunContent(XElement element) =>
+            element.Elements().Any(e =>
+                e.Name == W.r || e.Name == W.smartTag || e.Name == W.ins || e.Name == W.del ||
+                e.Name == W.hyperlink || e.Name == W.fldSimple || e.Name == W.sdt);
+
         private static object AcceptAllOtherRevisionsTransform(XNode node)
         {
             XElement element = node as XElement;
@@ -1779,6 +1797,18 @@ namespace Docxodus
                     (string)element.Attribute(W.vMerge) == "cont")
                     return new XElement(W.vMerge,
                         new XAttribute(W.val, "continue"));
+
+                // A w:hyperlink whose entire content was an inserted (now deleted-on-accept) or deleted run
+                // collapses to an EMPTY shell. Drop it — an empty hyperlink is invisible and an artifact of a
+                // hyperlink-text revision (the IR's del-old-link/ins-new-link shape; WmlComparer never produces
+                // one because it strips hyperlinks pre-compare). Checked AFTER transforming children so it only
+                // fires when the link genuinely has no surviving run/content.
+                if (element.Name == W.hyperlink)
+                {
+                    var transformed = new XElement(element.Name, element.Attributes(),
+                        element.Nodes().Select(n => AcceptAllOtherRevisionsTransform(n)));
+                    return HasRunContent(transformed) ? transformed : null;
+                }
 
                 // Otherwise do identity clone.
                 return new XElement(element.Name,
