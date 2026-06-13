@@ -438,4 +438,56 @@ public class IrSplitMergeTests
         var a = Align(l, r, new IrDiffSettings()); // DetectSplitMerge false
         Assert.Empty(a.Entries.Where(e => e.Kind is IrAlignmentKind.Split or IrAlignmentKind.Merge));
     }
+
+    // -------- builder projection + apply-verifier (Task 5) --------
+
+    private static (IrDocument L, IrDocument R, IrEditScript S) BuildScript(string[] left, string[] right)
+    {
+        var (l, _) = ReadParas(left);
+        var (r, _) = ReadParas(right);
+        var script = IrEditScriptBuilder.Build(l, r, S);
+        return (l, r, script);
+    }
+
+    [Fact]
+    public void Split_script_carries_one_SplitBlock_and_apply_verifies()
+    {
+        var (l, r, script) = BuildScript(
+            new[] { "aaa bbb ccc ddd. eee fff ggg hhh.", "anchor one two three four five." },
+            new[] { "aaa bbb ccc ddd. ", "eee fff ggg hhh.", "anchor one two three four five." });
+        var split = Assert.Single(script.Operations.Where(o => o.Kind == IrEditOpKind.SplitBlock));
+        Assert.Equal(2, split.SplitMergeAnchors!.Count);
+        IrEditScriptVerifier.Verify(l, r, script, S); // count/order/ReferenceEquals proves apply (F3.1)
+    }
+
+    [Fact]
+    public void Merge_script_carries_one_MergeBlock_and_apply_verifies()
+    {
+        var (l, r, script) = BuildScript(
+            new[] { "aaa bbb ccc ddd. ", "eee fff ggg hhh.", "anchor one two three four five." },
+            new[] { "aaa bbb ccc ddd. eee fff ggg hhh.", "anchor one two three four five." });
+        Assert.Single(script.Operations.Where(o => o.Kind == IrEditOpKind.MergeBlock));
+        IrEditScriptVerifier.Verify(l, r, script, S);
+    }
+
+    [Fact]
+    public void Split_with_interior_insert_and_prefix_edit_apply_verifies()
+    {
+        var (l, r, script) = BuildScript(
+            new[] { "aaa bbb ccc ddd eee fff. ggg hhh iii jjj kkk lll.", "anchor one two three." },
+            new[] { "PRE aaa bbb ccc ddd eee fff. ", "zzz", "ggg hhh iii jjj kkk lll.", "anchor one two three." });
+        Assert.Single(script.Operations.Where(o => o.Kind == IrEditOpKind.SplitBlock));
+        IrEditScriptVerifier.Verify(l, r, script, S);
+    }
+
+    [Fact]
+    public void Split_script_json_round_trips()
+    {
+        var (_, _, script) = BuildScript(
+            new[] { "aaa bbb ccc ddd. eee fff ggg hhh." },
+            new[] { "aaa bbb ccc ddd. ", "eee fff ggg hhh." });
+        var json = IrEditScriptJson.Write(script);
+        Assert.Equal(script, IrEditScriptJson.Read(json));
+        Assert.Equal(json, IrEditScriptJson.Write(IrEditScriptJson.Read(json)));
+    }
 }

@@ -531,6 +531,34 @@ internal static class IrEditScriptBuilder
                         entry.Left!.Anchor.ToString(), null, null, null, null));
                     break;
 
+                // The detection gate (IrBlockAligner split/merge scan) only ever groups PARAGRAPH
+                // blocks into a Split/Merge entry, so the IrParagraph casts below are safe.
+                case IrAlignmentKind.Split:
+                {
+                    var lp = (IrParagraph)entry.Left!;
+                    var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
+                    ops.Add(new IrEditOp(IrEditOpKind.SplitBlock,
+                        lp.Anchor.ToString(), null, null, null, null, null, null,
+                        IrNodeList.From(members.Select(m => m.Anchor.ToString()).ToList()),
+                        IrSplitSegmenter.ComputeSegmentDiffs(lp, members, settings)));
+                    break;
+                }
+
+                case IrAlignmentKind.Merge:
+                {
+                    var rp = (IrParagraph)entry.Right!;
+                    var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
+                    // Segment diffs are computed singular-vs-members (rp sliced against each left
+                    // member) then MIRRORED so each stored diff reads left-member → right-slice,
+                    // keeping the universal "left = left document" orientation for every consumer.
+                    var sliced = IrSplitSegmenter.ComputeSegmentDiffs(rp, members, settings);
+                    ops.Add(new IrEditOp(IrEditOpKind.MergeBlock,
+                        null, rp.Anchor.ToString(), null, null, null, null, null,
+                        IrNodeList.From(members.Select(m => m.Anchor.ToString()).ToList()),
+                        IrNodeList.From(sliced.Select(IrSplitSegmenter.MirrorDiff).ToList())));
+                    break;
+                }
+
                 case IrAlignmentKind.Moved:
                 case IrAlignmentKind.MovedModified:
                 {
@@ -549,9 +577,17 @@ internal static class IrEditScriptBuilder
                 }
             }
 
-            // After a paired-in-place left block's entry, flush move-sources anchored to it.
+            // After a paired-in-place left block's entry, flush move-sources anchored to it. A Split
+            // entry's singular entry.Left is covered here (IsPairedInPlace includes Split).
             if (entry.Left is not null && IsPairedInPlace(entry.Kind))
                 EmitSources(sourcesAfterLeft, leftIndex[entry.Left], moves, ops);
+
+            // A Merge entry carries its paired-in-place lefts in MultiBlocks (entry.Left is null):
+            // flush move-sources anchored to each member, in ascending left order (MultiBlocks is in
+            // left order) — mirroring the aligner's deletion-flush convention.
+            if (entry.Kind == IrAlignmentKind.Merge && entry.MultiBlocks is { } mergeLefts)
+                foreach (var lb in mergeLefts)
+                    EmitSources(sourcesAfterLeft, leftIndex[lb], moves, ops);
         }
 
         return ops;
@@ -752,6 +788,12 @@ internal static class IrEditScriptBuilder
         {
             if (entry.Left is not null && IsPairedInPlace(entry.Kind))
                 pairedInPlace.Add(leftIndex[entry.Left]);
+
+            // A Merge entry's N left members are all paired in place (consumed by the merge, not
+            // deleted), so each anchors the move-source interleave exactly like a Modified left.
+            if (entry.Kind == IrAlignmentKind.Merge && entry.MultiBlocks is { } lefts)
+                foreach (var lb in lefts)
+                    pairedInPlace.Add(leftIndex[lb]);
         }
 
         var sourcesAfterLeft = new Dictionary<int, List<int>>();
@@ -773,8 +815,13 @@ internal static class IrEditScriptBuilder
         return sourcesAfterLeft;
     }
 
+    // Split counts: its entry.Left is the singular left block, paired in place at the entry's right
+    // position (the N right members replace it there). Merge is handled separately — its entry.Left is
+    // null; its N left members are added to the paired-in-place set explicitly (see BuildSourceInterleave)
+    // and flushed explicitly after the Merge entry in ProjectAlignment.
     private static bool IsPairedInPlace(IrAlignmentKind kind) =>
-        kind is IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly or IrAlignmentKind.Modified;
+        kind is IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly or IrAlignmentKind.Modified
+            or IrAlignmentKind.Split;
 
     /// <summary>Emit the move-SOURCE ops bucketed under <paramref name="anchorLeftIndex"/>, in left order.</summary>
     private static void EmitSources(

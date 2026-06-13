@@ -46,6 +46,7 @@ internal static class IrEditScriptVerifier
     {
         AssertAnchorsResolve(left, right, script);
         AssertMovePairing(script);
+        AssertSplitMergePairing(script);
 
         // Source blocks of moves, keyed by group, so a destination op can reproduce the moved-from text.
         var moveSourceBlock = new Dictionary<int, IrBlock>();
@@ -120,6 +121,35 @@ internal static class IrEditScriptVerifier
                         // Exact-content move: the destination reproduces the SOURCE text verbatim, so the
                         // source block drives both the paragraph token check and the non-paragraph hash check.
                         reconstructed.Add((rightBlock, TokensOrNull(sourceBlock, settings), sourceBlock));
+                    break;
+                }
+
+                case IrEditOpKind.SplitBlock:
+                {
+                    // M2.6: one left paragraph fanned out into N right paragraphs. The pairing assert
+                    // already proved the shape (LeftAnchor + ≥2 SplitMergeAnchors + same-count
+                    // SegmentDiffs); the detection gate only groups paragraphs, so the casts are safe.
+                    var lp = (IrParagraph)ResolveLeft(left, op.LeftAnchor!);
+                    var members = op.SplitMergeAnchors!
+                        .Select(a => (IrParagraph)ResolveRight(right, a)).ToList();
+                    var segments = ApplySplitOp(lp, members, op.SegmentDiffs!, settings);
+                    // F3.1: push ONE tuple PER member — the count/order/ReferenceEquals loop below
+                    // then proves the N produced rights sit CONTIGUOUSLY at the op's position, in
+                    // right-document order, not merely that their concatenated text matches.
+                    for (int s = 0; s < members.Count; s++)
+                        reconstructed.Add((members[s], segments[s], members[s]));
+                    break;
+                }
+
+                case IrEditOpKind.MergeBlock:
+                {
+                    // M2.6: N left paragraphs collapsed into one right paragraph; the op produces
+                    // exactly one right block, reconstructed FROM the left members via the stored
+                    // member→right-slice segment diffs.
+                    var rp = (IrParagraph)ResolveRight(right, op.RightAnchor!);
+                    var members = op.SplitMergeAnchors!
+                        .Select(a => (IrParagraph)ResolveLeft(left, a)).ToList();
+                    reconstructed.Add((rp, ApplyMergeOp(members, rp, op.SegmentDiffs!, settings), rp));
                     break;
                 }
 
@@ -394,6 +424,7 @@ internal static class IrEditScriptVerifier
         var leftByAnchor = leftBlocks.ToDictionary(b => b.Anchor.ToString());
         var rightByAnchor = rightBlocks.ToDictionary(b => b.Anchor.ToString());
         var result = new List<string>();
+        var producedRightAnchors = new List<string>();
 
         foreach (var op in blockOps)
         {
@@ -402,6 +433,7 @@ internal static class IrEditScriptVerifier
                 case IrEditOpKind.EqualBlock:
                 case IrEditOpKind.FormatOnlyBlock:
                     result.Add(BlockText(leftByAnchor[op.LeftAnchor!], settings));
+                    producedRightAnchors.Add(op.RightAnchor!);
                     break;
                 case IrEditOpKind.ModifyBlock:
                 {
@@ -411,22 +443,53 @@ internal static class IrEditScriptVerifier
                         result.Add(string.Concat(ApplyModify(lb, rb, op.TokenDiff, settings)!));
                     else
                         result.Add(BlockText(rb, settings)); // nested table/opaque in a cell: source from right
+                    producedRightAnchors.Add(op.RightAnchor!);
                     break;
                 }
                 case IrEditOpKind.InsertBlock:
                     result.Add(BlockText(rightByAnchor[op.RightAnchor!], settings));
+                    producedRightAnchors.Add(op.RightAnchor!);
                     break;
                 case IrEditOpKind.DeleteBlock:
                     break;
+                case IrEditOpKind.SplitBlock:
+                {
+                    // M2.6: one text string per right member, in member order (mirrors the body path's
+                    // one-tuple-per-member; the anchor-order assert below proves contiguity here).
+                    var lp = (IrParagraph)leftByAnchor[op.LeftAnchor!];
+                    var members = op.SplitMergeAnchors!
+                        .Select(a => (IrParagraph)rightByAnchor[a]).ToList();
+                    foreach (var segment in ApplySplitOp(lp, members, op.SegmentDiffs!, settings))
+                        result.Add(string.Concat(segment));
+                    producedRightAnchors.AddRange(op.SplitMergeAnchors!);
+                    break;
+                }
+                case IrEditOpKind.MergeBlock:
+                {
+                    var rp = (IrParagraph)rightByAnchor[op.RightAnchor!];
+                    var members = op.SplitMergeAnchors!
+                        .Select(a => (IrParagraph)leftByAnchor[a]).ToList();
+                    result.Add(string.Concat(ApplyMergeOp(members, rp, op.SegmentDiffs!, settings)));
+                    producedRightAnchors.Add(op.RightAnchor!);
+                    break;
+                }
                 case IrEditOpKind.MoveBlock:
                 case IrEditOpKind.MoveModifyBlock:
                     // Cell-internal block moves are not produced by the table differ in M2.2; if they
                     // ever are, the destination sources from the right block.
                     if (op.IsMoveSource != true)
+                    {
                         result.Add(BlockText(rightByAnchor[op.RightAnchor!], settings));
+                        producedRightAnchors.Add(op.RightAnchor!);
+                    }
                     break;
             }
         }
+
+        // F3.2: the cell/note path proves text equality only; strengthen with an anchor-order proof —
+        // the right-producing ops must name the right blocks in right-document order.
+        Assert.Equal(rightBlocks.Select(b => b.Anchor.ToString()).ToList(), producedRightAnchors);
+
         return result;
     }
 
@@ -466,7 +529,7 @@ internal static class IrEditScriptVerifier
     // F1.2 anchor-walker audit (M2.6): every reader of op.LeftAnchor/op.RightAnchor, and how it
     // handles the plural SplitMergeAnchors side:
     //   IrEditScriptVerifier.AssertAnchorsResolve — EXTENDED (walks SplitMergeAnchors, this file)
-    //   IrEditScriptVerifier.Verify/ReconstructBlocks — EXTENDED in Task 5 (split/merge cases)
+    //   IrEditScriptVerifier.Verify/ReconstructBlocks — EXTENDED (split/merge apply cases, this file)
     //   IrRevisionRenderer (RenderBlockOp + RenderInsDelRun segmentation) — EXTENDED in Task 6
     //   IrMarkupRenderer (RenderBlockOp/IsSectionBreakOp) — EXTENDED in Task 7; section-break guard is
     //     anchor-free for split ops (detection emits paragraph-only groups)
@@ -681,6 +744,127 @@ internal static class IrEditScriptVerifier
             }
         }
         return result;
+    }
+
+    // ------------------------------------------------------------------ split/merge apply (M2.6 Task 5)
+
+    /// <summary>Apply one segment diff (slice-local singular-side spans) and return the reconstructed
+    /// member token keys; re-asserts the full token-diff invariant battery over (slice, member) and
+    /// returns the slice length consumed (the partition-invariant accumulator, F3.3).</summary>
+    private static (IReadOnlyList<string> Tokens, int SliceLen) ApplySegment(
+        IReadOnlyList<IrDiffToken> singularTokens, int offset,
+        IReadOnlyList<IrDiffToken> memberTokens, IrTokenDiff diff, IrDiffSettings settings)
+    {
+        int sliceLen = diff.Ops.Where(o => o.Kind != IrTokenOpKind.Insert).Sum(o => o.LeftLength);
+        Assert.True(offset + sliceLen <= singularTokens.Count,
+            $"segment slice [{offset},{offset + sliceLen}) overruns the singular token stream ({singularTokens.Count}).");
+        var slice = new List<IrDiffToken>(sliceLen);
+        for (int k = offset; k < offset + sliceLen; k++)
+            slice.Add(singularTokens[k]);
+
+        IrTokenDiffAsserts.AssertInvariants(slice, memberTokens, diff, settings);
+
+        var result = new List<string>();
+        foreach (var op in diff.Ops)
+        {
+            switch (op.Kind)
+            {
+                case IrTokenOpKind.Equal:
+                case IrTokenOpKind.FormatChanged:
+                    for (int k = op.LeftStart; k < op.LeftEnd; k++)
+                        result.Add(slice[k].MatchKey);
+                    break;
+                case IrTokenOpKind.Insert:
+                    for (int k = op.RightStart; k < op.RightEnd; k++)
+                        result.Add(memberTokens[k].MatchKey);
+                    break;
+                case IrTokenOpKind.Delete:
+                    break;
+            }
+        }
+        return (result, sliceLen);
+    }
+
+    /// <summary>
+    /// Apply a SplitBlock's segment diffs (slice-of-left → right-member orientation) over the resolved
+    /// left paragraph and its N right member paragraphs, returning one reconstructed token sequence PER
+    /// member. Shared by the body path (which pushes one reconstruction tuple per member) and the
+    /// cell/note path (which appends one text string per member). Asserts the F3.3 partition invariant:
+    /// the segment slices tile the left token stream exactly.
+    /// </summary>
+    private static List<IReadOnlyList<string>> ApplySplitOp(
+        IrParagraph leftPara, IReadOnlyList<IrParagraph> members,
+        IrNodeList<IrTokenDiff> segmentDiffs, IrDiffSettings settings)
+    {
+        Assert.Equal(members.Count, segmentDiffs.Count);
+        var leftTokens = MaskTextboxKeys(IrDiffTokenizer.Tokenize(leftPara, settings));
+        var result = new List<IReadOnlyList<string>>(members.Count);
+        int offset = 0;
+        for (int s = 0; s < members.Count; s++)
+        {
+            var memberTokens = MaskTextboxKeys(IrDiffTokenizer.Tokenize(members[s], settings));
+            var (tokens, sliceLen) = ApplySegment(leftTokens, offset, memberTokens, segmentDiffs[s], settings);
+            result.Add(tokens);
+            offset += sliceLen;
+        }
+        Assert.Equal(leftTokens.Count, offset); // F3.3: slices tile the left token stream exactly
+        return result;
+    }
+
+    /// <summary>
+    /// Apply a MergeBlock's segment diffs over the N resolved left member paragraphs and the singular
+    /// right paragraph, returning the ONE combined reconstructed token sequence. The stored diffs read
+    /// left-member → right-slice (the builder mirrors the segmenter's singular-vs-members output), so
+    /// per member we (1) re-assert the full invariant battery in the STORED orientation against the
+    /// right sub-stream at the accumulated offset, then (2) apply the diff FORWARD — Equal/FormatChanged
+    /// copy MEMBER tokens, Insert copies the right-slice tokens, Delete drops member tokens — which
+    /// reconstructs the right slice FROM the left member (apply(merge, [L members]) == R). Shared by the
+    /// body and cell/note paths. Asserts the F3.3 mirror: the slices tile the right token stream exactly.
+    /// </summary>
+    private static IReadOnlyList<string> ApplyMergeOp(
+        IReadOnlyList<IrParagraph> members, IrParagraph rightPara,
+        IrNodeList<IrTokenDiff> segmentDiffs, IrDiffSettings settings)
+    {
+        Assert.Equal(members.Count, segmentDiffs.Count);
+        var rightTokens = MaskTextboxKeys(IrDiffTokenizer.Tokenize(rightPara, settings));
+        var combined = new List<string>();
+        int offset = 0;
+        for (int m = 0; m < members.Count; m++)
+        {
+            var memberTokens = MaskTextboxKeys(IrDiffTokenizer.Tokenize(members[m], settings));
+            var stored = segmentDiffs[m]; // member → right-slice orientation
+            // The slice is the right sub-stream this member maps onto; for the STORED member→slice
+            // orientation its length is the diff's RIGHT-side total (Σ non-Delete RightLength).
+            int sliceLen = stored.Ops.Where(o => o.Kind != IrTokenOpKind.Delete).Sum(o => o.RightLength);
+            Assert.True(offset + sliceLen <= rightTokens.Count,
+                $"merge slice [{offset},{offset + sliceLen}) overruns the right token stream ({rightTokens.Count}).");
+            var slice = new List<IrDiffToken>(sliceLen);
+            for (int k = offset; k < offset + sliceLen; k++)
+                slice.Add(rightTokens[k]);
+
+            IrTokenDiffAsserts.AssertInvariants(memberTokens, slice, stored, settings);
+
+            foreach (var op in stored.Ops)
+            {
+                switch (op.Kind)
+                {
+                    case IrTokenOpKind.Equal:
+                    case IrTokenOpKind.FormatChanged:
+                        for (int k = op.LeftStart; k < op.LeftEnd; k++)
+                            combined.Add(memberTokens[k].MatchKey);
+                        break;
+                    case IrTokenOpKind.Insert:
+                        for (int k = op.RightStart; k < op.RightEnd; k++)
+                            combined.Add(slice[k].MatchKey);
+                        break;
+                    case IrTokenOpKind.Delete:
+                        break; // member tokens dropped by the merge
+                }
+            }
+            offset += sliceLen;
+        }
+        Assert.Equal(rightTokens.Count, offset); // F3.3 mirror: slices tile the right token stream
+        return combined;
     }
 
     private static IrBlock ResolveLeft(IrDocument left, string anchor)
