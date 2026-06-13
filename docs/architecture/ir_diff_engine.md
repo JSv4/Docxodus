@@ -102,7 +102,7 @@ The end-state on the deviation/allowlist sets is **evidence-retained, not zero**
 
 ### Deferred follow-on (M2.6)
 
-The dominant retained deviation (WC-1450 / WC-1830) is a **1:N paragraph split**: one before-paragraph's content migrates across two after-paragraphs. The oracle's flat atom LCS credits both halves as Equal against the single before-paragraph; the IR's `IrEditOp` is strictly 1:1, so it surfaces the second half as a whole-paragraph revision (+1). This is not closable in the 1:1 model and not render-coalescible; the correct fix is an engine-level 1:N split/merge op with apply-verifier/markup/JSON/fuzzer ripple — a real capability, sketched and deferred. See `docs/superpowers/specs/2026-06-12-subparagraph-split-alignment-sketch.md`.
+The dominant retained deviation (WC-1450 / WC-1830) is a **1:N paragraph split**: one before-paragraph's content migrates across two after-paragraphs. The oracle's flat atom LCS credits both halves as Equal against the single before-paragraph; the IR's `IrEditOp` is strictly 1:1, so it surfaces the second half as a whole-paragraph revision (+1). This is not closable in the 1:1 model and not render-coalescible; the correct fix is an engine-level 1:N split/merge op with apply-verifier/markup/JSON/fuzzer ripple — a real capability, sketched and deferred. See `docs/superpowers/specs/2026-06-12-subparagraph-split-merge-design.md`.
 
 ## Relationship to WmlComparer
 
