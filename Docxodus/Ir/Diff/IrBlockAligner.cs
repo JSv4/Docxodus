@@ -469,6 +469,41 @@ internal static class IrBlockAligner
         int[] leftMatch, int[] rightMatch,
         bool requireFormatEqual, IrAlignmentKind kind, IrDiffSettings settings)
     {
+        // Phase 1 — SAME-UNID identity reservation (M2.6 Task 2). Before any first-fit, pair every free right
+        // block with a free left block that shares BOTH its key (ContentHash + this pass's format gate) AND its
+        // persisted unid. The unid is the IR's stable per-element identity (an unchanged paragraph keeps it
+        // across the two documents), so an identity-keyed pair is the genuinely-unchanged correspondence. Doing
+        // this FIRST stops the plain first-fit below from stealing an identity-matched left for a DIFFERENT-unid
+        // right that happens to be scanned earlier — the WC022 crossing: two adjacent empty paragraphs where a
+        // bare empty (kept identity) was consumed by an earlier different-identity empty, forcing the leftover
+        // to cross document order and reconstruct swapped on reject. Reserving identities keeps the pairing
+        // monotonic. Pure deterministic tie-break: it only changes WHICH equal-key left fills an equal-key
+        // right (same kind, same accept/reject content), never which blocks pair overall.
+        foreach (int rj in freeRight)
+        {
+            if (rightMatch[rj] != -1)
+                continue;
+            foreach (int candLeft in freeLeft)
+            {
+                if (leftMatch[candLeft] != -1)
+                    continue;
+                if (!string.Equals(leftBlocks[candLeft].Anchor.Unid, rightBlocks[rj].Anchor.Unid,
+                        StringComparison.Ordinal))
+                    continue;
+                if (!leftBlocks[candLeft].ContentHash.Equals(rightBlocks[rj].ContentHash))
+                    continue;
+                if (requireFormatEqual != FormatEqual(leftBlocks[candLeft], rightBlocks[rj], settings))
+                    continue;
+
+                leftKind[candLeft] = kind;
+                rightKind[rj] = kind;
+                leftMatch[candLeft] = rj;
+                rightMatch[rj] = candLeft;
+                break;
+            }
+        }
+
+        // Phase 2 — first-to-first in document order over whatever identity reservation left free.
         foreach (int rj in freeRight)
         {
             if (rightMatch[rj] != -1)

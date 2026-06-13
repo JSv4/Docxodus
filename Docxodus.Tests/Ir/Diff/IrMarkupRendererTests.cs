@@ -750,6 +750,24 @@ public class IrMarkupRendererTests
         AssertRoundTrip(left, right, settings, label: "move-simplified");
     }
 
+    // ----------------------------------------------------------------- WC022 ordering regression (M2.6 T2)
+
+    /// <summary>
+    /// WC022 adjacent-empty-paragraph ordering regression (M2.6 Task 2). BEFORE has two adjacent empty
+    /// paragraphs where the second keeps its persisted unid into AFTER; the aligner's InOrderRefine must
+    /// reserve that same-unid identity pair BEFORE first-fitting the other empty, or reject reconstructs the
+    /// pair swapped (a fwd-REJECT-only failure). Both directions must round-trip clean (content + format +
+    /// notes), pinning the IrBlockAligner identity-reservation fix.
+    /// </summary>
+    [Fact]
+    public void WC022_adjacent_empty_paragraphs_round_trip_both_directions()
+    {
+        var before = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC022-Image-Math-Para-Before.docx"));
+        var after = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC022-Image-Math-Para-After.docx"));
+        AssertRoundTrip(before, after, label: "WC022-fwd");
+        AssertRoundTrip(after, before, label: "WC022-rev");
+    }
+
     // ----------------------------------------------------------------- corpus invariant (92 × 2)
 
     /// <summary>
@@ -759,10 +777,11 @@ public class IrMarkupRendererTests
     /// entry below carries its PRECISE root cause. This allowlist is a RATCHET — the invariant test asserts
     /// EVERY other pair round-trips AND that no allowlisted pair UNEXPECTEDLY passes (a fixed-early pair must be
     /// removed). The Task-4 burndown drove this from 11 to 6 distinct root causes; M2.5 Task 3 then closed WC019
-    /// (RevisionProcessor reject del/ins under w:hyperlink + empty-hyperlink-shell drop), and M2.6 Task 1 closed
-    /// WC034 foot+end (the note-id renumber/reorder pass — IrMarkupRenderer.RenumberNoteIds), leaving 2 entries:
-    /// WC022 (adjacent-empty-paragraph alignment ordering) and WC-BodyBookmarks (endnote→footnote note-store
-    /// conversion).
+    /// (RevisionProcessor reject del/ins under w:hyperlink + empty-hyperlink-shell drop), M2.6 Task 1 closed
+    /// WC034 foot+end (the note-id renumber/reorder pass — IrMarkupRenderer.RenumberNoteIds), and M2.6 Task 2
+    /// closed WC022 (the InOrderRefine same-unid identity-reservation phase — IrBlockAligner), leaving 1 entry:
+    /// WC-BodyBookmarks (endnote→footnote whole-note-store conversion, on which the WmlComparer ORACLE ITSELF
+    /// throws "Internal error in ProcessFootnoteEndnote" — there is no oracle behaviour to match; see below).
     /// </summary>
     private static readonly HashSet<string> Task4BlockedPairs = new(StringComparer.Ordinal)
     {
@@ -785,19 +804,19 @@ public class IrMarkupRendererTests
         // oracle, external/hyperlink → target URI, dangling → sentinel) and strips the renumber-prone
         // wp:docPr/@id. Content identity over rel numbering: those three pairs now round-trip clean and are
         // removed from this allowlist.
-        // DEVIATION — WC022-After carries a stray orphan w:bookmarkEnd (id=0, no matching start) as a DIRECT
-        // w:body child. M2.4b Workstream D FIXED the bookmark half: the IR reader now drops a body-level
-        // bookmark marker (AppendBlocks applies the N3 IsDroppedParagraphChild rule at block level), mirroring
-        // WmlComparer's PreProcessMarkup (MarkupSimplifier RemoveBookmarks=true strips ALL bookmarks), so the
-        // stray marker no longer enters the comparison as a spurious opaque block — three of the four round-trip
-        // sub-checks (fwd ACCEPT, rev ACCEPT, rev REJECT) now PASS. The RESIDUAL is a separate, narrower
-        // alignment-grain artifact: removing the body-level marker leaves the diff aligning around TWO ADJACENT
-        // empty paragraphs near its former position (one a bare w:p, one a w:p with a pPr), and reject
-        // reconstructs them in the opposite order (verified: blocks [8]/[9] are content-hash-swapped, both empty;
-        // every other block round-trips identically). That is an adjacent-equal-empty-paragraph ordering
-        // sensitivity in the block aligner, NOT a bookmark or rel-id issue — deferred to M2.5 (sub-paragraph /
-        // empty-mark alignment grain, the same class as WC-1830). The bookmark-modeling half is CLOSED.
-        "WC022-Image-Math-Para-Before.docx↔WC022-Image-Math-Para-After.docx",
+        // (M2.6 Task 2 — CLOSED) WC022's adjacent-empty-paragraph ordering. The bookmark half closed in M2.4b
+        // WS-D (the body-level bookmark marker is dropped like WmlComparer's RemoveBookmarks). The surviving
+        // residual was an aligner ORDERING bug: BEFORE had two adjacent empty paragraphs [efb022(empty+pPr),
+        // c88b(bare empty)]; AFTER had [5e71(bare empty), c88b(bare empty)]. InOrderRefine's first-to-first
+        // matched AFTER's bare empty 5e71 (scanned first, no identity match) to the only free bare-empty left
+        // c88b, stranding BEFORE's efb022 to pair with AFTER's c88b — crossing document order, so reject
+        // reconstructed [8]/[9] swapped (a fwd-REJECT-only failure; accept + the reverse direction were already
+        // clean). Closed by giving InOrderRefine a SAME-UNID identity-reservation phase (IrBlockAligner): a
+        // free right block first claims the free left block sharing its persisted unid (the genuinely-unchanged
+        // c88b↔c88b pair) BEFORE any first-fit, keeping the pairing monotonic. Pure deterministic tie-break —
+        // it only chooses among equal-(content,format) candidates, never which blocks pair — so no other corpus
+        // pair shifts. NOT a 1:N problem (all pairings here are 1×1); both directions now round-trip clean.
+        // Removed from the allowlist.
         // (M2.5 Task 3 — CLOSED) hyperlink TARGET+TEXT change where the right hyperlink's rId COLLIDES with a
         // DIFFERENT left rId (Before → ericwhite.com, After → ericwhite2.com, BOTH as rId4). The true rId REMAP
         // landed in M2.4b WS-D (ImportHyperlinkAndExternalRelationships mints a fresh id and rewrites the cloned
