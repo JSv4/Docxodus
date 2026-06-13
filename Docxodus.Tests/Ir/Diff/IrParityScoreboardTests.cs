@@ -107,19 +107,40 @@ public class IrParityScoreboardTests
     /// </summary>
     private static readonly IReadOnlyDictionary<string, string> DocumentedDeviations = new Dictionary<string, string>
     {
+        // ---- M2.4b Workstream B CLOSED three rows of the "coincidental Equal island" family — now genuine
+        // PASSES, no catalog entry:
+        //   * WC-1170 (WC007-Longest-At-End: `Video provides.` → a 36-token paragraph): the 1×1 gap-residue
+        //     aligner pairs the near-rewrite as Modified, then Myers credits the COINCIDENTAL `Video` (source
+        //     `Video` vs the after-text's `Online Video`) as an Equal island, splitting one rewrite into 3.
+        //   * WC-1950 (WC053-Text-in-cell: `from the beginning…` → `in accordance with the procedure…`): only
+        //     coincidental function words (`the`/`of`/`each`) shared; Myers split the rewrite into 4.
+        //   * WC-1190 (WC007-Moved-into-Table): the spurious 3rd revision was a zero-width Inserted over the
+        //     EMPTY cell paragraph (a bare paragraph mark) the moved-into-table block left behind.
+        // FIXES (render-time, WmlComparerCompatible only; Fine grain untouched — IrRevisionRenderer): (1) a
+        // low-coverage coarsening — when a Modified pair's Equal+FormatChanged CONTENT-token coverage (larger
+        // side) is below 0.67 AND the larger side has ≥8 content tokens (so a near-rewrite, not a short edit),
+        // bridge the word-bearing Equal islands too and emit ONE del+ins (the affix trim still keeps any wholly
+        // common edge); (2) an empty-paragraph-mark prune — a whole-block Insert/Delete of a paragraph with
+        // ZERO content tokens surfaces no WmlComparer revision. The 0.67/≥8 thresholds were swept over the
+        // corpus (stable plateau floor 0.55–0.72 × min 6–10); both fixes are size/coverage-gated so no passing
+        // row regresses (verified: WC-1930's 3-token `designs that compleme` short edit stays fine-grained; the
+        // standalone math/SmartArt/image block inserts WC-1320/1340/1350/1550 keep their revisions — only an
+        // EMPTY-mark paragraph is pruned, not a math/image one).
+        //
         // ---- Engine token-differ: coincidental sub-word matches / wider span attribution (TokenSpanGranularity).
         // WmlComparer's whole-document LCS reports the minimal changed phrase as ONE del + ONE ins; the IR
         // token differ (Myers over word tokens, per Modified pair) finds a coincidental interior token match
         // that splits the change into more revisions. The split is in the ENGINE'S edit script (the grain is
-        // untouchable); render-time coalescing already merges separator-bridged regions but cannot UN-match a
-        // genuine (if coincidental) equal token without re-running the diff at a coarser grain.
-        ["WC-1170"] = "WC007-Longest-At-End: `Video provides.` → a long paragraph. The IR token differ matches the COINCIDENTAL shared word `Video` (the source `Video` against the `Video` in the after-text's `Online Video`), so it splits the change into ins `When you click Online ` + del ` provides` + ins `, you can paste …` (3) where WmlComparer's whole-doc LCS reports one del + one ins (2). The +1 is the engine's edit-script grain; render-time cannot un-match the genuine equal `Video` token.",
-        ["WC-1190"] = "WC007-Moved-into-Table: the `Video provides.` paragraph is moved into a table. The IR aligner reports the whole paragraph as del `Video provides.` + ins `Video provides.` PLUS a zero-width empty insert for the new table-cell paragraph boundary (3) vs WmlComparer's 2 — engine reader/grain, NOT the WC-1170 coincidental-word mechanism.",
-        ["WC-1210"] = "Para-before-table: IR splits the changed phrase one finer than WmlComparer's LCS (+1) — engine grain.",
-        ["WC-1420"] = "Math-heavy paragraph: IR token grain splits a math-adjacent run one finer than WmlComparer (+1) — engine grain.",
-        ["WC-1430"] = "Math-heavy paragraph: +1 finer split vs WmlComparer's LCS — engine grain.",
-        ["WC-1440"] = "Image+math+para: IR reports the math/run boundary at a finer grain (+3) — engine grain.",
-        ["WC-1450"] = "Table-4-row-image: IR row/run grain is finer than WmlComparer's LCS (+2) — engine grain.",
+        // untouchable); render-time coalescing merges separator-bridged regions and (M2.4b) low-coverage
+        // near-rewrites, but cannot UN-match a genuine equal token inside a HIGH-coverage in-place edit without
+        // re-running the diff at a coarser grain — and coarsening THOSE would UNDER-report (regress WC-1930).
+        // The residual rows below are all high-coverage edits or adjacent-block-coalescing/structural cases that
+        // the low-coverage coarsening deliberately does NOT touch.
+        ["WC-1210"] = "Para-before-table: the original paragraph `1b34efghij…wxyz` is split into `Abcde` + an EMPTY-cell table + `fghij…wxyz`. IR reports del + ins `Abcde` + (zero-width ins of the empty STRUCTURAL table) + ins `fghij…` (4) vs WmlComparer's 3. The +1 is the empty-text TABLE insert: WmlComparer folds a no-text structural table into the adjacent w:ins region, but the IR's empty-paragraph-mark prune is scoped to PARAGRAPHS only (pruning empty-text tables regressed nothing here but is unverified corpus-wide — kept as a deviation pending a table-aware structural-insert coalescing pass in WS-C). engine/render — structural-table grain.",
+        ["WC-1420"] = "Math-heavy paragraph: a HIGH-coverage in-place edit (the changed `Video provides`→`Provides` run sits at 0.73+ content coverage) that the low-coverage coarsening deliberately skips (coarsening it would UNDER-report, regressing WC-1930-class short edits). IR's Myers splits the math-adjacent run one finer than WmlComparer's LCS (+1) — engine grain inside a mostly-unchanged paragraph.",
+        ["WC-1430"] = "Math-heavy paragraph: same high-coverage (0.73+) in-place math-run edit as WC-1420, +1 finer split vs WmlComparer's LCS, above the coarsening floor — engine grain.",
+        ["WC-1440"] = "Image+math+para: +3 from a mix of (a) finer math/run-boundary splits in high-coverage (0.98+) paragraphs the coarsening skips and (b) WmlComparer coalescing two CONSECUTIVE inserted body paragraphs (`Jean-Antoine Watteau…` + `Watteau is credited…`) into ONE w:ins region — adjacent-block-insert coalescing the IR does not yet do (a WS-C structural item; doing it naively regressed the WC031-Two-Maths standalone-math counts). engine grain + adjacent-block coalescing.",
+        ["WC-1450"] = "Table-4-row-image: +2 from a math-ONLY cell paragraph (`para[1 Opaque]`, empty surface text) whose whole-block insert IR reports as an empty Inserted plus adjacent inserted cell-paragraphs WmlComparer coalesces into one w:ins region. The WS-B empty-mark prune is scoped to ZERO-content paragraphs (bare marks) only — it does NOT prune a math/opaque-only paragraph, because WmlComparer DOES count a STANDALONE math paragraph insert (WC-1550 two-maths) and there is no render-time signal distinguishing a coalesced-into-region math paragraph from a standalone one. engine/render — adjacent-block coalescing + opaque-paragraph-in-region (WS-C).",
         // WC-1940 (WC052-SmartArt-Same vs -Mod): CLOSED in M2.4b Workstream A — now a genuine PASS (IR 2 ==
         // WmlComparer 2). The two spurious empty-text revisions were over UNCHANGED pure-SmartArt paragraphs
         // whose diagram drawing-object id (wp:docPr/@id, 1 vs 2) and diagram rel ids differed side-to-side,
@@ -127,7 +148,9 @@ public class IrParityScoreboardTests
         // now strips the renumber-prone wp:docPr/@id and resolves relationship attributes to stable
         // content-identity tokens (matching WmlComparer's CloneBlockLevelContentForHashing), so the unchanged
         // paragraphs hash equal and align as Equal. No catalog entry — the row PASSES.
-        ["WC-1950"] = "Text-in-cell: IR splits the cell-text phrase finer than WmlComparer's LCS (+2) — engine grain.",
+        // WC-1950 (WC053-Text-in-cell): CLOSED in M2.4b Workstream B — now a genuine PASS (see the WS-B note
+        // above). The cell rewrite shared only coincidental function words; the low-coverage coarsening
+        // (max-side content coverage 0.41 < 0.67, 19 content tokens ≥ 8) collapses it to one del+ins.
 
         // ---- Engine token-differ degenerates where WmlComparer keeps shared words (under-trim residual).
         // WC-1710/1720 (WC034-Endnotes-Before vs -After3): IR 6 vs WmlComparer 7 (-1). TWO distinct
@@ -141,7 +164,7 @@ public class IrParityScoreboardTests
         // to recover the endnote split would REGRESS the many +1 over-report rows that rely on it (WC-1170,
         // WC-1210, WC-1420/1430, WC-1950) — verified to inflate them. Kept as a deviation; the trim word it
         // absorbs is the endnote sentence's shared `endnote`/`with a change` boundary run.",
-        ["WC-1710"] = "Endnote-After3: IR 6 vs WmlComparer 7 (-1). (a) WmlComparer spuriously reports the UNCHANGED body word `Video` as del+ins (endnote-ref renumber perturbs its LCS); IR correctly reports none there. (b) Inside the changed endnote, IR's word-boundary affix trim coalesces `This is an endnote with a change` into one del `This is an`+ins `New` region where WmlComparer splits `New endnote`+` with a change` finer. Loosening the trim to recover the split REGRESSES the +1 over-report rows (WC-1170/1210/1420/1430/1950) that depend on it — kept as a deviation.",
+        ["WC-1710"] = "Endnote-After3: IR 6 vs WmlComparer 7 (-1). (a) WmlComparer spuriously reports the UNCHANGED body word `Video` as del+ins (endnote-ref renumber perturbs its LCS); IR correctly reports none there. (b) Inside the changed endnote, IR's word-boundary affix trim coalesces `This is an endnote with a change` into one del `This is an`+ins `New` region where WmlComparer splits `New endnote`+` with a change` finer. Loosening the trim to recover the split REGRESSES the residual +1 over-report rows (WC-1210/1420/1430) that depend on it — kept as a deviation.",
         ["WC-1720"] = "Reverse of WC-1710 (After3 → Before), same two-part −1: oracle's spurious `Video` del+ins on the unchanged body word plus IR's affix-trim coalescing the endnote sentence one region coarser than WmlComparer. Same trim/over-report tension — kept as a deviation.",
 
         // ---- Reader: textbox VML/DrawingML duplication NOT collapsed by the adjacent-pair dedup.
@@ -150,9 +173,9 @@ public class IrParityScoreboardTests
         // fixed). When the two branches land in SEPARATE IR paragraphs/cells (textbox-in-cell), they are not
         // adjacent and the dedup cannot pair them without the reader's MC-preprocessing (WmlComparer's
         // approach) — an engine/reader change outside render scope.
-        ["WC-1770"] = "Textbox interior: WmlComparer reports the whole textbox paragraph as del+ins (2); IR token-diffs the interior to a single changed atom (1). Engine grain inside the textbox.",
-        ["WC-1830"] = "Table-5 cell run: IR reports the cell change at a finer grain than WmlComparer (+2) — engine grain.",
-        ["WC-1840"] = "Table-5 cell run, same finer-grain +2 as WC-1830 — engine grain.",
+        ["WC-1770"] = "Textbox interior (`Out\\nIn1`→`Out\\nIn`): IR UNDER-reports — 1 vs WmlComparer 2. WmlComparer reports the whole changed textbox paragraph as del `In1` + ins `In` (2); the IR token-diffs the textbox interior to a single Deleted `1` atom (the `In` is Equal, only the trailing `1` deleted), which is the more precise account but one revision short of the oracle's whole-paragraph del+ins. The WS-B low-coverage coarsening does NOT apply (a 1-char deletion is high coverage, and the textbox interior is only 2 tokens — below the ≥8 size gate); forcing the textbox paragraph to whole del+ins would need a textbox-scoped coarsening with no coverage justification (the edit is NOT a rewrite). Genuine engine-grain under-report; WmlComparer's coarser textbox-paragraph grain is the established oracle behavior but the IR account is defensible — kept as a deviation (the count is off by the oracle's coarser textbox grain, not an IR error).",
+        ["WC-1830"] = "Table-5 cell (`Video provides…\\n[math]\\nWhen you click…` → cell rewrite): +2 (4 vs 2). The cell's blocks aligned as InsertBlock `Video provides…` + math-only-paragraph InsertBlock (empty text) + ModifyBlock + DeleteBlock `You can also…`; WmlComparer coalesces the consecutive cell inserts into ONE w:ins region and folds the math-only paragraph in, reporting 2. The IR reports the text insert, the math-only-paragraph empty insert (NOT pruned — WmlComparer counts a STANDALONE math paragraph, WC-1550, so the WS-B prune is bare-marks only) and the delete separately. engine/render — adjacent-block-insert coalescing + opaque-paragraph-in-region (a WS-C item).",
+        ["WC-1840"] = "Table-5 cell (`Video. Click.`→`Video.\\n[math]\\nClick`): +2 (4 vs 2). Same mechanism as WC-1830 — the cell's `Video.` and `Click` land as SEPARATE adjacent InsertBlocks straddling a math-only-paragraph empty insert; WmlComparer coalesces them into one w:ins region (2). engine/render — adjacent-block-insert coalescing + opaque-paragraph-in-region (WS-C).",
         ["WC-1900"] = "Textbox-in-cell: the DrawingML/VML duplicate of one textbox lands in SEPARATE cells (non-adjacent), so the adjacent-pair dedup cannot collapse it (+2) — engine reader (needs MC-preprocessing).",
         ["WC-1920"] = "Table-in-textbox: nested textbox duplication + finer grain net -1 vs WmlComparer — engine reader/grain.",
 

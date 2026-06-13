@@ -129,12 +129,22 @@ internal static class IrRevisionRenderer
                 break;
 
             case IrEditOpKind.InsertBlock:
+                // Empty-paragraph-mark prune (M2.4b Workstream B). A whole-block insert of a paragraph that
+                // carries NO content tokens (a bare paragraph mark — e.g. the empty cell paragraph a
+                // moved-into-table block leaves behind, WC-1190) has empty surface text; WmlComparer reports
+                // no revision for it (an empty w:ins paragraph has no text run to key on). Suppress it in
+                // compatible mode so it never inflates the count. A paragraph with ANY content token (text,
+                // image, math/opaque) still emits — those WmlComparer counts (WC-1230/1320 math/image blocks).
+                if (IsZeroWidthBlock(op.RightAnchor, ctx.Right, ctx.Settings))
+                    break;
                 sink.Add(new IrRevision(IrRevisionType.Inserted,
                     BlockText(op.RightAnchor, ctx.Right, ctx.Settings), ctx.Author, ctx.Date,
                     RightAnchor: op.RightAnchor));
                 break;
 
             case IrEditOpKind.DeleteBlock:
+                if (IsZeroWidthBlock(op.LeftAnchor, ctx.Left, ctx.Settings))
+                    break;
                 sink.Add(new IrRevision(IrRevisionType.Deleted,
                     BlockText(op.LeftAnchor, ctx.Left, ctx.Settings), ctx.Author, ctx.Date,
                     LeftAnchor: op.LeftAnchor));
@@ -156,6 +166,24 @@ internal static class IrRevisionRenderer
     }
 
     // ------------------------------------------------------------------ modify / move
+
+    /// <summary>
+    /// True iff (compatible mode only) the anchor resolves to a PARAGRAPH with ZERO content tokens — a bare
+    /// paragraph mark (only separators, or wholly empty). Such a paragraph's whole-block insert/delete carries
+    /// no surface text and no <c>w:r</c> text run, so <c>WmlComparer.GetRevisions</c> surfaces no revision for
+    /// it (WC-1190: the empty cell paragraph a moved-into-table block leaves behind). Pruning it keeps count
+    /// parity. A paragraph with ANY content token — text, image, OR math/opaque — still emits: WmlComparer
+    /// DOES report whole-block math/SmartArt/image paragraph inserts and deletes (WC-1320 deleted SmartArt,
+    /// WC-1550 two-maths, WC-1340/1350 images), so the prune is strictly the empty-mark case.
+    /// </summary>
+    private static bool IsZeroWidthBlock(string? anchor, IrDocument doc, IrDiffSettings settings)
+    {
+        if (settings.RevisionGranularity != RevisionGranularity.WmlComparerCompatible)
+            return false;
+        if (anchor is null || !doc.AnchorIndex.TryGetValue(anchor, out var block) || block is not IrParagraph p)
+            return false;
+        return CountContent(IrDiffTokenizer.Tokenize(p, settings)) == 0;
+    }
 
     private static void RenderModifyBlock(IrEditOp op, in Context ctx, List<IrRevision> sink)
     {
@@ -381,6 +409,19 @@ internal static class IrRevisionRenderer
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
         string? leftAnchor, string? rightAnchor, in Context ctx, List<IrRevision> sink)
     {
+        // Low-coverage coarsening (M2.4b Workstream B — the "coincidental Equal island" family). The aligner's
+        // 1×1 gap residue (IrBlockAligner.FillGaps) pairs a near-rewritten paragraph/cell as Modified REGARDLESS
+        // of similarity score (it is the only sensible reading of a lone in-gap pair). Myers then credits the
+        // few COINCIDENTALLY shared words ("Video", a stray space) as Equal islands, splitting one logical
+        // rewrite into several Inserted/Deleted regions — MORE revisions than WmlComparer's whole-document LCS,
+        // which reports the rewrite as one contiguous del + one ins. When the Equal(+FormatChanged) token
+        // coverage of the pair is BELOW the threshold, the shared islands are diff noise: we coalesce the
+        // ENTIRE token stream into ONE region (bridging the word-bearing Equal ops too, not just separators) so
+        // the common-affix trim recovers WmlComparer's clean whole-region del+ins. Compatible mode only — Fine
+        // is the engine's truth and keeps every island. The coarse region still runs through the SAME Region
+        // accumulator + word-boundary affix trim, so a wholly-common edge is still kept unchanged.
+        bool coarsen = IsLowEqualCoverage(tokenDiff, leftTokens, rightTokens);
+
         var region = new Region();
 
         foreach (var tokenOp in tokenDiff.Ops)
@@ -388,6 +429,17 @@ internal static class IrRevisionRenderer
             switch (tokenOp.Kind)
             {
                 case IrTokenOpKind.Equal:
+                    if (coarsen && region.Open)
+                    {
+                        // Below the coverage floor: a word-bearing Equal island is coincidental noise, not a
+                        // real boundary — bridge it into the open region exactly like a pure separator, so the
+                        // whole rewrite collapses to one del+ins. (A leading Equal with no open region is still
+                        // genuine unchanged head content and is dropped, becoming the trimmed common prefix.)
+                        region.HoldSeparator(
+                            RawText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd),
+                            RawText(rightTokens, tokenOp.RightStart, tokenOp.RightEnd));
+                        break;
+                    }
                     if (IsPureSeparatorSpan(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd))
                     {
                         // A pure-separator Equal MIGHT bridge two changed regions. Hold it; commit only if a
@@ -428,6 +480,74 @@ internal static class IrRevisionRenderer
         }
 
         region.Flush(leftAnchor, rightAnchor, ctx, sink);
+    }
+
+    /// <summary>
+    /// The Equal+FormatChanged content-token-coverage ceiling below which a Modified pair is treated as a
+    /// near-rewrite and coalesced to one whole-region del+ins (the "coincidental Equal island" coarsening). A
+    /// pair is coarsened only when the LARGER-covered side shares less than this fraction of its content (so a
+    /// paragraph that is mostly unchanged on EITHER side keeps its fine islands — that is a real in-place edit,
+    /// not a rewrite). Derived empirically from the M2.4b Workstream B scoreboard sweep: the true rewrites have
+    /// max-side coverage at or below ~0.50 (WC-1170 at 0.50: 2-token left vs 36-token right; WC-1950 at 0.41:
+    /// only coincidental function words "the"/"of"/"each" shared) while every legitimately-finer pair sits at
+    /// or above ~0.73 (the WC-1420/1430 math runs, WC-1930's 0.91/0.94 short edits). 0.67 separates them.
+    /// Swept over the corpus: the result is a stable plateau across floor 0.55–0.72 × min 6–10.
+    /// </summary>
+    private const double LowCoverageFloor = 0.67;
+
+    /// <summary>
+    /// The minimum content-token size (on the LARGER side) a Modified pair must have to be eligible for
+    /// low-coverage coarsening. A SHORT pair (a 3-word cell, a one-word run) where one word coincidentally
+    /// survives reads as low coverage (WC-1930's "designs that compleme" → "Designs that complement.", 3 tokens
+    /// with 1 shared = 0.33) but WmlComparer's LCS still reports it at fine word grain — coalescing it to one
+    /// del+ins UNDER-reports. The rewrites this coarsening targets are substantial (WC-1170 at 36 tokens,
+    /// WC-1950 at 19); requiring at least this many tokens excludes the short edits without losing a rewrite.
+    /// </summary>
+    private const int MinCoarsenContent = 8;
+
+    /// <summary>
+    /// True iff the Modified pair is a near-rewrite eligible for whole-region coarsening: its
+    /// Equal+FormatChanged CONTENT-token coverage (measured on the larger-covered side) is below
+    /// <see cref="LowCoverageFloor"/> AND the larger side has at least <see cref="MinCoarsenContent"/> content
+    /// tokens. Separator/placeholder tokens are excluded from the counts (they are diff noise, not content);
+    /// a side with no content tokens is never coarsened.
+    /// </summary>
+    private static bool IsLowEqualCoverage(
+        IrTokenDiff tokenDiff,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens)
+    {
+        int leftContent = CountContent(leftTokens), rightContent = CountContent(rightTokens);
+        if (leftContent == 0 || rightContent == 0)
+            return false;
+        if (System.Math.Max(leftContent, rightContent) < MinCoarsenContent)
+            return false;
+
+        int coveredLeft = 0, coveredRight = 0;
+        foreach (var op in tokenDiff.Ops)
+        {
+            if (op.Kind is not (IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged))
+                continue;
+            coveredLeft += CountContent(leftTokens, op.LeftStart, op.LeftEnd);
+            coveredRight += CountContent(rightTokens, op.RightStart, op.RightEnd);
+        }
+
+        double covL = (double)coveredLeft / leftContent;
+        double covR = (double)coveredRight / rightContent;
+        return System.Math.Max(covL, covR) < LowCoverageFloor;
+    }
+
+    /// <summary>Count <see cref="IrDiffTokenKind.Word"/>/Image/Opaque/Math content tokens in a list (separators
+    /// and masked textbox placeholders excluded — they are not content the coverage ratio should weigh).</summary>
+    private static int CountContent(IReadOnlyList<IrDiffToken> tokens) =>
+        CountContent(tokens, 0, tokens.Count);
+
+    private static int CountContent(IReadOnlyList<IrDiffToken> tokens, int start, int end)
+    {
+        int n = 0;
+        for (int i = start; i < end && i < tokens.Count; i++)
+            if (tokens[i].Kind is not (IrDiffTokenKind.Separator or IrDiffTokenKind.Textbox))
+                n++;
+        return n;
     }
 
     /// <summary>
