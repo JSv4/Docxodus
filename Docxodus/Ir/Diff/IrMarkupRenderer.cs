@@ -1259,8 +1259,9 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>A relationship id not currently in use by any of the left main part's relationships (parts,
-    /// hyperlinks, and external links alike). Deterministic: the first <c>rId{n}</c> (n ascending from a high
-    /// base that clears typical document ids) that is free.</summary>
+    /// hyperlinks, external links, and data-part references alike). Deterministic: the first free
+    /// <c>rIdRemap{n}</c> (n ascending from 1). The dedicated <c>rIdRemap</c> prefix avoids colliding with the
+    /// document's own <c>rId{n}</c> numbering — the very collision this remap exists to resolve.</summary>
     private static string FreshRelationshipId(MainDocumentPart leftMain)
     {
         var used = new HashSet<string>(StringComparer.Ordinal);
