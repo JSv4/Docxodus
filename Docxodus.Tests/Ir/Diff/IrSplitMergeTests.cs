@@ -490,4 +490,79 @@ public class IrSplitMergeTests
         Assert.Equal(script, IrEditScriptJson.Read(json));
         Assert.Equal(json, IrEditScriptJson.Write(IrEditScriptJson.Read(json)));
     }
+
+    // -------- revision renderer (Task 6) --------
+
+    private static List<IrRevision> FixtureRevisions(string l, string r)
+    {
+        var settings = IrWmlComparerAdapter.MapSettings(new WmlComparerSettings()) with { DetectSplitMerge = true };
+        var left = IrReader.Read(new WmlDocument(Path.Combine("../../../../TestFiles/", l)), WcCorpus.ReadOpts);
+        var right = IrReader.Read(new WmlDocument(Path.Combine("../../../../TestFiles/", r)), WcCorpus.ReadOpts);
+        var script = IrEditScriptBuilder.Build(left, right, settings);
+        return IrRevisionRenderer.Render(script, left, right, settings).ToList();
+    }
+
+    [Fact]
+    public void WC1830_compat_revisions_match_oracle_count()
+    {
+        // Oracle (WmlComparer): 2 — Deleted "When you click…add." + Inserted "\n" (the inserted mark).
+        var revs = FixtureRevisions("WC/WC041-Table-5.docx", "WC/WC041-Table-5-Mod.docx");
+        Assert.True(revs.Count == 2,
+            $"expected 2 revisions, got {revs.Count}:\n" +
+            string.Join("\n", revs.Select(rv => $"  {rv.Type}: [{rv.Text}]")));
+    }
+
+    [Fact]
+    public void WC1450_compat_revisions_match_oracle_count()
+    {
+        var revs = FixtureRevisions("WC/WC023-Table-4-Row-Image-Before.docx",
+            "WC/WC023-Table-4-Row-Image-After-Delete-1-Row.docx");
+        Assert.True(revs.Count == 7,
+            $"expected 7 revisions, got {revs.Count}:\n" +
+            string.Join("\n", revs.Select(rv => $"  {rv.Type}: [{rv.Text}]")));
+    }
+
+    [Fact]
+    public void Fine_mode_split_reports_per_segment_revisions_only()
+    {
+        var (l, r, script) = BuildScript(
+            new[] { "aaa bbb ccc ddd. eee fff ggg hhh." },
+            new[] { "aaa bbb ccc ddd. ", "NEW eee fff ggg hhh." });
+        var revs = IrRevisionRenderer.Render(script, l, r, S).ToList(); // Fine granularity
+        // Engine truth: the only content change is the inserted "NEW " inside segment 1.
+        Assert.All(revs, rv => Assert.NotEqual(IrRevisionType.Deleted, rv.Type));
+        Assert.Contains(revs, rv => rv.Type == IrRevisionType.Inserted && rv.Text.Contains("NEW"));
+    }
+
+    [Fact]
+    public void Cell_scope_empty_mark_prune_fires() // F4.3 verification, pinned as a test
+    {
+        // A body-table cell paragraph anchors as p:body:… (IrReader assigns scope "body" throughout the
+        // body, including table cells; only p:fn:/p:en: are excluded from the prune at
+        // IrRevisionRenderer.IsZeroWidthBlock), so the compat empty-mark prune applies in cells.
+        // RIGHT's cell gains one EMPTY paragraph: compat mode must report NO revision for it.
+        const string cellL =
+            "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr>" +
+            "<w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid>" +
+            "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr>" +
+            "<w:p><w:r><w:t>cell text here</w:t></w:r></w:p>" +
+            "</w:tc></w:tr></w:tbl>";
+        const string cellR =
+            "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr>" +
+            "<w:tblGrid><w:gridCol w:w=\"2000\"/></w:tblGrid>" +
+            "<w:tr><w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr>" +
+            "<w:p><w:r><w:t>cell text here</w:t></w:r></w:p><w:p/>" +
+            "</w:tc></w:tr></w:tbl>";
+        var ro = new IrReaderOptions { RetainSources = false, RevisionView = RevisionView.Accept };
+        var l = IrReader.Read(IrTestDocuments.FromBodyXml(cellL), ro);
+        var r = IrReader.Read(IrTestDocuments.FromBodyXml(cellR), ro);
+        var compat = new IrDiffSettings
+        {
+            DetectSplitMerge = true,
+            RevisionGranularity = RevisionGranularity.WmlComparerCompatible,
+        };
+        var script = IrEditScriptBuilder.Build(l, r, compat);
+        var revs = IrRevisionRenderer.Render(script, l, r, compat);
+        Assert.Empty(revs); // the empty-mark insert in a CELL is pruned (body-scope anchor)
+    }
 }

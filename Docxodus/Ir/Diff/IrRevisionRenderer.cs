@@ -297,7 +297,168 @@ internal static class IrRevisionRenderer
             case IrEditOpKind.MoveModifyBlock:
                 RenderMoveOp(op, ctx, sink);
                 break;
+
+            case IrEditOpKind.SplitBlock:
+                RenderSplitBlock(op, ctx, sink);
+                break;
+
+            case IrEditOpKind.MergeBlock:
+                RenderMergeBlock(op, ctx, sink);
+                break;
         }
+    }
+
+    // ------------------------------------------------------------------ split / merge (M2.6)
+
+    /// <summary>
+    /// Render a 1:N paragraph split. FINE mode is the engine's truth: each segment's token diff
+    /// renders through <see cref="RenderTokenOps"/> over (left slice, member tokens) — a clean split
+    /// yields no revisions at all (every token is Equal; the structural mark account lives in the edit
+    /// script, not this surface), an edited split yields exactly its per-segment ins/del.
+    /// <para><b>Compatible mode</b> reproduces WmlComparer's account of a split. The oracle expresses a
+    /// split as ONE contiguous inserted region spanning the split-off paragraphs — the new mark plus
+    /// each member's text plus its mark, e.g. WC-1830's <c>Inserted "\nA=πr2\nWhen you click…add.\n"</c>
+    /// (the oracle's delete-side counterpart, the re-deleted tail, COALESCES into the adjacent deleted
+    /// paragraph's region and so adds no count of its own; when no deleted neighbor exists the oracle's
+    /// anchored account is the same single inserted region — either way the split contributes its
+    /// member-0 inline edits plus exactly ONE Inserted). So: segment 0 renders through the compat token
+    /// path (its inline edits, e.g. a prefix insert, surface normally), and members 1..N-1 collapse to
+    /// one Inserted whose text is <c>"\n" + Σ(memberText + "\n")</c> — the leading newline is the new
+    /// pilcrow that made the split. The trim/score gates guarantee at least one split-off member has
+    /// content, so the coalesced text is never empty.</para>
+    /// </summary>
+    private static void RenderSplitBlock(IrEditOp op, in Context ctx, List<IrRevision> sink)
+    {
+        if (op.SplitMergeAnchors is not { } anchors || op.SegmentDiffs is not { } diffs)
+            return; // malformed op — the pairing assert catches this in tests; render nothing here
+        var leftTokens = ParagraphTokens(op.LeftAnchor, ctx.Left, ctx.Settings);
+
+        int offset = 0;
+        for (int s = 0; s < anchors.Count; s++)
+        {
+            var diff = diffs[s];
+            int sliceLen = SegmentLeftLength(diff);
+            var slice = SubList(leftTokens, offset, sliceLen);
+            offset += sliceLen;
+
+            if (s == 0 || ctx.Settings.RevisionGranularity != RevisionGranularity.WmlComparerCompatible)
+            {
+                var memberTokens = ParagraphTokens(anchors[s], ctx.Right, ctx.Settings);
+                RenderSegmentTokenOps(diff, slice, memberTokens, op.LeftAnchor, anchors[s], ctx, sink);
+            }
+        }
+
+        if (ctx.Settings.RevisionGranularity == RevisionGranularity.WmlComparerCompatible && anchors.Count > 1)
+        {
+            var sb = new StringBuilder();
+            sb.Append('\n'); // the inserted pilcrow that split the paragraph
+            for (int s = 1; s < anchors.Count; s++)
+            {
+                sb.Append(BlockText(anchors[s], ctx.Right, ctx.Settings));
+                sb.Append('\n');
+            }
+            sink.Add(new IrRevision(IrRevisionType.Inserted, sb.ToString(), ctx.Author, ctx.Date,
+                LeftAnchor: op.LeftAnchor, RightAnchor: anchors[1]));
+        }
+    }
+
+    /// <summary>
+    /// Render one split/merge segment's token diff, suppressing (compatible mode only) revisions whose
+    /// text is pure whitespace — the SEAM separator the segmentation left on one side of the split
+    /// boundary (e.g. WC-1450's <c>"point. "</c> trailing space when the prefix member ends at
+    /// <c>"point."</c>). WmlComparer accounts that seam space inside its coalesced tail region, so a
+    /// standalone whitespace-only ins/del here would double-count it (+1 vs the oracle). Fine mode
+    /// passes everything through untouched.
+    /// </summary>
+    private static void RenderSegmentTokenOps(
+        IrTokenDiff diff,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        string? leftAnchor, string? rightAnchor, in Context ctx, List<IrRevision> sink)
+    {
+        if (ctx.Settings.RevisionGranularity != RevisionGranularity.WmlComparerCompatible)
+        {
+            RenderTokenOps(diff, leftTokens, rightTokens, leftAnchor, rightAnchor, ctx, sink);
+            return;
+        }
+
+        var buffer = new List<IrRevision>();
+        RenderTokenOps(diff, leftTokens, rightTokens, leftAnchor, rightAnchor, ctx, buffer);
+        buffer.RemoveAll(rv => rv.Type is IrRevisionType.Inserted or IrRevisionType.Deleted
+            && rv.Text.Length > 0 && rv.Text.Trim().Length == 0);
+        sink.AddRange(buffer);
+    }
+
+    /// <summary>
+    /// Render an N:1 paragraph merge — the byte-mirror of <see cref="RenderSplitBlock"/>. The stored
+    /// segment diffs read left-member → right-slice, so member 0's diff renders directly through the
+    /// token path against the right stream's first slice. Compatible mode collapses members 1..N-1 to
+    /// one Deleted (<c>"\n" + Σ(memberText + "\n")</c> — the removed pilcrows and the re-deleted tail,
+    /// WmlComparer's account of a merge); Fine mode renders every member's segment diff (a clean merge
+    /// has no token-level changes and reports nothing — the mark removal is the edit script's account).
+    /// </summary>
+    private static void RenderMergeBlock(IrEditOp op, in Context ctx, List<IrRevision> sink)
+    {
+        if (op.SplitMergeAnchors is not { } anchors || op.SegmentDiffs is not { } diffs)
+            return;
+        var rightTokens = ParagraphTokens(op.RightAnchor, ctx.Right, ctx.Settings);
+
+        int offset = 0;
+        for (int m = 0; m < anchors.Count; m++)
+        {
+            var diff = diffs[m];
+            int sliceLen = SegmentRightLength(diff);
+            var slice = SubList(rightTokens, offset, sliceLen);
+            offset += sliceLen;
+
+            if (m == 0 || ctx.Settings.RevisionGranularity != RevisionGranularity.WmlComparerCompatible)
+            {
+                var memberTokens = ParagraphTokens(anchors[m], ctx.Left, ctx.Settings);
+                RenderSegmentTokenOps(diff, memberTokens, slice, anchors[m], op.RightAnchor, ctx, sink);
+            }
+        }
+
+        if (ctx.Settings.RevisionGranularity == RevisionGranularity.WmlComparerCompatible && anchors.Count > 1)
+        {
+            var sb = new StringBuilder();
+            sb.Append('\n'); // the removed pilcrow that joined the paragraphs
+            for (int m = 1; m < anchors.Count; m++)
+            {
+                sb.Append(BlockText(anchors[m], ctx.Left, ctx.Settings));
+                sb.Append('\n');
+            }
+            sink.Add(new IrRevision(IrRevisionType.Deleted, sb.ToString(), ctx.Author, ctx.Date,
+                LeftAnchor: anchors[1], RightAnchor: op.RightAnchor));
+        }
+    }
+
+    /// <summary>A segment diff's singular-side slice length: Σ non-Insert left-span lengths (the F3.3
+    /// partition convention — boundaries are implicit in the diff ops).</summary>
+    private static int SegmentLeftLength(IrTokenDiff diff)
+    {
+        int n = 0;
+        foreach (var o in diff.Ops)
+            if (o.Kind != IrTokenOpKind.Insert)
+                n += o.LeftLength;
+        return n;
+    }
+
+    /// <summary>A merge segment diff's right-slice length: Σ non-Delete right-span lengths (the stored
+    /// merge orientation is member → right-slice).</summary>
+    private static int SegmentRightLength(IrTokenDiff diff)
+    {
+        int n = 0;
+        foreach (var o in diff.Ops)
+            if (o.Kind != IrTokenOpKind.Delete)
+                n += o.RightLength;
+        return n;
+    }
+
+    private static IReadOnlyList<IrDiffToken> SubList(IReadOnlyList<IrDiffToken> tokens, int offset, int len)
+    {
+        var list = new List<IrDiffToken>(len);
+        for (int i = offset; i < offset + len && i < tokens.Count; i++)
+            list.Add(tokens[i]);
+        return list;
     }
 
     // ------------------------------------------------------------------ modify / move
