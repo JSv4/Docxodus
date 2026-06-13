@@ -193,9 +193,14 @@ internal static class IrEditScriptVerifier
             var leftStore = noteDiff.Kind == IrNoteKind.Footnote ? left.Footnotes : left.Endnotes;
             var rightStore = noteDiff.Kind == IrNoteKind.Footnote ? right.Footnotes : right.Endnotes;
 
-            var leftBlocks = leftStore.Notes.TryGetValue(noteDiff.NoteId, out var ls)
+            // M2.5 Task 3: a matched pair can carry DIFFERENT left/right ids — resolve the LEFT store by
+            // LeftNoteId and the RIGHT store by NoteId. A DELETED-only note has no right counterpart and its
+            // NoteId is the LEFT id (which may collide with an unrelated right note's id), so the right side is
+            // resolved only when the diff actually produces right content (any non-DeleteBlock op).
+            bool hasRightSide = noteDiff.Ops.Any(o => o.Kind is not IrEditOpKind.DeleteBlock);
+            var leftBlocks = noteDiff.LeftNoteId is { } lid && leftStore.Notes.TryGetValue(lid, out var ls)
                 ? ls.Blocks : IrNodeList.Empty<IrBlock>();
-            var rightBlocks = rightStore.Notes.TryGetValue(noteDiff.NoteId, out var rs)
+            var rightBlocks = hasRightSide && rightStore.Notes.TryGetValue(noteDiff.NoteId, out var rs)
                 ? rs.Blocks : IrNodeList.Empty<IrBlock>();
 
             // At least one side must hold the note (the diff would not exist otherwise).

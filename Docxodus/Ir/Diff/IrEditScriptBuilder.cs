@@ -69,40 +69,85 @@ internal static class IrEditScriptBuilder
     private static List<IrNoteDiff> BuildNoteOps(IrDocument left, IrDocument right, IrDiffSettings settings)
     {
         var result = new List<IrNoteDiff>();
-        result.AddRange(BuildOneStore(left.Footnotes, right.Footnotes, IrNoteKind.Footnote, settings));
-        result.AddRange(BuildOneStore(left.Endnotes, right.Endnotes, IrNoteKind.Endnote, settings));
+        result.AddRange(BuildOneStore(left, right, IrNoteKind.Footnote, settings));
+        result.AddRange(BuildOneStore(left, right, IrNoteKind.Endnote, settings));
         return result;
     }
 
+    /// <summary>
+    /// Diff one note store (footnotes OR endnotes) under the oracle's NOTE CORRESPONDENCE semantics.
+    ///
+    /// <para><b>Why not by raw <c>w:id</c>.</b> <see cref="WmlComparer"/> does NOT pair notes by their stored
+    /// <c>w:id</c>. <c>WmlComparer.ChangeFootnoteEndnoteReferencesToUniqueRange</c> RENUMBERS every note id to a
+    /// per-document range in BODY-REFERENCE ORDER (the n-th <c>w:footnoteReference</c>/<c>w:endnoteReference</c>
+    /// encountered walking <c>document.xml</c> gets id <c>base+n</c>, and its note definition is renumbered to
+    /// match); then <c>WmlComparer.ProcessFootnoteEndnote</c> pairs a note with another note IFF their body
+    /// REFERENCES correlate Equal in the body diff. So a note's correspondence is driven by its reference's
+    /// position in the body, never by the original id. When a reference is inserted (WC034-After3 relocates an
+    /// endnote ref INTO the middle of <c>Video</c>, shifting the ids), by-id pairing cross-matches unrelated
+    /// notes and over-reports; reference-order/content pairing matches the oracle.</para>
+    ///
+    /// <para><b>The IR equivalent.</b> Collect each side's referenced note ids in body document order
+    /// (<see cref="CollectNoteReferenceOrder"/>), then align the two reference sequences
+    /// (<see cref="AlignNoteReferences"/>): exact-content references anchor an order-preserving spine first, the
+    /// residue pairs leftover references by best note-content similarity (the lone-left/lone-right case pairs
+    /// UNCONDITIONALLY — the same 1×1-residue rule the block aligner uses, so a single edited note on each side
+    /// is always a content modify, never a delete+insert), and surplus references fall out as whole-note
+    /// insert/delete. <b>Invariant:</b> when the reference sequences have equal length and pair up in order
+    /// (no inserted/deleted reference shifted them — the overwhelmingly common case), this reduces EXACTLY to
+    /// the former by-id pairing, so unrelated fixtures (WC-1600/1660/1750/…) are byte-identical.</para>
+    ///
+    /// <para>A matched pair aligns its note blocks (a footnote-text edit surfaces as a ModifyBlock token diff
+    /// inside the note, like a body paragraph); an only-left reference becomes all-Deleted blocks, an only-right
+    /// all-Inserted. The per-scope op stream is ordered by RIGHT reference order (inserts interleaved at their
+    /// reference position), then deleted-only notes, then any unreferenced-on-both-sides notes — deterministic.</para>
+    /// </summary>
     private static List<IrNoteDiff> BuildOneStore(
-        IrNoteStore left, IrNoteStore right, IrNoteKind kind, IrDiffSettings settings)
+        IrDocument left, IrDocument right, IrNoteKind kind, IrDiffSettings settings)
     {
-        // The union of note ids on both sides, ordered numeric-ascending (a non-numeric id sorts last by
-        // its ordinal string) so the per-scope op stream is deterministic and matches the oracle's note
-        // traversal order (notes are authored/numbered ascending).
-        var ids = new SortedSet<string>(left.Notes.Keys.Concat(right.Notes.Keys), NoteIdComparer.Instance);
+        var leftStore = kind == IrNoteKind.Footnote ? left.Footnotes : left.Endnotes;
+        var rightStore = kind == IrNoteKind.Footnote ? right.Footnotes : right.Endnotes;
+
+        // Referenced note ids in body document order (the oracle's correspondence axis). Defensively de-dup:
+        // a note referenced twice corresponds once (first reference wins) — the oracle renumbers per reference
+        // but compares each note's content once.
+        var refsLeft = DistinctInOrder(CollectNoteReferenceOrder(left, kind), leftStore);
+        var refsRight = DistinctInOrder(CollectNoteReferenceOrder(right, kind), rightStore);
+
+        var correspondence = AlignNoteReferences(refsLeft, refsRight, leftStore, rightStore, settings);
+
+        // Notes that exist in a store but are NOT referenced from the body (orphans — uncommon but legal).
+        // Pair common ids, otherwise treat as whole-note ins/del; appended after the referenced stream in
+        // numeric-id order for determinism.
+        AppendUnreferencedNotes(correspondence, refsLeft, refsRight, leftStore, rightStore);
 
         var diffs = new List<IrNoteDiff>();
-        foreach (var id in ids)
+        foreach (var (leftId, rightId) in correspondence)
         {
-            bool hasLeft = left.Notes.TryGetValue(id, out var leftScope);
-            bool hasRight = right.Notes.TryGetValue(id, out var rightScope);
+            bool hasLeft = leftId is not null && leftStore.Notes.TryGetValue(leftId, out _);
+            bool hasRight = rightId is not null && rightStore.Notes.TryGetValue(rightId, out _);
+
+            // The note id used to scope the diff: the right id for matched/inserted notes (the produced
+            // document is right-shaped), the left id for a deleted-only note.
+            string scopeId = rightId ?? leftId!;
 
             List<IrEditOp> ops;
             if (hasLeft && hasRight)
             {
-                var alignment = IrBlockAligner.AlignBlocks(leftScope!.Blocks, rightScope!.Blocks, settings);
+                var leftScope = leftStore.Notes[leftId!];
+                var rightScope = rightStore.Notes[rightId!];
+                var alignment = IrBlockAligner.AlignBlocks(leftScope.Blocks, rightScope.Blocks, settings);
                 ops = ProjectAlignment(leftScope.Blocks, alignment, settings);
             }
             else if (hasRight)
             {
-                ops = rightScope!.Blocks
+                ops = rightStore.Notes[rightId!].Blocks
                     .Select(b => new IrEditOp(IrEditOpKind.InsertBlock, null, b.Anchor.ToString(), null, null, null))
                     .ToList();
             }
             else
             {
-                ops = leftScope!.Blocks
+                ops = leftStore.Notes[leftId!].Blocks
                     .Select(b => new IrEditOp(IrEditOpKind.DeleteBlock, b.Anchor.ToString(), null, null, null, null))
                     .ToList();
             }
@@ -110,9 +155,287 @@ internal static class IrEditScriptBuilder
             // A matched note whose alignment is entirely EqualBlock/FormatOnly carries no real change; only
             // emit a note diff when something actually changed, so an unedited note produces zero revisions.
             if (ops.Any(o => o.Kind is not IrEditOpKind.EqualBlock))
-                diffs.Add(new IrNoteDiff(kind, id, IrNodeList.From(ops)));
+                diffs.Add(new IrNoteDiff(kind, scopeId, IrNodeList.From(ops), hasLeft ? leftId : null));
         }
         return diffs;
+    }
+
+    // ------------------------------------------------------------------ note correspondence (M2.5 Task 3)
+
+    /// <summary>Walk the body in document order (recursing into tables, textboxes, fields, and hyperlinks the
+    /// same way the reader/tokenizer do) and return the <see cref="IrNoteRef.NoteId"/> of every reference of
+    /// <paramref name="kind"/>, in encounter order — the oracle's note-correspondence axis.</summary>
+    private static List<string> CollectNoteReferenceOrder(IrDocument doc, IrNoteKind kind)
+    {
+        var ids = new List<string>();
+        WalkBlocksForNoteRefs(doc.Body.Blocks, kind, ids);
+        return ids;
+    }
+
+    private static void WalkBlocksForNoteRefs(IReadOnlyList<IrBlock> blocks, IrNoteKind kind, List<string> sink)
+    {
+        foreach (var block in blocks)
+        {
+            switch (block)
+            {
+                case IrParagraph p:
+                    WalkInlinesForNoteRefs(p.Inlines, kind, sink);
+                    break;
+                case IrTable t:
+                    foreach (var row in t.Rows)
+                        foreach (var cell in row.Cells)
+                            WalkBlocksForNoteRefs(cell.Blocks, kind, sink);
+                    break;
+            }
+        }
+    }
+
+    private static void WalkInlinesForNoteRefs(IReadOnlyList<IrInline> inlines, IrNoteKind kind, List<string> sink)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrNoteRef note when note.Kind == kind:
+                    sink.Add(note.NoteId);
+                    break;
+                case IrFieldRun field:
+                    WalkInlinesForNoteRefs(field.CachedResult, kind, sink);
+                    break;
+                case IrHyperlink link:
+                    WalkInlinesForNoteRefs(link.Inlines, kind, sink);
+                    break;
+                case IrTextbox tbx:
+                    WalkBlocksForNoteRefs(tbx.Blocks, kind, sink);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Keep the first occurrence of each id (a note referenced twice corresponds once) and drop ids
+    /// with no note definition in the store (a dangling reference contributes no note diff).</summary>
+    private static List<string> DistinctInOrder(List<string> ids, IrNoteStore store)
+    {
+        var seen = new HashSet<string>();
+        var result = new List<string>(ids.Count);
+        foreach (var id in ids)
+            if (store.Notes.ContainsKey(id) && seen.Add(id))
+                result.Add(id);
+        return result;
+    }
+
+    /// <summary>
+    /// Align two body-reference-ordered note-id sequences into an ordered list of <c>(leftId?, rightId?)</c>
+    /// correspondence pairs, mirroring the oracle's body-reference correlation.
+    ///
+    /// <para><b>Pass 1 — exact-content spine.</b> References whose notes are <see cref="IrBlock.ContentHash"/>-equal
+    /// are matched along the longest order-preserving (LCS) subsequence, so an unchanged note pairs with its
+    /// reference-order counterpart even when other references were inserted around it.</para>
+    /// <para><b>Pass 2 — similarity residue.</b> Leftover left references pair with leftover right references
+    /// (order-respecting) by best note similarity, highest score first; a lone-left/lone-right residue pairs
+    /// UNCONDITIONALLY (the 1×1-residue rule — a single edited note on each side is one modify, not del+ins).</para>
+    /// <para><b>Surplus.</b> Unpaired left references → <c>(id, null)</c> (whole-note delete); unpaired right →
+    /// <c>(null, id)</c> (whole-note insert). The result is ordered by right reference position with deletes
+    /// interleaved before the right reference they precede, so the op stream reads as a unified note diff.</para>
+    /// </summary>
+    private static List<(string? Left, string? Right)> AlignNoteReferences(
+        List<string> refsLeft, List<string> refsRight,
+        IrNoteStore leftStore, IrNoteStore rightStore, IrDiffSettings settings)
+    {
+        int nLeft = refsLeft.Count;
+        int nRight = refsRight.Count;
+        var leftPartner = new int[nLeft];  // right index this left ref paired with, or -1
+        var rightPartner = new int[nRight]; // left index this right ref paired with, or -1
+        Array.Fill(leftPartner, -1);
+        Array.Fill(rightPartner, -1);
+
+        // Pass 1: exact-content LCS spine.
+        bool ContentEqual(int li, int rj) =>
+            NoteContentEqual(leftStore.Notes[refsLeft[li]], rightStore.Notes[refsRight[rj]]);
+        var spine = LongestCommonSubsequence(nLeft, nRight, ContentEqual);
+        foreach (var (li, rj) in spine)
+        {
+            leftPartner[li] = rj;
+            rightPartner[rj] = li;
+        }
+
+        // Pass 2: similarity residue over the still-free references, preserving order. Greedy highest-score
+        // first; the lone-left/lone-right pairing falls out as the single remaining candidate (forced pair).
+        // Score on the note's WHOLE-content token multiset (Jaccard) so a multi-paragraph note is not penalized
+        // by per-block averaging — the most content-overlapping note wins, matching the oracle's body-LCS choice.
+        var bagCache = new Dictionary<string, Dictionary<string, int>>();
+        Dictionary<string, int> LeftBag(string id) => NoteTokenBag(bagCache, "L:" + id, leftStore.Notes[id], settings);
+        Dictionary<string, int> RightBag(string id) => NoteTokenBag(bagCache, "R:" + id, rightStore.Notes[id], settings);
+        double Score(int li, int rj) => BagJaccard(LeftBag(refsLeft[li]), RightBag(refsRight[rj]));
+        GreedyResiduePair(nLeft, nRight, leftPartner, rightPartner, Score);
+
+        // Emit in right order with deletes interleaved before the right ref they precede (by left order).
+        var result = new List<(string?, string?)>();
+        int nextLeft = 0;
+        for (int rj = 0; rj < nRight; rj++)
+        {
+            int li = rightPartner[rj];
+            if (li >= 0)
+            {
+                // Flush any unpaired left refs that precede this matched left ref (deletes in left order).
+                while (nextLeft < li)
+                {
+                    if (leftPartner[nextLeft] < 0)
+                        result.Add((refsLeft[nextLeft], null));
+                    nextLeft++;
+                }
+                nextLeft = li + 1;
+                result.Add((refsLeft[li], refsRight[rj]));
+            }
+            else
+            {
+                result.Add((null, refsRight[rj]));
+            }
+        }
+        // Trailing unpaired left refs (deletes after the last matched left ref).
+        for (; nextLeft < nLeft; nextLeft++)
+            if (leftPartner[nextLeft] < 0)
+                result.Add((refsLeft[nextLeft], null));
+
+        return result;
+    }
+
+    /// <summary>Longest common subsequence of <c>[0,nLeft)</c> × <c>[0,nRight)</c> under the boolean
+    /// <paramref name="match"/> predicate, returned as ascending (leftIndex, rightIndex) pairs. Standard
+    /// O(nLeft·nRight) DP — note-reference counts are tiny, so cost is negligible.</summary>
+    private static List<(int Left, int Right)> LongestCommonSubsequence(
+        int nLeft, int nRight, Func<int, int, bool> match)
+    {
+        var dp = new int[nLeft + 1, nRight + 1];
+        for (int i = nLeft - 1; i >= 0; i--)
+            for (int j = nRight - 1; j >= 0; j--)
+                dp[i, j] = match(i, j)
+                    ? dp[i + 1, j + 1] + 1
+                    : Math.Max(dp[i + 1, j], dp[i, j + 1]);
+
+        var pairs = new List<(int, int)>();
+        for (int i = 0, j = 0; i < nLeft && j < nRight;)
+        {
+            if (match(i, j)) { pairs.Add((i, j)); i++; j++; }
+            else if (dp[i + 1, j] >= dp[i, j + 1]) i++;
+            else j++;
+        }
+        return pairs;
+    }
+
+    /// <summary>Greedily pair still-free left/right references (those with partner == -1) by descending
+    /// <paramref name="score"/>, preserving order monotonicity: a chosen pair must not cross an already-chosen
+    /// pair. Ties break by smallest left then right index. The lone-left/lone-right case yields the single
+    /// candidate, pairing it unconditionally regardless of score.</summary>
+    private static void GreedyResiduePair(
+        int nLeft, int nRight, int[] leftPartner, int[] rightPartner, Func<int, int, double> score)
+    {
+        while (true)
+        {
+            double best = double.NegativeInfinity;
+            int bestLi = -1, bestRj = -1;
+            for (int li = 0; li < nLeft; li++)
+            {
+                if (leftPartner[li] >= 0) continue;
+                for (int rj = 0; rj < nRight; rj++)
+                {
+                    if (rightPartner[rj] >= 0) continue;
+                    if (CrossesExistingPair(li, rj, leftPartner)) continue;
+                    double s = score(li, rj);
+                    if (s > best) { best = s; bestLi = li; bestRj = rj; }
+                }
+            }
+            if (bestLi < 0) return; // no order-compatible free pair remains
+            leftPartner[bestLi] = bestRj;
+            rightPartner[bestRj] = bestLi;
+        }
+    }
+
+    /// <summary>True if pairing left ref <paramref name="li"/> with right ref <paramref name="rj"/> would cross
+    /// an already-established pair (order violation): some matched left ref &lt; li paired with a right ref &gt; rj,
+    /// or some matched left ref &gt; li paired with a right ref &lt; rj.</summary>
+    private static bool CrossesExistingPair(int li, int rj, int[] leftPartner)
+    {
+        for (int k = 0; k < leftPartner.Length; k++)
+        {
+            int p = leftPartner[k];
+            if (p < 0) continue;
+            if ((k < li && p > rj) || (k > li && p < rj)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Two note scopes are "exact-content equal" iff they have the same number of blocks and every
+    /// block's <see cref="IrBlock.ContentHash"/> matches in order (a structural content digest — the same key
+    /// the block aligner anchors on). Used only to seed the LCS spine of unchanged references.</summary>
+    private static bool NoteContentEqual(IrScope a, IrScope b)
+    {
+        if (a.Blocks.Count != b.Blocks.Count) return false;
+        for (int i = 0; i < a.Blocks.Count; i++)
+            if (!a.Blocks[i].ContentHash.Equals(b.Blocks[i].ContentHash)) return false;
+        return true;
+    }
+
+    /// <summary>Build (and cache) a note scope's whole-content WORD multiset — the <see cref="IrDiffTokenKind.Word"/>
+    /// tokens of every paragraph block concatenated in document order, keyed by <see cref="IrDiffToken.MatchKey"/>.
+    /// Whitespace, separators, note-ref/opaque markers and other non-word tokens are EXCLUDED: they are shared
+    /// near-uniformly across notes (every note opens with the same note-ref marker and is mostly spaces) and
+    /// would otherwise dominate a Jaccard score, pairing notes by length rather than by content. Non-paragraph
+    /// blocks contribute nothing. The residue similarity is a coarse content-overlap heuristic — it disambiguates
+    /// which reference a leftover note corresponds to, never gating a forced lone-left/lone-right pair.</summary>
+    private static Dictionary<string, int> NoteTokenBag(
+        Dictionary<string, Dictionary<string, int>> cache, string cacheKey, IrScope scope, IrDiffSettings settings)
+    {
+        if (cache.TryGetValue(cacheKey, out var bag)) return bag;
+        bag = new Dictionary<string, int>();
+        foreach (var block in scope.Blocks)
+            if (block is IrParagraph p)
+                foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+                    if (t.Kind == IrDiffTokenKind.Word)
+                        bag[t.MatchKey] = bag.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
+        cache[cacheKey] = bag;
+        return bag;
+    }
+
+    /// <summary>Jaccard index over two token multisets (sum of per-key min counts / sum of per-key max counts).
+    /// Two empty bags score 1.0; an empty-vs-nonempty pair scores 0. Used only to disambiguate the residue.</summary>
+    private static double BagJaccard(Dictionary<string, int> a, Dictionary<string, int> b)
+    {
+        int totalA = a.Values.Sum();
+        int totalB = b.Values.Sum();
+        if (totalA == 0 && totalB == 0) return 1.0;
+        if (totalA == 0 || totalB == 0) return 0.0;
+
+        int intersection = 0;
+        var (small, large) = a.Count <= b.Count ? (a, b) : (b, a);
+        foreach (var kv in small)
+            if (large.TryGetValue(kv.Key, out int other))
+                intersection += Math.Min(kv.Value, other);
+        int union = totalA + totalB - intersection;
+        return union == 0 ? 1.0 : (double)intersection / union;
+    }
+
+    /// <summary>Append correspondence entries for notes present in a store but NOT referenced from the body
+    /// (orphans). Common ids pair (defensive — keeps a previously-by-id-matched orphan note matched); the rest
+    /// become whole-note ins/del. Ordered numeric-id-ascending for determinism.</summary>
+    private static void AppendUnreferencedNotes(
+        List<(string? Left, string? Right)> correspondence,
+        List<string> refsLeft, List<string> refsRight,
+        IrNoteStore leftStore, IrNoteStore rightStore)
+    {
+        var referencedLeft = new HashSet<string>(refsLeft);
+        var referencedRight = new HashSet<string>(refsRight);
+        var orphanLeft = leftStore.Notes.Keys.Where(id => !referencedLeft.Contains(id));
+        var orphanRight = rightStore.Notes.Keys.Where(id => !referencedRight.Contains(id));
+        var ids = new SortedSet<string>(orphanLeft.Concat(orphanRight), NoteIdComparer.Instance);
+        foreach (var id in ids)
+        {
+            bool l = leftStore.Notes.ContainsKey(id) && !referencedLeft.Contains(id);
+            bool r = rightStore.Notes.ContainsKey(id) && !referencedRight.Contains(id);
+            if (l && r) correspondence.Add((id, id));
+            else if (r) correspondence.Add((null, id));
+            else if (l) correspondence.Add((id, null));
+        }
     }
 
     /// <summary>Numeric-ascending note-id order (id is a <c>w:id</c> integer string); non-numeric ids sort

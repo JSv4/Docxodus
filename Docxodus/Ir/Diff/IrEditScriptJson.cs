@@ -99,6 +99,7 @@ internal static class IrEditScriptJson
         writer.WriteStartObject();
         writer.WriteString("kind", diff.Kind.ToString());
         writer.WriteString("noteId", diff.NoteId);
+        if (diff.LeftNoteId is { } leftId) writer.WriteString("leftNoteId", leftId);
         writer.WriteStartArray("ops");
         foreach (var op in diff.Ops)
             WriteOp(writer, op);
@@ -216,10 +217,11 @@ internal static class IrEditScriptJson
     {
         var kind = Enum.Parse<IrNoteKind>(element.GetProperty("kind").GetString()!);
         string noteId = element.GetProperty("noteId").GetString()!;
+        string? leftNoteId = element.TryGetProperty("leftNoteId", out var ln) ? ln.GetString() : null;
         var ops = new List<IrEditOp>();
         foreach (var opElement in element.GetProperty("ops").EnumerateArray())
             ops.Add(ReadOp(opElement));
-        return new IrNoteDiff(kind, noteId, IrNodeList.From(ops));
+        return new IrNoteDiff(kind, noteId, IrNodeList.From(ops), leftNoteId);
     }
 
     private static IrEditOp ReadOp(JsonElement element)

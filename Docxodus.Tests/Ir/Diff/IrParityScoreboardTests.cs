@@ -94,19 +94,21 @@ public class IrParityScoreboardTests
         // NON-ADJACENT (nested) branch interleaving via content-signature occurrence parity — the oracle
         // MC-resolves AlternateContent to one branch (PreProcessMarkup, ProcessAllParts/Office2007), so it
         // counts one copy; the reader walks both for projection parity, and the dedup now mirrors the oracle
-        // wherever the Fallback copy lands. The five surviving deviations are all genuine engine-grain cases:
-        // WC-1450/1830 (1:N sub-paragraph SPLIT — one before-paragraph's content migrates across TWO after-
-        // paragraphs; M2.5 Task 2 PROVED both share this root cause and that it is NOT closable in the 1:1
-        // IrEditOp model nor render-coalescible — the correct fix is engine-level 1:N split semantics, sketched
-        // in docs/superpowers/specs/2026-06-12-subparagraph-split-alignment-sketch.md and recommended as a
-        // Phase-2 follow-on (M2.6); RETAINED with evidence per the timebox rule), WC-1710/1720 (the mid-word
-        // note-ref TOKENIZATION is now FIXED by M2.5 Task 1 — the residual -1 is the separate note-store
-        // by-id-vs-content correspondence over-report; ORACLE CORRECT), WC-1920 (tokenizer punctuation-
-        // attachment grain in a textbox-nested table — the residual -1 is the `test`/`test!` word-boundary
-        // difference). The split pair (WC-1450/1830) is sketch-and-deferred to a Phase-2 follow-on; the
-        // note-store and punctuation residuals remain deferred-class items.
+        // wherever the Fallback copy lands. M2.5 Task 3 then closed WC-1710/1720 (175→176) by giving the IR the
+        // oracle's NOTE-STORE CORRESPONDENCE (notes pair by body-reference order + content, not raw w:id —
+        // IrEditScriptBuilder.BuildOneStore) plus a structural-only affix-trim guard (a byte-identical del/ins
+        // region — an intra-word note-ref relocation — is no longer cancelled). The three surviving deviations
+        // are all genuine engine-grain cases: WC-1450/1830 (1:N sub-paragraph SPLIT — one before-paragraph's
+        // content migrates across TWO after-paragraphs; M2.5 Task 2 PROVED both share this root cause and that
+        // it is NOT closable in the 1:1 IrEditOp model nor render-coalescible — the correct fix is engine-level
+        // 1:N split semantics, sketched in docs/superpowers/specs/2026-06-12-subparagraph-split-alignment-sketch.md
+        // and recommended as a Phase-2 follow-on (M2.6); RETAINED with evidence per the timebox rule) and
+        // WC-1920 (cross-run word coalescing — the cell `This is a test` gains a trailing `!` in a SEPARATE run;
+        // the oracle's char-atom word grouping reads `test!` as one word and reports del `test` + ins `test!`,
+        // while the IR tokenizes per-run so `test`/`!` are two tokens and the affix-trim reports just ins `!`;
+        // a tokenizer word-boundary change with corpus-wide blast radius — deferred-tokenizer class).
         const int ParityFloor = 179;     // PASS + documented deviation = full runnable set (179/179)
-        const int GenuinePassFloor = 174; // PASS-only ratchet (M2.4b WS-D: +WC-1900): may only rise
+        const int GenuinePassFloor = 176; // PASS-only ratchet (M2.5 Task 3: +WC-1710/1720 note correspondence): may only rise
         Assert.True(board.Total > 0, "Scoreboard scored no cases.");
         Assert.Equal(board.Total, board.Pass + board.Deviation + board.Fail);
         Assert.True(board.Pass + board.Deviation >= ParityFloor,
@@ -185,44 +187,29 @@ public class IrParityScoreboardTests
         // above). The cell rewrite shared only coincidental function words; the low-coverage coarsening
         // (max-side content coverage 0.41 < 0.67, 19 content tokens ≥ 8) collapses it to one del+ins.
 
-        // ---- WC-1710/1720 (WC034-Endnotes-Before vs -After3): IR 6 vs WmlComparer 7 (-1).
-        //
-        // WC034 'Video' INVESTIGATION (M2.4b WS-C — CORRECTS the prior "oracle spurious" misdiagnosis):
-        // examined the raw OOXML of both sides' body paragraph. BEFORE the body run is `Video `[en-ref id=1]
-        // `provides…` — `Video` is one contiguous text run. In After3 the endnote-reference id=1 has been
-        // RELOCATED INTO THE MIDDLE of the word: the runs are `Vi`[en-ref id=1]`deo`` `[en-ref id=2]`provides…`
-        // (verified run-by-run). So the word `Video` genuinely changed its run/atom structure — a note
-        // reference was inserted between `Vi` and `deo`. WmlComparer's atom LCS faithfully reports `Video`
-        // del + `Video` ins (the old contiguous atom is gone; the reconstituted `Vi`+`deo` is new). This is
-        // CORRECT oracle behavior, NOT a fault — there is a real structural edit to the word.
-        //
-        // M2.5 Task 1 — TOKENIZER FIX LANDED (intra-word note-ref interruption). IrDiffTokenizer now marks a
-        // word that a zero-width content atom (NoteRef/Image/Opaque/Textbox) splits WITHOUT a separator on
-        // either side: the flanking words' MatchKeys carry an interruption marker keyed on the interrupting
-        // atoms, so `Vi`⟨ref⟩`deo` is NOT word-equal to a contiguous `Video`. The Fine-mode edit script now
-        // CORRECTLY reports the body change (verified: ModifyBlock token diff = Delete `Vi` / Insert
-        // `Vi`+ref+`deo`, the `Video` word no longer Equal). A ref BETWEEN words (separator-adjacent — the
-        // overwhelmingly common case) is untouched: zero corpus blast radius (full scoreboard unchanged at
-        // 174 PASS + 5 DEV + 0 FAIL).
-        //
-        // RESIDUAL (why this is still a -1 deviation in WmlComparerCompatible COUNT): two SEPARATE,
-        // render/note-subsystem effects the tokenizer fix does NOT address, isolated by the M2.5 oracle
-        // breakdown (oracle body 3: del `Video` + ins `Video` + ins ``; oracle endnotes 4: en correspondence):
-        //   (a) The WmlComparerCompatible common-affix trim cancels the body del `Video` / ins `Vi`+`deo`
-        //       because the inserted letters spell the SAME `Video` (the relocated zero-width ref carries no
-        //       text), so the body del+ins collapses to zero in the COUNT projection. (Fine mode keeps it.)
-        //   (b) The note-store diff aligns notes BY w:id, while the oracle aligns by CONTENT/reference-order
-        //       (it remaps note ids): After3 inserts a new en#1 and pushes Before's en#1 content to en#2, so
-        //       by-id matching over-reports the note scope by +1. A note-store CONTENT-CORRESPONDENCE aligner
-        //       (notes matched by content/reference-order, not raw id) is required — a broad note-subsystem
-        //       change (it restructures IrNoteDiff + the note markup renderer + body↔note id remapping, and a
-        //       trial regressed WC-1660/1670/1750/1760), the same class as deferred item #5 (note-store
-        //       cross-part conversion). Effects (a)+(b) net to the -1 today; closing them is a follow-on, not
-        //       part of the note-ref-within-word tokenization.
-        // Kept as a deviation: the note-ref-within-word TOKENIZATION is FIXED (engine/Fine correct); the
-        // residual count gap is note-store-correspondence-alignment (deferred).",
-        ["WC-1710"] = "Endnote-After3: IR 6 vs WmlComparer 7 (-1). The note-ref-within-word TOKENIZATION is now FIXED (M2.5 Task 1): the Fine-mode edit script correctly reports `Video` del + `Vi`+ref+`deo` ins for the mid-word endnote-reference relocation (`Vi`[en-ref]`deo` vs Before's contiguous `Video `[en-ref], verified run-by-run). The residual -1 in the WmlComparerCompatible COUNT is TWO separate effects the tokenizer fix does not touch: (a) the compat common-affix trim cancels the text-identical body del/ins (`Video` == `Vi`+`deo`; the relocated ref is textless), and (b) the note-store diff aligns notes by w:id while the oracle aligns by content/reference-order (After3 renumbers en#1→en#2 and inserts a new en#1), over-reporting the note scope by +1 — a note-store CONTENT-CORRESPONDENCE aligner is required (broad note-subsystem change, deferred item #5 class). ORACLE CORRECT; tokenization FIXED; residual is note-store-correspondence-alignment.",
-        ["WC-1720"] = "Reverse of WC-1710 (After3 → Before): same root as WC-1710. The mid-word note-ref interruption tokenization is FIXED (Fine-mode body diff correct); the residual -1 in the compat count is the same (a) text-identical-affix-trim + (b) note-store-by-id-vs-content-correspondence over-report. ORACLE CORRECT; tokenization FIXED; residual deferred (note-store correspondence).",
+        // ---- WC-1710/1720 + WC-1600/1620/1630 (WC034 footnote/endnote Before↔After3): CLOSED in M2.5 Task 3
+        // — now GENUINE PASSES, no catalog entry. Two changes combined under the binding method rule:
+        //   (1) NOTE-STORE CORRESPONDENCE (IrEditScriptBuilder.BuildOneStore): the IR no longer pairs notes by
+        //       raw w:id. WmlComparer.ChangeFootnoteEndnoteReferencesToUniqueRange renumbers every note id in
+        //       BODY-REFERENCE ORDER and ProcessFootnoteEndnote pairs a note with another note IFF their body
+        //       references correlate Equal — so a note's correspondence is its body reference's, never the raw
+        //       id. After3 relocates an endnote ref INTO the middle of `Video` (shifting ids: a new en#1 is
+        //       inserted, Before's en#1 content moves to en#2). By-id pairing cross-matched unrelated notes and
+        //       over-reported; the IR now collects each side's referenced note ids in body order and aligns them
+        //       (exact-content LCS spine, then best-content-similarity residue with a forced lone-left/lone-right
+        //       pair — the 1×1 rule), so Before-en#1 ↔ After3-en#2 (content modify) and After3-en#1/en#3 are
+        //       whole-note inserts, matching the oracle. INVARIANT: when the reference sequences pair in order
+        //       (no inserted/deleted ref shifted them — the common case), this reduces EXACTLY to by-id, so
+        //       WC-1600/1660/1750/… are byte-identical (the prior trial that REGRESSED WC-1660/1670/1750/1760
+        //       used unconstrained content similarity; the order-preserving spine + forced-1×1 residue is what
+        //       keeps the single-edited-note case a modify rather than a del+ins).
+        //   (2) STRUCTURAL-ONLY AFFIX-TRIM GUARD (IrRevisionRenderer region flush): the compat common-affix trim
+        //       no longer cancels a del/ins region whose two sides are byte-IDENTICAL text. The token differ only
+        //       emits such a region when the words differ in STRUCTURE (MatchKeys diverge though text matches) —
+        //       the M2.5 Task 1 intra-word note-ref relocation (`Vi`⟨ref⟩`deo` vs `Video`, the relocated ref is
+        //       textless). WmlComparer reports del `Video` + ins `Video` there; the old trim erased both to empty.
+        // Together these recover the oracle's exact counts: WC-1620/1630 (footnotes, 3==3), WC-1710/1720
+        // (endnotes, 7==7). No catalog entry — the rows PASS.
 
         // ---- Reader: textbox VML/DrawingML duplication NOT collapsed by the adjacent-pair dedup.
         // Word emits one logical textbox as a DrawingML mc:Choice + a VML mc:Fallback. The render-time dedup

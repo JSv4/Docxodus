@@ -567,8 +567,12 @@ internal static class IrMarkupRenderer
         bool changed = false;
         foreach (var diff in diffs)
         {
-            var noteEl = root.Elements(noteName)
-                .FirstOrDefault(e => (string?)e.Attribute(W.id) == diff.NoteId);
+            // M2.5 Task 3: the output part is seeded from the LEFT document, so a MATCHED note is located by its
+            // LEFT id (which may differ from the right/scope id under reference-order correspondence). A
+            // wholly-inserted note has no LeftNoteId and is built from the right note's shell.
+            var noteEl = diff.LeftNoteId is { } lid
+                ? root.Elements(noteName).FirstOrDefault(e => (string?)e.Attribute(W.id) == lid)
+                : null;
             if (noteEl == null)
             {
                 // The note is absent in the LEFT part (a wholly-inserted note). Create its wrapper by cloning

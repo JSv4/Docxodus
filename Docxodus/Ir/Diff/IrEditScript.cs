@@ -126,16 +126,24 @@ internal sealed record IrTextboxDiff(IrNodeList<IrEditOp> Ops);
 
 /// <summary>
 /// The block-level diff of ONE note scope (a single footnote or endnote, M2.4 Task 1). Carries the note's
-/// kind + id (so a consumer can resolve it back to the store and so the renderer can stamp the scope
-/// context) and the ordered block edit ops produced by aligning the matched note's left/right block lists.
+/// kind, its RIGHT-side id (<see cref="NoteId"/> — used to resolve the note in the produced/right document and
+/// to stamp the scope context) and its LEFT-side id (<see cref="LeftNoteId"/>), plus the ordered block edit
+/// ops produced by aligning the matched note's left/right block lists.
 /// </summary>
 /// <remarks>
 /// <para><b>Whole-note insert/delete.</b> A note present on only one side has no counterpart to align: a
 /// right-only note's <see cref="Ops"/> are all <see cref="IrEditOpKind.InsertBlock"/> over its blocks; a
 /// left-only note's are all <see cref="IrEditOpKind.DeleteBlock"/>. A matched note runs the full block
 /// aligner over its two block lists, exactly like a cell.</para>
+/// <para><b>Distinct left/right ids (M2.5 Task 3).</b> Under the oracle's note correspondence a note pairs by
+/// body-reference order, NOT by raw <c>w:id</c>, so a matched pair can carry DIFFERENT left and right ids
+/// (e.g. an inserted reference shifts the numbering). <see cref="NoteId"/> is the SCOPE id used to resolve the
+/// note in the produced/right document and to stamp revisions — the right id for a matched or inserted note,
+/// the left id for a deleted-only note. <see cref="LeftNoteId"/> is the left-store id (set for matched and
+/// deleted notes, null for a right-only / inserted note). A consumer resolving the LEFT store uses
+/// <see cref="LeftNoteId"/>; one resolving the RIGHT/output store uses <see cref="NoteId"/>.</para>
 /// </remarks>
-internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrEditOp> Ops);
+internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrEditOp> Ops, string? LeftNoteId = null);
 
 /// <summary>
 /// The kind of a row-level operation in an <see cref="IrTableDiff"/> (M2.2 Task 4). Rows carry a

@@ -820,7 +820,16 @@ internal static class IrRevisionRenderer
                 bool emitByText = _hadDelete && _hadInsert && delText.Length > 0 && insText.Length > 0;
                 if (emitByText)
                 {
-                    TrimCommonWordAffixes(ref delText, ref insText, ctx.Settings);
+                    // Structural-only word change: when the deleted and inserted TEXT are byte-identical yet the
+                    // token differ still produced a del+ins for this region, the words differ only in STRUCTURE
+                    // (their MatchKeys diverge though their text matches) — the established case is an intra-word
+                    // note-reference relocation (`Vi`⟨ref⟩`deo` vs contiguous `Video`, M2.5 Task 1), where the
+                    // relocated reference carries no text. WmlComparer reports this as del `Video` + ins `Video`
+                    // (the old word atom is gone, the reconstituted one is new — WC-1620/1630/1710/1720 body).
+                    // The common-affix trim would cancel both to empty (they share their whole text), erasing a
+                    // change the oracle counts; so when the two sides are textually identical, keep both whole.
+                    if (!string.Equals(delText, insText, System.StringComparison.Ordinal))
+                        TrimCommonWordAffixes(ref delText, ref insText, ctx.Settings);
                     if (delText.Length > 0)
                         sink.Add(new IrRevision(IrRevisionType.Deleted, delText, ctx.Author, ctx.Date,
                             LeftAnchor: leftAnchor, RightAnchor: rightAnchor));

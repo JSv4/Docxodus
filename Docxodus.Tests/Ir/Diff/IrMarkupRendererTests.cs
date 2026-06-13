@@ -757,14 +757,21 @@ public class IrMarkupRendererTests
         // catalog WC-1710/1720). In WC034-After3 a note reference (id=1) is relocated INTO THE MIDDLE of the
         // body word `Video` (verified: runs `Vi`[note-ref]`deo` vs Before's contiguous `Video `[note-ref]) AND
         // the note store is RENUMBERED (a new note inserted at id=1 pushes Before's note content to id=2).
-        // M2.5 Task 1 FIXED the note-ref-within-word TOKENIZATION: the body word `Video` now correctly diffs as
-        // del+ins (Fine-mode edit script verified), so the body-side reference attribution is no longer the
-        // blocker. The SURVIVING blocker is the note-store CORRESPONDENCE: the IR aligns notes by w:id, but the
-        // oracle aligns by content/reference-order (it remaps ids), so reject's REFERENCED note set still does
-        // not match LEFT's when the ids renumbered. Closing it needs a note-store content-correspondence aligner
-        // + body↔note id remapping (restructures IrNoteDiff + the note markup renderer; a trial regressed the
-        // WC-1660/1670/1750/1760 endnote-with-table rows) — the deferred item #5 (note-store cross-part
-        // conversion) class, NOT the note-ref tokenization (which is done) and NOT a renderer-markup gap.
+        // M2.5 Task 1 FIXED the note-ref-within-word TOKENIZATION and M2.5 Task 3 FIXED the note-store
+        // CORRESPONDENCE: the GetRevisions parity rows WC-1710/1720 are now GENUINE PASSES (notes pair by
+        // body-reference order + content, not raw w:id — IrEditScriptBuilder.BuildOneStore). The note CONTENT
+        // the markup produces is now CORRECT (verified: accept yields all three right endnotes' text, reject
+        // yields the single left endnote's text). The SURVIVING blocker is purely the note-element ORDER in the
+        // produced part: a matched note pairs left-en#1 → right-en#2, so the rendered note element stays at the
+        // left's part position (1) while RIGHT orders the notes by their renumbered ids (en#1=`New`, en#2=`…with
+        // a change`, en#3=`Yet`), so the accepted part's note ELEMENT order is [en2,en1,en3] vs RIGHT's
+        // [en1,en2,en3] — the ACCEPT-NOTES/REJECT-NOTES element-sequence check fails though every note's content
+        // matches. Closing it needs the note markup renderer to RENUMBER matched notes to their right ids and
+        // REORDER the produced part's note elements to right note order (while keeping reject→left order via the
+        // reference-order mapping the oracle's ChangeFootnoteEndnoteReferencesToUniqueRange establishes) — a
+        // note-renumber/reorder markup pass, NOT the correspondence (now done) and NOT the note-ref tokenization
+        // (done). The deferred item #5 (note-store renumber/reorder) class; the correspondence + body-side
+        // attribution are CLOSED.
         "WC034-Footnotes-Before.docx↔WC034-Footnotes-After3.docx",
         "WC034-Endnotes-Before.docx↔WC034-Endnotes-After3.docx",
         // (M2.4b Workstream A — CLOSED, 3 of 4) The SmartArt diagram rel-id family (WC014 ×2 + WC052) was here
