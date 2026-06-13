@@ -79,6 +79,7 @@ async function initializeWasm(basePath: string): Promise<void> {
       wasmExports = {
         DocumentConverter: (exports as any).DocxodusWasm.DocumentConverter,
         DocumentComparer: (exports as any).DocxodusWasm.DocumentComparer,
+        DocxDiffBridge: (exports as any).DocxodusWasm.DocxDiffBridge,
         DocxSessionBridge: (exports as any).DocxodusWasm.DocxSessionBridge,
       };
     } catch (error) {

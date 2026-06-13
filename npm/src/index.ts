@@ -8,6 +8,9 @@ import type {
   DocxodusWasmExports,
   GetRevisionsOptions,
   FormatChangeDetails,
+  // DocxDiff (IR diff engine)
+  DocxDiffSettings,
+  DocxDiffRevision,
   Annotation,
   AddAnnotationRequest,
   AddAnnotationResponse,
@@ -96,6 +99,8 @@ import {
   PaginationMode,
   AnnotationLabelMode,
   RevisionType,
+  DocxDiffRevisionGranularity,
+  DocxDiffFormatComparison,
   ProjectionScopes,
   AnchorRenderMode,
   TableRenderMode,
@@ -188,6 +193,9 @@ export type {
   MarkdownProjectionSettings,
   MarkdownAnchorTarget,
   MarkdownProjection,
+  // DocxDiff (IR diff engine)
+  DocxDiffSettings,
+  DocxDiffRevision,
 };
 
 export {
@@ -195,6 +203,8 @@ export {
   PaginationMode,
   AnnotationLabelMode,
   RevisionType,
+  DocxDiffRevisionGranularity,
+  DocxDiffFormatComparison,
   ProjectionScopes,
   AnchorRenderMode,
   TableRenderMode,
@@ -344,6 +354,7 @@ async function tryLoadFromPath(basePath: string): Promise<boolean> {
     wasmExports = {
       DocumentConverter: exports.DocxodusWasm.DocumentConverter,
       DocumentComparer: exports.DocxodusWasm.DocumentComparer,
+      DocxDiffBridge: exports.DocxodusWasm.DocxDiffBridge,
       DocxSessionBridge: exports.DocxodusWasm.DocxSessionBridge,
     };
     return true;
@@ -843,6 +854,139 @@ export async function getRevisions(
       changedPropertyNames: r.FormatChange?.ChangedPropertyNames || r.formatChange?.changedPropertyNames,
     } : undefined,
   }));
+}
+
+// ─── DocxDiff (IR diff engine) ──────────────────────────────────────────────
+//
+// The NEW structure-aware comparison engine, exposed alongside the default
+// WmlComparer-backed compareDocuments/getRevisions. Differentiators:
+// anchor-addressed revisions and the diff-as-data edit script. Settings flow as
+// a JSON object; an empty `{}` (or omitted options) uses the engine defaults.
+
+/** Serialize DocxDiffSettings to the wire JSON the bridge parses (empty string when undefined). */
+function docxDiffSettingsJson(settings?: DocxDiffSettings): string {
+  return settings ? JSON.stringify(settings) : "";
+}
+
+/**
+ * Compare two DOCX documents with the IR diff engine and return the redlined
+ * result as a DOCX (native w:ins/w:del/w:moveFrom/w:moveTo/w:rPrChange markup).
+ *
+ * @param left - The earlier/original document.
+ * @param right - The later/revised document.
+ * @param settings - Optional {@link DocxDiffSettings}; omit for engine defaults.
+ * @returns Redlined DOCX as Uint8Array.
+ * @throws Error if comparison fails.
+ */
+export async function docxDiffCompare(
+  left: File | Uint8Array,
+  right: File | Uint8Array,
+  settings?: DocxDiffSettings
+): Promise<Uint8Array> {
+  const exports = ensureInitialized();
+  const leftBytes = await toBytes(left);
+  const rightBytes = await toBytes(right);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.Compare(
+    leftBytes,
+    rightBytes,
+    docxDiffSettingsJson(settings)
+  );
+
+  if (result.length === 0) {
+    throw new Error("DocxDiff comparison failed - empty result");
+  }
+
+  return result;
+}
+
+/**
+ * Compare two DOCX documents with the IR diff engine and return the
+ * anchor-addressed revision list.
+ *
+ * @param left - The earlier/original document.
+ * @param right - The later/revised document.
+ * @param settings - Optional {@link DocxDiffSettings}; omit for engine defaults.
+ * @returns Array of {@link DocxDiffRevision} (each carrying its left/right block anchors).
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffGetRevisions(
+  left: File | Uint8Array,
+  right: File | Uint8Array,
+  settings?: DocxDiffSettings
+): Promise<DocxDiffRevision[]> {
+  const exports = ensureInitialized();
+  const leftBytes = await toBytes(left);
+  const rightBytes = await toBytes(right);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.GetRevisionsJson(
+    leftBytes,
+    rightBytes,
+    docxDiffSettingsJson(settings)
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get DocxDiff revisions: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return (parsed.revisions || parsed.Revisions || []).map((r: any) => ({
+    revisionType: r.revisionType ?? r.RevisionType,
+    text: r.text ?? r.Text,
+    author: r.author ?? r.Author,
+    date: r.date ?? r.Date,
+    moveGroupId: r.moveGroupId ?? r.MoveGroupId ?? undefined,
+    isMoveSource: r.isMoveSource ?? r.IsMoveSource ?? undefined,
+    formatChange: (r.formatChange || r.FormatChange) ? {
+      oldProperties: r.formatChange?.oldProperties ?? r.FormatChange?.OldProperties,
+      newProperties: r.formatChange?.newProperties ?? r.FormatChange?.NewProperties,
+      changedPropertyNames: r.formatChange?.changedPropertyNames ?? r.FormatChange?.ChangedPropertyNames,
+    } : undefined,
+    leftAnchor: r.leftAnchor ?? r.LeftAnchor ?? undefined,
+    rightAnchor: r.rightAnchor ?? r.RightAnchor ?? undefined,
+  }));
+}
+
+/**
+ * Compare two DOCX documents with the IR diff engine and return the edit script
+ * as a JSON string — the diff-as-data differentiator. The script is the
+ * anchor-addressed list of block operations the markup and revision renderers
+ * both consume: stable and machine-readable for storage, transport, and audit.
+ *
+ * @param left - The earlier/original document.
+ * @param right - The later/revised document.
+ * @param settings - Optional {@link DocxDiffSettings}; omit for engine defaults.
+ * @returns The edit script serialized as indented JSON.
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffGetEditScript(
+  left: File | Uint8Array,
+  right: File | Uint8Array,
+  settings?: DocxDiffSettings
+): Promise<string> {
+  const exports = ensureInitialized();
+  const leftBytes = await toBytes(left);
+  const rightBytes = await toBytes(right);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.GetEditScriptJson(
+    leftBytes,
+    rightBytes,
+    docxDiffSettingsJson(settings)
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get DocxDiff edit script: ${error.error}`);
+  }
+
+  return result;
 }
 
 /**

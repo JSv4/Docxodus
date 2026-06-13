@@ -28,6 +28,7 @@
         window.Docxodus = {
             DocumentConverter: exports.DocxodusWasm.DocumentConverter,
             DocumentComparer: exports.DocxodusWasm.DocumentComparer,
+            DocxDiffBridge: exports.DocxodusWasm.DocxDiffBridge,
             DocxSessionBridge: exports.DocxodusWasm.DocxSessionBridge,
             // Typed wrapper class from the IIFE bundle above; constructor takes
             // (handle, bridge). openTypedSession opens + wraps in one call.
@@ -107,6 +108,41 @@
                     }
                     const parsed = JSON.parse(result);
                     return { revisions: parsed.Revisions || [] };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // DocxDiff (IR diff engine): compare + revisions + edit script
+            docxDiffCompare: function(leftBytes, rightBytes, settingsJson = '') {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.Compare(leftBytes, rightBytes, settingsJson);
+                    if (result.length === 0) {
+                        return { error: { message: 'DocxDiff.Compare returned empty result' } };
+                    }
+                    return { docxBytes: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+            docxDiffGetRevisions: function(leftBytes, rightBytes, settingsJson = '') {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.GetRevisionsJson(leftBytes, rightBytes, settingsJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { revisions: JSON.parse(result).revisions || [] };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+            docxDiffGetEditScript: function(leftBytes, rightBytes, settingsJson = '') {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.GetEditScriptJson(leftBytes, rightBytes, settingsJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { editScript: result };
                 } catch (e) {
                     return { error: { message: e.message } };
                 }

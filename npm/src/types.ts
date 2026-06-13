@@ -386,6 +386,95 @@ export interface FormatChangeDetails {
   changedPropertyNames?: string[];
 }
 
+// ─── DocxDiff (IR diff engine) ──────────────────────────────────────────────
+//
+// The NEW structure-aware comparison engine, exposed alongside the default
+// WmlComparer-backed `compareDocuments`/`getRevisions`. Its differentiators:
+// anchor-addressed revisions (`leftAnchor`/`rightAnchor`) and the diff-as-data
+// edit script (`docxDiffGetEditScript`). WmlComparer remains the default for
+// production redlines until the swap is ratified.
+
+/**
+ * How `docxDiffGetRevisions` projects the edit script to revisions. Integer
+ * values match the .NET `DocxDiffRevisionGranularity` enum positions.
+ */
+export enum DocxDiffRevisionGranularity {
+  /** The engine's native one-revision-per-token-span grain (the default). */
+  Fine = 0,
+  /** Coalesced to counts/texts comparable to the shipped WmlComparer's. */
+  WmlComparerCompatible = 1,
+}
+
+/**
+ * How DocxDiff compares run formatting. Integer values match the .NET
+ * `DocxDiffFormatComparison` enum positions.
+ */
+export enum DocxDiffFormatComparison {
+  /** Compare only the modeled rPr fields (the default). */
+  ModeledOnly = 0,
+  /** Compare the full run format including the unmodeled rPr digest. */
+  Full = 1,
+}
+
+/**
+ * Settings for the `docxDiff*` functions. Mirrors the .NET `DocxDiffSettings`;
+ * every field is optional and an omitted field uses the engine default.
+ */
+export interface DocxDiffSettings {
+  /** Author stamped on revisions and markup (default "Open-Xml-PowerTools"). */
+  authorForRevisions?: string;
+  /** Pin revision dates to a fixed epoch for byte-identical output (default true). */
+  deterministic?: boolean;
+  /** Explicit ISO-8601 revision date; overrides `deterministic` when set. */
+  dateTimeForRevisions?: string;
+  /** Case-fold word match keys (default false). */
+  caseInsensitive?: boolean;
+  /** Fold NBSP (U+00A0) to ordinary space in match keys (default true). */
+  conflateBreakingAndNonbreakingSpaces?: boolean;
+  /** Override the word/separator split characters (default: engine's set). */
+  wordSeparators?: string;
+  /** Report relocations as native move pairs (default true). */
+  detectMoves?: boolean;
+  /** Jaccard similarity threshold for a fuzzy move 0.0-1.0 (default 0.8). */
+  moveSimilarityThreshold?: number;
+  /** Minimum word tokens for a fuzzy move (default 3). */
+  moveMinimumWordCount?: number;
+  /** Revision projection grain (default Fine). */
+  revisionGranularity?: DocxDiffRevisionGranularity;
+  /** Run-format comparison policy (default ModeledOnly). */
+  formatComparison?: DocxDiffFormatComparison;
+}
+
+/**
+ * One revision from `docxDiffGetRevisions`. Mirrors the consumer shape of
+ * {@link Revision} and ADDS the block anchors the revision derives from — the
+ * IR engine's differentiator.
+ *
+ * Anchor presence by `revisionType`: Inserted → `rightAnchor` only; Deleted →
+ * `leftAnchor` only; FormatChanged → both; Moved source → `leftAnchor`, Moved
+ * destination → `rightAnchor`.
+ */
+export interface DocxDiffRevision {
+  /** "Inserted" | "Deleted" | "Moved" | "FormatChanged". */
+  revisionType: RevisionType | string;
+  /** The affected text. */
+  text: string;
+  /** Author stamped on the revision. */
+  author: string;
+  /** ISO-8601 revision date. */
+  date: string;
+  /** For Moved revisions, links source and destination. */
+  moveGroupId?: number;
+  /** For Moved revisions: true = source, false = destination. */
+  isMoveSource?: boolean;
+  /** For FormatChanged revisions: what formatting changed. */
+  formatChange?: FormatChangeDetails;
+  /** The LEFT-document block anchor (`kind:scope:unid`), or undefined for a pure insertion. */
+  leftAnchor?: string;
+  /** The RIGHT-document block anchor (`kind:scope:unid`), or undefined for a pure deletion. */
+  rightAnchor?: string;
+}
+
 /**
  * Type guard to check if a revision is an insertion.
  * @param revision - The revision to check
@@ -727,6 +816,26 @@ export interface DocxodusWasmExports {
       detailThreshold: number,
       caseInsensitive: boolean,
       renderTrackedChanges: boolean
+    ) => string;
+  };
+  DocxDiffBridge: {
+    /** Redlined DOCX bytes (native markup), or empty array on error. */
+    Compare: (
+      leftBytes: Uint8Array,
+      rightBytes: Uint8Array,
+      settingsJson: string
+    ) => Uint8Array;
+    /** `{"revisions":[…]}` JSON, or a JSON error object. */
+    GetRevisionsJson: (
+      leftBytes: Uint8Array,
+      rightBytes: Uint8Array,
+      settingsJson: string
+    ) => string;
+    /** Edit-script JSON (diff-as-data), or a JSON error object. */
+    GetEditScriptJson: (
+      leftBytes: Uint8Array,
+      rightBytes: Uint8Array,
+      settingsJson: string
     ) => string;
   };
   DocxSessionBridge: {
