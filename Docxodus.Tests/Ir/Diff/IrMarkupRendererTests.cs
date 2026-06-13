@@ -806,6 +806,86 @@ public class IrMarkupRendererTests
         AssertRoundTrip(after, before, label: "WC022-rev");
     }
 
+    // ----------------------------------------------------------------- split/merge markup (M2.6 Task 7)
+
+    private static readonly IrDiffSettings SplitOn = new() { DetectSplitMerge = true };
+
+    /// <summary>M2.6 split markup (anchored-split shape): the produced document carries an inserted
+    /// paragraph mark (empty <c>w:ins</c> in <c>pPr/rPr</c>) on every paragraph but the last of the
+    /// group; REJECT removes the marks, re-merging the split paragraphs into the original LEFT one.</summary>
+    [Fact]
+    public void Split_markup_accept_yields_right_reject_yields_left()
+    {
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">aaa bbb ccc ddd. eee fff ggg hhh.</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>anchor one two three four five.</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">aaa bbb ccc ddd. </w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>eee fff ggg hhh.</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>anchor one two three four five.</w:t></w:r></w:p>");
+
+        var rendered = RenderMarkup(left, right, SplitOn);
+        Assert.Equal(0, SchemaErrorCount(rendered));
+
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        // The split-introduced pilcrow is a paragraph-mark revision: empty w:ins inside pPr/rPr.
+        Assert.NotEmpty(body.Elements(W.p).Elements(W.pPr).Elements(W.rPr).Elements(W.ins));
+
+        AssertRoundTrip(left, right, SplitOn, label: "split-markup");
+    }
+
+    /// <summary>M2.6 merge markup: paragraphs 0..N-2 of the merged group carry a DELETED mark
+    /// (empty <c>w:del</c> in <c>pPr/rPr</c>); ACCEPT merges them into the following paragraph,
+    /// REJECT restores the original N LEFT paragraphs.</summary>
+    [Fact]
+    public void Merge_markup_accept_yields_right_reject_yields_left()
+    {
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">aaa bbb ccc ddd. </w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>eee fff ggg hhh.</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>anchor one two three four five.</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">aaa bbb ccc ddd. eee fff ggg hhh.</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>anchor one two three four five.</w:t></w:r></w:p>");
+
+        var rendered = RenderMarkup(left, right, SplitOn);
+        Assert.Equal(0, SchemaErrorCount(rendered));
+
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        Assert.NotEmpty(body.Elements(W.p).Elements(W.pPr).Elements(W.rPr).Elements(W.del));
+
+        AssertRoundTrip(left, right, SplitOn, label: "merge-markup");
+    }
+
+    /// <summary>The two corpus split fixtures (cell-scope splits): with detection ON the produced
+    /// markup must still round-trip both ways and stay schema-valid.</summary>
+    [Theory]
+    [InlineData("WC041-Table-5.docx", "WC041-Table-5-Mod.docx")]
+    [InlineData("WC023-Table-4-Row-Image-Before.docx", "WC023-Table-4-Row-Image-After-Delete-1-Row.docx")]
+    public void Fixture_split_markup_round_trips(string l, string r)
+    {
+        var left = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, l));
+        var right = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, r));
+        var rendered = RenderMarkup(left, right, SplitOn);
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        AssertRoundTrip(left, right, SplitOn, label: $"split-fixture {l}");
+    }
+
+    /// <summary>F4.2 regression: the WC022 identity-reservation reject-order invariant must hold with
+    /// split/merge detection ON, both directions (the scan never promotes Unchanged/FormatOnly pairs).</summary>
+    [Fact]
+    public void WC022_reject_order_invariant_holds_with_detection_on()
+    {
+        var before = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC022-Image-Math-Para-Before.docx"));
+        var after = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC022-Image-Math-Para-After.docx"));
+        AssertRoundTrip(before, after, SplitOn, label: "WC022-split-on-fwd");
+        AssertRoundTrip(after, before, SplitOn, label: "WC022-split-on-rev");
+    }
+
     // ----------------------------------------------------------------- corpus invariant (92 × 2)
 
     /// <summary>

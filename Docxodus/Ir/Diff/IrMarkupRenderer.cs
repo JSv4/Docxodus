@@ -271,7 +271,156 @@ internal static class IrMarkupRenderer
                     EmitMoveDestination(op, state, sink);
                 }
                 break;
+
+            case IrEditOpKind.SplitBlock:
+                RenderSplitBlock(op, state, sink);
+                break;
+
+            case IrEditOpKind.MergeBlock:
+                RenderMergeBlock(op, state, sink);
+                break;
         }
+    }
+
+    // ----------------------------------------------------------------- split / merge markup (M2.6)
+
+    /// <summary>
+    /// Render a 1:N paragraph split as the ANCHORED-SPLIT shape (spec §3.3): emit N paragraphs, each
+    /// carrying the corresponding RIGHT member's pPr and the segment diff's run content (built by the
+    /// shared <see cref="BuildTokenOpContent"/> span walk over the LEFT slice vs the member). Paragraphs
+    /// 0..N-2 get an INSERTED paragraph mark (<see cref="MarkParagraphMark"/>, <see cref="RevKind.Ins"/> —
+    /// the new pilcrows the split introduced); the LAST paragraph's mark is the original left pilcrow's
+    /// role and stays unmarked. ACCEPT keeps the marks → the N right paragraphs. REJECT removes each
+    /// inserted mark — RevisionProcessor merges a reject-removed mark's paragraph into the NEXT one — so
+    /// paragraphs 0..N-1 re-fuse, and the rejected per-segment ins/del restore the LEFT slices: the
+    /// single LEFT paragraph reconstructs. Slice token lists retain the source paragraph's absolute char
+    /// positions, so the FULL left paragraph's <see cref="SourceRunModel"/> serves every segment.
+    /// Falls back to conservative whole-block del(left)+ins(members) when a source is missing.
+    /// </summary>
+    private static void RenderSplitBlock(IrEditOp op, RenderState state, List<XElement> sink)
+    {
+        var leftPara = SourceElement(op.LeftAnchor, state.Left);
+        if (leftPara == null || op.SplitMergeAnchors is not { } anchors || op.SegmentDiffs is not { } diffs
+            || anchors.Count != diffs.Count)
+        {
+            EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+            if (op.SplitMergeAnchors is { } fallbackAnchors)
+                foreach (var a in fallbackAnchors)
+                    EmitWholeBlock(a, state.Right, state, sink, RevKind.Ins, fromRight: true);
+            return;
+        }
+
+        var leftRuns = new SourceRunModel(leftPara);
+        var leftTokens = ParagraphTokens(op.LeftAnchor, state.Left, state.Settings);
+
+        int offset = 0;
+        for (int s = 0; s < anchors.Count; s++)
+        {
+            var diff = diffs[s];
+            int sliceLen = SegmentSliceLength(diff, leftSide: true);
+            var slice = SubTokens(leftTokens, offset, sliceLen);
+            offset += sliceLen;
+
+            var memberPara = SourceElement(anchors[s], state.Right);
+            if (memberPara == null)
+            {
+                EmitWholeBlock(anchors[s], state.Right, state, sink, RevKind.Ins, fromRight: true);
+                continue;
+            }
+            var memberTokens = ParagraphTokens(anchors[s], state.Right, state.Settings);
+            var rightRuns = new SourceRunModel(memberPara);
+
+            var newPara = new XElement(W.p);
+            var rightPPr = memberPara.Element(W.pPr);
+            if (rightPPr != null)
+                newPara.Add(StripUnids(new XElement(rightPPr)));
+            newPara.Add(BuildTokenOpContent(diff, slice, memberTokens, leftRuns, rightRuns, state));
+            if (s < anchors.Count - 1)
+                MarkParagraphMark(newPara, RevKind.Ins, state); // the new pilcrow (RevKind.Ins — spec §3.3 nit)
+            sink.Add(newPara);
+        }
+    }
+
+    /// <summary>
+    /// Render an N:1 paragraph merge — the inverse mark shape: emit N paragraphs; paragraphs 0..N-2
+    /// carry their LEFT member's pPr (they vanish on accept and must restore left properties on reject)
+    /// plus a DELETED paragraph mark (<see cref="RevKind.Del"/>); the LAST paragraph carries the RIGHT
+    /// paragraph's pPr (the accepted state). Content per paragraph comes from the stored segment diff
+    /// (left-member → right-slice orientation, applied directly by the shared span walk). ACCEPT removes
+    /// each deleted mark — merging every paragraph into the next — yielding the single RIGHT paragraph;
+    /// REJECT restores the marks and the member content: the N LEFT paragraphs reconstruct.
+    /// </summary>
+    private static void RenderMergeBlock(IrEditOp op, RenderState state, List<XElement> sink)
+    {
+        var rightPara = SourceElement(op.RightAnchor, state.Right);
+        if (rightPara == null || op.SplitMergeAnchors is not { } anchors || op.SegmentDiffs is not { } diffs
+            || anchors.Count != diffs.Count)
+        {
+            if (op.SplitMergeAnchors is { } fallbackAnchors)
+                foreach (var a in fallbackAnchors)
+                    EmitWholeBlock(a, state.Left, state, sink, RevKind.Del, fromRight: false);
+            EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+            return;
+        }
+
+        var rightRuns = new SourceRunModel(rightPara);
+        var rightTokens = ParagraphTokens(op.RightAnchor, state.Right, state.Settings);
+        var rightPPr = rightPara.Element(W.pPr);
+
+        int offset = 0;
+        for (int m = 0; m < anchors.Count; m++)
+        {
+            var diff = diffs[m];
+            int sliceLen = SegmentSliceLength(diff, leftSide: false);
+            var slice = SubTokens(rightTokens, offset, sliceLen);
+            offset += sliceLen;
+
+            var memberPara = SourceElement(anchors[m], state.Left);
+            if (memberPara == null)
+            {
+                EmitWholeBlock(anchors[m], state.Left, state, sink, RevKind.Del, fromRight: false);
+                continue;
+            }
+            var memberTokens = ParagraphTokens(anchors[m], state.Left, state.Settings);
+            var leftRuns = new SourceRunModel(memberPara);
+
+            var newPara = new XElement(W.p);
+            bool last = m == anchors.Count - 1;
+            var pPrSource = last ? rightPPr : memberPara.Element(W.pPr);
+            if (pPrSource != null)
+                newPara.Add(StripUnids(new XElement(pPrSource)));
+            newPara.Add(BuildTokenOpContent(diff, memberTokens, slice, leftRuns, rightRuns, state));
+            if (!last)
+                MarkParagraphMark(newPara, RevKind.Del, state); // the joining mark accept removes
+            sink.Add(newPara);
+        }
+    }
+
+    /// <summary>A split/merge segment's singular-side slice length, implicit in the diff ops (F3.3):
+    /// the LEFT slice of a split diff is Σ non-Insert left lengths; the RIGHT slice of a merge diff
+    /// (stored member→slice orientation) is Σ non-Delete right lengths.</summary>
+    private static int SegmentSliceLength(IrTokenDiff diff, bool leftSide)
+    {
+        int n = 0;
+        foreach (var o in diff.Ops)
+        {
+            if (leftSide && o.Kind != IrTokenOpKind.Insert)
+                n += o.LeftEnd - o.LeftStart;
+            else if (!leftSide && o.Kind != IrTokenOpKind.Delete)
+                n += o.RightEnd - o.RightStart;
+        }
+        return n;
+    }
+
+    /// <summary>A contiguous sub-list of a token list. The tokens keep their ABSOLUTE char positions in
+    /// the source paragraph, which is what lets a slice compose with the full paragraph's
+    /// <see cref="SourceRunModel"/> inside <see cref="BuildTokenOpContent"/>.</summary>
+    private static IReadOnlyList<IrDiffToken> SubTokens(IReadOnlyList<IrDiffToken> tokens, int offset, int len)
+    {
+        var list = new List<IrDiffToken>(len);
+        for (int i = offset; i < offset + len && i < tokens.Count; i++)
+            list.Add(tokens[i]);
+        return list;
     }
 
     /// <summary>
