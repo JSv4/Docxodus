@@ -241,6 +241,14 @@ Format change detection produces **native Word format change markup** (`w:rPrCha
 - `GetRevisions()` recognizes this native markup and returns `WmlComparerRevisionType.FormatChanged` revisions
 - `WmlComparerRevision.FormatChange` contains details about what changed (old/new properties, changed property names)
 
+**DocxDiff.cs** - Public facade over the IR diff engine — a structure-aware, anchor-addressed DOCX comparison engine and the diff-side counterpart to `WmlToMarkdownConverter`/`DocxSession`. The NEW engine; `WmlComparer` remains the default/blessed comparison API (`DocxDiff` ships as a production-candidate pending Word manual-verification + burn-in — decision D4):
+- `Compare(left, right, settings?)` → `WmlDocument` — native tracked-changes markup (`w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`/`w:rPrChange`); satisfies the WmlComparer contract (accept ≡ right, reject ≡ left)
+- `GetRevisions(left, right, settings?)` → `IReadOnlyList<DocxDiffRevision>` — consumer revisions rendered off the edit script
+- `GetEditScriptJson(left, right, settings?)` → `string` — the edit script as data (the differentiator vs `WmlComparer`)
+- `DocxDiffSettings` mirrors `WmlComparerSettings` defaults (two honest deviations: `Deterministic` revision dates default true; `FormatComparison` defaults `ModeledOnly`). `DocxDiffRevision` adds `LeftAnchor`/`RightAnchor` (`kind:scope:unid`, interoperable with `DocxSession`/markdown projection)
+- No static state — `AuthorForRevisions` flows per call (multi-author / consolidate-compatible)
+- Wraps the internal `Docxodus/Ir/Diff/` pipeline (`IrReader → IrEditScriptBuilder → IrMarkupRenderer/IrRevisionRenderer/IrEditScriptJson`); see `docs/architecture/ir_diff_engine.md`
+
 **WmlToHtmlConverter.cs / HtmlToWmlConverter.cs** - Bidirectional DOCX ↔ HTML conversion. Key settings in `WmlToHtmlConverterSettings`:
 - `RenderTrackedChanges` - Render insertions/deletions as `<ins>`/`<del>` instead of accepting them
 - `RenderMoveOperations` - Distinguish move operations from regular insert/delete
@@ -352,6 +360,7 @@ Detailed design docs for the major subsystems live in `docs/architecture/`. Read
 - `docx_converter.md`, `comment_rendering.md`, `paginated_headers_footers.md`, `custom_annotations.md`, `unsupported_content_placeholders.md`, `wml_to_html_converter_gaps.md` — WmlToHtmlConverter internals
 - `opencontracts_export.md` — OpenContractExporter format
 - `markdown_projection.md` — WmlToMarkdownConverter design
+- `ir_diff_engine.md` — DocxDiff (IR diff engine) public surface, pipeline, edit script, settings, parity status, relationship to WmlComparer
 - `docx_mutation_api.md` — DocxSession surface, anchor lifecycle, error catalog, supported markdown subset
 - `python_docxodus.md` — planned Python wrapper for DocxSession; wire protocol, type mapping, distribution
 - `skiasharp-removal-plan.md`, `wasm-optimization-plan.md`, `ui_responsiveness.md`, `profiling-results.md` — WASM/browser work
