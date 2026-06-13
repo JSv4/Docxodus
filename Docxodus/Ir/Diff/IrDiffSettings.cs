@@ -226,6 +226,31 @@ internal sealed record IrDiffSettings
     public int MoveMinimumTokenCount { get; init; } = 3;
 
     /// <summary>
+    /// DIFF-TIME setting (M2.6). When true, the aligner's gap fill runs the 1:N paragraph split / N:1
+    /// merge containment scan (after similarity pairing, before the 1×1-residue rule), emitting
+    /// <see cref="IrEditOpKind.SplitBlock"/>/<see cref="IrEditOpKind.MergeBlock"/> ops. Default FALSE
+    /// during the M2.6 build-out; flipped to true when the full pipeline (apply/revisions/markup) lands.
+    /// </summary>
+    public bool DetectSplitMerge { get; init; } = false;
+
+    /// <summary>
+    /// DIFF-TIME setting (M2.6). Minimum in-order LCS coverage of the singular-side paragraph's content
+    /// tokens by the candidate run for a split/merge to fire. STARTING HYPOTHESIS 0.90 (spec §2.2) —
+    /// the corpus sweep (IrSplitThresholdSweepTests) is the gate that pins the shipped value (F4.1).
+    /// </summary>
+    public double SplitCoverageThreshold { get; init; } = 0.90;
+
+    /// <summary>
+    /// DIFF-TIME setting (M2.6). Maximum fraction of the candidate run's content tokens NOT matched by
+    /// the LCS (net-new content, e.g. WC-1830's inserted math paragraph). Starting hypothesis 0.34; swept.
+    /// </summary>
+    public double SplitForeignSlack { get; init; } = 0.34;
+
+    /// <summary>DIFF-TIME setting (M2.6). Hard cap on a split/merge candidate run's block count
+    /// (bounds the per-gap O(G²) candidate scan on pathological gaps).</summary>
+    public int SplitMaxRunLength { get; init; } = 8;
+
+    /// <summary>
     /// REVISIONS-SURFACE setting (M2.3 Task 1). Author name stamped on every <see cref="IrRevision"/>'s
     /// <see cref="IrRevision.Author"/>. Default <c>"Open-Xml-PowerTools"</c> — copied verbatim from
     /// <c>WmlComparerSettings.AuthorForRevisions</c> (Docxodus/WmlComparer.cs ~line 54) so an IR-rendered

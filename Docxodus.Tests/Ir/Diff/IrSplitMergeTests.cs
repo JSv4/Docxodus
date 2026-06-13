@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
+using Docxodus.Tests.Ir;
 using Xunit;
 
 namespace Docxodus.Tests.Ir.Diff;
@@ -146,5 +147,73 @@ public class IrSplitMergeTests
     {
         IrEditScriptVerifier.AssertSplitMergePairing(
             new IrEditScript(IrNodeList.From(new List<IrEditOp> { SplitOp(), MergeOp() })));
+    }
+
+    // -------- segmenter (Task 3) --------
+
+    private static (IrDocument Doc, List<IrParagraph> Paras) ReadParas(params string[] texts)
+    {
+        var xml = string.Concat(texts.Select(t =>
+            $"<w:p><w:r><w:t xml:space=\"preserve\">{t}</w:t></w:r></w:p>"));
+        var doc = IrReader.Read(IrTestDocuments.FromBodyXml(xml),
+            new IrReaderOptions { RetainSources = false, RevisionView = RevisionView.Accept });
+        return (doc, doc.Body.Blocks.OfType<IrParagraph>().ToList());
+    }
+
+    private static readonly IrDiffSettings S = new() { DetectSplitMerge = true };
+
+    [Fact]
+    public void Segmenter_scores_a_clean_split_at_full_coverage_zero_slack()
+    {
+        var (_, lp) = ReadParas("alpha bravo charlie. delta echo foxtrot.");
+        var (_, rp) = ReadParas("alpha bravo charlie. ", "delta echo foxtrot.");
+        var score = IrSplitSegmenter.Score(lp[0], new List<IrParagraph> { rp[0], rp[1] }, S);
+        Assert.True(score.Coverage >= 0.99, $"coverage {score.Coverage}");
+        Assert.True(score.ForeignSlack <= 0.01, $"slack {score.ForeignSlack}");
+    }
+
+    [Fact]
+    public void Segmenter_scores_keyword_coincidence_below_threshold()
+    {
+        var (_, lp) = ReadParas("the contract terminates on delivery of the goods.");
+        var (_, rp) = ReadParas("the parties agree on many things.", "delivery of pizza is unrelated to the goods here.");
+        var score = IrSplitSegmenter.Score(lp[0], new List<IrParagraph> { rp[0], rp[1] }, S);
+        Assert.True(score.Coverage < S.SplitCoverageThreshold || score.ForeignSlack > S.SplitForeignSlack,
+            $"coincidence must not qualify (cov={score.Coverage}, slack={score.ForeignSlack})");
+    }
+
+    [Fact]
+    public void Segmenter_segment_diffs_tile_the_left_token_stream_exactly() // F3.3 partition invariant
+    {
+        var (_, lp) = ReadParas("alpha bravo charlie. delta echo foxtrot.");
+        var (_, rp) = ReadParas("alpha bravo charlie. ", "NEW WORDS HERE", "delta echo foxtrot.");
+        var rights = new List<IrParagraph> { rp[0], rp[1], rp[2] };
+        var diffs = IrSplitSegmenter.ComputeSegmentDiffs(lp[0], rights, S);
+        Assert.Equal(3, diffs.Count);
+        // F3.3: the segment slices tile the left token stream exactly — slice i's length is the sum
+        // of its non-Insert left-span lengths, and the slice lengths sum to the full left token count.
+        int leftTotal = IrDiffTokenizer.Tokenize(lp[0], S).Count;
+        Assert.Equal(leftTotal, diffs.Sum(d => d.Ops.Where(o => o.Kind != IrTokenOpKind.Insert).Sum(o => o.LeftLength)));
+        // And each segment diff right-tiles its right block (IrTokenDiffer invariant, re-checked):
+        for (int i = 0; i < 3; i++)
+        {
+            int rightCount = IrDiffTokenizer.Tokenize(rights[i], S).Count;
+            Assert.Equal(rightCount, diffs[i].Ops.Where(o => o.Kind != IrTokenOpKind.Delete).Sum(o => o.RightLength));
+        }
+    }
+
+    [Fact]
+    public void MirrorDiff_swaps_sides_and_flips_insert_delete()
+    {
+        // A Delete (left-only span) followed by an Equal must mirror to an Insert (right-only span)
+        // followed by an Equal with the side spans swapped — the merge path's orientation correction.
+        var diff = Diff(
+            new IrTokenOp(IrTokenOpKind.Delete, 0, 2, 0, 0),
+            new IrTokenOp(IrTokenOpKind.Equal, 2, 5, 0, 3));
+        var mirrored = IrSplitSegmenter.MirrorDiff(diff);
+        Assert.Equal(new IrTokenOp(IrTokenOpKind.Insert, 0, 0, 0, 2), mirrored.Ops[0]);
+        Assert.Equal(new IrTokenOp(IrTokenOpKind.Equal, 0, 3, 2, 5), mirrored.Ops[1]);
+        // Mirroring twice is the identity.
+        Assert.Equal(diff, IrSplitSegmenter.MirrorDiff(mirrored));
     }
 }
