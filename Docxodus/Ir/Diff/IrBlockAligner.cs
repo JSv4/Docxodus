@@ -925,8 +925,14 @@ internal static class IrBlockAligner
                     deletionsAfterLeft[lastPairedLeft] = list = new List<int>();
                 list.Add(i);
             }
-            else if (leftMatch[i] != -1)
+            else if (leftMatch[i] != -1 &&
+                     leftKind[i] is not (IrAlignmentKind.Moved or IrAlignmentKind.MovedModified))
             {
+                // Only an IN-PLACE paired left anchors trailing deletions. A MOVED left's entry is
+                // emitted at its destination's RIGHT position — anchoring a deletion to it would make
+                // the deleted block restore at the move DESTINATION on reject instead of in its left
+                // neighborhood (a reject-order corruption surfaced by the M2.6 fuzz reshuffle, seed 16:
+                // [deleted, moved-away, deleted] left runs restored permuted).
                 lastPairedLeft = i;
             }
         }

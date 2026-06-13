@@ -346,6 +346,13 @@ internal static class IrRevisionRenderer
                 var memberTokens = ParagraphTokens(anchors[s], ctx.Right, ctx.Settings);
                 RenderSegmentTokenOps(diff, slice, memberTokens, op.LeftAnchor, anchors[s], ctx, sink);
             }
+
+            // Fine mode reports each NEW pilcrow as its own Inserted "\n" (spec §4.4: the per-segment
+            // account plus each new mark) — without it a CLEAN split would be invisible on this
+            // surface despite being a real document change (the mark IS content at the text level).
+            if (s > 0 && ctx.Settings.RevisionGranularity != RevisionGranularity.WmlComparerCompatible)
+                sink.Add(new IrRevision(IrRevisionType.Inserted, "\n", ctx.Author, ctx.Date,
+                    LeftAnchor: op.LeftAnchor, RightAnchor: anchors[s]));
         }
 
         if (ctx.Settings.RevisionGranularity == RevisionGranularity.WmlComparerCompatible && anchors.Count > 1)
@@ -415,6 +422,12 @@ internal static class IrRevisionRenderer
                 var memberTokens = ParagraphTokens(anchors[m], ctx.Left, ctx.Settings);
                 RenderSegmentTokenOps(diff, memberTokens, slice, anchors[m], op.RightAnchor, ctx, sink);
             }
+
+            // Fine mode reports each REMOVED pilcrow as its own Deleted "\n" (mirror of the split's
+            // new-mark account; a clean merge is otherwise invisible on this surface).
+            if (m > 0 && ctx.Settings.RevisionGranularity != RevisionGranularity.WmlComparerCompatible)
+                sink.Add(new IrRevision(IrRevisionType.Deleted, "\n", ctx.Author, ctx.Date,
+                    LeftAnchor: anchors[m], RightAnchor: op.RightAnchor));
         }
 
         if (ctx.Settings.RevisionGranularity == RevisionGranularity.WmlComparerCompatible && anchors.Count > 1)

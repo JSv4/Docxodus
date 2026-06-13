@@ -491,6 +491,18 @@ public class IrSplitMergeTests
         Assert.Equal(json, IrEditScriptJson.Write(IrEditScriptJson.Read(json)));
     }
 
+    [Fact]
+    public void Two_adjacent_splits_full_pipeline_apply_verifies_and_round_trips_json() // F2.2 end-to-end
+    {
+        var (l, r, script) = BuildScript(
+            new[] { "aaa bbb ccc. ddd eee fff.", "ggg hhh iii. jjj kkk lll." },
+            new[] { "aaa bbb ccc. ", "ddd eee fff.", "ggg hhh iii. ", "jjj kkk lll." });
+        Assert.Equal(2, script.Operations.Count(o => o.Kind == IrEditOpKind.SplitBlock));
+        IrEditScriptVerifier.Verify(l, r, script, S); // incl. AssertSplitMergePairing's no-shared-anchor rule
+        var json = IrEditScriptJson.Write(script);
+        Assert.Equal(script, IrEditScriptJson.Read(json));
+    }
+
     // -------- revision renderer (Task 6) --------
 
     private static List<IrRevision> FixtureRevisions(string l, string r)

@@ -62,6 +62,20 @@ internal static class DiffFuzzer
         /// <summary>Replace the text of the document's footnote. (Comparable class — WmlComparer diffs
         /// footnote scopes via GetRevisions, so a footnote-text edit is cross-engine comparable.)</summary>
         EditFootnote,
+
+        /// <summary>Split one body paragraph at a word boundary into two paragraphs (M2.6). (NOT
+        /// comparable — the engines frame a clean split differently BY CONSTRUCTION: WmlComparer
+        /// reports the tail as a real Deleted+Inserted pair of IDENTICAL text (its delete-and-reinsert
+        /// account), while the IR's SplitBlock keeps the content Equal and reports only the structural
+        /// mark — so the new side's content bag is legitimately empty and the differential's new-empty
+        /// regression gate false-alarms (500-seed artifact evidence, 2026-06-12: e.g. seed 5,
+        /// old = Del+Ins "labore foxtrot", new = the SplitBlock op). The RelocateParagraph precedent.
+        /// Own-oracle coverage — apply-verify, JSON round-trip, determinism — still runs on every seed.)</summary>
+        SplitParagraph,
+
+        /// <summary>Merge two adjacent body paragraphs into one (space-joined) (M2.6). (NOT comparable —
+        /// the byte-mirror of <see cref="SplitParagraph"/>'s framing difference.)</summary>
+        MergeParagraphs,
     }
 
     /// <summary>
@@ -85,6 +99,8 @@ internal static class DiffFuzzer
             MutationKind.InsertRow => $"InsertRow(at={Index}, \"{Payload}\")",
             MutationKind.DeleteRow => $"DeleteRow(row={Index})",
             MutationKind.EditFootnote => $"EditFootnote(-> \"{Payload}\")",
+            MutationKind.SplitParagraph => $"SplitParagraph(para={Index}, atWord={Target})",
+            MutationKind.MergeParagraphs => $"MergeParagraphs(first={Index})",
             _ => Kind.ToString(),
         };
     }
@@ -103,11 +119,13 @@ internal static class DiffFuzzer
     {
         /// <summary>
         /// True iff EVERY mutation is in the cross-engine-comparable class. Relocate (move semantics differ
-        /// between engines) and BoldWord (format-change reporting differs) make the whole case
-        /// non-comparable, so the differential check is SKIPPED when either is present.
+        /// between engines), BoldWord (format-change reporting differs), and SplitParagraph/MergeParagraphs
+        /// (the engines frame a clean split/merge differently by construction — see the enum docs) make the
+        /// whole case non-comparable, so the differential check is SKIPPED when any is present.
         /// </summary>
         public bool IsComparableClass =>
-            Mutations.All(m => m.Kind is not (MutationKind.RelocateParagraph or MutationKind.BoldWord));
+            Mutations.All(m => m.Kind is not (MutationKind.RelocateParagraph or MutationKind.BoldWord
+                or MutationKind.SplitParagraph or MutationKind.MergeParagraphs));
 
         public string DescribeMutations() => string.Join("; ", Mutations.Select(m => m.Describe()));
     }
@@ -245,6 +263,8 @@ internal static class DiffFuzzer
             MutationKind.DeleteParagraph,
             MutationKind.RelocateParagraph,
             MutationKind.BoldWord,
+            MutationKind.SplitParagraph,
+            MutationKind.MergeParagraphs,
         };
         if (hasTable)
         {
@@ -379,6 +399,37 @@ internal static class DiffFuzzer
                 if (model.FootnoteText == replacement)
                     replacement += "x"; // guarantee an actual change
                 model.FootnoteText = replacement;
+                return true;
+            }
+
+            case MutationKind.SplitParagraph:
+            {
+                if (model.Paragraphs.Count == 0)
+                    return false;
+                int pi = m.Index % model.Paragraphs.Count;
+                var words = model.Paragraphs[pi].WordRuns;
+                if (words.Count < 4)
+                    return false; // need ≥2 words per half for a detectable split
+                int at = 1 + (m.Target % (words.Count - 1)); // split AFTER word index at-1
+                var first = Para.Words(words.Take(at).Select(r => r.Text));
+                var second = Para.Words(words.Skip(at).Select(r => r.Text));
+                model.Paragraphs[pi] = first;
+                model.Paragraphs.Insert(pi + 1, second);
+                return true;
+            }
+
+            case MutationKind.MergeParagraphs:
+            {
+                if (model.Paragraphs.Count < 2)
+                    return false;
+                int pi = m.Index % (model.Paragraphs.Count - 1);
+                var a = model.Paragraphs[pi];
+                var b = model.Paragraphs[pi + 1];
+                if (a.WordRuns.Count == 0 || b.WordRuns.Count == 0)
+                    return false;
+                var merged = Para.Words(a.WordRuns.Select(r => r.Text).Concat(b.WordRuns.Select(r => r.Text)));
+                model.Paragraphs[pi] = merged;
+                model.Paragraphs.RemoveAt(pi + 1);
                 return true;
             }
 

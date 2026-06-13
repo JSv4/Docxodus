@@ -498,11 +498,24 @@ internal static class IrEditScriptBuilder
 
         var ops = new List<IrEditOp>();
 
-        // Front move-sources (those preceding every paired-in-place left block).
-        EmitSources(sourcesAfterLeft, -1, moves, ops);
+        // Move-source ops are STAGED when their anchor's entry is emitted and flushed lazily so they
+        // interleave with the anchor's trailing DELETED entries by LEFT index — the op stream then
+        // reads in left-document order (a deleted block at left index 7 precedes a moved-away block
+        // at left index 8 even though both trail the same in-place anchor; M2.6 fuzz seed-16
+        // reject-order regression).
+        var pendingSources = new List<int>();
+        StageSources(sourcesAfterLeft, -1, pendingSources); // sources preceding every in-place anchor
 
         foreach (var entry in alignment.Entries)
         {
+            if (pendingSources.Count > 0)
+            {
+                // A Deleted entry releases only the staged sources whose left index PRECEDES it; any
+                // other entry ends the anchor's deletion run and releases everything staged.
+                int limit = entry.Kind == IrAlignmentKind.Deleted ? leftIndex[entry.Left!] : int.MaxValue;
+                FlushPendingSources(pendingSources, limit, moves, ops);
+            }
+
             switch (entry.Kind)
             {
                 case IrAlignmentKind.Unchanged:
@@ -577,20 +590,52 @@ internal static class IrEditScriptBuilder
                 }
             }
 
-            // After a paired-in-place left block's entry, flush move-sources anchored to it. A Split
-            // entry's singular entry.Left is covered here (IsPairedInPlace includes Split).
+            // After a paired-in-place left block's entry, STAGE the move-sources anchored to it (they
+            // flush lazily, interleaved with the anchor's trailing Deleted entries — see above). A
+            // Split entry's singular entry.Left is covered here (IsPairedInPlace includes Split).
             if (entry.Left is not null && IsPairedInPlace(entry.Kind))
-                EmitSources(sourcesAfterLeft, leftIndex[entry.Left], moves, ops);
+                StageSources(sourcesAfterLeft, leftIndex[entry.Left], pendingSources);
 
             // A Merge entry carries its paired-in-place lefts in MultiBlocks (entry.Left is null):
-            // flush move-sources anchored to each member, in ascending left order (MultiBlocks is in
-            // left order) — mirroring the aligner's deletion-flush convention.
+            // stage move-sources anchored to each member, in ascending left order (MultiBlocks is in
+            // left order, and per-anchor buckets are disjoint ascending runs, so appending keeps the
+            // staged list sorted) — mirroring the aligner's deletion-flush convention.
             if (entry.Kind == IrAlignmentKind.Merge && entry.MultiBlocks is { } mergeLefts)
                 foreach (var lb in mergeLefts)
-                    EmitSources(sourcesAfterLeft, leftIndex[lb], moves, ops);
+                    StageSources(sourcesAfterLeft, leftIndex[lb], pendingSources);
         }
 
+        // Trailing staged sources (an anchor at the very end of the document).
+        FlushPendingSources(pendingSources, int.MaxValue, moves, ops);
+
         return ops;
+    }
+
+    /// <summary>Append the move-source left indexes bucketed under <paramref name="anchorLeftIndex"/> to
+    /// the staged list (ascending order preserved — buckets are disjoint ascending runs staged in
+    /// anchor order).</summary>
+    private static void StageSources(
+        Dictionary<int, List<int>> sourcesAfterLeft, int anchorLeftIndex, List<int> pendingSources)
+    {
+        if (sourcesAfterLeft.TryGetValue(anchorLeftIndex, out var list))
+            pendingSources.AddRange(list);
+    }
+
+    /// <summary>Emit (and remove) the staged move-source ops whose left index is &lt; <paramref name="limit"/>,
+    /// in ascending left order — the lazy half of the source/deletion left-order interleave.</summary>
+    private static void FlushPendingSources(
+        List<int> pendingSources, int limit, Dictionary<int, MoveInfo> moves, List<IrEditOp> ops)
+    {
+        int n = 0;
+        while (n < pendingSources.Count && pendingSources[n] < limit)
+        {
+            var move = moves[pendingSources[n]];
+            // The source op mirrors the destination's kind; the token diff lives only on the destination.
+            ops.Add(new IrEditOp(
+                move.OpKind, move.LeftBlock.Anchor.ToString(), null, null, move.GroupId, IsMoveSource: true));
+            n++;
+        }
+        pendingSources.RemoveRange(0, n);
     }
 
     // ------------------------------------------------------------------ modify op (token / table diff)
@@ -823,19 +868,4 @@ internal static class IrEditScriptBuilder
         kind is IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly or IrAlignmentKind.Modified
             or IrAlignmentKind.Split;
 
-    /// <summary>Emit the move-SOURCE ops bucketed under <paramref name="anchorLeftIndex"/>, in left order.</summary>
-    private static void EmitSources(
-        Dictionary<int, List<int>> sourcesAfterLeft, int anchorLeftIndex,
-        Dictionary<int, MoveInfo> moves, List<IrEditOp> ops)
-    {
-        if (!sourcesAfterLeft.TryGetValue(anchorLeftIndex, out var list))
-            return;
-        foreach (int li in list) // ascending left order
-        {
-            var move = moves[li];
-            // The source op mirrors the destination's kind; the token diff lives only on the destination.
-            ops.Add(new IrEditOp(
-                move.OpKind, move.LeftBlock.Anchor.ToString(), null, null, move.GroupId, IsMoveSource: true));
-        }
-    }
 }
