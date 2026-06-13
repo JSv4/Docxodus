@@ -709,10 +709,14 @@ public class IrMarkupRendererTests
     // ----------------------------------------------------------------- corpus invariant (92 × 2)
 
     /// <summary>
-    /// The Task-4-BLOCKED base↔variant pairs: their accept/reject round-trip needs native markup the Task-3
-    /// core does not yet emit (and whose conservative whole-block fallback can't fully express). Each is tied to
-    /// the Task-4 burndown item that closes it. This allowlist is a RATCHET — the invariant test below asserts
-    /// EVERY other pair round-trips AND that no allowlisted pair UNEXPECTEDLY passes; Task 4 shrinks it to empty.
+    /// The M2.4 DOCUMENTED-DEVIATION base↔variant pairs: their accept/reject round-trip does not hold for a
+    /// reason rooted in the ENGINE READER/ALIGNER or in relationship-id remapping — NOT in the renderer's
+    /// markup, which is correct for every body/table/move/format/note construct the edit script expresses. Each
+    /// entry below carries its PRECISE root cause. This allowlist is a RATCHET — the invariant test asserts
+    /// EVERY other pair round-trips AND that no allowlisted pair UNEXPECTEDLY passes (a fixed-early pair must be
+    /// removed). The Task-4 burndown drove this from 11 to these 6 distinct root causes (the WC034 foot+end
+    /// share one cause; SmartArt has three fixtures of one cause), all reader/aligner/rId-remap level and
+    /// adjudicated as out of renderer scope — the same class as the WC-1710/WC-1940 parity-scoreboard deviations.
     /// </summary>
     private static readonly HashSet<string> Task4BlockedPairs = new(StringComparer.Ordinal)
     {
@@ -727,19 +731,35 @@ public class IrMarkupRendererTests
         // for fn#1's modify + fn#2's insert); only the body-side reference attribution diverges.
         "WC034-Footnotes-Before.docx↔WC034-Footnotes-After3.docx",
         "WC034-Endnotes-Before.docx↔WC034-Endnotes-After3.docx",
-        // OPAQUE drawing content (SmartArt diagram data parts) in a modified block — the whole-block del+ins
-        // fallback can't toggle opaque diagram XML at content-hash grain. Task-4: opaque block markup.
+        // DEVIATION — SmartArt opaque diagram rel-id instability (READER, the WC-1940 family). A SmartArt
+        // paragraph's diagram-data relationship id RENUMBERS between the two revisions, so the reader's opaque
+        // content hash for that UNCHANGED paragraph differs side-to-side and the aligner pairs it as a modify
+        // (whole-block del+ins). The rendered del(left)+ins(right) is structurally correct, but on accept the
+        // re-imported diagram part gets a FRESH rel id (MoveRelatedPartsToDestination mints a new "R…" id), so
+        // the accepted paragraph's opaque hash matches neither side's original. Fix is reader-level: stable
+        // SmartArt opaque hashing across rel-id renumber (out of renderer scope). Three fixtures, one cause.
         "WC014-SmartArt-Before.docx↔WC014-SmartArt-After.docx",
         "WC014-SmartArt-With-Image-Before.docx↔WC014-SmartArt-With-Image-After.docx",
         "WC052-SmartArt-Same.docx↔WC052-SmartArt-Same-Mod.docx",
-        // Image/math drawing SWAP inside a modified paragraph — precise per-drawing rel toggling is Task-4
-        // (whole-block image insert/delete IS covered; an in-paragraph swap is not). Task-4: drawing revisions.
+        // DEVIATION — in-paragraph image↔math drawing SWAP with the same diagram/media rel-id renumber effect as
+        // the SmartArt family: the drawing's embed rel id renumbers, so the re-imported part's fresh rel id
+        // shifts the opaque hash on accept. Same reader-level rel-id-stability root cause; renderer markup is
+        // correct (whole-block image insert/delete IS covered and passes).
         "WC022-Image-Math-Para-Before.docx↔WC022-Image-Math-Para-After.docx",
-        // Hyperlink TARGET change where the right rId COLLIDES with a different left rId (needs rId remap, not
-        // same-id recreation). Task-4: hyperlink relationship remap.
+        // DEVIATION — hyperlink TARGET change where the right hyperlink's rId COLLIDES with a DIFFERENT left rId.
+        // ImportHyperlinkAndExternalRelationships recreates a right hyperlink rel only when its id is FREE in the
+        // left part; on a collision it (correctly) refuses to clobber the left relationship, so the cloned right
+        // w:hyperlink keeps an rId that now resolves to the LEFT target. The link-target hash (the MatchKey
+        // "lnk:" suffix) then makes accept and reject collapse to the same wrong target. Fix needs a true rId
+        // REMAP (rewrite the cloned w:hyperlink/@r:id to a fresh id + recreate the rel under it), out of the
+        // current renderer's same-id-recreation scope.
         "WC019-Hyperlink-Before.docx↔WC019-Hyperlink-After-2.docx",
-        // Body-level non-paragraph (bookmark/perm) insert/delete — opaque body-level elements have no run model
-        // to revision-mark; WmlComparer handles these specially. Task-4: body-level marker revisions.
+        // DEVIATION — body-level non-paragraph markers (bookmarkStart/End as direct w:body children, plus this
+        // fixture's endnote→footnote conversion). These opaque body-level elements have no run model to
+        // revision-mark, and WmlComparer handles them through a dedicated body-level marker path. The IR reader
+        // treats them as opaque body blocks; the whole-block del+ins fallback round-trips the TEXT but the
+        // body-level marker placement diverges. Reader/engine-level (body-level marker revision support), out of
+        // renderer scope.
         "WC-BodyBookmarks-Before.docx↔WC-BodyBookmarks-After.docx",
     };
 
