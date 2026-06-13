@@ -79,6 +79,31 @@ public class IrReaderTests
         Assert.Equal("bold", run.Text);
     }
 
+    /// <summary>
+    /// M2.4b Workstream D — a bookmark marker (bookmarkStart/bookmarkEnd) that appears as a DIRECT body child
+    /// (legal OOXML, a sibling of w:p) is DROPPED by the block-level N3 rule, exactly as the inline walker drops
+    /// a bookmark inside a paragraph. This mirrors WmlComparer's PreProcessMarkup (RemoveBookmarks=true) so a
+    /// body-level bookmark never becomes a spurious content block (the WC022 stray bookmarkEnd / WC-BodyBookmarks
+    /// section bookmarks). The real paragraphs around it are unaffected.
+    /// </summary>
+    [Fact]
+    public void Read_BodyLevelBookmarkMarkers_AreDropped()
+    {
+        var doc = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>before</w:t></w:r></w:p>" +
+            "<w:bookmarkStart w:id=\"7\" w:name=\"sec\"/>" +
+            "<w:bookmarkEnd w:id=\"7\"/>" +
+            "<w:p><w:r><w:t>after</w:t></w:r></w:p>");
+        var ir = IrReader.Read(doc);
+
+        // Only the two real paragraphs survive; the body-level bookmark markers are gone (no opaque block).
+        var paras = ir.Body.Blocks.OfType<IrParagraph>().ToList();
+        Assert.Equal(2, paras.Count);
+        Assert.DoesNotContain(ir.Body.Blocks, b => b is IrOpaqueBlock);
+        Assert.Equal("before", string.Concat(paras[0].Inlines.OfType<IrTextRun>().Select(r => r.Text)));
+        Assert.Equal("after", string.Concat(paras[1].Inlines.OfType<IrTextRun>().Select(r => r.Text)));
+    }
+
     [Fact]
     public void Read_AdjacentEqualRuns_Coalesce()
     {

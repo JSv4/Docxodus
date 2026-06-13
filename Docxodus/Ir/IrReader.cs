@@ -556,6 +556,18 @@ internal static class IrReader
     /// </summary>
     private static void AppendBlocks(XElement el, ReadContext ctx, List<IrBlock> sink, int depth = 0)
     {
+        // N3 at BLOCK level: a bookmark marker (bookmarkStart/bookmarkEnd) — or comment-range plumbing — that
+        // appears as a DIRECT body/cell child (a sibling of w:p, legal OOXML) is dropped, exactly as the inline
+        // walker drops it inside a paragraph. WmlComparer strips ALL bookmarks in PreProcessMarkup
+        // (MarkupSimplifier RemoveBookmarks=true), so a body-level bookmark is invisible to the comparison; the
+        // IR previously modeled it as an IrOpaqueBlock, which made an inserted/orphaned body-level bookmarkEnd
+        // a spurious content block that the markup round-trip could not toggle (it is not run content, so it is
+        // emitted verbatim and survives both accept and reject) — WC022's stray w:bookmarkEnd and the
+        // WC-BodyBookmarks section bookmarks. Dropping it mirrors the oracle and the inline N3 rule. Bookmarks
+        // never surface in the markdown projection either, so this does not perturb M1.4 equivalence.
+        if (IsDroppedParagraphChild(el.Name))
+            return;
+
         if (el.Name == W + "sdt")
         {
             // Pathologically deep SDT nesting would recurse without bound; cap it and preserve the

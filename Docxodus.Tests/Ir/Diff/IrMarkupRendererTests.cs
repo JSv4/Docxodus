@@ -532,6 +532,39 @@ public class IrMarkupRendererTests
         AssertRoundTrip(left, right, label: "footnote-edit");
     }
 
+    /// <summary>
+    /// M2.4b Workstream D — the hyperlink rId REMAP (WC019). Before and After both reference their hyperlink as
+    /// rId4 but to DIFFERENT targets (ericwhite.com → ericwhite2.com). Recreating the right relationship under
+    /// the same id would collide with the left's rId4 and leave the cloned link resolving to the LEFT target;
+    /// the remap mints a FRESH relationship id for the right target and rewrites the cloned w:hyperlink/@r:id to
+    /// it. We assert the ACCEPTED document contains a hyperlink resolving to the RIGHT target (ericwhite2.com) —
+    /// the remap half is correct. (The FULL accept/reject round-trip stays allowlisted: rejecting w:del/w:ins
+    /// nested inside w:hyperlink is a shared-RevisionProcessor gap, deferred to M2.5 — see Task4BlockedPairs.)
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Corpus")]
+    public void Hyperlink_rId_collision_remaps_to_fresh_relationship_resolving_right_target()
+    {
+        var left = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC019-Hyperlink-Before.docx"));
+        var right = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC019-Hyperlink-After-2.docx"));
+        var rendered = RenderMarkup(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+
+        using var ms = new MemoryStream(accepted.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var main = wd.MainDocumentPart!;
+        // The accepted document references a hyperlink whose relationship resolves to the RIGHT target.
+        var referencedIds = main.GetXDocument().Descendants(W.hyperlink)
+            .Select(h => (string?)h.Attribute(R.r + "id")).Where(s => s != null).ToHashSet();
+        var resolvedTargets = main.HyperlinkRelationships
+            .Where(r => referencedIds.Contains(r.Id))
+            .Select(r => r.Uri.ToString()).ToList();
+        Assert.Contains(resolvedTargets, t => t.Contains("ericwhite2.com"));
+        // The right target rides on a FRESH id, not the colliding rId4 (which still names the LEFT target).
+        var rightRel = main.HyperlinkRelationships.Single(r => r.Uri.ToString().Contains("ericwhite2.com"));
+        Assert.NotEqual("rId4", rightRel.Id);
+    }
+
     [Fact]
     [Trait("Category", "Corpus")]
     public void Render_endnote_edit_lands_markup_inside_endnotes_part_and_round_trips()
@@ -742,28 +775,49 @@ public class IrMarkupRendererTests
         // oracle, external/hyperlink → target URI, dangling → sentinel) and strips the renumber-prone
         // wp:docPr/@id. Content identity over rel numbering: those three pairs now round-trip clean and are
         // removed from this allowlist.
-        // DEVIATION — body-level bookmarkEnd marker (the WC-BodyBookmarks root cause, NOT the rel-id renumber the
-        // original catalog claimed). WC022-After carries a stray w:bookmarkEnd as a DIRECT w:body child; the IR
-        // reader models it as an IrOpaqueBlock, but the markup render→accept round-trip drops that body-level
-        // marker, so accept has one fewer block than RIGHT (verified: every OTHER block — including the image and
-        // math drawings whose embed rel ids DO renumber — round-trips identically after Workstream A, so the
-        // rel-id-stability gap that WAS suspected here is closed; only the body-level bookmark survives). Same
-        // body-level-marker revision-support gap as WC-BodyBookmarks below — Workstream D scope.
+        // DEVIATION — WC022-After carries a stray orphan w:bookmarkEnd (id=0, no matching start) as a DIRECT
+        // w:body child. M2.4b Workstream D FIXED the bookmark half: the IR reader now drops a body-level
+        // bookmark marker (AppendBlocks applies the N3 IsDroppedParagraphChild rule at block level), mirroring
+        // WmlComparer's PreProcessMarkup (MarkupSimplifier RemoveBookmarks=true strips ALL bookmarks), so the
+        // stray marker no longer enters the comparison as a spurious opaque block — three of the four round-trip
+        // sub-checks (fwd ACCEPT, rev ACCEPT, rev REJECT) now PASS. The RESIDUAL is a separate, narrower
+        // alignment-grain artifact: removing the body-level marker leaves the diff aligning around TWO ADJACENT
+        // empty paragraphs near its former position (one a bare w:p, one a w:p with a pPr), and reject
+        // reconstructs them in the opposite order (verified: blocks [8]/[9] are content-hash-swapped, both empty;
+        // every other block round-trips identically). That is an adjacent-equal-empty-paragraph ordering
+        // sensitivity in the block aligner, NOT a bookmark or rel-id issue — deferred to M2.5 (sub-paragraph /
+        // empty-mark alignment grain, the same class as WC-1830). The bookmark-modeling half is CLOSED.
         "WC022-Image-Math-Para-Before.docx↔WC022-Image-Math-Para-After.docx",
-        // DEVIATION — hyperlink TARGET change where the right hyperlink's rId COLLIDES with a DIFFERENT left rId.
-        // ImportHyperlinkAndExternalRelationships recreates a right hyperlink rel only when its id is FREE in the
-        // left part; on a collision it (correctly) refuses to clobber the left relationship, so the cloned right
-        // w:hyperlink keeps an rId that now resolves to the LEFT target. The link-target hash (the MatchKey
-        // "lnk:" suffix) then makes accept and reject collapse to the same wrong target. Fix needs a true rId
-        // REMAP (rewrite the cloned w:hyperlink/@r:id to a fresh id + recreate the rel under it), out of the
-        // current renderer's same-id-recreation scope.
+        // DEVIATION — hyperlink TARGET change where the right hyperlink's rId COLLIDES with a DIFFERENT left rId
+        // (Before → ericwhite.com, After → ericwhite2.com, BOTH as rId4).
+        //
+        // M2.4b Workstream D PARTIALLY fixed this and re-diagnosed the residual: the true rId REMAP is now
+        // IMPLEMENTED — ImportHyperlinkAndExternalRelationships detects the collision (the id already names a
+        // DIFFERENT-URI left relationship), mints a fresh id, recreates the right target under it, and rewrites
+        // the cloned w:hyperlink/@r:id (verified: ACCEPT now yields the correct ericwhite2.com link via the
+        // remapped relationship — the old same-id-recreation gap is closed). The RESIDUAL blocker is downstream
+        // and SEPARATE: the w:del/w:ins this fixture's link edit produces live INSIDE the w:hyperlink container
+        // (the schema forbids a hyperlink inside w:ins/w:del, so the revision markers nest within it), and the
+        // shared RevisionProcessor's reject/accept transforms do not fully process revisions nested inside a
+        // w:hyperlink — REJECT leaves the LEFT link's w:delText unconverted and the RIGHT link's w:ins unremoved,
+        // so reject ≠ left. (WmlComparer SIDESTEPS this entirely: its PreProcessMarkup runs MarkupSimplifier with
+        // RemoveHyperlinks=true, stripping ALL hyperlinks to plain text before comparing — its accepted output
+        // has NO hyperlink at all, verified. The IR deliberately PRESERVES hyperlinks for fidelity, so it must
+        // round-trip the nested revision markup the oracle never emits.) Closing the round-trip needs
+        // RevisionProcessor to process w:del/w:ins nested in w:hyperlink — a shared-accept-path change beyond the
+        // renderer's rId-remap scope, deferred to M2.5. The rId-remap half is done; the nested-revision-in-link
+        // round-trip is the surviving deviation.
         "WC019-Hyperlink-Before.docx↔WC019-Hyperlink-After-2.docx",
-        // DEVIATION — body-level non-paragraph markers (bookmarkStart/End as direct w:body children, plus this
-        // fixture's endnote→footnote conversion). These opaque body-level elements have no run model to
-        // revision-mark, and WmlComparer handles them through a dedicated body-level marker path. The IR reader
-        // treats them as opaque body blocks; the whole-block del+ins fallback round-trips the TEXT but the
-        // body-level marker placement diverges. Reader/engine-level (body-level marker revision support), out of
-        // renderer scope.
+        // DEVIATION — WC-BodyBookmarks-After carries MANY body-level bookmarkStart/End markers (named section
+        // bookmarks as direct w:body children) AND converts the document's endnotes to footnotes. M2.4b
+        // Workstream D's block-level bookmark drop (see WC022 above) removes the body-level bookmark markers from
+        // the comparison — the bookmark half is handled — but this pair STILL fails ACCEPT≠RIGHT in BOTH
+        // directions, dominated by the ENDNOTE→FOOTNOTE conversion: the note set itself changes part (en→fn), a
+        // whole-note-store structural change the IR's per-scope note diff does not reconcile to a clean
+        // accept==right (the same "Internal error in ProcessFootnoteEndnote" that WmlComparerBodyLevelBookmarkTests
+        // documents as a SEPARATE bug from the bookmark NRE). That note-store conversion is well beyond bookmark
+        // modeling — deferred to M2.5 (note-store cross-part conversion). The bookmark-marker root cause is now
+        // oracle-faithful (dropped like RemoveBookmarks); the surviving blocker is the endnote→footnote conversion.
         "WC-BodyBookmarks-Before.docx↔WC-BodyBookmarks-After.docx",
     };
 
