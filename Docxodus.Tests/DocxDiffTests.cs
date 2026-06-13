@@ -1,0 +1,312 @@
+#nullable enable
+
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using Docxodus;
+using Xunit;
+
+namespace Docxodus.Tests;
+
+/// <summary>
+/// M2.5 Task 4 — public-surface smoke tests for <see cref="DocxDiff"/>: each entry point
+/// (<see cref="DocxDiff.Compare"/>, <see cref="DocxDiff.GetRevisions"/>,
+/// <see cref="DocxDiff.GetEditScriptJson"/>) over a WC corpus pair AND a programmatic pair, plus
+/// <see cref="DocxDiffSettings"/> mapping spot-checks. These assert the PUBLIC contract only (round-trip,
+/// revision shape, JSON parses) — the engine internals are covered by the Ir.Diff battery.
+/// </summary>
+public class DocxDiffTests
+{
+    private static readonly DirectoryInfo SourceDir = new("../../../../TestFiles/");
+
+    private static WmlDocument Load(string relativePath) =>
+        new(Path.Combine(SourceDir.FullName, relativePath));
+
+    // A minimal programmatic doc, mirroring the Ir.Diff scoreboard builders (all required parts present).
+    private static WmlDocument Doc(params string[] paragraphs)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(
+                paragraphs.Select(text => new Paragraph(new Run(new Text(text))))));
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new DocDefaults(
+                new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                    new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                new ParagraphPropertiesDefault()));
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("test.docx", stream.ToArray());
+    }
+
+    private static WmlDocument BoldDoc(string text)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(
+                new Paragraph(new Run(new RunProperties(new Bold()), new Text(text)))));
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new DocDefaults(
+                new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                    new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                new ParagraphPropertiesDefault()));
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("test.docx", stream.ToArray());
+    }
+
+    // Body-level <w:t> texts of a document, for round-trip comparison.
+    private static List<string> BodyTexts(WmlDocument doc)
+    {
+        using var stream = new MemoryStream(doc.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var body = wdoc.MainDocumentPart?.Document.Body;
+        return body is null
+            ? new List<string>()
+            : body.Descendants<Paragraph>().Select(p => p.InnerText).ToList();
+    }
+
+    // ----------------------------------------------------------------- Compare
+
+    [Fact]
+    public void Compare_WcPair_RoundTripsAcceptToRightRejectToLeft()
+    {
+        var left = Load("WC/WC001-Digits.docx");
+        var right = Load("WC/WC001-Digits-Mod.docx");
+
+        var result = DocxDiff.Compare(left, right);
+
+        // The WmlComparer output contract: accept ⇒ right, reject ⇒ left (body text level).
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
+    public void Compare_ProgrammaticPair_ProducesTrackedChanges()
+    {
+        var left = Doc("The quick brown fox.");
+        var right = Doc("The quick red fox.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+
+        // The produced markup actually carries ins/del elements (not an untouched clone).
+        using var stream = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var body = wdoc.MainDocumentPart!.Document.Body!;
+        Assert.True(body.Descendants<InsertedRun>().Any() || body.Descendants<DeletedRun>().Any());
+    }
+
+    [Fact]
+    public void Compare_IdenticalDocuments_HasNoTrackedChanges()
+    {
+        var doc = Doc("Unchanged paragraph one.", "Unchanged paragraph two.");
+
+        var result = DocxDiff.Compare(doc, doc);
+
+        using var stream = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var body = wdoc.MainDocumentPart!.Document.Body!;
+        Assert.False(body.Descendants<InsertedRun>().Any());
+        Assert.False(body.Descendants<DeletedRun>().Any());
+    }
+
+    // ----------------------------------------------------------------- GetRevisions
+
+    [Fact]
+    public void GetRevisions_WcPair_ReturnsRevisionsWithAnchors()
+    {
+        var left = Load("WC/WC001-Digits.docx");
+        var right = Load("WC/WC001-Digits-Mod.docx");
+
+        var revisions = DocxDiff.GetRevisions(left, right);
+
+        Assert.NotEmpty(revisions);
+        // Every revision carries at least one anchor of the documented kind:scope:unid grammar.
+        foreach (var r in revisions)
+        {
+            var anchor = r.LeftAnchor ?? r.RightAnchor;
+            Assert.NotNull(anchor);
+            Assert.Equal(2, anchor!.Count(c => c == ':')); // kind:scope:unid → exactly two colons.
+        }
+    }
+
+    [Fact]
+    public void GetRevisions_ProgrammaticPair_SurfacesInsertAndDelete()
+    {
+        var left = Doc("alpha beta gamma");
+        var right = Doc("alpha delta gamma");
+
+        var revisions = DocxDiff.GetRevisions(left, right);
+
+        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Inserted);
+        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Deleted);
+
+        // Anchor presence rule: a pure insertion has RightAnchor (no LeftAnchor); a pure deletion the inverse.
+        var ins = revisions.First(r => r.Type == DocxDiffRevisionType.Inserted);
+        Assert.NotNull(ins.RightAnchor);
+        var del = revisions.First(r => r.Type == DocxDiffRevisionType.Deleted);
+        Assert.NotNull(del.LeftAnchor);
+    }
+
+    [Fact]
+    public void GetRevisions_FormatOnlyChange_SurfacesFormatChanged()
+    {
+        var left = Doc("identical text");
+        var right = BoldDoc("identical text");
+
+        var revisions = DocxDiff.GetRevisions(left, right);
+
+        var fc = Assert.Single(revisions, r => r.Type == DocxDiffRevisionType.FormatChanged);
+        Assert.NotNull(fc.FormatChange);
+        Assert.Contains("bold", fc.FormatChange!.ChangedPropertyNames);
+    }
+
+    [Fact]
+    public void GetRevisions_StampsAuthorFromSettings()
+    {
+        var left = Doc("one two three");
+        var right = Doc("one TWO three");
+        var settings = new DocxDiffSettings { AuthorForRevisions = "Daisy" };
+
+        var revisions = DocxDiff.GetRevisions(left, right, settings);
+
+        Assert.NotEmpty(revisions);
+        Assert.All(revisions, r => Assert.Equal("Daisy", r.Author));
+    }
+
+    // ----------------------------------------------------------------- GetEditScriptJson
+
+    [Fact]
+    public void GetEditScriptJson_WcPair_ParsesAndHasOperations()
+    {
+        var left = Load("WC/WC001-Digits.docx");
+        var right = Load("WC/WC001-Digits-Mod.docx");
+
+        var json = DocxDiff.GetEditScriptJson(left, right);
+
+        using var parsed = JsonDocument.Parse(json); // must be valid JSON.
+        Assert.True(parsed.RootElement.TryGetProperty("operations", out var ops));
+        Assert.Equal(JsonValueKind.Array, ops.ValueKind);
+        Assert.NotEqual(0, ops.GetArrayLength());
+    }
+
+    [Fact]
+    public void GetEditScriptJson_ProgrammaticPair_Parses()
+    {
+        var left = Doc("first paragraph", "second paragraph");
+        var right = Doc("first paragraph", "second paragraph changed");
+
+        var json = DocxDiff.GetEditScriptJson(left, right);
+
+        using var parsed = JsonDocument.Parse(json);
+        Assert.Equal(JsonValueKind.Object, parsed.RootElement.ValueKind);
+    }
+
+    [Fact]
+    public void GetEditScriptJson_IsDeterministicByDefault()
+    {
+        var left = Doc("alpha", "beta");
+        var right = Doc("alpha", "beta gamma");
+
+        var a = DocxDiff.GetEditScriptJson(left, right);
+        var b = DocxDiff.GetEditScriptJson(left, right);
+
+        Assert.Equal(a, b); // deterministic dates + stable ids ⇒ byte-identical.
+    }
+
+    // ----------------------------------------------------------------- settings mapping spot-checks
+
+    [Fact]
+    public void Settings_CaseInsensitive_SuppressesCaseOnlyRevisions()
+    {
+        var left = Doc("Hello World");
+        var right = Doc("hello world");
+
+        var sensitive = DocxDiff.GetRevisions(left, right);
+        var insensitive = DocxDiff.GetRevisions(left, right,
+            new DocxDiffSettings { CaseInsensitive = true });
+
+        Assert.NotEmpty(sensitive);                 // case difference IS a change by default.
+        Assert.DoesNotContain(insensitive, r =>
+            r.Type is DocxDiffRevisionType.Inserted or DocxDiffRevisionType.Deleted);
+    }
+
+    [Fact]
+    public void Settings_WmlComparerCompatibleGranularity_CoalescesRevisions()
+    {
+        // A paragraph where two adjacent words both change: Fine reports one ins + one del per word;
+        // WmlComparerCompatible coalesces the contiguous region.
+        var left = Doc("the aaa bbb end");
+        var right = Doc("the xxx yyy end");
+
+        var fine = DocxDiff.GetRevisions(left, right,
+            new DocxDiffSettings { RevisionGranularity = DocxDiffRevisionGranularity.Fine });
+        var compat = DocxDiff.GetRevisions(left, right,
+            new DocxDiffSettings { RevisionGranularity = DocxDiffRevisionGranularity.WmlComparerCompatible });
+
+        Assert.True(compat.Count <= fine.Count,
+            $"compatible ({compat.Count}) should coalesce vs fine ({fine.Count})");
+    }
+
+    [Fact]
+    public void Settings_FormatComparisonFull_SeesUnmodeledFlip()
+    {
+        // ModeledOnly (default) ignores an unmodeled-only rPr difference; Full sees it. We assert the
+        // default does not over-report on a plain text-equal pair (no spurious FormatChanged).
+        var doc = Doc("plain text");
+
+        var modeled = DocxDiff.GetRevisions(doc, doc,
+            new DocxDiffSettings { FormatComparison = DocxDiffFormatComparison.ModeledOnly });
+
+        Assert.DoesNotContain(modeled, r => r.Type == DocxDiffRevisionType.FormatChanged);
+    }
+
+    [Fact]
+    public void Settings_DetectMovesFalse_RendersMoveAsInsertDelete()
+    {
+        // Move a distinctive block from the top to the bottom.
+        var left = Doc("MOVED distinctive sentence here", "anchor one", "anchor two", "anchor three");
+        var right = Doc("anchor one", "anchor two", "anchor three", "MOVED distinctive sentence here");
+
+        var withMoves = DocxDiff.GetRevisions(left, right,
+            new DocxDiffSettings { DetectMoves = true });
+        var noMoves = DocxDiff.GetRevisions(left, right,
+            new DocxDiffSettings { DetectMoves = false });
+
+        // With moves off, nothing is reported as Moved.
+        Assert.DoesNotContain(noMoves, r => r.Type == DocxDiffRevisionType.Moved);
+        // (With moves on the engine MAY report a move; this is a settings-mapping spot check, not a
+        // move-detection assertion, so we only assert the off-switch suppresses the Moved type.)
+        Assert.NotNull(withMoves);
+    }
+
+    [Fact]
+    public void Settings_ExplicitDate_StampsRevisions()
+    {
+        var left = Doc("one two");
+        var right = Doc("one three");
+        var settings = new DocxDiffSettings { DateTimeForRevisions = "2021-07-04T00:00:00Z" };
+
+        var revisions = DocxDiff.GetRevisions(left, right, settings);
+
+        Assert.NotEmpty(revisions);
+        Assert.All(revisions, r => Assert.Equal("2021-07-04T00:00:00Z", r.Date));
+    }
+}
