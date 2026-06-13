@@ -681,7 +681,10 @@ internal static class IrEditScriptVerifier
     private static IReadOnlyList<string>? TokensOrNull(IrBlock block, IrDiffSettings settings) =>
         block is IrParagraph p ? Tokens(p, settings) : null;
 
-    private static IReadOnlyList<string> Tokens(IrParagraph p, IrDiffSettings settings) =>
+    /// <summary>Reconstruct one paragraph's normalized token-key sequence (shared with the composite
+    /// verifier, T5.1). Internal so <see cref="IrCompositeVerifier"/> reuses the engine's exact
+    /// tokenization + textbox masking instead of re-deriving it.</summary>
+    internal static IReadOnlyList<string> Tokens(IrParagraph p, IrDiffSettings settings) =>
         MaskTextboxKeys(IrDiffTokenizer.Tokenize(p, settings)).Select(t => t.MatchKey).ToList();
 
     /// <summary>
@@ -692,6 +695,12 @@ internal static class IrEditScriptVerifier
     /// unchanged textbox the masking is a harmless no-op (both sides already share the same constant).
     /// </summary>
     private const string MaskedTextboxKey = "tbx";
+
+    /// <summary>Tokenize a paragraph with the engine's tokenizer and textbox-key masking — the exact
+    /// token model the composite merger's token-span composition coordinates against. Internal so
+    /// <see cref="IrCompositeVerifier"/> resolves AuthoredTokens spans consistently.</summary>
+    internal static IReadOnlyList<IrDiffToken> MaskedTokenize(IrParagraph p, IrDiffSettings settings) =>
+        MaskTextboxKeys(IrDiffTokenizer.Tokenize(p, settings));
 
     private static IReadOnlyList<IrDiffToken> MaskTextboxKeys(IReadOnlyList<IrDiffToken> tokens)
     {
@@ -707,7 +716,7 @@ internal static class IrEditScriptVerifier
     /// Delete drops left tokens. For a non-paragraph Modified pair (null diff) returns null so the caller
     /// compares by ContentHash.
     /// </summary>
-    private static IReadOnlyList<string>? ApplyModify(
+    internal static IReadOnlyList<string>? ApplyModify(
         IrBlock leftBlock, IrBlock rightBlock, IrTokenDiff? tokenDiff, IrDiffSettings settings)
     {
         if (leftBlock is not IrParagraph lp || rightBlock is not IrParagraph rp)
