@@ -34,3 +34,62 @@ Diagnosis to confirm per-case: the 1×1-gap fallback (and similar) pairs effecti
 
 - Every one of the 18+8 gaps has a per-row verdict: FIXED (engine/render — genuine PASS) or ORACLE-FAULT-ESTABLISHED (deviation retained with concrete evidence).
 - Ratchets risen to match; allowlist minimized; full suite + corpus + fuzz + projection equivalence green; no main merges.
+
+## M2.4b Outcome
+
+**Status: COMPLETE (2026-06-12).** All 18 GetRevisions deviations + 8 markup-allowlist fixtures (6 root causes) carry a per-row verdict. GetRevisions ratchet rose **161 → 174 genuine PASS** (PASS+deviation still 179/179); markup floor held at 39; the round-trip allowlist shrank **8 → 5 fixtures** (WS-A closed the 3 SmartArt fixtures). Full verification triple + fuzz + markdown-projection equivalence green. No merges to main.
+
+### Method-rule note: the WC034 'Video' reversal
+
+The headline correction of this milestone: WC034 / WC-1710 / WC-1720 were FORMERLY catalogued as a WmlComparer "oracle spurious del+ins of the unchanged word `Video`". WS-C re-examined the raw OOXML run-by-run and **reversed that verdict** — in After3 an endnote reference (id=1) is relocated INTO THE MIDDLE of the word (`Vi`[en-ref]`deo` vs Before's contiguous `Video `[en-ref]), so the word's atoms genuinely change and WmlComparer's del+ins is **CORRECT**. The IR's id-less, per-run note-ref tokenization is COARSER there. This is the binding method rule in action: the oracle won once the evidence was gathered; the deviation is retained as IR-coarser-than-oracle (a deferred tokenizer item), not oracle-fault.
+
+### GetRevisions scoreboard — final per-row state (the original 18)
+
+| Row | Verdict | Resolution |
+|-----|---------|------------|
+| WC-1170 | **FIXED** (WS-B) | low-coverage near-rewrite coarsening collapsed the coincidental `Video` Equal island |
+| WC-1190 | **FIXED** (WS-B) | empty-paragraph-mark prune (moved-into-table leftover bare mark) |
+| WC-1210 | **FIXED** (WS-C) | adjacent-block insert/delete coalescing |
+| WC-1420 | **FIXED** (WS-C) | adjacent-block coalescing (math/run-boundary fragments) |
+| WC-1430 | **FIXED** (WS-C) | adjacent-block coalescing |
+| WC-1440 | **FIXED** (WS-C) | consecutive inserted body paragraphs coalesce to one region |
+| WC-1450 | **DEVIATION** (engine grain) | intra-cell anchor ambiguity: two identical `Video provides…` cell paragraphs, the aligner anchors the wrong one (+1). Engine alignment grain, not render-coalescible. |
+| WC-1710 | **DEVIATION** (ORACLE CORRECT) | mid-word endnote-ref relocation in `Video` — oracle del+ins correct, IR note-ref tokenization coarser (−1). Deferred tokenizer item. |
+| WC-1720 | **DEVIATION** (ORACLE CORRECT) | reverse of WC-1710, same mid-word ref relocation (−1). Deferred tokenizer item. |
+| WC-1770 | **FIXED** (WS-C) | textbox-interior compat coarsening (whole-paragraph del+ins, matching the oracle's opaque-drawing grain) |
+| WC-1830 | **DEVIATION** (engine grain) | sub-paragraph content migration: one before-paragraph's text splits across two after-paragraphs (+1). Block-vs-atom granularity; oracle's whole-doc LCS is finer. Deferred (sub-paragraph alignment grain). |
+| WC-1840 | **FIXED** (WS-C) | cell consecutive inserts coalesce to one region |
+| WC-1900 | **FIXED** (WS-D) | non-adjacent Choice/Fallback textbox duplicate collapsed via content-signature occurrence parity (oracle MC-resolves AlternateContent to one branch; 6 == 6). Genuine-pass ratchet 173 → 174. |
+| WC-1920 | **DEVIATION** (tokenizer grain) | duplicate half now fixed; residual −1 is the `test`/`test!` punctuation-attachment tokenizer grain inside a textbox-nested table. Deferred tokenizer item. |
+| WC-1940 | **FIXED** (WS-A) | relationship-id-stable opaque hashing — unchanged SmartArt with renumbered rel ids / wp:docPr@id now hashes equal (2 == 2) |
+| WC-1950 | **FIXED** (WS-B) | low-coverage coarsening — cell rewrite sharing only function words collapses to one del+ins |
+| WC-1970 | **FIXED** (prior, re-verified) | NBSP↔space conflation tokenizer bug fixed; 0 == 0 (oracle correct — not a content change) |
+| WC-1980 | **FIXED** (prior, re-verified) | reverse of WC-1970, same NBSP conflation fix |
+
+Final GetRevisions composition: **174 genuine PASS + 5 deviations = 179/179** PASS-or-deviation. The 5 surviving deviations (WC-1450, WC-1710, WC-1720, WC-1830, WC-1920) are ALL engine-alignment-grain or tokenizer-grain — none is an oracle fault, and four explicitly establish the oracle is CORRECT and the IR coarser.
+
+### Markup round-trip allowlist — final state (the original 8 fixtures / 6 causes)
+
+| Fixture(s) | Verdict | Resolution |
+|------------|---------|------------|
+| WC014 SmartArt ×2 + WC052 SmartArt | **CLOSED** (WS-A) | rel-id-stable opaque hashing — removed from allowlist (3 fixtures) |
+| WC034-Footnotes / WC034-Endnotes After3 | **DEVIATION** (ORACLE CORRECT) | mid-word note-ref relocation (same root as WC-1710/1720) — body-side note-reference attribution diverges; note CONTENT markup verified correct. Deferred tokenizer item. |
+| WC022-Image-Math-Para | **DEVIATION** (alignment grain; bookmark FIXED) | WS-D drops body-level bookmark markers (mirrors oracle RemoveBookmarks) — 3/4 round-trip sub-checks now pass; residual is adjacent-empty-paragraph alignment ordering. Deferred. |
+| WC019-Hyperlink | **DEVIATION** (rId remap FIXED; nested-revision residual) | WS-D implements the true rId remap (accept resolves the right target via a fresh relationship); residual is rejecting w:del/w:ins nested inside w:hyperlink (shared RevisionProcessor gap; the oracle sidesteps it via RemoveHyperlinks). Deferred. |
+| WC-BodyBookmarks | **DEVIATION** (bookmark FIXED; note-conversion residual) | WS-D bookmark drop handles the markers; surviving blocker is the endnote→footnote note-store conversion. Deferred. |
+
+Final allowlist: **5 fixtures** (WC034 ×2 same cause, WC022, WC019, WC-BodyBookmarks). Every surviving entry carries established root-cause evidence; none is a renderer-markup gap.
+
+### Deferred to M2.5
+
+1. **Note-reference-within-word tokenization** (WC-1710/1720, WC034 ×2): model a note-ref's POSITION WITHIN a word as word content so a ref relocating inside `Video` reads as a word change. Fine-mode + corpus-wide blast radius.
+2. **Sub-paragraph alignment grain** (WC-1830, WC-1450, WC022 empty-paragraph ordering): the IR aligns at paragraph grain; the oracle's whole-document atom LCS is finer at content-migration / identical-adjacent-paragraph / empty-mark boundaries.
+3. **Punctuation-attachment tokenizer grain** (WC-1920): attach trailing punctuation (`test!`) to the preceding word the way WmlComparer's atomizer does.
+4. **Revisions nested inside w:hyperlink** (WC019): RevisionProcessor accept/reject of w:del/w:ins inside a w:hyperlink container (so a fully-deleted link's empty shell is cleaned on accept). Shared-accept-path change; the rId remap that precedes it is already done.
+5. **Note-store cross-part conversion** (WC-BodyBookmarks): endnote→footnote whole-note-store conversion reconciliation in the per-scope note diff.
+
+### Verification
+
+- `dotnet build Docxodus.sln` clean; `dotnet build -c Release Docxodus/Docxodus.csproj` (warnings-as-errors) clean for the touched files.
+- Full `dotnet test` suite green; `Ir.Diff` suite (175) green; `IrParityScoreboardTests` 174 PASS / 5 DEV / 0 FAIL; `IrMarkupParityScoreboardTests` 39/39; WC corpus markup round-trip (5 allowlisted) green; `IrDiffFuzzTests` green.
+- Markdown-projection equivalence (`IrMarkdownEquivalenceTests` 26/26) green — the WS-D reader change (block-level bookmark drop) does not perturb the projection.
