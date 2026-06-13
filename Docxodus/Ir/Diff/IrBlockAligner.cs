@@ -101,7 +101,13 @@ internal static class IrBlockAligner
             .OrderBy(p => p.Left)
             .ToList();
 
-        FillGaps(leftBlocks, rightBlocks, spinePairs, leftKind, rightKind, leftMatch, rightMatch, similarity, settings);
+        // M2.6: the gap fill records every fired split (one left → N right) and merge (N left → one
+        // right) group here; EmitEntries consumes them to emit the single Split/Merge entry per group.
+        var splitGroups = new List<(int SingularIndex, List<int> PluralIndexes)>();
+        var mergeGroups = new List<(int SingularIndex, List<int> PluralIndexes)>();
+
+        FillGaps(leftBlocks, rightBlocks, spinePairs, leftKind, rightKind, leftMatch, rightMatch,
+            similarity, settings, splitGroups, mergeGroups);
 
         // --- Cross-gap fuzzy moves: over the GLOBAL leftover Deleted × Inserted sets (after all gap
         // fill), re-pair similar blocks as Moved / MovedModified. Runs AFTER gap fill so it sees the
@@ -109,7 +115,8 @@ internal static class IrBlockAligner
         DetectCrossGapMoves(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch, similarity, settings);
 
         // --- Emit in right order with left-anchored deletion interleave.
-        var entries = EmitEntries(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch);
+        var entries = EmitEntries(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch,
+            splitGroups, mergeGroups);
         return new IrBlockAlignment(IrNodeList.From(entries));
     }
 
@@ -270,19 +277,21 @@ internal static class IrBlockAligner
         List<(int Left, int Right)> spinePairs,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
         int[] leftMatch, int[] rightMatch,
-        IrBlockSimilarity similarity, IrDiffSettings settings)
+        IrBlockSimilarity similarity, IrDiffSettings settings,
+        List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
+        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups)
     {
         int prevLeft = -1, prevRight = -1;
         foreach (var (sl, sr) in spinePairs)
         {
             FillOneGap(leftBlocks, rightBlocks, prevLeft + 1, sl, prevRight + 1, sr,
-                leftKind, rightKind, leftMatch, rightMatch, similarity, settings);
+                leftKind, rightKind, leftMatch, rightMatch, similarity, settings, splitGroups, mergeGroups);
             prevLeft = sl;
             prevRight = sr;
         }
         // Tail gap (after the last spine pair, or the whole document if there were no spine pairs).
         FillOneGap(leftBlocks, rightBlocks, prevLeft + 1, leftBlocks.Count, prevRight + 1, rightBlocks.Count,
-            leftKind, rightKind, leftMatch, rightMatch, similarity, settings);
+            leftKind, rightKind, leftMatch, rightMatch, similarity, settings, splitGroups, mergeGroups);
     }
 
     /// <summary>
@@ -300,7 +309,9 @@ internal static class IrBlockAligner
         int leftFrom, int leftTo, int rightFrom, int rightTo,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
         int[] leftMatch, int[] rightMatch,
-        IrBlockSimilarity similarity, IrDiffSettings settings)
+        IrBlockSimilarity similarity, IrDiffSettings settings,
+        List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
+        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups)
     {
         var freeLeft = new List<int>();
         for (int i = leftFrom; i < leftTo; i++)
@@ -370,6 +381,30 @@ internal static class IrBlockAligner
             rightMatch[rj] = li;
             leftoverLeft.Remove(li);
             leftoverRight.Remove(rj);
+        }
+
+        // M2.6 1:N split / N:1 merge containment scan (gated; default OFF during the build-out).
+        //
+        // PLACEMENT RATIONALE. The scan runs AFTER SimilarityPair (and the table residue) so that a
+        // better 1:1 pairing always wins first — a clean Modified pair is never torn into a
+        // speculative split; the scan only PROMOTES an existing this-gap Modified pairing when the
+        // run-containment evidence says the partner is one segment of a multi-paragraph split. It
+        // runs BEFORE the 1×1-residue rule and the surplus classification because without it a 1:N
+        // split's members fall through to surplus Inserted/Deleted — exactly the WC-1450/WC-1830
+        // corpus deviation this pass exists to fix — and the residue must still be re-classifiable
+        // when the scan sees it.
+        //
+        // The split scan runs BEFORE the merge scan; every block a split group consumes gets its
+        // match slot stamped, so the merge scan can never reuse it (F2.2 overlap ceiling — no block
+        // is ever a member of two groups).
+        if (settings.DetectSplitMerge)
+        {
+            DetectOneToManyInGap(leftBlocks, rightBlocks, leftFrom, leftTo, rightFrom, rightTo,
+                leftKind, rightKind, leftMatch, rightMatch, leftoverLeft, leftoverRight,
+                IrAlignmentKind.Split, splitGroups, settings);
+            DetectOneToManyInGap(rightBlocks, leftBlocks, rightFrom, rightTo, leftFrom, leftTo,
+                rightKind, leftKind, rightMatch, leftMatch, leftoverRight, leftoverLeft,
+                IrAlignmentKind.Merge, mergeGroups, settings);
         }
 
         // Unambiguous 1×1 residue → Modified regardless of score. When exactly ONE free left and ONE free
@@ -448,6 +483,191 @@ internal static class IrBlockAligner
             leftMatch[bestLeft] = bestRight;
             rightMatch[bestRight] = bestLeft;
         }
+    }
+
+    // ------------------------------------------------------------------ split/merge detection (M2.6)
+
+    /// <summary>
+    /// One-directional 1:N containment scan over a gap, side-parameterized so the SAME worker serves
+    /// both directions: for a SPLIT, singular = left / plural = right (one left paragraph whose
+    /// content migrated across N adjacent right paragraphs); for a MERGE the call mirrors the sides
+    /// (singular = right / plural = left) and stamps <see cref="IrAlignmentKind.Merge"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Candidates (F4.2).</b> A singular-side gap block qualifies only if it is an
+    /// <see cref="IrParagraph"/> that is either still FREE or was Modified-paired BY THIS GAP'S
+    /// SimilarityPair to a plural-side paragraph inside this gap. Unchanged/FormatOnly/Moved blocks
+    /// are NEVER candidates: an identity-reserved (WC022) or content-anchored pair is
+    /// ContentHash-equal, so its singular side has ZERO unmatched tail — promoting it could only
+    /// manufacture a false split out of a genuinely-new neighbor (review finding F4.2; regression
+    /// test <c>Detection_never_promotes_an_identity_reserved_unchanged_pair</c>).</para>
+    /// <para><b>Consumption (F2.2).</b> Scan order is ascending singular index; the first qualifying
+    /// window per candidate wins; fired members get their match slots stamped immediately, and a
+    /// candidate window never admits an already-consumed (non-free, non-partner) index by
+    /// construction — so no block can belong to two groups.</para>
+    /// <para><b>Determinism.</b> Pure index-ascending scans; no dictionary enumeration feeds output.</para>
+    /// </remarks>
+    private static void DetectOneToManyInGap(
+        IrNodeList<IrBlock> singularBlocks, IrNodeList<IrBlock> pluralBlocks,
+        int singularFrom, int singularTo, int pluralFrom, int pluralTo,
+        IrAlignmentKind?[] singularKind, IrAlignmentKind?[] pluralKind,
+        int[] singularMatch, int[] pluralMatch,
+        List<int> leftoverSingular, List<int> leftoverPlural,
+        IrAlignmentKind kind,
+        List<(int SingularIndex, List<int> PluralIndexes)> groups,
+        IrDiffSettings settings)
+    {
+        for (int si = singularFrom; si < singularTo; si++)
+        {
+            if (singularBlocks[si] is not IrParagraph singularPara)
+                continue;
+
+            int partner = -1;
+            if (singularMatch[si] != -1)
+            {
+                // F4.2: only a this-gap Modified pairing may be promoted (see remarks).
+                if (singularKind[si] != IrAlignmentKind.Modified)
+                    continue;
+                partner = singularMatch[si];
+                if (partner < pluralFrom || partner >= pluralTo)
+                    continue;
+            }
+
+            var run = FindQualifyingRun(singularPara, partner, pluralBlocks, pluralFrom, pluralTo,
+                pluralMatch, settings);
+            if (run is null)
+                continue;
+
+            // The gate guarantees a paired candidate's partner is inside the run, so the partner's
+            // prior Modified stamp is overwritten as a member in the loop below — no dissolve step.
+            singularKind[si] = kind;
+            singularMatch[si] = run[0];
+            foreach (int pj in run)
+            {
+                pluralKind[pj] = kind;
+                pluralMatch[pj] = si;
+            }
+
+            groups.Add((si, run));
+
+            // Remove the consumed indices so the 1×1-residue rule and the surplus classification
+            // only see what genuinely remains in the gap.
+            leftoverSingular.Remove(si);
+            foreach (int pj in run)
+                leftoverPlural.Remove(pj);
+        }
+    }
+
+    /// <summary>
+    /// Enumerate candidate windows of ADJACENT eligible plural-side indices (free paragraphs, or the
+    /// candidate's own Modified partner) and return the first — smallest (start, end), both scanned
+    /// ascending — that passes ALL gates after edge trimming, or null. Window length is capped at
+    /// <see cref="IrDiffSettings.SplitMaxRunLength"/>. Shortest-qualifying-first is deliberate:
+    /// the smallest window that already clears the coverage bar absorbs the least foreign content,
+    /// so the group claims no more blocks than the evidence supports (a longer window can only add
+    /// slack, never coverage the smaller one lacked at the same start).
+    /// </summary>
+    private static List<int>? FindQualifyingRun(
+        IrParagraph singular, int partner,
+        IrNodeList<IrBlock> pluralBlocks, int pluralFrom, int pluralTo,
+        int[] pluralMatch, IrDiffSettings settings)
+    {
+        bool Eligible(int pj) =>
+            pluralBlocks[pj] is IrParagraph && (pluralMatch[pj] == -1 || pj == partner);
+
+        for (int a = pluralFrom; a < pluralTo; a++)
+        {
+            if (!Eligible(a))
+                continue;
+            for (int b = a + 1; b < pluralTo && b - a + 1 <= settings.SplitMaxRunLength; b++)
+            {
+                if (!Eligible(b))
+                    break; // adjacency requirement: the window must be a contiguous eligible run
+                var trimmed = TrimAndGate(singular, partner, a, b, pluralBlocks, pluralMatch, settings);
+                if (trimmed is not null)
+                    return trimmed;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Score one window, apply the R2 edge trim, and check the firing gates. Returns the trimmed
+    /// member index list when the window qualifies, else null.
+    /// </summary>
+    /// <remarks>
+    /// <b>R2 edge trim (false-positive guard).</b> Leading and trailing members with ZERO
+    /// LCS-matched content tokens are dropped before gating: an unrelated edge insert (net-new
+    /// neighbor paragraph) and an edge empty carrier (an empty paragraph has no content tokens, so
+    /// it can never match) must not ride along in a split group just because they are adjacent.
+    /// INTERIOR zero-match members — WC-1830's net-new math paragraph between the two halves — are
+    /// deliberately KEPT (absorbed): they sit between matched segments, so excluding them would
+    /// break the run's adjacency, and their foreign content is already priced by the slack gate.
+    /// </remarks>
+    private static List<int>? TrimAndGate(
+        IrParagraph singular, int partner, int a, int b,
+        IrNodeList<IrBlock> pluralBlocks, int[] pluralMatch, IrDiffSettings settings)
+    {
+        var window = new List<int>(b - a + 1);
+        for (int pj = a; pj <= b; pj++)
+            window.Add(pj);
+        var paras = window.Select(pj => (IrParagraph)pluralBlocks[pj]).ToList();
+        var score = IrSplitSegmenter.Score(singular, paras, settings);
+
+        // R2 edge trim (see remarks).
+        int lo = 0, hi = window.Count - 1;
+        while (lo <= hi && score.MemberMatchedContent[lo] == 0)
+            lo++;
+        while (hi >= lo && score.MemberMatchedContent[hi] == 0)
+            hi--;
+        if (hi - lo + 1 < 2)
+            return null;
+        if (lo != 0 || hi != window.Count - 1)
+        {
+            window = window.GetRange(lo, hi - lo + 1);
+            paras = paras.GetRange(lo, hi - lo + 1);
+            score = IrSplitSegmenter.Score(singular, paras, settings);
+        }
+
+        // Gate 1: ≥2 members carrying at least one content token each. Interior empties are absorbed
+        // but do not count toward N — a "split" whose other member is an empty carrier is not a split.
+        int contentMembers = paras.Count(p => HasContentTokens(p, settings));
+        if (contentMembers < 2)
+            return null;
+
+        // Gate 2 (paired candidate only): the partner must survive the trim, and at least one OTHER
+        // member must be free — otherwise nothing new is being claimed beyond the existing pairing.
+        if (partner != -1)
+        {
+            // The window is a contiguous index range — an O(1) bounds check, not a List.Contains scan.
+            if (partner < window[0] || partner > window[window.Count - 1])
+                return null;
+            bool anyFree = false;
+            foreach (int pj in window)
+                if (pj != partner && pluralMatch[pj] == -1)
+                    anyFree = true;
+            if (!anyFree)
+                return null;
+        }
+
+        // Gates 3+4: containment thresholds on the trimmed run.
+        if (score.Coverage < settings.SplitCoverageThreshold)
+            return null;
+        if (score.ForeignSlack > settings.SplitForeignSlack)
+            return null;
+
+        return window;
+    }
+
+    /// <summary>True iff the paragraph tokenizes to at least one content (non-Separator, non-Textbox)
+    /// token — the same content rule <see cref="IrSplitSegmenter"/> scores by.</summary>
+    private static bool HasContentTokens(IrParagraph p, IrDiffSettings settings)
+    {
+        foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+            if (t.Kind is not (IrDiffTokenKind.Separator or IrDiffTokenKind.Textbox))
+                return true;
+        return false;
     }
 
     /// <summary>
@@ -625,14 +845,33 @@ internal static class IrBlockAligner
     /// Emit entries in RIGHT-document order, interleaving Deleted (left-only) entries using the
     /// left-anchored unified-diff convention: each deleted left block is emitted right after the entry
     /// of the nearest PAIRED left block preceding it; deletions before any paired left block go first.
+    /// M2.6: a split group emits ONE <see cref="IrAlignmentKind.Split"/> entry at its FIRST member's
+    /// right position (the other members emit nothing); a merge group emits its
+    /// <see cref="IrAlignmentKind.Merge"/> entry at the singular right block's position.
     /// </summary>
     private static List<IrAlignedBlock> EmitEntries(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
-        int[] leftMatch, int[] rightMatch)
+        int[] leftMatch, int[] rightMatch,
+        List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
+        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups)
     {
+        // O(1) lookups for the right-walk below (lookup only — never enumerated, so determinism
+        // rests purely on the index-ascending walk).
+        // Split group: singular = the one LEFT index, plural = the N right member indexes.
+        // Merge group: singular = the one RIGHT index, plural = the N left member indexes.
+        var splitByFirstMember = new Dictionary<int, (int SingularIndex, List<int> PluralIndexes)>();
+        foreach (var g in splitGroups)
+            splitByFirstMember[g.PluralIndexes[0]] = g;
+        var mergeByRight = new Dictionary<int, (int SingularIndex, List<int> PluralIndexes)>();
+        foreach (var g in mergeGroups)
+            mergeByRight[g.SingularIndex] = g;
+
         // Group deleted left indices by the left index of the nearest preceding PAIRED left block.
         // anchorLeftIndex = the left index whose right-side entry a deletion trails; -1 = emit at front.
+        // Split/merge participants have leftMatch set (the split singular; every merge member), so they
+        // correctly act as lastPairedLeft anchors here; their buckets are flushed by the explicit
+        // EmitDeletions calls in the walk below — each bucket exactly once.
         var deletionsAfterLeft = new Dictionary<int, List<int>>();
         int lastPairedLeft = -1;
         for (int i = 0; i < leftBlocks.Count; i++)
@@ -656,6 +895,35 @@ internal static class IrBlockAligner
 
         for (int j = 0; j < rightBlocks.Count; j++)
         {
+            // A Split-stamped right index emits the group's ONE entry iff it is the FIRST member;
+            // every other member is consumed silently (the TryGetValue miss below) — and must not
+            // re-flush the group's deletion bucket, which the generic path would (every member's
+            // rightMatch points at the same left index).
+            if (rightKind[j] == IrAlignmentKind.Split)
+            {
+                if (splitByFirstMember.TryGetValue(j, out var sg))
+                {
+                    entries.Add(new IrAlignedBlock(IrAlignmentKind.Split, leftBlocks[sg.SingularIndex], null,
+                        IrNodeList.From(sg.PluralIndexes.Select(rj => rightBlocks[rj]).ToList())));
+                    EmitDeletions(deletionsAfterLeft, sg.SingularIndex, leftBlocks, entries);
+                }
+
+                continue;
+            }
+
+            if (rightKind[j] == IrAlignmentKind.Merge)
+            {
+                var mg = mergeByRight[j];
+                entries.Add(new IrAlignedBlock(IrAlignmentKind.Merge, null, rightBlocks[j],
+                    IrNodeList.From(mg.PluralIndexes.Select(mi => leftBlocks[mi]).ToList())));
+
+                // Flush the deletion bucket of EVERY left member, in ascending left order — a
+                // deletion anchored to a non-final member must still flush exactly once.
+                foreach (int mi in mg.PluralIndexes)
+                    EmitDeletions(deletionsAfterLeft, mi, leftBlocks, entries);
+                continue;
+            }
+
             var kind = rightKind[j] ?? IrAlignmentKind.Inserted;
             int li = rightMatch[j];
             IrBlock? leftBlock = li != -1 ? leftBlocks[li] : null;

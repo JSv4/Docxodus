@@ -1,17 +1,24 @@
 #nullable enable
 
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
 using Docxodus.Tests.Ir;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace Docxodus.Tests.Ir.Diff;
 
 /// <summary>M2.6 split/merge unit tests — op model + JSON wire (extended by later tasks: segmenter, detection, projection).</summary>
 public class IrSplitMergeTests
 {
+    private readonly ITestOutputHelper _out;
+
+    public IrSplitMergeTests(ITestOutputHelper output) => _out = output;
+
     private static IrTokenDiff Diff(params IrTokenOp[] ops) => new(IrNodeList.From(ops.ToList()));
 
     private static IrEditOp SplitOp() => new(
@@ -202,6 +209,95 @@ public class IrSplitMergeTests
         }
     }
 
+    // -------- Task 4 Step 1: permanent fixture diagnostic (evidence for the detection design) --------
+
+    /// <summary>
+    /// Dumps the DEFAULT-settings (detection OFF) edit-script op states for the two corpus fixture
+    /// pairs whose 1:N split deviations motivated M2.6 (WC-1830, WC-1450), recursing into TableDiff
+    /// cell BlockOps. This pins the entry states the detection scan must convert.
+    /// </summary>
+    /// <remarks>
+    /// OBSERVED 2026-06-12 (detection OFF), both deviations live INSIDE one cell's block alignment,
+    /// each in a SINGLE gap — the state-(b) shape the Task 4 scan converts:
+    /// <list type="bullet">
+    /// <item><b>WC-1830</b> (WC041-Table-5 vs Mod), cell tc:7e5725…: the split-out run is
+    /// [Insert "Video provides…" | Insert "" (the net-new interior math paragraph, zero content
+    /// tokens) | Modify L"Video provides…"↔R"When you click Online Video…"]. I.e. the singular LEFT
+    /// paragraph is similarity-paired (Modified) to the LAST run member; the two preceding members
+    /// are free Inserts, all adjacent in the same gap. A genuine Delete ("You can also type…")
+    /// follows in the same gap and must remain a Delete.</item>
+    /// <item><b>WC-1450</b> (WC023-Table-4-Row-Image Before vs After-Delete-1-Row), cell
+    /// tc:cd1109…: identical shape — [Insert "Video provides…" | Insert "" | Modify L"Video
+    /// provides…"↔R"When you click…"] + trailing genuine Delete. Cell tc:7e5725… additionally shows
+    /// the partner-FIRST variant: [Modify L↔R-prefix | Insert "When you click…" (the split tail)].</item>
+    /// </list>
+    /// No fixture puts the halves in different gaps and no prefix is consumed by a spine anchor
+    /// outside the gap, so the in-gap containment scan covers both corpus deviations.
+    /// </remarks>
+    [Fact]
+    public void Diagnostic_fixture_cell_alignment_states()
+    {
+        DumpFixture("WC-1830", "WC/WC041-Table-5.docx", "WC/WC041-Table-5-Mod.docx");
+        DumpFixture("WC-1450", "WC/WC023-Table-4-Row-Image-Before.docx",
+            "WC/WC023-Table-4-Row-Image-After-Delete-1-Row.docx");
+    }
+
+    private void DumpFixture(string label, string leftRel, string rightRel)
+    {
+        const string root = "../../../../TestFiles/";
+        var settings = new IrDiffSettings(); // DetectSplitMerge defaults FALSE — baseline states
+        var left = IrReader.Read(new WmlDocument(Path.Combine(root, leftRel)), WcCorpus.ReadOpts);
+        var right = IrReader.Read(new WmlDocument(Path.Combine(root, rightRel)), WcCorpus.ReadOpts);
+        var script = IrEditScriptBuilder.Build(left, right, settings);
+
+        _out.WriteLine($"==== {label}: {leftRel} vs {rightRel} ====");
+        DumpOps(script.Operations, left, right, settings, indent: "");
+        _out.WriteLine("");
+
+        // Minimal regression canary (the dump itself is the diagnostic): the baseline (detection-OFF)
+        // script must still contain the cell-level Modified pairing the state-(b) account documents —
+        // if this fails, the recorded entry states above are stale and must be re-derived.
+        bool anyCellModify = script.Operations.Any(o => o.TableDiff is { } td2 &&
+            td2.RowOps.Any(rw => rw.CellOps is { } cs && cs.Any(c => c.BlockOps is { } bs &&
+                bs.Any(b => b.Kind == IrEditOpKind.ModifyBlock))));
+        Assert.True(anyCellModify, $"{label}: expected a cell-level ModifyBlock in the baseline script.");
+    }
+
+    private void DumpOps(
+        IEnumerable<IrEditOp> ops, IrDocument left, IrDocument right, IrDiffSettings settings, string indent)
+    {
+        foreach (var op in ops)
+        {
+            _out.WriteLine(
+                $"{indent}{op.Kind} L={op.LeftAnchor ?? "-"} [{BlockText(left, op.LeftAnchor, settings)}] " +
+                $"R={op.RightAnchor ?? "-"} [{BlockText(right, op.RightAnchor, settings)}]");
+            if (op.TableDiff is { } td)
+            {
+                foreach (var row in td.RowOps)
+                {
+                    _out.WriteLine($"{indent}  row {row.Kind} L={row.LeftRowAnchor ?? "-"} R={row.RightRowAnchor ?? "-"}");
+                    if (row.CellOps is { } cells)
+                        foreach (var cell in cells)
+                        {
+                            _out.WriteLine($"{indent}    cell L={cell.LeftCellAnchor ?? "-"} R={cell.RightCellAnchor ?? "-"}");
+                            if (cell.BlockOps is { } blockOps)
+                                DumpOps(blockOps, left, right, settings, indent + "      ");
+                        }
+                }
+            }
+        }
+    }
+
+    private static string BlockText(IrDocument doc, string? anchor, IrDiffSettings settings)
+    {
+        if (anchor is null || !doc.AnchorIndex.TryGetValue(anchor, out var block))
+            return "";
+        if (block is not IrParagraph p)
+            return $"<{block.GetType().Name}>";
+        string text = string.Concat(IrDiffTokenizer.Tokenize(p, settings).Select(t => t.Text));
+        return text.Length <= 40 ? text : text[..40] + "…";
+    }
+
     [Fact]
     public void MirrorDiff_swaps_sides_and_flips_insert_delete()
     {
@@ -215,5 +311,131 @@ public class IrSplitMergeTests
         Assert.Equal(new IrTokenOp(IrTokenOpKind.Equal, 0, 3, 2, 5), mirrored.Ops[1]);
         // Mirroring twice is the identity.
         Assert.Equal(diff, IrSplitSegmenter.MirrorDiff(mirrored));
+    }
+
+    // -------- detection (Task 4) --------
+
+    private static IrBlockAlignment Align(IrDocument l, IrDocument r, IrDiffSettings s) =>
+        IrBlockAligner.Align(l, r, s);
+
+    [Fact]
+    public void Detection_fires_for_a_clean_two_way_split()
+    {
+        // NB: this enters detection as state (b) — each half's Jaccard vs the whole (~0.56) clears the
+        // 0.5 BlockSimilarityThreshold, so SimilarityPair pairs L with R0 first and the scan PROMOTES
+        // the pairing. The genuinely-free state-(a) path is exercised by the three-way test below.
+        var (l, _) = ReadParas("aaa bbb ccc ddd. eee fff ggg hhh.", "unrelated anchor paragraph one two three.");
+        var (r, _) = ReadParas("aaa bbb ccc ddd. ", "eee fff ggg hhh.", "unrelated anchor paragraph one two three.");
+        var a = Align(l, r, S);
+        IrAlignmentAsserts.AssertInvariants(l, r, a, S);
+        var split = a.Entries.Single(e => e.Kind == IrAlignmentKind.Split);
+        Assert.Equal(2, split.MultiBlocks!.Count);
+        Assert.Equal(0, IrAlignmentAsserts.Count(a, IrAlignmentKind.Inserted));
+        Assert.Equal(0, IrAlignmentAsserts.Count(a, IrAlignmentKind.Deleted));
+    }
+
+    [Fact]
+    public void Detection_fires_for_a_fully_free_three_way_split() // state (a): SimilarityPair declines
+    {
+        // Each third's Jaccard vs the whole is ~1/3 < 0.5, so SimilarityPair declines every pairing and
+        // the candidate L reaches the scan genuinely FREE — the partner == -1 fire path.
+        var (l, _) = ReadParas("aaa bbb ccc ddd. eee fff ggg hhh. iii jjj kkk lll.",
+            "anchor one two three four five.");
+        var (r, _) = ReadParas("aaa bbb ccc ddd. ", "eee fff ggg hhh. ", "iii jjj kkk lll.",
+            "anchor one two three four five.");
+        var a = Align(l, r, S);
+        IrAlignmentAsserts.AssertInvariants(l, r, a, S);
+        var split = a.Entries.Single(e => e.Kind == IrAlignmentKind.Split);
+        Assert.Equal(3, split.MultiBlocks!.Count);
+        Assert.Equal(0, IrAlignmentAsserts.Count(a, IrAlignmentKind.Inserted));
+        Assert.Equal(0, IrAlignmentAsserts.Count(a, IrAlignmentKind.Deleted));
+    }
+
+    [Fact]
+    public void Detection_absorbs_an_interior_net_new_block() // the WC-1830 math-paragraph shape
+    {
+        var (l, _) = ReadParas("aaa bbb ccc ddd eee fff. ggg hhh iii jjj kkk lll.");
+        var (r, _) = ReadParas("aaa bbb ccc ddd eee fff. ", "zzz", "ggg hhh iii jjj kkk lll.");
+        var a = Align(l, r, S);
+        var split = a.Entries.Single(e => e.Kind == IrAlignmentKind.Split);
+        Assert.Equal(3, split.MultiBlocks!.Count); // interior net-new member absorbed
+        // The absorbed member must not ALSO surface as a plain Insert (consumed exactly once).
+        Assert.Equal(0, IrAlignmentAsserts.Count(a, IrAlignmentKind.Inserted));
+    }
+
+    [Fact]
+    public void Detection_promotes_a_similarity_paired_prefix_with_trailing_tail_inserts() // state (b)
+    {
+        // Prefix dominant enough that SimilarityPair pairs L with R0 (Jaccard > 0.5), tail falls out free.
+        var (l, _) = ReadParas("aaa bbb ccc ddd eee fff ggg hhh iii jjj. kkk lll.");
+        var (r, _) = ReadParas("aaa bbb ccc ddd eee fff ggg hhh iii jjj. ", "kkk lll.");
+        var a = Align(l, r, S);
+        Assert.Single(a.Entries.Where(e => e.Kind == IrAlignmentKind.Split));
+        Assert.Equal(0, IrAlignmentAsserts.Count(a, IrAlignmentKind.Modified));
+    }
+
+    [Fact]
+    public void Detection_does_not_fire_on_keyword_coincidence()
+    {
+        var (l, _) = ReadParas("the contract terminates on delivery of the goods.");
+        var (r, _) = ReadParas("the parties agree on many things today.", "delivery of pizza is unrelated to goods.");
+        var a = Align(l, r, S);
+        Assert.Empty(a.Entries.Where(e => e.Kind is IrAlignmentKind.Split or IrAlignmentKind.Merge));
+    }
+
+    [Fact]
+    public void Detection_excludes_an_unrelated_edge_insert_from_the_run() // R2 guard
+    {
+        var (l, _) = ReadParas("aaa bbb ccc ddd. eee fff ggg hhh.", "anchor one two three four five.");
+        var (r, _) = ReadParas("aaa bbb ccc ddd. ", "eee fff ggg hhh.",
+            "totally unrelated new paragraph words.", "anchor one two three four five.");
+        var a = Align(l, r, S);
+        var split = a.Entries.Single(e => e.Kind == IrAlignmentKind.Split);
+        Assert.Equal(2, split.MultiBlocks!.Count); // edge net-new EXCLUDED → stays a plain Insert
+        Assert.Equal(1, IrAlignmentAsserts.Count(a, IrAlignmentKind.Inserted));
+    }
+
+    [Fact]
+    public void Detection_never_promotes_an_identity_reserved_unchanged_pair() // F4.2 / WC022 guard
+    {
+        // Content-equal pair (same text) + a following insert: an Unchanged pair has NO unmatched
+        // tail (ContentHash-equal ⇒ all tokens matched), so the insert is genuinely new — no split.
+        var (l, _) = ReadParas("same text here one two three.");
+        var (r, _) = ReadParas("same text here one two three.", "a new paragraph appended after.");
+        var a = Align(l, r, S);
+        Assert.Empty(a.Entries.Where(e => e.Kind == IrAlignmentKind.Split));
+        Assert.Equal(1, IrAlignmentAsserts.Count(a, IrAlignmentKind.Unchanged));
+        Assert.Equal(1, IrAlignmentAsserts.Count(a, IrAlignmentKind.Inserted));
+    }
+
+    [Fact]
+    public void Detection_merge_mirror_fires_for_a_clean_merge()
+    {
+        var (l, _) = ReadParas("aaa bbb ccc ddd. ", "eee fff ggg hhh.", "anchor one two three four.");
+        var (r, _) = ReadParas("aaa bbb ccc ddd. eee fff ggg hhh.", "anchor one two three four.");
+        var a = Align(l, r, S);
+        var merge = a.Entries.Single(e => e.Kind == IrAlignmentKind.Merge);
+        Assert.Equal(2, merge.MultiBlocks!.Count);
+    }
+
+    [Fact]
+    public void Detection_two_adjacent_splits_never_share_a_right_block() // F2.2
+    {
+        var (l, _) = ReadParas("aaa bbb ccc. ddd eee fff.", "ggg hhh iii. jjj kkk lll.");
+        var (r, _) = ReadParas("aaa bbb ccc. ", "ddd eee fff.", "ggg hhh iii. ", "jjj kkk lll.");
+        var a = Align(l, r, S);
+        var splits = a.Entries.Where(e => e.Kind == IrAlignmentKind.Split).ToList();
+        Assert.Equal(2, splits.Count);
+        var members = splits.SelectMany(e => e.MultiBlocks!).ToList();
+        Assert.Equal(members.Count, members.Distinct(ReferenceEqualityComparer.Instance).Count());
+    }
+
+    [Fact]
+    public void Detection_off_by_default_changes_nothing()
+    {
+        var (l, _) = ReadParas("aaa bbb ccc ddd. eee fff ggg hhh.");
+        var (r, _) = ReadParas("aaa bbb ccc ddd. ", "eee fff ggg hhh.");
+        var a = Align(l, r, new IrDiffSettings()); // DetectSplitMerge false
+        Assert.Empty(a.Entries.Where(e => e.Kind is IrAlignmentKind.Split or IrAlignmentKind.Merge));
     }
 }
