@@ -99,21 +99,32 @@ public class IrMarkupRendererTests
         using var ms = new MemoryStream(doc.DocumentByteArray);
         using var wd = WordprocessingDocument.Open(ms, false);
         var bodyRoot = wd.MainDocumentPart!.GetXDocument().Root!;
-        var referencedFn = bodyRoot.Descendants(W.footnoteReference)
-            .Select(e => (string?)e.Attribute(W.id)).Where(s => s != null).ToHashSet(StringComparer.Ordinal);
-        var referencedEn = bodyRoot.Descendants(W.endnoteReference)
-            .Select(e => (string?)e.Attribute(W.id)).Where(s => s != null).ToHashSet(StringComparer.Ordinal);
+
+        // Order notes by BODY-REFERENCE DOCUMENT ORDER, not by absolute numeric id. The note-id renumber pass
+        // (M2.6 Task 1) mirrors the oracle (ChangeFootnoteEndnoteReferencesToUniqueRange): it numbers refs by the
+        // ACCEPTED body's reference order, so an equal/matched note carries its right-side ordinal even after
+        // reject leaves only a subsequence of those refs. Comparing by reference position (the content actually
+        // surfaced in reading order) — rather than the absolute id baked into a tag — is the semantically faithful
+        // round-trip invariant the oracle itself satisfies (accept-by-right-order, reject-by-left-order), and is
+        // robust to the legitimate id divergence between the two sides. The first reference to a note fixes its
+        // position; the scope tag still partitions footnotes from endnotes.
+        List<string> ReferenceOrder(XName refName) =>
+            bodyRoot.Descendants(refName).Select(e => (string?)e.Attribute(W.id))
+                .Where(s => s != null).Select(s => s!).Distinct().ToList();
+        var referencedFn = ReferenceOrder(W.footnoteReference);
+        var referencedEn = ReferenceOrder(W.endnoteReference);
 
         var hashes = new List<string>();
         foreach (var (scopeTag, store, referenced) in new[]
                  { ("fn", ir.Footnotes, referencedFn), ("en", ir.Endnotes, referencedEn) })
         {
-            foreach (var id in store.Notes.Keys
-                         .Where(k => referenced.Contains(k))
-                         .OrderBy(k => int.TryParse(k, out var n) ? n : int.MaxValue).ThenBy(k => k, StringComparer.Ordinal))
+            int ordinal = 0;
+            foreach (var id in referenced)
             {
-                hashes.Add($"{scopeTag}#{id}");
-                foreach (var b in store.Notes[id].Blocks)
+                if (!store.Notes.TryGetValue(id, out var note))
+                    continue;
+                hashes.Add($"{scopeTag}#{ordinal++}");
+                foreach (var b in note.Blocks)
                     CollectHashes(b, hashes);
             }
         }
@@ -748,33 +759,23 @@ public class IrMarkupRendererTests
     /// entry below carries its PRECISE root cause. This allowlist is a RATCHET — the invariant test asserts
     /// EVERY other pair round-trips AND that no allowlisted pair UNEXPECTEDLY passes (a fixed-early pair must be
     /// removed). The Task-4 burndown drove this from 11 to 6 distinct root causes; M2.5 Task 3 then closed WC019
-    /// (RevisionProcessor reject del/ins under w:hyperlink + empty-hyperlink-shell drop), leaving 3 entries:
-    /// WC034 foot+end (note renumber/reorder markup — share one cause), WC022 (adjacent-empty-paragraph
-    /// alignment ordering), and WC-BodyBookmarks (endnote→footnote note-store conversion).
+    /// (RevisionProcessor reject del/ins under w:hyperlink + empty-hyperlink-shell drop), and M2.6 Task 1 closed
+    /// WC034 foot+end (the note-id renumber/reorder pass — IrMarkupRenderer.RenumberNoteIds), leaving 2 entries:
+    /// WC022 (adjacent-empty-paragraph alignment ordering) and WC-BodyBookmarks (endnote→footnote note-store
+    /// conversion).
     /// </summary>
     private static readonly HashSet<string> Task4BlockedPairs = new(StringComparer.Ordinal)
     {
-        // Footnote/endnote SCOPE markup, the WC034-After3 note-renumbering family (see the parity scoreboard
-        // catalog WC-1710/1720). In WC034-After3 a note reference (id=1) is relocated INTO THE MIDDLE of the
-        // body word `Video` (verified: runs `Vi`[note-ref]`deo` vs Before's contiguous `Video `[note-ref]) AND
-        // the note store is RENUMBERED (a new note inserted at id=1 pushes Before's note content to id=2).
-        // M2.5 Task 1 FIXED the note-ref-within-word TOKENIZATION and M2.5 Task 3 FIXED the note-store
-        // CORRESPONDENCE: the GetRevisions parity rows WC-1710/1720 are now GENUINE PASSES (notes pair by
-        // body-reference order + content, not raw w:id — IrEditScriptBuilder.BuildOneStore). The note CONTENT
-        // the markup produces is now CORRECT (verified: accept yields all three right endnotes' text, reject
-        // yields the single left endnote's text). The SURVIVING blocker is purely the note-element ORDER in the
-        // produced part: a matched note pairs left-en#1 → right-en#2, so the rendered note element stays at the
-        // left's part position (1) while RIGHT orders the notes by their renumbered ids (en#1=`New`, en#2=`…with
-        // a change`, en#3=`Yet`), so the accepted part's note ELEMENT order is [en2,en1,en3] vs RIGHT's
-        // [en1,en2,en3] — the ACCEPT-NOTES/REJECT-NOTES element-sequence check fails though every note's content
-        // matches. Closing it needs the note markup renderer to RENUMBER matched notes to their right ids and
-        // REORDER the produced part's note elements to right note order (while keeping reject→left order via the
-        // reference-order mapping the oracle's ChangeFootnoteEndnoteReferencesToUniqueRange establishes) — a
-        // note-renumber/reorder markup pass, NOT the correspondence (now done) and NOT the note-ref tokenization
-        // (done). The deferred item #5 (note-store renumber/reorder) class; the correspondence + body-side
-        // attribution are CLOSED.
-        "WC034-Footnotes-Before.docx↔WC034-Footnotes-After3.docx",
-        "WC034-Endnotes-Before.docx↔WC034-Endnotes-After3.docx",
+        // (M2.6 Task 1 — CLOSED) The WC034-After3 note-renumber family. The note CONTENT round-tripped after M2.5
+        // Task 3 fixed the note-store CORRESPONDENCE (notes pair by body-reference order + content, not raw w:id);
+        // the SURVIVING residual was purely the note-element id/ORDER in the produced part — a matched note paired
+        // left-en#1 → right-en#2 but the produced definition kept the LEFT id at the LEFT part position, so the
+        // accepted part's note sequence was [en2,en1,en3] vs RIGHT's [en1,en2,en3]. Closed by the note-id renumber
+        // pass (IrMarkupRenderer.RenumberNoteIds) mirroring the oracle's ChangeFootnoteEndnoteReferencesToUniqueRange:
+        // body references are renumbered to document order (base 1, separator/continuation boilerplate reserved),
+        // each definition renumbered + reordered to match, del references resolving deleted-only defs and ins/equal
+        // references resolving the live (matched/inserted) def. Both directions now round-trip clean (ACCEPT==RIGHT
+        // notes, REJECT==LEFT notes) — removed from the allowlist.
         // (M2.4b Workstream A — CLOSED, 3 of 4) The SmartArt diagram rel-id family (WC014 ×2 + WC052) was here
         // as DEVIATIONS: an UNCHANGED diagram's relationship ids renumber between revisions (and on accept
         // MoveRelatedPartsToDestination mints fresh "R…" ids), and its wp:docPr/@id renumbers (1 vs 2), so the

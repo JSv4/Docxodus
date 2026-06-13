@@ -152,9 +152,17 @@ internal static class IrEditScriptBuilder
                     .ToList();
             }
 
-            // A matched note whose alignment is entirely EqualBlock/FormatOnly carries no real change; only
-            // emit a note diff when something actually changed, so an unedited note produces zero revisions.
-            if (ops.Any(o => o.Kind is not IrEditOpKind.EqualBlock))
+            // A matched note whose alignment is entirely EqualBlock/FormatOnly carries no real change; normally we
+            // emit no note diff so an unedited note produces zero revisions. EXCEPTION: a matched note whose left
+            // and right ids DIFFER (an inserted reference shifted the numbering) still needs an entry so the markup
+            // renderer can reconcile the produced definition's id to the right id space — without it the renumber
+            // pass cannot link the equal body reference (right id) to its definition (still at the left id), and
+            // accept/reject would dangle. The all-EqualBlock ops project to NO revisions (EqualBlock is a no-op in
+            // IrRevisionRenderer), so the revisions surface and its counts are unchanged; only the markup renderer
+            // acts on the entry (re-id + content passthrough).
+            bool hasRealChange = ops.Any(o => o.Kind is not IrEditOpKind.EqualBlock);
+            bool idShifted = hasLeft && hasRight && leftId != rightId;
+            if (hasRealChange || idShifted)
                 diffs.Add(new IrNoteDiff(kind, scopeId, IrNodeList.From(ops), hasLeft ? leftId : null));
         }
         return diffs;

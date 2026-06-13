@@ -188,6 +188,16 @@ internal static class IrMarkupRenderer
                 if (script.NoteOps is { Count: > 0 })
                     RenderNoteScopes(script.NoteOps, state, wDoc, main, wDocRight, settings);
 
+                // Note-id renumber pass (M2.6 Task 1): mirror the oracle's ChangeFootnoteEndnoteReferencesToUniqueRange.
+                // Walk the produced body in document order; every footnote/endnote reference gets a sequential id
+                // (body-reference order, base 1), each note DEFINITION is renumbered + reordered to match, and the
+                // reserved separator/continuation boilerplate notes keep their ids. Runs for EVERY render (cheap and
+                // idempotent when ids already coincide) so accept-by-right-order / reject-by-left-order both hold.
+                RenumberNoteIds(main, W.footnoteReference, W.footnote, W.footnotes,
+                    main.FootnotesPart, wDocRight.MainDocumentPart?.FootnotesPart);
+                RenumberNoteIds(main, W.endnoteReference, W.endnote, W.endnotes,
+                    main.EndnotesPart, wDocRight.MainDocumentPart?.EndnotesPart);
+
                 // Carry right-only styles + numbering into the left-based package.
                 if (main.StyleDefinitionsPart != null &&
                     wDocRight.MainDocumentPart?.StyleDefinitionsPart != null)
@@ -603,6 +613,18 @@ internal static class IrMarkupRenderer
             // Replace the note's block-level children (w:p / w:tbl), keeping any non-block prelude.
             noteEl.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).Remove();
             noteEl.Add(noteBlocks);
+
+            // Re-id a MATCHED note's definition to its RIGHT/scope id so the definition shares an id space with
+            // the body's ins/equal references (which clone from the RIGHT and carry the right id). The output part
+            // was seeded from the LEFT, so a matched note still carries its LEFT id here — left and right id spaces
+            // diverge whenever an inserted note shifts the numbering (WC034-After3: matched left-en#1 → right-en#2).
+            // Without this, the equal body reference (right id) and its definition (left id) disagree and the
+            // RenumberNoteIds pass below cannot link them. Del-only notes (no diff, left content only) keep their
+            // LEFT id and are reconciled by the renumber pass via their del reference. Right ids never collide with
+            // a kept left id here because matched notes move OUT of the left space and inserted notes were created
+            // in the right space.
+            if (diff.LeftNoteId != null && diff.NoteId != diff.LeftNoteId)
+                noteEl.SetAttributeValue(W.id, diff.NoteId);
             changed = true;
         }
 
@@ -614,6 +636,119 @@ internal static class IrMarkupRenderer
                 attr.Remove();
             part.PutXDocument();
         }
+    }
+
+    // ----------------------------------------------------------------- note-id renumber (M2.6 Task 1)
+
+    /// <summary>
+    /// Renumber footnote/endnote ids in the produced package to <b>body-reference document order</b>, mirroring
+    /// <see cref="WmlComparer"/>'s <c>ChangeFootnoteEndnoteReferencesToUniqueRange</c>. Walk every body reference
+    /// (<paramref name="refName"/>) in document order; the n-th reference (1-based) names note ordinal <c>n</c>.
+    /// Each reference's <c>@w:id</c> is rewritten to <c>n</c> and its definition (matched by side: a reference
+    /// inside <c>w:del</c> resolves a LEFT-sourced definition, an <c>w:ins</c>/equal reference a RIGHT-sourced one)
+    /// is renumbered to <c>n</c> and emitted in that order. Reserved separator/continuation boilerplate notes
+    /// (<c>w:type</c> present, or id ≤ 0) keep their ids and lead the part. Definitions that no surviving reference
+    /// names are still carried (after the renumbered ones, original order) so accept/reject — which drop the
+    /// opposite side's references — never dangle: each surviving reference still resolves, and the kept ids stay an
+    /// ASCENDING subsequence of the renumbered space, so the read-order note sequence matches the right document on
+    /// accept and the left on reject. Idempotent when ids already coincide; runs for every render.
+    /// </summary>
+    private static void RenumberNoteIds(MainDocumentPart main, XName refName, XName noteName, XName rootName,
+        OpenXmlPart? notePart, OpenXmlPart? rightNotePart)
+    {
+        if (notePart == null)
+            return;
+        var noteXDoc = notePart.GetXDocument();
+        var noteRoot = noteXDoc.Root;
+        if (noteRoot == null)
+            return;
+
+        // Partition: reserved boilerplate (kept verbatim, leads the part) vs real notes (renumber candidates).
+        bool IsReserved(XElement note) =>
+            note.Attribute(W.type) != null ||
+            (int.TryParse((string?)note.Attribute(W.id), out var nid) && nid <= 0);
+        var reserved = noteRoot.Elements(noteName).Where(IsReserved).ToList();
+        var realNotes = noteRoot.Elements(noteName).Where(e => !IsReserved(e)).ToList();
+
+        // Reference walk in document order. Each reference's revision side selects which definition it names.
+        var mainXDoc = main.GetXDocument();
+        var bodyRefs = mainXDoc.Root?.Element(W.body)?.Descendants(refName).ToList() ?? new List<XElement>();
+        if (bodyRefs.Count == 0)
+        {
+            // No references — nothing to renumber against; leave the part as-is.
+            return;
+        }
+
+        // A definition is DELETED-ONLY (left-sourced, vanishes on accept) iff every run carrying text is inside a
+        // w:del — i.e. it has w:delText and no live w:t outside a w:del. Its body reference lives in a w:del. A
+        // NON-deleted definition (matched or inserted) is named by an ins/equal reference. This deletedness — NOT
+        // the raw id — is the reliable side discriminator: left and right ids can collide numerically (a deleted
+        // note and a matched note can BOTH land on id 1), but a del reference always names a deleted-only def and
+        // an ins/equal reference always names a non-deleted def. Partitioning the defs this way mirrors the
+        // oracle's disjoint left/right id ranges without needing the preprocess range trick.
+        bool IsDeletedOnly(XElement note)
+        {
+            bool hasLiveText = note.Descendants(W.t)
+                .Any(t => !t.Ancestors().Any(a => a.Name == W.del));
+            bool hasDelText = note.Descendants(W.delText).Any();
+            return hasDelText && !hasLiveText;
+        }
+        var delDefs = new Queue<XElement>(realNotes.Where(IsDeletedOnly));
+        var liveById = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var note in realNotes.Where(n => !IsDeletedOnly(n)))
+        {
+            var id = (string?)note.Attribute(W.id);
+            if (id != null) liveById[id] = note;   // last wins; ids are unique among live defs post matched-id fix
+        }
+
+        var orderedDefs = new List<XElement>();
+        var assignedIdByDef = new Dictionary<XElement, string>();
+        int next = 1;
+        foreach (var r in bodyRefs)
+        {
+            var oldId = (string?)r.Attribute(W.id);
+            if (oldId == null) continue;
+            bool isDel = r.Ancestors().Any(a => a.Name == W.del);
+            // del → next deleted-only definition (in produced part order); ins/equal → the live definition with the
+            // reference's (right) id.
+            XElement? def = isDel
+                ? (delDefs.Count > 0 ? delDefs.Dequeue() : null)
+                : liveById.GetValueOrDefault(oldId);
+
+            // A note referenced more than once corresponds once: the FIRST reference fixes its id; later references
+            // to the same definition reuse it (mirroring the builder's first-reference-wins correspondence).
+            if (def != null && assignedIdByDef.TryGetValue(def, out var existing))
+            {
+                r.SetAttributeValue(W.id, existing);
+                continue;
+            }
+
+            var newId = next.ToString();
+            r.SetAttributeValue(W.id, newId);
+            next++;
+            if (def != null)
+            {
+                def.SetAttributeValue(W.id, newId);
+                assignedIdByDef[def] = newId;
+                orderedDefs.Add(def);
+            }
+        }
+
+        // Carry any real definitions no surviving reference named (defensive: orphaned/unreferenced notes), after
+        // the renumbered ones, preserving their relative order and existing ids.
+        foreach (var note in realNotes)
+            if (!assignedIdByDef.ContainsKey(note))
+                orderedDefs.Add(note);
+
+        // Rewrite the part: reserved boilerplate first, then notes in body-reference order.
+        noteRoot.Elements(noteName).Remove();
+        foreach (var note in reserved)
+            noteRoot.Add(note);
+        foreach (var note in orderedDefs)
+            noteRoot.Add(note);
+
+        main.PutXDocument();
+        notePart.PutXDocument();
     }
 
     // ----------------------------------------------------------------- native move markup
