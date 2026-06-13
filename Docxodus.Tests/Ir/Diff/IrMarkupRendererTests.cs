@@ -720,15 +720,17 @@ public class IrMarkupRendererTests
     /// </summary>
     private static readonly HashSet<string> Task4BlockedPairs = new(StringComparer.Ordinal)
     {
-        // Footnote/endnote SCOPE markup with a WC-1710/1720-family aligner artifact (NOT a renderer gap). In
-        // WC034-After3 the footnote-reference RENUMBER between revisions perturbs the body LCS so the aligner
-        // pairs the "Video provides…" paragraph (which carries the note reference) as delete+insert instead of
-        // modify. The note REFERENCE therefore rides the body del/ins: reject removes the (wrongly-inserted)
-        // fn#1 reference and keeps the fn#2 reference, so the REFERENCED note set after reject does not match
-        // LEFT's. This is the same engine alignment artifact catalogued as the WC-1710/WC-1720 documented
-        // deviation in the parity scoreboard — stabilizing it is a reader/aligner change (stable note-ref
-        // hashing across renumber), out of renderer scope. The note CONTENT markup itself is correct (verified
-        // for fn#1's modify + fn#2's insert); only the body-side reference attribution diverges.
+        // Footnote/endnote SCOPE markup, the WC-1710/1720 note-ref-within-word family (M2.4b WS-C corrected
+        // root cause — see the parity scoreboard catalog). In WC034-After3 a note reference (id=1) is relocated
+        // INTO THE MIDDLE of the body word `Video` (verified in the raw OOXML: runs `Vi`[note-ref]`deo` vs
+        // Before's contiguous `Video `[note-ref]), so the `Video`-bearing paragraph's atoms genuinely change.
+        // WmlComparer correctly reports that as a body del+ins carrying the note reference; the IR's id-less,
+        // per-run note-ref tokenization treats the word as unchanged, so the body-side note-REFERENCE
+        // attribution diverges and reject's REFERENCED note set does not match LEFT's. The note CONTENT markup
+        // is correct (fn#1 modify + fn#2 insert verified); only the body-side reference attribution diverges.
+        // ORACLE CORRECT — closing this needs the deferred tokenizer change (model a note-ref's position WITHIN
+        // a word as word content), an M2.5 item, NOT a renderer gap. Same root as the WC-1710/1720 scoreboard
+        // deviation.
         "WC034-Footnotes-Before.docx↔WC034-Footnotes-After3.docx",
         "WC034-Endnotes-Before.docx↔WC034-Endnotes-After3.docx",
         // (M2.4b Workstream A — CLOSED, 3 of 4) The SmartArt diagram rel-id family (WC014 ×2 + WC052) was here
