@@ -70,6 +70,29 @@ internal enum IrEditOpKind
     /// surface is stable; it activates automatically when the aligner starts producing the kind.</para>
     /// </summary>
     MoveModifyBlock,
+
+    /// <summary>
+    /// One LEFT paragraph whose content migrated, in order, across N≥2 RIGHT paragraphs (a paragraph
+    /// SPLIT — M2.6). The singular side rides <see cref="IrEditOp.LeftAnchor"/>; the ordered right
+    /// anchors ride <see cref="IrEditOp.SplitMergeAnchors"/> with one complete per-segment token diff
+    /// each in <see cref="IrEditOp.SegmentDiffs"/> (slice-local left spans; the slices tile the left
+    /// token stream exactly — the partition invariant the apply-verifier enforces).
+    /// <para><b>N:M is rejected by <c>AssertSplitMergePairing</c> + never emitted by the builder; the
+    /// field set physically permits it (nullable fields), so the pairing assert is load-bearing —
+    /// a SplitBlock must carry a null <see cref="IrEditOp.RightAnchor"/>.</b></para>
+    /// </summary>
+    SplitBlock,
+
+    /// <summary>
+    /// N≥2 adjacent LEFT paragraphs fused into one RIGHT paragraph (a paragraph MERGE — the byte-mirror
+    /// of <see cref="SplitBlock"/>; M2.6). Singular side rides <see cref="IrEditOp.RightAnchor"/>;
+    /// the ordered left anchors ride <see cref="IrEditOp.SplitMergeAnchors"/>; <see cref="IrEditOp.SegmentDiffs"/>
+    /// holds one diff per left block against the corresponding slice of the right token stream.
+    /// <see cref="IrEditOp.LeftAnchor"/> must be null (pairing-assert-enforced; see SplitBlock note).
+    /// Shipped alongside split as apply-path CONFIDENCE for the N↔1 reconstruction machinery + fuzzer
+    /// coverage — no corpus deviation demands it (the two retained deviations are both splits).
+    /// </summary>
+    MergeBlock,
 }
 
 /// <summary>
@@ -92,6 +115,13 @@ internal enum IrEditOpKind
 /// <see cref="MoveGroupId"/> and <see cref="IsMoveSource"/> set. The SOURCE op (<see cref="IsMoveSource"/>
 /// = true) sets <see cref="LeftAnchor"/>; the DESTINATION op (<see cref="IsMoveSource"/> = false) sets
 /// <see cref="RightAnchor"/>. A MoveModify DESTINATION additionally carries <see cref="TokenDiff"/>.</item>
+/// <item><see cref="IrEditOpKind.SplitBlock"/>: <see cref="LeftAnchor"/> set, <see cref="RightAnchor"/> null;
+/// <see cref="SplitMergeAnchors"/> carries the N≥2 right-doc anchors in document order; <see cref="SegmentDiffs"/>
+/// carries one <see cref="IrTokenDiff"/> per right segment (same count), with slice-local left spans that tile
+/// the left token stream (partition invariant); all move fields null.</item>
+/// <item><see cref="IrEditOpKind.MergeBlock"/>: <see cref="RightAnchor"/> set, <see cref="LeftAnchor"/> null;
+/// <see cref="SplitMergeAnchors"/> carries the N≥2 left anchors; <see cref="SegmentDiffs"/> holds one diff
+/// per left block against the corresponding slice of the right token stream; mirror of SplitBlock otherwise.</item>
 /// </list>
 /// </remarks>
 internal sealed record IrEditOp(
@@ -102,7 +132,9 @@ internal sealed record IrEditOp(
     int? MoveGroupId,
     bool? IsMoveSource,
     IrTableDiff? TableDiff = null,
-    IrNodeList<IrTextboxDiff>? TextboxDiffs = null);
+    IrNodeList<IrTextboxDiff>? TextboxDiffs = null,
+    IrNodeList<string>? SplitMergeAnchors = null,
+    IrNodeList<IrTokenDiff>? SegmentDiffs = null);
 
 /// <summary>
 /// The nested inner-block diff of ONE textbox pair inside a Modified paragraph (M2.4 Task 1). A paragraph

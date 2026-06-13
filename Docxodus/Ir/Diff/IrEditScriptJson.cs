@@ -21,7 +21,9 @@ namespace Docxodus.Ir.Diff;
 /// record's nullability). A <c>tokenDiff</c> is <c>{"ops":[ [kind,ls,le,rs,re], … ]}</c> — each token
 /// op a COMPACT 5-element array: an integer kind code (0=Equal,1=Insert,2=Delete,3=FormatChanged) plus
 /// the four half-open span bounds. The compact array keeps a large corpus script terse while staying
-/// fully self-describing for the reader.</para>
+/// fully self-describing for the reader. For <c>SplitBlock</c>/<c>MergeBlock</c> ops, an optional
+/// <c>splitMergeAnchors</c> string array and <c>segmentDiffs</c> array (one tokenDiff object per anchor)
+/// are additionally present; both are omitted on every other kind.</para>
 /// <para><b>Determinism.</b> Field order is fixed in code; numbers are written via
 /// <see cref="Utf8JsonWriter"/> (invariant). Two <see cref="Write"/> calls on equal scripts produce
 /// byte-identical JSON.</para>
@@ -87,6 +89,20 @@ internal static class IrEditScriptJson
                 writer.WriteEndArray();
                 writer.WriteEndObject();
             }
+            writer.WriteEndArray();
+        }
+        if (op.SplitMergeAnchors is { } smAnchors)
+        {
+            writer.WriteStartArray("splitMergeAnchors");
+            foreach (var a in smAnchors)
+                writer.WriteStringValue(a);
+            writer.WriteEndArray();
+        }
+        if (op.SegmentDiffs is { } segDiffs)
+        {
+            writer.WriteStartArray("segmentDiffs");
+            foreach (var d in segDiffs)
+                WriteTokenDiff(writer, d);
             writer.WriteEndArray();
         }
         writer.WriteEndObject();
@@ -246,7 +262,24 @@ internal static class IrEditScriptJson
             }
             textboxDiffs = IrNodeList.From(list);
         }
-        return new IrEditOp(kind, leftAnchor, rightAnchor, tokenDiff, moveGroupId, isMoveSource, tableDiff, textboxDiffs);
+        IrNodeList<string>? splitMergeAnchors = null;
+        if (element.TryGetProperty("splitMergeAnchors", out var sma))
+        {
+            var list = new List<string>();
+            foreach (var a in sma.EnumerateArray())
+                list.Add(a.GetString()!);
+            splitMergeAnchors = IrNodeList.From(list);
+        }
+        IrNodeList<IrTokenDiff>? segmentDiffs = null;
+        if (element.TryGetProperty("segmentDiffs", out var sd))
+        {
+            var list = new List<IrTokenDiff>();
+            foreach (var d in sd.EnumerateArray())
+                list.Add(ReadTokenDiff(d));
+            segmentDiffs = IrNodeList.From(list);
+        }
+        return new IrEditOp(kind, leftAnchor, rightAnchor, tokenDiff, moveGroupId, isMoveSource,
+            tableDiff, textboxDiffs, splitMergeAnchors, segmentDiffs);
     }
 
     private static IrTableDiff ReadTableDiff(JsonElement element)
