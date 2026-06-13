@@ -299,6 +299,7 @@ internal static class IrMarkupRenderer
             EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
     }
 
+
     /// <summary>
     /// Render a Modified table pair from its <see cref="IrTableDiff"/> (Task 4): build the new table from the
     /// RIGHT table's shell (tblPr/tblGrid) with rows assembled per <see cref="IrRowOp"/> — EqualRow passthrough,
@@ -1212,22 +1213,76 @@ internal static class IrMarkupRenderer
 
         foreach (var id in referenced)
         {
-            if (rightHyper.TryGetValue(id, out var hr) && !leftHyper.ContainsKey(id))
+            if (rightHyper.TryGetValue(id, out var hr))
             {
-                // AddHyperlinkRelationship with the explicit id keeps the cloned w:hyperlink/@r:id resolving. A
-                // duplicate-id collision (ArgumentException/InvalidOperationException from the packaging API — the
-                // same id already names a DIFFERENT left relationship) is the only expected failure; we leave that
-                // reference dangling because the hyperlink TEXT is unchanged, so the ContentHash round-trip still
-                // holds (precise rId remap is the Task-4 item). Any OTHER exception propagates.
-                try { leftMain.AddHyperlinkRelationship(hr.Uri, hr.IsExternal, id); }
-                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { }
+                if (!leftHyper.ContainsKey(id))
+                {
+                    // The id is FREE in the left part — recreate the relationship under the SAME id so the
+                    // cloned w:hyperlink/@r:id keeps resolving (the common, no-collision case).
+                    try { leftMain.AddHyperlinkRelationship(hr.Uri, hr.IsExternal, id); }
+                    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { }
+                }
+                else if (hr.Uri is { } hrUri &&
+                         !string.Equals(leftHyper[id].Uri?.ToString(), hrUri.ToString(), StringComparison.Ordinal))
+                {
+                    // COLLISION (WC019): the id already names a DIFFERENT left hyperlink (Before → ericwhite.com,
+                    // After → ericwhite2.com both as rId4). Reusing it would leave the cloned right hyperlink
+                    // pointing at the LEFT target. True rId REMAP: mint a fresh id, recreate the right target
+                    // under it, and rewrite the cloned @r:id so accept reads the RIGHT target. (Same id + same
+                    // target is a no-op — the existing left relationship already resolves correctly.)
+                    string fresh = FreshRelationshipId(leftMain);
+                    leftMain.AddHyperlinkRelationship(hrUri, hr.IsExternal, fresh);
+                    RewriteReferenceId(rightClones, id, fresh);
+                }
             }
-            else if (rightExternal.TryGetValue(id, out var er) && !leftExternalIds.Contains(id))
+            else if (rightExternal.TryGetValue(id, out var er))
             {
-                try { leftMain.AddExternalRelationship(er.RelationshipType, er.Uri, id); }
-                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { }
+                if (!leftExternalIds.Contains(id))
+                {
+                    try { leftMain.AddExternalRelationship(er.RelationshipType, er.Uri, id); }
+                    catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { }
+                }
+                else
+                {
+                    var leftEr = leftMain.ExternalRelationships.FirstOrDefault(r => r.Id == id);
+                    if (er.Uri is { } erUri &&
+                        (leftEr is null || !string.Equals(leftEr.Uri?.ToString(), erUri.ToString(), StringComparison.Ordinal)))
+                    {
+                        // Same collision class for an external (non-hyperlink) relationship: remap to a fresh id.
+                        string fresh = FreshRelationshipId(leftMain);
+                        leftMain.AddExternalRelationship(er.RelationshipType, erUri, fresh);
+                        RewriteReferenceId(rightClones, id, fresh);
+                    }
+                }
             }
         }
+    }
+
+    /// <summary>A relationship id not currently in use by any of the left main part's relationships (parts,
+    /// hyperlinks, and external links alike). Deterministic: the first <c>rId{n}</c> (n ascending from a high
+    /// base that clears typical document ids) that is free.</summary>
+    private static string FreshRelationshipId(MainDocumentPart leftMain)
+    {
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rel in leftMain.Parts) used.Add(rel.RelationshipId);
+        foreach (var rel in leftMain.HyperlinkRelationships) used.Add(rel.Id);
+        foreach (var rel in leftMain.ExternalRelationships) used.Add(rel.Id);
+        foreach (var rel in leftMain.DataPartReferenceRelationships) used.Add(rel.Id);
+        int n = 1;
+        string candidate;
+        do { candidate = "rIdRemap" + n++; } while (used.Contains(candidate));
+        return candidate;
+    }
+
+    /// <summary>Rewrite every <c>@r:id</c> (any relationship-namespace attribute) on the right clones that
+    /// currently reads <paramref name="oldId"/> to <paramref name="newId"/>, so the remapped relationship
+    /// resolves. Scoped to the relationship namespace so only true r:id references are touched.</summary>
+    private static void RewriteReferenceId(List<XElement> rightClones, string oldId, string newId)
+    {
+        foreach (var clone in rightClones)
+            foreach (var attr in clone.DescendantsAndSelf().Attributes().Where(a => a.Name.Namespace == R.r))
+                if (string.Equals((string?)attr, oldId, StringComparison.Ordinal))
+                    attr.Value = newId;
     }
 
     /// <summary>True iff this op concerns a standalone section-break block (a `sec:` anchor on either side, or a
