@@ -77,6 +77,11 @@ namespace DocxodusWasm;
 [JsonSerializable(typeof(MarkdownProjectionResponse))]
 [JsonSerializable(typeof(MarkdownAnchorTargetDto))]
 [JsonSerializable(typeof(Dictionary<string, MarkdownAnchorTargetDto>))]
+// DocxDiff (IR diff engine) types
+[JsonSerializable(typeof(DocxDiffSettingsDto))]
+[JsonSerializable(typeof(DocxDiffRevisionsResponse))]
+[JsonSerializable(typeof(DocxDiffRevisionDto))]
+[JsonSerializable(typeof(DocxDiffRevisionDto[]))]
 internal partial class DocxodusJsonContext : JsonSerializerContext
 {
 }
@@ -1248,6 +1253,59 @@ public class MarkdownAnchorTargetDto
     public string Unid { get; set; } = string.Empty;
     public string PartUri { get; set; } = string.Empty;
     public string TextPreview { get; set; } = string.Empty;
+}
+
+#endregion
+
+#region DocxDiff (IR diff engine) Types
+
+/// <summary>
+/// Transport mirror of <c>Docxodus.DocxDiffSettings</c> for the WASM/stdio JSON
+/// boundary. Every field is optional on the wire: an omitted field uses the
+/// .NET default. Enum-valued settings are integer-coded to match the TypeScript
+/// enum positions in <c>npm/src/types.ts</c> (RevisionGranularity 0=Fine,
+/// 1=WmlComparerCompatible; FormatComparison 0=ModeledOnly, 1=Full).
+/// </summary>
+public class DocxDiffSettingsDto
+{
+    public string? AuthorForRevisions { get; set; }
+    public bool? Deterministic { get; set; }
+    public string? DateTimeForRevisions { get; set; }
+    public bool? CaseInsensitive { get; set; }
+    public bool? ConflateBreakingAndNonbreakingSpaces { get; set; }
+    public char[]? WordSeparators { get; set; }
+    public bool? DetectMoves { get; set; }
+    public double? MoveSimilarityThreshold { get; set; }
+    public int? MoveMinimumWordCount { get; set; }
+    public int? RevisionGranularity { get; set; }
+    public int? FormatComparison { get; set; }
+}
+
+/// <summary>
+/// Transport shape for the <c>DocxDiff.GetRevisions</c> result.
+/// </summary>
+public class DocxDiffRevisionsResponse
+{
+    public DocxDiffRevisionDto[] Revisions { get; set; } = Array.Empty<DocxDiffRevisionDto>();
+}
+
+/// <summary>
+/// Transport mirror of <c>Docxodus.DocxDiffRevision</c>. Adds the left/right
+/// block anchors the IR engine surfaces over <c>WmlComparer</c>'s revision shape.
+/// <see cref="RevisionType"/> is the <c>DocxDiffRevisionType</c> name
+/// ("Inserted"/"Deleted"/"Moved"/"FormatChanged").
+/// </summary>
+public class DocxDiffRevisionDto
+{
+    public string RevisionType { get; set; } = "";
+    public string Text { get; set; } = "";
+    public string Author { get; set; } = "";
+    public string Date { get; set; } = "";
+    public int? MoveGroupId { get; set; }
+    public bool? IsMoveSource { get; set; }
+    public FormatChangeInfo? FormatChange { get; set; }
+    public string? LeftAnchor { get; set; }
+    public string? RightAnchor { get; set; }
 }
 
 #endregion
