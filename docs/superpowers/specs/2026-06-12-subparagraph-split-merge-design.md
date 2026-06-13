@@ -1,7 +1,12 @@
 # Sub-Paragraph Split/Merge Alignment — Resolved Design (M2.6 follow-on)
 
 **Date:** 2026-06-12
-**Status:** DESIGN-RESOLVED — implementation deferred. This spec resolves the
+**Status:** IMPLEMENTED (M2.6, 2026-06-12 — commits 07060d8..HEAD on `feat/diff-m24`; scoreboard
+179/179 genuine, deviation catalog empty). The MUST-FIX gate is closed item-by-item in the
+**IMPLEMENTATION OUTCOME** section appended at the end; the canonical description of the
+as-implemented algorithm (including deltas from §§2–4 below) is
+`docs/architecture/ir_diff_engine.md` § "1:N paragraph split / N:1 merge".
+Originally: DESIGN-RESOLVED — implementation deferred. This spec resolves the
 open op-model / detection / apply / markup / wire questions left by the original
 sketch into a single buildable contract, then ran an adversarial DESIGN REVIEW
 (separate reviewer agent) whose verified findings are appended at the end. The
@@ -706,3 +711,97 @@ strengthen the cell-path verifier or stop claiming the identity proof there) and
 **F4.2** (the WC022 interaction can both miss the fix and regress reject-order). Neither
 invalidates the op-model decision (§1) or the detection placement (§2.1), both of
 which the reviewer independently verified sound.
+
+---
+
+## IMPLEMENTATION OUTCOME (M2.6, 2026-06-12)
+
+Shipped on `feat/diff-m24` (op model + JSON `07060d8`, alignment kinds + pairing assert `70ff633`,
+segmenter `8f36bfa`, detection `1a7bea9`, projection + verifier `436272a`, revision rendering
+`adfcd71`, markup `129dea4` (+`eb4b8da` refactor), default-on + sweep `ea3369f`, fuzzer + interleave
+fix `5867082`). GetRevisions scoreboard **179/179 genuine** (WC-1450/WC-1830 closed; the catalog is
+EMPTY and `board.Deviation == 0` is asserted); markup round-trip allowlist down to the single
+oracle-crashes fixture; full suite 2000/0/1; 1000-seed own-oracle fuzz green; Release build clean.
+
+### MUST-FIX adjudication closure
+
+- **F1.1 (N:M "un-representable" overstated)** — CLOSED as the review demanded: §1.1/§1.5's claim is
+  restated here — N:M is *physically representable* by the nullable fields and is rejected by
+  `IrEditScriptVerifier.AssertSplitMergePairing` (a `SplitBlock` must carry a null `RightAnchor`, a
+  `MergeBlock` a null `LeftAnchor`; no anchor may appear in two ops' `SplitMergeAnchors`) plus the
+  builder never emitting it. The pairing assert is the load-bearing scope ceiling and is invoked by
+  `Verify` on every corpus/fuzz case.
+- **F1.2 (anchor-walker enumeration)** — CLOSED: the audit table lives as a comment above
+  `AssertSplitMergePairing` (`IrEditScriptVerifier.cs`), every grep-surfaced walker
+  extended-or-proven-anchor-free; `AssertAnchorsResolve` walks `SplitMergeAnchors` (right store for
+  splits, left for merges).
+- **F1.3 (`IrSegmentDiff` scalar wrapper)** — ADOPTED: no wrapper record exists; `SegmentDiffs` is
+  `IrNodeList<IrTokenDiff>?` directly.
+- **F2.1 (merge framing)** — OWNED as the review required: `MergeBlock` shipped in the same
+  milestone as apply-path CONFIDENCE for the N↔1 reconstruction machinery plus fuzzer coverage
+  (`MergeParagraphs` mutation, synthetic fixtures) — NOT as deviation closure; no corpus deviation
+  demanded it, and the op-model docs say so.
+- **F2.2 (overlap → N:M drift)** — CLOSED: fired members' match slots are stamped immediately and a
+  window never admits a consumed index; `AssertSplitMergePairing` rejects any anchor appearing in
+  two groups; the two-adjacent-splits case runs at alignment, full-pipeline (Build→Verify→JSON),
+  and detection-unit grain.
+- **F3.1 (apply "for free" oversold)** — CLOSED per the downgraded claim: a real new `Verify` case
+  pushes one reconstructed tuple PER member, and the existing count/order/`ReferenceEquals` loop
+  then proves the builder-ordering obligation (the N rights right-contiguous at the op position).
+- **F3.2 (cell path identity proof)** — CLOSED: `ReconstructBlocks` (the path the two fixtures
+  actually take) gained the split/merge cases AND a produced-right-anchor SEQUENCE assertion
+  (right-producing ops must name the right blocks in right-document order) — asserted corpus-wide,
+  not just on the split fixtures.
+- **F3.3 (slice boundaries not serialized)** — CLOSED exactly as the review's closeable-iff
+  condition required: every segment diff is COMPLETE over (slice, member) — re-diffed by the
+  ordinary Myers differ per slice — so boundaries are implicit (slice length = Σ non-Insert left
+  lengths; merge mirror = Σ non-Delete right lengths); the verifier asserts the slices tile the
+  singular stream exactly, and `IrTokenDiffAsserts.AssertInvariants` runs per segment.
+- **F4.1 (threshold sweep is a gate)** — CLOSED: `IrSplitThresholdSweepTests` sweeps coverage
+  {0.80..0.95} × slack {0.20..0.50} over the WC003 row set; the shipped (0.90, 0.34) sits at the
+  grid maximum (104 count-exact rows) on a broad plateau — every ±1-step neighbor attains the same
+  count (only slack=0.50 flips a row anywhere in the grid). The plateau + margin assertion runs on
+  every test execution; defaults are pinned by a second test.
+- **F4.2 (WC022 identity-reservation interaction)** — CLOSED by construction: Unchanged/FormatOnly
+  pairs are NEVER promotion candidates (content-equal ⇒ zero unmatched tail ⇒ a trailing insert is
+  genuinely new), only a same-gap Modified pairing can be promoted. Regression tests: the
+  detection-unit Unchanged-pair negative, plus WC022 both-direction markup round-trips with
+  detection ON. (Risk R8, as the review required, is hereby recorded: "reconcile promotes an
+  identity-reserved pair → reject-order regression" — mitigated by candidate exclusion, see above.)
+- **F4.3 (empty-mark prune scope in cells)** — VERIFIED before reliance: body-table cell paragraphs
+  anchor as `p:body:…` (only `p:fn:`/`p:en:` scopes are excluded from the prune), so the prune DOES
+  fire in cell scope; pinned by `Cell_scope_empty_mark_prune_fires`.
+
+### Deltas from the proposed design (§§2–4) worth knowing
+
+1. **§3.2's "anchored-split" example cell is NOT a split.** The WC-1450 `Second `-prefix cell's
+   before-paragraph never contained the tail (`Score` member-match probe `[11, 0]`): the oracle's
+   `Inserted "Second "` + `Inserted "When you click…"` is the ordinary Modify + InsertBlock account,
+   which the R2 edge trim correctly preserves. Both true splits in the corpus are the
+   suffix-paired state-(b) shape.
+2. **Detection is one unified scan, not scan-plus-reconcile.** A candidate may be free OR
+   Modified-paired; a qualifying window simply overwrites the pairing. The §2.3(b) "tail-token
+   exact-match gate" was superseded by the zero-matched-content EDGE TRIM + the coverage/slack
+   gates, which handle both prefix- and suffix-paired states and the interior net-new member with
+   one mechanism (R2 is mitigated by the trim: an unrelated edge insert has zero matched content
+   and is excluded, shrinking the window below the 2-member floor).
+3. **Mark placement:** inserted marks go on paragraphs 0..N−2 and the LAST paragraph keeps the
+   original pilcrow (reject's mark-removal merges each paragraph into the NEXT, reconstructing
+   LEFT). This differs from the §3.1/§3.2 oracle excerpts' internal strategy but satisfies the same
+   accept ≡ right / reject ≡ left contract §3.3/§5.5 adjudicate on. `MarkParagraphMark` is invoked
+   with `RevKind.Ins`/`RevKind.Del` — confirming the reviewer's nit that the move path
+   (`RevKind.MoveTo`) had not exercised these grades.
+4. **Compat-mode account:** the oracle's split contribution is segment-0 inline edits + exactly ONE
+   coalesced inserted region (its re-deleted tail coalesces into an adjacent deleted paragraph's
+   region when one exists, adding no count) — so the compat renderer emits one coalesced
+   `Inserted "\n" + Σ(memberText + "\n")` per split (mirror `Deleted` per merge) rather than
+   per-segment + per-mark revisions; Fine mode keeps the per-segment account plus one `"\n"` mark
+   revision per added/removed pilcrow (§4.4's account, which also keeps a clean split visible).
+5. **An O(1) content-count prefilter** (window content within
+   `[coverage·singular, singular/(1−slack)]`) guards the G²-class cost bound — required by the
+   adversarial 200×200 fixture once detection went default-on; not anticipated by §2.5.
+6. **Fuzzer comparability:** split/merge mutations are EXCLUDED from the cross-engine differential
+   class (the engines frame a clean split differently by construction — artifact evidence in the
+   500-seed run); §5.2 anticipated exactly this fork. The own-oracle battery covers them on every
+   seed. The reshuffled seed stream also exposed a PRE-EXISTING reject-order bug (deletions
+   anchored to moved-away lefts restored at the move destination), fixed alongside Task 9.
