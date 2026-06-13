@@ -30,6 +30,10 @@ internal static class Dispatcher
         "save" => Save(args),
         "convert_to_html" => ConvertToHtml(args),
         "session_to_html" => SessionToHtml(args),
+
+        "docx_diff_compare" => DocxDiffCompare(args),
+        "docx_diff_get_revisions" => DocxDiffGetRevisions(args),
+        "docx_diff_get_edit_script" => JsonString(DocxDiffGetEditScript(args)),
         "project" => DocxSessionOps.Project(Handle(args)),
         "project_anchor" => DocxSessionOps.ProjectAnchor(
             Handle(args), Str(args, "anchorId"),
@@ -184,6 +188,38 @@ internal static class Dispatcher
         var html = HtmlConversionOps.ConvertToHtml(Handle(args), ParseHtmlOptions(args));
         return JsonString(html);
     }
+
+    // ─── DocxDiff (IR diff engine) — stateless byte-in ops ──────────────
+
+    private static string DocxDiffCompare(JsonElement args)
+    {
+        var left = Convert.FromBase64String(Str(args, "leftB64"));
+        var right = Convert.FromBase64String(Str(args, "rightB64"));
+        var bytes = DocxDiffOps.Compare(left, right, DiffSettingsJson(args));
+        return "{\"docxB64\":" + DocxSessionJson.JsonString(Convert.ToBase64String(bytes)) + "}";
+    }
+
+    private static string DocxDiffGetRevisions(JsonElement args)
+    {
+        var left = Convert.FromBase64String(Str(args, "leftB64"));
+        var right = Convert.FromBase64String(Str(args, "rightB64"));
+        // Already a JSON object ({"revisions":[…]}) — embed verbatim as the result.
+        return DocxDiffOps.GetRevisionsJson(left, right, DiffSettingsJson(args));
+    }
+
+    private static string DocxDiffGetEditScript(JsonElement args)
+    {
+        var left = Convert.FromBase64String(Str(args, "leftB64"));
+        var right = Convert.FromBase64String(Str(args, "rightB64"));
+        return DocxDiffOps.GetEditScriptJson(left, right, DiffSettingsJson(args));
+    }
+
+    private static string? DiffSettingsJson(JsonElement args) =>
+        args.ValueKind == JsonValueKind.Object
+        && args.TryGetProperty("settings", out var s)
+        && s.ValueKind == JsonValueKind.Object
+            ? s.GetRawText()
+            : null;
 
     private static HtmlConversionOptions ParseHtmlOptions(JsonElement args)
     {

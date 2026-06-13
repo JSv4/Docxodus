@@ -36,6 +36,9 @@ from .enums import (
     AnchorRenderMode,
     ContextBoundary,
     DiffFormat,
+    DocxDiffFormatComparison,
+    DocxDiffRevisionGranularity,
+    DocxDiffRevisionType,
     EditErrorCode,
     EmptyParagraphMode,
     PlaceholderKind,
@@ -49,7 +52,15 @@ from .enums import (
     WhitespaceMode,
 )
 from .errors import DocxodusHostNotFoundError, DocxodusTransportError, DocxScalpelError
-from .session import DocxSession, convert_docx_to_html, open_session, ping
+from .session import (
+    DocxSession,
+    convert_docx_to_html,
+    docx_diff_compare,
+    docx_diff_get_edit_script,
+    docx_diff_get_revisions,
+    open_session,
+    ping,
+)
 from .types import (
     Anchor,
     AnchorInfo,
@@ -61,6 +72,9 @@ from .types import (
     CharSpan,
     CrossBlockMatch,
     DocumentAnnotation,
+    DocxDiffFormatChange,
+    DocxDiffRevision,
+    DocxDiffSettings,
     DocxSessionSettings,
     EditError,
     EditResult,
@@ -96,6 +110,9 @@ __all__ = [
     # entry points
     "DocxSession",
     "convert_docx_to_html",
+    "docx_diff_compare",
+    "docx_diff_get_revisions",
+    "docx_diff_get_edit_script",
     "open_session",
     "ping",
     "shutdown_host",
@@ -129,11 +146,17 @@ __all__ = [
     "TemplatePlaceholder",
     "TextMatch",
     "WmlToMarkdownConverterSettings",
+    "DocxDiffSettings",
+    "DocxDiffRevision",
+    "DocxDiffFormatChange",
     # enums
     "AnchorIdRendering",
     "AnchorRenderMode",
     "ContextBoundary",
     "DiffFormat",
+    "DocxDiffRevisionType",
+    "DocxDiffRevisionGranularity",
+    "DocxDiffFormatComparison",
     "EditErrorCode",
     "EmptyParagraphMode",
     "PlaceholderKind",

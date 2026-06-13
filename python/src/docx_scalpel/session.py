@@ -43,6 +43,8 @@ from .types import (
     CharSpan,
     CrossBlockMatch,
     DocumentAnnotation,
+    DocxDiffRevision,
+    DocxDiffSettings,
     DocxSessionSettings,
     EditError,
     EditResult,
@@ -59,7 +61,15 @@ from .types import (
     TextMatch,
 )
 
-__all__ = ["DocxSession", "open_session", "ping", "convert_docx_to_html"]
+__all__ = [
+    "DocxSession",
+    "open_session",
+    "ping",
+    "convert_docx_to_html",
+    "docx_diff_compare",
+    "docx_diff_get_revisions",
+    "docx_diff_get_edit_script",
+]
 
 
 def ping() -> dict[str, Any]:
@@ -103,6 +113,76 @@ def convert_docx_to_html(
     if not isinstance(html, str):
         raise TypeError(f"convert_to_html: expected str, got {type(html).__name__}")
     return html
+
+
+# ---------------------------------------------------------------------------
+# DocxDiff — IR diff engine (stateless two-document compare)
+# ---------------------------------------------------------------------------
+#
+# These mirror the .NET ``DocxDiff`` static facade and the WASM/npm
+# ``docxDiffCompare`` / ``docxDiffGetRevisions`` / ``docxDiffGetEditScript``
+# wrappers. ``WmlComparer`` (not exposed in this wrapper yet) remains Docxodus'
+# default comparison engine; ``DocxDiff`` is the NEW engine whose differentiators
+# are anchor-addressed revisions and the diff-as-data edit script. All three are
+# stateless: pass two DOCX byte blobs, get the result — no session.
+
+
+def _diff_args(left: bytes, right: bytes, settings: DocxDiffSettings | None) -> dict[str, Any]:
+    args: dict[str, Any] = {
+        "leftB64": base64.b64encode(left).decode("ascii"),
+        "rightB64": base64.b64encode(right).decode("ascii"),
+    }
+    if settings is not None:
+        wire = settings.to_wire()
+        if wire:
+            args["settings"] = wire
+    return args
+
+
+def docx_diff_compare(
+    left: bytes, right: bytes, settings: DocxDiffSettings | None = None
+) -> bytes:
+    """Compare two DOCX blobs; return a redlined DOCX (native tracked-changes markup).
+
+    Mirrors .NET ``DocxDiff.Compare``. The result satisfies the WmlComparer
+    contract: accepting its revisions yields ``right``, rejecting them yields
+    ``left`` (at the per-block text level).
+    """
+    result = _call("docx_diff_compare", _diff_args(left, right, settings))
+    if not isinstance(result, dict) or "docxB64" not in result:
+        raise TypeError(f"docx_diff_compare: expected {{docxB64}}, got {result!r}")
+    return base64.b64decode(result["docxB64"])
+
+
+def docx_diff_get_revisions(
+    left: bytes, right: bytes, settings: DocxDiffSettings | None = None
+) -> tuple[DocxDiffRevision, ...]:
+    """Compare two DOCX blobs; return the anchor-addressed revision list.
+
+    Mirrors .NET ``DocxDiff.GetRevisions`` — the diff-as-revisions view, where
+    each revision additionally carries the left/right block anchors it derives
+    from.
+    """
+    result = _call("docx_diff_get_revisions", _diff_args(left, right, settings))
+    revisions = result.get("revisions", []) if isinstance(result, dict) else []
+    return tuple(DocxDiffRevision._from_wire(r) for r in revisions)
+
+
+def docx_diff_get_edit_script(
+    left: bytes, right: bytes, settings: DocxDiffSettings | None = None
+) -> str:
+    """Compare two DOCX blobs; return the engine's edit script as a JSON string.
+
+    Mirrors .NET ``DocxDiff.GetEditScriptJson`` — the diff-as-data
+    differentiator: the anchor-addressed block-operation list as machine-readable
+    JSON, suitable for storage, transport, and review tooling.
+    """
+    result = _call("docx_diff_get_edit_script", _diff_args(left, right, settings))
+    if not isinstance(result, str):
+        raise TypeError(
+            f"docx_diff_get_edit_script: expected str, got {type(result).__name__}"
+        )
+    return result
 
 
 class DocxSession:

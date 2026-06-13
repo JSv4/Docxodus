@@ -22,6 +22,9 @@ from .enums import (
     AnchorIdRendering,
     AnchorRenderMode,
     ContextBoundary,
+    DocxDiffFormatComparison,
+    DocxDiffRevisionGranularity,
+    DocxDiffRevisionType,
     EditErrorCode,
     EmptyParagraphMode,
     PlaceholderKind,
@@ -62,6 +65,9 @@ __all__ = [
     "AnnotationUpdate",
     "EditSummary",
     "ReplaceOptions",
+    "DocxDiffSettings",
+    "DocxDiffRevision",
+    "DocxDiffFormatChange",
 ]
 
 
@@ -757,6 +763,117 @@ class HtmlOptions:
         if self.document_language is not None:
             wire["documentLanguage"] = self.document_language
         return wire
+
+
+# ---------------------------------------------------------------------------
+# DocxDiff — IR diff engine (stateless two-document compare)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffSettings:
+    """Settings for the ``docx_diff_*`` module functions. Mirrors the .NET
+    ``DocxDiffSettings``; defaults match it field-for-field, so an unset
+    ``DocxDiffSettings()`` reproduces the engine's out-of-the-box behavior.
+
+    Every field is sent only when it differs from the default, so the wire
+    object stays minimal and the host applies its own defaults for omitted keys.
+    """
+
+    author_for_revisions: str = "Open-Xml-PowerTools"
+    deterministic: bool = True
+    date_time_for_revisions: str | None = None
+    case_insensitive: bool = False
+    conflate_breaking_and_nonbreaking_spaces: bool = True
+    word_separators: str | None = None
+    detect_moves: bool = True
+    move_similarity_threshold: float = 0.8
+    move_minimum_word_count: int = 3
+    revision_granularity: DocxDiffRevisionGranularity = DocxDiffRevisionGranularity.FINE
+    format_comparison: DocxDiffFormatComparison = DocxDiffFormatComparison.MODELED_ONLY
+
+    def to_wire(self) -> dict[str, Any]:
+        """camelCase keys the host's ``DocxDiffOps.ParseSettings`` reads. Only
+        non-default fields are emitted."""
+        wire: dict[str, Any] = {}
+        if self.author_for_revisions != "Open-Xml-PowerTools":
+            wire["authorForRevisions"] = self.author_for_revisions
+        if not self.deterministic:
+            wire["deterministic"] = False
+        if self.date_time_for_revisions is not None:
+            wire["dateTimeForRevisions"] = self.date_time_for_revisions
+        if self.case_insensitive:
+            wire["caseInsensitive"] = True
+        if not self.conflate_breaking_and_nonbreaking_spaces:
+            wire["conflateBreakingAndNonbreakingSpaces"] = False
+        if self.word_separators is not None:
+            wire["wordSeparators"] = self.word_separators
+        if not self.detect_moves:
+            wire["detectMoves"] = False
+        if self.move_similarity_threshold != 0.8:
+            wire["moveSimilarityThreshold"] = self.move_similarity_threshold
+        if self.move_minimum_word_count != 3:
+            wire["moveMinimumWordCount"] = self.move_minimum_word_count
+        if self.revision_granularity != DocxDiffRevisionGranularity.FINE:
+            wire["revisionGranularity"] = int(self.revision_granularity)
+        if self.format_comparison != DocxDiffFormatComparison.MODELED_ONLY:
+            wire["formatComparison"] = int(self.format_comparison)
+        return wire
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffFormatChange:
+    """Details of a ``FORMAT_CHANGED`` revision — the modeled run-format fields
+    before/after plus the names that differ. Mirrors .NET ``DocxDiffFormatChange``."""
+
+    old_properties: Mapping[str, str]
+    new_properties: Mapping[str, str]
+    changed_property_names: Sequence[str]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DocxDiffFormatChange":
+        return cls(
+            old_properties=dict(d.get("oldProperties") or {}),
+            new_properties=dict(d.get("newProperties") or {}),
+            changed_property_names=tuple(d.get("changedPropertyNames") or ()),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffRevision:
+    """One consumer revision from ``docx_diff_get_revisions``. Mirrors .NET
+    ``DocxDiffRevision`` and carries the IR engine's differentiator: the
+    left/right block anchors the revision derives from.
+
+    Anchor presence by ``type``: ``INSERTED`` → ``right_anchor`` only;
+    ``DELETED`` → ``left_anchor`` only; ``FORMAT_CHANGED`` → both; ``MOVED``
+    source → ``left_anchor``, destination → ``right_anchor``.
+    """
+
+    type: DocxDiffRevisionType
+    text: str
+    author: str
+    date: str
+    move_group_id: int | None = None
+    is_move_source: bool | None = None
+    format_change: DocxDiffFormatChange | None = None
+    left_anchor: str | None = None
+    right_anchor: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DocxDiffRevision":
+        fc = d.get("formatChange")
+        return cls(
+            type=DocxDiffRevisionType._from_wire(d["revisionType"]),
+            text=d.get("text", ""),
+            author=d.get("author", ""),
+            date=d.get("date", ""),
+            move_group_id=d.get("moveGroupId"),
+            is_move_source=d.get("isMoveSource"),
+            format_change=DocxDiffFormatChange._from_wire(fc) if fc else None,
+            left_anchor=d.get("leftAnchor"),
+            right_anchor=d.get("rightAnchor"),
+        )
 
 
 # ---------------------------------------------------------------------------
