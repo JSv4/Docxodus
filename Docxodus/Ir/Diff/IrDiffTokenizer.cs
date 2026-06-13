@@ -24,6 +24,14 @@ namespace Docxodus.Ir.Diff;
 /// <para><b>The tokenizer needs no provenance.</b> It reads only the built IR node tree
 /// (<see cref="IrParagraph.Inlines"/> and nested inline lists), never <c>Source</c>, so it works on
 /// an IR read with <c>RetainSources=false</c>.</para>
+/// <para><b>Intra-word atom interruption (§6.1-adjacent, M2.5 Task 1).</b> A word's diff identity is its
+/// atom STRUCTURE, not merely its visible characters: a word split by a zero-width content atom (a note
+/// ref / image / opaque / textbox) with NO separator on either side is a different word from its
+/// contiguous form (a note reference relocated INTO the middle of <c>Video</c> — <c>Vi</c>⟨ref⟩<c>deo</c>
+/// — is a real edit even though the letters still spell <c>Video</c>). <see cref="InterruptionPostPass"/>
+/// frames the two flanking words' match keys with the interrupting atoms' keys to express this, while a
+/// ref BETWEEN words (separator-adjacent) and the ref token's OWN key are left exactly as the §6.1 stream
+/// has them — so the change is confined to the rare intra-word case and never disturbs the common one.</para>
 /// </remarks>
 internal static class IrDiffTokenizer
 {
@@ -34,13 +42,102 @@ internal static class IrDiffTokenizer
     // sentinel framing, spec §6.1.)
     private const char AtomicSentinel = '\u0001';
 
+    // Word tokens flanking an intra-word interruption (a zero-width CONTENT atom that splits a word
+    // with no separator on either side) get this sentinel-framed marker appended to their MatchKey, so
+    // `Vi⟨ref⟩deo` is NOT word-equal to a contiguous `Video`. The marker carries the interrupting atoms'
+    // OWN keys (in document order) so the equality break is specific to what interrupted the word: a ref
+    // moving inside `Video` reads as a word change, but an image interrupting it reads differently again.
+    // Sentinel-framed (U+0001) for the same XML-illegality non-collision guarantee as atomic keys, and
+    // distinct body (`iw:`) so it can never alias an atomic key. See InterruptionPostPass.
+    private const string InterruptionMarkerPrefix = "iw:";
+
     public static IReadOnlyList<IrDiffToken> Tokenize(IrParagraph paragraph, IrDiffSettings settings)
     {
         var tokens = new List<IrDiffToken>();
         int charOffset = 0;
         WalkInlines(paragraph.Inlines, settings, linkSuffix: null, tokens, ref charOffset);
+        InterruptionPostPass(tokens);
         return tokens;
     }
+
+    /// <summary>
+    /// Rewrite the MatchKeys of word tokens that flank an <b>intra-word interruption</b>: a maximal run
+    /// of one or more zero-width CONTENT atoms (NoteRef / Image / Opaque / Textbox) sitting between two
+    /// Word tokens with NO separator on either side (the words touch the atoms at their char offsets).
+    /// In that configuration the word's atom structure genuinely changed — a note reference relocated INTO
+    /// the middle of <c>Video</c> (<c>Vi</c>[ref]<c>deo</c>) is a real structural edit the contiguous
+    /// <c>Video</c> does not share — so the two flanking words must NOT be word-equal to their contiguous
+    /// form. Each flanking word gets <see cref="InterruptionMarkerPrefix"/> + the interrupting atoms' keys
+    /// appended to its MatchKey.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Zero corpus blast radius outside intra-word cases.</b> The OVERWHELMINGLY common placement
+    /// — a ref BETWEEN words (separator-adjacent: <c>Video </c>[ref] or [ref]<c> provides</c>) — is NOT an
+    /// interruption: a Separator token sits on at least one side, so neither flanking word is rewritten and
+    /// the keys are byte-identical to the pre-pass output. Only the rare mid-word placement is affected.
+    /// The interrupting atom tokens themselves are NOT rewritten (their keys stay position-independent, so
+    /// a between-word ref that did NOT move still matches across the pair).</para>
+    /// <para><b>Engine truth, not render policy.</b> This runs unconditionally in <see cref="Tokenize"/>,
+    /// so it is identical under every <see cref="IrDiffSettings"/> — Fine and WmlComparerCompatible see the
+    /// same token stream. It mirrors the §6.1 content-hash stream's word-structure granularity: a word
+    /// split by an inline atom is a different word.</para>
+    /// <para><b>Determinism.</b> A single forward linear scan keyed on token kinds and char offsets; the
+    /// marker body is the interrupting atoms' keys in document order. Pure function of the token list.</para>
+    /// </remarks>
+    private static void InterruptionPostPass(List<IrDiffToken> tokens)
+    {
+        for (int i = 0; i < tokens.Count; i++)
+        {
+            // Anchor on a Word immediately followed by a tightly-adjacent zero-width content atom.
+            if (tokens[i].Kind != IrDiffTokenKind.Word)
+                continue;
+            int leftWord = i;
+
+            int j = i + 1;
+            int atomCount = 0;
+            while (j < tokens.Count &&
+                   IsZeroWidthContentAtom(tokens[j].Kind) &&
+                   tokens[j].StartChar == tokens[j - 1].EndChar)
+            {
+                atomCount++;
+                j++;
+            }
+
+            // Need ≥1 interrupting atom AND a tightly-adjacent Word resuming after it (no separator).
+            if (atomCount == 0 ||
+                j >= tokens.Count ||
+                tokens[j].Kind != IrDiffTokenKind.Word ||
+                tokens[j].StartChar != tokens[j - 1].EndChar)
+            {
+                continue;
+            }
+            int rightWord = j;
+
+            // Build the interruption marker from the interrupting atoms' keys (document order). Lead with
+            // the AtomicSentinel so the word↔marker boundary is unambiguous: a normalized word — always
+            // derived from w:t text — can never contain U+0001, so `Vi` + marker can never alias a literal
+            // word that merely happened to end in the marker body.
+            var sb = new StringBuilder();
+            sb.Append(AtomicSentinel).Append(InterruptionMarkerPrefix);
+            for (int a = leftWord + 1; a < rightWord; a++)
+                sb.Append(tokens[a].MatchKey);
+            string marker = sb.ToString();
+
+            tokens[leftWord] = AppendMarker(tokens[leftWord], marker);
+            tokens[rightWord] = AppendMarker(tokens[rightWord], marker);
+
+            // Continue scanning from the resuming word: it may itself be the left side of a FURTHER
+            // interruption (`Vi[ref]de[ref]o`). Re-anchoring on it (i = rightWord) handles the chain.
+            i = rightWord - 1;
+        }
+    }
+
+    private static bool IsZeroWidthContentAtom(IrDiffTokenKind kind) => kind is
+        IrDiffTokenKind.NoteRef or IrDiffTokenKind.Image or
+        IrDiffTokenKind.Opaque or IrDiffTokenKind.Textbox;
+
+    private static IrDiffToken AppendMarker(IrDiffToken token, string marker) =>
+        token with { MatchKey = token.MatchKey + marker };
 
     /// <summary>
     /// Walk an inline list in document order, appending tokens and advancing <paramref name="charOffset"/>.

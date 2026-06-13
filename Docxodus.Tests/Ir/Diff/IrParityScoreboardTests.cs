@@ -180,8 +180,7 @@ public class IrParityScoreboardTests
         // above). The cell rewrite shared only coincidental function words; the low-coverage coarsening
         // (max-side content coverage 0.41 < 0.67, 19 content tokens ≥ 8) collapses it to one del+ins.
 
-        // ---- IR note-ref-transparent tokenization is coarser than WmlComparer at a NOTE-REFERENCE-WITHIN-WORD
-        // boundary. WC-1710/1720 (WC034-Endnotes-Before vs -After3): IR 6 vs WmlComparer 7 (-1).
+        // ---- WC-1710/1720 (WC034-Endnotes-Before vs -After3): IR 6 vs WmlComparer 7 (-1).
         //
         // WC034 'Video' INVESTIGATION (M2.4b WS-C — CORRECTS the prior "oracle spurious" misdiagnosis):
         // examined the raw OOXML of both sides' body paragraph. BEFORE the body run is `Video `[en-ref id=1]
@@ -192,17 +191,33 @@ public class IrParityScoreboardTests
         // del + `Video` ins (the old contiguous atom is gone; the reconstituted `Vi`+`deo` is new). This is
         // CORRECT oracle behavior, NOT a fault — there is a real structural edit to the word.
         //
-        // The IR tokenizes a note reference as an ID-LESS, kind-only NoteRef token (renumber-invariant by
-        // design, §6.1) and word-tokenizes per text run, so its account of the body change does not surface
-        // the mid-word ref relocation as a `Video` del+ins — the visible word text is unchanged and the IR's
-        // note-ref token is position-only. Matching the oracle here would require the tokenizer/reader to
-        // model a note-ref's POSITION WITHIN a word as word-content (so a ref moving inside `Video` reads as
-        // a word change) — a deep tokenizer change with Fine-mode + whole-corpus blast radius (it would touch
-        // every note-bearing paragraph), disproportionate for this ±1 row and risking the many rows where the
-        // id-less note-ref tokenization is exactly right. Kept as a deviation: ORACLE CORRECT, IR coarser at
-        // the inline-note-ref-within-word boundary (a tokenizer-grain under-report, deferred as an M2.5 item).",
-        ["WC-1710"] = "Endnote-After3: IR 6 vs WmlComparer 7 (-1). WmlComparer CORRECTLY reports the body word `Video` as del+ins because an endnote reference (id=1) was relocated INTO THE MIDDLE of the word in After3 (runs `Vi`[en-ref]`deo` vs Before's contiguous `Video `[en-ref]) — a real structural change to the word's atoms, verified in the raw OOXML (corrects the earlier 'oracle spurious' misdiagnosis). The IR's id-less, per-run note-ref tokenization does not surface a note-ref's position-within-a-word as word content, so it reports `Video` unchanged. Matching needs a tokenizer change modeling intra-word note-ref position (Fine-mode + corpus-wide blast radius), deferred to M2.5. ORACLE CORRECT; IR coarser at the note-ref-within-word boundary.",
-        ["WC-1720"] = "Reverse of WC-1710 (After3 → Before): same −1 from the same mid-word endnote-reference relocation in `Video` (`Vi`[en-ref]`deo` ⇄ `Video `[en-ref]). WmlComparer's `Video` del+ins is CORRECT (real run-structure change); the IR's id-less per-run note-ref tokenization reports the word unchanged. ORACLE CORRECT; IR coarser at the note-ref-within-word boundary — same deferred tokenizer item as WC-1710.",
+        // M2.5 Task 1 — TOKENIZER FIX LANDED (intra-word note-ref interruption). IrDiffTokenizer now marks a
+        // word that a zero-width content atom (NoteRef/Image/Opaque/Textbox) splits WITHOUT a separator on
+        // either side: the flanking words' MatchKeys carry an interruption marker keyed on the interrupting
+        // atoms, so `Vi`⟨ref⟩`deo` is NOT word-equal to a contiguous `Video`. The Fine-mode edit script now
+        // CORRECTLY reports the body change (verified: ModifyBlock token diff = Delete `Vi` / Insert
+        // `Vi`+ref+`deo`, the `Video` word no longer Equal). A ref BETWEEN words (separator-adjacent — the
+        // overwhelmingly common case) is untouched: zero corpus blast radius (full scoreboard unchanged at
+        // 174 PASS + 5 DEV + 0 FAIL).
+        //
+        // RESIDUAL (why this is still a -1 deviation in WmlComparerCompatible COUNT): two SEPARATE,
+        // render/note-subsystem effects the tokenizer fix does NOT address, isolated by the M2.5 oracle
+        // breakdown (oracle body 3: del `Video` + ins `Video` + ins ``; oracle endnotes 4: en correspondence):
+        //   (a) The WmlComparerCompatible common-affix trim cancels the body del `Video` / ins `Vi`+`deo`
+        //       because the inserted letters spell the SAME `Video` (the relocated zero-width ref carries no
+        //       text), so the body del+ins collapses to zero in the COUNT projection. (Fine mode keeps it.)
+        //   (b) The note-store diff aligns notes BY w:id, while the oracle aligns by CONTENT/reference-order
+        //       (it remaps note ids): After3 inserts a new en#1 and pushes Before's en#1 content to en#2, so
+        //       by-id matching over-reports the note scope by +1. A note-store CONTENT-CORRESPONDENCE aligner
+        //       (notes matched by content/reference-order, not raw id) is required — a broad note-subsystem
+        //       change (it restructures IrNoteDiff + the note markup renderer + body↔note id remapping, and a
+        //       trial regressed WC-1660/1670/1750/1760), the same class as deferred item #5 (note-store
+        //       cross-part conversion). Effects (a)+(b) net to the -1 today; closing them is a follow-on, not
+        //       part of the note-ref-within-word tokenization.
+        // Kept as a deviation: the note-ref-within-word TOKENIZATION is FIXED (engine/Fine correct); the
+        // residual count gap is note-store-correspondence-alignment (deferred).",
+        ["WC-1710"] = "Endnote-After3: IR 6 vs WmlComparer 7 (-1). The note-ref-within-word TOKENIZATION is now FIXED (M2.5 Task 1): the Fine-mode edit script correctly reports `Video` del + `Vi`+ref+`deo` ins for the mid-word endnote-reference relocation (`Vi`[en-ref]`deo` vs Before's contiguous `Video `[en-ref], verified run-by-run). The residual -1 in the WmlComparerCompatible COUNT is TWO separate effects the tokenizer fix does not touch: (a) the compat common-affix trim cancels the text-identical body del/ins (`Video` == `Vi`+`deo`; the relocated ref is textless), and (b) the note-store diff aligns notes by w:id while the oracle aligns by content/reference-order (After3 renumbers en#1→en#2 and inserts a new en#1), over-reporting the note scope by +1 — a note-store CONTENT-CORRESPONDENCE aligner is required (broad note-subsystem change, deferred item #5 class). ORACLE CORRECT; tokenization FIXED; residual is note-store-correspondence-alignment.",
+        ["WC-1720"] = "Reverse of WC-1710 (After3 → Before): same root as WC-1710. The mid-word note-ref interruption tokenization is FIXED (Fine-mode body diff correct); the residual -1 in the compat count is the same (a) text-identical-affix-trim + (b) note-store-by-id-vs-content-correspondence over-report. ORACLE CORRECT; tokenization FIXED; residual deferred (note-store correspondence).",
 
         // ---- Reader: textbox VML/DrawingML duplication NOT collapsed by the adjacent-pair dedup.
         // Word emits one logical textbox as a DrawingML mc:Choice + a VML mc:Fallback. The render-time dedup

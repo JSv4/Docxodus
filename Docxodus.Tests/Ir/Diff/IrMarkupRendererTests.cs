@@ -753,17 +753,18 @@ public class IrMarkupRendererTests
     /// </summary>
     private static readonly HashSet<string> Task4BlockedPairs = new(StringComparer.Ordinal)
     {
-        // Footnote/endnote SCOPE markup, the WC-1710/1720 note-ref-within-word family (M2.4b WS-C corrected
-        // root cause — see the parity scoreboard catalog). In WC034-After3 a note reference (id=1) is relocated
-        // INTO THE MIDDLE of the body word `Video` (verified in the raw OOXML: runs `Vi`[note-ref]`deo` vs
-        // Before's contiguous `Video `[note-ref]), so the `Video`-bearing paragraph's atoms genuinely change.
-        // WmlComparer correctly reports that as a body del+ins carrying the note reference; the IR's id-less,
-        // per-run note-ref tokenization treats the word as unchanged, so the body-side note-REFERENCE
-        // attribution diverges and reject's REFERENCED note set does not match LEFT's. The note CONTENT markup
-        // is correct (fn#1 modify + fn#2 insert verified); only the body-side reference attribution diverges.
-        // ORACLE CORRECT — closing this needs the deferred tokenizer change (model a note-ref's position WITHIN
-        // a word as word content), an M2.5 item, NOT a renderer gap. Same root as the WC-1710/1720 scoreboard
-        // deviation.
+        // Footnote/endnote SCOPE markup, the WC034-After3 note-renumbering family (see the parity scoreboard
+        // catalog WC-1710/1720). In WC034-After3 a note reference (id=1) is relocated INTO THE MIDDLE of the
+        // body word `Video` (verified: runs `Vi`[note-ref]`deo` vs Before's contiguous `Video `[note-ref]) AND
+        // the note store is RENUMBERED (a new note inserted at id=1 pushes Before's note content to id=2).
+        // M2.5 Task 1 FIXED the note-ref-within-word TOKENIZATION: the body word `Video` now correctly diffs as
+        // del+ins (Fine-mode edit script verified), so the body-side reference attribution is no longer the
+        // blocker. The SURVIVING blocker is the note-store CORRESPONDENCE: the IR aligns notes by w:id, but the
+        // oracle aligns by content/reference-order (it remaps ids), so reject's REFERENCED note set still does
+        // not match LEFT's when the ids renumbered. Closing it needs a note-store content-correspondence aligner
+        // + body↔note id remapping (restructures IrNoteDiff + the note markup renderer; a trial regressed the
+        // WC-1660/1670/1750/1760 endnote-with-table rows) — the deferred item #5 (note-store cross-part
+        // conversion) class, NOT the note-ref tokenization (which is done) and NOT a renderer-markup gap.
         "WC034-Footnotes-Before.docx↔WC034-Footnotes-After3.docx",
         "WC034-Endnotes-Before.docx↔WC034-Endnotes-After3.docx",
         // (M2.4b Workstream A — CLOSED, 3 of 4) The SmartArt diagram rel-id family (WC014 ×2 + WC052) was here

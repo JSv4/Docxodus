@@ -254,6 +254,75 @@ public class IrDiffTokenizerTests
         Assert.NotEqual(page.MatchKey, line.MatchKey);
     }
 
+    // --- intra-word note-ref interruption (M2.5 Task 1) ------------------
+
+    // A footnote reference splitting `Video` into `Vi`[ref]`deo` with NO separator on either side. The two
+    // text runs touch the zero-width ref at the same char offset, so the flanking words flank an interruption.
+    private const string ViRefDeo =
+        "<w:p><w:r><w:t xml:space=\"preserve\">Vi</w:t></w:r>" +
+        "<w:r><w:footnoteReference w:id=\"1\"/></w:r>" +
+        "<w:r><w:t xml:space=\"preserve\">deo</w:t></w:r></w:p>";
+
+    // A footnote reference BETWEEN words: `Video `[ref]`provides`. A separator (the space) sits before the
+    // ref, so this is NOT an intra-word interruption — the common, non-disruptive case.
+    private const string VideoRefProvides =
+        "<w:p><w:r><w:t xml:space=\"preserve\">Video </w:t></w:r>" +
+        "<w:r><w:footnoteReference w:id=\"1\"/></w:r>" +
+        "<w:r><w:t xml:space=\"preserve\">provides</w:t></w:r></w:p>";
+
+    [Fact]
+    public void Intra_word_note_ref_breaks_word_equality_with_contiguous_form()
+    {
+        // `Vi`[ref]`deo` must NOT be word-equal to a contiguous `Video`: the relocated ref is a real
+        // structural edit to the word's atoms (WC-1710). The flanking `Vi`/`deo` carry the interruption
+        // marker so neither equals `Video`'s key, and their concatenation `Video` does not coincidentally
+        // reconstitute the contiguous key sequence.
+        var split = Tok(Para(ViRefDeo));
+        var contiguous = Tok(TextPara("Video"));
+
+        var splitWords = split.Where(t => t.Kind == IrDiffTokenKind.Word).Select(t => t.MatchKey).ToList();
+        // `Vi` and `deo` are both interruption-marked, so neither aliases the contiguous `Video` key.
+        Assert.DoesNotContain(contiguous[0].MatchKey, splitWords);
+        Assert.Equal(2, splitWords.Count);
+        Assert.NotEqual(splitWords[0], splitWords[1]);  // Vi-marked vs deo-marked are distinct
+    }
+
+    [Fact]
+    public void Between_word_note_ref_leaves_word_keys_identical_to_today()
+    {
+        // The CONSTRAINT: a ref BETWEEN words (separator-adjacent) is non-disruptive — the flanking words'
+        // keys are byte-identical to the same words with NO ref at all. `Video `[ref]`provides` keys its
+        // `Video`/`provides` exactly as plain `Video provides` does (zero blast radius outside intra-word).
+        var withRef = Tok(Para(VideoRefProvides));
+        var plain = Tok(TextPara("Video provides"));
+
+        var withRefWordKeys = withRef.Where(t => t.Kind == IrDiffTokenKind.Word).Select(t => t.MatchKey);
+        var plainWordKeys = plain.Where(t => t.Kind == IrDiffTokenKind.Word).Select(t => t.MatchKey);
+        Assert.Equal(plainWordKeys, withRefWordKeys);
+    }
+
+    [Fact]
+    public void Intra_word_interruption_does_not_change_the_note_ref_key_itself()
+    {
+        // The interrupting NoteRef token's OWN key is position-independent (still kind-only `fn`), so a
+        // between-word ref that did NOT move still matches across a pair — only the flanking WORD keys carry
+        // the marker. (This is what keeps the relocated-ref diff a clean body del+ins rather than also
+        // splitting on the ref token.)
+        var split = Tok(Para(ViRefDeo)).Single(t => t.Kind == IrDiffTokenKind.NoteRef);
+        var between = Tok(Para(VideoRefProvides)).Single(t => t.Kind == IrDiffTokenKind.NoteRef);
+        Assert.Equal(between.MatchKey, split.MatchKey);
+    }
+
+    [Fact]
+    public void Intra_word_marker_is_determined_by_the_interrupting_atom()
+    {
+        // The marker is keyed on the interrupting atom, so a word split by a ref differs from the SAME word
+        // unsplit AND the marker is stable/deterministic for repeated tokenizations.
+        var a = Tok(Para(ViRefDeo)).Where(t => t.Kind == IrDiffTokenKind.Word).Select(t => t.MatchKey);
+        var b = Tok(Para(ViRefDeo)).Where(t => t.Kind == IrDiffTokenKind.Word).Select(t => t.MatchKey);
+        Assert.Equal(a, b);  // deterministic
+    }
+
     // --- hyperlink suffixing ---------------------------------------------
 
     [Fact]
