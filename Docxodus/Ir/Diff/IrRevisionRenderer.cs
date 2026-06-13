@@ -78,9 +78,16 @@ internal static class IrRevisionRenderer
         // Each note's block ops render through the SAME block-op machinery as the body — its fn/en blocks
         // are in the shared AnchorIndex, so anchor→block/token resolution works unchanged, and the note's
         // distinct fn/en anchors carry the scope context into every revision.
+        //
+        // NB: the adjacent-block COALESCING (RenderBlockOpList) is deliberately NOT applied to note ops.
+        // WmlComparer groups note revisions PER NOTE (GetFootnoteEndnoteRevisionList builds a separate atom
+        // list per footnote/endnote), so consecutive inserted note PARAGRAPHS that the body coalescing would
+        // merge are reported individually by the oracle (WC-1710/1720: each endnote's paragraphs surface
+        // separately). Render note ops one-per-op to preserve that grain.
         if (script.NoteOps is { } noteOps)
             foreach (var noteDiff in noteOps)
-                RenderBlockOpList(noteDiff.Ops, ctx, revisions);
+                foreach (var op in noteDiff.Ops)
+                    RenderBlockOp(op, ctx, revisions);
 
         // Section-break zero-width prune (M2.4 Task 2, prelim a). A whole-block Inserted/Deleted over a
         // SECTION-BREAK block (a `sec:` anchor) carries no surface text and is a structural-only change that
@@ -309,6 +316,14 @@ internal static class IrRevisionRenderer
         if (settings.RevisionGranularity != RevisionGranularity.WmlComparerCompatible)
             return false;
         if (anchor is null || !doc.AnchorIndex.TryGetValue(anchor, out var block) || block is not IrParagraph p)
+            return false;
+        // Scope (M2.4b Workstream C): the empty-mark prune applies to BODY paragraphs only. In a footnote/
+        // endnote scope, WmlComparer's per-note atom grouping DOES surface an inserted/deleted empty paragraph
+        // as a revision (WC-1750/1760: deleting a table's trailing rows leaves an empty-paragraph insert the
+        // oracle reports as `\n`), so a note-scope empty mark must NOT be pruned. The WC-1190 prune case (a
+        // moved-into-table block's leftover empty cell mark) is a BODY-scope anchor.
+        if (anchor.StartsWith("p:fn:", System.StringComparison.Ordinal)
+            || anchor.StartsWith("p:en:", System.StringComparison.Ordinal))
             return false;
         return CountContent(IrDiffTokenizer.Tokenize(p, settings)) == 0;
     }
