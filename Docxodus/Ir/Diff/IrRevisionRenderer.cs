@@ -369,7 +369,7 @@ internal static class IrRevisionRenderer
         {
             var batch = new List<IrRevision>();
             foreach (var blockOp in tbxDiff.Ops)
-                RenderBlockOp(blockOp, ctx, batch);
+                RenderTextboxInnerOp(blockOp, ctx, batch);
             batches.Add(batch);
         }
 
@@ -387,6 +387,42 @@ internal static class IrRevisionRenderer
             bool dup = k + 1 < batches.Count && SameRevisionContent(batches[k], batches[k + 1]);
             k += dup ? 2 : 1;
         }
+    }
+
+    /// <summary>
+    /// Render one textbox-INTERIOR block op in compatible mode (M2.4b Workstream C — WC-1770). WmlComparer
+    /// never descends <c>w:txbxContent</c> — it treats the whole <c>w:drawing</c> as an OPAQUE atom (see
+    /// WmlComparer.cs ~L8225/8673, where <c>w:drawing</c> is one comparison unit), so a CHANGED textbox
+    /// surfaces as a single del+ins over the textbox paragraph's WHOLE text, never a finer interior token
+    /// diff. The IR reader DOES model the textbox interior (to mirror the markdown projection), and its token
+    /// diff can split an interior edit finer than the oracle (WC-1770: `In1`→`In` token-diffs to a lone
+    /// Deleted `1`, where the oracle reports del `In1` + ins `In`). We reproduce the oracle's coarser
+    /// whole-paragraph grain here: a textbox-interior Modified paragraph renders as one whole-block Deleted
+    /// (left text) + Inserted (right text). This already-coincides for WC-1890/2080 (their interior token diff
+    /// happens to be whole-paragraph) and WC-2090/2092 (interior insert/delete, no Modify) — all keep passing.
+    /// Fine mode keeps the interior token diff (the engine's more precise account).
+    /// </summary>
+    private static void RenderTextboxInnerOp(IrEditOp op, in Context ctx, List<IrRevision> sink)
+    {
+        if (op.Kind == IrEditOpKind.ModifyBlock && op.TableDiff is null
+            && op.LeftAnchor is not null && op.RightAnchor is not null
+            && ctx.Left.AnchorIndex.TryGetValue(op.LeftAnchor, out var lb) && lb is IrParagraph
+            && ctx.Right.AnchorIndex.TryGetValue(op.RightAnchor, out var rb) && rb is IrParagraph)
+        {
+            string delText = BlockText(op.LeftAnchor, ctx.Left, ctx.Settings);
+            string insText = BlockText(op.RightAnchor, ctx.Right, ctx.Settings);
+            // Only coarsen when there is actual text on both sides changing; a wholly-equal pair (no text
+            // delta — should not reach here as a Modify) would otherwise emit empty revisions.
+            if (delText.Length > 0)
+                sink.Add(new IrRevision(IrRevisionType.Deleted, delText, ctx.Author, ctx.Date,
+                    LeftAnchor: op.LeftAnchor, RightAnchor: op.RightAnchor));
+            if (insText.Length > 0)
+                sink.Add(new IrRevision(IrRevisionType.Inserted, insText, ctx.Author, ctx.Date,
+                    LeftAnchor: op.LeftAnchor, RightAnchor: op.RightAnchor));
+            return;
+        }
+
+        RenderBlockOp(op, ctx, sink);
     }
 
     /// <summary>True iff two revision batches carry the same ordered (Type, Text) content — the Choice/Fallback
