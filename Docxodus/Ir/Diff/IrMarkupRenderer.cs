@@ -181,6 +181,13 @@ internal static class IrMarkupRenderer
 
                 main.PutXDocument();
 
+                // Note-scope markup (Task 4): apply each note's edit ops INSIDE the footnotes/endnotes parts.
+                // The output package carries the LEFT notes; we rebuild each diffed note's block content from its
+                // ops (same dispatch as the body — anchors resolve in the shared AnchorIndex) so accept/reject
+                // round-trips note content too. Done BEFORE PutXDocument of the note parts.
+                if (script.NoteOps is { Count: > 0 })
+                    RenderNoteScopes(script.NoteOps, state, wDoc, main, wDocRight, settings);
+
                 // Carry right-only styles + numbering into the left-based package.
                 if (main.StyleDefinitionsPart != null &&
                     wDocRight.MainDocumentPart?.StyleDefinitionsPart != null)
@@ -482,6 +489,126 @@ internal static class IrMarkupRenderer
             .Where(e => e.Name == W.moveFromRangeStart || e.Name == W.moveFromRangeEnd ||
                         e.Name == W.moveToRangeStart || e.Name == W.moveToRangeEnd)
             .Remove();
+    }
+
+    // ----------------------------------------------------------------- note-scope markup
+
+    /// <summary>
+    /// Apply note-scope edit ops inside the footnotes/endnotes parts of the output package. For each
+    /// <see cref="IrNoteDiff"/>, locate the matching <c>w:footnote</c>/<c>w:endnote</c> (by <c>@w:id</c>) in the
+    /// LEFT-based part, render its block ops (reusing <see cref="RenderBlockOp"/> — note anchors resolve in the
+    /// shared AnchorIndex), and replace the note's block-level children with the rendered blocks. Notes the diff
+    /// did not touch are left untouched. A note id present in the diff but absent in the part is skipped (the
+    /// body still round-trips).
+    /// </summary>
+    private static void RenderNoteScopes(
+        IReadOnlyList<IrNoteDiff> noteOps, RenderState state, WordprocessingDocument wDoc, MainDocumentPart main,
+        WordprocessingDocument? wDocRight, IrDiffSettings settings)
+    {
+        // Group note diffs by their target part so each part is loaded/saved once.
+        var footnoteDiffs = noteOps.Where(n => n.Kind == IrNoteKind.Footnote).ToList();
+        var endnoteDiffs = noteOps.Where(n => n.Kind == IrNoteKind.Endnote).ToList();
+
+        var rightMain = wDocRight?.MainDocumentPart;
+        ApplyNoteDiffsToPart(footnoteDiffs, EnsureNotePart(main, isFootnote: true, rightMain),
+            rightMain?.FootnotesPart, W.footnote, W.footnotes, state, settings);
+        ApplyNoteDiffsToPart(endnoteDiffs, EnsureNotePart(main, isFootnote: false, rightMain),
+            rightMain?.EndnotesPart, W.endnote, W.endnotes, state, settings);
+    }
+
+    /// <summary>Return the output's footnotes/endnotes part, creating an EMPTY one (with the right part's
+    /// boilerplate separator/continuation notes copied so references resolve) when the LEFT package lacks it
+    /// but the diff inserts notes into that scope. Returns null only if there is genuinely no such scope.</summary>
+    private static OpenXmlPart? EnsureNotePart(MainDocumentPart main, bool isFootnote, MainDocumentPart? rightMain)
+    {
+        var existing = isFootnote ? (OpenXmlPart?)main.FootnotesPart : main.EndnotesPart;
+        if (existing != null)
+            return existing;
+        // No part on the left. If the right side has none either, nothing to render.
+        var rightPart = isFootnote ? (OpenXmlPart?)rightMain?.FootnotesPart : rightMain?.EndnotesPart;
+        if (rightPart == null)
+            return null;
+
+        // Create the part and seed it with the right part's BOILERPLATE notes only (the reserved separator /
+        // continuation notes, ids ≤ 0), under a fresh root — so the real inserted notes start from a clean
+        // LEFT-side (empty) baseline and reject-all yields no real note content.
+        var newPart = isFootnote ? (OpenXmlPart)main.AddNewPart<FootnotesPart>() : main.AddNewPart<EndnotesPart>();
+        var rootName = isFootnote ? W.footnotes : W.endnotes;
+        var noteName = isFootnote ? W.footnote : W.endnote;
+        var rightRoot = rightPart.GetXDocument().Root;
+        var newRoot = new XElement(rootName,
+            rightRoot?.Attributes() ?? Enumerable.Empty<XAttribute>());
+        if (rightRoot != null)
+            foreach (var note in rightRoot.Elements(noteName)
+                         .Where(n => int.TryParse((string?)n.Attribute(W.id), out var id) && id <= 0))
+                newRoot.Add(new XElement(note));
+        var xDoc = newPart.GetXDocument();
+        if (xDoc.Root == null)
+            xDoc.Add(newRoot);
+        else
+            xDoc.Root.ReplaceWith(newRoot);
+        newPart.PutXDocument();
+        return newPart;
+    }
+
+    private static void ApplyNoteDiffsToPart(
+        List<IrNoteDiff> diffs, OpenXmlPart? part, OpenXmlPart? rightPart, XName noteName, XName rootName,
+        RenderState state, IrDiffSettings settings)
+    {
+        if (diffs.Count == 0 || part == null)
+            return;
+        var xDoc = part.GetXDocument();
+        var root = xDoc.Root;
+        if (root == null)
+            return;
+        var rightRoot = rightPart?.GetXDocument().Root;
+
+        bool changed = false;
+        foreach (var diff in diffs)
+        {
+            var noteEl = root.Elements(noteName)
+                .FirstOrDefault(e => (string?)e.Attribute(W.id) == diff.NoteId);
+            if (noteEl == null)
+            {
+                // The note is absent in the LEFT part (a wholly-inserted note). Create its wrapper by cloning
+                // the RIGHT note element's shell (attributes + non-block prelude) so the inserted blocks land in
+                // a schema-valid w:footnote/w:endnote; the ops (all InsertBlock) supply the content.
+                var rightNote = rightRoot?.Elements(noteName)
+                    .FirstOrDefault(e => (string?)e.Attribute(W.id) == diff.NoteId);
+                if (rightNote == null)
+                    continue;
+                noteEl = new XElement(noteName, rightNote.Attributes());
+                foreach (var pre in rightNote.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+                    noteEl.Add(StripUnids(new XElement(pre)));
+                root.Add(noteEl);
+            }
+
+            // Render the note's block ops to a fresh block list (same dispatch as the body).
+            var noteBlocks = new List<XElement>();
+            foreach (var op in diff.Ops)
+                RenderBlockOp(op, state, noteBlocks);
+            if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
+                foreach (var b in noteBlocks)
+                    SimplifyMoveMarkup(b);
+
+            // Strip engine-internal pt bookkeeping from the rendered blocks.
+            foreach (var b in noteBlocks)
+                StripUnids(b);
+
+            // Replace the note's block-level children (w:p / w:tbl), keeping any non-block prelude.
+            noteEl.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).Remove();
+            noteEl.Add(noteBlocks);
+            changed = true;
+        }
+
+        if (changed)
+        {
+            // A note part should never carry pt bookkeeping in the output.
+            foreach (var attr in root.DescendantsAndSelf().Attributes()
+                         .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
+                attr.Remove();
+            part.PutXDocument();
+        }
     }
 
     // ----------------------------------------------------------------- native move markup
@@ -801,7 +928,17 @@ internal static class IrMarkupRenderer
         if (rPr == null)
         {
             rPr = new XElement(W.rPr);
-            pPr.AddFirst(rPr);   // rPr is the first child of pPr per schema order
+            // The paragraph-mark w:rPr is near the END of pPr's schema order — after the paragraph-level
+            // properties (pStyle, numPr, spacing, …) and before only w:sectPr / w:pPrChange. Insert it there,
+            // NOT at the front (AddFirst would put it before w:pStyle, which the schema rejects).
+            var sectPr = pPr.Element(W.sectPr);
+            var pPrChange = pPr.Element(W.pPrChange);
+            if (sectPr != null)
+                sectPr.AddBeforeSelf(rPr);
+            else if (pPrChange != null)
+                pPrChange.AddBeforeSelf(rPr);
+            else
+                pPr.Add(rPr);
         }
         var markName = IsDeleteGrade(kind) ? W.del : W.ins;
         // Remove any pre-existing ins/del marker (idempotence) then add the new one FIRST inside rPr.
@@ -1226,6 +1363,11 @@ internal static class IrMarkupRenderer
         // whole run carrying no text.
         private readonly List<Segment> _segments = new();
 
+        /// <summary>Source zero-width child elements already emitted by a previous <see cref="Slice"/> call on
+        /// THIS model (one model per paragraph side), so a boundary-shared zero-width inline is never emitted
+        /// twice across adjacent token ops. Keyed by reference identity.</summary>
+        private readonly HashSet<XElement> _claimedZeroWidth = new();
+
         public SourceRunModel(XElement para)
         {
             int charOffset = 0;
@@ -1320,6 +1462,19 @@ internal static class IrMarkupRenderer
                     ? (seg.Start == start && seg.IsZeroWidth)         // empty span: only zero-width at the point
                     : seg.Start < end && seg.End > start ||           // text overlap
                       (seg.IsZeroWidth && seg.Start >= start && seg.Start < end);
+
+                // A zero-width inline (note ref, drawing, tab, …) sits at ONE char position two adjacent
+                // token-ops can SHARE (prev op's end char == this op's start char), so a char-span slice would
+                // emit it twice. De-duplicate by the specific source CHILD element identity across the
+                // paragraph: a given zero-width source node is sliced into exactly one output op (the first to
+                // claim it). A standalone ZeroWidth segment keys on its own Element; a RunOther zero-width keys
+                // on its OtherChild (so two distinct zero-width children of one run are not conflated).
+                if (overlaps && seg.IsZeroWidth)
+                {
+                    var key = seg.OtherChild ?? seg.Element;
+                    if (key != null && !_claimedZeroWidth.Add(key))
+                        overlaps = false;
+                }
 
                 if (!overlaps)
                 {

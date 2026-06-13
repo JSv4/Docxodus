@@ -87,6 +87,39 @@ public class IrMarkupRendererTests
         }
     }
 
+    /// <summary>The per-note block ContentHash sequence over a document's FOOTNOTE then ENDNOTE scopes (Task 4 —
+    /// note-scope markup). Only notes actually REFERENCED from the body (a <c>w:footnoteReference</c>/
+    /// <c>w:endnoteReference</c> with the matching id) are included, in ascending numeric note-id order, each
+    /// note's blocks hashed with the same descent as the body. Filtering by body reference is semantically
+    /// faithful (an unreferenced note is invisible) and makes the invariant robust to an orphaned empty note
+    /// left in a part after a whole-note insertion is rejected — what matters is the referenced content.</summary>
+    private static List<string> NoteContentHashes(WmlDocument doc)
+    {
+        var ir = IrReader.Read(doc, ReadOpts);
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var bodyRoot = wd.MainDocumentPart!.GetXDocument().Root!;
+        var referencedFn = bodyRoot.Descendants(W.footnoteReference)
+            .Select(e => (string?)e.Attribute(W.id)).Where(s => s != null).ToHashSet(StringComparer.Ordinal);
+        var referencedEn = bodyRoot.Descendants(W.endnoteReference)
+            .Select(e => (string?)e.Attribute(W.id)).Where(s => s != null).ToHashSet(StringComparer.Ordinal);
+
+        var hashes = new List<string>();
+        foreach (var (scopeTag, store, referenced) in new[]
+                 { ("fn", ir.Footnotes, referencedFn), ("en", ir.Endnotes, referencedEn) })
+        {
+            foreach (var id in store.Notes.Keys
+                         .Where(k => referenced.Contains(k))
+                         .OrderBy(k => int.TryParse(k, out var n) ? n : int.MaxValue).ThenBy(k => k, StringComparer.Ordinal))
+            {
+                hashes.Add($"{scopeTag}#{id}");
+                foreach (var b in store.Notes[id].Blocks)
+                    CollectHashes(b, hashes);
+            }
+        }
+        return hashes;
+    }
+
     /// <summary>The per-paragraph BOUNDARY-NORMALIZED modeled-only format signature sequence over a document's
     /// body, descending into table cells, in document order. This is the FORMAT fingerprint the strengthened
     /// invariant compares (Task 4 — w:rPrChange): two ContentHash-equal paragraphs compare format-equal iff
@@ -155,6 +188,16 @@ public class IrMarkupRendererTests
             $"ACCEPT-FORMAT≠RIGHT {label}\n  accept: [{string.Join(", ", acceptFmt)}]\n  right:  [{string.Join(", ", rightFmt)}]");
         Assert.True(rejectFmt.SequenceEqual(leftFmt),
             $"REJECT-FORMAT≠LEFT {label}\n  reject: [{string.Join(", ", rejectFmt)}]\n  left:   [{string.Join(", ", leftFmt)}]");
+
+        // STRENGTHENED (Task 4): footnote/endnote scope content must round-trip too.
+        var acceptNotes = NoteContentHashes(accepted);
+        var rightNotes = NoteContentHashes(right);
+        var rejectNotes = NoteContentHashes(rejected);
+        var leftNotes = NoteContentHashes(left);
+        Assert.True(acceptNotes.SequenceEqual(rightNotes),
+            $"ACCEPT-NOTES≠RIGHT {label}\n  accept: [{string.Join(", ", acceptNotes)}]\n  right:  [{string.Join(", ", rightNotes)}]");
+        Assert.True(rejectNotes.SequenceEqual(leftNotes),
+            $"REJECT-NOTES≠LEFT {label}\n  reject: [{string.Join(", ", rejectNotes)}]\n  left:   [{string.Join(", ", leftNotes)}]");
     }
 
     // ----------------------------------------------------------------- targeted unit shapes
@@ -463,6 +506,53 @@ public class IrMarkupRendererTests
                 desc.Length == 0 ? "no-format-change" : desc.ToString().Trim());
     }
 
+    // ----------------------------------------------------------------- note-scope markup
+
+    [Fact]
+    [Trait("Category", "Corpus")]
+    public void Render_footnote_edit_lands_markup_inside_footnotes_part_and_round_trips()
+    {
+        // WC035-Footnote: a footnote whose text is edited. The markup must land INSIDE the footnotes part
+        // (w:ins/w:del under w:footnote), and accept/reject must round-trip the note content.
+        var left = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC035-Footnote-Before.docx"));
+        var right = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC035-Footnote-After.docx"));
+        var rendered = RenderMarkup(left, right);
+
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var fnPart = wd.MainDocumentPart!.FootnotesPart;
+        Assert.NotNull(fnPart);
+        var fnRoot = fnPart!.GetXDocument().Root!;
+        // Revision markup (ins or del) must appear inside a w:footnote.
+        var noteRevs = fnRoot.Elements(W.footnote)
+            .SelectMany(n => n.Descendants().Where(e => e.Name == W.ins || e.Name == W.del))
+            .ToList();
+        Assert.NotEmpty(noteRevs);
+
+        AssertRoundTrip(left, right, label: "footnote-edit");
+    }
+
+    [Fact]
+    [Trait("Category", "Corpus")]
+    public void Render_endnote_edit_lands_markup_inside_endnotes_part_and_round_trips()
+    {
+        var left = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC035-Endnote-Before.docx"));
+        var right = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC035-Endnote-After.docx"));
+        var rendered = RenderMarkup(left, right);
+
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var enPart = wd.MainDocumentPart!.EndnotesPart;
+        Assert.NotNull(enPart);
+        var enRoot = enPart!.GetXDocument().Root!;
+        var noteRevs = enRoot.Elements(W.endnote)
+            .SelectMany(n => n.Descendants().Where(e => e.Name == W.ins || e.Name == W.del))
+            .ToList();
+        Assert.NotEmpty(noteRevs);
+
+        AssertRoundTrip(left, right, label: "endnote-edit");
+    }
+
     // ----------------------------------------------------------------- native move markup (w:moveFrom/To)
 
     /// <summary>Build a doc from plain-text paragraphs (mirrors WmlComparerMoveDetectionTests' fixtures).</summary>
@@ -626,11 +716,17 @@ public class IrMarkupRendererTests
     /// </summary>
     private static readonly HashSet<string> Task4BlockedPairs = new(StringComparer.Ordinal)
     {
-        // Footnote/endnote SCOPE markup — the renderer does not yet render IrEditScript.NoteOps into the
-        // footnotes/endnotes parts; accept/reject keep the LEFT package's note content. Task-4: note scopes.
-        "WC020-FootNote-Before.docx↔WC020-FootNote-After-2.docx",
-        "WC035-Footnote-Before.docx↔WC035-Footnote-After.docx",
-        "WC035-Endnote-Before.docx↔WC035-Endnote-After.docx",
+        // Footnote/endnote SCOPE markup with a WC-1710/1720-family aligner artifact (NOT a renderer gap). In
+        // WC034-After3 the footnote-reference RENUMBER between revisions perturbs the body LCS so the aligner
+        // pairs the "Video provides…" paragraph (which carries the note reference) as delete+insert instead of
+        // modify. The note REFERENCE therefore rides the body del/ins: reject removes the (wrongly-inserted)
+        // fn#1 reference and keeps the fn#2 reference, so the REFERENCED note set after reject does not match
+        // LEFT's. This is the same engine alignment artifact catalogued as the WC-1710/WC-1720 documented
+        // deviation in the parity scoreboard — stabilizing it is a reader/aligner change (stable note-ref
+        // hashing across renumber), out of renderer scope. The note CONTENT markup itself is correct (verified
+        // for fn#1's modify + fn#2's insert); only the body-side reference attribution diverges.
+        "WC034-Footnotes-Before.docx↔WC034-Footnotes-After3.docx",
+        "WC034-Endnotes-Before.docx↔WC034-Endnotes-After3.docx",
         // OPAQUE drawing content (SmartArt diagram data parts) in a modified block — the whole-block del+ins
         // fallback can't toggle opaque diagram XML at content-hash grain. Task-4: opaque block markup.
         "WC014-SmartArt-Before.docx↔WC014-SmartArt-After.docx",
@@ -685,6 +781,10 @@ public class IrMarkupRendererTests
                         failure = $"{key} [{dir}] ACCEPT-FORMAT≠RIGHT";
                     else if (!BodyFormatSignatures(rejectedDoc).SequenceEqual(BodyFormatSignatures(l)))
                         failure = $"{key} [{dir}] REJECT-FORMAT≠LEFT";
+                    else if (!NoteContentHashes(acceptedDoc).SequenceEqual(NoteContentHashes(r)))
+                        failure = $"{key} [{dir}] ACCEPT-NOTES≠RIGHT";
+                    else if (!NoteContentHashes(rejectedDoc).SequenceEqual(NoteContentHashes(l)))
+                        failure = $"{key} [{dir}] REJECT-NOTES≠LEFT";
                 }
                 catch (Exception ex)
                 {
