@@ -197,7 +197,7 @@ internal static class IrReader
         public ReadContext(Uri partUri, MainDocumentPart main,
             IrStyleRegistry styles, IrNumberingRegistry numbering,
             string scope, CommentTracker? commentTracker = null, int textboxDepth = 0,
-            bool retainSources = true)
+            bool retainSources = true, OpenXmlPart? owningPart = null)
         {
             PartUri = partUri;
             Main = main;
@@ -207,6 +207,10 @@ internal static class IrReader
             CommentTracker = commentTracker;
             TextboxDepth = textboxDepth;
             RetainSources = retainSources;
+            // The part whose relationships resolve drawing/image/diagram rel ids for opaque canonicalization.
+            // Defaults to the main part (the body scope); header/footer/note scopes pass their own part so a
+            // drawing's r:embed resolves against the relationships that actually own it.
+            OwningPart = owningPart ?? main;
         }
 
         // Whether per-node provenance pins the source XElement (IrReaderOptions.RetainSources). When
@@ -227,11 +231,25 @@ internal static class IrReader
         /// matching the reader's existing "no offsets inside a field" stance.</summary>
         public ReadContext IntoTextbox() =>
             new(PartUri, Main, Styles, Numbering, Scope, commentTracker: null, TextboxDepth + 1,
-                RetainSources);
+                RetainSources, OwningPart)
+            { RelResolver = RelResolver };
 
         public Uri PartUri { get; }
 
         public MainDocumentPart Main { get; }
+
+        // The part whose relationships own this scope's drawing/image/diagram rel ids.
+        public OpenXmlPart OwningPart { get; }
+
+        // Opaque-canonicalization relationship resolver (rel id → stable content-identity token), lazily
+        // built over OwningPart and shared down through IntoTextbox so the per-part byte-hash cache is hit
+        // across nested textbox contexts. Backing field assigned via the initializer or the lazy getter.
+        private IrRelResolver? _relResolver;
+        public IrRelResolver RelResolver
+        {
+            get => _relResolver ??= new IrRelResolver(OwningPart);
+            init => _relResolver = value;
+        }
 
         // The IR scope name carried into every anchor produced under this context ("body", "hdr1",
         // "ftr1", "fn", "en", "cmt"). Threaded so header/note/comment blocks get scope-tagged anchors
@@ -757,7 +775,7 @@ internal static class IrReader
             {
                 // Pathologically deep inline content-control nesting: bound the recursion and
                 // preserve the whole subtree opaquely rather than risk a stack overflow.
-                EmitInline(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)), child);
+                EmitInline(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child, _ctx.RelResolver)), child);
             }
             else if (child.Name == W + "sdt")
             {
@@ -802,7 +820,7 @@ internal static class IrReader
             }
             else
             {
-                EmitInline(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)), child);
+                EmitInline(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child, _ctx.RelResolver)), child);
             }
         }
 
@@ -978,7 +996,7 @@ internal static class IrReader
                     // Instruction-only unterminated field: re-emit captured plumbing opaquely so no
                     // content is lost (each captured element is canonical-hashed into an opaque inline).
                     foreach (var el in _captured)
-                        _output.Add(new IrOpaqueInline(el.Name, IrHasher.CanonicalHash(el)));
+                        _output.Add(new IrOpaqueInline(el.Name, IrHasher.CanonicalHash(el, _ctx.RelResolver)));
                     _fieldDepth = 0;
                 }
                 _inResult = false;
@@ -1080,7 +1098,7 @@ internal static class IrReader
             // NOT promoted to an image by AppendDrawing (that branch is above), so it lands here.
             AppendTextboxes(child, ctx, sink);
         else
-            sink.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child)));
+            sink.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child, ctx.RelResolver)));
     }
 
     // --- textbox bodies (w:txbxContent inside w:drawing/wps:txbx or w:pict/v:textbox) -------------
@@ -1106,7 +1124,7 @@ internal static class IrReader
         {
             if (ctx.TextboxDepth >= MaxTextboxDepth)
             {
-                sink.Add(new IrOpaqueInline(txbx.Name, IrHasher.CanonicalHash(txbx)));
+                sink.Add(new IrOpaqueInline(txbx.Name, IrHasher.CanonicalHash(txbx, ctx.RelResolver)));
                 continue;
             }
 
@@ -1266,7 +1284,7 @@ internal static class IrReader
 
         // No resolvable embedded image and no textbox (missing rel, unmodeled shape, etc.): preserve
         // the whole drawing opaquely so nothing is lost (totality).
-        sink.Add(new IrOpaqueInline(drawing.Name, IrHasher.CanonicalHash(drawing)));
+        sink.Add(new IrOpaqueInline(drawing.Name, IrHasher.CanonicalHash(drawing, ctx.RelResolver)));
     }
 
     /// <summary>
@@ -2010,9 +2028,11 @@ internal static class IrReader
             UnmodeledDigest = digest,
         };
 
-        // ContentHash: a single opaque hash of the whole sectPr — deterministic and simple.
+        // ContentHash: a single opaque hash of the whole sectPr — deterministic and simple. Resolver-aware
+        // so a header/footer-reference rel-id renumber (r:id pointing at content-identical header/footer
+        // parts) does not perturb a section break's identity.
         var contentBuilder = new IrContentHashBuilder();
-        contentBuilder.AppendHash(IrHasher.CanonicalHash(sectPr));
+        contentBuilder.AppendHash(IrHasher.CanonicalHash(sectPr, ctx.RelResolver));
 
         return new IrSectionBreak
         {
@@ -2031,7 +2051,7 @@ internal static class IrReader
         {
             Anchor = AnchorFor(IrAnchorKind.Unk, el, ctx),
             ElementName = el.Name,
-            ContentHash = IrHasher.CanonicalHash(el),
+            ContentHash = IrHasher.CanonicalHash(el, ctx.RelResolver),
             FormatFingerprint = EmptyUnmodeledDigest,
             Source = ctx.Provenance(el),
         };
@@ -2086,7 +2106,7 @@ internal static class IrReader
                     continue;
 
                 var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName,
-                    retainSources: retain);
+                    retainSources: retain, owningPart: part);
                 var blocks = new List<IrBlock>();
                 foreach (var child in root.Elements())
                     AppendBlocks(child, ctx, blocks);
@@ -2157,7 +2177,7 @@ internal static class IrReader
                 return IrNoteStore.Empty;
 
             var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName,
-                retainSources: retain);
+                retainSources: retain, owningPart: part);
             var notes = new Dictionary<string, IrScope>(StringComparer.Ordinal);
             // Insertion-ordered map id → the note element's own pt:Unid (the projection's label source).
             var noteUnids = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -2215,7 +2235,7 @@ internal static class IrReader
                 return IrCommentStore.Empty;
 
             var ctx = new ReadContext(part.Uri, main, styles, numbering, "cmt",
-                retainSources: retain);
+                retainSources: retain, owningPart: part);
             var comments = new List<IrComment>();
 
             foreach (var commentEl in root.Elements(W + "comment"))

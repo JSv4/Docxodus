@@ -186,6 +186,65 @@ public class IrNoteImageSdtTests
         Assert.NotEqual(p1.ContentHash, p2.ContentHash);
     }
 
+    // --- M2.4b Workstream A: relationship-id-stable opaque hashing -------
+    //
+    // The headline guard. An OPAQUE element that carries a relationship id (here a VML w:pict /
+    // v:imagedata, which stays opaque — no a:blip to promote) hashes by what the relationship POINTS AT,
+    // not by the (freely renumbering) rel id. So: same rel id + different part bytes ⇒ DIFFERENT opaque
+    // hash (content sensitivity preserved — the M1.2 guarantee); different rel id + same part bytes ⇒
+    // SAME opaque hash (the new rel-numbering invariance — content identity over rel numbering).
+
+    // A VML picture whose v:imagedata references an image part by rel id. No a:blip, so the reader keeps
+    // the whole w:pict as an IrOpaqueInline — exercising the opaque canonical-hash rel-token path.
+    private static string VmlPict(string relId) =>
+        "<w:pict>" +
+          "<v:shape xmlns:v=\"urn:schemas-microsoft-com:vml\">" +
+            $"<v:imagedata r:id=\"{relId}\"/>" +
+          "</v:shape>" +
+        "</w:pict>";
+
+    private static IrOpaqueInline OpaquePictInline(string relId, params (string, byte[])[] parts)
+    {
+        var doc = IrTestDocuments.FromBodyXmlWithImageParts(
+            $"<w:p><w:r>{VmlPict(relId)}</w:r></w:p>", parts);
+        var p = IrReader.Read(doc).Body.Blocks.OfType<IrParagraph>().Single();
+        return p.Inlines.OfType<IrOpaqueInline>().Single();
+    }
+
+    [Fact]
+    public void Read_OpaqueRel_DifferentRelId_SamePartBytes_SameOpaqueHash()
+    {
+        // Different relationship ids pointing at byte-identical parts ⇒ identical opaque hash. This is the
+        // WC-1940 / SmartArt-rel-renumber closure expressed at the unit level.
+        var a = OpaquePictInline("rIdA", ("rIdA", IrTestDocuments.TinyPng));
+        var b = OpaquePictInline("rIdZZZ", ("rIdZZZ", IrTestDocuments.TinyPng));
+
+        Assert.Equal(a.CanonicalHash, b.CanonicalHash);
+    }
+
+    [Fact]
+    public void Read_OpaqueRel_SameRelId_DifferentPartBytes_DifferentOpaqueHash()
+    {
+        // Same relationship id but different part bytes ⇒ different opaque hash. Content sensitivity (the
+        // M1.2 guarantee) must survive the rel-token canonicalization — a real content change still hashes
+        // differently.
+        var a = OpaquePictInline("rId1", ("rId1", new byte[] { 0x89, 0x50, 1, 2, 3 }));
+        var b = OpaquePictInline("rId1", ("rId1", new byte[] { 0x89, 0x50, 9, 9, 9 }));
+
+        Assert.NotEqual(a.CanonicalHash, b.CanonicalHash);
+    }
+
+    [Fact]
+    public void Read_OpaqueRel_DanglingRel_ToleratesToStableToken()
+    {
+        // A rel id with no backing part (dangling) must not throw and must hash stably (totality). Two
+        // dangling references to the same missing id hash equal.
+        var a = OpaquePictInline("rIdGone");
+        var b = OpaquePictInline("rIdGone");
+
+        Assert.Equal(a.CanonicalHash, b.CanonicalHash);
+    }
+
     // --- N12: SDT / smartTag unwrap --------------------------------------
 
     [Fact]

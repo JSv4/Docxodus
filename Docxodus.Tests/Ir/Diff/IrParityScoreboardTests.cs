@@ -120,19 +120,13 @@ public class IrParityScoreboardTests
         ["WC-1430"] = "Math-heavy paragraph: +1 finer split vs WmlComparer's LCS — engine grain.",
         ["WC-1440"] = "Image+math+para: IR reports the math/run boundary at a finer grain (+3) — engine grain.",
         ["WC-1450"] = "Table-4-row-image: IR row/run grain is finer than WmlComparer's LCS (+2) — engine grain.",
-        // WC-1940 (WC052-SmartArt-Same vs -Mod): IR 4 vs WmlComparer 2 (+2). The real edit is two body-text
-        // deletes (` too`, ` it`) which BOTH engines report. IR adds TWO spurious empty-text revisions: a pure
-        // DeleteBlock `"" (L set, R unset)` and a pure InsertBlock `"" (L unset, R set)` over SmartArt-only
-        // paragraphs (graphicData uri=…/diagram, no image/math/text). These paragraphs are UNCHANGED but the
-        // diagram's relationship-id renumbers between revisions, so their opaque content hashes differ and the
-        // aligner pairs them as delete+insert instead of Equal — an engine READER/aligner artifact, not a
-        // render-grain one. The existing zero-width prune CANNOT be extended to drop them: it is scoped to
-        // `sec:` section-break anchors precisely because an empty-text paragraph DeleteBlock over a pure-SmartArt
-        // paragraph is INDISTINGUISHABLE (same block kind IrParagraph, same empty text, same L-set/R-unset
-        // anchor shape) from WC-1320's empty-text SmartArt-paragraph delete that WmlComparer DOES count
-        // (expected 1). Pruning by that shape would regress WC-1320/WC-1230/WC-1240. The fix belongs in the
-        // reader/aligner (stabilize SmartArt opaque hashing across rel-id renumber), out of render scope.",
-        ["WC-1940"] = "WC052-SmartArt-Same: IR 4 vs WmlComparer 2 (+2). Real edit = two body deletes (` too`, ` it`) both engines agree on. IR adds two SPURIOUS empty-text revisions — a pure DeleteBlock and a pure InsertBlock over UNCHANGED pure-SmartArt paragraphs whose diagram rel-ids renumber, so their opaque hashes differ and the aligner pairs them del+ins instead of Equal. Cannot be zero-width-pruned: an empty pure-SmartArt paragraph delete is indistinguishable in shape (IrParagraph, empty text, L-set/R-unset) from WC-1320's empty SmartArt-paragraph delete that WmlComparer DOES count — pruning regresses WC-1320/1230/1240. Reader/aligner fix (stable SmartArt hashing), out of render scope.",
+        // WC-1940 (WC052-SmartArt-Same vs -Mod): CLOSED in M2.4b Workstream A — now a genuine PASS (IR 2 ==
+        // WmlComparer 2). The two spurious empty-text revisions were over UNCHANGED pure-SmartArt paragraphs
+        // whose diagram drawing-object id (wp:docPr/@id, 1 vs 2) and diagram rel ids differed side-to-side,
+        // so their opaque content hashes diverged and the aligner paired them del+ins. IrHasher.Canonicalize
+        // now strips the renumber-prone wp:docPr/@id and resolves relationship attributes to stable
+        // content-identity tokens (matching WmlComparer's CloneBlockLevelContentForHashing), so the unchanged
+        // paragraphs hash equal and align as Equal. No catalog entry — the row PASSES.
         ["WC-1950"] = "Text-in-cell: IR splits the cell-text phrase finer than WmlComparer's LCS (+2) — engine grain.",
 
         // ---- Engine token-differ degenerates where WmlComparer keeps shared words (under-trim residual).

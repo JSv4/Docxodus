@@ -731,20 +731,22 @@ public class IrMarkupRendererTests
         // for fn#1's modify + fn#2's insert); only the body-side reference attribution diverges.
         "WC034-Footnotes-Before.docx↔WC034-Footnotes-After3.docx",
         "WC034-Endnotes-Before.docx↔WC034-Endnotes-After3.docx",
-        // DEVIATION — SmartArt opaque diagram rel-id instability (READER, the WC-1940 family). A SmartArt
-        // paragraph's diagram-data relationship id RENUMBERS between the two revisions, so the reader's opaque
-        // content hash for that UNCHANGED paragraph differs side-to-side and the aligner pairs it as a modify
-        // (whole-block del+ins). The rendered del(left)+ins(right) is structurally correct, but on accept the
-        // re-imported diagram part gets a FRESH rel id (MoveRelatedPartsToDestination mints a new "R…" id), so
-        // the accepted paragraph's opaque hash matches neither side's original. Fix is reader-level: stable
-        // SmartArt opaque hashing across rel-id renumber (out of renderer scope). Three fixtures, one cause.
-        "WC014-SmartArt-Before.docx↔WC014-SmartArt-After.docx",
-        "WC014-SmartArt-With-Image-Before.docx↔WC014-SmartArt-With-Image-After.docx",
-        "WC052-SmartArt-Same.docx↔WC052-SmartArt-Same-Mod.docx",
-        // DEVIATION — in-paragraph image↔math drawing SWAP with the same diagram/media rel-id renumber effect as
-        // the SmartArt family: the drawing's embed rel id renumbers, so the re-imported part's fresh rel id
-        // shifts the opaque hash on accept. Same reader-level rel-id-stability root cause; renderer markup is
-        // correct (whole-block image insert/delete IS covered and passes).
+        // (M2.4b Workstream A — CLOSED, 3 of 4) The SmartArt diagram rel-id family (WC014 ×2 + WC052) was here
+        // as DEVIATIONS: an UNCHANGED diagram's relationship ids renumber between revisions (and on accept
+        // MoveRelatedPartsToDestination mints fresh "R…" ids), and its wp:docPr/@id renumbers (1 vs 2), so the
+        // opaque content hash for that block differed side-to-side and on accept. Fixed at the reader/hasher
+        // level — IrHasher.Canonicalize now resolves every relationship-namespace attribute to a stable
+        // content-identity token (media → part-content SHA, xml diagram parts dropped to match the WmlComparer
+        // oracle, external/hyperlink → target URI, dangling → sentinel) and strips the renumber-prone
+        // wp:docPr/@id. Content identity over rel numbering: those three pairs now round-trip clean and are
+        // removed from this allowlist.
+        // DEVIATION — body-level bookmarkEnd marker (the WC-BodyBookmarks root cause, NOT the rel-id renumber the
+        // original catalog claimed). WC022-After carries a stray w:bookmarkEnd as a DIRECT w:body child; the IR
+        // reader models it as an IrOpaqueBlock, but the markup render→accept round-trip drops that body-level
+        // marker, so accept has one fewer block than RIGHT (verified: every OTHER block — including the image and
+        // math drawings whose embed rel ids DO renumber — round-trips identically after Workstream A, so the
+        // rel-id-stability gap that WAS suspected here is closed; only the body-level bookmark survives). Same
+        // body-level-marker revision-support gap as WC-BodyBookmarks below — Workstream D scope.
         "WC022-Image-Math-Para-Before.docx↔WC022-Image-Math-Para-After.docx",
         // DEVIATION — hyperlink TARGET change where the right hyperlink's rId COLLIDES with a DIFFERENT left rId.
         // ImportHyperlinkAndExternalRelationships recreates a right hyperlink rel only when its id is FREE in the

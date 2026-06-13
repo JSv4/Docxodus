@@ -5,8 +5,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
 
 namespace Docxodus.Ir;
 
@@ -19,6 +21,17 @@ namespace Docxodus.Ir;
 internal static class IrHasher
 {
     private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    // The relationship namespace (r:id/r:embed/r:dm/...). Every attribute in this namespace names a
+    // relationship id that renumbers freely across edits/imports without changing what it points at, so
+    // its raw value must never reach the canonical bytes — see <see cref="IrRelResolver"/>.
+    private static readonly XNamespace R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    // The wp: drawing namespace, for wp:docPr/@id — a document-unique non-visual drawing-object id Word
+    // renumbers freely; it carries no content meaning, so it is stripped from canonical form (mirroring
+    // WmlComparer's CloneBlockLevelContentForHashing, which drops wp:docPr/@id from its content hash).
+    private static readonly XName WpDocPr =
+        (XNamespace)"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" + "docPr";
 
     // PowerTools bookkeeping namespaces (Unid/StyleName/etc.) — declared via the "pt14"
     // prefix in the codebase. Stripped from canonical form so it survives Unid churn.
@@ -51,18 +64,33 @@ internal static class IrHasher
     /// strips only that minimal noise set for now.</item>
     /// </list>
     /// </remarks>
-    public static byte[] Canonicalize(XElement element)
+    public static byte[] Canonicalize(XElement element) => Canonicalize(element, resolver: null);
+
+    /// <summary>
+    /// Part-aware overload of <see cref="Canonicalize(XElement)"/>. When <paramref name="resolver"/> is
+    /// non-null, every attribute in the relationship namespace (<c>r:id</c>/<c>r:embed</c>/<c>r:dm</c>/…)
+    /// has its VALUE replaced by a stable content-identity token (the target part's content hash for
+    /// internal media, the URI for external/hyperlink rels, a sentinel for dangling/xml-part rels) so a
+    /// renumbered-but-content-identical drawing/image/diagram canonicalizes identically. When null, rel
+    /// values pass through unchanged (the legacy, rel-numbering-sensitive behavior). Either way the
+    /// renumber-prone <c>wp:docPr/@id</c> is stripped (it is a non-content drawing-object id).
+    /// </summary>
+    public static byte[] Canonicalize(XElement element, IrRelResolver? resolver)
     {
         var clone = new XElement(element);
-        Clean(clone);
+        Clean(clone, resolver);
         var xml = clone.ToString(SaveOptions.DisableFormatting);
         return Encoding.UTF8.GetBytes(xml);
     }
 
     /// <summary>SHA-256 of <see cref="Canonicalize(XElement)"/>.</summary>
-    public static IrHash CanonicalHash(XElement element) => IrHash.Compute(Canonicalize(element));
+    public static IrHash CanonicalHash(XElement element) => IrHash.Compute(Canonicalize(element, resolver: null));
 
-    private static void Clean(XElement element)
+    /// <summary>Part-aware SHA-256 of <see cref="Canonicalize(XElement, IrRelResolver?)"/>.</summary>
+    public static IrHash CanonicalHash(XElement element, IrRelResolver? resolver) =>
+        IrHash.Compute(Canonicalize(element, resolver));
+
+    private static void Clean(XElement element, IrRelResolver? resolver)
     {
         // Remove noise child elements first (proofErr/noProof, anywhere in the subtree).
         var toRemove = element
@@ -73,13 +101,14 @@ internal static class IrHasher
             d.Remove();
 
         foreach (var el in element.DescendantsAndSelf())
-            CleanAttributes(el);
+            CleanAttributes(el, resolver);
     }
 
-    private static void CleanAttributes(XElement element)
+    private static void CleanAttributes(XElement element, IrRelResolver? resolver)
     {
         var kept = element.Attributes()
             .Where(a => !ShouldStripAttribute(a))
+            .Select(a => RewriteRelAttribute(a, resolver))
             .OrderBy(a => a.Name.NamespaceName, StringComparer.Ordinal)
             .ThenBy(a => a.Name.LocalName, StringComparer.Ordinal)
             .ToList();
@@ -87,6 +116,19 @@ internal static class IrHasher
         element.RemoveAttributes();
         foreach (var a in kept)
             element.Add(a);
+    }
+
+    /// <summary>
+    /// When <paramref name="a"/> is a relationship-namespace attribute and a <paramref name="resolver"/>
+    /// is supplied, return a copy whose value is the resolver's stable content-identity token; otherwise
+    /// return the attribute unchanged. The attribute NAME is preserved (so r:embed and r:link never
+    /// collide); only the renumber-prone VALUE is normalized.
+    /// </summary>
+    private static XAttribute RewriteRelAttribute(XAttribute a, IrRelResolver? resolver)
+    {
+        if (resolver is null || a.Name.Namespace != R)
+            return a;
+        return new XAttribute(a.Name, resolver.ResolveToken(a.Value));
     }
 
     private static bool ShouldStripAttribute(XAttribute attribute)
@@ -103,6 +145,12 @@ internal static class IrHasher
 
         // rsid* attributes in any namespace (local name starts with "rsid").
         if (attribute.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal))
+            return true;
+
+        // wp:docPr/@id — a non-content drawing-object id Word renumbers freely (mirrors WmlComparer's
+        // CloneBlockLevelContentForHashing dropping wp:docPr/@id). Two otherwise-identical drawings whose
+        // docPr ids differ (the WC-1940 / WC052-SmartArt case) must canonicalize equal.
+        if (attribute.Name == "id" && attribute.Parent?.Name == WpDocPr)
             return true;
 
         return false;
@@ -262,6 +310,118 @@ internal static class IrHasher
         Span<byte> bytes = stackalloc byte[32];
         hash.CopyTo(bytes);
         stream.Write(bytes);
+    }
+}
+
+/// <summary>
+/// Resolves a relationship id (the raw value of an <c>r:id</c>/<c>r:embed</c>/<c>r:dm</c>/… attribute on
+/// some part) to a STABLE content-identity token for <see cref="IrHasher.Canonicalize(XElement, IrRelResolver?)"/>.
+/// The token depends only on what the relationship POINTS AT, never on the (freely renumbering) id itself,
+/// so a renumbered-but-content-identical drawing/image/diagram canonicalizes to identical bytes.
+/// <para/>
+/// The mapping mirrors <c>WmlComparer.CloneBlockLevelContentForHashing</c> (the parity oracle) so the IR
+/// agrees with WmlComparer on which opaque blocks are unchanged:
+/// <list type="bullet">
+/// <item><b>internal media part</b> (content type NOT ending in <c>xml</c> — images, audio, …): the
+/// SHA-256 of its bytes, as <c>part-sha:&lt;hex&gt;</c>. Bytes are streamed and the digest is cached per
+/// part within one resolver, so a logo reused N times (or referenced from both sides) hashes once.</item>
+/// <item><b>internal xml part</b> (content type ending in <c>xml</c> — diagram data/layout/colors,
+/// charts, …): the sentinel <c>xml-part</c>. The oracle deliberately drops these rels from its content
+/// hash (their serialized bytes differ cosmetically across saves even when the diagram is unchanged — the
+/// WC-1940 / WC052-SmartArt case), so matching it means NOT hashing the xml part's bytes.</item>
+/// <item><b>external relationship / hyperlink</b>: <c>ext:&lt;target-uri&gt;</c> — a target change is a
+/// content change, a re-numbered-but-same-target rel is not.</item>
+/// <item><b>dangling</b> (no such relationship id on the part): <c>dangling</c>.</item>
+/// <item><b>any resolution failure</b> (missing owning part, unreadable stream, …): <c>unresolved</c> —
+/// the resolver NEVER throws (totality over the whole corpus).</item>
+/// </list>
+/// </summary>
+internal sealed class IrRelResolver
+{
+    private readonly OpenXmlPart? _part;
+
+    // rel id → stable token. Caches both the streamed media-byte digests (the expensive case) and the
+    // cheap classifications, so a rel referenced many times within one Read resolves once.
+    private readonly Dictionary<string, string> _cache = new(StringComparer.Ordinal);
+
+    public IrRelResolver(OpenXmlPart? part) => _part = part;
+
+    /// <summary>
+    /// The stable content-identity token for relationship id <paramref name="relId"/>. Total: every path
+    /// returns a token; nothing throws. Results are cached for the lifetime of this resolver.
+    /// </summary>
+    public string ResolveToken(string relId)
+    {
+        if (_cache.TryGetValue(relId, out var cached))
+            return cached;
+        var token = Classify(relId);
+        _cache[relId] = token;
+        return token;
+    }
+
+    private string Classify(string relId)
+    {
+        if (_part is null || string.IsNullOrEmpty(relId))
+            return "unresolved";
+
+        // GetPartById throws (ArgumentOutOfRangeException / KeyNotFoundException) when relId is not an
+        // INTERNAL part relationship — it may still be an external/hyperlink relationship, or dangling.
+        OpenXmlPart? target = null;
+        try
+        {
+            target = _part.GetPartById(relId);
+        }
+        catch (Exception e) when (e is ArgumentException or KeyNotFoundException or InvalidOperationException)
+        {
+            return ClassifyNonPartRel(relId);
+        }
+
+        if (target is null)
+            return ClassifyNonPartRel(relId);
+
+        try
+        {
+            // xml content parts (diagram data/layout/colors, charts, embedded settings, …): drop, matching
+            // the oracle — their serialized bytes vary cosmetically across saves even when unchanged.
+            if (target.ContentType.EndsWith("xml", StringComparison.OrdinalIgnoreCase))
+                return "xml-part";
+
+            using var stream = target.GetStream(System.IO.FileMode.Open, System.IO.FileAccess.Read);
+            using var sha = SHA256.Create();
+            var digest = sha.ComputeHash(stream);
+            return "part-sha:" + Convert.ToHexString(digest).ToLowerInvariant();
+        }
+        catch (Exception e) when (e is System.IO.IOException or InvalidOperationException
+            or NotSupportedException or ObjectDisposedException or UnauthorizedAccessException)
+        {
+            return "unresolved";
+        }
+    }
+
+    /// <summary>
+    /// A rel id that is not an internal part relationship: try the part's hyperlink relationships, then
+    /// its external relationships (both keyed by the rel target URI), else it is dangling. Never throws.
+    /// </summary>
+    private string ClassifyNonPartRel(string relId)
+    {
+        if (_part is null)
+            return "unresolved";
+        try
+        {
+            var hr = _part.HyperlinkRelationships.FirstOrDefault(z => z.Id == relId);
+            if (hr is not null)
+                return "ext:" + hr.Uri;
+
+            var er = _part.ExternalRelationships.FirstOrDefault(z => z.Id == relId);
+            if (er is not null)
+                return "ext:" + er.Uri;
+
+            return "dangling";
+        }
+        catch (Exception e) when (e is InvalidOperationException or NotSupportedException)
+        {
+            return "unresolved";
+        }
     }
 }
 
