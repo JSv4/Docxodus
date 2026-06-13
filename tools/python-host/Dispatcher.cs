@@ -34,6 +34,10 @@ internal static class Dispatcher
         "docx_diff_compare" => DocxDiffCompare(args),
         "docx_diff_get_revisions" => DocxDiffGetRevisions(args),
         "docx_diff_get_edit_script" => JsonString(DocxDiffGetEditScript(args)),
+        "docx_diff_consolidate" => DocxDiffConsolidate(args),
+        "docx_diff_get_conflicts" => DocxDiffOps.GetConflictsJson(BaseB(args), ReviewersJson(args), DiffSettingsJson(args)),
+        "docx_diff_get_consolidated_revisions" => DocxDiffOps.GetConsolidatedRevisionsJson(BaseB(args), ReviewersJson(args), DiffSettingsJson(args)),
+        "docx_diff_get_consolidated_edit_script" => DocxDiffOps.GetConsolidatedEditScriptJson(BaseB(args), ReviewersJson(args), DiffSettingsJson(args)),
         "project" => DocxSessionOps.Project(Handle(args)),
         "project_anchor" => DocxSessionOps.ProjectAnchor(
             Handle(args), Str(args, "anchorId"),
@@ -213,6 +217,17 @@ internal static class Dispatcher
         var right = Convert.FromBase64String(Str(args, "rightB64"));
         return DocxDiffOps.GetEditScriptJson(left, right, DiffSettingsJson(args));
     }
+
+    private static string DocxDiffConsolidate(JsonElement args)
+    {
+        var bytes = DocxDiffOps.Consolidate(BaseB(args), ReviewersJson(args), DiffSettingsJson(args));
+        return "{\"docxB64\":" + DocxSessionJson.JsonString(Convert.ToBase64String(bytes)) + "}";
+    }
+
+    private static byte[] BaseB(JsonElement args) => Convert.FromBase64String(Str(args, "baseB64"));
+
+    private static string ReviewersJson(JsonElement args) =>
+        args.TryGetProperty("reviewers", out var r) && r.ValueKind == JsonValueKind.Array ? r.GetRawText() : "[]";
 
     private static string? DiffSettingsJson(JsonElement args) =>
         args.ValueKind == JsonValueKind.Object
