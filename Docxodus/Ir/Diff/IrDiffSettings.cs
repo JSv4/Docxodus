@@ -226,12 +226,15 @@ internal sealed record IrDiffSettings
     public int MoveMinimumTokenCount { get; init; } = 3;
 
     /// <summary>
-    /// DIFF-TIME setting (M2.6). When true, the aligner's gap fill runs the 1:N paragraph split / N:1
-    /// merge containment scan (after similarity pairing, before the 1×1-residue rule), emitting
-    /// <see cref="IrEditOpKind.SplitBlock"/>/<see cref="IrEditOpKind.MergeBlock"/> ops. Default FALSE
-    /// during the M2.6 build-out; flipped to true when the full pipeline (apply/revisions/markup) lands.
+    /// DIFF-TIME setting (M2.6). When true (the DEFAULT), the aligner's gap fill runs the 1:N paragraph
+    /// split / N:1 merge containment scan (after similarity pairing, before the 1×1-residue rule),
+    /// emitting <see cref="IrEditOpKind.SplitBlock"/>/<see cref="IrEditOpKind.MergeBlock"/> ops — so a
+    /// paragraph split mid-text (Enter pressed) or two paragraphs fused report as a paragraph-mark
+    /// revision plus per-segment edits instead of an inflated whole-paragraph delete+insert pair
+    /// (WC-1450/WC-1830). Set false for strict 1:1 op semantics (every op carries at most one anchor
+    /// per side; splits fall back to the pre-M2.6 Modify+Insert account).
     /// </summary>
-    public bool DetectSplitMerge { get; init; } = false;
+    public bool DetectSplitMerge { get; init; } = true;
 
     /// <summary>
     /// DIFF-TIME setting (M2.6). Minimum in-order LCS coverage of the singular-side paragraph's content

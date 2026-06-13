@@ -97,18 +97,17 @@ public class IrParityScoreboardTests
         // wherever the Fallback copy lands. M2.5 Task 3 then closed WC-1710/1720 (175→176) by giving the IR the
         // oracle's NOTE-STORE CORRESPONDENCE (notes pair by body-reference order + content, not raw w:id —
         // IrEditScriptBuilder.BuildOneStore) plus a structural-only affix-trim guard (a byte-identical del/ins
-        // region — an intra-word note-ref relocation — is no longer cancelled). The three surviving deviations
-        // are all genuine engine-grain cases: WC-1450/1830 (1:N sub-paragraph SPLIT — one before-paragraph's
-        // content migrates across TWO after-paragraphs; M2.5 Task 2 PROVED both share this root cause and that
-        // it is NOT closable in the 1:1 IrEditOp model nor render-coalescible — the correct fix is engine-level
-        // 1:N split semantics, sketched in docs/superpowers/specs/2026-06-12-subparagraph-split-merge-design.md
-        // and recommended as a Phase-2 follow-on (M2.6); RETAINED with evidence per the timebox rule) and
-        // WC-1920 (cross-run word coalescing — the cell `This is a test` gains a trailing `!` in a SEPARATE run;
-        // the oracle's char-atom word grouping reads `test!` as one word and reports del `test` + ins `test!`,
-        // while the IR tokenizes per-run so `test`/`!` are two tokens and the affix-trim reports just ins `!`;
-        // a tokenizer word-boundary change with corpus-wide blast radius — deferred-tokenizer class).
+        // region — an intra-word note-ref relocation — is no longer cancelled), and WC-1920 (177) by aligning
+        // the affix-trim word boundary with GetComparisonUnitList. M2.6 closed the LAST two deviations,
+        // WC-1450/WC-1830 (1:N sub-paragraph SPLIT), with engine-level SplitBlock/MergeBlock semantics: the
+        // aligner's containment scan (IrBlockAligner.DetectOneToManyInGap, gated by
+        // IrDiffSettings.DetectSplitMerge, default ON) pairs the one before-paragraph with BOTH after-halves,
+        // and the compat renderer projects the oracle's account (per-segment edits + one coalesced inserted
+        // region per split). See docs/superpowers/specs/2026-06-12-subparagraph-split-merge-design.md and the
+        // M2.6 implementation plan. THE CATALOG IS NOW EMPTY — every runnable row is a genuine count-exact
+        // PASS (179/179), and board.Deviation is asserted 0 below.
         const int ParityFloor = 179;     // PASS + documented deviation = full runnable set (179/179)
-        const int GenuinePassFloor = 177; // PASS-only ratchet (M2.5 Task 3: +WC-1710/1720 note correspondence, +WC-1920 affix-trim boundary): may only rise
+        const int GenuinePassFloor = 179; // PASS-only ratchet (M2.6: +WC-1450/WC-1830 split semantics): may only rise
         Assert.True(board.Total > 0, "Scoreboard scored no cases.");
         Assert.Equal(board.Total, board.Pass + board.Deviation + board.Fail);
         Assert.True(board.Pass + board.Deviation >= ParityFloor,
@@ -119,6 +118,9 @@ public class IrParityScoreboardTests
         Assert.True(board.Pass >= GenuinePassFloor,
             $"GENUINE-PASS REGRESSION: {board.Pass} PASS < ratchet floor {GenuinePassFloor}. A row that was a " +
             "count-exact PASS has regressed to a deviation/fail — the genuine-pass ratchet may only rise.");
+        Assert.True(board.Deviation == 0,
+            $"The deviation catalog is EMPTY as of M2.6 (179/179 genuine) — yet {board.Deviation} row(s) " +
+            "scored as DEVIATION. A new entry must carry a fresh adjudicated reason, not resurrect a closed one.");
     }
 
     /// <summary>
@@ -175,7 +177,19 @@ public class IrParityScoreboardTests
         // and WC-1320/1340/1350 (standalone image/SmartArt inserts) keep one revision per block — a sub-region
         // with NO Word token is left un-coalesced (those are what WmlComparer counts individually). Verified
         // zero regression on the math/image corpus rows.
-        ["WC-1450"] = "Table-4-row-image: +1 (8 vs 7). M2.5 Task 2 RE-DIAGNOSIS — the prior 'two identical Video provides paragraphs, aligner anchored the wrong one' description was STALE/WRONG. The actual +1 is a 1:N PARAGRAPH SPLIT inside the surviving cell (tc:…cd11), the SAME root cause as WC-1830: before-cell has ONE paragraph `Video provides…point. When you click…add.`; after-cell SPLITS it across `Video provides…point.` + an empty paragraph + `When you click…add.`. WmlComparer's whole-document atom LCS credits BOTH split halves as Equal against the single before-paragraph (a 1:2 match), reporting the split as one contiguous del+ins region. The IR aligns at PARAGRAPH grain — IrEditOp is strictly 1:1 (one LeftAnchor, one RightAnchor, one token diff), so it pairs the before-paragraph with ONE after-half (the higher-Jaccard `When you click` suffix) as Modify and the other half (`Video provides` prefix) falls out as a whole Insert. The shared prefix the oracle keeps is LOST. PROVABLY not closable in the 1:1 model and not render-coalescible (the ops are interleaved Insert/Insert/Modify/Delete; re-pairing the other half is symmetric — 1:1 keeps at most one of two). Correct fix = engine-level 1:N split semantics (new edit-script op + apply/markup/JSON/fuzz ripple), sketched in docs/superpowers/specs/2026-06-12-subparagraph-split-merge-design.md and recommended as a Phase-2 follow-on (M2.6). RETAINED with evidence per the timebox rule (do NOT ship new edit-script op kinds under time pressure). engine alignment grain (sub-paragraph 1:N split).",
+        // ---- WC-1450 + WC-1830 (1:N sub-paragraph SPLIT): CLOSED in M2.6 (2026-06-12) — now genuine
+        // PASSES, no catalog entry. Both fixtures' +1 was ONE before-paragraph whose content migrated across
+        // TWO after-paragraphs inside a table cell (`Video provides…point. When you click…add.` split at the
+        // sentence boundary, with an inserted math paragraph between the halves in WC-1830/cd11). M2.5 Task 2
+        // PROVED this unfixable in the 1:1 IrEditOp model; M2.6 shipped the engine-level fix: SplitBlock/
+        // MergeBlock op kinds (one singular anchor + N SplitMergeAnchors + per-segment partition-invariant
+        // token diffs), a containment scan in the aligner's gap fill (IrBlockAligner.DetectOneToManyInGap —
+        // in-order LCS coverage ≥ SplitCoverageThreshold, foreign slack ≤ SplitForeignSlack, zero-match edge
+        // trim; after similarity pairing, before the 1×1 rule; may PROMOTE a same-gap Modified pairing whose
+        // partner is one segment of the run), and renderer support (compat mode projects the oracle's account:
+        // segment-0 inline edits + ONE coalesced Inserted spanning the split-off members — the oracle's
+        // re-deleted tail coalesces into the adjacent deleted-paragraph region, so the split contributes
+        // exactly one count). Spec: docs/superpowers/specs/2026-06-12-subparagraph-split-merge-design.md.
         // WC-1940 (WC052-SmartArt-Same vs -Mod): CLOSED in M2.4b Workstream A — now a genuine PASS (IR 2 ==
         // WmlComparer 2). The two spurious empty-text revisions were over UNCHANGED pure-SmartArt paragraphs
         // whose diagram drawing-object id (wp:docPr/@id, 1 vs 2) and diagram rel ids differed side-to-side,
@@ -226,7 +240,6 @@ public class IrParityScoreboardTests
         // mode a textbox-interior Modified paragraph now renders as whole-block Deleted (left text) + Inserted
         // (right text), matching the oracle's coarser grain (2 == 2). Validated against WC-1890/2080 (interior
         // token diff already whole-paragraph) and WC-2090/2092 (interior insert/delete) — all keep passing.
-        ["WC-1830"] = "Table-5 cell, SUB-PARAGRAPH content migration (+1, 3 vs 2). Before cell p0 = `Video provides…point. When you click…add.` (one paragraph); after the SAME text is SPLIT across after-p0 `Video provides…point. ` + a math paragraph + after-p2 `When you click…add.` (three paragraphs). WmlComparer's whole-document atom LCS reports this as one contiguous del+ins region (2). The IR aligns at PARAGRAPH grain — it cannot split before-p0's content across two after-paragraphs — so the block aligner's similarity pass pairs before-p0 with after-p0 (shared prefix, Modify), inserts the math paragraph, and matches after-p2 against the deleted before-p1 tail, surfacing one extra whole-paragraph revision. This is a genuine block-vs-atom GRANULARITY difference (WmlComparer's sub-paragraph LCS is finer than the IR's per-block token diff here), not a render-coalescible inter-block run and not an oracle fault — the IR's per-block account is internally consistent, just coarser at the paragraph boundary. M2.5 Task 2: PROVED not closable in the 1:1 IrEditOp model — the oracle's 2 requires crediting BOTH split halves (prefix `Video provides` AND suffix `When you click`) as Equal against the single before-paragraph, a 1:2 token diff with no representation in a one-Left/one-Right op; re-pairing the other half is symmetric. Correct fix = engine-level 1:N split semantics, sketched in docs/superpowers/specs/2026-06-12-subparagraph-split-merge-design.md and recommended as a Phase-2 follow-on (M2.6). RETAINED with evidence per the timebox rule (this is the SAME root cause as WC-1450). engine alignment grain (sub-paragraph 1:N split).",
         // WC-1900 (WC048-Text-Box-in-Cell): CLOSED in M2.4b Workstream D — now a genuine PASS (IR 6 ==
         // WmlComparer 6). WmlComparer's PreProcessMarkup opens with MarkupCompatibilityProcessMode.ProcessAllParts
         // (Office2007), which MC-RESOLVES each mc:AlternateContent to a single branch and discards the other, so
@@ -699,7 +712,9 @@ public class IrParityScoreboardTests
 
     /// <summary>The 105 live WC003_Compare InlineData rows (id, left, right, expectedRevisionCount), copied
     /// verbatim from WmlComparerTests.cs.</summary>
-    private static IEnumerable<(string Id, string Left, string Right, int Expected)> WC003_Compare_Rows() => new[]
+    // Internal: the M2.6 threshold sweep (IrSplitThresholdSweepTests) re-runs these rows per candidate
+    // threshold pair, so the row list is shared rather than duplicated.
+    internal static IEnumerable<(string Id, string Left, string Right, int Expected)> WC003_Compare_Rows() => new[]
     {
         ("WC-1000", "CA/CA001-Plain.docx", "CA/CA001-Plain-Mod.docx", 1),
         ("WC-1010", "WC/WC001-Digits.docx", "WC/WC001-Digits-Mod.docx", 4),

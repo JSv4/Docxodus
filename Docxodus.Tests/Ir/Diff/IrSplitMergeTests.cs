@@ -245,7 +245,7 @@ public class IrSplitMergeTests
     private void DumpFixture(string label, string leftRel, string rightRel)
     {
         const string root = "../../../../TestFiles/";
-        var settings = new IrDiffSettings(); // DetectSplitMerge defaults FALSE — baseline states
+        var settings = new IrDiffSettings { DetectSplitMerge = false }; // detection OFF — baseline states
         var left = IrReader.Read(new WmlDocument(Path.Combine(root, leftRel)), WcCorpus.ReadOpts);
         var right = IrReader.Read(new WmlDocument(Path.Combine(root, rightRel)), WcCorpus.ReadOpts);
         var script = IrEditScriptBuilder.Build(left, right, settings);
@@ -431,11 +431,11 @@ public class IrSplitMergeTests
     }
 
     [Fact]
-    public void Detection_off_by_default_changes_nothing()
+    public void Detection_disabled_changes_nothing()
     {
         var (l, _) = ReadParas("aaa bbb ccc ddd. eee fff ggg hhh.");
         var (r, _) = ReadParas("aaa bbb ccc ddd. ", "eee fff ggg hhh.");
-        var a = Align(l, r, new IrDiffSettings()); // DetectSplitMerge false
+        var a = Align(l, r, new IrDiffSettings { DetectSplitMerge = false }); // the strict-1:1 opt-out
         Assert.Empty(a.Entries.Where(e => e.Kind is IrAlignmentKind.Split or IrAlignmentKind.Merge));
     }
 

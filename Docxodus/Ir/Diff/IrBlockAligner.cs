@@ -517,6 +517,22 @@ internal static class IrBlockAligner
         List<(int SingularIndex, List<int> PluralIndexes)> groups,
         IrDiffSettings settings)
     {
+        // O(1)-prefilter content-token counts, computed lazily once per gap (-1 = not yet counted).
+        // The thresholds imply HARD length bounds a window must satisfy before any LCS scoring is
+        // worth running: matched ≤ min(singularContent, windowContent), so coverage ≥ T needs
+        // windowContent ≥ T·singularContent, and slack ≤ S needs windowContent ≤ singularContent/(1−S)
+        // (unmatched ≥ windowContent − singularContent). Without this, a fully-rewritten G×G gap pays
+        // G²·LCS for windows that cannot possibly qualify (the adversarial 200×200 scale fixture).
+        var pluralContent = new int[pluralTo - pluralFrom];
+        Array.Fill(pluralContent, -1);
+        int PluralContent(int pj)
+        {
+            int idx = pj - pluralFrom;
+            if (pluralContent[idx] < 0)
+                pluralContent[idx] = pluralBlocks[pj] is IrParagraph p ? ContentTokenCount(p, settings) : 0;
+            return pluralContent[idx];
+        }
+
         for (int si = singularFrom; si < singularTo; si++)
         {
             if (singularBlocks[si] is not IrParagraph singularPara)
@@ -534,7 +550,7 @@ internal static class IrBlockAligner
             }
 
             var run = FindQualifyingRun(singularPara, partner, pluralBlocks, pluralFrom, pluralTo,
-                pluralMatch, settings);
+                pluralMatch, settings, PluralContent);
             if (run is null)
                 continue;
 
@@ -570,19 +586,36 @@ internal static class IrBlockAligner
     private static List<int>? FindQualifyingRun(
         IrParagraph singular, int partner,
         IrNodeList<IrBlock> pluralBlocks, int pluralFrom, int pluralTo,
-        int[] pluralMatch, IrDiffSettings settings)
+        int[] pluralMatch, IrDiffSettings settings, Func<int, int> pluralContent)
     {
         bool Eligible(int pj) =>
             pluralBlocks[pj] is IrParagraph && (pluralMatch[pj] == -1 || pj == partner);
+
+        // O(1) length prefilter bounds (see DetectOneToManyInGap): a window whose content-token total
+        // falls outside [coverage·singular, singular/(1−slack)] cannot clear the thresholds, so the
+        // LCS scorer never runs on it. The lower bound uses the UNTRIMMED window (trimming only
+        // removes zero-match members, which cannot raise coverage); the upper bound is checked after
+        // a hypothetical best-case trim is unknowable cheaply, so it is applied to the raw window —
+        // a window that only passes POST-trim is re-admitted because the trimmed window is itself
+        // enumerated as a smaller (a,b) candidate by the ascending scan.
+        int singularContent = ContentTokenCount(singular, settings);
+        double maxWindowContent = singularContent / (1.0 - settings.SplitForeignSlack);
+        double minWindowContent = settings.SplitCoverageThreshold * singularContent;
 
         for (int a = pluralFrom; a < pluralTo; a++)
         {
             if (!Eligible(a))
                 continue;
+            int windowContent = pluralContent(a);
             for (int b = a + 1; b < pluralTo && b - a + 1 <= settings.SplitMaxRunLength; b++)
             {
                 if (!Eligible(b))
                     break; // adjacency requirement: the window must be a contiguous eligible run
+                windowContent += pluralContent(b);
+                if (windowContent > maxWindowContent)
+                    break; // adding members only grows content — no longer window from this start qualifies
+                if (windowContent < minWindowContent)
+                    continue; // too little content to cover the singular side yet — extend the window
                 var trimmed = TrimAndGate(singular, partner, a, b, pluralBlocks, pluralMatch, settings);
                 if (trimmed is not null)
                     return trimmed;
@@ -590,6 +623,16 @@ internal static class IrBlockAligner
         }
 
         return null;
+    }
+
+    /// <summary>Content-token count of a paragraph (non-Separator, non-Textbox — the scoring rule).</summary>
+    private static int ContentTokenCount(IrParagraph p, IrDiffSettings settings)
+    {
+        int n = 0;
+        foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+            if (t.Kind is not (IrDiffTokenKind.Separator or IrDiffTokenKind.Textbox))
+                n++;
+        return n;
     }
 
     /// <summary>
