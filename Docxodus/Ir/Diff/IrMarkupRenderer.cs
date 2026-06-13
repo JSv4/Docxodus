@@ -652,6 +652,18 @@ internal static class IrMarkupRenderer
     /// opposite side's references — never dangle: each surviving reference still resolves, and the kept ids stay an
     /// ASCENDING subsequence of the renumbered space, so the read-order note sequence matches the right document on
     /// accept and the left on reject. Idempotent when ids already coincide; runs for every render.
+    /// <para><b>Known limitations (unexercised in the M2.6 corpus; documented per the T1 review).</b>
+    /// (1) <i>Note-ref nested in a note body is not renumbered.</i> The reference walk scans <c>w:body</c>
+    /// descendants only, so a footnote/endnote reference that lives INSIDE another note's definition body
+    /// (a note that itself cites a note) keeps its original <c>@w:id</c> — only body-anchored references drive
+    /// the renumber. No corpus fixture exercises note-in-note references; if one arises, the walk must also
+    /// visit references inside the note part(s).
+    /// (2) <i>Deleted EMPTY-bodied note dequeue keys on <c>w:delText</c>.</i> <c>IsDeletedOnly</c> classifies a
+    /// definition as deleted-only via "has <c>w:delText</c> and no live <c>w:t</c>"; a deleted note whose body
+    /// carries NO text at all (no <c>w:delText</c>, no <c>w:t</c>) is therefore not enqueued in <c>delDefs</c>,
+    /// so a <c>w:del</c> body reference could dequeue the wrong deleted def (or none). No corpus fixture has a
+    /// textless deleted note; a robust fix would key deletedness on the reference/definition correspondence the
+    /// builder already records rather than on body text presence.</para>
     /// </summary>
     private static void RenumberNoteIds(MainDocumentPart main, XName refName, XName noteName, XName rootName,
         OpenXmlPart? notePart, OpenXmlPart? rightNotePart)
