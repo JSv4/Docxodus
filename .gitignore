@@ -44,6 +44,9 @@ _ReSharper.Caches/
 # Plans (internal working documents)
 docs/plans/
 
+# Superpowers plans/specs (internal working documents)
+docs/superpowers/
+
 # IR markdown-equivalence triage artifacts (regenerated per test run)
 Docxodus.Tests/Ir/EquivalenceArtifacts/
 
