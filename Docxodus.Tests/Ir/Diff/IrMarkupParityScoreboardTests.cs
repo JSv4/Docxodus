@@ -77,11 +77,12 @@ public class IrMarkupParityScoreboardTests
 
         // The markup floor: every ported MARKUP_BLOCKED case lands PASS (markup correct) or DEVIATION
         // (adjudicated reader/aligner-level difference — see DocumentedDeviations), never an undocumented FAIL.
-        // 34 = 16 native-move-markup + 6 w:rPrChange + 5 legal-numbering + 6 body-level + 1 parallel-race
-        // assertions ported from WmlComparerMoveDetection/FormatChange/LegalNumbering/BodyLevel/ParallelRace.
-        // Combined with the 179 GetRevisions-scoreboard rows (IrParityScoreboardTests), the two scoreboards span
-        // the WmlComparer parity surface the M2.4 gate measures (see the ## M2.4 Outcome gate report).
-        const int MarkupParityFloor = 34; // M2.4 Task 4 — the ported MARKUP_BLOCKED set, all PASS-or-deviation.
+        // 39 = the full MARKUP_BLOCKED set from the M2.3 scoreboard inventory: 16 native-move-markup +
+        // 3 move-stress + 8 w:rPrChange + 5 legal-numbering + 6 body-level (5 elements + 1 bookmark) +
+        // 1 parallel-race, ported from WmlComparerMoveDetection/FormatChange/LegalNumbering/BodyLevel/ParallelRace.
+        // Combined with the 179 GetRevisions-scoreboard rows (IrParityScoreboardTests), the two scoreboards reach
+        // 179 + 39 = 218 — the M2.4 parity bar (see the ## M2.4 Outcome gate report).
+        const int MarkupParityFloor = 39; // M2.4 Task 4 — the full MARKUP_BLOCKED set, all PASS-or-deviation.
         Assert.True(board.Total > 0, "Markup scoreboard scored no cases.");
         Assert.Equal(board.Total, board.Pass + board.Deviation + board.Fail);
         Assert.True(board.Pass + board.Deviation >= MarkupParityFloor,
@@ -239,6 +240,46 @@ public class IrMarkupParityScoreboardTests
 
         board.Score("MoveMarkup-ValidSchema", "D", () =>
             Assert.Equal(0, SchemaErrorCount(RenderMarkup(MoveDoc(swap2L), MoveDoc(swap2R), moveSettings))));
+
+        // 3 stress variants (50 / 100 / 200 paragraphs with many moves + edits): all revision ids unique, move
+        // names pair, schema valid. Proves the renderer scales without id collisions or markup corruption.
+        foreach (var size in new[] { 50, 100, 200 })
+            board.Score($"MoveMarkup-Stress-{size}", "D", () =>
+            {
+                var (l, r) = StressPair(size, seed: 42);
+                var b = MoveBody(l, r, moveSettings);
+                var ids = b.Descendants().Where(e => e.Name == w + "ins" || e.Name == w + "del" ||
+                                                     e.Name == w + "moveFrom" || e.Name == w + "moveTo")
+                    .Select(e => (string?)e.Attribute(w + "id")).Where(s => s != null).ToList();
+                Assert.Equal(ids.Count, ids.Distinct().Count());
+                var fromN = b.Descendants(w + "moveFromRangeStart").Select(e => (string?)e.Attribute(w + "name")).ToHashSet();
+                var toN = b.Descendants(w + "moveToRangeStart").Select(e => (string?)e.Attribute(w + "name")).ToHashSet();
+                Assert.True(fromN.SetEquals(toN), "stress move names pair");
+                Assert.Equal(0, SchemaErrorCount(RenderMarkup(MoveDoc(l), MoveDoc(r), moveSettings)));
+            });
+    }
+
+    /// <summary>Deterministically generate a (original, modified) paragraph-set pair with moves + word edits +
+    /// deletions for the stress cases (mirrors WmlComparerMoveDetectionTests' stress generator shape).</summary>
+    private static (string[] Left, string[] Right) StressPair(int count, int seed)
+    {
+        var rng = new Random(seed);
+        var left = Enumerable.Range(0, count)
+            .Select(i => $"Paragraph {i} alpha bravo charlie delta echo foxtrot golf hotel content here.")
+            .ToArray();
+        var right = (string[])left.Clone();
+        // A handful of swaps + word edits.
+        for (int k = 0; k < count / 4; k++)
+        {
+            int a = rng.Next(count), b = rng.Next(count);
+            (right[a], right[b]) = (right[b], right[a]);
+        }
+        for (int k = 0; k < count / 5; k++)
+        {
+            int i = rng.Next(count);
+            right[i] = right[i].Replace("charlie", "CHANGED");
+        }
+        return (left, right);
     }
 
     private static XElement MoveBody(string[] left, string[] right, IrDiffSettings settings) =>
@@ -283,6 +324,18 @@ public class IrMarkupParityScoreboardTests
             Assert.NotNull(oldRpr);
             Assert.NotNull(oldRpr!.Element(w + "b"));
         });
+
+        board.Score("FormatChange-ItalicToBold-rPrChange", "E", () =>
+        {
+            // Italic → bold: rPrChange present, old rPr carries italic (the LEFT formatting).
+            var change = FmtBody(ItalicPara("sample text here"), BoldPara("sample text here"))
+                .Descendants(w + "rPrChange").First();
+            Assert.NotNull(change.Element(w + "rPr"));
+            Assert.NotNull(change.Element(w + "rPr")!.Element(w + "i"));
+        });
+
+        board.Score("FormatChange-RenderedSchemaValid", "E", () =>
+            Assert.Equal(0, SchemaErrorCount(RenderMarkup(Para("sample text here"), BoldItalicPara("sample text here")))));
     }
 
     private static XElement FmtBody(WmlDocument left, WmlDocument right) =>
