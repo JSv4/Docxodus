@@ -108,7 +108,7 @@ public class IrParityScoreboardTests
         // while the IR tokenizes per-run so `test`/`!` are two tokens and the affix-trim reports just ins `!`;
         // a tokenizer word-boundary change with corpus-wide blast radius — deferred-tokenizer class).
         const int ParityFloor = 179;     // PASS + documented deviation = full runnable set (179/179)
-        const int GenuinePassFloor = 176; // PASS-only ratchet (M2.5 Task 3: +WC-1710/1720 note correspondence): may only rise
+        const int GenuinePassFloor = 177; // PASS-only ratchet (M2.5 Task 3: +WC-1710/1720 note correspondence, +WC-1920 affix-trim boundary): may only rise
         Assert.True(board.Total > 0, "Scoreboard scored no cases.");
         Assert.Equal(board.Total, board.Pass + board.Deviation + board.Fail);
         Assert.True(board.Pass + board.Deviation >= ParityFloor,
@@ -209,7 +209,8 @@ public class IrParityScoreboardTests
         //       the M2.5 Task 1 intra-word note-ref relocation (`Vi`⟨ref⟩`deo` vs `Video`, the relocated ref is
         //       textless). WmlComparer reports del `Video` + ins `Video` there; the old trim erased both to empty.
         // Together these recover the oracle's exact counts: WC-1620/1630 (footnotes, 3==3), WC-1710/1720
-        // (endnotes, 7==7). No catalog entry — the rows PASS.
+        // (endnotes, 7==7). No catalog entry — the rows PASS. (M2.5 Task 3 also closed WC-1920 — see its note
+        // below — by aligning the affix-trim's word-boundary to WmlComparer's GetComparisonUnitList; ratchet 176→177.)
 
         // ---- Reader: textbox VML/DrawingML duplication NOT collapsed by the adjacent-pair dedup.
         // Word emits one logical textbox as a DrawingML mc:Choice + a VML mc:Fallback. The render-time dedup
@@ -241,7 +242,18 @@ public class IrParityScoreboardTests
         // copy is dropped wherever it lands. No catalog entry — the row PASSES. (Reader output is unchanged: the
         // fix is render-time/count-only, so the markdown-projection equivalence suite stays green and the markup
         // round-trip path — which keeps both branches because both LEFT and RIGHT carry both — is untouched.)
-        ["WC-1920"] = "Table-in-textbox: IR 7 vs WmlComparer 8 (-1). The Choice/Fallback DUPLICATE is now correctly collapsed (the WS-D signature-parity dedup), so the residual -1 is NOT duplication — it is a tokenizer/affix-trim GRAIN difference inside the textbox's nested table. The cell text `This is a test` → `This is a test!` (one `!` appended). WmlComparer's word-atom LCS pairs the whole changed word as del `test` + ins `test!` (2 revisions); the IR tokenizes `!` as its own punctuation token, so compatible-mode common-affix trim reports just ins `!` (1 revision). Matching the oracle here needs the IR tokenizer to attach trailing punctuation to the preceding word the way WmlComparer's atomizer does — a corpus-wide tokenizer word-boundary change (Fine-mode + whole-corpus blast radius), the same deferred-tokenizer class as WC-1710/1720's note-ref-within-word and WC-1830's sub-paragraph grain. ORACLE follows its word-atom grain; IR finer at the punctuation-attachment boundary — deferred to M2.5.",
+        // ---- WC-1920 (WC050-Table-in-Text-Box): CLOSED in M2.5 Task 3 — now a genuine PASS (IR 8 == WmlComparer 8).
+        // The cell text `This is a test` → `This is a test!` (a `!` appended in a SEPARATE run; the reader's N5
+        // run-coalescing already joins them to `test!`). WmlComparer's GetComparisonUnitList groups per-char atoms
+        // into words where `!` JOINS the surrounding word (only WordSeparators, CJK, and non-digit-adjacent `.`/`,`
+        // are isolated atoms), so it keeps `test!` whole and reports del `test` + ins `test!` (2). The IR's
+        // compat common-affix-trim back-off (IrRevisionRenderer.IsWordBoundaryBefore) formerly treated EVERY
+        // non-letter-digit as a boundary, so it trimmed the common `test` and reported just `ins !` (1). The
+        // boundary test now mirrors GetComparisonUnitList EXACTLY (IsOracleSplitChar): a boundary falls only at a
+        // WordSeparator / CJK / non-digit-adjacent `.`/`,`, so `test`/`test!` share no trimmable affix and the
+        // whole word del+ins survives. The `.`/`,` isolation (and digit-adjacency carve-out for `3.14`) keeps the
+        // `This`/`This.` and `endnote`/`endnote.` trims working — zero scoreboard blast radius (no other row
+        // changed). No catalog entry — the row PASSES.
 
         // ---- M2.4b Workstream C CLOSED WC-1750/1760 (endnote-with-table) — now genuine PASSES, no catalog
         // entry. Two fixes combined: (1) table-aware block similarity + an unambiguous table-residue rule in

@@ -894,23 +894,52 @@ internal static class IrRevisionRenderer
     }
 
     /// <summary>
-    /// True iff position <paramref name="i"/> in <paramref name="s"/> is a word boundary — i.e. cutting here
-    /// does not split a run of word characters. A cut is legal at the string edge, or when the chars straddling
-    /// the cut are not BOTH word characters (so the boundary falls next to whitespace or punctuation). This
-    /// matches WmlComparer's atom granularity, where punctuation like <c>.</c> is its own atom and so a legal
-    /// trim edge — note the IR <c>WordSeparators</c> set is deliberately NOT used here (it excludes ASCII
-    /// <c>.</c>, which WmlComparer nonetheless atomizes).
+    /// True iff position <paramref name="i"/> in <paramref name="s"/> is a word boundary under
+    /// <see cref="WmlComparer"/>'s EXACT atom-grouping rule (<c>GetComparisonUnitList</c>): the comparer groups
+    /// per-character atoms into words, where a char is a SPLITTING char (its own isolated atom — boundaries on
+    /// BOTH sides) iff it is a <see cref="IrDiffSettings.WordSeparators"/> member, a CJK ideograph, OR a
+    /// non-digit-adjacent <c>.</c>/<c>,</c>; every OTHER char (letters, digits, and other punctuation such as
+    /// <c>!</c>/<c>?</c>/<c>:</c>) JOINS the surrounding word. A boundary exists between <c>s[i-1]</c> and
+    /// <c>s[i]</c> iff either straddling char is a splitting char.
+    ///
+    /// <para>The earlier rule treated EVERY non-letter-digit (including <c>!</c>) as a boundary, so it trimmed
+    /// <c>test</c>/<c>test!</c> to just <c>ins !</c> — but the comparer keeps <c>test!</c> as one word and
+    /// reports del <c>test</c> + ins <c>test!</c> (WC-1920). The digit-adjacency carve-out keeps <c>3.14</c> one
+    /// word; the <c>.</c>/<c>,</c> isolation keeps the <c>This</c>/<c>This.</c> and <c>endnote</c>/<c>endnote.</c>
+    /// trims working (WC-1710 bridges the trailing <c>.</c>).</para>
     /// </summary>
     private static bool IsWordBoundaryBefore(string s, int i)
     {
         if (i <= 0 || i >= s.Length)
             return true;
-        return !(IsWordChar(s[i - 1]) && IsWordChar(s[i]));
+        return IsOracleSplitChar(s, i - 1) || IsOracleSplitChar(s, i);
     }
 
-    /// <summary>A "word" char for the affix-trim back-off: a letter or digit. Everything else (whitespace,
-    /// punctuation) is a potential atom boundary.</summary>
-    private static bool IsWordChar(char c) => char.IsLetterOrDigit(c);
+    /// <summary>True iff the char at <paramref name="pos"/> is an ISOLATED atom under WmlComparer's grouping
+    /// (boundaries on both sides): a <see cref="IrDiffSettings.WordSeparators"/> member, a CJK ideograph, or a
+    /// <c>.</c>/<c>,</c> that is NOT adjacent to a digit. Other chars (letters, digits, <c>!</c>/<c>?</c>/<c>:</c>)
+    /// join the surrounding word.</summary>
+    private static bool IsOracleSplitChar(string s, int pos)
+    {
+        char c = s[pos];
+        if (DefaultWordSeparatorSet.Contains(c))
+            return true;
+        if (c >= 0x4e00 && c <= 0x9fff) // CJK ideographs (matches GetComparisonUnitList's range check)
+            return true;
+        if (c == '.' || c == ',')
+        {
+            bool prevDigit = pos > 0 && char.IsDigit(s[pos - 1]);
+            bool nextDigit = pos < s.Length - 1 && char.IsDigit(s[pos + 1]);
+            return !(prevDigit || nextDigit); // digit-adjacent .,/ joins (e.g. 3.14); otherwise isolated
+        }
+        return false;
+    }
+
+    /// <summary>The comparer's word-separator chars (the <see cref="IrDiffSettings.DefaultWordSeparators"/> set)
+    /// used by the affix-trim's oracle-faithful boundary test. CJK and digit-adjacency-sensitive <c>.</c>/<c>,</c>
+    /// are handled separately in <see cref="IsOracleSplitChar"/>.</summary>
+    private static readonly System.Collections.Generic.HashSet<char> DefaultWordSeparatorSet =
+        new(IrDiffSettings.DefaultWordSeparators);
 
     /// <summary>
     /// True iff every token in the half-open span is a <see cref="IrDiffTokenKind.Textbox"/> placeholder — a
