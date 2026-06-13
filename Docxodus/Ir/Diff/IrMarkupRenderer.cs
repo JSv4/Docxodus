@@ -157,21 +157,7 @@ internal static class IrMarkupRenderer
                 // BEFORE PutXDocument so the in-tree XElements are the live ones MoveRelatedPartsToDestination
                 // mutates. Uses the same proven part-copy/fresh-rId path WmlComparer uses for inserted drawings.
                 var rightMain = wDocRight.MainDocumentPart;
-                if (rightMain != null && state.RightSourcedClones.Count > 0)
-                {
-                    // (1) Import hyperlink/external relationships (e.g. w:hyperlink/@r:id targets) the right
-                    // clones reference but the left package lacks — these are NOT parts, so the part-copy path
-                    // below skips them; recreate them with the SAME id where free so the cloned r:id resolves.
-                    ImportHyperlinkAndExternalRelationships(state.RightSourcedClones, main, rightMain);
-
-                    // (2) Import media PARTS (image embeds, diagram data) and remap their r:ids in place, using
-                    // the stream documents' own packages directly (the wrapper's package is the authoritative
-                    // writable one — not the reflection-based OpenXmlPackage.GetPackage()).
-                    var leftPkgPart = streamDoc.GetPackage().GetPart(main.Uri);
-                    var rightPkgPart = rightStream.GetPackage().GetPart(rightMain.Uri);
-                    foreach (var clone in state.RightSourcedClones)
-                        WmlComparer.MoveRelatedPartsToDestination(rightPkgPart, leftPkgPart, clone, skipDanglingRelationships: true);
-                }
+                ImportRightSourcedMedia(state.RightSourcedClones, main, rightMain, streamDoc, rightStream);
 
                 // Strip ALL engine-internal pt:Unid bookkeeping attributes from the assembled body (cloned runs
                 // inside ins/del wrappers carry them too; a single sweep here catches every nested occurrence).
@@ -208,9 +194,36 @@ internal static class IrMarkupRenderer
         }
     }
 
+    /// <summary>
+    /// Import media (and hyperlink/external relationships) referenced by RIGHT-sourced clones into the output's
+    /// LEFT-based main part, remapping the cloned elements' relationship ids IN PLACE. Extracted from
+    /// <see cref="Render"/> so the composite renderer can run the same proven import per-reviewer (each reviewer
+    /// package supplies its own clones). A no-op when there are no media-bearing clones or no right main part.
+    /// </summary>
+    internal static void ImportRightSourcedMedia(
+        IReadOnlyList<XElement> rightClones, MainDocumentPart main, MainDocumentPart? rightMain,
+        OpenXmlMemoryStreamDocument leftStreamDoc, OpenXmlMemoryStreamDocument rightStreamDoc)
+    {
+        if (rightMain == null || rightClones.Count == 0)
+            return;
+
+        // (1) Import hyperlink/external relationships (e.g. w:hyperlink/@r:id targets) the right clones reference
+        // but the left package lacks — these are NOT parts, so the part-copy path below skips them; recreate them
+        // with the SAME id where free so the cloned r:id resolves.
+        ImportHyperlinkAndExternalRelationships(rightClones.ToList(), main, rightMain);
+
+        // (2) Import media PARTS (image embeds, diagram data) and remap their r:ids in place, using the stream
+        // documents' own packages directly (the wrapper's package is the authoritative writable one — not the
+        // reflection-based OpenXmlPackage.GetPackage()).
+        var leftPkgPart = leftStreamDoc.GetPackage().GetPart(main.Uri);
+        var rightPkgPart = rightStreamDoc.GetPackage().GetPart(rightMain.Uri);
+        foreach (var clone in rightClones)
+            WmlComparer.MoveRelatedPartsToDestination(rightPkgPart, leftPkgPart, clone, skipDanglingRelationships: true);
+    }
+
     // ----------------------------------------------------------------- block-op dispatch
 
-    private static void RenderBlockOp(IrEditOp op, RenderState state, List<XElement> sink)
+    internal static void RenderBlockOp(IrEditOp op, RenderState state, List<XElement> sink)
     {
         // A standalone trailing section-break block (a `sec:` anchor, an IrSectionBreak) is last-section page
         // METADATA, not body content. Its `w:sectPr` is a direct w:body child that must be the LAST element —
@@ -224,8 +237,9 @@ internal static class IrMarkupRenderer
         switch (op.Kind)
         {
             case IrEditOpKind.EqualBlock:
-                // Content-equal: emit the RIGHT block verbatim (accepted-state continuity).
-                EmitVerbatim(op.RightAnchor, state.Right, state, sink, fromRight: true);
+                // Content-equal: emit the RIGHT block verbatim (accepted-state continuity). In a composite render
+                // an EqualBlock is base-sourced — the composite renderer points RightSource at the base for it.
+                EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true);
                 break;
 
             case IrEditOpKind.FormatOnlyBlock:
@@ -236,7 +250,7 @@ internal static class IrMarkupRenderer
                 break;
 
             case IrEditOpKind.InsertBlock:
-                EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+                EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
                 break;
 
             case IrEditOpKind.DeleteBlock:
@@ -260,7 +274,7 @@ internal static class IrMarkupRenderer
                     if (op.IsMoveSource == true)
                         EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
                     else
-                        EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+                        EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
                 }
                 else if (op.IsMoveSource == true)
                 {
@@ -306,7 +320,7 @@ internal static class IrMarkupRenderer
             EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
             if (op.SplitMergeAnchors is { } fallbackAnchors)
                 foreach (var a in fallbackAnchors)
-                    EmitWholeBlock(a, state.Right, state, sink, RevKind.Ins, fromRight: true);
+                    EmitWholeBlock(a, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
             return;
         }
 
@@ -321,13 +335,13 @@ internal static class IrMarkupRenderer
             var slice = SubTokens(leftTokens, offset, sliceLen);
             offset += sliceLen;
 
-            var memberPara = SourceElement(anchors[s], state.Right);
+            var memberPara = SourceElement(anchors[s], state.RightSource);
             if (memberPara == null)
             {
-                EmitWholeBlock(anchors[s], state.Right, state, sink, RevKind.Ins, fromRight: true);
+                EmitWholeBlock(anchors[s], state.RightSource, state, sink, RevKind.Ins, fromRight: true);
                 continue;
             }
-            var memberTokens = ParagraphTokens(anchors[s], state.Right, state.Settings);
+            var memberTokens = ParagraphTokens(anchors[s], state.RightSource, state.Settings);
             var rightRuns = new SourceRunModel(memberPara);
 
             var newPara = new XElement(W.p);
@@ -352,19 +366,19 @@ internal static class IrMarkupRenderer
     /// </summary>
     private static void RenderMergeBlock(IrEditOp op, RenderState state, List<XElement> sink)
     {
-        var rightPara = SourceElement(op.RightAnchor, state.Right);
+        var rightPara = SourceElement(op.RightAnchor, state.RightSource);
         if (rightPara == null || op.SplitMergeAnchors is not { } anchors || op.SegmentDiffs is not { } diffs
             || anchors.Count != diffs.Count)
         {
             if (op.SplitMergeAnchors is { } fallbackAnchors)
                 foreach (var a in fallbackAnchors)
                     EmitWholeBlock(a, state.Left, state, sink, RevKind.Del, fromRight: false);
-            EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+            EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
             return;
         }
 
         var rightRuns = new SourceRunModel(rightPara);
-        var rightTokens = ParagraphTokens(op.RightAnchor, state.Right, state.Settings);
+        var rightTokens = ParagraphTokens(op.RightAnchor, state.RightSource, state.Settings);
         var rightPPr = rightPara.Element(W.pPr);
 
         int offset = 0;
@@ -431,7 +445,7 @@ internal static class IrMarkupRenderer
     private static void RenderModifyBlock(IrEditOp op, RenderState state, List<XElement> sink)
     {
         bool leftIsPara = ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph;
-        bool rightIsPara = ResolveBlock(op.RightAnchor, state.Right) is IrParagraph;
+        bool rightIsPara = ResolveBlock(op.RightAnchor, state.RightSource) is IrParagraph;
 
         if (op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
             op.TextboxDiffs is null)   // textbox-interior diffs are not finely rendered in Task 3
@@ -443,7 +457,7 @@ internal static class IrMarkupRenderer
         // A Modified TABLE pair with a nested table diff renders row/cell-precise markup (Task 4).
         if (op.TableDiff is { } tableDiff &&
             ResolveBlock(op.LeftAnchor, state.Left) is IrTable &&
-            ResolveBlock(op.RightAnchor, state.Right) is IrTable)
+            ResolveBlock(op.RightAnchor, state.RightSource) is IrTable)
         {
             if (RenderModifiedTable(op, tableDiff, state, sink))
                 return;
@@ -455,7 +469,7 @@ internal static class IrMarkupRenderer
         if (op.LeftAnchor != null)
             EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
         if (op.RightAnchor != null)
-            EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+            EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
     }
 
 
@@ -468,14 +482,14 @@ internal static class IrMarkupRenderer
     /// </summary>
     private static bool RenderModifiedTable(IrEditOp op, IrTableDiff tableDiff, RenderState state, List<XElement> sink)
     {
-        var rightTbl = SourceElement(op.RightAnchor, state.Right);
+        var rightTbl = SourceElement(op.RightAnchor, state.RightSource);
         var leftTbl = SourceElement(op.LeftAnchor, state.Left);
         if (rightTbl == null || leftTbl == null || rightTbl.Name != W.tbl || leftTbl.Name != W.tbl)
             return false;
 
         // Index the source rows by anchor so a row op resolves to its source w:tr.
         var leftRowsByAnchor = IndexRows(ResolveBlock(op.LeftAnchor, state.Left) as IrTable);
-        var rightRowsByAnchor = IndexRows(ResolveBlock(op.RightAnchor, state.Right) as IrTable);
+        var rightRowsByAnchor = IndexRows(ResolveBlock(op.RightAnchor, state.RightSource) as IrTable);
 
         var newTbl = new XElement(W.tbl);
         // Carry the table's non-row prelude (tblPr, tblGrid, …) from the right shell.
@@ -639,7 +653,7 @@ internal static class IrMarkupRenderer
     /// <summary>In-place rewrite of native move markup under one block to plain del/ins (mirrors
     /// <see cref="WmlComparer"/>'s <c>SimplifyMoveMarkupToDelIns</c>): <c>w:moveFrom</c> → <c>w:del</c>,
     /// <c>w:moveTo</c> → <c>w:ins</c> (attributes + children preserved), and all four range markers removed.</summary>
-    private static void SimplifyMoveMarkup(XElement block)
+    internal static void SimplifyMoveMarkup(XElement block)
     {
         foreach (var moveFrom in block.DescendantsAndSelf(W.moveFrom).ToList())
             moveFrom.ReplaceWith(new XElement(W.del, moveFrom.Attributes(), moveFrom.Nodes()));
@@ -945,10 +959,10 @@ internal static class IrMarkupRenderer
     /// </summary>
     private static void EmitMoveDestination(IrEditOp op, RenderState state, List<XElement> sink)
     {
-        var src = SourceElement(op.RightAnchor, state.Right);
+        var src = SourceElement(op.RightAnchor, state.RightSource);
         if (src == null || src.Name != W.p || op.MoveGroupId is not { } gid)
         {
-            EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, fromRight: true);
+            EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
             return;
         }
         string moveName = state.MoveName(gid);
@@ -983,14 +997,14 @@ internal static class IrMarkupRenderer
     private static XElement? BuildMoveModifyDestination(IrEditOp op, IrTokenDiff tokenDiff, RenderState state)
     {
         var leftPara = SourceElement(op.LeftAnchor, state.Left);
-        var rightPara = SourceElement(op.RightAnchor, state.Right);
+        var rightPara = SourceElement(op.RightAnchor, state.RightSource);
         if (leftPara == null || rightPara == null)
             return null;
 
         var leftRuns = new SourceRunModel(leftPara);
         var rightRuns = new SourceRunModel(rightPara);
         var leftTokens = ParagraphTokens(op.LeftAnchor, state.Left, state.Settings);
-        var rightTokens = ParagraphTokens(op.RightAnchor, state.Right, state.Settings);
+        var rightTokens = ParagraphTokens(op.RightAnchor, state.RightSource, state.Settings);
 
         var newPara = new XElement(W.p);
         var rightPPr = rightPara.Element(W.pPr);
@@ -1256,11 +1270,11 @@ internal static class IrMarkupRenderer
     /// </summary>
     private static void EmitFormatOnlyParagraph(IrEditOp op, RenderState state, List<XElement> sink)
     {
-        var rightPara = SourceElement(op.RightAnchor, state.Right);
+        var rightPara = SourceElement(op.RightAnchor, state.RightSource);
         var leftPara = SourceElement(op.LeftAnchor, state.Left);
         if (rightPara == null || rightPara.Name != W.p || leftPara == null || leftPara.Name != W.p)
         {
-            EmitVerbatim(op.RightAnchor, state.Right, state, sink, fromRight: true);
+            EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true);
             return;
         }
 
@@ -1301,12 +1315,12 @@ internal static class IrMarkupRenderer
         IrEditOp op, IrTokenDiff tokenDiff, RenderState state, List<XElement> sink)
     {
         var leftPara = SourceElement(op.LeftAnchor, state.Left);
-        var rightPara = SourceElement(op.RightAnchor, state.Right);
+        var rightPara = SourceElement(op.RightAnchor, state.RightSource);
         if (leftPara == null || rightPara == null)
         {
             // Defensive: fall back to whole-block del+ins if a source element is unexpectedly missing.
             if (op.LeftAnchor != null) EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, false);
-            if (op.RightAnchor != null) EmitWholeBlock(op.RightAnchor, state.Right, state, sink, RevKind.Ins, true);
+            if (op.RightAnchor != null) EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, true);
             return;
         }
 
@@ -1316,7 +1330,7 @@ internal static class IrMarkupRenderer
         // Resolve token char spans: a token op's left span is [left[LeftStart].StartChar, left[LeftEnd-1].EndChar)
         // and likewise right. We resolve via the tokenizers so char coordinates match the diff's exactly.
         var leftTokens = ParagraphTokens(op.LeftAnchor, state.Left, state.Settings);
-        var rightTokens = ParagraphTokens(op.RightAnchor, state.Right, state.Settings);
+        var rightTokens = ParagraphTokens(op.RightAnchor, state.RightSource, state.Settings);
 
         // The new paragraph: clone the RIGHT paragraph's pPr (accepted-state paragraph properties) and rebuild
         // its run-level content from the spans.
@@ -1608,7 +1622,7 @@ internal static class IrMarkupRenderer
         if ((op.RightAnchor?.StartsWith("sec:", StringComparison.Ordinal) ?? false) ||
             (op.LeftAnchor?.StartsWith("sec:", StringComparison.Ordinal) ?? false))
             return true;
-        return ResolveBlock(op.RightAnchor, state.Right) is IrSectionBreak ||
+        return ResolveBlock(op.RightAnchor, state.RightSource) is IrSectionBreak ||
                ResolveBlock(op.LeftAnchor, state.Left) is IrSectionBreak;
     }
 
@@ -1660,7 +1674,7 @@ internal static class IrMarkupRenderer
     /// ascending revision-id counter (no static state), and the live RIGHT-sourced clone roots whose media must
     /// be imported into the left package. One instance per call ⇒ concurrent renders never share a counter.
     /// </summary>
-    private sealed class RenderState
+    internal sealed class RenderState
     {
         private int _nextId = 1;
 
@@ -1668,6 +1682,7 @@ internal static class IrMarkupRenderer
         {
             Left = left;
             Right = right;
+            RightSource = right;   // two-way: the right source IS the right doc — never reassigned, so behavior is unchanged.
             Settings = settings;
         }
 
@@ -1675,16 +1690,37 @@ internal static class IrMarkupRenderer
         public IrDocument Right { get; }
         public IrDiffSettings Settings { get; }
 
+        /// <summary>The document the CURRENTLY-emitting op draws inserted/modified ("right-side") block elements
+        /// and token text from. In a two-way render this is always <see cref="Right"/> (set once in the ctor and
+        /// never reassigned), so behavior is byte-identical to before this field existed. The composite renderer
+        /// switches it per op to the contributing reviewer's IR (or <see cref="Left"/>/base for a base-sourced
+        /// equal/delete) so the existing emit helpers can be reused per-reviewer.</summary>
+        public IrDocument RightSource { get; set; }
+
         /// <summary>When non-null, overrides Settings.AuthorForRevisions for emitted revision attributes
         /// (composite multi-author rendering). Null for normal two-way render → behavior unchanged.</summary>
         public string? AuthorOverride { get; set; }
 
-        /// <summary>RIGHT-sourced clone roots (in document order) that may carry image relationship references
-        /// the LEFT package cannot resolve. After they are placed in the new body (still the same XElement
-        /// instances), <see cref="WmlComparer.MoveRelatedPartsToDestination"/> walks each and remaps ids in
-        /// place. Only roots actually containing an r-namespace attribute are recorded, so the common
-        /// text-only case adds nothing.</summary>
-        public List<XElement> RightSourcedClones { get; } = new();
+        /// <summary>The bucket key of the CURRENTLY-active right source package, used to attribute media-bearing
+        /// clones to the package they must be imported FROM. Two-way uses the single key 0 (the right package);
+        /// the composite renderer sets it to the contributing reviewer's index per op so <see cref="Render"/>'s
+        /// media-import pass (composite path) can copy each clone's parts from the correct reviewer package.</summary>
+        public int RightSourceId { get; set; }
+
+        /// <summary>RIGHT-sourced clone roots that may carry image relationship references the base package cannot
+        /// resolve, BUCKETED by <see cref="RightSourceId"/> (the source package they were cloned from). After they
+        /// are placed in the new body (still the same XElement instances),
+        /// <see cref="WmlComparer.MoveRelatedPartsToDestination"/> walks each and remaps ids in place. Only roots
+        /// actually containing an r-namespace attribute are recorded, so the common text-only case adds nothing.
+        /// In a two-way render every clone lands in bucket 0 (the right package).</summary>
+        public Dictionary<int, List<XElement>> RightSourcedClonesBySource { get; } = new();
+
+        /// <summary>The two-way render's single clone bucket (bucket 0 = the right package). Preserves the original
+        /// flat-list API for the two-way <see cref="Render"/> media-import pass; equivalent to the bucket-0 list.</summary>
+        public List<XElement> RightSourcedClones =>
+            RightSourcedClonesBySource.TryGetValue(0, out var list) ? list : EmptyClones;
+
+        private static readonly List<XElement> EmptyClones = new();
 
         /// <summary>Fresh (author, id, date) attribute triple for one revision element; id ascends from 1.</summary>
         public object[] RevisionAttributes() => new object[]
@@ -1715,11 +1751,16 @@ internal static class IrMarkupRenderer
         }
 
         /// <summary>Record a RIGHT-sourced clone for media import iff it references any relationship id (an
-        /// image embed/link). The recorded element is the live tree node; importing happens post-assembly.</summary>
+        /// image embed/link), into the bucket for the currently-active <see cref="RightSourceId"/>. The recorded
+        /// element is the live tree node; importing happens post-assembly. Two-way always records into bucket 0.</summary>
         public void RegisterMediaReferences(XElement clone)
         {
             if (clone.DescendantsAndSelf().Attributes().Any(a => a.Name.Namespace == R.r))
-                RightSourcedClones.Add(clone);
+            {
+                if (!RightSourcedClonesBySource.TryGetValue(RightSourceId, out var list))
+                    RightSourcedClonesBySource[RightSourceId] = list = new List<XElement>();
+                list.Add(clone);
+            }
         }
     }
 
