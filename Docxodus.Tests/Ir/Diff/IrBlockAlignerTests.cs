@@ -435,6 +435,56 @@ public class IrBlockAlignerTests
         AssertInvariants(l, r, a);
     }
 
+    /// <summary>
+    /// M2.4b Workstream C grain LOCK (added in WS-D review follow-up). The unambiguous-table-residue rule
+    /// (<see cref="IrBlockAligner"/>.FillOneGap) pairs the lone free-left table with the lone free-right table
+    /// as Modified REGARDLESS of similarity — a table can only sensibly pair with a table, so a heavily-edited
+    /// (here COMPLETELY UNRELATED) table is still ONE edited table, not a delete+insert of two tables. This
+    /// test pins that choice for the extreme case: two tables that share NO cell content, isolated in a gap
+    /// between two unchanged paragraphs. They MUST pair as ONE Modified table (not Deleted+Inserted), and the
+    /// rendered grain MUST be clean all-rows delete+insert — every left cell's text Deleted and every right
+    /// cell's text Inserted, with NO coincidental Equal island splitting the rows (the rows pair positionally
+    /// into ModifyRows whose totally-different cells token-diff to whole del+ins). Locks both the pairing
+    /// decision and the resulting revision grain against regression.
+    /// </summary>
+    [Fact]
+    public void Unrelated_tables_in_a_gap_pair_as_modified_with_all_rows_del_ins_grain()
+    {
+        const string row = "<w:tr><w:tc><w:p><w:r><w:t>{0}</w:t></w:r></w:p></w:tc></w:tr>";
+        string Table(string a, string b) =>
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"100\"/></w:tblGrid>" +
+            string.Format(row, a) + string.Format(row, b) + "</w:tbl>";
+
+        // Stable spine paragraphs bracket the table so it is an ISOLATED gap residue (1 free table each side).
+        var l = FromXml("<w:p><w:r><w:t>head</w:t></w:r></w:p>" + Table("Apple", "Banana") +
+                        "<w:p><w:r><w:t>tail</w:t></w:r></w:p>");
+        var r = FromXml("<w:p><w:r><w:t>head</w:t></w:r></w:p>" + Table("Xylophone", "Zebra") +
+                        "<w:p><w:r><w:t>tail</w:t></w:r></w:p>");
+
+        var a = Align(l, r);
+        Assert.Equal(2, Count(a, IrAlignmentKind.Unchanged));  // head + tail
+        Assert.Equal(1, Count(a, IrAlignmentKind.Modified));   // the table as ONE unit (residue rule)
+        Assert.Equal(0, Count(a, IrAlignmentKind.Deleted));    // NOT a whole-table delete+insert
+        Assert.Equal(0, Count(a, IrAlignmentKind.Inserted));
+        var modified = a.Entries.Single(e => e.Kind == IrAlignmentKind.Modified);
+        Assert.IsType<IrTable>(modified.Left);
+        Assert.IsType<IrTable>(modified.Right);
+        AssertInvariants(l, r, a);
+
+        // Rendered grain: every left cell text Deleted, every right cell text Inserted (no shared Equal island
+        // because the cells share nothing). Compatible mode is what the GetRevisions surface uses.
+        var script = IrEditScriptBuilder.Build(l, r, new IrDiffSettings { RevisionGranularity = RevisionGranularity.WmlComparerCompatible });
+        var revs = IrRevisionRenderer.Render(script, l, r, new IrDiffSettings { RevisionGranularity = RevisionGranularity.WmlComparerCompatible });
+        var deleted = string.Concat(revs.Where(x => x.Type == IrRevisionType.Deleted).Select(x => x.Text));
+        var inserted = string.Concat(revs.Where(x => x.Type == IrRevisionType.Inserted).Select(x => x.Text));
+        Assert.Contains("Apple", deleted);
+        Assert.Contains("Banana", deleted);
+        Assert.Contains("Xylophone", inserted);
+        Assert.Contains("Zebra", inserted);
+        // No FormatChanged/Moved noise and nothing left Equal — the change is wholly del+ins.
+        Assert.DoesNotContain(revs, x => x.Type is IrRevisionType.Moved or IrRevisionType.FormatChanged);
+    }
+
     // ------------------------------------------------------------------ empty docs
 
     [Fact]

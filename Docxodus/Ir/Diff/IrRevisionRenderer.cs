@@ -388,20 +388,48 @@ internal static class IrRevisionRenderer
             batches.Add(batch);
         }
 
-        // Collapse Choice/Fallback PAIRS. Word emits each logical textbox as TWO adjacent IrTextbox inlines
-        // (DrawingML Choice then VML Fallback) with byte-identical content, so they form consecutive PAIRS in
-        // document order. We pair-walk: when batch[i+1] duplicates batch[i], emit batch[i] and SKIP its
-        // duplicate (advance by 2); otherwise emit batch[i] alone (advance by 1, covering a lone textbox with
-        // no fallback). This is robust to two DISTINCT textboxes that happen to share identical edits — they
-        // are positions (Choice_A, Fallback_A, Choice_B, Fallback_B), and pair-walking dedups A and B
-        // separately rather than greedily merging A's fallback with B (the WC037 two-textbox case).
-        int k = 0;
-        while (k < batches.Count)
+        // Collapse the Choice/Fallback DUPLICATE. Word emits each logical textbox TWICE — a DrawingML
+        // mc:Choice and a VML mc:Fallback with byte-identical inner content — and WmlComparer MC-resolves its
+        // input (PreProcessMarkup opens with MarkupCompatibilityProcessMode.ProcessAllParts for Office2007,
+        // discarding the branch it cannot satisfy), so the oracle sees ONE branch and reports the change once.
+        // The IR reader walks BOTH branches (M1.4 markdown-projection parity), so a changed textbox renders to
+        // two value-equal revision batches that we must collapse to mirror the oracle's count.
+        //
+        // We dedup by CONTENT-SIGNATURE OCCURRENCE PARITY rather than the old adjacent pair-walk: within one
+        // carrier paragraph each distinct batch signature from the AlternateContent duplication appears an even
+        // number of times (once per branch), so we emit ODD occurrences (1st, 3rd, …) and drop EVEN ones (the
+        // Fallback copy). This is robust to the branches being NON-ADJACENT, which a NESTED textbox produces:
+        // WC-1900 (WC048-Text-Box-in-Cell) interleaves an empty wrapper body between the two `Textbox3` copies
+        // — the order is [Textbox3, ⌀, Textbox3, ⌀], NOT [Textbox3, Textbox3] — so the old i/i+1 pair-walk
+        // saw `Textbox3` and `⌀` as non-equal neighbours and never collapsed the pair (+2). Parity matching
+        // collapses each signature's pair wherever it lands. For two DISTINCT textboxes (the WC037 case,
+        // [A, A, B, B] or [A, B, A, B]) each of A and B still appears twice and is halved independently, and a
+        // lone textbox with no fallback (one occurrence, odd) is always kept.
+        var seen = new Dictionary<string, int>(System.StringComparer.Ordinal);
+        foreach (var batch in batches)
         {
-            sink.AddRange(batches[k]);
-            bool dup = k + 1 < batches.Count && SameRevisionContent(batches[k], batches[k + 1]);
-            k += dup ? 2 : 1;
+            string sig = BatchSignature(batch);
+            int n = seen.TryGetValue(sig, out var c) ? c + 1 : 1;
+            seen[sig] = n;
+            if (n % 2 == 1)            // odd occurrence: the Choice copy (or a lone/unpaired textbox) — keep.
+                sink.AddRange(batch);  // even occurrence: the Fallback duplicate — drop.
         }
+    }
+
+    /// <summary>A stable content signature for a rendered textbox-diff revision batch: the ordered
+    /// (Type, Text) pairs joined. Empty batches share the empty signature (so an empty wrapper body pairs with
+    /// its Fallback empty body). Anchors are deliberately excluded — they differ between the DrawingML Choice
+    /// and VML Fallback branches, which is exactly the pair we are collapsing.</summary>
+    private static string BatchSignature(List<IrRevision> batch)
+    {
+        if (batch.Count == 0)
+            return "";
+        var sb = new StringBuilder();
+        foreach (var r in batch)
+        {
+            sb.Append((int)r.Type).Append(':').Append(r.Text).Append('\u001F');
+        }
+        return sb.ToString();
     }
 
     /// <summary>
@@ -440,17 +468,6 @@ internal static class IrRevisionRenderer
         RenderBlockOp(op, ctx, sink);
     }
 
-    /// <summary>True iff two revision batches carry the same ordered (Type, Text) content — the Choice/Fallback
-    /// duplicate test. Anchors are deliberately ignored (they differ between the DrawingML and VML branches).</summary>
-    private static bool SameRevisionContent(List<IrRevision> a, List<IrRevision> b)
-    {
-        if (a.Count != b.Count || a.Count == 0)
-            return false;
-        for (int i = 0; i < a.Count; i++)
-            if (a[i].Type != b[i].Type || !string.Equals(a[i].Text, b[i].Text, System.StringComparison.Ordinal))
-                return false;
-        return true;
-    }
 
     /// <summary>
     /// True iff (compatible mode only) the moved block's text has FEWER than

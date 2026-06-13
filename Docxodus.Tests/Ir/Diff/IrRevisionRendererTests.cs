@@ -488,6 +488,41 @@ public class IrRevisionRendererTests
         "</w:txbxContent></wps:txbx></wps:wsp>" +
         "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r>";
 
+    /// <summary>A textbox run whose inner paragraph carries NO content token (an empty wrapper body) — the
+    /// nested-textbox shape that interleaves between the Choice and Fallback copies of a logical textbox.</summary>
+    private static string EmptyTextboxRun() =>
+        "<w:r><w:drawing><wp:inline><a:graphic><a:graphicData>" +
+        "<wps:wsp><wps:txbx><w:txbxContent><w:p/></w:txbxContent></wps:txbx></wps:wsp>" +
+        "</a:graphicData></a:graphic></wp:inline></w:drawing></w:r>";
+
+    /// <summary>
+    /// M2.4b Workstream D — the Choice/Fallback textbox dedup must collapse a NON-ADJACENT duplicate. Word
+    /// emits one logical textbox as a DrawingML mc:Choice + a VML mc:Fallback with identical inner content;
+    /// WmlComparer MC-resolves its input to a single branch (PreProcessMarkup) and counts the change ONCE,
+    /// while the IR reader walks both branches (markdown-projection parity). A NESTED textbox interleaves an
+    /// empty wrapper body between the two copies — document order [TB, ⌀, TB, ⌀], not [TB, TB] — so the old
+    /// adjacent i/i+1 pair-walk never matched the pair (WC-1900's +2). The signature-occurrence-parity dedup
+    /// (emit odd occurrences, drop even) collapses the pair wherever it lands. We model the shape with two
+    /// equal `Video`→`Video edited` textboxes separated by empty wrapper bodies and assert exactly ONE del +
+    /// ONE ins survive (the duplicate dropped).
+    /// </summary>
+    [Fact]
+    public void Nonadjacent_choice_fallback_textbox_duplicate_is_deduped()
+    {
+        // [TB(Video), ⌀, TB(Video), ⌀] — the two real copies are positions 0 and 2 (non-adjacent).
+        var l = IrReader.Read(IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p>" + TextboxRun("Video") + EmptyTextboxRun() + TextboxRun("Video") + EmptyTextboxRun() + "</w:p>"), NoSources);
+        var r = IrReader.Read(IrTestDocuments.FromBodyXmlWithDrawingNamespaces(
+            "<w:p>" + TextboxRun("Video edited") + EmptyTextboxRun() + TextboxRun("Video edited") + EmptyTextboxRun() + "</w:p>"), NoSources);
+
+        var revs = Render(l, r, Compatible).ToList();
+        // The Fallback copy is dropped: exactly one Deleted + one Inserted for the single logical textbox.
+        Assert.Equal(1, revs.Count(x => x.Type == IrRevisionType.Deleted));
+        Assert.Equal(1, revs.Count(x => x.Type == IrRevisionType.Inserted));
+        Assert.Contains("Video", revs.Single(x => x.Type == IrRevisionType.Deleted).Text);
+        Assert.Contains("Video edited", revs.Single(x => x.Type == IrRevisionType.Inserted).Text);
+    }
+
     // ------------------------------------------------------------------ WC corpus totality smoke
 
     [Trait("Category", "Corpus")]

@@ -90,12 +90,18 @@ public class IrParityScoreboardTests
         // M2.4b Workstream C drove the GENUINE-PASS count from 161 to 173 by closing eight more deviation
         // rows: WC-1210/1420/1430/1440/1840 (adjacent-block insert/delete coalescing), WC-1770 (textbox-
         // interior compat coarsening), WC-1750/1760 (table-aware block similarity + note-scope empty-mark
-        // prune). The six surviving deviations are all genuine engine-grain or out-of-scope (WS-D) cases:
+        // prune). Workstream D then closed WC-1900 (174) by making the Choice/Fallback textbox dedup robust to
+        // NON-ADJACENT (nested) branch interleaving via content-signature occurrence parity — the oracle
+        // MC-resolves AlternateContent to one branch (PreProcessMarkup, ProcessAllParts/Office2007), so it
+        // counts one copy; the reader walks both for projection parity, and the dedup now mirrors the oracle
+        // wherever the Fallback copy lands. The five surviving deviations are all genuine engine-grain cases:
         // WC-1450/1830 (block-vs-atom paragraph granularity inside a cell), WC-1710/1720 (the IR's id-less
         // note-ref tokenization is coarser than the oracle at a verified mid-word note-ref relocation —
-        // ORACLE CORRECT, deferred tokenizer item), WC-1900/1920 (WS-D textbox-duplicate dedup).
+        // ORACLE CORRECT), WC-1920 (tokenizer punctuation-attachment grain in a textbox-nested table — the
+        // duplicate half is now fixed; the residual -1 is the `test`/`test!` word-boundary difference). All
+        // five are the same deferred-tokenizer / sub-paragraph-alignment class, deferred to M2.5.
         const int ParityFloor = 179;     // PASS + documented deviation = full runnable set (179/179)
-        const int GenuinePassFloor = 173; // PASS-only ratchet (M2.4b WS-C): may only rise
+        const int GenuinePassFloor = 174; // PASS-only ratchet (M2.4b WS-D: +WC-1900): may only rise
         Assert.True(board.Total > 0, "Scoreboard scored no cases.");
         Assert.Equal(board.Total, board.Pass + board.Deviation + board.Fail);
         Assert.True(board.Pass + board.Deviation >= ParityFloor,
@@ -213,8 +219,22 @@ public class IrParityScoreboardTests
         // (right text), matching the oracle's coarser grain (2 == 2). Validated against WC-1890/2080 (interior
         // token diff already whole-paragraph) and WC-2090/2092 (interior insert/delete) — all keep passing.
         ["WC-1830"] = "Table-5 cell, SUB-PARAGRAPH content migration (+1, 3 vs 2). Before cell p0 = `Video provides…point. When you click…add.` (one paragraph); after the SAME text is SPLIT across after-p0 `Video provides…point. ` + a math paragraph + after-p2 `When you click…add.` (three paragraphs). WmlComparer's whole-document atom LCS reports this as one contiguous del+ins region (2). The IR aligns at PARAGRAPH grain — it cannot split before-p0's content across two after-paragraphs — so the block aligner's similarity pass pairs before-p0 with after-p0 (shared prefix, Modify), inserts the math paragraph, and matches after-p2 against the deleted before-p1 tail, surfacing one extra whole-paragraph revision. This is a genuine block-vs-atom GRANULARITY difference (WmlComparer's sub-paragraph LCS is finer than the IR's per-block token diff here), not a render-coalescible inter-block run and not an oracle fault — the IR's per-block account is internally consistent, just coarser at the paragraph boundary. engine alignment grain (sub-paragraph content migration).",
-        ["WC-1900"] = "Textbox-in-cell: the DrawingML/VML duplicate of one textbox lands in SEPARATE cells (non-adjacent), so the adjacent-pair dedup cannot collapse it (+2) — engine reader (needs MC-preprocessing).",
-        ["WC-1920"] = "Table-in-textbox: nested textbox duplication + finer grain net -1 vs WmlComparer — engine reader/grain.",
+        // WC-1900 (WC048-Text-Box-in-Cell): CLOSED in M2.4b Workstream D — now a genuine PASS (IR 6 ==
+        // WmlComparer 6). WmlComparer's PreProcessMarkup opens with MarkupCompatibilityProcessMode.ProcessAllParts
+        // (Office2007), which MC-RESOLVES each mc:AlternateContent to a single branch and discards the other, so
+        // the oracle sees ONE copy of every logical textbox and counts its change once (evidence: the Choice
+        // declares Requires="wps", an Office2010 namespace the Office2007 processor cannot satisfy, so the SDK
+        // keeps the VML Fallback — either way, ONE branch survives). The IR reader walks BOTH branches (M1.4
+        // markdown-projection parity), so a changed textbox renders to two value-equal revision batches. The
+        // render-time Choice/Fallback dedup collapsed only the ADJACENT-pair case; WC048's `Textbox3` is a NESTED
+        // textbox whose two branches are interleaved with an empty wrapper body ([Textbox3, ⌀, Textbox3, ⌀], not
+        // [Textbox3, Textbox3]), so the i/i+1 pair-walk never matched the pair and the duplicate leaked (+2).
+        // Fixed by switching the dedup to CONTENT-SIGNATURE OCCURRENCE PARITY (emit odd occurrences, drop even):
+        // each AlternateContent body appears an even number of times within a carrier paragraph, so the Fallback
+        // copy is dropped wherever it lands. No catalog entry — the row PASSES. (Reader output is unchanged: the
+        // fix is render-time/count-only, so the markdown-projection equivalence suite stays green and the markup
+        // round-trip path — which keeps both branches because both LEFT and RIGHT carry both — is untouched.)
+        ["WC-1920"] = "Table-in-textbox: IR 7 vs WmlComparer 8 (-1). The Choice/Fallback DUPLICATE is now correctly collapsed (the WS-D signature-parity dedup), so the residual -1 is NOT duplication — it is a tokenizer/affix-trim GRAIN difference inside the textbox's nested table. The cell text `This is a test` → `This is a test!` (one `!` appended). WmlComparer's word-atom LCS pairs the whole changed word as del `test` + ins `test!` (2 revisions); the IR tokenizes `!` as its own punctuation token, so compatible-mode common-affix trim reports just ins `!` (1 revision). Matching the oracle here needs the IR tokenizer to attach trailing punctuation to the preceding word the way WmlComparer's atomizer does — a corpus-wide tokenizer word-boundary change (Fine-mode + whole-corpus blast radius), the same deferred-tokenizer class as WC-1710/1720's note-ref-within-word and WC-1830's sub-paragraph grain. ORACLE follows its word-atom grain; IR finer at the punctuation-attachment boundary — deferred to M2.5.",
 
         // ---- M2.4b Workstream C CLOSED WC-1750/1760 (endnote-with-table) — now genuine PASSES, no catalog
         // entry. Two fixes combined: (1) table-aware block similarity + an unambiguous table-residue rule in
