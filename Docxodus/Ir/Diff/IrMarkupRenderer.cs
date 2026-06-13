@@ -1176,6 +1176,22 @@ internal static class IrMarkupRenderer
         if (rightPPr != null)
             newPara.Add(StripUnids(new XElement(rightPPr)));
 
+        newPara.Add(BuildTokenOpContent(tokenDiff, leftTokens, rightTokens, leftRuns, rightRuns, state));
+        sink.Add(newPara);
+    }
+
+    /// <summary>
+    /// Build the run-level content for one token diff over explicit token lists / run models — shared by
+    /// <see cref="RenderModifiedParagraph"/> (whole-paragraph diff) and the M2.6 split/merge segment
+    /// rendering (slice diffs). Token spans index the GIVEN lists; char spans resolve through the tokens'
+    /// own absolute StartChar/EndChar, so a SLICE of a paragraph's token list (which retains the source
+    /// paragraph's char positions) composes with the full paragraph's <see cref="SourceRunModel"/> unchanged.
+    /// </summary>
+    private static List<XElement> BuildTokenOpContent(
+        IrTokenDiff tokenDiff,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state)
+    {
         var content = new List<XElement>();
         foreach (var tokenOp in tokenDiff.Ops)
         {
@@ -1256,8 +1272,7 @@ internal static class IrMarkupRenderer
             }
         }
 
-        newPara.Add(content);
-        sink.Add(newPara);
+        return content;
     }
 
     /// <summary>Concatenate the RAW token text over a half-open token-index span (empty span ⇒ "").</summary>
