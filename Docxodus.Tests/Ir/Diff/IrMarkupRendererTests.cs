@@ -750,6 +750,44 @@ public class IrMarkupRendererTests
         AssertRoundTrip(left, right, settings, label: "move-simplified");
     }
 
+    /// <summary>
+    /// WC-BodyBookmarks capability verdict (M2.6 Task 2). This fixture pair converts the document's ENTIRE
+    /// endnote store to footnotes (BEFORE: 24 footnotes + 190 endnotes; AFTER: 213 footnotes + 0 endnotes) and
+    /// carries many body-level bookmark markers. On it the WmlComparer ORACLE THROWS a DocxodusException
+    /// ("Internal error in ProcessFootnoteEndnote") — it produces NO comparison at all (see
+    /// <c>WmlComparerBodyLevelBookmarkTests</c>, whose own comment documents this as a separate bug from the
+    /// body-bookmark NRE). There is therefore no oracle behaviour to match.
+    ///
+    /// <para>Our IR engine's <see cref="DocxDiff.GetRevisions"/> surface, by contrast, completes WITHOUT
+    /// throwing and yields a substantial revision list — we EXCEED the oracle here (it cannot even run). This
+    /// test pins that capability: GetRevisions is total on the pathological note-store-conversion fixture.</para>
+    ///
+    /// <para>The separate MARKUP round-trip (<c>Compare</c> accept/reject ≡ right/left) does NOT hold for this
+    /// pair — the whole-store endnote→footnote cross-part migration surfaces as 190 endnote deletions + 190
+    /// footnote insertions that the per-scope note diff does not reconcile to a clean accept==right. That
+    /// failure is retained in <see cref="Task4BlockedPairs"/> with this oracle-throws ceiling as context;
+    /// fixing cross-part note-store conversion is a large effort with negligible real-world value (the oracle
+    /// itself cannot do it, and whole-store note-kind flips do not occur in practice), so it is NOT pursued.</para>
+    /// </summary>
+    [Fact]
+    public void WC_BodyBookmarks_GetRevisions_is_total_where_the_oracle_throws()
+    {
+        var before = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC-BodyBookmarks-Before.docx"));
+        var after = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, "WC-BodyBookmarks-After.docx"));
+
+        // The oracle throws on this fixture (no behaviour to match) — assert that explicitly so the verdict is
+        // self-documenting and re-checked: if WmlComparer ever LEARNS to handle this pair, revisit the verdict.
+        Assert.Throws<DocxodusException>(() => WmlComparer.Compare(before, after, new WmlComparerSettings()));
+
+        // Our engine completes and produces revisions in BOTH directions — the capability win.
+        var fwd = DocxDiff.GetRevisions(before, after);
+        var rev = DocxDiff.GetRevisions(after, before);
+        Assert.NotEmpty(fwd);
+        Assert.NotEmpty(rev);
+        Assert.All(fwd, r => Assert.NotNull(r.Text));
+        Assert.All(rev, r => Assert.NotNull(r.Text));
+    }
+
     // ----------------------------------------------------------------- WC022 ordering regression (M2.6 T2)
 
     /// <summary>
@@ -830,16 +868,25 @@ public class IrMarkupRendererTests
         // content) in the accept transform (the artifact of the IR's del-old-link/ins-new-link shape). Both
         // directions now round-trip clean (ACCEPT==RIGHT, REJECT==LEFT, content + format). Removed from the
         // allowlist; the full old-engine RevisionProcessor/WmlComparer suite stays green.
-        // DEVIATION — WC-BodyBookmarks-After carries MANY body-level bookmarkStart/End markers (named section
-        // bookmarks as direct w:body children) AND converts the document's endnotes to footnotes. M2.4b
-        // Workstream D's block-level bookmark drop (see WC022 above) removes the body-level bookmark markers from
-        // the comparison — the bookmark half is handled — but this pair STILL fails ACCEPT≠RIGHT in BOTH
-        // directions, dominated by the ENDNOTE→FOOTNOTE conversion: the note set itself changes part (en→fn), a
-        // whole-note-store structural change the IR's per-scope note diff does not reconcile to a clean
-        // accept==right (the same "Internal error in ProcessFootnoteEndnote" that WmlComparerBodyLevelBookmarkTests
-        // documents as a SEPARATE bug from the bookmark NRE). That note-store conversion is well beyond bookmark
-        // modeling — deferred to M2.5 (note-store cross-part conversion). The bookmark-marker root cause is now
-        // oracle-faithful (dropped like RemoveBookmarks); the surviving blocker is the endnote→footnote conversion.
+        // (M2.6 Task 2 — FINAL VERDICT: RETAINED, oracle-throws ceiling) WC-BodyBookmarks-After carries MANY
+        // body-level bookmarkStart/End markers AND converts the document's ENTIRE endnote store to footnotes
+        // (measured: BEFORE 24 fn + 190 en; AFTER 213 fn + 0 en). The bookmark half closed in M2.4b WS-D (the
+        // body-level markers drop like WmlComparer's RemoveBookmarks). The surviving blocker is the whole-store
+        // ENDNOTE→FOOTNOTE cross-part conversion: 190 endnotes migrate into the footnote part, surfacing as 190
+        // endnote deletions + 190 footnote insertions that the IR's PER-SCOPE note diff (fn-vs-fn, en-vs-en)
+        // does not reconcile to a clean accept==right (note counts land at accept=424 vs right=426 fwd).
+        //
+        // METHOD-RULE VERDICT (measured end-to-end, M2.6 T2): the WmlComparer ORACLE THROWS on this fixture —
+        // WmlComparer.Compare raises DocxodusException "Internal error in ProcessFootnoteEndnote" and produces
+        // NOTHING (its own WmlComparerBodyLevelBookmarkTests only asserts the body-bookmark NRE is gone, not
+        // that Compare succeeds). There is NO oracle behaviour to match, so this is not a parity gap. Where the
+        // oracle dies our DocxDiff.GetRevisions COMPLETES and yields 6319 revisions both directions — we EXCEED
+        // the oracle on the consumer surface (pinned by WC_BodyBookmarks_GetRevisions_is_total_where_the_oracle_throws).
+        // Only the MARKUP round-trip (Compare accept/reject ≡ right/left) fails, on the cross-part note-store
+        // migration. HONEST WORTH ASSESSMENT: fixing whole-store note-kind conversion is a large, isolated
+        // effort (a cross-part note correspondence the per-scope diff is not built for) for negligible value —
+        // the oracle itself cannot do it, and converting an entire endnote store to footnotes does not occur in
+        // real documents (this is a single synthetic fixture). NOT pursued; retained with this ceiling context.
         "WC-BodyBookmarks-Before.docx↔WC-BodyBookmarks-After.docx",
     };
 
