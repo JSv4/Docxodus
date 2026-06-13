@@ -97,4 +97,54 @@ public class IrSplitMergeTests
         Assert.DoesNotContain("splitMergeAnchors", json);
         Assert.DoesNotContain("segmentDiffs", json);
     }
+
+    [Fact]
+    public void Pairing_assert_rejects_a_split_op_that_also_sets_RightAnchor() // F1.1: the assert is load-bearing
+    {
+        var bad = SplitOp() with { RightAnchor = "p:body:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" };
+        var script = new IrEditScript(IrNodeList.From(new List<IrEditOp> { bad }));
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => IrEditScriptVerifier.AssertSplitMergePairing(script));
+    }
+
+    [Fact]
+    public void Pairing_assert_rejects_anchor_shared_between_two_split_ops() // F2.2 overlap ceiling
+    {
+        var a = SplitOp();
+        var b = SplitOp() with { LeftAnchor = "p:body:ffffffffffffffffffffffffffffffff" };
+        var script = new IrEditScript(IrNodeList.From(new List<IrEditOp> { a, b }));
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => IrEditScriptVerifier.AssertSplitMergePairing(script));
+    }
+
+    [Fact]
+    public void Pairing_assert_rejects_count_mismatch_and_short_anchor_lists()
+    {
+        var oneAnchor = SplitOp() with
+        {
+            SplitMergeAnchors = IrNodeList.From(new List<string> { "p:body:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }),
+        };
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => IrEditScriptVerifier.AssertSplitMergePairing(
+            new IrEditScript(IrNodeList.From(new List<IrEditOp> { oneAnchor }))));
+    }
+
+    [Fact]
+    public void Pairing_assert_rejects_segment_diff_count_mismatch()
+    {
+        // 2 anchors (passes the ≥2 gate) but only 1 segment diff — the count-equality rule must fire.
+        var mismatch = SplitOp() with
+        {
+            SegmentDiffs = IrNodeList.From(new List<IrTokenDiff>
+            {
+                Diff(new IrTokenOp(IrTokenOpKind.Equal, 0, 3, 0, 3)),
+            }),
+        };
+        Assert.ThrowsAny<Xunit.Sdk.XunitException>(() => IrEditScriptVerifier.AssertSplitMergePairing(
+            new IrEditScript(IrNodeList.From(new List<IrEditOp> { mismatch }))));
+    }
+
+    [Fact]
+    public void Pairing_assert_accepts_a_well_formed_split_and_merge()
+    {
+        IrEditScriptVerifier.AssertSplitMergePairing(
+            new IrEditScript(IrNodeList.From(new List<IrEditOp> { SplitOp(), MergeOp() })));
+    }
 }

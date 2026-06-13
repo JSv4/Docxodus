@@ -452,7 +452,109 @@ internal static class IrEditScriptVerifier
                 Assert.True(left.AnchorIndex.ContainsKey(la), $"LeftAnchor '{la}' does not resolve in left.AnchorIndex.");
             if (op.RightAnchor is { } ra)
                 Assert.True(right.AnchorIndex.ContainsKey(ra), $"RightAnchor '{ra}' does not resolve in right.AnchorIndex.");
+            if (op.SplitMergeAnchors is { } multi)
+            {
+                // Split: plural side = RIGHT anchors; Merge: plural side = LEFT anchors (F1.2).
+                var doc = op.Kind == IrEditOpKind.SplitBlock ? right : left;
+                string side = op.Kind == IrEditOpKind.SplitBlock ? "right" : "left";
+                foreach (var a in multi)
+                    Assert.True(doc.AnchorIndex.ContainsKey(a), $"SplitMergeAnchor '{a}' does not resolve in {side}.AnchorIndex.");
+            }
         }
+    }
+
+    // F1.2 anchor-walker audit (M2.6): every reader of op.LeftAnchor/op.RightAnchor, and how it
+    // handles the plural SplitMergeAnchors side:
+    //   IrEditScriptVerifier.AssertAnchorsResolve — EXTENDED (walks SplitMergeAnchors, this file)
+    //   IrEditScriptVerifier.Verify/ReconstructBlocks — EXTENDED in Task 5 (split/merge cases)
+    //   IrRevisionRenderer (RenderBlockOp + RenderInsDelRun segmentation) — EXTENDED in Task 6
+    //   IrMarkupRenderer (RenderBlockOp/IsSectionBreakOp) — EXTENDED in Task 7; section-break guard is
+    //     anchor-free for split ops (detection emits paragraph-only groups)
+    //   IrRevisionRenderer.Render move pre-pass — anchor-free for split/merge (move fields asserted null here)
+    //   IrEditScriptJson — EXTENDED in Task 1 (optional arrays)
+    //   IrVsWmlComparerTests — reads LeftAnchor only to filter ModifyBlock ops; split/merge ops carry no
+    //     ModifyBlock kind so the filter naturally excludes them (no extension needed)
+    //   IrRevisionRendererTests — reads LeftAnchor/RightAnchor on IrRevision (output side, not IrEditOp);
+    //     split/merge revisions are not produced until Task 6 (no extension needed in Task 2)
+    //   IrEditScriptTests — reads LeftAnchor/RightAnchor on IrEditOp in shape assertions for existing op kinds;
+    //     split/merge shape tests are in IrSplitMergeTests (no extension needed in Task 2)
+
+    /// <summary>
+    /// Shape invariants for SplitBlock/MergeBlock ops (M2.6, review findings F1.1/F2.2/F3.3):
+    /// a SplitBlock has a non-null LeftAnchor, a NULL RightAnchor (N:M is physically representable by
+    /// the nullable fields, so this assert is the load-bearing scope ceiling), SplitMergeAnchors.Count ≥ 2,
+    /// SegmentDiffs non-null with the same count, and no move fields. MergeBlock mirrors (RightAnchor
+    /// set, LeftAnchor null). No anchor may appear in two ops' SplitMergeAnchors. Non-split/merge ops
+    /// must carry null SplitMergeAnchors/SegmentDiffs.
+    /// </summary>
+    public static void AssertSplitMergePairing(IrEditScript script)
+    {
+        var multiAnchorsSeen = new HashSet<string>(System.StringComparer.Ordinal);
+        foreach (var op in AllOps(script))
+        {
+            if (op.Kind is not (IrEditOpKind.SplitBlock or IrEditOpKind.MergeBlock))
+            {
+                Assert.Null(op.SplitMergeAnchors);
+                Assert.Null(op.SegmentDiffs);
+                continue;
+            }
+
+            Assert.Null(op.MoveGroupId);
+            Assert.Null(op.IsMoveSource);
+            Assert.Null(op.TokenDiff);
+            Assert.Null(op.TableDiff);
+            Assert.NotNull(op.SplitMergeAnchors);
+            Assert.NotNull(op.SegmentDiffs);
+            Assert.True(op.SplitMergeAnchors!.Count >= 2,
+                $"{op.Kind} must carry ≥2 SplitMergeAnchors (got {op.SplitMergeAnchors.Count}).");
+            Assert.Equal(op.SplitMergeAnchors.Count, op.SegmentDiffs!.Count);
+
+            if (op.Kind == IrEditOpKind.SplitBlock)
+            {
+                Assert.NotNull(op.LeftAnchor);
+                Assert.Null(op.RightAnchor); // F1.1: N:M physically possible; rejected HERE.
+            }
+            else
+            {
+                Assert.NotNull(op.RightAnchor);
+                Assert.Null(op.LeftAnchor);
+            }
+
+            foreach (var a in op.SplitMergeAnchors)
+                Assert.True(multiAnchorsSeen.Add(a),
+                    $"anchor '{a}' appears in two split/merge ops' SplitMergeAnchors (F2.2 overlap).");
+        }
+    }
+
+    /// <summary>Every op in the script: body, note, textbox-nested, and table-cell-nested.</summary>
+    private static IEnumerable<IrEditOp> AllOps(IrEditScript script)
+    {
+        IEnumerable<IrEditOp> Expand(IrEditOp op)
+        {
+            yield return op;
+            if (op.TextboxDiffs is { } tbx)
+                foreach (var d in tbx)
+                    foreach (var inner in d.Ops)
+                        foreach (var e in Expand(inner))
+                            yield return e;
+            if (op.TableDiff is { } td)
+                foreach (var row in td.RowOps)
+                    if (row.CellOps is { } cells)
+                        foreach (var cell in cells)
+                            if (cell.BlockOps is { } blocks)
+                                foreach (var inner in blocks)
+                                    foreach (var e in Expand(inner))
+                                        yield return e;
+        }
+
+        foreach (var op in script.Operations)
+            foreach (var e in Expand(op))
+                yield return e;
+        if (script.NoteOps is { } notes)
+            foreach (var n in notes)
+                foreach (var op in n.Ops)
+                    foreach (var e in Expand(op))
+                        yield return e;
     }
 
     /// <summary>

@@ -29,6 +29,10 @@ internal static class IrAlignmentAsserts
     /// <item>Modified ⇒ both present (no hash constraint).</item>
     /// <item>MovedModified ⇒ both present (no hash constraint — M2.2 fuzzy moved+edited;
     /// ContentHash equality is NOT required and would mean it should have been plain Moved).</item>
+    /// <item>Split (M2.6) ⇒ Left non-null, Right null, MultiBlocks ≥2 right blocks; the N right
+    /// members count toward the right totality multiset.</item>
+    /// <item>Merge (M2.6) ⇒ Left null, Right non-null, MultiBlocks ≥2 left blocks; the N left
+    /// members count toward the left totality multiset.</item>
     /// <item>Every left/right body block appears in exactly one entry (totality + no duplication),
     /// by reference identity to the input lists.</item>
     /// </list>
@@ -81,12 +85,36 @@ internal static class IrAlignmentAsserts
                     Assert.NotNull(e.Left);
                     Assert.NotNull(e.Right);
                     break;
+                case IrAlignmentKind.Split:
+                    Assert.NotNull(e.Left);
+                    Assert.Null(e.Right);
+                    Assert.NotNull(e.MultiBlocks);
+                    Assert.True(e.MultiBlocks!.Count >= 2, "Split entry needs ≥2 right members.");
+                    break;
+                case IrAlignmentKind.Merge:
+                    Assert.Null(e.Left);
+                    Assert.NotNull(e.Right);
+                    Assert.NotNull(e.MultiBlocks);
+                    Assert.True(e.MultiBlocks!.Count >= 2, "Merge entry needs ≥2 left members.");
+                    break;
             }
+
+            // Only Split/Merge entries may carry the plural side (mirrors the op-level
+            // AssertSplitMergePairing null rule for non-split/merge ops).
+            if (e.Kind is not (IrAlignmentKind.Split or IrAlignmentKind.Merge))
+                Assert.True(e.MultiBlocks is null, $"{e.Kind} entry must not carry MultiBlocks.");
 
             if (e.Left is not null)
                 leftSeen.Add(e.Left);
             if (e.Right is not null)
                 rightSeen.Add(e.Right);
+            if (e.MultiBlocks is { } multi)
+            {
+                if (e.Kind == IrAlignmentKind.Split)
+                    rightSeen.AddRange(multi);
+                else if (e.Kind == IrAlignmentKind.Merge)
+                    leftSeen.AddRange(multi);
+            }
         }
 
         // Every left/right body block appears in exactly one entry (totality + no duplication).
@@ -132,7 +160,7 @@ internal static class IrAlignmentAsserts
         {
             IrAlignmentKind.Unchanged, IrAlignmentKind.FormatOnly, IrAlignmentKind.Modified,
             IrAlignmentKind.Moved, IrAlignmentKind.MovedModified, IrAlignmentKind.Inserted,
-            IrAlignmentKind.Deleted,
+            IrAlignmentKind.Deleted, IrAlignmentKind.Split, IrAlignmentKind.Merge,
         };
         return string.Join(" ", order.Select(k => $"{k}={Count(a, k)}"));
     }

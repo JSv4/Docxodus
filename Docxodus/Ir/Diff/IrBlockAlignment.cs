@@ -45,14 +45,29 @@ internal enum IrAlignmentKind
 
     /// <summary>Left-only block (no right counterpart): <c>Right</c> is null.</summary>
     Deleted,
+
+    /// <summary>One left paragraph split across N≥2 adjacent right paragraphs (M2.6). <c>Left</c> set,
+    /// <c>Right</c> null, <see cref="IrAlignedBlock.MultiBlocks"/> = the N right blocks in right order.
+    /// Emitted at the FIRST member right block's position; the other members get no entry of their own.</summary>
+    Split,
+
+    /// <summary>N≥2 adjacent left paragraphs merged into one right paragraph (M2.6). <c>Right</c> set,
+    /// <c>Left</c> null, <see cref="IrAlignedBlock.MultiBlocks"/> = the N left blocks in left order.</summary>
+    Merge,
 }
 
 /// <summary>
 /// One entry in an <see cref="IrBlockAlignment"/>: a classified pairing of a left and/or right body
-/// block. <see cref="Inserted"/> carries a null <see cref="Left"/>; <see cref="Deleted"/> a null
-/// <see cref="Right"/>; every other kind carries both.
+/// block. <see cref="IrAlignmentKind.Inserted"/> carries a null <see cref="Left"/>;
+/// <see cref="IrAlignmentKind.Deleted"/> a null <see cref="Right"/>; every other 1:1 kind carries both.
+/// <see cref="IrAlignmentKind.Split"/> carries a non-null <see cref="Left"/>, a null <see cref="Right"/>,
+/// and <see cref="MultiBlocks"/> = the N≥2 right blocks in right order.
+/// <see cref="IrAlignmentKind.Merge"/> carries a null <see cref="Left"/>, a non-null <see cref="Right"/>,
+/// and <see cref="MultiBlocks"/> = the N≥2 left blocks in left order.
 /// </summary>
-internal sealed record IrAlignedBlock(IrAlignmentKind Kind, IrBlock? Left, IrBlock? Right);
+internal sealed record IrAlignedBlock(
+    IrAlignmentKind Kind, IrBlock? Left, IrBlock? Right,
+    IrNodeList<IrBlock>? MultiBlocks = null);
 
 /// <summary>
 /// The result of aligning two documents' body block lists: a flat, document-ordered sequence of
