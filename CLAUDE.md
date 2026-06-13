@@ -176,6 +176,8 @@ This repo is not just a .NET library — it ships a four-layer stack. Changes to
 
 When the core library changes a public method or setting on `DocxSession`, update **`Docxodus/Internal/DocxSessionOps.cs` first** — both bridges and both clients pick up the change automatically. Then ripple through: tests, the WASM `[JSExport]` shell in `DocxSessionBridge.cs`, the stdio dispatcher in `tools/python-host/Dispatcher.cs`, `npm/src/types.ts` + `npm/src/index.ts`, `python/src/docx_scalpel/types.py` + `python/src/docx_scalpel/session.py`. The table in "Feature Development Workflow" below summarizes when each is required.
 
+The same single-owner-facade pattern applies to the **stateless** surfaces (no session handle): `HtmlConversionOps` owns DOCX→HTML, and `DocxDiffOps` (`Docxodus/Internal/DocxDiffOps.cs`) owns the public `DocxDiff` engine (Compare / GetRevisions / GetEditScriptJson). Both the WASM bridge (`DocxDiffBridge.cs`) and the stdio dispatcher route through `DocxDiffOps`, so the settings-in / revisions-out JSON wire shapes — and any future change to them — live in exactly one place. The corresponding clients are `npm/src/index.ts`'s `docxDiff*` wrappers (`DocxDiffBridge` on `DocxodusWasmExports`) and `docx-scalpel`'s `docx_diff_*` module functions (`python/src/docx_scalpel/session.py`, with the `DocxDiff*` types/enums in `types.py`/`enums.py`). When a stateless surface changes, update its `*Ops` facade first, then ripple the two bridges + two clients exactly as for `DocxSession`.
+
 ### WASM Conditional Compilation
 
 The core library compiles in two modes controlled by the `WASM_BUILD` MSBuild property (set by `scripts/build-wasm.sh`):
