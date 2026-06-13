@@ -450,9 +450,15 @@ export interface DocxDiffSettings {
  * {@link Revision} and ADDS the block anchors the revision derives from — the
  * IR engine's differentiator.
  *
- * Anchor presence by `revisionType`: Inserted → `rightAnchor` only; Deleted →
- * `leftAnchor` only; FormatChanged → both; Moved source → `leftAnchor`, Moved
- * destination → `rightAnchor`.
+ * Anchor presence by `revisionType` — each type's PRIMARY anchor is ALWAYS
+ * present; the opposite anchor MAY also be present for a token-level revision.
+ * Inserted → `rightAnchor` always (plus `leftAnchor` when it is a token-level
+ * insert inside a modified block); Deleted → `leftAnchor` always (plus
+ * `rightAnchor` when token-level); FormatChanged → both; Moved is EXCLUSIVE:
+ * source → `leftAnchor` only, destination → `rightAnchor` only. A token-level
+ * revision (an insert/delete WITHIN a modified paragraph that exists on both
+ * sides) carries both enclosing-block anchors; a whole-block insert/delete
+ * carries only its primary anchor.
  */
 export interface DocxDiffRevision {
   /** "Inserted" | "Deleted" | "Moved" | "FormatChanged". */
@@ -469,9 +475,11 @@ export interface DocxDiffRevision {
   isMoveSource?: boolean;
   /** For FormatChanged revisions: what formatting changed. */
   formatChange?: FormatChangeDetails;
-  /** The LEFT-document block anchor (`kind:scope:unid`), or undefined for a pure insertion. */
+  /** The LEFT-document block anchor (`kind:scope:unid`). Always set for Deleted/FormatChanged/Moved-source;
+   *  also set for a token-level insert inside a modified block; undefined for a whole-block insertion. */
   leftAnchor?: string;
-  /** The RIGHT-document block anchor (`kind:scope:unid`), or undefined for a pure deletion. */
+  /** The RIGHT-document block anchor (`kind:scope:unid`). Always set for Inserted/FormatChanged/Moved-dest;
+   *  also set for a token-level delete inside a modified block; undefined for a whole-block deletion. */
   rightAnchor?: string;
 }
 

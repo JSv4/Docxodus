@@ -845,9 +845,16 @@ class DocxDiffRevision:
     ``DocxDiffRevision`` and carries the IR engine's differentiator: the
     left/right block anchors the revision derives from.
 
-    Anchor presence by ``type``: ``INSERTED`` → ``right_anchor`` only;
-    ``DELETED`` → ``left_anchor`` only; ``FORMAT_CHANGED`` → both; ``MOVED``
-    source → ``left_anchor``, destination → ``right_anchor``.
+    Anchor presence by ``type`` — each type's PRIMARY anchor is ALWAYS
+    present; the opposite anchor MAY also be present for a token-level
+    revision. ``INSERTED`` → ``right_anchor`` always (plus ``left_anchor``
+    when it is a token-level insert inside a modified block); ``DELETED`` →
+    ``left_anchor`` always (plus ``right_anchor`` when token-level);
+    ``FORMAT_CHANGED`` → both; ``MOVED`` is EXCLUSIVE: source → ``left_anchor``
+    only, destination → ``right_anchor`` only. A token-level revision (an
+    insert/delete WITHIN a modified paragraph that exists on both sides)
+    carries both enclosing-block anchors; a whole-block insert/delete carries
+    only its primary anchor.
     """
 
     type: DocxDiffRevisionType

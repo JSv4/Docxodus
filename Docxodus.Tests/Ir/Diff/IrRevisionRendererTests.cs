@@ -19,6 +19,9 @@ namespace Docxodus.Tests.Ir.Diff;
 /// </summary>
 public class IrRevisionRendererTests
 {
+    private readonly ITestOutputHelper _out;
+    public IrRevisionRendererTests(ITestOutputHelper output) => _out = output;
+
     private static readonly IrReaderOptions NoSources = new() { RetainSources = false };
     private static readonly IrDiffSettings Default = new();
 
@@ -552,8 +555,13 @@ public class IrRevisionRendererTests
                 Assert.Equal("Open-Xml-PowerTools", rev.Author);
                 Assert.Equal(IrDiffSettings.DeterministicEpoch, rev.Date);
 
-                // Anchor presence by type, and every present anchor resolves in its document (blocks) or is
-                // a row/cell anchor (not block-indexed) — accept either.
+                // Anchor presence by type (the M2.6 Task 2 contract). The PRIMARY anchor for the type is ALWAYS
+                // present and resolvable; the OPPOSITE anchor MAY ALSO be present for a TOKEN-LEVEL revision
+                // inside a Modified/MoveModify block (it carries BOTH enclosing-block anchors — that block
+                // exists on both sides). A BLOCK-LEVEL ins/del carries only its primary anchor. FormatChanged
+                // (always a content-equal pair) carries both. Moved is EXCLUSIVE: source = left only, dest =
+                // right only. Empirically surveyed over the whole corpus × both modes × both directions:
+                // Inserted is {R only | L+R}, Deleted is {L only | L+R}, FormatChanged is L+R, never otherwise.
                 switch (rev.Type)
                 {
                     case IrRevisionType.Inserted:
@@ -574,12 +582,18 @@ public class IrRevisionRendererTests
                         Assert.NotNull(rev.IsMoveSource);
                         if (rev.IsMoveSource == true)
                         {
+                            // Move SOURCE: left anchor only (the relocated block's origin). Unlike a token-level
+                            // ins/del inside a Modified block, a Moved revision is EXCLUSIVE — the source names
+                            // exactly the left position, never the destination.
                             Assert.NotNull(rev.LeftAnchor);
+                            Assert.Null(rev.RightAnchor);
                             AssertAnchorResolvable(rev.LeftAnchor!, l);
                         }
                         else
                         {
+                            // Move DESTINATION: right anchor only (the relocated block's new position).
                             Assert.NotNull(rev.RightAnchor);
+                            Assert.Null(rev.LeftAnchor);
                             AssertAnchorResolvable(rev.RightAnchor!, r);
                         }
                         break;

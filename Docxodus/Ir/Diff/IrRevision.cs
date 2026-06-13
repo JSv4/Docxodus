@@ -70,10 +70,14 @@ internal sealed record IrFormatChangeDetails(
 /// simply ignores them. <c>WmlComparerRevision</c>'s OOXML-specific members
 /// (<c>ContentXElement</c>/<c>RevisionXElement</c>/<c>PartUri</c>/<c>PartContentType</c>) are deliberately
 /// NOT mirrored: this surface is built from the IR edit script, not produced OOXML markup (that is M2.4).</para>
-/// <para><b>Anchor presence by <see cref="Type"/>.</b> Inserted → <see cref="RightAnchor"/> only; Deleted
-/// → <see cref="LeftAnchor"/> only; FormatChanged → both (content-equal block pair); Moved source →
-/// <see cref="LeftAnchor"/>, Moved destination → <see cref="RightAnchor"/>. A nested token-op revision
-/// inside a Modified/MoveModify block carries the enclosing block's anchor(s).</para>
+/// <para><b>Anchor presence by <see cref="Type"/>.</b> Each type's PRIMARY anchor is ALWAYS present; the
+/// opposite anchor MAY also be present for a token-level revision. Inserted → <see cref="RightAnchor"/>
+/// always (and <see cref="LeftAnchor"/> too when token-level in a Modified block); Deleted →
+/// <see cref="LeftAnchor"/> always (and <see cref="RightAnchor"/> too when token-level); FormatChanged →
+/// BOTH (content-equal block pair); Moved → EXCLUSIVE: source = <see cref="LeftAnchor"/> only, destination =
+/// <see cref="RightAnchor"/> only. A nested token-op revision inside a Modified/MoveModify block carries BOTH
+/// of the enclosing block's anchors (that block exists on both sides); a whole-block ins/del carries only its
+/// primary anchor.</para>
 /// </remarks>
 internal sealed record IrRevision(
     IrRevisionType Type,

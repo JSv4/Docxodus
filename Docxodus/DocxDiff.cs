@@ -393,12 +393,23 @@ public sealed class DocxDiffFormatChange
 /// (<c>ReplaceText</c>, <c>GetBlockMetadata</c>, <c>AddAnnotation</c>, …) on the corresponding document.
 /// The <c>unid</c> is the IR's deterministic per-element id.</para>
 ///
-/// <para><b>Anchor presence by <see cref="Type"/>.</b> Inserted → <see cref="RightAnchor"/> only;
-/// Deleted → <see cref="LeftAnchor"/> only; FormatChanged → both (a content-equal block pair);
-/// Moved source → <see cref="LeftAnchor"/>, Moved destination → <see cref="RightAnchor"/>. A token-level
-/// revision inside a modified or moved-and-edited block carries the enclosing block's anchor(s). The
-/// anchor resolves against the IR of the document it came FROM: left anchors against
-/// <see cref="DocxDiff.GetRevisions"/>'s <c>left</c> argument, right anchors against <c>right</c>.</para>
+/// <para><b>Anchor presence by <see cref="Type"/>.</b> Each type's PRIMARY anchor is ALWAYS present; the
+/// opposite anchor MAY also be present for a TOKEN-LEVEL revision (see below). The full rule:
+/// <list type="bullet">
+/// <item><see cref="DocxDiffRevisionType.Inserted"/> — <see cref="RightAnchor"/> always; <see cref="LeftAnchor"/>
+/// null for a whole-block insertion, but PRESENT for a token-level insert inside a modified block.</item>
+/// <item><see cref="DocxDiffRevisionType.Deleted"/> — <see cref="LeftAnchor"/> always; <see cref="RightAnchor"/>
+/// null for a whole-block deletion, but PRESENT for a token-level delete inside a modified block.</item>
+/// <item><see cref="DocxDiffRevisionType.FormatChanged"/> — BOTH (it is always a content-equal block pair).</item>
+/// <item><see cref="DocxDiffRevisionType.Moved"/> — EXCLUSIVE: source carries <see cref="LeftAnchor"/> only
+/// (<see cref="RightAnchor"/> null), destination carries <see cref="RightAnchor"/> only.</item>
+/// </list>
+/// A TOKEN-LEVEL revision is one describing an insert/delete WITHIN a modified (or moved-and-edited) paragraph
+/// — that paragraph exists on both sides, so the revision carries BOTH the left and right anchors of its
+/// enclosing block (useful for locating the edit in either document). A BLOCK-LEVEL insert/delete (a whole
+/// new/removed paragraph) carries only its primary anchor. Each anchor resolves against the IR of the document
+/// it came FROM: left anchors against <see cref="DocxDiff.GetRevisions"/>'s <c>left</c> argument, right anchors
+/// against <c>right</c>.</para>
 /// </remarks>
 public sealed class DocxDiffRevision
 {

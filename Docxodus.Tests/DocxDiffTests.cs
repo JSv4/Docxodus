@@ -166,6 +166,93 @@ public class DocxDiffTests
     }
 
     [Fact]
+    public void GetRevisions_TokenLevelEdit_CarriesBothEnclosingBlockAnchors()
+    {
+        // A SINGLE-paragraph edit is a MODIFIED block: the inserted/deleted token spans live inside a block
+        // that exists on BOTH sides, so each token-level revision carries BOTH the left and right anchors of
+        // the enclosing paragraph (the documented "token-level revision carries the enclosing block's
+        // anchor(s)" rule). This is the shape the python E2E observed — a Deleted with both anchors — and it
+        // is intentional, not a defect: the contract is "the type's PRIMARY anchor is always present; the
+        // opposite anchor MAY also be present for a token-level revision inside a Modified/MoveModify block".
+        var left = Doc("alpha beta gamma");
+        var right = Doc("alpha delta gamma");
+
+        var revisions = DocxDiff.GetRevisions(left, right);
+
+        var ins = revisions.First(r => r.Type == DocxDiffRevisionType.Inserted);
+        var del = revisions.First(r => r.Type == DocxDiffRevisionType.Deleted);
+        // Token-level inside a Modified paragraph → both anchors present (and equal across the two revisions:
+        // they describe edits to the SAME enclosing block).
+        Assert.NotNull(ins.LeftAnchor);
+        Assert.NotNull(ins.RightAnchor);
+        Assert.NotNull(del.LeftAnchor);
+        Assert.NotNull(del.RightAnchor);
+        Assert.Equal(ins.LeftAnchor, del.LeftAnchor);
+        Assert.Equal(ins.RightAnchor, del.RightAnchor);
+    }
+
+    [Fact]
+    public void GetRevisions_BlockLevelInsertDelete_CarriesOnlyPrimaryAnchor()
+    {
+        // A WHOLE-paragraph insertion/deletion is a BLOCK-level revision: the block exists on ONE side only,
+        // so the revision carries ONLY its primary anchor — the opposite anchor is null. (Contrast the
+        // token-level case above.) Two surrounding equal paragraphs keep the inserted/deleted one whole-block.
+        var left = Doc("first para", "third para");
+        var right = Doc("first para", "second para", "third para");
+
+        var ins = Assert.Single(DocxDiff.GetRevisions(left, right),
+            r => r.Type == DocxDiffRevisionType.Inserted);
+        Assert.NotNull(ins.RightAnchor);
+        Assert.Null(ins.LeftAnchor);
+
+        var del = Assert.Single(DocxDiff.GetRevisions(right, left),
+            r => r.Type == DocxDiffRevisionType.Deleted);
+        Assert.NotNull(del.LeftAnchor);
+        Assert.Null(del.RightAnchor);
+    }
+
+    [Fact]
+    public void GetRevisions_AnchorPresenceContract_HoldsOverCorpusPair()
+    {
+        // The public-surface anchor-presence contract, asserted end-to-end over a real WC pair (both
+        // directions): Inserted ALWAYS has RightAnchor; Deleted ALWAYS has LeftAnchor; FormatChanged has
+        // both; Moved is exclusive (source = left only, dest = right only). The opposite anchor is permitted
+        // for token-level ins/del. This is the invariant the python/npm doc comments and the IR corpus test
+        // also encode — pinned here at the shipped public API.
+        var a = Load("WC/WC001-Digits.docx");
+        var b = Load("WC/WC001-Digits-Mod.docx");
+        foreach (var (l, r) in new[] { (a, b), (b, a) })
+            foreach (var rev in DocxDiff.GetRevisions(l, r))
+            {
+                switch (rev.Type)
+                {
+                    case DocxDiffRevisionType.Inserted:
+                        Assert.NotNull(rev.RightAnchor);
+                        break;
+                    case DocxDiffRevisionType.Deleted:
+                        Assert.NotNull(rev.LeftAnchor);
+                        break;
+                    case DocxDiffRevisionType.FormatChanged:
+                        Assert.NotNull(rev.LeftAnchor);
+                        Assert.NotNull(rev.RightAnchor);
+                        break;
+                    case DocxDiffRevisionType.Moved:
+                        if (rev.IsMoveSource == true)
+                        {
+                            Assert.NotNull(rev.LeftAnchor);
+                            Assert.Null(rev.RightAnchor);
+                        }
+                        else
+                        {
+                            Assert.NotNull(rev.RightAnchor);
+                            Assert.Null(rev.LeftAnchor);
+                        }
+                        break;
+                }
+            }
+    }
+
+    [Fact]
     public void GetRevisions_FormatOnlyChange_SurfacesFormatChanged()
     {
         var left = Doc("identical text");
