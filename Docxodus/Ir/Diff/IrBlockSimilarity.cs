@@ -38,6 +38,11 @@ internal sealed class IrBlockSimilarity
     private readonly Dictionary<IrParagraph, MatchKeyBag> _bagCache =
         new(ReferenceEqualityComparer.Instance);
 
+    // Per-Align-call table-bag cache (M2.4b Workstream C): a table is tokenized to a flattened multiset of
+    // ALL its descendant cell-paragraph tokens at most once, even though it is scored against many candidates.
+    private readonly Dictionary<IrTable, MatchKeyBag> _tableBagCache =
+        new(ReferenceEqualityComparer.Instance);
+
     public IrBlockSimilarity(IrDiffSettings settings) => _settings = settings;
 
     /// <summary>
@@ -50,7 +55,18 @@ internal sealed class IrBlockSimilarity
         if (left is IrParagraph lp && right is IrParagraph rp)
             return Jaccard(Bag(lp), Bag(rp));
 
-        // Non-paragraph or mixed-kind: only exact content counts (keeps tables out of fuzzy pairing).
+        // Table-aware similarity (M2.4b Workstream C): score a TABLE pair by the Jaccard index over their
+        // CONCATENATED cell-paragraph token multisets — the same token model paragraphs use, flattened over
+        // every descendant cell paragraph. This lets the in-gap pairing classify two structurally-similar
+        // tables (e.g. the two endnote tables of WC-1750/1760, which differ only in a couple of cell words) as
+        // a Modified pair, so IrTableDiffer can produce row/cell-granular edits instead of a whole-table
+        // delete+insert. Exact-content tables still score 1.0 (their token multisets are identical), so this
+        // never demotes an exact relocation. NB: this is an ALIGNMENT capability addition — it runs in BOTH
+        // Fine and compatible modes; the produced table-row/cell ops are the engine's truth either way.
+        if (left is IrTable lt && right is IrTable rt)
+            return Jaccard(TableBag(lt), TableBag(rt));
+
+        // Other non-paragraph or mixed-kind pairs: only exact content counts.
         return left.ContentHash.Equals(right.ContentHash) ? 1.0 : 0.0;
     }
 
@@ -63,6 +79,15 @@ internal sealed class IrBlockSimilarity
             return bag;
         bag = MatchKeyBag.Build(paragraph, _settings);
         _bagCache[paragraph] = bag;
+        return bag;
+    }
+
+    private MatchKeyBag TableBag(IrTable table)
+    {
+        if (_tableBagCache.TryGetValue(table, out var bag))
+            return bag;
+        bag = MatchKeyBag.BuildTable(table, _settings);
+        _tableBagCache[table] = bag;
         return bag;
     }
 
@@ -112,6 +137,26 @@ internal sealed class IrBlockSimilarity
                     wordCount++;
             }
             return new MatchKeyBag(counts, tokens.Count, wordCount);
+        }
+
+        /// <summary>Flatten a table to one MatchKey multiset over EVERY descendant cell paragraph's tokens
+        /// (document order), so two structurally-similar tables score by shared cell content.</summary>
+        public static MatchKeyBag BuildTable(IrTable table, IrDiffSettings settings)
+        {
+            var counts = new Dictionary<string, int>();
+            int total = 0, wordCount = 0;
+            foreach (var row in table.Rows)
+                foreach (var cell in row.Cells)
+                    foreach (var block in cell.Blocks)
+                        if (block is IrParagraph p)
+                            foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+                            {
+                                counts[t.MatchKey] = counts.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
+                                total++;
+                                if (t.Kind == IrDiffTokenKind.Word)
+                                    wordCount++;
+                            }
+            return new MatchKeyBag(counts, total, wordCount);
         }
     }
 }

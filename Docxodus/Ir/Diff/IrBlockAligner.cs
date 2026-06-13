@@ -344,6 +344,34 @@ internal static class IrBlockAligner
             if (rightMatch[rj] == -1)
                 leftoverRight.Add(rj);
 
+        // Unambiguous table residue → Modified regardless of score (M2.4b Workstream C). A table can only
+        // sensibly pair with a table — a table-vs-paragraph similarity is 0 — so when exactly ONE free-left
+        // table and ONE free-right table survive the threshold in this gap, they are the same table edited,
+        // even when their cell-content Jaccard is below the generic BlockSimilarityThreshold (a heavily-edited
+        // table is still ONE edited table, not a delete+insert). Pairing them as Modified feeds IrTableDiffer's
+        // row/cell diff, matching WmlComparer's per-cell endnote-table revisions (WC-1750/1760). This is the
+        // table analogue of the 1×1 residue below; it fires only when the table pairing is UNAMBIGUOUS (one on
+        // each side), so it never competes with a better-scoring candidate (those were taken by SimilarityPair).
+        var tableLeft = new List<int>();
+        foreach (int li in leftoverLeft)
+            if (leftBlocks[li] is IrTable)
+                tableLeft.Add(li);
+        var tableRight = new List<int>();
+        foreach (int rj in leftoverRight)
+            if (rightBlocks[rj] is IrTable)
+                tableRight.Add(rj);
+        if (tableLeft.Count == 1 && tableRight.Count == 1)
+        {
+            int li = tableLeft[0];
+            int rj = tableRight[0];
+            leftKind[li] = IrAlignmentKind.Modified;
+            rightKind[rj] = IrAlignmentKind.Modified;
+            leftMatch[li] = rj;
+            rightMatch[rj] = li;
+            leftoverLeft.Remove(li);
+            leftoverRight.Remove(rj);
+        }
+
         // Unambiguous 1×1 residue → Modified regardless of score. When exactly ONE free left and ONE free
         // right survive the threshold, there is no competing candidate to disambiguate: classifying the
         // lone pair as "the same block, edited" is the only sensible reading (and is what M2.1's positional
