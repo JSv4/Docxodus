@@ -15,7 +15,7 @@ namespace Docxodus.Tests.Ir;
 /// </summary>
 internal static class IrTestDocuments
 {
-    private const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    internal const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
     /// <summary>
     /// A document whose body holds one simple text paragraph per supplied string.

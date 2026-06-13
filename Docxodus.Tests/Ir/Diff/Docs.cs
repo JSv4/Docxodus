@@ -20,15 +20,13 @@ namespace Docxodus.Tests.Ir.Diff;
 /// </summary>
 internal static class Docs
 {
-    private const string W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
-
     /// <summary>A one-section DOCX whose body holds one single-run paragraph per supplied string.</summary>
     public static WmlDocument Para(params string[] paragraphs) => IrTestDocuments.Create(paragraphs);
 
     /// <summary>Body paragraph text, paragraphs joined by newline (run text concatenated per paragraph).</summary>
     public static string PlainText(WmlDocument d)
     {
-        var ns = (XNamespace)W;
+        var ns = (XNamespace)IrTestDocuments.W;
         var doc = XDocument.Parse(MainPartXml(d));
         var body = doc.Root?.Element(ns + "body");
         if (body is null)
