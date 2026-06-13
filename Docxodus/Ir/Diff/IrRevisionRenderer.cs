@@ -72,8 +72,7 @@ internal static class IrRevisionRenderer
 
         var ctx = new Context(left, right, settings, moveSourceAnchor);
         var revisions = new List<IrRevision>();
-        foreach (var op in script.Operations)
-            RenderBlockOp(op, ctx, revisions);
+        RenderBlockOpList(script.Operations, ctx, revisions);
 
         // Note scopes (M2.4 Task 1): footnotes then endnotes, in the script's deterministic note order.
         // Each note's block ops render through the SAME block-op machinery as the body — its fn/en blocks
@@ -81,8 +80,7 @@ internal static class IrRevisionRenderer
         // distinct fn/en anchors carry the scope context into every revision.
         if (script.NoteOps is { } noteOps)
             foreach (var noteDiff in noteOps)
-                foreach (var op in noteDiff.Ops)
-                    RenderBlockOp(op, ctx, revisions);
+                RenderBlockOpList(noteDiff.Ops, ctx, revisions);
 
         // Section-break zero-width prune (M2.4 Task 2, prelim a). A whole-block Inserted/Deleted over a
         // SECTION-BREAK block (a `sec:` anchor) carries no surface text and is a structural-only change that
@@ -117,6 +115,136 @@ internal static class IrRevisionRenderer
     {
         public string Author => Settings.AuthorForRevisions;
         public string Date => Settings.DateTimeForRevisions;
+    }
+
+    // ------------------------------------------------------------------ adjacent-block coalescing (compat)
+
+    /// <summary>
+    /// Render an ordered list of block ops, applying (compatible mode only) WmlComparer's adjacent-block
+    /// insert/delete COALESCING (M2.4b Workstream C). WmlComparer's <c>GetRevisions</c> groups the produced
+    /// document's atoms by adjacent correlation status, so a maximal contiguous run of inserted (resp. deleted)
+    /// blocks collapses to ONE revision whose text is the run's blocks joined with their paragraph-mark
+    /// newlines. The IR's per-block <see cref="IrEditOpKind.InsertBlock"/>/<see cref="IrEditOpKind.DeleteBlock"/>
+    /// ops would otherwise each surface their own revision (WC-1440/1450/1830/1840, WC-1210).
+    ///
+    /// <para><b>Run segmentation.</b> A run is consecutive same-direction whole-block Insert (or Delete) ops.
+    /// A <see cref="IrTable"/> or opaque block STARTS A NEW SUB-REGION (it breaks the run before itself but
+    /// joins with the inserts that FOLLOW it) — this reproduces WmlComparer splitting `Abcde` from the empty
+    /// structural table + `fghij` that follows it (WC-1210: `Abcde` | `\n\nfghij\n`), and folding an inserted
+    /// image/opaque into the adjacent paragraph run (WC-1440). Each sub-region is coalesced to ONE revision
+    /// ONLY IF it carries at least one text-bearing paragraph (≥1 Word token); a sub-region with NO word
+    /// content (pure math/image/opaque/empty-mark) is left as one revision PER block, because WmlComparer
+    /// counts standalone math/image paragraph inserts individually (WC-1550 two-maths, WC-1320/1340/1350).</para>
+    ///
+    /// <para>Fine mode renders every op straight through (the engine's grain is its truth).</para>
+    /// </summary>
+    private static void RenderBlockOpList(IrNodeList<IrEditOp> ops, in Context ctx, List<IrRevision> sink)
+    {
+        if (ctx.Settings.RevisionGranularity != RevisionGranularity.WmlComparerCompatible)
+        {
+            foreach (var op in ops)
+                RenderBlockOp(op, ctx, sink);
+            return;
+        }
+
+        int i = 0;
+        int n = ops.Count;
+        while (i < n)
+        {
+            var kind = ops[i].Kind;
+            if (kind is IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock)
+            {
+                // Gather the maximal run of consecutive same-direction whole-block ins/del ops.
+                int runEnd = i + 1;
+                while (runEnd < n && ops[runEnd].Kind == kind)
+                    runEnd++;
+                RenderInsDelRun(ops, i, runEnd, kind, ctx, sink);
+                i = runEnd;
+            }
+            else
+            {
+                RenderBlockOp(ops[i], ctx, sink);
+                i++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Render a run of consecutive same-direction whole-block ins/del ops [start,end), splitting it into
+    /// sub-regions at table/opaque boundaries and coalescing each text-bearing sub-region into one revision.
+    /// </summary>
+    private static void RenderInsDelRun(
+        IrNodeList<IrEditOp> ops, int start, int end, IrEditOpKind kind, in Context ctx, List<IrRevision> sink)
+    {
+        bool insert = kind == IrEditOpKind.InsertBlock;
+        int subStart = start;
+        for (int k = start; k < end; k++)
+        {
+            // A table/opaque block starts a new sub-region: flush the run accumulated BEFORE it, then begin
+            // a fresh sub-region AT this block (it joins with the following inserts of the same run).
+            string? anchor = insert ? ops[k].RightAnchor : ops[k].LeftAnchor;
+            var doc = insert ? ctx.Right : ctx.Left;
+            bool isRegionStarter = anchor is not null && doc.AnchorIndex.TryGetValue(anchor, out var b)
+                && b is not IrParagraph;
+            if (isRegionStarter && k > subStart)
+            {
+                FlushInsDelSubRegion(ops, subStart, k, insert, ctx, sink);
+                subStart = k;
+            }
+        }
+        FlushInsDelSubRegion(ops, subStart, end, insert, ctx, sink);
+    }
+
+    /// <summary>
+    /// Emit one sub-region [start,end) of same-direction whole-block ins/del ops. If the sub-region has any
+    /// text-bearing paragraph, emit ONE coalesced revision (block texts joined with their paragraph-mark
+    /// newlines, empty-mark paragraphs still pruned); otherwise emit one revision per block (the per-block
+    /// path, which prunes empty-mark paragraphs and keeps standalone math/image inserts).
+    /// </summary>
+    private static void FlushInsDelSubRegion(
+        IrNodeList<IrEditOp> ops, int start, int end, bool insert, in Context ctx, List<IrRevision> sink)
+    {
+        if (end - start <= 1 || !SubRegionHasText(ops, start, end, insert, ctx))
+        {
+            // Single op, or no word content: render each op individually (prunes empty marks, keeps math/image).
+            for (int k = start; k < end; k++)
+                RenderBlockOp(ops[k], ctx, sink);
+            return;
+        }
+
+        // Coalesce: join the blocks' texts with the paragraph-mark convention. WmlComparer surfaces each
+        // paragraph's content followed by its mark (a newline), so the run reads as one multi-paragraph
+        // ins/del. An empty-mark paragraph contributes only its newline; a math/image paragraph contributes
+        // its surface text then a newline (matching the oracle's coalesced multi-paragraph text).
+        var sb = new StringBuilder();
+        string? firstAnchor = null;
+        for (int k = start; k < end; k++)
+        {
+            string? anchor = insert ? ops[k].RightAnchor : ops[k].LeftAnchor;
+            firstAnchor ??= anchor;
+            sb.Append(BlockText(anchor, insert ? ctx.Right : ctx.Left, ctx.Settings));
+            sb.Append('\n');
+        }
+        sink.Add(insert
+            ? new IrRevision(IrRevisionType.Inserted, sb.ToString(), ctx.Author, ctx.Date, RightAnchor: firstAnchor)
+            : new IrRevision(IrRevisionType.Deleted, sb.ToString(), ctx.Author, ctx.Date, LeftAnchor: firstAnchor));
+    }
+
+    /// <summary>True iff any block in the ins/del sub-region [start,end) is a paragraph with ≥1 Word token.</summary>
+    private static bool SubRegionHasText(IrNodeList<IrEditOp> ops, int start, int end, bool insert, in Context ctx)
+    {
+        var doc = insert ? ctx.Right : ctx.Left;
+        for (int k = start; k < end; k++)
+        {
+            string? anchor = insert ? ops[k].RightAnchor : ops[k].LeftAnchor;
+            if (anchor is not null && doc.AnchorIndex.TryGetValue(anchor, out var b) && b is IrParagraph p)
+            {
+                foreach (var t in IrDiffTokenizer.Tokenize(p, ctx.Settings))
+                    if (t.Kind == IrDiffTokenKind.Word)
+                        return true;
+            }
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------ block-op dispatch
@@ -918,8 +1046,7 @@ internal static class IrRevisionRenderer
                     if (rowOp.CellOps is { } cellOps)
                         foreach (var cellOp in cellOps)
                             if (cellOp.BlockOps is { } blockOps)
-                                foreach (var blockOp in blockOps)
-                                    RenderBlockOp(blockOp, ctx, sink);
+                                RenderBlockOpList(blockOps, ctx, sink);
                     break;
             }
         }
