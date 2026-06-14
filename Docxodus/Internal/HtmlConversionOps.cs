@@ -147,16 +147,79 @@ internal static class HtmlConversionOps
         sourceStream.Position = 0;
         using var sourceDoc = WordprocessingDocument.Open(sourceStream, true);
 
-        // Assign deterministic Unids with the SAME call the full render uses, so the
-        // anchor the editor saw in data-anchor resolves here by construction. The anchor
-        // id is kind:scope:unid; only the unid tail is the durable handle.
-        var sourceRoot = sourceDoc.MainDocumentPart!.GetXDocument().Root!;
-        UnidHelper.AssignToAllElementsDeterministic(sourceRoot);
+        // Stateless path: no live session, so assign deterministic Unids here (the same
+        // call the full render uses) so the anchor resolves by construction.
+        UnidHelper.AssignToAllElementsDeterministic(sourceDoc.MainDocumentPart!.GetXDocument().Root!);
 
-        var unid = anchorId.Substring(anchorId.LastIndexOf(':') + 1);
-        var blockElement = sourceRoot.DescendantsAndSelf()
-            .FirstOrDefault(e => (string?)e.Attribute(PtOpenXml.Unid) == unid)
+        var unid = AnchorUnid(anchorId);
+        var blockElement = FindByUnid(sourceDoc, unid)
             ?? throw new ArgumentException($"anchor not found: {anchorId}", nameof(anchorId));
+        return RenderResolvedBlock(sourceDoc, blockElement, options);
+    }
+
+    /// <summary>
+    /// Session-attached single-block render. Resolves the block from the live session
+    /// document WITHOUT re-opening bytes or re-assigning Unids over the whole document —
+    /// the optimized path for an editor's incremental per-block re-render after an edit.
+    /// Read-only with respect to the session (the block is cloned, parts are read).
+    /// </summary>
+    public static string RenderBlockHtml(DocxSession session, string anchorId, HtmlConversionOptions options)
+    {
+        if (session is null) throw new ArgumentNullException(nameof(session));
+        if (string.IsNullOrWhiteSpace(anchorId))
+            throw new ArgumentException("No anchor id provided", nameof(anchorId));
+        ArgumentNullException.ThrowIfNull(options);
+
+        var unid = AnchorUnid(anchorId);
+        var liveDoc = session.LiveDocument;
+
+        var blockElement = FindByUnid(liveDoc, unid);
+        if (blockElement is null)
+        {
+            // Anchor not on the live tree yet — ensure Unids are assigned/persisted
+            // (one projection) and retry once.
+            session.Project();
+            blockElement = FindByUnid(liveDoc, unid);
+        }
+        if (blockElement is null)
+            throw new ArgumentException($"anchor not found: {anchorId}", nameof(anchorId));
+
+        return RenderResolvedBlock(liveDoc, blockElement, options);
+    }
+
+    /// <summary>Session-attached render for a registered session handle.</summary>
+    public static string RenderBlockHtml(int handle, string anchorId, HtmlConversionOptions options) =>
+        RenderBlockHtml(SessionRegistry.Get(handle), anchorId, options);
+
+    private static string AnchorUnid(string anchorId) =>
+        anchorId.Substring(anchorId.LastIndexOf(':') + 1);
+
+    /// <summary>Find the element bearing PtOpenXml:Unid == unid across body/header/footer parts.</summary>
+    private static XElement? FindByUnid(WordprocessingDocument doc, string unid)
+    {
+        var main = doc.MainDocumentPart;
+        if (main is null) return null;
+        bool Match(XElement e) => (string?)e.Attribute(PtOpenXml.Unid) == unid;
+
+        var hit = main.GetXDocument().Root?.DescendantsAndSelf().FirstOrDefault(Match);
+        if (hit != null) return hit;
+        foreach (var part in main.HeaderParts.Cast<OpenXmlPart>().Concat(main.FooterParts))
+        {
+            hit = part.GetXDocument().Root?.DescendantsAndSelf().FirstOrDefault(Match);
+            if (hit != null) return hit;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Render one resolved block element to HTML via a throwaway document that copies the
+    /// source's formatting parts. Read-only w.r.t. <paramref name="sourceDoc"/> (the block is
+    /// cloned, parts are read), so it is safe to call on a live session document.
+    /// </summary>
+    private static string RenderResolvedBlock(WordprocessingDocument sourceDoc, XElement blockElement,
+        HtmlConversionOptions options)
+    {
+        var unid = (string?)blockElement.Attribute(PtOpenXml.Unid);
 
         // Build a throwaway doc: copied formatting parts + just this block.
         using var blockStream = new MemoryStream();
@@ -200,7 +263,7 @@ internal static class HtmlConversionOps
         XElement? inner = null;
         if (unid != null)
             inner = htmlElement.Descendants().FirstOrDefault(e => (string?)e.Attribute("data-anchor") == unid);
-        if (inner == null)
+        if (inner is null)
         {
             var body = htmlElement.Descendants().FirstOrDefault(e => e.Name.LocalName == "body");
             inner = body?.Elements().FirstOrDefault() ?? htmlElement;

@@ -3436,6 +3436,21 @@ public sealed class DocxSession : IDisposable
         return element?.ToString() ?? "";
     }
 
+    /// <summary>
+    /// The live, in-memory document backing this session. Exposed for read-only,
+    /// in-assembly consumers (e.g. session-attached single-block HTML rendering) that
+    /// must read the current tree/parts without the round-trip cost of <see cref="Save"/>.
+    /// Do not mutate it outside the session's own edit methods.
+    /// </summary>
+    internal WordprocessingDocument LiveDocument
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _doc!;
+        }
+    }
+
     internal EditResult RawInsertXmlInternal(string anchorId, Position pos, string xml)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");

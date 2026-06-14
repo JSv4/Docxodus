@@ -10,6 +10,9 @@ namespace Docxodus.Tests;
 
 public class HtmlConversionOpsTests
 {
+    private readonly Xunit.Abstractions.ITestOutputHelper _output;
+    public HtmlConversionOpsTests(Xunit.Abstractions.ITestOutputHelper output) => _output = output;
+
     private static byte[] TourPlanBytes() =>
         File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
             "HC001-5DayTourPlanTemplate.docx"));
@@ -107,5 +110,64 @@ public class HtmlConversionOpsTests
         }
 
         Assert.True(verified > 0, "no blocks verified");
+    }
+
+    // Proves (a) the session-attached render resolves the SAME anchors the full render
+    // stamps (one Unid scheme across convertDocxToHtml ↔ DocxSession ↔ RenderBlock) and
+    // produces equivalent output, and (b) it avoids the per-call byte re-open + whole-doc
+    // Unid pass, so it is no slower than the stateless path. Logs per-block latency.
+    [Fact]
+    public void HCO052_SessionAttachedRender_EquivalentAndNotSlower()
+    {
+        byte[] bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "HC031-Complicated-Document.docx"));
+        var opts = new HtmlConversionOptions { FabricateCssClasses = false };
+
+        var full = System.Xml.Linq.XElement.Parse(
+            HtmlConversionOps.ConvertToHtml(bytes,
+                new HtmlConversionOptions { StampAnchors = true, FabricateCssClasses = false }));
+        var anchors = full.Descendants()
+            .Where(e => (e.Name.LocalName is "p" or "h1" or "h2" or "h3" or "h4")
+                        && (string?)e.Attribute("data-anchor") != null
+                        && e.Descendants().All(d => d.Name.LocalName != "img"))
+            .Select(e => (string)e.Attribute("data-anchor")!)
+            .Where(u => u.Length == 32)
+            .Distinct().Take(20).ToList();
+        Assert.NotEmpty(anchors);
+
+        static string Text(string html) => System.Text.RegularExpressions.Regex.Replace(
+            System.Xml.Linq.XElement.Parse(html).Value, "\\s+", " ").Trim();
+
+        using var session = new DocxSession(bytes);
+
+        // (a) Equivalence: session-attached resolves the full-render anchor (same scheme)
+        // and yields the same text as the stateless path. This is the editor's invariant:
+        // a DOM block's data-anchor is a valid DocxSession/RenderBlock anchor.
+        foreach (var a in anchors.Take(6))
+        {
+            string viaBytes = HtmlConversionOps.RenderBlockHtml(bytes, a, opts);
+            string viaSession = HtmlConversionOps.RenderBlockHtml(session, a, opts);
+            Assert.Equal(Text(viaBytes), Text(viaSession));
+        }
+
+        // Warmup (JIT + first projection on the session path).
+        HtmlConversionOps.RenderBlockHtml(bytes, anchors[0], opts);
+        HtmlConversionOps.RenderBlockHtml(session, anchors[0], opts);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        foreach (var a in anchors) HtmlConversionOps.RenderBlockHtml(bytes, a, opts);
+        double statelessMs = sw.Elapsed.TotalMilliseconds / anchors.Count;
+
+        sw.Restart();
+        foreach (var a in anchors) HtmlConversionOps.RenderBlockHtml(session, a, opts);
+        double sessionMs = sw.Elapsed.TotalMilliseconds / anchors.Count;
+
+        _output.WriteLine($"PROFILE HC031 n={anchors.Count}: stateless={statelessMs:F2}ms/block " +
+                          $"session-attached={sessionMs:F2}ms/block speedup={statelessMs / sessionMs:F2}x");
+
+        // Session-attached must not be materially slower (it skips re-open + whole-doc
+        // Unid assignment). Generous margin keeps the assertion robust to CI noise.
+        Assert.True(sessionMs <= statelessMs * 1.25,
+            $"session-attached slower than stateless: stateless={statelessMs:F2} session={sessionMs:F2}");
     }
 }
