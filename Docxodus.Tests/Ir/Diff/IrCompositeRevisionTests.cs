@@ -91,4 +91,33 @@ public class IrCompositeRevisionTests
         Assert.NotNull(bob.ConflictId);
         Assert.NotNull(fred.ConflictId);
     }
+
+    // ---- FOLLOW-ON A: native move composition revisions ----
+
+    [Fact]
+    public void Native_move_yields_moved_source_and_dest_revisions_sharing_group_authored_to_mover()
+    {
+        // Four ≥4-word paragraphs so a reorder is detected as a MoveBlock.
+        const string p1 = "First paragraph alpha bravo charlie";
+        const string p2 = "Second paragraph delta echo foxtrot";
+        const string p3 = "Third paragraph golf hotel india";
+        const string p4 = "Fourth paragraph juliet kilo lima";
+        var b = Docs.Para(p1, p2, p3, p4);
+        var alice = Docs.Para(p1, p3, p4, p2);   // Alice relocates P2 to the end
+
+        var revs = DocxDiff.GetConsolidatedRevisions(
+            b, new[] { new DocxDiffReviewer { Document = alice, Author = "Alice" } });
+
+        var moved = revs.Where(r => r.Type == DocxDiffRevisionType.Moved).ToList();
+        Assert.Contains(moved, r => r.IsMoveSource == true);
+        Assert.Contains(moved, r => r.IsMoveSource == false);
+
+        // Source + dest share one (global) move group id, authored to the mover.
+        var src = moved.First(r => r.IsMoveSource == true);
+        var dest = moved.First(r => r.IsMoveSource == false);
+        Assert.Equal(src.MoveGroupId, dest.MoveGroupId);
+        Assert.NotNull(src.MoveGroupId);
+        Assert.Equal("Alice", src.Author);
+        Assert.Equal("Alice", dest.Author);
+    }
 }

@@ -1,5 +1,8 @@
 #nullable enable
+using System.IO;
 using System.Linq;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Docxodus.Ir.Diff;
 using Xunit;
@@ -146,5 +149,66 @@ public class IrCompositeMarkupRendererTests
         var xml = Docs.MainPartXml(merged);
         Assert.Contains("w:author=\"Bob\"", xml);
         Assert.Contains("w:author=\"Fred\"", xml);
+    }
+
+    // ---- FOLLOW-ON A: native move composition rendering ----
+
+    // Four ≥4-word paragraphs so a reorder is detected as a MoveBlock by the aligner.
+    private const string MP1 = "First paragraph alpha bravo charlie";
+    private const string MP2 = "Second paragraph delta echo foxtrot";
+    private const string MP3 = "Third paragraph golf hotel india";
+    private const string MP4 = "Fourth paragraph juliet kilo lima";
+
+    private static XElement BodyOf(WmlDocument d)
+    {
+        using var ms = new MemoryStream(d.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        return wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+    }
+
+    [Fact]
+    public void Native_composite_move_emits_moveFrom_moveTo_authored_to_mover()
+    {
+        var baseDoc = Docs.Para(MP1, MP2, MP3, MP4);
+        var alice = Docs.Para(MP1, MP3, MP4, MP2);    // Alice relocates P2 to the end
+        var script = IrCompositeMergerTests.MergeOf(baseDoc, ("Alice", alice));
+        var merged = IrCompositeMarkupRenderer.Render(script, baseDoc,
+            new[] { ("Alice", alice) }, new DocxDiffSettings().ToIrDiffSettings());
+
+        var body = BodyOf(merged);
+        Assert.NotEmpty(body.Descendants(W.moveFrom));
+        Assert.NotEmpty(body.Descendants(W.moveTo));
+        Assert.NotEmpty(body.Descendants(W.moveFromRangeStart));
+        Assert.NotEmpty(body.Descendants(W.moveToRangeStart));
+
+        // moveFrom/moveTo range names pair (set-equal).
+        var fromNames = body.Descendants(W.moveFromRangeStart).Select(e => (string?)e.Attribute(W.name)).ToHashSet();
+        var toNames = body.Descendants(W.moveToRangeStart).Select(e => (string?)e.Attribute(W.name)).ToHashSet();
+        Assert.True(fromNames.SetEquals(toNames), "moveFrom/moveTo range names must pair");
+
+        // Authored to the mover.
+        foreach (var e in body.Descendants(W.moveFrom).Concat(body.Descendants(W.moveTo)))
+            Assert.Equal("Alice", (string?)e.Attribute(W.author));
+
+        // reject ≡ base; accept ≡ Alice (the relocated body).
+        Assert.Equal(Docs.PlainText(baseDoc), Docs.PlainText(RevisionProcessor.RejectRevisions(merged)));
+        Assert.Equal(Docs.PlainText(alice), Docs.PlainText(RevisionAccepter.AcceptRevisions(merged)));
+    }
+
+    [Fact]
+    public void Native_composite_move_with_SimplifyMoveMarkup_degrades_to_ins_del()
+    {
+        var baseDoc = Docs.Para(MP1, MP2, MP3, MP4);
+        var alice = Docs.Para(MP1, MP3, MP4, MP2);
+        var settings = new DocxDiffSettings().ToIrDiffSettings() with { SimplifyMoveMarkup = true };
+        var script = IrCompositeMergerTests.MergeOf(baseDoc, ("Alice", alice));
+        var merged = IrCompositeMarkupRenderer.Render(script, baseDoc, new[] { ("Alice", alice) }, settings);
+
+        var body = BodyOf(merged);
+        Assert.Empty(body.Descendants(W.moveFrom));
+        Assert.Empty(body.Descendants(W.moveTo));
+        Assert.True(body.Descendants(W.ins).Any() || body.Descendants(W.del).Any(),
+            "simplified move must use ins/del");
+        Assert.Equal(Docs.PlainText(baseDoc), Docs.PlainText(RevisionProcessor.RejectRevisions(merged)));
     }
 }

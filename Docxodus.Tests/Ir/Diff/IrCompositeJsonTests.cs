@@ -1,4 +1,5 @@
 #nullable enable
+using System.Linq;
 using Docxodus;
 using Xunit;
 
@@ -44,28 +45,33 @@ public class IrCompositeJsonTests
     }
 
     /// <summary>
-    /// CONTRACT: a composite over a reviewer MOVE lowers the move SOURCE to a DeleteBlock and the move
-    /// DESTINATION to an InsertBlock (see <see cref="Docxodus.Ir.Diff.IrCompositeMerger.LowerStructuralOps"/>).
-    /// The lowered move-source DeleteBlock RETAINS MoveGroupId/IsMoveSource INTERNALLY (the merger's
-    /// contested-relocation detection reads them), but the documented <c>IrEditOp</c> field-presence contract
-    /// (IrEditScript.cs) says a DeleteBlock/InsertBlock carries NULL move fields — so the EMITTED, serialized
-    /// op must NOT leak <c>moveGroupId</c>/<c>isMoveSource</c>. The edit-script-as-data is the public
-    /// differentiator; a machine consumer must see a contract-clean delete/insert.
+    /// CONTRACT: any DeleteBlock/InsertBlock in the composite edit-script JSON must carry NULL move fields.
+    /// The merger lowers COLLIDING reviewer moves to Insert/Delete and RETAINS the MoveGroupId/IsMoveSource
+    /// marker INTERNALLY on a lowered move-source DeleteBlock (for contested-relocation detection); that
+    /// marker is stripped before emission. The documented <c>IrEditOp</c> field-presence contract
+    /// (IrEditScript.cs) says a DeleteBlock/InsertBlock carries NULL move fields, so the EMITTED, serialized
+    /// op must NOT leak <c>moveGroupId</c>/<c>isMoveSource</c>. (Native — non-colliding — moves keep their
+    /// MoveBlock kind, which DOES legitimately serialize move fields; that is covered separately below.)
     /// </summary>
     [Fact]
     public void Consolidated_json_delete_insert_ops_carry_no_move_fields()
     {
-        // A clean single-reviewer relocation of a ≥4-word paragraph so move detection fires and the move is
-        // lowered to a source DeleteBlock + a destination InsertBlock in the composite.
-        const string p1 = "First paragraph alpha bravo";
-        const string p2 = "Second paragraph charlie delta";
-        const string p3 = "Third paragraph echo foxtrot";
-        const string p4 = "Fourth paragraph golf hotel";
-        var b = Docs.Para(p1, p2, p3, p4);
-        var alice = Docs.Para(p1, p3, p4, p2); // P2 relocated to the end (a move → lowered to del + ins)
+        // Two reviewers move the SAME ≥4-word paragraph to different places → a CONTESTED relocation: both
+        // movers' sources lower to a marked DeleteBlock that co-anchors, so the move is NOT native and the
+        // emitted delete/insert ops must be contract-clean (no leaked move fields). A 5-paragraph base with a
+        // clear MIDDLE mover (P3) so the aligner anchors BOTH move sources at P3 (co-anchored → contested).
+        const string p1 = "First paragraph alpha bravo charlie";
+        const string p2 = "Second paragraph delta echo foxtrot";
+        const string p3 = "Third paragraph golf hotel india";
+        const string p4 = "Fourth paragraph juliet kilo lima";
+        const string p5 = "Fifth paragraph mike november oscar";
+        var b = Docs.Para(p1, p2, p3, p4, p5);
+        var alice = Docs.Para(p1, p2, p4, p5, p3); // P3 → end
+        var bob = Docs.Para(p3, p1, p2, p4, p5);   // P3 → front (contested with Alice)
 
         var json = DocxDiff.GetConsolidatedEditScriptJson(
-            b, new[] { new DocxDiffReviewer { Document = alice, Author = "Alice" } });
+            b, new[] { new DocxDiffReviewer { Document = alice, Author = "Alice" },
+                       new DocxDiffReviewer { Document = bob, Author = "Bob" } });
 
         using var doc = System.Text.Json.JsonDocument.Parse(json);
         foreach (var op in doc.RootElement.GetProperty("operations").EnumerateArray())
@@ -80,9 +86,47 @@ public class IrCompositeJsonTests
             }
         }
 
-        // Sanity: the move WAS lowered (a DeleteBlock for the move source is present), so the assertion above
-        // is not vacuously true.
+        // Sanity: the contested move WAS lowered (a DeleteBlock for the move source is present), so the
+        // assertion above is not vacuously true.
         Assert.Contains(doc.RootElement.GetProperty("operations").EnumerateArray(),
             op => op.GetProperty("kind").GetString() == "DeleteBlock");
+    }
+
+    /// <summary>
+    /// FOLLOW-ON A: a single-reviewer non-colliding move serializes as a NATIVE MoveBlock pair — both halves
+    /// carry the (global) <c>moveGroupId</c> and <c>isMoveSource</c>.
+    /// </summary>
+    [Fact]
+    public void Consolidated_json_native_move_serializes_moveGroupId_and_isMoveSource_for_both_halves()
+    {
+        const string p1 = "First paragraph alpha bravo charlie";
+        const string p2 = "Second paragraph delta echo foxtrot";
+        const string p3 = "Third paragraph golf hotel india";
+        const string p4 = "Fourth paragraph juliet kilo lima";
+        var b = Docs.Para(p1, p2, p3, p4);
+        var alice = Docs.Para(p1, p3, p4, p2);   // P2 relocated to the end (native move)
+
+        var json = DocxDiff.GetConsolidatedEditScriptJson(
+            b, new[] { new DocxDiffReviewer { Document = alice, Author = "Alice" } });
+
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var moveOps = doc.RootElement.GetProperty("operations").EnumerateArray()
+            .Where(op => op.GetProperty("kind").GetString() is "MoveBlock" or "MoveModifyBlock")
+            .ToList();
+        Assert.Equal(2, moveOps.Count); // source + destination
+
+        foreach (var op in moveOps)
+        {
+            Assert.True(op.TryGetProperty("moveGroupId", out _),
+                "native composite move op must serialize moveGroupId.");
+            Assert.True(op.TryGetProperty("isMoveSource", out _),
+                "native composite move op must serialize isMoveSource.");
+        }
+
+        // The two halves share one group id and split source/dest.
+        var gids = moveOps.Select(op => op.GetProperty("moveGroupId").GetInt32()).Distinct().ToList();
+        Assert.Single(gids);
+        Assert.Contains(moveOps, op => op.GetProperty("isMoveSource").GetBoolean());
+        Assert.Contains(moveOps, op => !op.GetProperty("isMoveSource").GetBoolean());
     }
 }

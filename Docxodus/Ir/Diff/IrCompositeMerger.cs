@@ -27,8 +27,21 @@ internal static class IrCompositeMerger
         Docxodus.ConflictResolution policy,
         IrDiffSettings settings)
     {
-        var scripts = reviewers
-            .Select(r => LowerStructuralOps(IrEditScriptBuilder.Build(baseIr, r.Ir, settings)))
+        // 1. Raw pairwise scripts, NOT yet lowered — so PlanMoves can inspect every reviewer's move groups
+        //    against the shared base anchor space before any move is collapsed to del/ins.
+        var rawScripts = reviewers
+            .Select(r => IrEditScriptBuilder.Build(baseIr, r.Ir, settings))
+            .ToList();
+
+        // 2. Decide, per reviewer move group, NATIVE (non-colliding single-reviewer move → keep
+        //    MoveBlock/MoveModifyBlock) vs LOWER (colliding move → del/ins), and assign a GLOBAL move-group
+        //    id so two reviewers' independent native moves never share a w:name.
+        var plan = PlanMoves(rawScripts, settings);
+
+        // 3. Transform each script per the plan: NATIVE move groups keep their move ops (with the global gid
+        //    substituted); LOWERED move groups + ALL Split/Merge collapse to Insert/Delete (LowerStructuralOps).
+        var scripts = rawScripts
+            .Select((s, reviewer) => ApplyMovePlan(s, reviewer, plan))
             .ToList();
         var baseOrder = BaseBlockAnchors(baseIr);
         var byBase = GroupByBaseAnchor(scripts);
@@ -44,6 +57,115 @@ internal static class IrCompositeMerger
             EmitInsertsAt(insertsAfter, anchor, reviewers, ops);
         }
         return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts));
+    }
+
+    // ---- FOLLOW-ON A: native move composition planning ----
+
+    /// <summary>
+    /// The verdict for every reviewer move group: whether it renders as a NATIVE move
+    /// (<c>w:moveFrom</c>/<c>w:moveTo</c>, authored to the mover) or is LOWERED to del/ins, plus the GLOBAL
+    /// move-group id assigned to a native group. Keyed by <c>(reviewer index, the reviewer's LOCAL
+    /// <see cref="IrEditOp.MoveGroupId"/>)</c> — both halves of a move share the local gid, so both resolve to
+    /// the same verdict and global gid. <see cref="GlobalGidByGroup"/> contains an entry ONLY for native groups
+    /// (a group absent from the map is lowered).
+    /// </summary>
+    internal sealed record MovePlan(IReadOnlyDictionary<(int Reviewer, int LocalGid), int> GlobalGidByGroup);
+
+    /// <summary>
+    /// Decide, per reviewer move group, NATIVE vs LOWER, and assign deterministic GLOBAL move-group ids.
+    /// <para>A move group (reviewer R, local gid G, source base anchor S) is NATIVE-eligible iff
+    /// <see cref="IrDiffSettings.RenderMoves"/> AND R is the ONLY reviewer that touches base block S — i.e.
+    /// <c>touchersByBaseAnchor[S] == {R}</c>. This single predicate covers BOTH collision shapes the lowering
+    /// must keep: a move-vs-edit on S (the other reviewer's ModifyBlock/DeleteBlock co-anchors at S) AND two
+    /// reviewers moving the same block (both move sources co-anchor at S). A move whose source block is
+    /// touched only by its mover is non-colliding and renders natively.</para>
+    /// <para><b>Global namespacing.</b> Native groups are assigned global ids from a single counter in
+    /// deterministic order — reviewers in list order, then each reviewer's groups by ascending local gid —
+    /// starting at 1. Both halves (matched by local gid within the reviewer) get the same global id, so the
+    /// renderer's <c>w:name</c> allocator pairs them while two reviewers' independent moves stay distinct.</para>
+    /// </summary>
+    internal static MovePlan PlanMoves(IReadOnlyList<IrEditScript> rawScripts, IrDiffSettings settings)
+    {
+        // touchersByBaseAnchor: base anchor → reviewers with a non-Equal op anchored (LeftAnchor) there.
+        // A move SOURCE (IsMoveSource=true) anchors at its source base block via LeftAnchor; a ModifyBlock/
+        // DeleteBlock/FormatOnlyBlock also carries the base block's LeftAnchor; a move DEST / InsertBlock has
+        // a null LeftAnchor and so never marks a base block as touched (it is right-positioned content).
+        var touchers = new Dictionary<string, HashSet<int>>();
+        for (int reviewer = 0; reviewer < rawScripts.Count; reviewer++)
+        {
+            foreach (var op in rawScripts[reviewer].Operations)
+            {
+                if (op.Kind == IrEditOpKind.EqualBlock || op.LeftAnchor is not { } anchor)
+                    continue;
+                if (!touchers.TryGetValue(anchor, out var set))
+                    touchers[anchor] = set = new HashSet<int>();
+                set.Add(reviewer);
+            }
+        }
+
+        var globalGid = new Dictionary<(int, int), int>();
+        int nextGlobal = 1;
+        if (settings.RenderMoves)
+        {
+            for (int reviewer = 0; reviewer < rawScripts.Count; reviewer++)
+            {
+                // The reviewer's native-eligible groups, by ascending local gid, each mapped to its source
+                // base anchor (the move-SOURCE op's LeftAnchor). Only groups with a resolvable source whose
+                // base block is touched solely by this reviewer are native.
+                var eligibleLocalGids = new SortedSet<int>();
+                foreach (var op in rawScripts[reviewer].Operations)
+                {
+                    if (op.Kind is not (IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock)
+                        || op.IsMoveSource != true || op.MoveGroupId is not { } localGid
+                        || op.LeftAnchor is not { } source)
+                        continue;
+                    bool soleToucher = touchers.TryGetValue(source, out var set)
+                        && set.Count == 1 && set.Contains(reviewer);
+                    if (soleToucher)
+                        eligibleLocalGids.Add(localGid);
+                }
+                foreach (var localGid in eligibleLocalGids)
+                    globalGid[(reviewer, localGid)] = nextGlobal++;
+            }
+        }
+
+        return new MovePlan(globalGid);
+    }
+
+    /// <summary>
+    /// Transform reviewer <paramref name="reviewer"/>'s raw pairwise script per <paramref name="plan"/>:
+    /// a NATIVE move group keeps its <see cref="IrEditOpKind.MoveBlock"/>/<see cref="IrEditOpKind.MoveModifyBlock"/>
+    /// source AND destination, with <see cref="IrEditOp.MoveGroupId"/> rewritten to the GLOBAL gid; a LOWERED
+    /// move group and ALL Split/Merge collapse to Insert/Delete via the per-op lowering rules. Op order is
+    /// preserved (the preceding-anchor insert routing depends on it).
+    /// </summary>
+    internal static IrEditScript ApplyMovePlan(IrEditScript script, int reviewer, MovePlan plan)
+    {
+        var result = new List<IrEditOp>(script.Operations.Count);
+        foreach (var op in script.Operations)
+        {
+            if (op.Kind is IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock
+                && op.MoveGroupId is { } localGid
+                && plan.GlobalGidByGroup.TryGetValue((reviewer, localGid), out var global))
+            {
+                // NATIVE: keep both halves verbatim, rewriting the local gid to the globally-namespaced one.
+                result.Add(op with { MoveGroupId = global });
+            }
+            else
+            {
+                // LOWERED move group, or a Split/Merge → del/ins (LowerStructuralOps' per-op rules).
+                LowerOneStructuralOp(op, result);
+            }
+        }
+
+        System.Diagnostics.Debug.Assert(
+            result.All(o =>
+                o.Kind is not (IrEditOpKind.SplitBlock or IrEditOpKind.MergeBlock)
+                && (o.Kind is not (IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock)
+                    || (o.MoveGroupId is { } g && plan.GlobalGidByGroup.Values.Contains(g)))),
+            "ApplyMovePlan must leave no Split/Merge and no LOWERED-candidate move op; surviving moves must be native (global gid).");
+
+        return new IrEditScript(IrNodeList.From(result), script.NoteOps);
     }
 
     /// <summary>
@@ -85,47 +207,7 @@ internal static class IrCompositeMerger
     {
         var lowered = new List<IrEditOp>(script.Operations.Count);
         foreach (var op in script.Operations)
-        {
-            switch (op.Kind)
-            {
-                case IrEditOpKind.MoveBlock:
-                case IrEditOpKind.MoveModifyBlock:
-                    if (op.IsMoveSource == true)
-                        // Lower the move SOURCE to a DeleteBlock, but RETAIN MoveGroupId/IsMoveSource as a
-                        // marker that this delete is a RELOCATION (the block is reinserted elsewhere by the
-                        // same reviewer), not a plain removal. The renderer/verifier/json dispatch on Kind
-                        // (DeleteBlock), so the retained fields are inert there; the merger reads them to
-                        // distinguish a contested move (2+ reviewers relocate the same base block to
-                        // different places) from a consensus removal — see MergeOneBaseBlock.
-                        lowered.Add(new IrEditOp(IrEditOpKind.DeleteBlock, op.LeftAnchor, null, null,
-                            op.MoveGroupId, IsMoveSource: true));
-                    else
-                        lowered.Add(new IrEditOp(IrEditOpKind.InsertBlock, null, op.RightAnchor, null, null, null));
-                    break;
-
-                case IrEditOpKind.SplitBlock:
-                    // One left base paragraph fans out into N right segments: delete the base block, then
-                    // insert each right segment in order at this position.
-                    lowered.Add(new IrEditOp(IrEditOpKind.DeleteBlock, op.LeftAnchor, null, null, null, null));
-                    if (op.SplitMergeAnchors is { } splitRights)
-                        foreach (var rightAnchor in splitRights)
-                            lowered.Add(new IrEditOp(IrEditOpKind.InsertBlock, null, rightAnchor, null, null, null));
-                    break;
-
-                case IrEditOpKind.MergeBlock:
-                    // N left base paragraphs fuse into one right paragraph: delete each consumed left block
-                    // in order, then insert the merged right result.
-                    if (op.SplitMergeAnchors is { } mergeLefts)
-                        foreach (var leftAnchor in mergeLefts)
-                            lowered.Add(new IrEditOp(IrEditOpKind.DeleteBlock, leftAnchor, null, null, null, null));
-                    lowered.Add(new IrEditOp(IrEditOpKind.InsertBlock, null, op.RightAnchor, null, null, null));
-                    break;
-
-                default:
-                    lowered.Add(op);
-                    break;
-            }
-        }
+            LowerOneStructuralOp(op, lowered);
 
         System.Diagnostics.Debug.Assert(
             lowered.All(o => o.Kind is not (IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock
@@ -135,6 +217,56 @@ internal static class IrCompositeMerger
         // Note scopes (footnotes/endnotes) are not part of body grouping; the composite path does not yet
         // compose them across reviewers, so they pass through unchanged (parity with the pre-lowering shape).
         return new IrEditScript(IrNodeList.From(lowered), script.NoteOps);
+    }
+
+    /// <summary>
+    /// Append the lowered form of ONE structural op (Move/MoveModify/Split/Merge) — or the op itself for any
+    /// other kind — to <paramref name="sink"/>, per the lowering rules documented on
+    /// <see cref="LowerStructuralOps"/>. Shared by <see cref="LowerStructuralOps"/> (lowers everything) and
+    /// <see cref="ApplyMovePlan"/> (lowers only the move groups the plan did NOT select for native rendering,
+    /// plus every Split/Merge).
+    /// </summary>
+    private static void LowerOneStructuralOp(IrEditOp op, List<IrEditOp> sink)
+    {
+        switch (op.Kind)
+        {
+            case IrEditOpKind.MoveBlock:
+            case IrEditOpKind.MoveModifyBlock:
+                if (op.IsMoveSource == true)
+                    // Lower the move SOURCE to a DeleteBlock, but RETAIN MoveGroupId/IsMoveSource as a
+                    // marker that this delete is a RELOCATION (the block is reinserted elsewhere by the
+                    // same reviewer), not a plain removal. The renderer/verifier/json dispatch on Kind
+                    // (DeleteBlock), so the retained fields are inert there; the merger reads them to
+                    // distinguish a contested move (2+ reviewers relocate the same base block to
+                    // different places) from a consensus removal — see MergeOneBaseBlock.
+                    sink.Add(new IrEditOp(IrEditOpKind.DeleteBlock, op.LeftAnchor, null, null,
+                        op.MoveGroupId, IsMoveSource: true));
+                else
+                    sink.Add(new IrEditOp(IrEditOpKind.InsertBlock, null, op.RightAnchor, null, null, null));
+                break;
+
+            case IrEditOpKind.SplitBlock:
+                // One left base paragraph fans out into N right segments: delete the base block, then
+                // insert each right segment in order at this position.
+                sink.Add(new IrEditOp(IrEditOpKind.DeleteBlock, op.LeftAnchor, null, null, null, null));
+                if (op.SplitMergeAnchors is { } splitRights)
+                    foreach (var rightAnchor in splitRights)
+                        sink.Add(new IrEditOp(IrEditOpKind.InsertBlock, null, rightAnchor, null, null, null));
+                break;
+
+            case IrEditOpKind.MergeBlock:
+                // N left base paragraphs fuse into one right paragraph: delete each consumed left block
+                // in order, then insert the merged right result.
+                if (op.SplitMergeAnchors is { } mergeLefts)
+                    foreach (var leftAnchor in mergeLefts)
+                        sink.Add(new IrEditOp(IrEditOpKind.DeleteBlock, leftAnchor, null, null, null, null));
+                sink.Add(new IrEditOp(IrEditOpKind.InsertBlock, null, op.RightAnchor, null, null, null));
+                break;
+
+            default:
+                sink.Add(op);
+                break;
+        }
     }
 
     /// <summary>
@@ -719,11 +851,15 @@ internal static class IrCompositeMerger
             : op;
 
     /// <summary>
-    /// Index every reviewer's right-only <see cref="IrEditOpKind.InsertBlock"/> op by the base anchor it
-    /// FOLLOWS — the <see cref="IrEditOp.LeftAnchor"/> of the most recent non-insert op in that reviewer's
-    /// script (or "" for inserts at the very top, before any base block). The composite emitter slots each
-    /// reviewer's inserts immediately after that anchor (<see cref="EmitInsertsAt"/>), so two reviewers both
-    /// inserting after the same base block both appear, attributed, with no conflict.
+    /// Index every reviewer's RIGHT-POSITIONED op — a right-only <see cref="IrEditOpKind.InsertBlock"/> OR a
+    /// NATIVE move DESTINATION (<see cref="IrEditOpKind.MoveBlock"/>/<see cref="IrEditOpKind.MoveModifyBlock"/>
+    /// with <see cref="IrEditOp.IsMoveSource"/> false) — by the base anchor it FOLLOWS: the
+    /// <see cref="IrEditOp.LeftAnchor"/> of the most recent left-anchored op in that reviewer's script (or ""
+    /// for ops at the very top, before any base block). The composite emitter slots each reviewer's
+    /// right-positioned ops immediately after that anchor (<see cref="EmitInsertsAt"/>), so two reviewers both
+    /// adding after the same base block both appear, attributed, with no conflict. A native move DESTINATION
+    /// carries a null left anchor (like an insert), so the existing preceding-anchor tracking already
+    /// positions it; <see cref="EmitInsertsAt"/> emits it via <see cref="EmitOp"/> intact (move fields kept).
     /// </summary>
     internal static Dictionary<string, List<(int Reviewer, IrEditOp Op)>> GroupInsertsByPrecedingAnchor(
         IReadOnlyList<IrEditScript> scripts)
@@ -734,7 +870,10 @@ internal static class IrCompositeMerger
             string preceding = "";
             foreach (var op in scripts[i].Operations)
             {
-                if (op.Kind == IrEditOpKind.InsertBlock)
+                bool isRightPositioned = op.Kind == IrEditOpKind.InsertBlock
+                    || (op.Kind is IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock
+                        && op.IsMoveSource == false);
+                if (isRightPositioned)
                 {
                     if (!map.TryGetValue(preceding, out var list)) map[preceding] = list = new();
                     list.Add((i, op));
