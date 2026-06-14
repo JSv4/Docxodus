@@ -265,6 +265,14 @@ namespace Docxodus
         /// </summary>
         public bool GeneratePageCss;
 
+        /// <summary>
+        /// When true, stamp block-level HTML elements (p, h1-h6, li, table) with a
+        /// <c>data-anchor</c> attribute carrying the source element's PtOpenXml:Unid.
+        /// Enables client-side addressing of blocks (editor incremental re-render).
+        /// Source elements must already carry Unids. Default: false.
+        /// </summary>
+        public bool StampAnchors;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -299,6 +307,7 @@ namespace Docxodus
             DocumentLanguage = null;
             ResolveThemeColors = true;
             GeneratePageCss = false;
+            StampAnchors = false;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -4547,6 +4556,9 @@ namespace Docxodus
                 // new XAttribute("cellpadding", 0),
                 tableDirection,
                 isBorderless ? new XAttribute("data-borderless", "true") : null,
+                settings.StampAnchors && (string)element.Attribute(PtOpenXml.Unid) != null
+                    ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid))
+                    : null,
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
             table.AddAnnotation(style);
             var jc = (string)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
@@ -5019,6 +5031,9 @@ namespace Docxodus
             var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
             var rtl = isBidi ? new XAttribute("dir", "rtl") : new XAttribute("dir", "ltr");
             var firstMark = isBidi ? new XEntity("#x200f") : null;
+            var anchorAttr = settings.StampAnchors && (string)paragraph.Attribute(PtOpenXml.Unid) != null
+                ? new XAttribute("data-anchor", (string)paragraph.Attribute(PtOpenXml.Unid))
+                : null;
 
             // Analyze initial runs to see whether we have a tab, in which case we will render
             // a span with a defined width and ignore the tab rather than rendering the text
@@ -5043,6 +5058,7 @@ namespace Docxodus
                 var paraElement1 = new XElement(elementName,
                     rtl,
                     firstMark,
+                    anchorAttr,
                     ConvertContentThatCanContainFields(wordDoc, settings, paragraph.Elements()));
                 paraElement1.AddAnnotation(style);
                 return paraElement1;
@@ -5055,6 +5071,7 @@ namespace Docxodus
             var paraElement = new XElement(elementName,
                 rtl,
                 firstMark,
+                anchorAttr,
                 txElementsPrecedingTab,
                 ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab));
             paraElement.AddAnnotation(style);
