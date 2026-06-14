@@ -67,7 +67,24 @@ faithfully out of whole-document context?*) is now **proven yes**, at two levels
   (the oracle), across up to 12 paragraphs/headings per doc.
 - **Browser / WASM (`npm/tests/render-block.spec.ts`)** — the same equivalence holds
   across the real WASM boundary in Chromium, using the actual DOM — i.e. the editor's
-  incremental per-block re-render path, verified end-to-end.
+  incremental per-block re-render path.
+- **Full editor loop (browser, same spec)** — open `DocxSession` → `Project` → edit a
+  body paragraph via `ReplaceText` → re-render **only that block** from the live session
+  (`DocxSessionBridge.RenderBlockHtml`) → the edit is visible in the re-rendered block.
+  The complete incremental round-trip, proven in Chromium.
+
+**One Unid scheme, confirmed.** `convertDocxToHtml`(stampAnchors) ↔ `DocxSession` ↔
+`RenderBlock` all derive anchors from `AssignToAllElementsDeterministic` over the raw
+main-document root, so a full-render `data-anchor` resolves unchanged on the live session
+path (`HCO052`). A DOM block's anchor is a valid session/render anchor.
+
+**Latency (measured, `HCO052`, HC031 — a complex 42 KB doc, 20 blocks):**
+- stateless `RenderBlockHtml(bytes,…)`: **26.5 ms/block**
+- session-attached `RenderBlockHtml(session,…)`: **10.4 ms/block (2.55×)** — resolves
+  against the live document, no byte re-open / whole-doc Unid pass.
+- Both are **~70–230× faster** than the ~0.7–2.4 s full `convertDocxToHtml` baseline, and
+  well under the <150 ms/edit target. The session-attached path is committed and exposed
+  through WASM/npm (`DocxSession.renderBlock`).
 
 What was built to clear it (committed):
 - `WmlToHtmlConverterSettings.StampAnchors` → stamps `data-anchor=Unid` on
@@ -86,9 +103,12 @@ Findings / refinements vs the original design:
   with the **identical call** (`AssignToAllElementsDeterministic` over the main-document
   root); `RenderBlockHtml` then resolves by the `Unid` attribute directly (keying on the
   anchor's unid tail, so a bare unid or a full `kind:scope:unid` both work).
-- **`data-anchor` carries the bare unid** today; the editor passes it straight back to
-  `renderBlockHtml`. (If DocxSession-style `kind:scope:unid` is wanted in the DOM later,
-  stamp the full id — `RenderBlockHtml` already accepts both.)
+- **`data-anchor` carries the bare unid** today. `renderBlock`/`renderBlockHtml` accept it
+  (they key on the unid tail), but DocxSession *edit* ops (`ReplaceText`, etc.) require the
+  full `kind:scope:unid`, so the editor maps bare unid → full id via the session projection
+  index (cheap — same Unid scheme, suffix match; exercised in the editor-loop test).
+  **Plan 2 refinement:** stamp the full `kind:scope:unid` into `data-anchor` so DOM blocks
+  are directly DocxSession-addressable with no mapping step.
 - **Confirmed degradations (acceptable PoC limits, see §8):** a list item rendered in
   isolation loses numbering *continuation*; an inline image loses its (uncopied) image
   part. The oracle test targets text paragraphs/headings and skips image blocks.
