@@ -856,7 +856,13 @@ internal static class IrMarkupRenderer
             newRow.Add(newCell);
         }
 
-        state.RegisterMediaReferences(newRow);
+        // No whole-row media registration here (unlike the two-way RenderModifyRow): each reviewer-sourced
+        // cell-block already registered its own media clones under the CORRECT per-cell RightSourceId inside
+        // RenderOneCompositeBlock, and base-passthrough cells reference base parts already present in the
+        // output package (the assembly clones the base package). A whole-row catch-all would (a) double-register
+        // those reviewer clones and (b) bucket them under whatever RightSourceId is left over after the per-cell
+        // restore (typically base/-1 or an unrelated reviewer), so a cell image could be skipped or imported from
+        // the WRONG reviewer's package on an r:id collision.
         newTbl.Add(newRow);
     }
 

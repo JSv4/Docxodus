@@ -183,6 +183,10 @@ public sealed class DocxDiffConflict
     /// <summary>
     /// The <c>kind:scope:unid</c> anchor of the base paragraph where the conflict occurs, in the base
     /// document passed to the consolidate call.
+    /// For a BLOCK-LEVEL conflict (empty token interval, <see cref="TokenStart"/> == <see cref="TokenEnd"/>),
+    /// BaseAnchor is the contested block's anchor — which may be a table (<c>tbl:</c>) or row (<c>tr:</c>)
+    /// anchor not present in a paragraph anchor index; token-level conflicts carry a <c>p:</c> anchor that
+    /// resolves in the projection/AnchorIndex.
     /// </summary>
     public string BaseAnchor { get; }
 

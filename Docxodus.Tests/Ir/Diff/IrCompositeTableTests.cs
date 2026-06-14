@@ -1,8 +1,12 @@
 #nullable enable
 
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
+using Docxodus.Ir;
 using Docxodus.Tests.Ir;
 using Xunit;
 
@@ -569,6 +573,155 @@ public class IrCompositeTableTests
             new (string, WmlDocument)[] { ("Alice", scAlice), ("Bob", scBob) },
             policy,
             Docs.AcceptStructuralBody(scMerged));
+    }
+
+    // ------------------------------------------------------------------ 16. image in a composed cell
+
+    private const string ANs = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    private const string RNs = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+    /// <summary>An inline-picture <c>w:drawing</c> whose <c>a:blip</c> references <paramref name="embedId"/>
+    /// (mirrors the shape <c>IrNoteImageSdtTests.Drawing</c> uses).</summary>
+    private static string Drawing(string embedId) =>
+        "<w:drawing>" +
+          "<wp:inline>" +
+            "<wp:extent cx=\"100\" cy=\"100\"/>" +
+            "<wp:docPr id=\"1\" name=\"Picture 1\"/>" +
+            "<a:graphic><a:graphicData>" +
+              "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">" +
+                $"<pic:blipFill><a:blip r:embed=\"{embedId}\"/></pic:blipFill>" +
+              "</pic:pic>" +
+            "</a:graphicData></a:graphic>" +
+          "</wp:inline>" +
+        "</w:drawing>";
+
+    /// <summary>A distinct tiny PNG: the shared <see cref="IrTestDocuments.TinyPng"/> bytes with the final
+    /// byte replaced by <paramref name="tag"/>, so each reviewer's inserted image has DIFFERENT bytes even
+    /// though both embed under the SAME rel id <c>rId51</c> in their respective (independent) packages — the
+    /// cross-package rel-id COLLISION the stale whole-row media bucket mis-resolves.</summary>
+    private static byte[] TaggedPng(byte tag)
+    {
+        var b = (byte[])IrTestDocuments.TinyPng.Clone();
+        b[b.Length - 1] = tag;
+        return b;
+    }
+
+    private static byte[] AlicePng => TaggedPng(0xA1);   // Alice inserts this into cell(0,0)
+    private static byte[] BobPng => TaggedPng(0xB2);      // Bob inserts this into cell(0,1)
+
+    /// <summary>An image-only paragraph embedding the SAME rel id <c>rId51</c> (so two reviewers' packages
+    /// collide on that id while holding different bytes).</summary>
+    private static string ImagePara() => $"<w:p><w:r>{Drawing("rId51")}</w:r></w:p>";
+
+    /// <summary>A 2x2 table; row 0 cell(0,0) appends <paramref name="c00Extra"/>, cell(0,1) appends
+    /// <paramref name="c01Extra"/> after a single base text paragraph; row 1 is plain text. (An inserted
+    /// image lives in its OWN appended paragraph so it renders as a whole-block insert that round-trips —
+    /// a trailing inline image inside an edited text paragraph is a separate, pre-existing slice concern.)</summary>
+    private static string ImageCellTableBody(string c00Extra, string c01Extra) =>
+        Lead +
+        "<w:tbl><w:tblPr/><w:tblGrid/>" +
+          "<w:tr>" +
+            $"<w:tc><w:p><w:r><w:t xml:space=\"preserve\">logo</w:t></w:r></w:p>{c00Extra}</w:tc>" +
+            $"<w:tc><w:p><w:r><w:t xml:space=\"preserve\">pic</w:t></w:r></w:p>{c01Extra}</w:tc>" +
+          "</w:tr>" +
+          Row(Cell("c three"), Cell("d four")) +
+        "</w:tbl>";
+
+    /// <summary>
+    /// #16 — Image in a COMPOSED cell, cross-reviewer same-row, colliding rel id. Base row 0 is plain text in
+    /// both cells. Alice (the FIRST table-toucher → the composed-table op's leftover <c>RightSourceId</c> = 0)
+    /// appends an image paragraph (<see cref="AlicePng"/>) to cell(0,0); Bob appends an image paragraph
+    /// (<see cref="BobPng"/>) to cell(0,1) — BOTH embedding the SAME id <c>rId51</c> in their independent
+    /// packages. The two disjoint cells fall in ONE composed ModifyRow whose cells are sourced from DIFFERENT
+    /// reviewers. With the (removed) buggy whole-row registration, Bob's image clone — correctly bucketed to
+    /// reviewer 1 inside the per-cell render — was RE-registered under the leftover reviewer-0 (Alice) bucket;
+    /// the bucket-0 import (which runs FIRST: buckets are key-ordered) then resolved Bob's clone's
+    /// <c>rId51</c> against ALICE's package and pulled <see cref="AlicePng"/> into Bob's cell — a WRONG image
+    /// that still resolves to a valid part. This pins the per-cell-only registration: every output embed
+    /// resolves to an ImagePart whose bytes are the EXPECTED per-cell image (resolved set ==
+    /// {AlicePng, BobPng}, not a collapsed {AlicePng}); accept keeps both edits + both correct images; reject
+    /// ≡ base (both image inserts gone).
+    /// </summary>
+    [Theory]
+    [InlineData(ConflictResolution.FirstReviewerWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void Image_in_composed_cell_resolves_to_correct_per_cell_part(ConflictResolution policy)
+    {
+        var baseDoc = IrTestDocuments.FromBodyXmlWithImageParts(ImageCellTableBody("", ""));
+        var alice = IrTestDocuments.FromBodyXmlWithImageParts(
+            ImageCellTableBody(ImagePara(), ""), ("rId51", AlicePng));   // image into cell(0,0)
+        var bob = IrTestDocuments.FromBodyXmlWithImageParts(
+            ImageCellTableBody("", ImagePara()), ("rId51", BobPng));     // image into cell(0,1)
+
+        // Disjoint cells (same row) compose: no conflict.
+        Assert.Empty(Conflicts(baseDoc, policy, ("Alice", alice), ("Bob", bob)));
+
+        var merged = Consolidate(baseDoc, policy, ("Alice", alice), ("Bob", bob));
+
+        // (1) Opens cleanly; every body embed resolves to a real ImagePart in the OUTPUT package.
+        AssertAllEmbedsResolve(merged);
+
+        // (2) Accept keeps both reviewers' image inserts AND both correct per-cell images.
+        var accepted = RevisionAccepter.AcceptRevisions(merged);
+        AssertAllEmbedsResolve(accepted);
+        // The two row-0 cells keep their OWN images: the set of resolved image-byte hashes is exactly
+        // {AlicePng, BobPng}. The buggy whole-row bucket pulled Alice's bytes into Bob's cell → {AlicePng}
+        // only (a single hash), which this set-equality catches.
+        Assert.Equal(
+            new HashSet<IrHash> { IrHash.Compute(AlicePng), IrHash.Compute(BobPng) },
+            ResolvedImageHashes(accepted));
+
+        // (3) reject ≡ base (both image inserts removed → no embeds).
+        var rejected = RevisionProcessor.RejectRevisions(merged);
+        Assert.Equal(Docs.StructuralBody(baseDoc), Docs.StructuralBody(rejected));
+        Assert.Empty(BodyEmbedIds(rejected));
+    }
+
+    /// <summary>Open the doc and assert every <c>a:blip/@r:embed</c> in the main part body resolves to an
+    /// <see cref="ImagePart"/> reachable from the main part by that relationship id.</summary>
+    private static void AssertAllEmbedsResolve(WmlDocument d)
+    {
+        using var ms = new MemoryStream(d.DocumentByteArray);
+        using var wDoc = WordprocessingDocument.Open(ms, false);
+        var main = wDoc.MainDocumentPart;
+        Assert.NotNull(main);
+
+        var embeds = BodyEmbedIds(d);
+        Assert.NotEmpty(embeds);   // the fixture always carries an image
+        foreach (var embedId in embeds)
+        {
+            var rel = main!.GetPartById(embedId);
+            Assert.IsType<ImagePart>(rel);
+        }
+    }
+
+    /// <summary>Distinct <c>a:blip/@r:embed</c> ids in the main part body.</summary>
+    private static List<string> BodyEmbedIds(WmlDocument d) =>
+        XDocument.Parse(Docs.MainPartXml(d))
+            .Descendants((XNamespace)ANs + "blip")
+            .Select(b => b.Attribute((XNamespace)RNs + "embed")?.Value)
+            .Where(v => !string.IsNullOrEmpty(v))
+            .Select(v => v!)
+            .Distinct()
+            .ToList();
+
+    /// <summary>The set of content hashes of the ImageParts that the body's embeds resolve to in the OUTPUT
+    /// package (so a wrong-package import is caught by the bytes, not just by part existence).</summary>
+    private static HashSet<IrHash> ResolvedImageHashes(WmlDocument d)
+    {
+        using var ms = new MemoryStream(d.DocumentByteArray);
+        using var wDoc = WordprocessingDocument.Open(ms, false);
+        var main = wDoc.MainDocumentPart!;
+        var hashes = new HashSet<IrHash>();
+        foreach (var embedId in BodyEmbedIds(d))
+        {
+            var part = (ImagePart)main.GetPartById(embedId);
+            using var s = part.GetStream(FileMode.Open, FileAccess.Read);
+            using var mem = new MemoryStream();
+            s.CopyTo(mem);
+            hashes.Add(IrHash.Compute(mem.ToArray()));
+        }
+        return hashes;
     }
 
     // ------------------------------------------------------------------ helpers
