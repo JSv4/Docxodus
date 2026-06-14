@@ -1,0 +1,319 @@
+# IR-Powered DOCX Editor — Feasibility & PoC Design
+
+Status: **Design / feasibility** (pre-implementation). Target deliverable of the
+first effort is a written feasibility spec (this document) plus a **focused,
+runnable proof-of-concept** that turns "could we?" into a measured yes/no.
+
+Branch: `feat/ir-editor-feasibility-poc`.
+
+---
+
+## 1. Summary / verdict
+
+**Can the Docxodus IR power a performant, format-faithful browser DOCX editor
+that "renders pages and populates with editable blocks"? Yes — but not in the
+literal framing.** A source-level scan (verified with file/line citations)
+establishes that the IR (`Docxodus/Ir/`) is the **wrong layer to be the
+editor's model-of-record**, while the surrounding stack already provides ~80% of
+an editor:
+
+- The IR has **no IR→OOXML writer** anywhere (`IrWriter`/`IrToWml`/`EmitOoxml`
+  grep-empty). The only emitter is `IrMarkdownEmitter`. You cannot edit an
+  `IrDocument` and serialize a valid `.docx` from it.
+- The diff engine proves the model: `IrMarkupRenderer`
+  (`Docxodus/Ir/Diff/IrMarkupRenderer.cs:108-163`) builds tracked-changes output
+  by **re-reading the source documents and cloning the original `w:p`/`w:tbl`
+  XML via `IrProvenance`** — never by serializing the IR. The IR carries
+  *alignment/anchors*; the original OOXML carries *fidelity*.
+- The IR is `internal`/experimental, **immutable** (sealed records, no mutation
+  API), and deliberately **lossy**: unmodeled run/paragraph/section properties
+  survive only as one-way `UnmodeledDigest` hashes; math/charts/SmartArt/VML are
+  `IrOpaqueInline` (hash only); `IrOpaqueBlock` is `ElementName` + hash; images
+  keep only bytes-hash + EMU extent + alt.
+
+The right architecture is therefore **Option B** (see §11): the live
+`DocxSession` (real OOXML, mutated in place, lossless `Save()`) is the
+model-of-record; `WmlToHtmlConverter` + the existing `npm/src/pagination.ts`
+engine are the render substrate; and the `{#kind:scope:unid}` anchor system is
+the addressing/diff overlay only.
+
+The **two real gaps** (not the IR) that stand between this stack and a
+responsive editor:
+
+1. **Incremental rendering.** Every `DocxSession` mutation re-projects the whole
+   document (`DocxSession.cs:4184` `ProjectScope` runs
+   `WmlToMarkdownConverter.Convert` over the entire doc; `MarkdownPatch` carries
+   whole-doc markdown), and getting an edit *on screen* requires a full
+   `convertDocxToHtml` re-conversion (~0.7–2.4s). There is **no per-block HTML
+   patch path** for content edits today.
+2. **Worker offload.** The full editing surface is **main-thread-only**; the Web
+   Worker exposes only convert/compare/metadata + annotation ops.
+
+The **page-fidelity ceiling** is honest and inherent: DOCX is *reflowable*
+(Word computes layout at render time; nothing is stored), and there is **no
+layout engine** in this stack. `pagination.ts` delivers *block-flow* pages
+(paragraphs/tables flow whole; cannot split mid-line; page counts ≈ Word, not
+exact; font-dependent). True line-exact WYSIWYG would require integrating an
+external renderer (e.g. LibreOffice headless) and is explicitly out of scope.
+
+## 2. Locked decisions
+
+| Decision | Choice | Consequence |
+|---|---|---|
+| Page model | **Block-flow paginated** | Real page boxes via `pagination.ts`; no external renderer needed. |
+| Save fidelity | **Lossless round-trip** | `DocxSession`'s live OOXML is the *only* viable model-of-record (the lossy IR/markdown cannot round-trip arbitrary docs). |
+| Primary use | **Both** (review/redline + authoring) | Tracked-changes (`RenderInline`) available but optional; edit model is **per-block, debounce-committed** (serves both; avoids per-keystroke-through-WASM). |
+| Collaboration | **Single-user now, don't foreclose collab** | Build single-user; design the edit-event model so a CRDT/OT layer could sit on the anchor ops later. |
+| Deliverable | **Feasibility spec + focused PoC** | This doc + a runnable harness that de-risks the hard parts. |
+
+## 3. Key findings (source-verified)
+
+### 3.1 The IR is addressing/diff, not a save model
+See §1. The lossless fidelity source is the *retained original XML*
+(`IrProvenance.Element`, only when `RetainSources=true`) — i.e. the OOXML, not
+the IR. An editor that mutated the IR alone would have no save path.
+
+### 3.2 `DocxSession` is the real edit backend (and already WASM-surfaced)
+`Docxodus/DocxSession.cs` is a stateful, transactional, anchor-addressed
+mutation API over a live `WordprocessingDocument`:
+
+- Tiers A–E: text CRUD, structural (`SplitParagraph`/`MergeParagraphs`/
+  `InsertParagraph`), formatting (`ApplyFormat`/`SetParagraphStyle`/
+  `SetListLevel`), cell content (`ReplaceCellContent`), annotations.
+- Each op mutates the in-memory XML **in place** (single-digit ms), takes a
+  pre-op snapshot for atomic rollback, and returns a typed `EditResult`
+  (`Success`, `EditError(code,…)`, `Created`/`Removed`/`Modified` anchor lists,
+  `MarkdownPatch`).
+- Bounded undo/redo (`UndoRing`, depth 50), tracked-changes `RenderInline` mode
+  (edits land as `w:ins`/`w:del` with author attribution), and a `Raw.*`
+  OOXML escape hatch.
+- Surfaced over WASM via `DocxSessionBridge` (int handle pool) and consumed by
+  `npm/src/session.ts`.
+
+**Granularity that works: per-block transactions** (paragraph/cell), committed
+on blur or a debounced typing burst coalesced into one `ReplaceTextAtSpan`.
+Per-keystroke is not viable through the WASM/projection path.
+
+### 3.3 The anchor/Unid spine
+`{#kind:scope:unid}` (`IrAnchor.cs`, public `Anchor` in
+`WmlToMarkdownConverter.cs`) is shared across read (markdown), write
+(`DocxSession`), and diff (`DocxDiff` `leftAnchor`/`rightAnchor`). Unids are
+content-addressable (SHA over content+position, `UnidHelper.cs`), so **sibling
+blocks stay stable when one block is edited** — but the **edited block's own
+Unid changes** (it hashes its text), freshly-inserted/split blocks get **random
+Guids**, and `Save()` **strips Unids by default** (`PersistAnchorIds=false`).
+Implication: an editor must key React on a **client-side stable id**, not the
+raw Unid (see §6.3).
+
+### 3.4 Render assets that already exist
+- `WmlToHtmlConverter` (~8k lines): style-cascade→CSS, Word-faithful for the
+  common ~80% (runs, tables with border resolution, lists, headings, theme
+  colors, `@page` CSS). **Does not stamp `data-anchor` today** (references Unid
+  0 times) — an additive change is needed.
+- `npm/src/pagination.ts` (1412 lines): a working client-side pagination engine
+  — measures rendered blocks via `getBoundingClientRect`, flows them into fixed
+  page boxes with margin-collapsing, keep-with-next, header/footer registry, and
+  footnote splitting/continuation. `<PaginatedDocument>` wires it up.
+- `DocxSession.GetSectionInfo(anchor)` → true page setup (size, margins,
+  landscape, columns, header/footer part URIs) — the page-box frame to draw.
+- `ExternalAnnotationProjector` proves an *incremental DOM-patch loop* is
+  possible (0.3ms single-add) — though it addresses by fragile text-search and
+  re-parses the whole HTML string per op.
+
+### 3.5 The page-fidelity ceiling
+No glyph metrics / line-box / line-breaking / page-breaking in C#/IR. The only
+place a block acquires a real position is `pagination.ts` (the browser does the
+line breaking). PAWLS token X/Y/W/H from `OpenContractExporter` are **fabricated**
+(6pt/char, 12pt/line) — decorative, never to be aligned to a rendered view. Page
+counts from every C# API are heuristic estimates. Computed layout is
+browser-only and one-way; nothing persists page/line geometry back to the doc.
+
+## 4. Target architecture (Option B)
+
+**Hard invariant: the DOM is a projection; the in-WASM `DocxSession` is the only
+source of truth.** Optimistic local edits are always reconciled against the
+authoritative re-render; the worker wins.
+
+```
+┌─────────────────────────── Main thread (React) ───────────────────────────┐
+│  Editor shell ──▶ Page list ──▶ Block views (contenteditable, data-anchor) │
+│      ▲                                   │ edit-intent (debounced/on blur)  │
+│      │ {anchorId, html, editResult}      ▼                                  │
+│  Anchor↔stable-key registry        postMessage                             │
+│  Paginator (pagination.ts)              │                                   │
+└─────────────────────────────────────────┼──────────────────────────────────┘
+                                           ▼
+┌──────────────────────── Web Worker (WASM) ─────────────────────────────────┐
+│  Editor worker service                                                      │
+│    DocxSession (live OOXML = model-of-record, lossless Save)                │
+│    apply op → EditResult (Created/Removed/Modified)                         │
+│    RenderBlockHtml(anchor) → faithful HTML for one block   ◀── NEW          │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Layers**
+
+| Layer | What | Where |
+|---|---|---|
+| Model-of-record | Live `DocxSession`; real bytes mutated in place; lossless `Save()` | WASM, in Worker |
+| Addressing spine | `{#kind:scope:unid}`; every editable block carries `data-anchor` | shared |
+| Render substrate | `WmlToHtmlConverter` → faithful HTML; **new `data-anchor` stamp** | C# (additive) |
+| Pagination | `pagination.ts` flows blocks into page boxes | TS, main thread |
+| Incremental render | **new `RenderBlockHtml(anchor)`**; patch only that DOM node | C# + TS |
+| Edit surface | React; per-block `contenteditable`; debounce-committed | TS, main thread |
+
+**Data flow for one edit**
+
+1. User types in a block → optimistic local DOM update (caret preserved).
+2. On commit (debounce ~300ms / blur) → main thread posts an edit-intent to the
+   worker (anchor + op + args).
+3. Worker applies the `DocxSession` op → `EditResult`
+   (`Created`/`Removed`/`Modified`).
+4. Worker calls `RenderBlockHtml` on the affected block(s) → posts
+   `{anchorId, html, editResult}` back.
+5. Main thread reconciles: swap the block's subtree, update the
+   stable-key↔unid map from `EditResult`, re-paginate from the affected page
+   forward.
+
+Reconciliation uses `EditResult` deltas + the render-block path; it **does not
+depend on `MarkdownPatch`** (whole-doc re-projection).
+
+## 5. The three hard problems & de-risking
+
+1. **Incremental per-block render** (gap #1, biggest unknown). Build
+   `RenderBlockHtml(anchor)`: run the converter pipeline over a single block's
+   XML subtree with styles/numbering context resolved once. **Risk:** the
+   converter assumes whole-doc context (styles, numbering, sectPr). Mitigation:
+   resolve styles/numbering once at session/render-context construction and
+   render the block element against the already-fabricated CSS classes.
+   **Fallback baseline to beat:** full `convertDocxToHtml` + DOM-diff by
+   `data-anchor` (cheaper to build, ~1s/edit — too slow, used only as the
+   measurement baseline).
+2. **Worker offload** (gap #2). Extend `docxodus.worker.ts` + `worker-proxy.ts`
+   (or a new `editor.worker.ts`) to carry the content-editing `DocxSession` ops
+   (`replaceText`/`applyFormat`/`split`/`merge`/`replaceCellContent`/`save`/
+   `undo`/`redo`) plus the new render-block op, so editing never blocks the UI.
+3. **Anchor stability / React keys** (§3.3). Maintain a **client-side stable
+   block key** (a GUID per block assigned at first render) mapped to the
+   *current* Unid, updated from `EditResult.Created`/`Removed`/`Modified`. React
+   keys = the stable key, never the Unid → the actively-typed block never
+   remounts (caret preserved). Reconciliation must be correct across
+   split/merge (a split produces one `Modified` + one `Created`; a merge
+   produces one `Modified` + one `Removed`).
+
+Plus **incremental re-pagination**: after a block changes height, re-paginate
+from the affected page forward. `pagination.ts` measures via the live DOM (no
+WASM); for the PoC a full re-paginate is acceptable to measure, with
+forward-only incremental reflow as a follow-up.
+
+## 6. PoC scope — the runnable yes/no
+
+A minimal React harness (served from the npm build / Playwright-driveable) that:
+
+1. Loads a real, non-trivial `.docx` from `TestFiles/` — one with headings, a
+   list, a table, headers/footers, and ideally an **unmodeled construct** (text
+   box / equation / SmartArt) to test lossless save.
+2. Renders it **block-flow paginated** (`WmlToHtmlConverter` + `pagination.ts`)
+   with `data-anchor` on every block.
+3. Makes 3 representative edits via `DocxSession` in the worker:
+   - **text** edit in a paragraph (`ReplaceTextAtSpan`),
+   - **format** toggle (bold on a span, `ApplyFormat`),
+   - **structural** edit (`SplitParagraph` or `InsertParagraph`).
+4. **Incrementally re-renders only the changed block(s)** and re-paginates —
+   measuring per-edit visible-update latency.
+5. **Verifies lossless save**: reopen `Save()` bytes, assert untouched/unmodeled
+   content is byte-preserved and the edits landed.
+6. (Optional) toggles tracked-changes (`RenderInline`) and shows `w:ins`/`w:del`.
+
+### 6.1 Success criteria (= the feasibility verdict, made runnable)
+
+- Per-edit visible update **materially beats** full re-convert (target
+  **<150ms** vs ~1s baseline).
+- **Lossless save verified** on a doc containing unmodeled content.
+- **Caret preserved** across an edit (stable-key reconciliation works).
+- Block-flow pages render recognizably (margins / headers & footers / page
+  boxes).
+
+If these hold → "yes, and here is the architecture + measured costs." If
+incremental render cannot be made fast *and* faithful → that is the documented,
+honest "not yet."
+
+### 6.2 Non-goals (YAGNI for this pass)
+
+Line-exact WYSIWYG / mid-paragraph page splits; table structure editing
+(insert/delete rows/cols, cell merge), image insert, footnote/comment creation
+(no write API — viewable only); collaboration/CRDT; a full formatting toolbar or
+style picker; optimizing `ProjectScope`. The edit-event model is designed so a
+CRDT/OT layer *could* sit on the anchor ops later, but none is built now.
+
+### 6.3 Anchor/key handling (explicit, because it is a known trap)
+
+- React `key` = client-side stable GUID, assigned per block at first render.
+- A `Map<stableKey, currentUnid>` and reverse index are updated on every
+  `EditResult`.
+- The actively-edited block keeps its stable key even though its Unid changes —
+  no remount, caret intact.
+- `Save()` is called with default `PersistAnchorIds=false` (no bloat); on reopen,
+  anchors are re-derived deterministically and the editor re-attaches by
+  re-projection. (Persisting ids is an opt-in follow-up, not in the PoC.)
+
+## 7. Units & boundaries (isolated, testable)
+
+- **`RenderBlockHtml` bridge** — *new* C#: a method on the HTML-conversion facade
+  (`Docxodus/Internal/HtmlConversionOps.cs`) + a `DocumentConverter`/session WASM
+  `[JSExport]`: `(sessionHandle | bytes, anchor) → html`. The *one* substantive
+  new C# surface. Plus an additive `data-anchor=Unid` stamp on block elements in
+  `WmlToHtmlConverter`.
+- **Editor worker service** (`editor.worker.ts`) — owns the session; message
+  contract for open / edit-ops / render-block / save / undo. Testable via its
+  message protocol.
+- **Anchor↔stable-key registry** (TS, pure) — consumes `EditResult` deltas;
+  unit-testable in isolation.
+- **Block view** (React) — renders one block's HTML, `contenteditable`, emits
+  edit intents.
+- **Paginator** — existing `pagination.ts`, lightly extended for incremental
+  reflow.
+- **Editor shell** (React) — orchestrates the page/block list and the worker
+  round-trip.
+
+Per the repo's single-owner-facade convention, any new cross-boundary surface
+(`RenderBlockHtml`) lands in its `*Ops` facade first, then ripples to the WASM
+bridge + TS client.
+
+## 8. Risks & unknowns the PoC will settle
+
+- **Single-block faithful render out of whole-doc context** (the big one —
+  styles, numbering continuation, list markers, sectPr).
+- **Incremental re-pagination cost** and correctness across page boundaries.
+- **Worker round-trip overhead** per edit (postMessage + JSON + WASM).
+- **Stable-key reconciliation correctness** across split/merge.
+- Converter fidelity holes (text boxes dropped, math/charts/SmartArt opaque,
+  most field codes) → these render as holes; the editor must treat them as
+  viewable-not-editable and must never silently drop them on save (lossless save
+  via `DocxSession` guarantees this, since the bytes are never round-tripped
+  through the lossy projection).
+
+## 9. Appendix — architecture options considered
+
+| Option | Verdict | Why |
+|---|---|---|
+| **A. IR as model-of-record** | ❌ Fatal | No IR→OOXML writer; IR is immutable + lossy + internal. No save path. |
+| **B. HTML-render + anchor-addressed edit overlay** | ✅ **Chosen** | Reuses the converter (fidelity) + `pagination.ts` (pages) + `DocxSession` (lossless transactional edits); IR/anchors as addressing only. |
+| **C. DocxSession-backed galley/markdown blocks** | Stepping stone | Lowest-friction (public + WASM today) but lossy text view, no pages — contradicts the block-flow-paginated requirement. Useful as an even-smaller fallback if §6 stalls. |
+| **D. True paginated WYSIWYG** | ❌ Out of scope | Needs a layout engine that exists nowhere here; realistically an external-renderer integration. |
+
+## 10. References (cited source)
+
+- IR core & no-writer: `Docxodus/Ir/IrDocument.cs`, `IrBlocks.cs`,
+  `IrInlines.cs`, `IrFormats.cs`, `IrReader.cs`,
+  `Docxodus/Ir/Diff/IrMarkupRenderer.cs:108-163`, `docs/architecture/document_ir.md`.
+- Anchors/Unid: `Docxodus/Ir/IrAnchor.cs`, `Docxodus/UnidHelper.cs`,
+  `Docxodus/WmlToMarkdownConverter.cs`, `docs/architecture/markdown_projection.md`.
+- Edit backend: `Docxodus/DocxSession.cs` (esp. `:4184` `ProjectScope`),
+  `Docxodus/Internal/DocxSessionOps.cs`, `docs/architecture/docx_mutation_api.md`.
+- TS/WASM surface: `npm/src/{index,session,pagination,react,docxodus.worker,worker-proxy}.ts`,
+  `wasm/DocxodusWasm/{DocxSessionBridge,DocumentConverter}.cs`,
+  `docs/architecture/{ui_responsiveness,wasm-optimization-plan,profiling-results}.md`.
+- Rendering/pagination: `Docxodus/WmlToHtmlConverter.cs`,
+  `Docxodus/ExternalAnnotationProjector.cs`, `Docxodus/OpenContractExporter.cs`,
+  `docs/architecture/{docx_converter,wml_to_html_converter_gaps,incremental_annotation_overlay,paginated_headers_footers}.md`.
