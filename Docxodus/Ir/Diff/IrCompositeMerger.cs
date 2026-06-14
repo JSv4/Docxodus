@@ -468,6 +468,12 @@ internal static class IrCompositeMerger
         }
         if (AllOpsIdentical(touched, reviewers, settings))            // CONSENSUS
         {
+            // Tripwire: a multi-reviewer TABLE edit must never reach the consensus emit (which keeps only
+            // touched[0] and silently drops the rest). v1 routes table edits to the block-level conflict
+            // branch; if one ever lands here a table edit is being silently dropped (B4 regression).
+            System.Diagnostics.Debug.Assert(
+                !(touched.Count > 1 && touched.Any(e => IsTableModify(e.Op))),
+                "Multi-reviewer table edit reached consensus emit — a table edit is being silently dropped.");
             var (rev, op) = touched[0];
             ops.Add(new IrCompositeOp(op, reviewers[rev].Author, rev));
             return;
@@ -512,10 +518,50 @@ internal static class IrCompositeMerger
             case Docxodus.ConflictResolution.FirstReviewerWins:
                 ops.Add(new IrCompositeOp(touched[0].Op, reviewers[touched[0].Reviewer].Author, touched[0].Reviewer, null, cid)); break;
             case Docxodus.ConflictResolution.StackAll:
-                foreach (var (rev, op) in touched)
-                    ops.Add(new IrCompositeOp(op, reviewers[rev].Author, rev, null, cid));
+                EmitStackAllBlockConflict(anchor, touched, reviewers, cid, ops);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Emit the StackAll resolution of a BLOCK-LEVEL conflict so that AT MOST ONE op is anchored to (and
+    /// thus consumes/restores on reject) the contested base block <paramref name="anchor"/>.
+    /// <para><b>Why not stack every touched op.</b> A delete-vs-edit conflict has <c>touched</c> = a
+    /// base-anchored DeleteBlock AND a base-anchored ModifyBlock, BOTH base-restoring on reject. Stacking
+    /// both duplicates the base paragraph on reject (and doubles the <c>w:del</c> wrapper). To keep
+    /// reject ≡ base, only the FIRST touched op (lowest reviewer index — Modify/Delete/etc.) stays
+    /// base-anchored; every other competitor that has RIGHT content is re-emitted as a base-ANCHORLESS
+    /// <see cref="IrEditOpKind.InsertBlock"/> (its own reviewer's right block, <c>SourceReviewer</c> set so
+    /// the renderer sources from that reviewer), which contributes a <c>w:ins</c>-wrapped block that
+    /// vanishes on reject. A pure DeleteBlock competitor (no right content) is dropped — it is already
+    /// captured in the recorded conflict, and re-anchoring it would re-introduce the duplication.</para>
+    /// </summary>
+    private static void EmitStackAllBlockConflict(
+        string anchor,
+        List<(int Reviewer, IrEditOp Op)> touched,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
+        int cid,
+        List<IrCompositeOp> ops)
+    {
+        // touched[0] stays base-anchored verbatim (lowest reviewer index — base-consuming on reject).
+        ops.Add(new IrCompositeOp(touched[0].Op, reviewers[touched[0].Reviewer].Author, touched[0].Reviewer, null, cid));
+
+        // Every other competitor that carries right content becomes a base-anchorless InsertBlock (its
+        // reviewer's right block), so it adds NOTHING on reject. Pure deletes (no right) are skipped.
+        for (int i = 1; i < touched.Count; i++)
+        {
+            var (rev, op) = touched[i];
+            if (op.RightAnchor is not { } rightAnchor)
+                continue;
+            var insert = new IrEditOp(IrEditOpKind.InsertBlock, null, rightAnchor, null, null, null);
+            ops.Add(new IrCompositeOp(insert, reviewers[rev].Author, rev, null, cid));
+        }
+
+        // Exactly one emitted op for this block-conflict consumes/restores the base anchor (LeftAnchor ==
+        // anchor) — the block-level analogue of the token path's AssertTilesBase totality invariant.
+        System.Diagnostics.Debug.Assert(
+            ops.Count(o => o.Op.LeftAnchor == anchor) == 1,
+            "StackAll block-conflict must emit exactly one base-anchored op (reject ≡ base).");
     }
 
     /// <summary>A base-sourced EqualBlock op for <paramref name="anchor"/> (Author "", reviewer -1).</summary>
@@ -588,6 +634,16 @@ internal static class IrCompositeMerger
 
         if (kind == IrEditOpKind.ModifyBlock)
         {
+            // A TABLE ModifyBlock (TableDiff != null) must NEVER be treated as identical via the empty-text
+            // shortcut: BlockResultText returns "" for any non-paragraph block, so two reviewers editing the
+            // SAME base table — even DIFFERENT cells — would (mis)compare as ""=="" and short-circuit to a
+            // false consensus, silently dropping every reviewer but the first and recording NO conflict
+            // (data loss). v1 does NOT compose table cells across reviewers, so any multi-reviewer table edit
+            // must fall through to the BLOCK-LEVEL conflict branch (BaseWins keeps the base table + records
+            // the conflict; the other policies surface a recorded conflict too).
+            if (touched.Any(e => IsTableModify(e.Op)))
+                return false;
+
             string first = BlockResultText(touched[0].Op, reviewers[touched[0].Reviewer].Ir, settings);
             return touched.All(e =>
                 BlockResultText(e.Op, reviewers[e.Reviewer].Ir, settings) == first);
@@ -595,6 +651,14 @@ internal static class IrCompositeMerger
 
         return false;
     }
+
+    /// <summary>
+    /// True when <paramref name="op"/> is a TABLE ModifyBlock — it carries a nested <see cref="IrEditOp.TableDiff"/>,
+    /// or its resolved right block is not a paragraph (so <see cref="BlockResultText"/> would return "" and the
+    /// empty-text consensus shortcut would falsely fire). v1 does not compose table cells across reviewers, so
+    /// such ops must route to the block-level conflict branch rather than the phantom-consensus path.
+    /// </summary>
+    private static bool IsTableModify(IrEditOp op) => op.TableDiff != null;
 
     /// <summary>Tokenize the BASE paragraph at <paramref name="anchor"/> exactly as
     /// <see cref="IrEditScriptBuilder"/> tokenizes a Modified pair's left side, so token indices line up with
@@ -657,11 +721,50 @@ internal static class IrCompositeMerger
     {
         if (op.RightAnchor is not { } ra)
             return "";
-        if (!reviewerIr.AnchorIndex.TryGetValue(ra, out var block) || block is not IrParagraph p)
+        if (!reviewerIr.AnchorIndex.TryGetValue(ra, out var block))
             return "";
         var sb = new System.Text.StringBuilder();
-        foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
-            sb.Append(t.Text);
+        switch (block)
+        {
+            case IrParagraph p:
+                foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+                    sb.Append(t.Text);
+                break;
+            case IrTable tbl:
+                // Serialize the table's cell text so a table conflict's competitor ResultText is meaningful
+                // (rather than ""): concatenate each cell's paragraph text, cells separated by '␟' (unit
+                // separator) and rows by '␞' (record separator) so two differently-edited tables produce
+                // distinguishable strings. v1 does not compose table cells; this text is for conflict reporting.
+                AppendTableText(tbl, sb, settings);
+                break;
+        }
         return sb.ToString();
+    }
+
+    /// <summary>Append <paramref name="tbl"/>'s cell text (row/cell-delimited) to <paramref name="sb"/> for
+    /// conflict-competitor reporting. Nested paragraphs in a cell are tokenized with the diff tokenizer so the
+    /// text matches what the diff sees; nested tables recurse.</summary>
+    private static void AppendTableText(IrTable tbl, System.Text.StringBuilder sb, IrDiffSettings settings)
+    {
+        bool firstRow = true;
+        foreach (var row in tbl.Rows)
+        {
+            if (!firstRow) sb.Append('␞');
+            firstRow = false;
+            bool firstCell = true;
+            foreach (var cell in row.Cells)
+            {
+                if (!firstCell) sb.Append('␟');
+                firstCell = false;
+                foreach (var b in cell.Blocks)
+                {
+                    if (b is IrParagraph cp)
+                        foreach (var t in IrDiffTokenizer.Tokenize(cp, settings))
+                            sb.Append(t.Text);
+                    else if (b is IrTable nested)
+                        AppendTableText(nested, sb, settings);
+                }
+            }
+        }
     }
 }
