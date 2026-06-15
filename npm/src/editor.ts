@@ -17,6 +17,8 @@
  * full fidelity, and save() is lossless for them.
  */
 
+import { paginateHtml } from "./pagination.js";
+
 /** The subset of WASM bridge exports the editor needs (as exposed on `window.Docxodus`). */
 export interface DocxEditorExports {
   DocxSessionBridge: {
@@ -46,6 +48,10 @@ export interface DocxEditorOptions {
   fabricateClasses?: boolean;
   /** Make paragraph/heading blocks editable. Default true. */
   editable?: boolean;
+  /** Render block-flow pages (page boxes via pagination.ts) vs a continuous view. Default false. */
+  paginated?: boolean;
+  /** Page render scale for paginated mode (1.0 = 100%). Default 1. */
+  scale?: number;
   /** Called after a block edit commits (with the affected anchor). */
   onEdit?: (info: { anchorId: string; unid: string }) => void;
 }
@@ -64,11 +70,15 @@ function completeArgs(
   bytes: Uint8Array,
   cssPrefix: string,
   fabricate: boolean,
+  paginated: boolean,
+  scale: number,
 ): any[] {
   return [
     bytes, "Document", cssPrefix, fabricate, "", -1, "comment-",
-    0, 1.0, "page-", false, 0, "annot-",
-    false, false, false, true, true, false, null, /* stampAnchors */ true,
+    /* paginationMode */ paginated ? 1 : 0, /* paginationScale */ scale, "page-",
+    false, 0, "annot-",
+    /* renderFootnotesAndEndnotes */ false, /* renderHeadersAndFooters */ paginated,
+    false, true, true, false, null, /* stampAnchors */ true,
   ];
 }
 
@@ -104,16 +114,18 @@ export class DocxEditor {
       cssPrefix: options.cssPrefix ?? "docx-",
       fabricateClasses: options.fabricateClasses ?? true,
       editable: options.editable ?? true,
+      paginated: options.paginated ?? false,
+      scale: options.scale ?? 1,
       onEdit: options.onEdit,
     };
     const handle = exports.DocxSessionBridge.OpenSession(bytes, "");
     const editor = new DocxEditor(container, exports, handle, opts);
     editor.refreshAnchorMap();
-    editor.mountHtml(
-      exports.DocumentConverter.ConvertDocxToHtmlComplete(
-        ...completeArgs(bytes, opts.cssPrefix, opts.fabricateClasses),
-      ),
+    const fullHtml = exports.DocumentConverter.ConvertDocxToHtmlComplete(
+      ...completeArgs(bytes, opts.cssPrefix, opts.fabricateClasses, opts.paginated, opts.scale),
     );
+    if (opts.paginated) editor.mountPaginated(fullHtml);
+    else editor.mountHtml(fullHtml);
     return editor;
   }
 
@@ -152,16 +164,28 @@ export class DocxEditor {
     }
   }
 
-  /** Inject the converter's HTML (styles + body) into the container and wire blocks. */
+  /** Continuous (non-paginated) mount: inject the converter's styles + body, wire blocks. */
   private mountHtml(fullHtml: string): void {
     const parsed = new DOMParser().parseFromString(fullHtml, "text/html");
     const styles = Array.from(parsed.querySelectorAll("style"))
       .map((s) => s.outerHTML)
       .join("");
     this.container.innerHTML = styles + parsed.body.innerHTML;
-    if (this.options.editable) {
-      this.container.querySelectorAll<HTMLElement>("[data-anchor]").forEach((el) => this.wireBlock(el));
-    }
+    if (this.options.editable) this.wireBlocks(this.container);
+  }
+
+  /** Paginated mount: flow blocks into page boxes via pagination.ts, wire the page clones. */
+  private mountPaginated(fullHtml: string): void {
+    paginateHtml(fullHtml, this.container, { scale: this.options.scale, cssPrefix: "page-" });
+    // pagination clones blocks into pages (hidden originals stay in #pagination-staging),
+    // so wire ONLY the visible page container — never the staging copies.
+    const pageRoot =
+      this.container.querySelector<HTMLElement>("#pagination-container") ?? this.container;
+    if (this.options.editable) this.wireBlocks(pageRoot);
+  }
+
+  private wireBlocks(root: HTMLElement): void {
+    root.querySelectorAll<HTMLElement>("[data-anchor]").forEach((el) => this.wireBlock(el));
   }
 
   private wireBlock(el: HTMLElement): void {

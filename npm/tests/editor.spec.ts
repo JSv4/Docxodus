@@ -117,4 +117,48 @@ test.describe('DocxEditor — block editor end-to-end', () => {
     expect(out.savedHasEdit).toBe(true);
     expect(out.savedHasWitness).toBe(true);
   });
+
+  // Paginated mode: blocks flow into real page boxes (margins/headers via the converter
+  // + pagination.ts), and those page blocks remain editable with incremental re-render.
+  test('paginated mode renders page boxes with editable blocks', async ({ page }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+
+    const out = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const D = (window as any).Docxodus;
+
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const editor = D.DocxEditor.open(container, bin, D, { paginated: true });
+
+      const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
+      const pageContainer = container.querySelector('#pagination-container');
+      const pageBoxes = container.querySelectorAll('.page-box').length;
+      const editable = pageContainer
+        ? (Array.from(
+            pageContainer.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+          ) as HTMLElement[]).filter((e) => norm(e.textContent || '').length > 5)
+        : [];
+
+      let editedText = '(none)';
+      const target = editable[0];
+      if (target) {
+        target.focus();
+        target.textContent = 'PAGINATEDEDIT77 content';
+        target.dispatchEvent(new Event('blur'));
+        const edited = (Array.from(
+          (pageContainer as HTMLElement).querySelectorAll('p[data-anchor]'),
+        ) as HTMLElement[]).find((e) => norm(e.textContent || '').includes('PAGINATEDEDIT77'));
+        editedText = edited ? norm(edited.textContent || '') : '(missing)';
+      }
+
+      editor.close();
+      container.remove();
+      return { pageBoxes, editableCount: editable.length, editedText };
+    }, Array.from(bytes));
+
+    expect(out.pageBoxes).toBeGreaterThan(0); // real page boxes rendered
+    expect(out.editableCount).toBeGreaterThan(0); // blocks inside pages stay editable
+    expect(out.editedText).toContain('PAGINATEDEDIT77'); // incremental edit inside a page
+  });
 });
