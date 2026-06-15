@@ -182,6 +182,9 @@ internal static class DocxSessionOps
     public static string SetParagraphStyle(int handle, string anchorId, string styleId) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetParagraphStyle(anchorId, styleId));
 
+    public static string SetParagraphFormat(int handle, string anchorId, ParagraphFormatOp op) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetParagraphFormat(anchorId, op));
+
     public static string SetListLevel(int handle, string anchorId, int levelDelta) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetListLevel(anchorId, levelDelta));
 

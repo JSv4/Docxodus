@@ -979,6 +979,7 @@ export interface DocxodusWasmExports {
     ApplyFormat: (handle: number, anchor: string, spanJson: string, opJson: string) => string;
     ApplyFormatBySubstring: (handle: number, anchor: string, substring: string, opJson: string) => string;
     SetParagraphStyle: (handle: number, anchor: string, styleId: string) => string;
+    SetParagraphFormat: (handle: number, anchor: string, opJson: string) => string;
     SetListLevel: (handle: number, anchor: string, delta: number) => string;
     RemoveListMembership: (handle: number, anchor: string) => string;
     ReplaceCellContent: (handle: number, anchor: string, md: string) => string;
@@ -1107,6 +1108,18 @@ export interface FormatOp {
   code?: boolean;
   color?: string;
   runStyle?: string;
+  /** Vertical alignment: "superscript" | "subscript" | "" (clear). Omit to leave unchanged. */
+  vertAlign?: string;
+}
+
+/** Paragraph-level formatting for `DocxSession.setParagraphFormat`. Omit a field to leave it unchanged. */
+export interface ParagraphFormatOp {
+  /** Paragraph alignment. */
+  alignment?: "left" | "center" | "right" | "justify";
+  /** Adjust the left indent by this many twips (1440 = 1 inch); clamped at 0. */
+  indentDelta?: number;
+  /** Page-break-before: true to add, false to remove. */
+  pageBreakBefore?: boolean;
 }
 
 export interface DocxSessionSettings {

@@ -30,6 +30,7 @@ export interface DocxEditorExports {
     MergeParagraphs: (handle: number, first: string, second: string) => string;
     ApplyFormat: (handle: number, anchor: string, spanJson: string, opJson: string) => string;
     SetParagraphStyle: (handle: number, anchor: string, styleId: string) => string;
+    SetParagraphFormat: (handle: number, anchor: string, opJson: string) => string;
     RenderBlockHtml: (
       handle: number,
       anchorId: string,
@@ -227,7 +228,10 @@ function placeCaretAtOffset(el: HTMLElement, offset: number): void {
 
 // ─── M5: formatting controls ────────────────────────────────────────────────
 
-export type FormatKey = "bold" | "italic" | "underline" | "strike" | "code";
+export type FormatKey = "bold" | "italic" | "underline" | "strike" | "code" | "superscript" | "subscript";
+
+/** Paragraph alignment passed to DocxEditor.setAlignment. */
+export type EditorAlignment = "left" | "center" | "right" | "justify";
 
 /** The selection's plain-text {start,length} within `block`, or null (collapsed / outside). */
 function selectionSpanIn(block: HTMLElement): { start: number; length: number } | null {
@@ -292,6 +296,8 @@ function selectionHasFormat(key: FormatKey, fallback: HTMLElement): boolean {
     case "underline": return cs.textDecorationLine.includes("underline");
     case "strike": return cs.textDecorationLine.includes("line-through");
     case "code": return /mono|courier|consolas/i.test(cs.fontFamily);
+    case "superscript": return cs.verticalAlign === "super" || !!el.closest("sup");
+    case "subscript": return cs.verticalAlign === "sub" || !!el.closest("sub");
     default: return false;
   }
 }
@@ -633,19 +639,58 @@ export class DocxEditor {
 
     const span = selectionSpanIn(block);
     const on = value ?? !selectionHasFormat(key, block);
+    // Super/subscript map to the single-valued w:vertAlign; the rest are boolean toggles.
+    const op =
+      key === "superscript" || key === "subscript"
+        ? { vertAlign: on ? key : "" }
+        : { [key]: on };
     fullId = this.syncBlock(block, fullId); // don't clobber uncommitted typing
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
         this.handle,
         fullId,
         span ? JSON.stringify(span) : "",
-        JSON.stringify({ [key]: on }),
+        JSON.stringify(op),
       ),
     );
     if (!res.success) return;
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
     if (fresh && span) selectRange(fresh, span.start, span.length);
     else fresh?.focus();
+  }
+
+  /** Set paragraph alignment (left/center/right/justify) on the active block. */
+  setAlignment(alignment: EditorAlignment): void {
+    this.applyParagraphFormat({ alignment });
+  }
+
+  /** Adjust the active block's left indent by `deltaTwips` (default ±720 = 0.5"), clamped at 0. */
+  indent(deltaTwips = 720): void {
+    this.applyParagraphFormat({ indentDelta: deltaTwips });
+  }
+
+  /** Toggle (or set) page-break-before on the active block. */
+  pageBreakBefore(value = true): void {
+    this.applyParagraphFormat({ pageBreakBefore: value });
+  }
+
+  private applyParagraphFormat(op: {
+    alignment?: EditorAlignment;
+    indentDelta?: number;
+    pageBreakBefore?: boolean;
+  }): void {
+    const block = this.activeBlock;
+    if (this.closed || !block) return;
+    const unid = block.getAttribute("data-anchor");
+    if (!unid) return;
+    let fullId = this.unidToFullId.get(unid);
+    if (!fullId) return;
+    fullId = this.syncBlock(block, fullId);
+    const res = this.parseEdit(
+      this.exports.DocxSessionBridge.SetParagraphFormat(this.handle, fullId, JSON.stringify(op)),
+    );
+    if (!res.success) return;
+    this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 
   /** Set the paragraph style of the active block (e.g. "Heading1", "Heading2", "Normal"). */
@@ -683,6 +728,8 @@ export class DocxEditor {
       underline: selectionHasFormat("underline", block),
       strike: selectionHasFormat("strike", block),
       code: selectionHasFormat("code", block),
+      superscript: selectionHasFormat("superscript", block),
+      subscript: selectionHasFormat("subscript", block),
     };
   }
 

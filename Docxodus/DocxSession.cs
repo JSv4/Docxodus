@@ -70,6 +70,29 @@ public sealed record FormatOp
     public bool? Code { get; init; }
     public string? Color { get; init; }
     public string? RunStyle { get; init; }
+
+    /// <summary>
+    /// Vertical alignment (w:vertAlign): null = leave unchanged, "" / "none" / "baseline"
+    /// = clear, "superscript" / "subscript" (or "super" / "sub") = set. Single-valued, so
+    /// a string rather than a bool toggle.
+    /// </summary>
+    public string? VertAlign { get; init; }
+}
+
+/// <summary>Paragraph alignment (maps to w:jc): Justify → w:val "both".</summary>
+public enum ParagraphAlignment { Left, Center, Right, Justify }
+
+/// <summary>
+/// Paragraph-level formatting for <see cref="DocxSession.SetParagraphFormat"/>. Each field
+/// is tri-state: null leaves it unchanged. Alignment sets w:jc; PageBreakBefore toggles
+/// w:pageBreakBefore (false removes); IndentDelta adjusts w:ind/@w:left by a twips delta
+/// (clamped at 0), preserving any firstLine/hanging/right indents.
+/// </summary>
+public sealed record ParagraphFormatOp
+{
+    public ParagraphAlignment? Alignment { get; init; }
+    public int? IndentDelta { get; init; }
+    public bool? PageBreakBefore { get; init; }
 }
 
 /// <summary>
@@ -3828,6 +3851,107 @@ public sealed class DocxSession : IDisposable
         }
     }
 
+    // CT_PPr child schema order (subset covering what we insert). w:pPr children must
+    // appear in this sequence or Word treats the file as needing repair.
+    private static readonly string[] PPrChildOrder =
+    {
+        "pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl",
+        "numPr", "suppressLineNumbers", "pBdr", "shd", "tabs", "suppressAutoHyphens",
+        "kinsoku", "wordWrap", "overflowPunct", "topLinePunct", "autoSpaceDE", "autoSpaceDN",
+        "bidi", "adjustRightInd", "snapToGrid", "spacing", "ind", "contextualSpacing",
+        "mirrorIndents", "suppressOverlap", "jc", "textDirection", "textAlignment",
+        "textboxTightWrap", "outlineLvl", "divId", "cnfStyle", "rPr", "sectPr", "pPrChange",
+    };
+
+    /// <summary>Insert (replacing any existing) a w:pPr child at its correct CT_PPr position.</summary>
+    private static void SetPPrChildInOrder(XElement pPr, XElement child)
+    {
+        pPr.Elements(child.Name).Remove();
+        int idx = Array.IndexOf(PPrChildOrder, child.Name.LocalName);
+        XElement? after = null;
+        foreach (var e in pPr.Elements())
+        {
+            int ei = Array.IndexOf(PPrChildOrder, e.Name.LocalName);
+            if (ei >= 0 && ei < idx) after = e;
+            else if (ei >= idx) break;
+        }
+        if (after is null) pPr.AddFirst(child);
+        else after.AddAfterSelf(child);
+    }
+
+    /// <summary>
+    /// Set paragraph-level formatting (alignment, indent delta, page-break-before) on the
+    /// paragraph the anchor names. Only the non-null fields of <paramref name="op"/> change.
+    /// </summary>
+    public EditResult SetParagraphFormat(string anchorId, ParagraphFormatOp op)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "SetParagraphFormat requires a paragraph anchor", anchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var pPr = element.Element(W.pPr);
+            if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+
+            if (op.Alignment is { } align)
+            {
+                var val = align switch
+                {
+                    ParagraphAlignment.Left => "left",
+                    ParagraphAlignment.Center => "center",
+                    ParagraphAlignment.Right => "right",
+                    ParagraphAlignment.Justify => "both",
+                    _ => "left",
+                };
+                SetPPrChildInOrder(pPr, new XElement(W.jc, new XAttribute(W.val, val)));
+            }
+
+            if (op.PageBreakBefore is { } pbb)
+            {
+                pPr.Element(W.pageBreakBefore)?.Remove();
+                if (pbb) SetPPrChildInOrder(pPr, new XElement(W.pageBreakBefore));
+            }
+
+            if (op.IndentDelta is { } delta && delta != 0)
+            {
+                var ind = pPr.Element(W.ind);
+                int cur = ind is null ? 0 : (int?)ind.Attribute(W.left) ?? 0;
+                int next = Math.Max(0, cur + delta);
+                if (ind is null)
+                {
+                    ind = new XElement(W.ind);
+                    SetPPrChildInOrder(pPr, ind);
+                }
+                ind.SetAttributeValue(W.left, next);
+            }
+
+            InvalidateProjectionCache();
+            var freshIndex = Project().AnchorIndex;
+            var updated = freshIndex.Values.FirstOrDefault(t => t.Unid == target.Unid)?.Anchor ?? target.Anchor;
+
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { updated },
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
     public EditResult SetListLevel(string anchorId, int levelDelta)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
@@ -4521,6 +4645,24 @@ public sealed class DocxSession : IDisposable
             rPr.Element(W.rStyle)?.Remove();
             if (op.RunStyle.Length > 0)
                 rPr.Add(new XElement(W.rStyle, new XAttribute(W.val, op.RunStyle)));
+        }
+
+        if (op.VertAlign is not null)
+        {
+            rPr.Element(W.vertAlign)?.Remove();
+            var v = op.VertAlign switch
+            {
+                "super" => "superscript",
+                "sub" => "subscript",
+                "none" or "baseline" => "",
+                _ => op.VertAlign,
+            };
+            if (v.Length > 0)
+            {
+                if (v is not ("superscript" or "subscript"))
+                    throw new ArgumentException($"invalid vertAlign: {op.VertAlign}");
+                rPr.Add(new XElement(W.vertAlign, new XAttribute(W.val, v)));
+            }
         }
     }
 

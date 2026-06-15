@@ -46,6 +46,17 @@
       <button data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
       <button data-cmd="strike" title="Strikethrough"><s>S</s></button>
       <button data-cmd="code" title="Inline code">&lt;/&gt;</button>
+      <button data-cmd="superscript" title="Superscript">x&#178;</button>
+      <button data-cmd="subscript" title="Subscript">x&#8322;</button>
+      <span class="sep"></span>
+      <button data-align="left" title="Align left">L</button>
+      <button data-align="center" title="Align center">C</button>
+      <button data-align="right" title="Align right">R</button>
+      <button data-align="justify" title="Justify">J</button>
+      <span class="sep"></span>
+      <button data-indent="-720" title="Decrease indent">&#8676;</button>
+      <button data-indent="720" title="Increase indent">&#8677;</button>
+      <button data-pagebreak title="Insert page break before">&#10515;</button>
       <span class="sep"></span>
       <select id="style" title="Paragraph style">
         <option value="">Style…</option>
@@ -95,6 +106,18 @@
       b.addEventListener('mousedown', (e) => e.preventDefault());
       b.addEventListener('click', () => editor && editor[id]());
     }
+    // Paragraph alignment / indent / page break.
+    ribbonEl.querySelectorAll('button[data-align]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => editor && editor.setAlignment(btn.dataset.align));
+    });
+    ribbonEl.querySelectorAll('button[data-indent]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => editor && editor.indent(parseInt(btn.dataset.indent, 10)));
+    });
+    const pbBtn = ribbonEl.querySelector('button[data-pagebreak]');
+    pbBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    pbBtn.addEventListener('click', () => editor && editor.pageBreakBefore(true));
     styleEl.addEventListener('change', () => {
       if (editor && styleEl.value) { editor.setParagraphStyle(styleEl.value); }
       styleEl.value = '';

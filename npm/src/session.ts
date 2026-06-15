@@ -21,6 +21,7 @@ import type {
   FillOptions,
   FindOptions,
   FormatOp,
+  ParagraphFormatOp,
   GrepOptions,
   ListMembership,
   ReplaceOptions,
@@ -185,6 +186,11 @@ export class DocxSession {
 
   setParagraphStyle(anchorId: string, styleId: string): EditResult {
     return JSON.parse(this.wasm.SetParagraphStyle(this.handle, anchorId, styleId)) as EditResult;
+  }
+
+  /** Set paragraph alignment / indent / page-break-before (omitted fields are left unchanged). */
+  setParagraphFormat(anchorId: string, op: ParagraphFormatOp): EditResult {
+    return JSON.parse(this.wasm.SetParagraphFormat(this.handle, anchorId, JSON.stringify(op))) as EditResult;
   }
 
   setListLevel(anchorId: string, levelDelta: number): EditResult {

@@ -341,4 +341,65 @@ test.describe('DocxEditor — block editor end-to-end', () => {
     expect(out.h1AfterStyle).toBe(out.h1Before + 1); // SetParagraphStyle made a heading
     expect(out.h1AfterUndo).toBe(out.h1Before); // undo reverted it
   });
+
+  // M5b: extended controls — alignment, indent, superscript (paragraph + run props
+  // via SetParagraphFormat / ApplyFormat vertAlign). Asserts the visible effect on the
+  // re-rendered block (inline styles).
+  test('M5b: alignment, indent, and superscript apply and render', async ({ page }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+
+    const out = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const D = (window as any).Docxodus;
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const editor = D.DocxEditor.open(container, bin, D, {});
+
+      const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
+      const editable = () =>
+        Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+
+      // ALIGNMENT: center a paragraph.
+      const a = editable().find((e) => norm(e.textContent || '').length > 10)!;
+      const aUnid = a.getAttribute('data-anchor');
+      a.focus();
+      editor.setAlignment('center');
+      const centered = container.querySelector(`[data-anchor="${aUnid}"]`) as HTMLElement;
+      const textAlign = centered ? getComputedStyle(centered).textAlign : '';
+
+      // INDENT: increase a paragraph's left indent.
+      const b = editable().find((e) => norm(e.textContent || '').length > 10)!;
+      const bUnid = b.getAttribute('data-anchor');
+      b.focus();
+      editor.indent(720);
+      const indented = container.querySelector(`[data-anchor="${bUnid}"]`) as HTMLElement;
+      const marginLeft = indented ? parseFloat(getComputedStyle(indented).marginLeft) : 0;
+
+      // SUPERSCRIPT: a word in a paragraph.
+      const c = editable().find((e) => norm(e.textContent || '').length > 10)!;
+      const word = norm(c.textContent || '').split(' ')[0];
+      c.focus();
+      const tn = document.createTreeWalker(c, NodeFilter.SHOW_TEXT).nextNode() as Text;
+      const sel = window.getSelection()!;
+      const r = document.createRange();
+      r.setStart(tn, 0); r.setEnd(tn, word.length);
+      sel.removeAllRanges(); sel.addRange(r);
+      editor.format('superscript');
+      const after = editable().find((e) => norm(e.textContent || '').startsWith(word));
+      let superFound = false;
+      if (after) {
+        for (const el of after.querySelectorAll('*')) {
+          if (getComputedStyle(el).verticalAlign === 'super' || el.tagName === 'SUP') { superFound = true; break; }
+        }
+      }
+
+      editor.close();
+      container.remove();
+      return { textAlign, marginLeft, superFound };
+    }, Array.from(bytes));
+
+    expect(out.textAlign).toBe('center'); // alignment applied + rendered
+    expect(out.marginLeft).toBeGreaterThan(0); // indent applied + rendered
+    expect(out.superFound).toBe(true); // superscript applied + rendered
+  });
 });

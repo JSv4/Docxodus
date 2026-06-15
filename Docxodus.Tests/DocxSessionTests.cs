@@ -1326,6 +1326,52 @@ public class DocxSessionTests
     }
 
     [Fact]
+    public void DS200_ApplyFormat_Superscript_EmitsVertAlign()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.ApplyFormat(anchor, new CharSpan(0, 5), new FormatOp { VertAlign = "superscript" });
+        Assert.True(r.Success, r.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("vertAlign", xml);
+        Assert.Contains("superscript", xml);
+        // Clear it back to baseline.
+        var r2 = s.ApplyFormat(anchor, new CharSpan(0, 5), new FormatOp { VertAlign = "" });
+        Assert.True(r2.Success, r2.Error?.Message);
+        Assert.DoesNotContain("vertAlign", s.Raw.GetXml(anchor));
+    }
+
+    [Fact]
+    public void DS201_SetParagraphFormat_Alignment_Center()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.SetParagraphFormat(anchor, new ParagraphFormatOp { Alignment = ParagraphAlignment.Center });
+        Assert.True(r.Success, r.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("jc", xml);
+        Assert.Contains("center", xml);
+    }
+
+    [Fact]
+    public void DS202_SetParagraphFormat_PageBreakBefore_And_Indent()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.SetParagraphFormat(anchor, new ParagraphFormatOp { PageBreakBefore = true, IndentDelta = 720 });
+        Assert.True(r.Success, r.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("pageBreakBefore", xml);
+        Assert.Contains("720", xml);
+        // Indent again accumulates; removing the page break leaves the indent.
+        var r2 = s.SetParagraphFormat(anchor, new ParagraphFormatOp { PageBreakBefore = false, IndentDelta = 720 });
+        Assert.True(r2.Success, r2.Error?.Message);
+        var xml2 = s.Raw.GetXml(anchor);
+        Assert.DoesNotContain("pageBreakBefore", xml2);
+        Assert.Contains("1440", xml2); // 720 + 720
+    }
+
+    [Fact]
     public void DS054_SetListLevelIndent()
     {
         using var s = new DocxSession(BuildDS002_BulletedList());

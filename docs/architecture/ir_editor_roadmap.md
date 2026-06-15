@@ -5,9 +5,11 @@ PoC results). This is the **sequenced, prioritized** plan for turning the proven
 foundation + MVP into a complete editor. Supersedes the scattered "Still Plan 2" notes.
 
 Status (branch `feat/ir-editor-feasibility-poc`, PR #234): **foundation + MVP shipped and
-proven; M1 (rich in-block editing), M2 (structural editing), and M5 (formatting controls +
-ribbon + undo/redo) done; runnable demo with a ribbon at `npm/examples/editor.html`
-(`npm run demo`).** M3 (worker offload) and M4 (re-paginate-on-edit) are next.
+proven; M1 (rich in-block editing), M2 (structural editing), M5 + M5b (formatting controls:
+bold/italic/underline/strike/code, super/sub, alignment, indent, page break, paragraph style,
+undo/redo) done; runnable demo with a full ribbon at `npm/examples/editor.html` (`npm run
+demo`).** Mlists (bullets/numbered — the hard one) is next; then M3 (worker offload) / M4
+(re-paginate-on-edit).
 
 ## Architecture invariants (do not break)
 
@@ -86,6 +88,32 @@ now defaults to `fabricateClasses: false` (inline styles) so per-block re-render
 self-contained — fabricated class names are per-conversion and have no page stylesheet.
 Test `editor.spec.ts` "M5" applies bold to a selection (survives save), sets Heading1
 (+1 h1), and undoes it; verified live in the browser.
+
+### M5b — Extended formatting controls (super/sub, alignment, indent, page break)  · effort M · ✅ **DONE**
+**Shipped (new C# ops, rippled through the 8 layers):**
+- **Superscript / subscript** — added `string? VertAlign` to `FormatOp`; `ApplyFormatToRun` emits
+  `w:vertAlign` (super/sub/baseline). Auto-rides the existing `ApplyFormat` JSON path (no new
+  bridge method). `editor.format('superscript'|'subscript')` toggles via `w:vertAlign`.
+- **Alignment / indent / page-break** — new `DocxSession.SetParagraphFormat(anchor, ParagraphFormatOp{Alignment?, IndentDelta?, PageBreakBefore?})`
+  writing `w:jc` / `w:ind/@w:left` (twips delta, clamped, sibling-preserving) / `w:pageBreakBefore`,
+  with a CT_PPr `SetPPrChildInOrder` schema-ordering helper. Rippled: DocxSessionOps →
+  DocxSessionJson (`ParseParagraphFormatOp`) → `DocxSessionBridge.SetParagraphFormat` → types.ts →
+  session.ts (`setParagraphFormat`) → editor.ts (`setAlignment`/`indent`/`pageBreakBefore`) → ribbon.
+- Demo ribbon gained x²/x₂, L/C/R/J, indent ⇤/⇥, and page-break buttons.
+- Tests: C# `DS200`–`DS202` (vertAlign set/clear, jc, pageBreakBefore + accumulating indent);
+  browser `M5b` (center renders `text-align:center`, indent → margin, superscript → `<sup>`).
+  Verified live. **Note:** the editor uses inline styles (`fabricateClasses:false`), so the
+  converter renders super/sub as `<sup>`/`<sub>`.
+
+### Mlists — Bullets & numbered lists (promote plain paragraph → list item)  · effort L · ⏳ NEXT (hard)
+**The one remaining requested control, deliberately its own milestone.** `SetListLevel`/
+`RemoveListMembership` only work on *existing* list items; there is no op that adds a `w:numPr`
+to a plain paragraph, and nothing synthesizes a numbering definition. **Plan (from the controls
+investigation):** new `ApplyListFormat(anchor, None|Bullet|Decimal)` + an `Internal/NumberingFactory`
+that ensures the `NumberingDefinitionsPart` exists, synthesizes a spec-valid 9-level bullet/decimal
+`w:abstractNum` + `w:num` (snapshot-safe, memoized per session), then sets/replaces the paragraph's
+`w:numPr` (flip p→li like `SetParagraphStyle`). Raw is NOT a shortcut (can't touch the numbering
+part). Needs round-trip + accept/reject parity tests and an `ooxml_corner_cases.md` entry.
 
 ### M6 — Tracked-changes / review mode  · effort M
 **Approach:** open the session with `TrackedChanges = RenderInline`; render `ins`/`del` with

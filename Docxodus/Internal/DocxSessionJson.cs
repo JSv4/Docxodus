@@ -100,6 +100,36 @@ internal static class DocxSessionJson
             Code = TryGetBoolNullable(root, "code"),
             Color = TryGetString(root, "color", null),
             RunStyle = TryGetString(root, "runStyle", null),
+            VertAlign = TryGetString(root, "vertAlign", null),
+        };
+    }
+
+    /// <summary>
+    /// Parse a ParagraphFormatOp wire object: { alignment?: "left"|"center"|"right"|"justify",
+    /// indentDelta?: int (twips), pageBreakBefore?: bool }. Missing fields leave that property
+    /// unchanged.
+    /// </summary>
+    public static ParagraphFormatOp ParseParagraphFormatOp(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return new ParagraphFormatOp();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        ParagraphAlignment? align = TryGetString(root, "alignment", null)?.ToLowerInvariant() switch
+        {
+            "left" => ParagraphAlignment.Left,
+            "center" => ParagraphAlignment.Center,
+            "right" => ParagraphAlignment.Right,
+            "justify" or "both" => ParagraphAlignment.Justify,
+            _ => null,
+        };
+        int? indentDelta = root.TryGetProperty("indentDelta", out var d) && d.ValueKind == JsonValueKind.Number
+            ? d.GetInt32()
+            : null;
+        return new ParagraphFormatOp
+        {
+            Alignment = align,
+            IndentDelta = indentDelta,
+            PageBreakBefore = TryGetBoolNullable(root, "pageBreakBefore"),
         };
     }
 

@@ -113,6 +113,15 @@ public static partial class DocxSessionBridge
     public static string SetParagraphStyle(int h, string anchor, string styleId) =>
         DocxSessionOps.SetParagraphStyle(h, anchor, styleId);
 
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.SetParagraphFormat"/>. <paramref name="opJson"/> is
+    /// { alignment?: "left"|"center"|"right"|"justify", indentDelta?: int (twips),
+    /// pageBreakBefore?: bool }; omitted fields are left unchanged.
+    /// </summary>
+    [JSExport]
+    public static string SetParagraphFormat(int h, string anchor, string opJson) =>
+        DocxSessionOps.SetParagraphFormat(h, anchor, DocxSessionJson.ParseParagraphFormatOp(opJson));
+
     [JSExport]
     public static string SetListLevel(int h, string anchor, int delta) =>
         DocxSessionOps.SetListLevel(h, anchor, delta);
