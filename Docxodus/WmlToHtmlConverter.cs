@@ -5086,6 +5086,13 @@ namespace Docxodus
             var tabWidth = tabElement != null
                 ? (decimal?) tabElement.Attribute(PtOpenXml.TabWidth) ?? 0m
                 : 0m;
+            // When the tab is the suffix tab of a list-item marker, tag the wrapper span so the
+            // whole marker (number/bullet glyph AND this tab) is excluded from editor offset math.
+            // The number run is tagged in ConvertRun, but the tab span renders via ProcessTab and
+            // would otherwise contribute a stray character to caret offsets (breaks Enter at EOL).
+            var listMarkerAttr = firstTabRun?.Attribute(PtOpenXml.ListItemRun) != null
+                ? new XAttribute("data-list-marker", "true")
+                : null;
             var precedingElementsWidth = elementsPrecedingTab
                 .Elements()
                 .Where(c => c.Attributes(PtOpenXml.TabWidth).Any())
@@ -5110,7 +5117,7 @@ namespace Docxodus
                 if (tabSpan != null)
                     contentList.Add(tabSpan);
 
-                var span = new XElement(Xhtml.span, contentList);
+                var span = new XElement(Xhtml.span, listMarkerAttr, contentList);
                 // Use min-width instead of width so the container expands to fit content
                 // when text is wider than the calculated tab position. This fixes issues
                 // where list numbers (e.g., "2.3") overlap with heading text because the
@@ -5138,7 +5145,7 @@ namespace Docxodus
                 // If we have a tab span with leaders, add it after the element
                 if (tabSpan != null)
                 {
-                    var wrapperSpan = new XElement(Xhtml.span, element, tabSpan);
+                    var wrapperSpan = new XElement(Xhtml.span, listMarkerAttr, element, tabSpan);
                     var wrapperStyle = new Dictionary<string, string>
                     {
                         { "display", "inline-block" },
@@ -5152,7 +5159,7 @@ namespace Docxodus
             else if (tabSpan != null)
             {
                 // Only the tab, no preceding content
-                var wrapperSpan = new XElement(Xhtml.span, tabSpan);
+                var wrapperSpan = new XElement(Xhtml.span, listMarkerAttr, tabSpan);
                 var wrapperStyle = new Dictionary<string, string>
                 {
                     { "display", "inline-block" },
@@ -5387,6 +5394,12 @@ namespace Docxodus
         {
             var rPr = run.Element(W.rPr);
 
+            // List-marker runs (the generated number/bullet + its suffix tab, both tagged by
+            // FormattingAssembler with PtOpenXml.ListItemRun) are not part of the paragraph's
+            // editable content. Stamp data-list-marker so an editor can make them
+            // non-editable and exclude them from caret/offset math.
+            var isListMarker = run.Attribute(PtOpenXml.ListItemRun) != null;
+
             // Skip runs that only contain w:footnoteRef or w:endnoteRef.
             // These are placeholder elements in footnote/endnote text that Word uses to display
             // the note number. Since we add the note number separately (via footnote-number span
@@ -5442,11 +5455,12 @@ namespace Docxodus
             XEntity runEndMark;
             DetermineRunMarks(run, rPr, style, out runStartMark, out runEndMark);
 
-            if (style.Any() || langAttribute != null || runStartMark != null)
+            if (style.Any() || langAttribute != null || runStartMark != null || isListMarker)
             {
                 style.AddIfMissing("margin", "0");
                 style.AddIfMissing("padding", "0");
                 var xe = new XElement(Xhtml.span,
+                    isListMarker ? new XAttribute("data-list-marker", "true") : null,
                     langAttribute,
                     runStartMark,
                     content,

@@ -456,4 +456,96 @@ test.describe('DocxEditor — block editor end-to-end', () => {
     expect(out.marginLeft).toBeGreaterThan(0); // list indent rendered
     expect(out.hasMarker).toBe(true); // bullet marker glyph rendered in the editor
   });
+
+  // Mlists2: numbered lists CONTINUE (1., 2.), and Enter on a list item adds a
+  // continuing item — the two issues found in manual testing.
+  test('Mlists2: numbered continuation + Enter adds a continuing item', async ({ page }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+
+    const out = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const D = (window as any).Docxodus;
+      const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
+
+      // Numbering continuation is checked precisely via the bridge (anchor-addressed),
+      // since HC031 repeats paragraphs and find-by-text is unreliable.
+      const h: number = D.DocxSessionBridge.OpenSession(bin, '{"persistAnchorIds":true}');
+      const proj = JSON.parse(D.DocxSessionBridge.Project(h));
+      const pAnchors = Object.keys(proj.anchorIndex).filter((k) => k.startsWith('p:'));
+      const liA = JSON.parse(D.DocxSessionBridge.ApplyListFormat(h, pAnchors[0], 'decimal')).modified[0].unid;
+      const liB = JSON.parse(D.DocxSessionBridge.ApplyListFormat(h, pAnchors[1], 'decimal')).modified[0].unid;
+      const full = D.DocumentConverter.ConvertDocxToHtmlComplete(
+        D.DocxSessionBridge.Save(h), 'Document', 'docx-', false, '', -1, 'comment-', 0, 1.0, 'page-',
+        false, 0, 'annot-', false, false, false, true, true, false, null, true);
+      D.DocxSessionBridge.CloseSession(h);
+      const doc = new DOMParser().parseFromString(full, 'text/html');
+      const numFor = (unid: string) => {
+        const el = doc.querySelector(`[data-anchor="${unid}"]`);
+        const m = el ? norm(el.textContent || '').match(/^(\d+)\./) : null;
+        return m ? parseInt(m[1], 10) : -1;
+      };
+      const nums = [numFor(liA), numFor(liB)].sort((a, b) => a - b);
+      const numA = nums[0];
+      const numB = nums[1];
+
+      // Enter at end of a numbered item adds a continuing item (editor path).
+      const edits: any[] = [];
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const editor = D.DocxEditor.open(container, bin, D, { onEdit: (i: any) => edits.push(i) });
+      const list = () => Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+      const firstP = list().find((e) => norm(e.textContent || '').length > 15)!;
+      firstP.focus();
+      editor.toggleList('decimal'); // make it a numbered item
+      const item = list().find((e) => /^\d+\./.test(norm(e.textContent || '')))!;
+      const countBefore = list().length;
+      const editsBefore = edits.length;
+      item.focus();
+      const tn = (() => {
+        const w = document.createTreeWalker(item, NodeFilter.SHOW_TEXT, {
+          acceptNode: (n) => (n.parentElement && (n.parentElement as HTMLElement).closest('[data-list-marker]')) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+        } as any);
+        let n: Node | null, last: Text | null = null;
+        while ((n = w.nextNode())) last = n as Text;
+        return last;
+      })();
+      const sel = window.getSelection()!;
+      const r = document.createRange();
+      if (tn) { r.setStart(tn, tn.length); } else { r.selectNodeContents(item); }
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      item.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      const countAfter = list().length;
+
+      editor.close();
+      container.remove();
+      // Bridge probe: does SplitParagraph work on a list item at all?
+      const hp: number = D.DocxSessionBridge.OpenSession(bin, '{"persistAnchorIds":true}');
+      const pp = Object.keys(JSON.parse(D.DocxSessionBridge.Project(hp)).anchorIndex).find((k) => k.startsWith('p:')) as string;
+      const liP = JSON.parse(D.DocxSessionBridge.ApplyListFormat(hp, pp, 'decimal')).modified[0].id;
+      const splitMid = JSON.parse(D.DocxSessionBridge.SplitParagraph(hp, liP, 3));
+      D.DocxSessionBridge.CloseSession(hp);
+
+      const markerEls = Array.from(item.querySelectorAll('[data-list-marker]'));
+      const markerText = markerEls.map((m) => m.textContent || '').join('');
+      return {
+        numA, numB, countBefore, countAfter,
+        editsFired: edits.length - editsBefore,
+        itemTag: item.tagName,
+        markerSpanCount: markerEls.length,
+        markerText: markerText.slice(0, 10),
+        fullTextLen: (item.textContent || '').length,
+        markerTextLen: markerText.length,
+        bridgeSplitOk: splitMid.success === true,
+        bridgeSplitErr: splitMid.error ? splitMid.error.code : null,
+      };
+    }, Array.from(bytes));
+
+    // Diagnostics surfaced if it fails.
+    expect(out.numA).toBeGreaterThan(0); // first numbered item is wired + numbered
+    expect(out.numB).toBeGreaterThan(out.numA); // numbering CONTINUES (B > A)
+    // Diagnostics print in the diff if this fails.
+    expect(out).toEqual({ ...out, countAfter: out.countBefore + 1, editsFired: 1 });
+  });
 });

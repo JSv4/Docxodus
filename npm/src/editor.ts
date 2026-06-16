@@ -99,6 +99,8 @@ function escapeInlineMarkdown(text: string): string {
 
 function collectInlineSegments(node: Node, out: InlineSeg[]): void {
   node.childNodes.forEach((child) => {
+    // Skip generated list-marker spans — they aren't part of the paragraph's content.
+    if (child.nodeType === 1 && (child as HTMLElement).hasAttribute?.("data-list-marker")) return;
     if (child.nodeType === 3 /* TEXT_NODE */) {
       const text = child.textContent ?? "";
       if (!text) return;
@@ -184,18 +186,54 @@ interface EditResultLite {
   error?: { message?: string };
 }
 
-/** Plain-text character offset of the collapsed caret within `block`, or null. */
+/** True if `node` is, or is inside, a generated list-marker span (not editable content). */
+function isInMarker(node: Node | null): boolean {
+  let el: HTMLElement | null = node && node.nodeType === 1 ? (node as HTMLElement) : node?.parentElement ?? null;
+  while (el) {
+    if (el.hasAttribute && el.hasAttribute("data-list-marker")) return true;
+    el = el.parentElement;
+  }
+  return false;
+}
+
+/**
+ * Content-text offset of (container, offset) within `block`, EXCLUDING generated list-marker
+ * text. This is the offset DocxSession ops expect (the paragraph's run text, not the rendered
+ * number/bullet the converter injects).
+ */
+function contentOffsetOf(block: HTMLElement, container: Node, offset: number): number {
+  let count = 0;
+  let done = false;
+  const walk = (node: Node): void => {
+    if (done) return;
+    if (node.nodeType === 3 /* TEXT_NODE */) {
+      if (node === container) { if (!isInMarker(node)) count += offset; done = true; return; }
+      if (!isInMarker(node)) count += node.textContent?.length ?? 0;
+    } else {
+      if (node === container) {
+        // Element container: `offset` is a child index — count content up to that child.
+        const kids = Array.from(node.childNodes);
+        for (let i = 0; i < offset && i < kids.length; i++) walk(kids[i]);
+        done = true;
+        return;
+      }
+      node.childNodes.forEach(walk);
+    }
+  };
+  walk(block);
+  return count;
+}
+
+/** Content-text offset of the collapsed caret within `block` (excludes markers), or null. */
 function caretOffsetIn(block: HTMLElement): number | null {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
   if (!sel || sel.rangeCount === 0) return null;
   const range = sel.getRangeAt(0);
   if (!block.contains(range.startContainer)) return null;
-  const pre = range.cloneRange();
-  pre.selectNodeContents(block);
-  pre.setEnd(range.startContainer, range.startOffset);
-  return pre.toString().length;
+  return contentOffsetOf(block, range.startContainer, range.startOffset);
 }
 
+/** Place the caret at content offset `offset` within `el`, skipping marker text. */
 function placeCaretAtOffset(el: HTMLElement, offset: number): void {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
   if (!sel) return;
@@ -206,6 +244,7 @@ function placeCaretAtOffset(el: HTMLElement, offset: number): void {
   const walk = (node: Node): void => {
     if (placed) return;
     if (node.nodeType === 3 /* TEXT_NODE */) {
+      if (isInMarker(node)) return; // never land the caret in the marker
       const len = node.textContent?.length ?? 0;
       if (remaining <= len) {
         range.setStart(node, remaining);
@@ -235,20 +274,19 @@ export type FormatKey = "bold" | "italic" | "underline" | "strike" | "code" | "s
 /** Paragraph alignment passed to DocxEditor.setAlignment. */
 export type EditorAlignment = "left" | "center" | "right" | "justify";
 
-/** The selection's plain-text {start,length} within `block`, or null (collapsed / outside). */
+/** The selection's content-text {start,length} within `block` (excludes markers), or null. */
 function selectionSpanIn(block: HTMLElement): { start: number; length: number } | null {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
   if (!sel || sel.rangeCount === 0) return null;
   const range = sel.getRangeAt(0);
   if (range.collapsed) return null;
   if (!block.contains(range.startContainer) || !block.contains(range.endContainer)) return null;
-  const pre = range.cloneRange();
-  pre.selectNodeContents(block);
-  pre.setEnd(range.startContainer, range.startOffset);
-  return { start: pre.toString().length, length: range.toString().length };
+  const start = contentOffsetOf(block, range.startContainer, range.startOffset);
+  const end = contentOffsetOf(block, range.endContainer, range.endOffset);
+  return { start: Math.min(start, end), length: Math.abs(end - start) };
 }
 
-/** Restore a text selection spanning [start, start+length) within `el`. */
+/** Restore a content-text selection spanning [start, start+length) within `el` (skips markers). */
 function selectRange(el: HTMLElement, start: number, length: number): void {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
   if (!sel) return;
@@ -260,6 +298,7 @@ function selectRange(el: HTMLElement, start: number, length: number): void {
   const walk = (node: Node): boolean => {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === 3 /* TEXT_NODE */) {
+        if (isInMarker(child)) continue; // marker text isn't part of the content offset space
         const len = child.textContent?.length ?? 0;
         if (!startSet && pos + len >= start) {
           range.setStart(child, start - pos);
@@ -362,7 +401,11 @@ export class DocxEditor {
       scale: options.scale ?? 1,
       onEdit: options.onEdit,
     };
-    const handle = exports.DocxSessionBridge.OpenSession(bytes, "");
+    // persistAnchorIds=true keeps PtOpenXml:Unid attributes in Save() output, so a remount's
+    // full re-render keeps the SAME unids the live session uses (a content change like becoming
+    // a list otherwise re-derives a fresh unid, leaving the block unwired). The cost is that
+    // saved bytes carry the Unid attributes (Word ignores them).
+    const handle = exports.DocxSessionBridge.OpenSession(bytes, '{"persistAnchorIds":true}');
     const editor = new DocxEditor(container, exports, handle, opts);
     editor.refreshAnchorMap();
     const fullHtml = exports.DocumentConverter.ConvertDocxToHtmlComplete(
@@ -442,6 +485,9 @@ export class DocxEditor {
     // stamped in the HTML but not individually indexed, so they stay read-only in v1.
     if (!unid || !this.unidToFullId.has(unid)) return;
     el.setAttribute("contenteditable", "true");
+    // Generated list markers (number/bullet + suffix) are not editable content — keep the
+    // caret out of them so offsets stay aligned with the paragraph's run text.
+    el.querySelectorAll<HTMLElement>("[data-list-marker]").forEach((m) => m.setAttribute("contenteditable", "false"));
     el.dataset.committedText = el.textContent ?? "";
     el.addEventListener("focus", () => { this.activeBlock = el; });
     el.addEventListener("blur", () => this.commitBlock(el));
@@ -462,13 +508,18 @@ export class DocxEditor {
     // M1: serialize the block's inline content to markdown so bold/italic/links survive
     // the edit, instead of flattening to plain text.
     const markdown = serializeInlineMarkdown(el);
-    const result = JSON.parse(this.exports.DocxSessionBridge.ReplaceText(this.handle, fullId, markdown)) as {
-      success: boolean;
-      modified?: Array<{ id: string; unid: string }>;
-    };
+    const result = this.parseEdit(this.exports.DocxSessionBridge.ReplaceText(this.handle, fullId, markdown));
     if (!result.success) {
       // Revert the DOM to the last committed text so the view stays in sync with truth.
       el.textContent = el.dataset.committedText ?? "";
+      return;
+    }
+
+    // Editing a list item must re-render the whole document: a single-block render can't keep
+    // the item's number (it would reset to "1."). Commit is on blur, so no caret to restore.
+    if (this.affectsList(result)) {
+      this.remount();
+      this.options.onEdit?.({ anchorId: result.modified?.[0]?.id ?? fullId, unid: result.modified?.[0]?.unid ?? unid });
       return;
     }
 
@@ -532,12 +583,21 @@ export class DocxEditor {
     let fullId = this.unidToFullId.get(unid);
     if (!fullId) return;
 
+    const idx = this.blockIndex(el); // capture before the op (for list remount focus)
     fullId = this.syncBlock(el, fullId); // flush any uncommitted typing first
     const res = this.parseEdit(this.exports.DocxSessionBridge.SplitParagraph(this.handle, fullId, offset));
     if (!res.success) return;
     const first = res.modified?.[0];
     const second = res.created?.[0];
     if (!first || !second) return;
+
+    // Splitting a list item makes a continuing list item — re-render the whole document so
+    // numbering continues and the new item shows its marker; put the caret in the new item.
+    if (this.affectsList(res)) {
+      this.remount(idx + 1, false);
+      this.options.onEdit?.({ anchorId: second.id, unid: second.unid });
+      return;
+    }
 
     const firstEl = this.renderInto(first.id);
     const secondEl = this.renderInto(second.id);
@@ -563,6 +623,7 @@ export class DocxEditor {
     let thisId = this.unidToFullId.get(thisUnid);
     if (!prevId || !thisId) return;
 
+    const prevIdx = this.blockIndex(prev); // capture before the op
     prevId = this.syncBlock(prev, prevId);
     thisId = this.syncBlock(el, thisId);
     const caret = (prev.textContent ?? "").length; // merge boundary
@@ -571,6 +632,13 @@ export class DocxEditor {
     if (!res.success) return;
     const merged = res.modified?.[0];
     if (!merged) return;
+
+    // Merging list items renumbers the list — re-render fully, caret at the merge boundary.
+    if (this.affectsList(res)) {
+      this.remount(prevIdx, true);
+      this.options.onEdit?.({ anchorId: merged.id, unid: merged.unid });
+      return;
+    }
 
     const mergedEl = this.renderInto(merged.id);
     if (!mergedEl) return;
@@ -656,6 +724,7 @@ export class DocxEditor {
       ),
     );
     if (!res.success) return;
+    if (this.affectsList(res)) { this.remount(this.blockIndex(block), false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
     if (fresh && span) selectRange(fresh, span.start, span.length);
     else fresh?.focus();
@@ -696,14 +765,15 @@ export class DocxEditor {
       !!membership && typeof membership.format === "string" &&
       membership.format.toLowerCase().startsWith(kind === "bullet" ? "bullet" : "decimal");
 
+    const idx = this.blockIndex(block); // capture before the op
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyListFormat(this.handle, fullId, isThisKind ? "none" : kind),
     );
     if (!res.success) return;
-    // The session-attached re-render copies the numbering part, so the bullet/number
-    // marker + hanging indent render correctly in the swapped-in block.
-    this.swapBlock(block, unid, res.modified?.[0])?.focus();
+    // Numbering continuation across the list needs whole-document context — re-render fully
+    // (a single-block render would show every numbered item as "1.").
+    this.remount(idx, false);
   }
 
   private applyParagraphFormat(op: {
@@ -717,11 +787,13 @@ export class DocxEditor {
     if (!unid) return;
     let fullId = this.unidToFullId.get(unid);
     if (!fullId) return;
+    const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.SetParagraphFormat(this.handle, fullId, JSON.stringify(op)),
     );
     if (!res.success) return;
+    if (this.affectsList(res)) { this.remount(idx, false); return; }
     this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 
@@ -733,9 +805,11 @@ export class DocxEditor {
     if (!unid) return;
     let fullId = this.unidToFullId.get(unid);
     if (!fullId) return;
+    const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(this.exports.DocxSessionBridge.SetParagraphStyle(this.handle, fullId, styleId));
     if (!res.success) return;
+    if (this.affectsList(res)) { this.remount(idx, false); return; }
     this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 
@@ -781,8 +855,31 @@ export class DocxEditor {
     return fresh;
   }
 
-  /** Full re-render from current session state (used after undo/redo, which can touch any block). */
-  private remount(): void {
+  /** Editable blocks in document order. */
+  private editableList(): HTMLElement[] {
+    return Array.from(this.editRoot.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'));
+  }
+
+  private blockIndex(el: HTMLElement): number {
+    return this.editableList().indexOf(el);
+  }
+
+  /**
+   * True when an edit produced or touched a list item (kind "li"). List markers and
+   * numbering CONTINUATION need whole-document context, which a single-block render lacks
+   * (every item would render as "1."), so such edits re-render the whole document.
+   */
+  private affectsList(res: EditResultLite): boolean {
+    return [...(res.modified ?? []), ...(res.created ?? [])].some((r) => r.kind === "li");
+  }
+
+  /**
+   * Full re-render from current session state (after undo/redo, and after list edits where
+   * single-block rendering can't compute numbering). Optionally focus the editable block at
+   * `focusIndex` (caret at start, or end if `caretAtEnd`) — addressed by index because a
+   * block's content-hashed unid changes across the save/reproject a remount performs.
+   */
+  private remount(focusIndex = -1, caretAtEnd = false): void {
     this.refreshAnchorMap();
     const bytes = this.exports.DocxSessionBridge.Save(this.handle);
     const fullHtml = this.exports.DocumentConverter.ConvertDocxToHtmlComplete(
@@ -791,5 +888,13 @@ export class DocxEditor {
     this.activeBlock = null;
     if (this.options.paginated) this.mountPaginated(fullHtml);
     else this.mountHtml(fullHtml);
+    if (focusIndex >= 0) {
+      const blocks = this.editableList();
+      const target = blocks[Math.min(focusIndex, blocks.length - 1)];
+      if (target) {
+        this.activeBlock = target;
+        placeCaretAtOffset(target, caretAtEnd ? (target.textContent ?? "").length : 0);
+      }
+    }
   }
 }
