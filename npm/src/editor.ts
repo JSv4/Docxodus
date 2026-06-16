@@ -515,18 +515,25 @@ export class DocxEditor {
       return;
     }
 
-    // Editing a list item must re-render the whole document: a single-block render can't keep
-    // the item's number (it would reset to "1."). Commit is on blur, so no caret to restore.
-    if (this.affectsList(result)) {
-      this.remount();
-      this.options.onEdit?.({ anchorId: result.modified?.[0]?.id ?? fullId, unid: result.modified?.[0]?.unid ?? unid });
-      return;
-    }
-
     const newAnchor = result.modified?.[0]?.id ?? fullId;
     const newUnid = result.modified?.[0]?.unid ?? unid;
 
-    // Re-render ONLY this block from the live session and patch it in place.
+    // List items: do NOT re-render on a text commit. A text edit never changes the item's number,
+    // and commit fires on blur — re-rendering replaces this block's DOM node *during* the blur,
+    // which cancels the browser's in-flight focus transfer when the user clicks straight to
+    // another bullet (focus falls to <body>, so typing into the next bullet does nothing). The
+    // DOM already shows exactly what the user typed, with the correct marker, so we leave it in
+    // place and only sync the session (done above) + bookkeeping. The marker would otherwise need
+    // whole-document context to renumber, which a single-block render lacks anyway.
+    if (el.querySelector(":scope > [data-list-marker]")) {
+      el.dataset.committedText = el.textContent ?? "";
+      this.options.onEdit?.({ anchorId: newAnchor, unid: newUnid });
+      return;
+    }
+
+    // Plain block: re-render ONLY this block from the live session and patch it in place for
+    // canonical HTML. Swapping the just-blurred node here is safe (verified — focus stays on the
+    // newly-clicked block).
     const html = this.exports.DocxSessionBridge.RenderBlockHtml(
       this.handle,
       newAnchor,

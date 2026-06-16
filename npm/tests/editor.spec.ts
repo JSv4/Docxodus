@@ -548,4 +548,82 @@ test.describe('DocxEditor — block editor end-to-end', () => {
     // Diagnostics print in the diff if this fails.
     expect(out).toEqual({ ...out, countAfter: out.countBefore + 1, editsFired: 1 });
   });
+
+  // Mlists3: clicking from one numbered item to another must KEEP focus on the clicked item, and
+  // typing into each (including freshly-created empty ones) must work. Regression: committing a
+  // list item on blur re-rendered its DOM node mid-blur, which cancelled the browser's in-flight
+  // focus transfer to the clicked bullet (focus fell to <body>, so typing went nowhere). Driven
+  // with REAL mouse clicks + REAL keyboard — the only faithful repro of the focus-transfer bug.
+  test('Mlists3: clicking between numbered items keeps focus; typing into each works', async ({ page }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+
+    // Build a 3-item numbered list (item 1 has text; items 2 & 3 are empty) in a real container.
+    const anchors = await page.evaluate((bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const D = (window as any).Docxodus;
+      const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
+      const container = document.createElement('div');
+      container.id = 'mtest';
+      document.body.appendChild(container);
+      const editor = D.DocxEditor.open(container, bin, D, {});
+      (window as any).__m = { editor, container };
+      const list = () => Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+      const caretEnd = (el: HTMLElement) => {
+        el.focus();
+        const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+          acceptNode: (n: Node) => (n.parentElement && (n.parentElement as HTMLElement).closest('[data-list-marker]')) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+        } as any);
+        let last: Node | null = null, n: Node | null;
+        while ((n = w.nextNode())) last = n;
+        const r = document.createRange();
+        if (last) { r.setStart(last, (last as Text).length); r.collapse(true); } else { r.selectNodeContents(el); r.collapse(false); }
+        const s = getSelection()!; s.removeAllRanges(); s.addRange(r);
+      };
+      const first = list().find((e) => norm(e.textContent || '').length > 20)!;
+      caretEnd(first);
+      editor.toggleList('decimal');
+      const fire = (el: HTMLElement) => { caretEnd(el); el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); };
+      const it = list().find((e) => /^\d+\./.test(norm(e.textContent || '')))!;
+      fire(it); fire(document.activeElement as HTMLElement); // create items 2 and 3
+      (document.activeElement as HTMLElement)?.blur?.();
+      return list().filter((e) => /^\d+\./.test(norm(e.textContent || ''))).slice(0, 3).map((e) => e.getAttribute('data-anchor')!);
+    }, Array.from(bytes));
+
+    expect(anchors.length).toBe(3);
+
+    // Real click item 1, append text.
+    await page.locator(`#mtest [data-anchor="${anchors[0]}"]`).click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' X');
+
+    // Click item 2 (commits item 1 on blur). Focus MUST land on item 2 — the bug dropped it to <body>.
+    await page.locator(`#mtest [data-anchor="${anchors[1]}"]`).click();
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-anchor'))).toBe(anchors[1]);
+    await page.keyboard.type('BB');
+
+    // Click item 3 (commits item 2). Same focus requirement, and typing into the empty item works.
+    await page.locator(`#mtest [data-anchor="${anchors[2]}"]`).click();
+    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-anchor'))).toBe(anchors[2]);
+    await page.keyboard.type('CC');
+
+    // Commit the last item; assert numbering stayed 1/2/3 and every item kept its typed text.
+    const result = await page.evaluate((a: string[]) => {
+      const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
+      const container = (window as any).__m.container as HTMLElement;
+      (document.activeElement as HTMLElement)?.blur?.();
+      const items = a.map((anc) => {
+        const el = container.querySelector(`[data-anchor="${anc}"]`);
+        const t = norm(el?.textContent || '');
+        return { num: t.match(/^(\d+)\./)?.[1] ?? null, text: t };
+      });
+      const savedLen = (window as any).__m.editor.save()?.length ?? 0;
+      return { items, savedLen };
+    }, anchors);
+
+    expect(result.items.map((i) => i.num)).toEqual(['1', '2', '3']); // numbering intact
+    expect(result.items[0].text.endsWith('X')).toBe(true); // item 1 kept appended text
+    expect(result.items[1].text).toBe('2. BB'); // typed into empty item 2
+    expect(result.items[2].text).toBe('3. CC'); // typed into empty item 3
+    expect(result.savedLen).toBeGreaterThan(0); // saves losslessly
+  });
 });
