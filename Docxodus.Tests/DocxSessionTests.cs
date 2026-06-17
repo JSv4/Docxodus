@@ -55,6 +55,24 @@ public class DocxSessionTests
         return ms.ToArray();
     }
 
+    /// <summary>Single paragraph; styles part defines ONLY Normal (no "Code" style).</summary>
+    internal static byte[] BuildDocWithoutCodeStyle()
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.Document = new Document(new Body(
+                new Paragraph(new Run(new Text("First paragraph.")))));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles(
+                new Style(new StyleName { Val = "Normal" })
+                { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true });
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
     /// <summary>
     /// 2×2 table with simple text in each cell.
     /// </summary>
@@ -1383,6 +1401,29 @@ public class DocxSessionTests
             new Docxodus.Internal.HtmlConversionOptions { FabricateCssClasses = false });
         Assert.Contains("", html);      // Symbol bullet marker rendered
         Assert.Contains("text-indent", html); // hanging indent applied
+    }
+
+    [Fact]
+    public void DS214_ApplyFormat_Code_CreatesMissingCodeCharacterStyle()
+    {
+        // On a document that does NOT define a "Code" style, inline code (FormatOp.Code)
+        // referenced a phantom style → Word silently ignored it (no monospace). The op must
+        // find-or-create a real *character* style so the run actually renders as code.
+        using var s = new DocxSession(BuildDocWithoutCodeStyle());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        var r = s.ApplyFormat(anchor, new CharSpan(0, 5), new FormatOp { Code = true });
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains("Code", s.Raw.GetXml(anchor)); // run references the style
+
+        // Save + reopen: the Code character style is defined and persisted with a monospace font.
+        using var ms = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var codeStyle = doc.MainDocumentPart!.StyleDefinitionsPart!.Styles!
+            .Elements<Style>().FirstOrDefault(st => st.StyleId == "Code");
+        Assert.NotNull(codeStyle);
+        Assert.Equal(StyleValues.Character, codeStyle!.Type!.Value);
+        Assert.Equal("Consolas", codeStyle.StyleRunProperties?.RunFonts?.Ascii?.Value);
     }
 
     [Fact]

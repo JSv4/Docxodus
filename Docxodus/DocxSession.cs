@@ -3777,6 +3777,10 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
+            // Inline code references a "Code" character style by id; ensure it actually
+            // exists so the run renders monospace instead of pointing at a phantom style.
+            if (op.Code is true) Internal.StyleFactory.EnsureCodeCharacterStyle(_doc);
+
             SplitRunsAtOffset(element, actualSpan.Start);
             SplitRunsAtOffset(element, actualSpan.Start + actualSpan.Length);
 
