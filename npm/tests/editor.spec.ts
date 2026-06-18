@@ -228,6 +228,63 @@ test.describe('DocxEditor — block editor end-to-end', () => {
     expect(out.savedLen).toBeGreaterThan(0);
   });
 
+  // Text typed at the end of an underlined run inherits that run's formatting (ReplaceTextAtSpan
+  // drops new text into the boundary run with its rPr intact), matching Word/contenteditable.
+  test('text typed adjacent to a formatted run inherits its formatting', async ({ page }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+    const out = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const D = (window as any).Docxodus;
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const editor = D.DocxEditor.open(container, bin, D, {});
+
+      const norm = (s: string) => (s || '').replace(/[‎‏]/g, '').replace(/\s+/g, ' ').trim();
+      const firstTextNode = (el: Node): Text | null => {
+        if (el.nodeType === 3) return el as Text;
+        for (const c of Array.from(el.childNodes)) { const r = firstTextNode(c); if (r) return r; }
+        return null;
+      };
+
+      const target = (Array.from(
+        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+      ) as HTMLElement[]).find((e) => norm(e.textContent || '').length > 12)!;
+      const anchor = target.getAttribute('data-anchor')!;
+
+      // Underline the WHOLE paragraph, then type at the very end; the new text should be underlined.
+      target.focus();
+      const tn = firstTextNode(target)!;
+      const raw = tn.textContent || '';
+      const lead = raw.length - raw.replace(/^[‎‏]+/, '').length;
+      const sel = window.getSelection()!;
+      const r = document.createRange();
+      r.setStart(tn, lead); r.setEnd(target, target.childNodes.length);
+      sel.removeAllRanges(); sel.addRange(r);
+      editor.format('underline');
+
+      const blk = container.querySelector(`[data-anchor="${anchor}"]`) as HTMLElement;
+      blk.focus();
+      const r2 = document.createRange();
+      r2.selectNodeContents(blk); r2.collapse(false);
+      sel.removeAllRanges(); sel.addRange(r2);
+      document.execCommand('insertText', false, 'QQQ');
+      blk.dispatchEvent(new Event('blur'));
+
+      const after = container.querySelector(`[data-anchor="${anchor}"]`) as HTMLElement;
+      const qSpan = (Array.from(after.querySelectorAll('span')) as HTMLElement[]).find(
+        (s) => norm(s.textContent || '').includes('QQQ'),
+      );
+      const qUnderlined = !!qSpan && getComputedStyle(qSpan).textDecorationLine.includes('underline');
+
+      editor.close();
+      container.remove();
+      return { hasQQQ: norm(after.textContent || '').includes('QQQ'), qUnderlined };
+    }, Array.from(bytes));
+
+    expect(out.hasQQQ).toBe(true);
+    expect(out.qUnderlined).toBe(true); // typed text inherited the adjacent underlined run
+  });
+
   // M2: structural editing — Enter splits a paragraph, Backspace at start merges.
   // Split a block (+1), then merge the halves back (-1, text restored), then save.
   test('M2: split and merge blocks via keyboard', async ({ page }) => {
