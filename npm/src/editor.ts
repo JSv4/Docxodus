@@ -26,6 +26,13 @@ export interface DocxEditorExports {
     CloseSession: (handle: number) => void;
     Project: (handle: number) => string;
     ReplaceText: (handle: number, anchor: string, md: string) => string;
+    ReplaceTextAtSpan: (
+      handle: number,
+      anchor: string,
+      spanStart: number,
+      spanLength: number,
+      replace: string,
+    ) => string;
     SplitParagraph: (handle: number, anchor: string, offset: number) => string;
     MergeParagraphs: (handle: number, first: string, second: string) => string;
     ApplyFormat: (handle: number, anchor: string, spanJson: string, opJson: string) => string;
