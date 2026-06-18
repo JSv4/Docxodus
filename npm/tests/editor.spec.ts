@@ -443,7 +443,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       const after = (Array.from(container.querySelectorAll('[data-anchor]')) as HTMLElement[])
         .find((e) => norm(e.textContent || '').includes(key));
       const marginLeft = after ? parseFloat(getComputedStyle(after).marginLeft) : 0;
-      const hasMarker = after ? after.outerHTML.includes('') : false; // Symbol bullet glyph
+      const hasMarker = after ? after.outerHTML.includes('\u2022') : false; // Unicode bullet glyph (mapped from Symbol U+F0B7)
       editor.close();
       container.remove();
 
@@ -454,7 +454,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
     expect(out.bridgeBullet).toBe(true); // it's a bullet list
     expect(out.removed).toBe(true); // toggling to "none" removed membership
     expect(out.marginLeft).toBeGreaterThan(0); // list indent rendered
-    expect(out.hasMarker).toBe(true); // bullet marker glyph rendered in the editor
+    expect(out.hasMarker).toBe(true); // bullet marker rendered as Unicode \u2022 in the editor
   });
 
   // Mlists2: numbered lists CONTINUE (1., 2.), and Enter on a list item adds a
@@ -688,5 +688,67 @@ test.describe('DocxEditor — block editor end-to-end', () => {
     expect(out.outdented.map((i) => i.num)).toEqual(['1', '2', '3', '4']);
     expect(out.outdented[2].indentPx).toBe(out.outdented[1].indentPx);
     expect(out.savedLen).toBeGreaterThan(0);
+  });
+
+  // Regression: the HTML converter wraps directional run text in bidi marks (U+200E/U+200F)
+  // that are NOT in the session's run text (Google-Docs-exported paragraphs hit this on every
+  // block). The editor's caret-offset math must exclude those marks; otherwise a caret at
+  // end-of-line maps past the session's text length and SplitParagraph rejects the offset, so
+  // Enter is silently dropped. Here we simulate the converter output by injecting a leading and
+  // trailing RLM into a block's DOM text (and matching its committed text, so the synthetic edit
+  // isn't committed back), then press Enter at the very end.
+  test('Enter at end-of-line works when block text carries bidi marks', async ({ page }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+    const out = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const D = (window as any).Docxodus;
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      const editor = D.DocxEditor.open(container, bin, D, {});
+
+      const norm = (s: string) => (s || '').replace(/[\u200E\u200F]/g, '').replace(/\s+/g, ' ').trim();
+      const target = Array.from(
+        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+      ).find((e) => norm((e as HTMLElement).textContent || '').length > 10) as HTMLElement;
+
+      // Inject a leading + trailing RLM into the block's first text node, exactly as the
+      // converter would for a directional paragraph, and align the editor's committed-text
+      // bookkeeping so the marks are treated as already-present (not a user edit).
+      const tn = (function f(n: Node): Text | null {
+        if (n.nodeType === 3) return n as Text;
+        for (const c of Array.from(n.childNodes)) { const r = f(c); if (r) return r; }
+        return null;
+      })(target)!;
+      tn.textContent = '\u200F' + tn.textContent + '\u200F';
+      (target as any).dataset.committedText = target.textContent;
+
+      const blockCountBefore = container.querySelectorAll('[data-anchor]').length;
+
+      // Caret at the very end, then a real Enter keydown.
+      target.focus();
+      const sel = window.getSelection()!;
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      range.collapse(false);
+      sel.removeAllRanges();
+      sel.addRange(range);
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+
+      const blockCountAfter = container.querySelectorAll('[data-anchor]').length;
+      // The new (empty) paragraph should follow the one still holding the original text.
+      const labelsBlock = Array.from(
+        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+      ).find((e) => norm((e as HTMLElement).textContent || '').length > 10) as HTMLElement;
+      const next = labelsBlock ? (labelsBlock.nextElementSibling as HTMLElement | null) : null;
+      const newIsEmpty = !!next && norm(next.textContent || '') === '';
+
+      editor.close();
+      container.remove();
+      return { blockCountBefore, blockCountAfter, newIsEmpty };
+    }, Array.from(bytes));
+
+    // A new paragraph was created (the Enter was NOT silently dropped) and it is empty.
+    expect(out.blockCountAfter).toBe(out.blockCountBefore + 1);
+    expect(out.newIsEmpty).toBe(true);
   });
 });

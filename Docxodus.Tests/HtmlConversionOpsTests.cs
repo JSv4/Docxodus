@@ -29,6 +29,28 @@ public class HtmlConversionOpsTests
     }
 
     [Fact]
+    public void HCO020_BulletListMarker_RendersUnicodeBullet()
+    {
+        // A bullet list item carries the Symbol-font glyph U+F0B7, which renders as a blank box in a
+        // browser without the proprietary font installed. The converter should map list-marker
+        // symbol glyphs to their Unicode equivalents (U+F0B7 -> U+2022 "•").
+        var bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles", "Blank-wml.docx"));
+        using var session = new DocxSession(bytes);
+        var anchor = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Kind is "p" or "h" or "li").Anchor.Id;
+
+        var edit = session.ReplaceText(anchor, "First bullet item");
+        Assert.True(edit.Success, edit.Error?.Message);
+        var li = session.ApplyListFormat(edit.Modified[0].Id, ListFormat.Bullet);
+        Assert.True(li.Success, li.Error?.Message);
+
+        string html = HtmlConversionOps.ConvertToHtml(session.Save(), new HtmlConversionOptions());
+
+        Assert.Contains("•", html);       // • rendered for the bullet marker
+        Assert.DoesNotContain("", html); // the raw Symbol private-use glyph is gone
+    }
+
+    [Fact]
     public void HCO002_ConvertSession_ReflectsEdit()
     {
         using var session = new DocxSession(TourPlanBytes());

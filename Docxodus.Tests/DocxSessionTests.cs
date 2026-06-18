@@ -1269,6 +1269,93 @@ public class DocxSessionTests
     }
 
     [Fact]
+    public void DS046_SplitAfterStyledParagraph_AppliesNextStyle()
+    {
+        // Pressing Enter at the END of a Title/Heading should start a Normal body paragraph (the
+        // style's linked w:next), not another Title — matching Word. Regression for the editor
+        // "draft from scratch" flow where every block below the letterhead inherited the Title.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var titleId = s.SetParagraphStyle(anchor, "Title").Modified[0].Id;
+
+        // "First paragraph." is 16 chars; split at the end → empty new paragraph.
+        var r = s.SplitParagraph(titleId, 16);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal("Title", s.GetBlockMetadata(r.Modified[0].Id)?.StyleId);   // original keeps Title
+        Assert.Equal("Normal", s.GetBlockMetadata(r.Created[0].Id)?.StyleId);   // new para = next style
+    }
+
+    [Fact]
+    public void DS046b_SplitStyledParagraphMidText_KeepsStyle()
+    {
+        // A mid-text split is a continuation of the SAME paragraph, so both halves keep the style
+        // (the next-style rebase only applies to an empty Enter-at-end split).
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var hId = s.SetParagraphStyle(anchor, "Heading2").Modified[0].Id;
+
+        var r = s.SplitParagraph(hId, 5); // "First" | " paragraph."
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal("Heading2", s.GetBlockMetadata(r.Modified[0].Id)?.StyleId);
+        Assert.Equal("Heading2", s.GetBlockMetadata(r.Created[0].Id)?.StyleId);
+    }
+
+    [Fact]
+    public void DS047_SplitDoesNotPropagatePageBreakBefore()
+    {
+        // pageBreakBefore is a once-only property: the original paragraph keeps it, the new
+        // paragraph created by Enter must not inherit a second page break. Regression for the
+        // editor flow where a page-broken "Enclosures" heading pushed every list item onto its own page.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        s.SetParagraphFormat(anchor, new ParagraphFormatOp { PageBreakBefore = true });
+
+        var r = s.SplitParagraph(anchor, 16);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains("pageBreakBefore", s.Raw.GetXml(r.Modified[0].Id));      // original keeps it
+        Assert.DoesNotContain("pageBreakBefore", s.Raw.GetXml(r.Created[0].Id)); // new para does not
+    }
+
+    [Fact]
+    public void DS048_SplitListItemContinuesList()
+    {
+        // Splitting a list item at its end must produce a continuing list item (same numbering),
+        // not a plain Normal paragraph — the next-style rebase must skip list items so the editor's
+        // Enter-continuation keeps working.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var p = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("p:"));
+        var li = s.ApplyListFormat(p, ListFormat.Decimal).Modified[0].Id;
+
+        var r = s.SplitParagraph(li, 16);
+        Assert.True(r.Success, r.Error?.Message);
+        var lm = s.GetListMembership(r.Created[0].Id);
+        Assert.NotNull(lm);
+        Assert.Equal(NumberFormat.Decimal, lm!.Format);
+    }
+
+    [Fact]
+    public void DS049_SplitReMintsClonedPropertyUnids()
+    {
+        // The new paragraph clones the source pPr (to carry indent/list membership). Each cloned
+        // property must get a FRESH Unid — otherwise the same Unid lands on two elements. Regression
+        // for duplicate property Unids observed across split-created paragraphs.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        s.SetParagraphFormat(anchor, new ParagraphFormatOp { IndentDelta = 720 });
+
+        var r = s.SplitParagraph(anchor, 5); // mid-split clones the w:ind into the new paragraph
+        Assert.True(r.Success, r.Error?.Message);
+        var firstUnids = System.Text.RegularExpressions.Regex
+            .Matches(s.Raw.GetXml(r.Modified[0].Id), "Unid=\"([0-9a-fA-F]+)\"")
+            .Select(m => m.Groups[1].Value).ToHashSet();
+        var secondUnids = System.Text.RegularExpressions.Regex
+            .Matches(s.Raw.GetXml(r.Created[0].Id), "Unid=\"([0-9a-fA-F]+)\"")
+            .Select(m => m.Groups[1].Value).ToHashSet();
+        Assert.NotEmpty(secondUnids);
+        Assert.Empty(firstUnids.Intersect(secondUnids)); // no Unid shared between the two subtrees
+    }
+
+    [Fact]
     public void DS043_MergeParagraphs()
     {
         using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
@@ -1320,6 +1407,35 @@ public class DocxSessionTests
         var r = s.SetParagraphStyle(anchor, "NotARealStyle1234");
         Assert.False(r.Success);
         Assert.Equal(EditErrorCode.UnknownStyle, r.Error!.Code);
+    }
+
+    [Fact]
+    public void DS053_SetParagraphStyle_CreatesMissingBuiltInStyle()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        // "Title" is a well-known built-in but BuildHeadingStyles defines only Heading1-6/Code/
+        // Quote/MyListStyle, so it is absent. Applying a built-in the document hasn't defined used
+        // to fail with UnknownStyle (a silent no-op in the editor); now the style is find-or-created
+        // (like the inline "Code" character style) and applied.
+        var r = s.SetParagraphStyle(anchor, "Title");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal("Title", s.GetBlockMetadata(r.Modified[0].Id)?.StyleId);
+    }
+
+    [Fact]
+    public void DS054_SetParagraphStyle_CreatesMissingHeadingAsHeading()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        // Heading8 is absent (BuildHeadingStyles stops at 6). The synthesized heading carries an
+        // outlineLvl, so the anchor flips p -> h and it projects as a markdown heading.
+        var r = s.SetParagraphStyle(anchor, "Heading8");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal("h", r.Modified[0].Kind);
+        Assert.Equal("Heading8", s.GetBlockMetadata(r.Modified[0].Id)?.StyleId);
     }
 
     [Fact]
@@ -1390,16 +1506,120 @@ public class DocxSessionTests
     }
 
     [Fact]
+    public void DS215_SetParagraphFormat_Indent_ToleratesNonIntegerExistingValue()
+    {
+        // Google-Docs-exported documents emit non-integer twips like w:left="12.996749877929688".
+        // SetParagraphFormat's indent delta must read that tolerantly (matching the HTML converter's
+        // AttributeToTwips: decimal → truncate) instead of throwing a FormatException, and write back
+        // a clean integer. Regression for indent being silently dead on every paragraph of such docs.
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        {
+            using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+            {
+                var main = wDoc.AddMainDocumentPart();
+                main.Document = new Document(new Body());
+                main.AddNewPart<StyleDefinitionsPart>().Styles = BuildHeadingStyles();
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                main.Document.Body!.Append(new Paragraph(
+                    new ParagraphProperties(new Indentation { Left = "12.996749877929688" }),
+                    new Run(new Text("Indented paragraph."))));
+                main.Document.Save();
+            }
+            bytes = ms.ToArray();
+        }
+
+        using var s = new DocxSession(bytes);
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.SetParagraphFormat(anchor, new ParagraphFormatOp { IndentDelta = 720 });
+        Assert.True(r.Success, r.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("732", xml);          // 12 (truncated from 12.996…) + 720
+        Assert.DoesNotContain("12.99", xml);  // the non-integer value is normalized away
+    }
+
+    [Fact]
+    public void DS216_ApplyFormat_Bold_TurnsOnExplicitlyOffRun()
+    {
+        // Google Docs stamps an explicit <w:b w:val="0"/> (bold OFF) on every run. Toggling bold ON
+        // must normalize that to ON (bare <w:b/>), not no-op because "a w:b element already exists".
+        // Regression for bold/italic/strike silently doing nothing on such documents.
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        {
+            using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+            {
+                var main = wDoc.AddMainDocumentPart();
+                main.Document = new Document(new Body());
+                main.AddNewPart<StyleDefinitionsPart>().Styles = BuildHeadingStyles();
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                main.Document.Body!.Append(new Paragraph(new Run(
+                    new RunProperties(new Bold { Val = OnOffValue.FromBoolean(false) }),
+                    new Text("Hello world"))));
+                main.Document.Save();
+            }
+            bytes = ms.ToArray();
+        }
+
+        using var s = new DocxSession(bytes);
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.ApplyFormat(anchor, new CharSpan(0, 5), new FormatOp { Bold = true });
+        Assert.True(r.Success, r.Error?.Message);
+        var html = Docxodus.Internal.HtmlConversionOps.RenderBlockHtml(s,
+            r.Modified is { Count: > 0 } ? r.Modified[0].Id : anchor,
+            new Docxodus.Internal.HtmlConversionOptions { FabricateCssClasses = false });
+        Assert.Contains("font-weight: bold", html); // the bolded span actually renders bold
+    }
+
+    [Fact]
+    public void DS217_RenderBlock_InvisiblePBdr_DoesNotEatIndent()
+    {
+        // An all-"nil" w:pBdr (Google Docs stamps one on every paragraph) is NOT a visible border.
+        // CreateBorderDivs must not wrap such a paragraph in a border <div> and relocate its left
+        // indent onto the div — that forces the paragraph's own margin-left to 0, so the editor's
+        // single-block re-render silently loses indentation. Regression for indent never showing.
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        {
+            using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+            {
+                var main = wDoc.AddMainDocumentPart();
+                main.Document = new Document(new Body());
+                main.AddNewPart<StyleDefinitionsPart>().Styles = BuildHeadingStyles();
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                main.Document.Body!.Append(new Paragraph(
+                    new ParagraphProperties(
+                        new ParagraphBorders(
+                            new TopBorder { Val = BorderValues.Nil, Size = 0U, Space = 0U },
+                            new LeftBorder { Val = BorderValues.Nil, Size = 0U, Space = 0U },
+                            new BottomBorder { Val = BorderValues.Nil, Size = 0U, Space = 0U },
+                            new RightBorder { Val = BorderValues.Nil, Size = 0U, Space = 0U }),
+                        new Indentation { Left = "1440" }),
+                    new Run(new Text("Indented under an invisible border."))));
+                main.Document.Save();
+            }
+            bytes = ms.ToArray();
+        }
+
+        using var s = new DocxSession(bytes);
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var html = Docxodus.Internal.HtmlConversionOps.RenderBlockHtml(s, anchor,
+            new Docxodus.Internal.HtmlConversionOptions { FabricateCssClasses = false });
+        // The <p> itself carries the 1-inch indent; it is not eaten by a wrapping border div.
+        Assert.Contains("margin-left: 1.00in", html);
+    }
+
+    [Fact]
     public void DS213_ApplyListFormat_Bullet_RendersMarker()
     {
-        // The single-block render (the editor's incremental path) must show the bullet
-        // marker glyph (Symbol U+F0B7) and the list's hanging indent.
+        // The single-block render (the editor's incremental path) must show the bullet marker
+        // and the list's hanging indent. The Symbol-font glyph U+F0B7 is mapped to Unicode (•).
         using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
         var p = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("p:"));
         var li = s.ApplyListFormat(p, ListFormat.Bullet).Modified[0].Id;
         var html = Docxodus.Internal.HtmlConversionOps.RenderBlockHtml(s, li,
             new Docxodus.Internal.HtmlConversionOptions { FabricateCssClasses = false });
-        Assert.Contains("", html);      // Symbol bullet marker rendered
+        Assert.Contains("•", html);            // Unicode bullet marker rendered (mapped from Symbol U+F0B7)
         Assert.Contains("text-indent", html); // hanging indent applied
     }
 

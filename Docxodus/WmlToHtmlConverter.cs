@@ -5429,7 +5429,30 @@ namespace Docxodus
                 return null;
 
             var style = DefineRunStyle(run);
-            object content = run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
+
+            // List-marker glyphs in a symbol font (e.g. Word's default bullet U+F0B7 in Symbol, or
+            // U+F0A7 in Wingdings) render as a blank box without the proprietary font installed. Map
+            // them to their Unicode equivalents and drop the symbol font so they render in the page's
+            // normal font. Scoped to markers (FormattingAssembler's ListItemRun) so body-text symbol
+            // runs are untouched; if nothing maps, the original text + font are left as-is.
+            object content;
+            if (isListMarker && style.TryGetValue("font-family", out var markerFont) &&
+                Internal.SymbolFontMapper.IsSymbolFont(markerFont))
+            {
+                var mappedAny = false;
+                content = run.Elements().Select(e =>
+                {
+                    if (e.Name != W.t) return ConvertToHtmlTransform(wordDoc, settings, e, false, 0m);
+                    var mapped = Internal.SymbolFontMapper.MapText(e.Value, markerFont);
+                    if (mapped != e.Value) mappedAny = true;
+                    return (object)new XText(mapped);
+                }).ToList();
+                if (mappedAny) style.Remove("font-family");
+            }
+            else
+            {
+                content = run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
+            }
 
             // Wrap content in h:sup or h:sub elements as necessary.
             if (rPr.Element(W.vertAlign) != null)
@@ -7176,12 +7199,31 @@ namespace Docxodus
             return currentSection;
         }
 
+        /// <summary>
+        /// True when a <c>w:pBdr</c> declares at least one visible border side. A side is invisible
+        /// when its <c>w:val</c> is absent, <c>"nil"</c>, or <c>"none"</c>. Word renders no border for
+        /// an all-nil pBdr, so for grouping purposes it must be treated as "no border".
+        /// </summary>
+        private static bool HasVisibleBorder(XElement pBdr)
+        {
+            return pBdr.Elements().Any(side =>
+            {
+                var val = (string)side.Attribute(W.val);
+                return val != null && val != "nil" && val != "none";
+            });
+        }
+
         private static object CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)
         {
             return elements.GroupAdjacent(e =>
                 {
                     var pBdr = e.Elements(W.pPr).Elements(W.pBdr).FirstOrDefault();
-                    if (pBdr != null)
+                    // Only an actually-visible border groups paragraphs into a border <div>. A pBdr
+                    // whose sides are all "nil"/"none" (e.g. the empty pBdr Google Docs stamps on every
+                    // paragraph) is no border at all — wrapping such a paragraph in a div would relocate
+                    // its left indent onto the div and force the paragraph's own margin-left to 0, so a
+                    // single-block re-render (the editor's incremental path) silently loses indentation.
+                    if (pBdr != null && HasVisibleBorder(pBdr))
                     {
                         var indStr = string.Empty;
                         var ind = e.Elements(W.pPr).Elements(W.ind).FirstOrDefault();

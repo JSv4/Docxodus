@@ -3341,7 +3341,12 @@ public sealed class DocxSession : IDisposable
         {
             var pPr = element.Element(W.pPr);
             var second = new XElement(W.p);
-            if (pPr is not null) second.Add(new XElement(pPr));
+            XElement? newPPr = null;
+            if (pPr is not null)
+            {
+                newPPr = new XElement(pPr);
+                second.Add(newPPr);
+            }
 
             // Split any run that straddles the offset (descends into hyperlinks/sdts),
             // then split any container (hyperlink) that still straddles, then move all
@@ -3350,15 +3355,54 @@ public sealed class DocxSession : IDisposable
             SplitInlineContainersAtOffset(element, characterOffset);
             MoveInlineChildrenAfter(element, characterOffset, second);
 
+            if (newPPr is not null)
+            {
+                // pageBreakBefore is a once-only property: the original paragraph keeps it; the new
+                // paragraph must not inherit a second page break (matches Word clearing it on Enter).
+                newPPr.Elements(W.pageBreakBefore).Remove();
+
+                // An empty Enter-at-end split starts a fresh paragraph. For a non-list paragraph whose
+                // style declares a distinct next-paragraph style (e.g. Title/Heading -> Normal), rebase
+                // the new paragraph onto that next style instead of cloning the heading: a clean pStyle,
+                // dropping the heading-only direct props and the inherited paragraph-mark rPr that would
+                // otherwise bake the heading's bold into freshly-typed text. List items are exempt so the
+                // editor's Enter-continuation keeps the list going.
+                bool emptySplit = characterOffset >= totalText.Length;
+                bool isListItem = newPPr.Element(W.numPr) is not null;
+                if (emptySplit && !isListItem)
+                {
+                    var curStyle = (string?)newPPr.Element(W.pStyle)?.Attribute(W.val);
+                    var nextStyle = ResolveNextParagraphStyle(curStyle);
+                    if (nextStyle is not null && !string.Equals(nextStyle, curStyle, StringComparison.Ordinal))
+                    {
+                        var rebuilt = new XElement(W.pPr,
+                            new XElement(W.pStyle, new XAttribute(W.val, nextStyle)));
+                        newPPr.ReplaceWith(rebuilt);
+                        newPPr = rebuilt;
+                    }
+                }
+
+                // Re-mint Unids on the new paragraph's property subtree so cloned property elements
+                // (jc, ind, numPr, ...) don't carry the original's Unid onto a second element.
+                foreach (var el in newPPr.DescendantsAndSelf())
+                    el.Attributes(PtOpenXml.Unid).Remove();
+            }
+
             UnidHelper.AssignToSelfAndDescendants(second);
             element.AddAfterSelf(second);
 
             var secondUnid = (string)second.Attribute(PtOpenXml.Unid)!;
-            var secondAnchor = new Anchor(
-                $"{target.Anchor.Kind}:{target.Anchor.Scope}:{secondUnid}",
-                target.Anchor.Kind, target.Anchor.Scope, secondUnid);
-
             InvalidateProjectionCache();
+
+            // The new paragraph's kind can differ from the original (Heading -> Normal via the
+            // next-paragraph style), so resolve its anchor from the fresh projection rather than
+            // assuming the original kind.
+            var secondAnchor =
+                Project().AnchorIndex.Values.FirstOrDefault(t => t.Unid == secondUnid)?.Anchor
+                ?? new Anchor(
+                    $"{target.Anchor.Kind}:{target.Anchor.Scope}:{secondUnid}",
+                    target.Anchor.Kind, target.Anchor.Scope, secondUnid);
+
             return new EditResult
             {
                 Success = true,
@@ -3373,6 +3417,23 @@ public sealed class DocxSession : IDisposable
             _ = _history.PopForUndo();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
+    }
+
+    /// <summary>
+    /// The linked next-paragraph style (<c>w:style/w:next/@w:val</c>) for the given paragraph style
+    /// id, read from the styles part; null when the id is empty/unknown or declares no next style.
+    /// Read via <c>GetXDocument</c> (the same view <see cref="Internal.StyleFactory"/> writes through)
+    /// so styles synthesized earlier in the session are visible.
+    /// </summary>
+    private string? ResolveNextParagraphStyle(string? styleId)
+    {
+        if (string.IsNullOrEmpty(styleId)) return null;
+        var part = _doc?.MainDocumentPart?.StyleDefinitionsPart;
+        var root = part?.GetXDocument().Root;
+        if (root is null) return null;
+        var style = root.Elements(W.style)
+            .FirstOrDefault(st => (string?)st.Attribute(W.styleId) == styleId);
+        return (string?)style?.Element(W.next)?.Attribute(W.val);
     }
 
     public EditResult MergeParagraphs(string firstAnchorId, string secondAnchorId)
@@ -3820,11 +3881,10 @@ public sealed class DocxSession : IDisposable
         if (target.Anchor.Kind is not ("p" or "h" or "li"))
             return EditResult.Fail(EditErrorCode.AnchorWrongKind, "SetParagraphStyle requires a paragraph anchor", anchorId);
 
-        var stylesPart = _doc!.MainDocumentPart!.StyleDefinitionsPart;
-        var stylesXml = stylesPart?.GetXDocument().Root;
-        bool exists = stylesXml?.Elements(W.style)
-            .Any(st => (string?)st.Attribute(W.styleId) == styleId) ?? false;
-        if (!exists)
+        // Find-or-create well-known built-in styles (Title, Subtitle, Heading1-9) the document
+        // hasn't defined yet, so applying one works instead of silently failing. Mirrors the inline
+        // "Code" character style. A truly unknown custom id is left untouched and still rejected.
+        if (!Internal.StyleFactory.EnsureParagraphStyle(_doc!, styleId))
             return EditResult.Fail(EditErrorCode.UnknownStyle, $"style id not found: {styleId}", anchorId);
 
         var element = target.Resolve(_doc);
@@ -3930,7 +3990,12 @@ public sealed class DocxSession : IDisposable
             if (op.IndentDelta is { } delta && delta != 0)
             {
                 var ind = pPr.Element(W.ind);
-                int cur = ind is null ? 0 : (int?)ind.Attribute(W.left) ?? 0;
+                // Parse the current left indent tolerantly: documents exported by Google Docs (and
+                // others) emit non-integer twips like w:left="12.996749877929688", which a bare
+                // (int?) cast rejects with a FormatException. AttributeToTwips is the same helper the
+                // HTML converter uses (decimal → truncate), so we read what the doc renders and write
+                // back a clean integer.
+                int cur = ind is null ? 0 : WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.left)) ?? 0;
                 int next = Math.Max(0, cur + delta);
                 if (ind is null)
                 {
@@ -4674,8 +4739,17 @@ public sealed class DocxSession : IDisposable
         {
             if (set is null) return;
             var existing = rPr.Element(name);
-            if (set.Value && existing is null) rPr.Add(new XElement(name));
-            else if (!set.Value) existing?.Remove();
+            if (set.Value)
+            {
+                // Turn the property ON. A run may already carry an explicit OFF element
+                // (e.g. Google Docs stamps <w:b w:val="0"/> on every run); just adding a new
+                // element when one is "missing" would leave that w:val="0" in place and the
+                // toggle would silently do nothing. Normalize: drop the w:val so the bare
+                // element (<w:b/>) means on; add one only when truly absent.
+                if (existing is null) rPr.Add(new XElement(name));
+                else existing.Attribute(W.val)?.Remove();
+            }
+            else existing?.Remove();
         }
 
         Toggle(rPr, W.b, op.Bold);

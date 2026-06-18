@@ -203,9 +203,36 @@ function isInMarker(node: Node | null): boolean {
 }
 
 /**
+ * Unicode bidi formatting marks the HTML converter injects to preserve visual order: LRM/RLM/ALM,
+ * the embedding/override controls, and the isolates (see WmlToHtmlConverter — a paragraph/run gets
+ * a leading U+200E or U+200F). They are presentation-only — NOT part of the paragraph's run text the
+ * session holds — so the editor must exclude them from its content-offset space, the same way it
+ * excludes generated list markers. Otherwise every caret offset is shifted by the leading mark and a
+ * caret at end-of-line overshoots the session's text length, so SplitParagraph/ApplyFormat reject the
+ * offset (symptom: Enter at the end of a Google-Docs-exported paragraph is silently dropped).
+ */
+// LRM, RLM, ALM; the embedding/override controls (LRE RLE PDF LRO RLO); the isolates (LRI RLI FSI PDI).
+const BIDI_MARK_CLASS = "\u200E\u200F\u061C\u202A-\u202E\u2066-\u2069";
+const BIDI_MARKS_RE_G = new RegExp(`[${BIDI_MARK_CLASS}]`, "g");
+const BIDI_MARK_RE = new RegExp(`[${BIDI_MARK_CLASS}]`);
+function stripBidi(s: string): string {
+  return s.replace(BIDI_MARKS_RE_G, "");
+}
+
+/** Raw string index in `s` for content offset `n` (content = chars excluding bidi marks). */
+function domOffsetForContentOffset(s: string, n: number): number {
+  let content = 0;
+  for (let i = 0; i < s.length; i++) {
+    if (content >= n) return i;
+    if (!BIDI_MARK_RE.test(s[i])) content++;
+  }
+  return s.length;
+}
+
+/**
  * Content-text offset of (container, offset) within `block`, EXCLUDING generated list-marker
- * text. This is the offset DocxSession ops expect (the paragraph's run text, not the rendered
- * number/bullet the converter injects).
+ * text and injected bidi marks. This is the offset DocxSession ops expect (the paragraph's run
+ * text, not the rendered number/bullet or bidi marks the converter injects).
  */
 function contentOffsetOf(block: HTMLElement, container: Node, offset: number): number {
   let count = 0;
@@ -213,8 +240,11 @@ function contentOffsetOf(block: HTMLElement, container: Node, offset: number): n
   const walk = (node: Node): void => {
     if (done) return;
     if (node.nodeType === 3 /* TEXT_NODE */) {
-      if (node === container) { if (!isInMarker(node)) count += offset; done = true; return; }
-      if (!isInMarker(node)) count += node.textContent?.length ?? 0;
+      if (node === container) {
+        if (!isInMarker(node)) count += stripBidi((node.textContent ?? "").slice(0, offset)).length;
+        done = true; return;
+      }
+      if (!isInMarker(node)) count += stripBidi(node.textContent ?? "").length;
     } else {
       if (node === container) {
         // Element container: `offset` is a child index — count content up to that child.
@@ -239,6 +269,38 @@ function caretOffsetIn(block: HTMLElement): number | null {
   return contentOffsetOf(block, range.startContainer, range.startOffset);
 }
 
+/** Visible content text of `block`, excluding generated list-marker text (the same content
+ *  caretOffsetIn/contentOffsetOf count). */
+function blockContentText(block: HTMLElement): string {
+  let out = "";
+  const walk = (node: Node): void => {
+    if (node.nodeType === 3 /* TEXT_NODE */) {
+      if (!isInMarker(node)) out += stripBidi(node.textContent ?? "");
+    } else {
+      node.childNodes.forEach(walk);
+    }
+  };
+  walk(block);
+  return out;
+}
+
+/**
+ * Map a DOM caret offset (from caretOffsetIn) into the run-text offset the session holds after a
+ * commit. commitBlock/syncBlock commit `serializeInlineMarkdown(el)`, which `.trim()`s leading and
+ * trailing whitespace, so the session's paragraph text is shorter than the DOM text whenever the
+ * block has edge whitespace — e.g. a blank document renders its empty paragraph with a placeholder
+ * space, and typing lands after it. Without this adjustment the caret offset overshoots the
+ * committed length, SplitParagraph returns OffsetOutOfRange, and splitAtCaret silently drops the
+ * Enter (no new paragraph). Subtracting the leading whitespace before the caret and clamping to the
+ * trimmed length keeps the split offset consistent with what was committed.
+ */
+function trimmedSplitOffset(block: HTMLElement, domOffset: number): number {
+  const content = blockContentText(block);
+  const leading = content.length - content.replace(/^\s+/, "").length;
+  const trimmedLen = content.trim().length;
+  return Math.max(0, Math.min(domOffset - Math.min(domOffset, leading), trimmedLen));
+}
+
 /** Place the caret at content offset `offset` within `el`, skipping marker text. */
 function placeCaretAtOffset(el: HTMLElement, offset: number): void {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
@@ -251,9 +313,10 @@ function placeCaretAtOffset(el: HTMLElement, offset: number): void {
     if (placed) return;
     if (node.nodeType === 3 /* TEXT_NODE */) {
       if (isInMarker(node)) return; // never land the caret in the marker
-      const len = node.textContent?.length ?? 0;
+      const raw = node.textContent ?? "";
+      const len = stripBidi(raw).length; // content length excludes injected bidi marks
       if (remaining <= len) {
-        range.setStart(node, remaining);
+        range.setStart(node, domOffsetForContentOffset(raw, remaining));
         placed = true;
       } else {
         remaining -= len;
@@ -305,13 +368,14 @@ function selectRange(el: HTMLElement, start: number, length: number): void {
     for (const child of Array.from(node.childNodes)) {
       if (child.nodeType === 3 /* TEXT_NODE */) {
         if (isInMarker(child)) continue; // marker text isn't part of the content offset space
-        const len = child.textContent?.length ?? 0;
+        const raw = child.textContent ?? "";
+        const len = stripBidi(raw).length; // content length excludes injected bidi marks
         if (!startSet && pos + len >= start) {
-          range.setStart(child, start - pos);
+          range.setStart(child, domOffsetForContentOffset(raw, start - pos));
           startSet = true;
         }
         if (startSet && pos + len >= end) {
-          range.setEnd(child, end - pos);
+          range.setEnd(child, domOffsetForContentOffset(raw, end - pos));
           return true;
         }
         pos += len;
@@ -378,6 +442,13 @@ export class DocxEditor {
   /** The most recently focused editable block — the target for ribbon/format commands. */
   private activeBlock: HTMLElement | null = null;
   private closed = false;
+  /**
+   * Re-entrancy guard for node replacement. Replacing a contenteditable block that still holds
+   * focus removes the focused node, which fires a SYNCHRONOUS `blur` → re-enters commitBlock; the
+   * interleaved second replaceWith then throws NotFoundError ("node ... no longer a child") and the
+   * structural edit (split/merge/format) is lost. While this flag is set, commitBlock no-ops.
+   */
+  private replacing = false;
 
   private constructor(
     container: HTMLElement,
@@ -500,9 +571,24 @@ export class DocxEditor {
     el.addEventListener("keydown", (ev) => this.onKeydown(el, ev as KeyboardEvent));
   }
 
+  /**
+   * Run a node-replacement that may remove the focused block while suppressing the re-entrant
+   * blur→commit that removal triggers (see the `replacing` field). The session has already been
+   * updated by the caller, so the suppressed commit would be redundant anyway.
+   */
+  private withReplaceGuard(run: () => void): void {
+    const prev = this.replacing;
+    this.replacing = true;
+    try {
+      run();
+    } finally {
+      this.replacing = prev;
+    }
+  }
+
   /** Commit a block edit on blur: DocxSession op → re-render only this block → patch DOM. */
   private commitBlock(el: HTMLElement): void {
-    if (this.closed) return;
+    if (this.closed || this.replacing) return;
     const unid = el.getAttribute("data-anchor");
     if (!unid) return;
     const newText = (el.textContent ?? "").trim();
@@ -548,8 +634,8 @@ export class DocxEditor {
     );
     if (html.charCodeAt(0) !== 0x7b /* not an error object */) {
       const fresh = new DOMParser().parseFromString(html, "text/html").body.firstElementChild as HTMLElement | null;
-      if (fresh) {
-        el.replaceWith(fresh);
+      if (fresh && el.isConnected) {
+        this.withReplaceGuard(() => el.replaceWith(fresh));
         // Keep the anchor map current and re-wire the replacement.
         this.unidToFullId.delete(unid);
         this.unidToFullId.set(newUnid, newAnchor);
@@ -597,11 +683,14 @@ export class DocxEditor {
 
   /** Enter: split the block at the caret into two paragraphs. */
   private splitAtCaret(el: HTMLElement): void {
-    const offset = caretOffsetIn(el);
+    const rawOffset = caretOffsetIn(el);
     const unid = el.getAttribute("data-anchor");
-    if (offset == null || !unid) return;
+    if (rawOffset == null || !unid) return;
     let fullId = this.unidToFullId.get(unid);
     if (!fullId) return;
+    // The session commits trimmed text, so map the DOM caret offset into the trimmed run-text
+    // offset (else an overshoot — e.g. a placeholder leading space — is rejected and Enter is lost).
+    const offset = trimmedSplitOffset(el, rawOffset);
 
     const idx = this.blockIndex(el); // capture before the op (for list remount focus)
     fullId = this.syncBlock(el, fullId); // flush any uncommitted typing first
@@ -621,10 +710,13 @@ export class DocxEditor {
 
     const firstEl = this.renderInto(first.id);
     const secondEl = this.renderInto(second.id);
-    if (!firstEl || !secondEl) return;
+    if (!firstEl || !secondEl || !el.isConnected) return;
 
-    el.replaceWith(firstEl);
-    firstEl.after(secondEl);
+    // el is the focused block — guard the replace so the blur it fires doesn't re-enter commitBlock.
+    this.withReplaceGuard(() => {
+      el.replaceWith(firstEl);
+      firstEl.after(secondEl);
+    });
     this.unidToFullId.delete(unid);
     this.unidToFullId.set(first.unid, first.id);
     this.unidToFullId.set(second.unid, second.id);
@@ -661,10 +753,13 @@ export class DocxEditor {
     }
 
     const mergedEl = this.renderInto(merged.id);
-    if (!mergedEl) return;
+    if (!mergedEl || !prev.isConnected) return;
 
-    prev.replaceWith(mergedEl);
-    el.remove();
+    // prev may be focused — guard the replace against the re-entrant blur→commit.
+    this.withReplaceGuard(() => {
+      prev.replaceWith(mergedEl);
+      el.remove();
+    });
     this.unidToFullId.delete(prevUnid);
     this.unidToFullId.delete(thisUnid);
     this.unidToFullId.set(merged.unid, merged.id);
@@ -891,8 +986,9 @@ export class DocxEditor {
     const newUnid = ref?.unid ?? oldUnid;
     if (!anchorId) return null;
     const fresh = this.renderInto(anchorId);
-    if (!fresh) return null;
-    oldEl.replaceWith(fresh);
+    if (!fresh || !oldEl.isConnected) return null;
+    // oldEl is the focused/active block — guard the replace against the re-entrant blur→commit.
+    this.withReplaceGuard(() => oldEl.replaceWith(fresh));
     this.unidToFullId.delete(oldUnid);
     this.unidToFullId.set(newUnid, anchorId);
     this.wireBlock(fresh);
