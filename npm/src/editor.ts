@@ -1160,11 +1160,16 @@ export class DocxEditor {
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
+    // If the caret is on an empty paragraph (not a table cell), insert the table BEFORE it so the
+    // empty paragraph becomes the editable line BELOW the table — no stray blank line above it, and
+    // a reachable paragraph below (S-1 smoke-test findings 2 + 4). Otherwise insert after.
+    const emptyHere =
+      !block.closest("table") && blockContentText(block).replace(/[\s ]+/g, "").length === 0;
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.InsertTable(
         this.handle,
         fullId,
-        "after",
+        emptyHere ? "before" : "after",
         rows,
         cols,
         options ? JSON.stringify(options) : "",
