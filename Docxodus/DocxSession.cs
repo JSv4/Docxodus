@@ -4035,20 +4035,59 @@ public sealed class DocxSession : IDisposable
 
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
-        var numPr = element.Element(W.pPr)?.Element(W.numPr);
-        if (numPr is null)
-            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "no numPr on this paragraph", anchorId);
 
-        var ilvl = numPr.Element(W.ilvl);
-        int current = ilvl is null ? 0 : int.Parse((string?)ilvl.Attribute(W.val) ?? "0");
+        var pPr = element.Element(W.pPr);
+        var numPr = pPr?.Element(W.numPr);
+
+        // Resolve the effective (numId, current ilvl). A direct w:numPr wins; otherwise the
+        // paragraph is a list item only via its pStyle chain (e.g. python-docx "List Bullet",
+        // which carries numPr on the STYLE, not the paragraph). In that case read the effective
+        // values from the style and materialize a direct w:numPr below — exactly what Word does
+        // when you Tab a styled list item, and the only way to control ilvl per paragraph.
+        int current;
+        int? effectiveNumId;
+        if (numPr is not null)
+        {
+            current = (int?)numPr.Element(W.ilvl)?.Attribute(W.val) ?? 0;
+            effectiveNumId = (int?)numPr.Element(W.numId)?.Attribute(W.val);
+        }
+        else
+        {
+            (effectiveNumId, current) = ResolveStyleNumbering(element);
+            if (effectiveNumId is null)
+                return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                    "no numPr on this paragraph or its style", anchorId);
+        }
+
         int next = current + levelDelta;
         if (next < 0 || next > 8)
             return EditResult.Fail(EditErrorCode.InvalidListLevel,
                 $"resulting list level {next} out of [0,8]", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
-        ilvl?.Remove();
-        numPr.Add(new XElement(W.ilvl, new XAttribute(W.val, next)));
+        // Nesting only renders if the abstractNum actually DEFINES the target level — many docs
+        // define just level 0, so synthesize any missing levels before bumping ilvl.
+        if (effectiveNumId.HasValue)
+            Internal.NumberingFactory.EnsureLevelDefined(_doc!, effectiveNumId.Value, next);
+
+        if (numPr is not null)
+        {
+            numPr.Element(W.ilvl)?.Remove();
+            numPr.AddFirst(new XElement(W.ilvl, new XAttribute(W.val, next))); // ilvl precedes numId
+        }
+        else
+        {
+            if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+            SetPPrChildInOrder(pPr, new XElement(W.numPr,
+                new XElement(W.ilvl, new XAttribute(W.val, next)),
+                new XElement(W.numId, new XAttribute(W.val, effectiveNumId!.Value))));
+        }
+        // Flush the body mutation to the part stream immediately — same as NumberingFactory does for
+        // the numbering part. Without this the materialized w:numPr lives only in the in-memory
+        // XDocument; under WASM the typed-DOM/XDocument divergence means a later Save() serializes
+        // the un-flushed state and the nest silently vanishes on save and re-render. (Body lists are
+        // body-scoped; flushing the main part covers them.)
+        _doc!.MainDocumentPart!.PutXDocument();
         InvalidateProjectionCache();
         return new EditResult
         {
@@ -4056,6 +4095,35 @@ public sealed class DocxSession : IDisposable
             Modified = new[] { target.Anchor },
             Patch = ProjectScope(target),
         };
+    }
+
+    /// <summary>
+    /// Resolve the effective <c>(numId, ilvl)</c> a paragraph inherits from its pStyle chain, for
+    /// a list item whose numbering comes from a style rather than a direct <c>w:numPr</c>. Walks
+    /// <c>basedOn</c> (cycle-guarded). Returns <c>(null, 0)</c> when no style contributes a numId.
+    /// </summary>
+    private (int? numId, int ilvl) ResolveStyleNumbering(XElement paragraph)
+    {
+        var styleId = (string?)paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val);
+        if (string.IsNullOrEmpty(styleId)) return (null, 0);
+        var stylesRoot = _doc!.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument().Root;
+        if (stylesRoot is null) return (null, 0);
+
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var current = styleId;
+        for (int i = 0; i < 16 && current is not null; i++)
+        {
+            if (!visited.Add(current)) break; // cycle
+            var style = stylesRoot.Elements(W.style)
+                .FirstOrDefault(s => (string?)s.Attribute(W.styleId) == current);
+            if (style is null) break;
+            var styleNumPr = style.Element(W.pPr)?.Element(W.numPr);
+            var numId = (int?)styleNumPr?.Element(W.numId)?.Attribute(W.val);
+            if (numId is not null)
+                return (numId, (int?)styleNumPr!.Element(W.ilvl)?.Attribute(W.val) ?? 0);
+            current = (string?)style.Element(W.basedOn)?.Attribute(W.val);
+        }
+        return (null, 0);
     }
 
     public EditResult RemoveListMembership(string anchorId)

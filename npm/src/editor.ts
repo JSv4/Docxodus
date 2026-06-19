@@ -513,6 +513,18 @@ export class DocxEditor {
     this.exports.DocxSessionBridge.CloseSession(this.handle);
   }
 
+  /**
+   * Switch between continuous and paginated rendering WITHOUT losing edits. Re-renders from the
+   * LIVE session, so every committed edit (and the undo/redo history) survives the toggle — unlike
+   * re-opening the original bytes, which silently discards session edits. No-op if already `value`.
+   */
+  setPaginated(value: boolean): void {
+    this.assertOpen();
+    if (this.options.paginated === value) return;
+    this.options.paginated = value;
+    this.remount();
+  }
+
   /** The editor's current DOM (for inspection/tests). */
   get root(): HTMLElement {
     return this.container;
@@ -549,8 +561,14 @@ export class DocxEditor {
   /** Paginated mount: flow blocks into page boxes via pagination.ts, wire the page clones. */
   private mountPaginated(fullHtml: string): void {
     paginateHtml(fullHtml, this.container, { scale: this.options.scale, cssPrefix: "page-" });
-    // pagination clones blocks into pages (hidden originals stay in #pagination-staging),
-    // so wire ONLY the visible page container — never the staging copies.
+    // pagination.ts measures the hidden #pagination-staging subtree ONCE, then flows CLONES of its
+    // blocks into the visible page boxes. Leaving staging in the live DOM is a trap: every
+    // data-anchor exists twice (staging + page-box copy), so document.querySelector('[data-anchor]')
+    // is ambiguous (hits the hidden copy first), and the staging copy goes stale because edits land
+    // only on the page-box copy — a future reflow-from-staging would silently revert them. Staging
+    // is a transient measurement scaffold; drop it so the page-box copies are the single source of
+    // truth. A remount (setPaginated, list/undo edits) rebuilds staging fresh from the live session.
+    this.container.querySelector("#pagination-staging, .page-staging")?.remove();
     const pageRoot =
       this.container.querySelector<HTMLElement>("#pagination-container") ?? this.container;
     this.editRoot = pageRoot;
@@ -564,9 +582,10 @@ export class DocxEditor {
   private wireBlock(el: HTMLElement): void {
     if (!EDITABLE_TAGS.has(el.tagName)) return;
     const unid = el.getAttribute("data-anchor");
-    // Only blocks the markdown projection addresses (top-level body paragraphs /
-    // headings) are editable via the text path. Paragraphs inside opaque tables are
-    // stamped in the HTML but not individually indexed, so they stay read-only in v1.
+    // Only blocks the markdown projection addresses are editable via the text path. This INCLUDES
+    // table-cell paragraphs (the projection indexes them), so cell text IS editable — but structural
+    // keys are kept inert inside a cell (see onKeydown / GAP3) so single-block editing can't corrupt
+    // table structure. Anything the projection does not index (unstamped content) stays read-only.
     if (!unid || !this.unidToFullId.has(unid)) return;
     el.setAttribute("contenteditable", "true");
     // Generated list markers (number/bullet + suffix) are not editable content — keep the
@@ -581,15 +600,24 @@ export class DocxEditor {
   }
 
   /**
-   * Run a node-replacement that may remove the focused block while suppressing the re-entrant
-   * blur→commit that removal triggers (see the `replacing` field). The session has already been
-   * updated by the caller, so the suppressed commit would be redundant anyway.
+   * Replace `oldEl` with `newNodes`, suppressing the re-entrant blur→commit that removing a focused
+   * block fires (see `replacing`), AND tolerating the case where a synchronous blur during focus
+   * transfer detaches `oldEl` between the caller's checks and here. `replaceWith` then throws
+   * NotFoundError ("node … no longer a child … moved in a blur event handler") — `isConnected`
+   * alone doesn't catch this race. The session is already updated, so a skipped/failed visual swap
+   * leaves correct content (the typed DOM); the next commit or remount reconciles it. This is why
+   * the catch is silent rather than rethrowing — there's no lost data, only a deferred re-render.
+   * Returns true if the swap happened.
    */
-  private withReplaceGuard(run: () => void): void {
+  private replaceNode(oldEl: HTMLElement, ...newNodes: Node[]): boolean {
     const prev = this.replacing;
     this.replacing = true;
     try {
-      run();
+      if (!oldEl.parentNode) return false;
+      oldEl.replaceWith(...newNodes);
+      return true;
+    } catch {
+      return false;
     } finally {
       this.replacing = prev;
     }
@@ -608,8 +636,7 @@ export class DocxEditor {
     if (!result.success) {
       // Session unchanged — re-render this block from truth to discard the rejected DOM edit.
       const fresh = this.renderInto(fullId);
-      if (fresh && el.isConnected) {
-        this.withReplaceGuard(() => el.replaceWith(fresh));
+      if (fresh && this.replaceNode(el, fresh)) {
         this.wireBlock(fresh);
         if (this.activeBlock === el) this.activeBlock = fresh;
       }
@@ -639,8 +666,7 @@ export class DocxEditor {
     );
     if (html.charCodeAt(0) !== 0x7b /* not an error object */) {
       const fresh = new DOMParser().parseFromString(html, "text/html").body.firstElementChild as HTMLElement | null;
-      if (fresh && el.isConnected) {
-        this.withReplaceGuard(() => el.replaceWith(fresh));
+      if (fresh && this.replaceNode(el, fresh)) {
         this.unidToFullId.delete(unid);
         this.unidToFullId.set(newUnid, newAnchor);
         this.wireBlock(fresh);
@@ -663,19 +689,31 @@ export class DocxEditor {
       if (k === "z") { ev.preventDefault(); ev.shiftKey ? this.redo() : this.undo(); return; }
       if (k === "y") { ev.preventDefault(); this.redo(); return; }
     }
+    // Inside a table cell, structural ops (split / merge / list-nest) need whole-table context
+    // the single-block editing model lacks, so keep them INERT — a cell is editable for text and
+    // inline/paragraph formatting only, never structure. Tab is swallowed so it can't move focus
+    // out of the cell or insert a literal tab; plain Enter does not split; Backspace at the cell's
+    // start does not merge across the cell boundary (mid-text Backspace still deletes normally).
+    // (GAP3 — keeps cell editing useful without risking table corruption.)
+    const inTableCell = !!el.closest("table");
+
     // Tab / Shift+Tab on a list item nests / un-nests it (changes list level).
-    if (ev.key === "Tab" && isListBlock(el)) {
-      ev.preventDefault();
-      this.activeBlock = el;
-      this.setListLevel(ev.shiftKey ? -1 : 1);
-      return;
+    if (ev.key === "Tab") {
+      if (inTableCell) { ev.preventDefault(); return; }
+      if (isListBlock(el)) {
+        ev.preventDefault();
+        this.activeBlock = el;
+        this.setListLevel(ev.shiftKey ? -1 : 1);
+        return;
+      }
     }
     if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
       ev.preventDefault();
+      if (inTableCell) return; // split needs whole-table context — inert in cells
       this.splitAtCaret(el);
     } else if (ev.key === "Backspace") {
       const sel = typeof window !== "undefined" ? window.getSelection() : null;
-      if (sel && sel.isCollapsed && caretOffsetIn(el) === 0) {
+      if (sel && sel.isCollapsed && caretOffsetIn(el) === 0 && !inTableCell) {
         const prev = this.previousEditable(el);
         if (prev) {
           ev.preventDefault();
@@ -714,13 +752,11 @@ export class DocxEditor {
 
     const firstEl = this.renderInto(first.id);
     const secondEl = this.renderInto(second.id);
-    if (!firstEl || !secondEl || !el.isConnected) return;
+    if (!firstEl || !secondEl) return;
 
-    // el is the focused block — guard the replace so the blur it fires doesn't re-enter commitBlock.
-    this.withReplaceGuard(() => {
-      el.replaceWith(firstEl);
-      firstEl.after(secondEl);
-    });
+    // el is the focused block — replaceNode guards the re-entrant blur→commit and tolerates a
+    // node detached mid-focus-transfer; replacing with both new blocks at once keeps them adjacent.
+    if (!this.replaceNode(el, firstEl, secondEl)) return;
     this.unidToFullId.delete(unid);
     this.unidToFullId.set(first.unid, first.id);
     this.unidToFullId.set(second.unid, second.id);
@@ -757,13 +793,11 @@ export class DocxEditor {
     }
 
     const mergedEl = this.renderInto(merged.id);
-    if (!mergedEl || !prev.isConnected) return;
+    if (!mergedEl) return;
 
-    // prev may be focused — guard the replace against the re-entrant blur→commit.
-    this.withReplaceGuard(() => {
-      prev.replaceWith(mergedEl);
-      el.remove();
-    });
+    // prev may be focused — replaceNode guards re-entrancy and tolerates a detached node.
+    if (!this.replaceNode(prev, mergedEl)) return;
+    el.remove();
     this.unidToFullId.delete(prevUnid);
     this.unidToFullId.delete(thisUnid);
     this.unidToFullId.set(merged.unid, merged.id);
@@ -1035,9 +1069,7 @@ export class DocxEditor {
     const newUnid = ref?.unid ?? oldUnid;
     if (!anchorId) return null;
     const fresh = this.renderInto(anchorId);
-    if (!fresh || !oldEl.isConnected) return null;
-    // oldEl is the focused/active block — guard the replace against the re-entrant blur→commit.
-    this.withReplaceGuard(() => oldEl.replaceWith(fresh));
+    if (!fresh || !this.replaceNode(oldEl, fresh)) return null;
     this.unidToFullId.delete(oldUnid);
     this.unidToFullId.set(newUnid, anchorId);
     this.wireBlock(fresh);

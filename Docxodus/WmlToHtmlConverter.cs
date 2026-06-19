@@ -4222,22 +4222,31 @@ namespace Docxodus
             // Check for page break (w:br with w:type="page")
             var breakType = (string)element.Attribute(W.type);
 
-            // In pagination mode, emit a page break marker div for page breaks
+            // In pagination mode, emit a page break marker div for page breaks.
+            // NOTE: the empty XText child is load-bearing. Without a child node an empty
+            // XElement serializes as a self-closing <div .../>, which a browser's HTML parser
+            // treats as an UNCLOSED div (the slash is ignored for non-void elements). Every
+            // following sibling — including the visible #pagination-container — then nests inside
+            // the display:none staging and the paginated view renders blank. The empty text node
+            // forces an explicit </div> so staging and container stay siblings. (HC008d)
             if (settings.RenderPagination == PaginationMode.Paginated && breakType == "page")
             {
                 var prefix = settings.PaginationCssClassPrefix ?? "page-";
                 return new XElement(Xhtml.div,
                     new XAttribute("class", prefix + "break"),
-                    new XAttribute("data-page-break", "true"));
+                    new XAttribute("data-page-break", "true"),
+                    new XText(string.Empty));
             }
 
-            // Column breaks - also mark for pagination but render as line break normally
+            // Column breaks - also mark for pagination but render as line break normally.
+            // Same self-closing-div hazard as page breaks above — force an explicit close tag.
             if (settings.RenderPagination == PaginationMode.Paginated && breakType == "column")
             {
                 var prefix = settings.PaginationCssClassPrefix ?? "page-";
                 return new XElement(Xhtml.div,
                     new XAttribute("class", prefix + "column-break"),
-                    new XAttribute("data-column-break", "true"));
+                    new XAttribute("data-column-break", "true"),
+                    new XText(string.Empty));
             }
 
             XElement span = null;

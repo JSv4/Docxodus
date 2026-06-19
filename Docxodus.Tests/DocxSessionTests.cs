@@ -183,6 +183,61 @@ public class DocxSessionTests
     }
 
     /// <summary>
+    /// Style-inherited bullet list — the numPr lives on the "ListBullet" STYLE (not the
+    /// paragraph) and the numbering defines ONLY level 0. Mirrors python-docx's default
+    /// "List Bullet" output, the real-world case where nesting was a silent no-op: SetListLevel
+    /// found no direct numPr, and even with one the abstractNum lacked the nested level.
+    /// </summary>
+    internal static byte[] BuildStyleListSingleLevel()
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.Document = new Document();
+            var body = new Body();
+            main.Document.Body = body;
+
+            var styles = BuildHeadingStyles();
+            styles.Append(new Style(
+                new StyleName { Val = "List Bullet" },
+                new ParagraphProperties(new NumberingProperties(new NumberingId { Val = 1 })))
+            {
+                Type = StyleValues.Paragraph,
+                StyleId = "ListBullet",
+            });
+            main.AddNewPart<StyleDefinitionsPart>().Styles = styles;
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            // Single-level (ilvl 0 only) bullet numbering, marked singleLevel — exactly what
+            // python-docx's default "List Bullet" emits, and the case where WmlToHtmlConverter
+            // forces ilvl=0 unless the nest upgrades multiLevelType.
+            var num = new DocumentFormat.OpenXml.Wordprocessing.Numbering();
+            var abs = new AbstractNum(
+                new MultiLevelType { Val = MultiLevelValues.SingleLevel })
+            { AbstractNumberId = 0 };
+            abs.Append(new Level(
+                new NumberingFormat { Val = NumberFormatValues.Bullet },
+                new LevelText { Val = "·" })
+            { LevelIndex = 0 });
+            num.Append(abs);
+            num.Append(new NumberingInstance(new AbstractNumId { Val = 0 }) { NumberID = 1 });
+            main.AddNewPart<NumberingDefinitionsPart>().Numbering = num;
+
+            // Paragraphs carry only the pStyle — list membership comes from the style.
+            body.Append(new Paragraph(
+                new ParagraphProperties(new ParagraphStyleId { Val = "ListBullet" }),
+                new Run(new Text("First bullet"))));
+            body.Append(new Paragraph(
+                new ParagraphProperties(new ParagraphStyleId { Val = "ListBullet" }),
+                new Run(new Text("Second bullet"))));
+
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>
     /// Single paragraph in a landscape A4 section with non-default margins,
     /// two columns, and a header part reference. Used to verify
     /// <c>GetSectionInfo</c> against a richly-configured sectPr.
@@ -1703,6 +1758,49 @@ public class DocxSessionTests
         var firstLi = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("li:"));
         var r = s.SetListLevel(firstLi, +1);
         Assert.True(r.Success, r.Error?.Message);
+    }
+
+    [Fact]
+    public void DS054b_SetListLevel_StyleInheritedSingleLevel_MaterializesNumPrAndSynthesizesLevel()
+    {
+        // Real-world regression: a style-inherited bullet (numPr on the style, abstractNum with
+        // only level 0) used to be a silent no-op on nest. After the fix SetListLevel materializes
+        // a direct numPr at the new level AND synthesizes the missing abstractNum level.
+        using var s = new DocxSession(BuildStyleListSingleLevel());
+        var firstLi = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("li:"));
+        var r = s.SetListLevel(firstLi, +1);
+        Assert.True(r.Success, r.Error?.Message);
+
+        var bytes = s.Save();
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+        // The styled paragraph now carries a DIRECT numPr at ilvl=1 (materialized from the style).
+        var firstP = doc.MainDocumentPart!.GetXDocument().Root!.Descendants(w + "p").First();
+        var directNumPr = firstP.Element(w + "pPr")?.Element(w + "numPr");
+        Assert.NotNull(directNumPr);
+        Assert.Equal("1", (string?)directNumPr!.Element(w + "ilvl")?.Attribute(w + "val"));
+        Assert.Equal("1", (string?)directNumPr.Element(w + "numId")?.Attribute(w + "val"));
+
+        // The abstractNum now DEFINES level 1 (synthesized — only level 0 existed before)...
+        var abstractNum = doc.MainDocumentPart!.NumberingDefinitionsPart!.GetXDocument().Root!
+            .Elements(w + "abstractNum").First();
+        var levels = abstractNum.Elements(w + "lvl").Select(l => (string?)l.Attribute(w + "ilvl")).ToList();
+        Assert.Contains("0", levels);
+        Assert.Contains("1", levels);
+        // ...and multiLevelType is upgraded off singleLevel, else the converter would force ilvl=0.
+        Assert.NotEqual("singleLevel", (string?)abstractNum.Element(w + "multiLevelType")?.Attribute(w + "val"));
+
+        // End-to-end: the converter must render the nested item with LEVEL 1's bullet glyph
+        // ("o"), not collapse it to level 0's "·". This guards BOTH the singleLevel→ilvl=0 force
+        // AND the bullet-continuation collapse — either bug renders the nested item as "· First…".
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("x.docx", bytes),
+            new WmlToHtmlConverterSettings { StampAnchors = true }).ToString(SaveOptions.DisableFormatting);
+        var text = System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", string.Empty)
+            .Replace("&#x00a0;", " ");
+        Assert.Contains("o First bullet", text, StringComparison.Ordinal);   // nested → level 1 glyph
+        Assert.Contains("· Second bullet", text, StringComparison.Ordinal);  // sibling stays level 0
     }
 
     [Fact]

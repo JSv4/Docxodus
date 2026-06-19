@@ -80,7 +80,8 @@
   <p class="hint">
     Click a paragraph or heading to edit it. Select text and use the ribbon (or <b>Ctrl+B/I/U</b>) to format.
     <b>Enter</b> splits a block, <b>Backspace</b> at the start merges with the previous one; <b>Ctrl+Z</b> undoes.
-    Edits re-render only the affected block. Tables are read-only in this MVP. <b>Save</b> downloads a lossless .docx.
+    Edits re-render only the affected block. Table <b>cell text is editable</b> (structure is fixed —
+    Enter/Tab inside a cell are inert). <b>Save</b> downloads a lossless .docx.
   </p>
   <div id="editor" class="continuous"></div>
 
@@ -170,7 +171,15 @@
       openDoc(new Uint8Array(await f.arrayBuffer()));
     });
 
-    paginatedEl.addEventListener('change', () => { if (currentBytes) openDoc(currentBytes); });
+    // Toggle pagination WITHOUT discarding edits: re-render the live session in the new mode
+    // (DocxEditor.setPaginated) instead of re-opening the original bytes. Falls back to a fresh
+    // open only when no editor exists yet.
+    paginatedEl.addEventListener('change', () => {
+      if (!editor) { if (currentBytes) openDoc(currentBytes); return; }
+      editorEl.className = paginatedEl.checked ? 'paginated' : 'continuous';
+      editor.setPaginated(paginatedEl.checked);
+      setStatus(paginatedEl.checked ? 'Paginated — edits preserved.' : 'Continuous — edits preserved.');
+    });
 
     saveEl.addEventListener('click', () => {
       if (!editor) return;

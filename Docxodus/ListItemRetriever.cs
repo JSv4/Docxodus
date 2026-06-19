@@ -1127,7 +1127,20 @@ namespace Docxodus
                     bool isContinuation = false;
                     if (ilvl > 0)
                     {
-                        if (continuationByLevel[ilvl])
+                        // Continuation only makes sense for ORDINAL (numbered) levels — a deeper
+                        // numbered item whose counter continues the parent's sequence renders flat
+                        // (4. not 3.4). Bullet levels have no counter to continue, so a nested
+                        // bullet must keep its OWN level's glyph/indent; treating it as a
+                        // continuation collapses it to the parent bullet (the bug exposed once
+                        // SetListLevel made source-list nesting actually take effect).
+                        var lvlDef = listItemInfo.Lvl(ilvl);
+                        var numFmt = (string)lvlDef.Elements(W.numFmt).Attributes(W.val).FirstOrDefault();
+                        bool isBulletLevel = numFmt is "bullet" or "none";
+                        if (isBulletLevel)
+                        {
+                            isContinuation = false;
+                        }
+                        else if (continuationByLevel[ilvl])
                         {
                             // Inherit continuation status from previous paragraph at this level
                             isContinuation = true;
@@ -1137,7 +1150,6 @@ namespace Docxodus
                             // Check if this starts a continuation pattern:
                             // - Current counter equals the level's start value (first item at this level)
                             // - Start value equals parent level's counter + 1 (continues the sequence)
-                            var lvlDef = listItemInfo.Lvl(ilvl);
                             int? startValue = (int?)lvlDef.Elements(W.start).Attributes(W.val).FirstOrDefault();
                             if (startValue != null &&
                                 levelNumbers[ilvl] == startValue &&
