@@ -74,6 +74,7 @@
       <button id="hr" title="Insert horizontal rule below">&#9473;&#9473;</button>
       <button id="hrThick" title="Insert thick rule below">&#9608;&#9608;</button>
       <button id="hrDouble" title="Insert double rule below">&#9552;&#9552;</button>
+      <button id="hrClear" title="Clear rule / paragraph border">&#9472;&#10007;</button>
       <button id="table" title="Insert table">&#8862;</button>
       <span class="sep"></span>
       <select id="style" title="Paragraph style">
@@ -186,6 +187,7 @@
       ['hr', () => editor && editor.insertHorizontalRule(12)],
       ['hrThick', () => editor && editor.insertHorizontalRule(24)],
       ['hrDouble', () => editor && editor.insertHorizontalRule(12, 'double')],
+      ['hrClear', () => editor && editor.clearParagraphBorders()],
     ]) {
       const b = document.getElementById(id);
       b.addEventListener('mousedown', (e) => e.preventDefault());

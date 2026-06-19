@@ -1282,10 +1282,18 @@ export class DocxEditor {
     this.remount(idx, false);
   }
 
+  /** Clear all paragraph borders (e.g. remove an inserted horizontal rule) on the active block —
+   *  or every block in a multi-block selection. The engine/wire already accept `clearBorders`;
+   *  this surfaces it on the editor so an HR border is removable (S-1 smoke-test finding 1b). */
+  clearParagraphBorders(): void {
+    this.applyParagraphFormat({ clearBorders: true });
+  }
+
   private applyParagraphFormat(op: {
     alignment?: EditorAlignment;
     indentDelta?: number;
     pageBreakBefore?: boolean;
+    clearBorders?: boolean;
   }): void {
     const block = this.activeBlock;
     if (this.closed || !block) return;
@@ -1307,7 +1315,9 @@ export class DocxEditor {
       this.exports.DocxSessionBridge.SetParagraphFormat(this.handle, fullId, JSON.stringify(op)),
     );
     if (!res.success) return;
-    if (this.affectsList(res)) { this.remount(idx, false); return; }
+    // A border change adds/removes the wrapping border <div>, so a single-block swap can't restructure
+    // it correctly — re-render fully (like list edits) so the wrapper appears/disappears cleanly.
+    if (this.affectsList(res) || op.clearBorders) { this.remount(idx, false); return; }
     this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 
