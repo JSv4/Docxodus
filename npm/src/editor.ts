@@ -146,8 +146,11 @@ function collectInlineSegments(node: Node, out: InlineSeg[]): void {
 }
 
 function segToMarkdown(seg: InlineSeg): string {
-  if (seg.text === "\n") return "\n";
-  let md = escapeInlineMarkdown(seg.text);
+  // A <br> segment is a hard line break → the canonical GFM "  \n", which the
+  // DocxSession markdown parser turns into a real w:br (Word's intra-paragraph
+  // line break) instead of a literal newline in w:t.
+  if (seg.text === "\n") return "  \n";
+  let md = escapeInlineMarkdown(seg.text).replace(/[ \t]*\n/g, "  \n");
   if (/\S/.test(seg.text)) {
     // Don't wrap pure whitespace — `** **` is not valid emphasis.
     if (seg.bold && seg.italic) md = `***${md}***`;
@@ -730,6 +733,14 @@ export class DocxEditor {
         return;
       }
     }
+    // Shift+Enter inserts an intra-paragraph line break (a real w:br on commit),
+    // not a paragraph split. Deterministic across browsers and allowed in cells
+    // (a line break changes no table structure).
+    if (ev.key === "Enter" && ev.shiftKey && !ev.isComposing) {
+      ev.preventDefault();
+      this.insertLineBreakAtCaret();
+      return;
+    }
     if (ev.key === "Enter" && !ev.shiftKey && !ev.isComposing) {
       ev.preventDefault();
       if (inTableCell) return; // split needs whole-table context — inert in cells
@@ -743,6 +754,17 @@ export class DocxEditor {
           this.mergeWithPrevious(prev, el);
         }
       }
+    }
+  }
+
+  /** Shift+Enter: insert an intra-paragraph line break at the caret. Delegates to the
+   *  native `insertLineBreak` command, which inserts a <br> AND positions the caret
+   *  after it correctly (handling the browser's bogus trailing-<br> rule) so typing
+   *  continues on the new line. Commits (on blur) as a w:br via the "  \n" hard break
+   *  the serializer emits for a <br>. */
+  private insertLineBreakAtCaret(): void {
+    if (typeof document !== "undefined" && typeof document.execCommand === "function") {
+      document.execCommand("insertLineBreak");
     }
   }
 

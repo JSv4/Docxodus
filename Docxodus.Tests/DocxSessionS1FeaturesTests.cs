@@ -261,4 +261,63 @@ public class DocxSessionS1FeaturesTests
         Assert.NotNull(body.Element(W + "sectPr"));
         Assert.NotEmpty(body.Elements(W + "p"));
     }
+
+    // ─── F-fix: line-break fidelity (Shift+Enter → w:br, not a raw newline) ──
+
+    [Fact]
+    public void DS211_HardLineBreak_BecomesWbr_NotLiteralNewline()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        // GFM hard break: two trailing spaces + newline within ONE paragraph.
+        var r = session.ReplaceText(anchor, "Line one  \nLine two");
+        Assert.True(r.Success, r.Error?.Message);
+
+        var root = DocumentXml(session.Save());
+
+        // It stays ONE paragraph (a line break, not a paragraph split)...
+        var matching = root.Descendants(W + "p")
+            .Where(p => p.Value.Contains("Line one") || p.Value.Contains("Line two"))
+            .ToList();
+        Assert.Single(matching);
+        var para = matching[0];
+
+        // ...containing a real w:br...
+        Assert.NotEmpty(para.Descendants(W + "br"));
+
+        // ...and NO w:t carries a literal newline (the Word-infidelity we are fixing).
+        Assert.DoesNotContain(para.Descendants(W + "t"), t => t.Value.Contains('\n'));
+    }
+
+    [Fact]
+    public void DS212_HardLineBreak_RoundTripsThroughProjection()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+        session.ReplaceText(anchor, "Line one  \nLine two");
+
+        // Re-open the saved bytes and project: the hard break survives as the
+        // canonical GFM "  \n" (symmetric with WmlToMarkdownConverter's w:br output).
+        using var session2 = new DocxSession(session.Save());
+        Assert.Contains("Line one  \nLine two", session2.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS213_BlankLineSeparatorStillSplitsParagraphs_NotABreak()
+    {
+        // Guard: a BLANK line (paragraph separator) must NOT become a w:br — only an
+        // intra-paragraph single newline does. InsertParagraph accepts multi-block md.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        var r = session.InsertParagraph(anchor, Position.After, "Alpha\n\nBeta");
+        Assert.True(r.Success, r.Error?.Message);
+
+        var root = DocumentXml(session.Save());
+        Assert.Contains(root.Descendants(W + "p"), p => p.Value == "Alpha");
+        Assert.Contains(root.Descendants(W + "p"), p => p.Value == "Beta");
+        Assert.DoesNotContain(root.Descendants(W + "p"),
+            p => (p.Value.Contains("Alpha") || p.Value.Contains("Beta")) && p.Descendants(W + "br").Any());
+    }
 }
