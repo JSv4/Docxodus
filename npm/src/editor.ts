@@ -19,6 +19,7 @@
 
 import { paginateHtml } from "./pagination.js";
 import { readSelection, type MultiBlockSelection } from "./editor-selection.js";
+import { classifyBeforeInput } from "./editor-input.js";
 
 /** The subset of WASM bridge exports the editor needs (as exposed on `window.Docxodus`). */
 export interface DocxEditorExports {
@@ -829,7 +830,47 @@ export class DocxEditor {
   }
 
   /** beforeinput router — populated in Task 5. */
-  private onBeforeInput(_ev: InputEvent): void { /* Task 5 */ }
+  /** Route a beforeinput event: single-block text/IME stays native (committed on blur); structural
+   *  and cross-block operations are intercepted and applied via the session, then re-rendered. */
+  private onBeforeInput(ev: InputEvent): void {
+    if (this.closed) return;
+    const model = this.selectionModel();
+    const isMulti = !!model && model.isMultiBlock;
+    const action = classifyBeforeInput(ev.inputType, ev.data, isMulti);
+    switch (action.kind) {
+      case "native":
+        return; // the browser edits the text node; the change commits on blur/selection-leave
+      case "format":
+        ev.preventDefault();
+        this.format(action.key as FormatKey);
+        return;
+      case "block":
+        ev.preventDefault();
+        return;
+      case "deleteSelection":
+        ev.preventDefault();
+        if (model) this.deleteSelection(model);
+        return;
+      case "typeOver":
+        ev.preventDefault();
+        if (model) this.typeOverSelection(model, action.text);
+        return;
+      case "splitAtSelection":
+        ev.preventDefault();
+        if (model) this.splitAtSelection(model);
+        return;
+      case "paste":
+        ev.preventDefault();
+        if (model) this.handlePaste(model);
+        return;
+    }
+  }
+
+  // ─── Compound cross-block edits (implemented in Tasks 6–7) ───────────────
+  private deleteSelection(_model: MultiBlockSelection): void { /* Task 6 */ }
+  private typeOverSelection(_model: MultiBlockSelection, _text: string): void { /* Task 7 */ }
+  private splitAtSelection(_model: MultiBlockSelection): void { /* Task 7 */ }
+  private handlePaste(_model: MultiBlockSelection): void { /* Task 7 */ }
 
   /** Turn `root` into the single contenteditable editing host so a native selection spans blocks.
    *  Per-block focus/blur/keydown live on the blocks (see wireBlock); the root only owns beforeinput
