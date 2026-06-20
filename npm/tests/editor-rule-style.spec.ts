@@ -26,7 +26,7 @@ test.describe('DocxEditor — styled horizontal rules (double)', () => {
       const blank: Uint8Array = D.DocxSessionBridge.CreateBlankDocx();
       const editor = D.DocxEditor.open(container, blank, D, {});
 
-      const body = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const body = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       body.focus();
       editor.insertHorizontalRule(12, 'double');
       const doubleAfterInsert = countDouble(container);

@@ -21,7 +21,7 @@ test.describe('DocxEditor — multi-block formatting', () => {
       document.body.appendChild(container);
       const editor = D.DocxEditor.open(container, D.DocxSessionBridge.CreateBlankDocx(), D, {});
       (window as any).__mbf = { editor, container };
-      const first = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const first = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       first.focus();
       const r = document.createRange();
       r.selectNodeContents(first);
@@ -46,7 +46,7 @@ test.describe('DocxEditor — multi-block formatting', () => {
       page.evaluate(() => {
         const { container } = (window as any).__mbf;
         const blocks = Array.from(
-          container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+          container.querySelectorAll('p[data-anchor][data-editable="1"]'),
         ) as HTMLElement[];
         const firstText = (el: HTMLElement) => document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode();
         const lastText = (el: HTMLElement) => {

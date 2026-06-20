@@ -525,8 +525,20 @@ export class DocxEditor {
     const sel = typeof window !== "undefined" ? window.getSelection() : null;
     if (!sel || sel.rangeCount === 0) return; // no selection info — keep the cache as-is
     const range = sel.getRangeAt(0);
-    const block = this.editableBlockOf(range.commonAncestorContainer);
-    if (!block) return; // selection is outside the editor (e.g. a toolbar field) — keep the cache
+    // Resolve from the START container so a multi-block selection (whose commonAncestor is the root)
+    // still tracks the first selected block as active (for ribbon highlighting + commands).
+    const block = this.editableBlockOf(range.startContainer) ?? this.editableBlockOf(range.commonAncestorContainer);
+    if (!block) return; // selection is outside the editor (e.g. a toolbar field) — keep caches
+    // Single-root: focus stays on the host, so moving the caret between blocks fires no blur. A
+    // deliberate (collapsed) caret move OUT of a block commits that block here (commitBlock is a
+    // no-op if unchanged) — the primary between-block commit. A drag-selection is non-collapsed, so
+    // we never commit mid-drag and the multi-block selection survives. Set activeBlock first so the
+    // commit's re-render (a re-entrant selectionchange) doesn't re-commit the block being left.
+    const leaving = this.activeBlock;
+    this.activeBlock = block;
+    if (leaving && leaving !== block && range.collapsed && leaving.isConnected && !this.replacing) {
+      this.commitBlock(leaving);
+    }
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
     if (range.collapsed) {
@@ -645,7 +657,10 @@ export class DocxEditor {
       .join("");
     this.container.innerHTML = styles + parsed.body.innerHTML;
     this.editRoot = this.container;
-    if (this.options.editable) this.wireBlocks(this.container);
+    if (this.options.editable) {
+      this.makeRootEditable(this.container);
+      this.wireBlocks(this.container);
+    }
   }
 
   /** Paginated mount: flow blocks into page boxes via pagination.ts, wire the page clones. */
@@ -662,7 +677,10 @@ export class DocxEditor {
     const pageRoot =
       this.container.querySelector<HTMLElement>("#pagination-container") ?? this.container;
     this.editRoot = pageRoot;
-    if (this.options.editable) this.wireBlocks(pageRoot);
+    if (this.options.editable) {
+      this.makeRootEditable(pageRoot);
+      this.wireBlocks(pageRoot);
+    }
   }
 
   private wireBlocks(root: HTMLElement): void {
@@ -677,7 +695,22 @@ export class DocxEditor {
     // keys are kept inert inside a cell (see onKeydown / GAP3) so single-block editing can't corrupt
     // table structure. Anything the projection does not index (unstamped content) stays read-only.
     if (!unid || !this.unidToFullId.has(unid)) return;
-    el.setAttribute("contenteditable", "true");
+    // Single-root model: the EDITING HOST is the surface (see makeRootEditable), so a native
+    // selection spans blocks. A body block is editable by inheritance; it is NOT its own
+    // contenteditable host (nested same-value editing hosts would re-introduce the cross-block
+    // selection boundary). It IS made programmatically focusable with tabindex so block.focus()
+    // still enters it and `document.activeElement` is the block — tabindex is not an editing host,
+    // so it does not create a selection boundary. EXCEPTION — tables are a selection BOUNDARY: the
+    // table is a non-editable island and each cell paragraph is its own editing host, so a body
+    // selection can't cross into/through a table and cell editing keeps working exactly as before.
+    if (el.closest("table")) {
+      const table = el.closest("table");
+      if (table) table.setAttribute("contenteditable", "false");
+      el.setAttribute("contenteditable", "true");
+    } else {
+      el.setAttribute("tabindex", "-1");
+      el.style.outline = "none"; // suppress the focus ring tabindex would otherwise draw
+    }
     el.setAttribute("data-editable", "1");
     // Generated list markers (number/bullet + suffix) are not editable content — keep the
     // caret out of them so offsets stay aligned with the paragraph's run text.
@@ -685,9 +718,12 @@ export class DocxEditor {
     // Baseline for the commit diff: CONTENT text (list markers + injected bidi marks excluded),
     // matching the session's flat run-text offset space.
     el.dataset.committedText = blockContentText(el);
+    // Per-block FOCUS only: a programmatic block.focus() sets the active target synchronously and
+    // makes document.activeElement the block. blur and keydown are NOT per-block — during real
+    // editing focus stays on the contenteditable ROOT (the editing host), so those events fire on
+    // the root, not the block (see makeRootEditable). Between-block commits come from
+    // selectionchange (the caret leaving a block) + the root blur.
     el.addEventListener("focus", () => { this.activeBlock = el; });
-    el.addEventListener("blur", () => this.commitBlock(el));
-    el.addEventListener("keydown", (ev) => this.onKeydown(el, ev as KeyboardEvent));
   }
 
   /**
@@ -766,6 +802,64 @@ export class DocxEditor {
     }
 
     this.options.onEdit?.({ anchorId: newAnchor, unid: newUnid });
+  }
+
+  /** Commit every editable block whose content changed since its last commit. `commitBlock` is a
+   *  no-op for an unchanged block, so this is cheap. Per-block blur already commits on focus loss;
+   *  this flushes blocks still holding the caret (e.g. before reading a multi-block selection, or
+   *  the public/test surface flushing freshly-typed text without moving the caret away). */
+  commitAllDirty(): void {
+    if (this.closed || this.replacing) return;
+    for (const el of this.editableList()) {
+      if (el.isConnected) this.commitBlock(el);
+    }
+  }
+
+  /** beforeinput router — populated in Task 5. */
+  private onBeforeInput(_ev: InputEvent): void { /* Task 5 */ }
+
+  /** Turn `root` into the single contenteditable editing host so a native selection spans blocks.
+   *  Per-block focus/blur/keydown live on the blocks (see wireBlock); the root only owns beforeinput
+   *  (cross-block input routing, Task 5). */
+  private makeRootEditable(root: HTMLElement): void {
+    root.setAttribute("contenteditable", "true");
+    // A non-paginated remount reuses the SAME container element, so guard against attaching the
+    // listeners twice (which would fire every structural keydown / beforeinput route twice — e.g.
+    // an Enter would split a paragraph into three). Paginated remounts build a fresh page root each
+    // time, which simply has no flag yet.
+    if (root.dataset.editorRootWired === "1") return;
+    root.dataset.editorRootWired = "1";
+    root.addEventListener("beforeinput", (ev) => this.onBeforeInput(ev as InputEvent));
+    // Keydown fires on the editing host (the root) during real editing, not on the block, so the
+    // structural-key handler lives here and resolves the target block from the event/selection.
+    root.addEventListener("keydown", (ev) => {
+      const block = this.keydownBlock(ev);
+      if (block) this.onKeydown(block, ev as KeyboardEvent);
+    });
+    // Commit when focus leaves the editor. Capture so a `blur` dispatched on a descendant block
+    // reaches here (the test pattern `block.dispatchEvent(new Event('blur'))`). But IGNORE transient
+    // internal focus shifts — setting a selection moves focus from a tabindex block to the
+    // contenteditable host, firing a block blur whose relatedTarget is inside the editor; committing
+    // then would re-render (detach) the block mid-interaction. Between-block commits are handled by
+    // selectionchange, so skipping internal shifts here loses nothing.
+    root.addEventListener("blur", (ev) => {
+      const rt = (ev as FocusEvent).relatedTarget as Node | null;
+      if (rt && this.editRoot.contains(rt)) return; // focus stayed inside the editor — not a real exit
+      this.commitAllDirty();
+    }, true);
+  }
+
+  /** The block a keydown targets: the event's block (synthetic dispatch on a block), else the
+   *  caret's block (real typing focuses the root), else the cached active block. */
+  private keydownBlock(ev: Event): HTMLElement | null {
+    const fromTarget = this.editableBlockOf(ev.target as Node | null);
+    if (fromTarget) return fromTarget;
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    if (sel && sel.rangeCount > 0) {
+      const fromCaret = this.editableBlockOf(sel.getRangeAt(0).startContainer);
+      if (fromCaret) return fromCaret;
+    }
+    return this.activeBlock;
   }
 
   // ─── M2: structural editing ──────────────────────────────────────────
@@ -1335,7 +1429,8 @@ export class DocxEditor {
    * `deltaTwips` (default ±720 = 0.5"), clamped at 0.
    */
   indent(deltaTwips = 720): void {
-    if (this.activeBlock && isListBlock(this.activeBlock)) {
+    const block = this.activeBlock;
+    if (block && isListBlock(block)) {
       this.setListLevel(deltaTwips >= 0 ? 1 : -1);
       return;
     }

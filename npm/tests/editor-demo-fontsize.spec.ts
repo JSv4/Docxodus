@@ -12,7 +12,7 @@ test.describe('Demo — arbitrary font size', () => {
 
     // Type "BIG" into the first paragraph.
     await page.evaluate(() => {
-      const p = document.querySelector('#editor p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const p = document.querySelector('#editor p[data-anchor][data-editable="1"]') as HTMLElement;
       p.focus();
       const r = document.createRange();
       r.selectNodeContents(p);
@@ -24,7 +24,7 @@ test.describe('Demo — arbitrary font size', () => {
 
     // Select the paragraph, then set the size field to 72 and apply.
     await page.evaluate(() => {
-      const p = document.querySelector('#editor p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const p = document.querySelector('#editor p[data-anchor][data-editable="1"]') as HTMLElement;
       const r = document.createRange();
       r.selectNodeContents(p);
       const s = window.getSelection()!;
@@ -53,7 +53,7 @@ test.describe('Demo — arbitrary font size', () => {
 
     // Type "BIGsmall" into the first paragraph.
     await page.evaluate(() => {
-      const p = document.querySelector('#editor p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const p = document.querySelector('#editor p[data-anchor][data-editable="1"]') as HTMLElement;
       p.focus();
       const r = document.createRange();
       r.selectNodeContents(p);
@@ -105,7 +105,7 @@ test.describe('Demo — arbitrary font size', () => {
 
     // Type "WORD" into the first paragraph and select it.
     await page.evaluate(() => {
-      const p = document.querySelector('#editor p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const p = document.querySelector('#editor p[data-anchor][data-editable="1"]') as HTMLElement;
       p.focus();
       const r = document.createRange();
       r.selectNodeContents(p);

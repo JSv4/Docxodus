@@ -23,7 +23,7 @@ test.describe('DocxEditor — table on an empty paragraph', () => {
       const editor = D.DocxEditor.open(container, blank, D, {});
 
       // Active block is the single empty body paragraph.
-      const body = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const body = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       body.focus();
       editor.insertTable(2, 3, { borderless: true });
 

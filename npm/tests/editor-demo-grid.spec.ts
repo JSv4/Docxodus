@@ -13,7 +13,7 @@ test.describe('Demo — visual table grid picker', () => {
     await page.click('#new');
     await page.waitForFunction(() => !!(window as any).__demo.getEditor());
     await page.evaluate(() => {
-      const p = document.querySelector('#editor p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const p = document.querySelector('#editor p[data-anchor][data-editable="1"]') as HTMLElement;
       p.focus();
     });
 
@@ -46,7 +46,7 @@ test.describe('Demo — visual table grid picker', () => {
     await page.click('#new');
     await page.waitForFunction(() => !!(window as any).__demo.getEditor());
     await page.evaluate(() => {
-      const p = document.querySelector('#editor p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const p = document.querySelector('#editor p[data-anchor][data-editable="1"]') as HTMLElement;
       p.focus();
     });
 

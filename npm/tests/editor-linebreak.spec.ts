@@ -25,7 +25,7 @@ test.describe('DocxEditor — line-break fidelity (Shift+Enter → w:br)', () =>
       const blank: Uint8Array = D.DocxSessionBridge.CreateBlankDocx();
       const editor = D.DocxEditor.open(container, blank, D, {});
       (window as any).__lb = { editor, container };
-      const target = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const target = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       target.focus();
       const r = document.createRange();
       r.selectNodeContents(target);
@@ -43,7 +43,7 @@ test.describe('DocxEditor — line-break fidelity (Shift+Enter → w:br)', () =>
       const D = (window as any).Docxodus;
       const { editor, container } = (window as any).__lb;
       const firstBlock = () =>
-        container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+        container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
 
       const target = firstBlock();
       const preCommitHTML = target.innerHTML;

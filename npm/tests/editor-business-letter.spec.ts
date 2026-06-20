@@ -61,7 +61,7 @@ test.describe('DocxEditor — business letter authoring (smoke test)', () => {
       const editor = D.DocxEditor.open(container, bin, D, {});
 
       const editableEls = () =>
-        Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+        Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
 
       // Set the letterhead line. (Edit a NON-focused block + blur — the editor's
       // reliable commit path; this is how editor.spec.ts's M1 test edits a block.)
@@ -116,7 +116,7 @@ test.describe('DocxEditor — business letter authoring (smoke test)', () => {
       document.body.appendChild(c1);
       const editor = D.DocxEditor.open(c1, bin, D, {});
       const editable = (root: HTMLElement) =>
-        Array.from(root.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+        Array.from(root.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
 
       // Right-align one paragraph (the "date" line in a letter).
       const dateEl = editable(c1).find((e) => norm(e.textContent || '').length > 12)!;
@@ -172,7 +172,7 @@ test.describe('DocxEditor — business letter authoring (smoke test)', () => {
       const bin = new Uint8Array(bytesArray);
       const D = (window as any).Docxodus;
       const editable = (root: HTMLElement) =>
-        Array.from(root.querySelectorAll('[data-anchor][contenteditable="true"]')) as HTMLElement[];
+        Array.from(root.querySelectorAll('[data-anchor][data-editable="1"]')) as HTMLElement[];
 
       const c1 = document.createElement('div');
       document.body.appendChild(c1);
@@ -223,7 +223,7 @@ test.describe('DocxEditor — business letter authoring (smoke test)', () => {
       const editor = D.DocxEditor.open(container, bin, D, {});
 
       const editableEls = () =>
-        Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+        Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
 
       const block = editableEls()[0];
       block.textContent = 'First line of the letter'; // clean text, no leading space
@@ -264,7 +264,7 @@ test.describe('DocxEditor — business letter authoring (smoke test)', () => {
       const editor = D.DocxEditor.open(container, bin, D, {});
 
       const editableEls = () =>
-        Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+        Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
 
       // Typing into the placeholder paragraph leaves the rendered leading space.
       const block = editableEls()[0];
@@ -305,7 +305,7 @@ test.describe('DocxEditor — business letter authoring (smoke test)', () => {
       const bin = new Uint8Array(bytesArray);
       const D = (window as any).Docxodus;
       const editable = (root: HTMLElement) =>
-        Array.from(root.querySelectorAll('[data-anchor][contenteditable="true"]')) as HTMLElement[];
+        Array.from(root.querySelectorAll('[data-anchor][data-editable="1"]')) as HTMLElement[];
 
       const c = document.createElement('div');
       document.body.appendChild(c);

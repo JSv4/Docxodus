@@ -25,7 +25,7 @@ test.describe('DocxEditor — horizontal-rule border does not bleed onto split t
       const editor = D.DocxEditor.open(container, blank, D, {});
 
       // Insert a horizontal rule after the body paragraph.
-      const body = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const body = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       body.focus();
       editor.insertHorizontalRule(12);
 
@@ -44,7 +44,7 @@ test.describe('DocxEditor — horizontal-rule border does not bleed onto split t
 
       // The new paragraph is the last editable paragraph; type into it.
       const paras = Array.from(
-        container.querySelectorAll<HTMLElement>('p[data-anchor][contenteditable="true"]'),
+        container.querySelectorAll<HTMLElement>('p[data-anchor][data-editable="1"]'),
       );
       const newPara = paras[paras.length - 1];
       newPara.focus();

@@ -20,7 +20,7 @@ test.describe('DocxEditor — table row/column editing', () => {
       const blank: Uint8Array = D.DocxSessionBridge.CreateBlankDocx();
       const editor = D.DocxEditor.open(container, blank, D, {});
 
-      const body = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const body = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       body.focus();
       editor.insertTable(2, 2, { borderless: true });
 

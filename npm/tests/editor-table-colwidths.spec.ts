@@ -26,7 +26,7 @@ test.describe('DocxEditor — table column widths', () => {
       const blank: Uint8Array = D.DocxSessionBridge.CreateBlankDocx();
       const editor = D.DocxEditor.open(container, blank, D, {});
 
-      const body = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const body = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       body.focus();
       // ~2.7 : 1 split.
       editor.insertTable(1, 2, { borderless: true, columnWidths: [7000, 2576] });

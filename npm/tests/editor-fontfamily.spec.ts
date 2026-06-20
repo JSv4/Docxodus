@@ -28,7 +28,7 @@ test.describe('DocxEditor — setFontFamily', () => {
       const editor = D.DocxEditor.open(container, blank, D, {});
 
       // Seed text into the body paragraph and commit it.
-      let blk = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      let blk = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       blk.focus();
       const sel = window.getSelection()!;
       let r = document.createRange();
@@ -38,7 +38,7 @@ test.describe('DocxEditor — setFontFamily', () => {
       blk.dispatchEvent(new Event('blur'));
 
       // Select the run and set the font family.
-      blk = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      blk = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       blk.focus();
       r = document.createRange();
       r.selectNodeContents(blk);

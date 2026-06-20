@@ -85,7 +85,7 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
     // Drive a realistic churn: type into a block then immediately move focus to the next,
     // commit-on-blur racing the next block's focus — repeated across several blocks. Use real
     // keyboard so the synchronous blur->commit->replaceWith interleaving is faithful.
-    const blocks = page.locator('#gap2-editor p[data-anchor][contenteditable="true"]');
+    const blocks = page.locator('#gap2-editor p[data-anchor][data-editable="1"]');
     const n = Math.min(6, await blocks.count());
     for (let i = 0; i < n; i++) {
       const b = blocks.nth(i);
@@ -124,7 +124,7 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
       D.DocxEditor.open(container, bin, D, {});
       // Tag the first editable cell paragraph with enough text to edit.
       const cellP = Array.from(
-        container.querySelectorAll('td p[data-anchor][contenteditable="true"]'),
+        container.querySelectorAll('td p[data-anchor][data-editable="1"]'),
       ).find((p) => (p as HTMLElement).innerText.trim().length > 3) as HTMLElement | undefined;
       if (cellP) cellP.setAttribute('data-testid', 'gap3-cell');
     }, bytes);
@@ -137,7 +137,7 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
       page.evaluate(() => {
         const c =
           (document.querySelector('[data-testid="gap3-cell"]') as HTMLElement) ||
-          (document.querySelector('#gap3-editor td p[contenteditable="true"]') as HTMLElement);
+          (document.querySelector('#gap3-editor td p[data-editable="1"]') as HTMLElement);
         const table = c.closest('table') as HTMLElement;
         return {
           tableParagraphs: table.querySelectorAll('td p, th p').length,
@@ -151,7 +151,7 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
       page.evaluate(() => {
         let c = document.querySelector('[data-testid="gap3-cell"]') as HTMLElement | null;
         if (!c) {
-          c = document.querySelector('#gap3-editor td p[contenteditable="true"]') as HTMLElement | null;
+          c = document.querySelector('#gap3-editor td p[data-editable="1"]') as HTMLElement | null;
           c?.setAttribute('data-testid', 'gap3-cell');
         }
         if (!c) return;
@@ -209,7 +209,7 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
 
       const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
       const firstEditable = () =>
-        Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]'))
+        Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]'))
           .find((e) => norm((e as HTMLElement).textContent || '').length > 5) as HTMLElement;
 
       // Edit a block and commit.
@@ -257,7 +257,7 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
       // against the next focus, repeatedly. (No awaits between, mirroring the smoke-test driver.)
       const churn = (root: HTMLElement) => {
         const blocks = Array.from(
-          root.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+          root.querySelectorAll('p[data-anchor][data-editable="1"]'),
         ) as HTMLElement[];
         const n = Math.min(8, blocks.length);
         for (let i = 0; i < n; i++) {
@@ -324,7 +324,7 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
       const duplicated = Array.from(counts.entries()).filter(([, c]) => c > 1).length;
 
       // Pick a real editable anchor and confirm a single, page-box-resident match.
-      const sample = anchored.find((e) => e.getAttribute('contenteditable') === 'true');
+      const sample = anchored.find((e) => e.getAttribute('data-editable') === '1');
       const sampleAnchor = sample?.getAttribute('data-anchor') || '';
       const matchesForSample = sampleAnchor
         ? container.querySelectorAll(`[data-anchor="${sampleAnchor}"]`).length

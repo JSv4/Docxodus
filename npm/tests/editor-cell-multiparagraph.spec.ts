@@ -28,7 +28,7 @@ test.describe('DocxEditor — multi-paragraph table cells (Enter in a cell)', ()
       (window as any).__cell = { editor, container };
 
       // Focus the body paragraph (sets the active block) then insert a table after it.
-      const body = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const body = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       body.focus();
       editor.insertTable(1, 2, { borderless: true });
 

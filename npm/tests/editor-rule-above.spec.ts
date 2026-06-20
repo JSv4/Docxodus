@@ -21,19 +21,19 @@ test.describe('DocxEditor — insertHorizontalRule position', () => {
       document.body.appendChild(container);
       const blank: Uint8Array = D.DocxSessionBridge.CreateBlankDocx();
       const editor = D.DocxEditor.open(container, blank, D, {});
-      let blk = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      let blk = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       blk.focus();
       const sel = window.getSelection()!;
       const r = document.createRange(); r.selectNodeContents(blk);
       sel.removeAllRanges(); sel.addRange(r);
       document.execCommand('insertText', false, 'UNITED STATES');
       blk.dispatchEvent(new Event('blur'));
-      blk = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      blk = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       blk.focus();
 
       editor.insertHorizontalRule(12, 'single', 'above');
       const eds = Array.from(
-        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+        container.querySelectorAll('p[data-anchor][data-editable="1"]'),
       ) as HTMLElement[];
       const markerIdx = eds.findIndex((b) => (b.textContent || '').includes('UNITED STATES'));
       const prevEmpty =
@@ -48,19 +48,19 @@ test.describe('DocxEditor — insertHorizontalRule position', () => {
       document.body.appendChild(container);
       const blank: Uint8Array = D.DocxSessionBridge.CreateBlankDocx();
       const editor = D.DocxEditor.open(container, blank, D, {});
-      let blk = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      let blk = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       blk.focus();
       const sel = window.getSelection()!;
       const r = document.createRange(); r.selectNodeContents(blk);
       sel.removeAllRanges(); sel.addRange(r);
       document.execCommand('insertText', false, 'UNITED STATES');
       blk.dispatchEvent(new Event('blur'));
-      blk = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      blk = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       blk.focus();
 
       editor.insertHorizontalRule(12, 'single'); // default 'below'
       const eds = Array.from(
-        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+        container.querySelectorAll('p[data-anchor][data-editable="1"]'),
       ) as HTMLElement[];
       const markerIdx = eds.findIndex((b) => (b.textContent || '').includes('UNITED STATES'));
       const nextEmpty =

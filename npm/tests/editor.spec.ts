@@ -38,7 +38,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
 
       const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
       const editablePs = () =>
-        Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]'))
+        Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]'))
           .filter((e) => norm(e.textContent || '').length > 5) as HTMLElement[];
 
       const before = editablePs();
@@ -136,7 +136,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       const pageBoxes = container.querySelectorAll('.page-box').length;
       const editable = pageContainer
         ? (Array.from(
-            pageContainer.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+            pageContainer.querySelectorAll('p[data-anchor][data-editable="1"]'),
           ) as HTMLElement[]).filter((e) => norm(e.textContent || '').length > 5)
         : [];
 
@@ -187,7 +187,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       };
 
       const target = (Array.from(
-        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+        container.querySelectorAll('p[data-anchor][data-editable="1"]'),
       ) as HTMLElement[]).find((e) => norm(e.textContent || '').length > 12)!;
       const anchor = target.getAttribute('data-anchor')!;
       const head = norm(target.textContent || '').slice(0, 3);
@@ -247,7 +247,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       };
 
       const target = (Array.from(
-        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+        container.querySelectorAll('p[data-anchor][data-editable="1"]'),
       ) as HTMLElement[]).find((e) => norm(e.textContent || '').length > 12)!;
       const anchor = target.getAttribute('data-anchor')!;
 
@@ -301,7 +301,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
       const alnum = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
       const editableEls = () =>
-        Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+        Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
       const count = () => editableEls().length;
 
       const firstText = (el: HTMLElement): Text | null =>
@@ -374,7 +374,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
 
       const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
       const editableEls = () =>
-        Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+        Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
       const h1count = () => container.querySelectorAll('h1[data-anchor]').length;
       const selectChars = (el: HTMLElement, start: number, len: number) => {
         const tn = document.createTreeWalker(el, NodeFilter.SHOW_TEXT).nextNode() as Text | null;
@@ -435,7 +435,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
 
       const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim();
       const editable = () =>
-        Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+        Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
 
       // ALIGNMENT: center a paragraph.
       const a = editable().find((e) => norm(e.textContent || '').length > 10)!;
@@ -509,7 +509,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       const container = document.createElement('div');
       document.body.appendChild(container);
       const editor = D.DocxEditor.open(container, bin, D, {});
-      const all = Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+      const all = Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
       // Pick a UNIQUE-text paragraph (HC031 repeats some), so we can re-find the exact block.
       const tgt = all.find((e) => {
         const t = norm(e.textContent || '').slice(0, 40);
@@ -571,7 +571,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       const container = document.createElement('div');
       document.body.appendChild(container);
       const editor = D.DocxEditor.open(container, bin, D, { onEdit: (i: any) => edits.push(i) });
-      const list = () => Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+      const list = () => Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
       const firstP = list().find((e) => norm(e.textContent || '').length > 15)!;
       firstP.focus();
       editor.toggleList('decimal'); // make it a numbered item
@@ -645,7 +645,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       document.body.appendChild(container);
       const editor = D.DocxEditor.open(container, bin, D, {});
       (window as any).__m = { editor, container };
-      const list = () => Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+      const list = () => Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
       const caretEnd = (el: HTMLElement) => {
         el.focus();
         const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
@@ -661,9 +661,15 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       caretEnd(first);
       editor.toggleList('decimal');
       const fire = (el: HTMLElement) => { caretEnd(el); el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); };
+      // Single-root: the active block is where the caret sits (document.activeElement is the host).
+      const caretBlock = () => {
+        const n = getSelection()?.anchorNode;
+        const el = n ? (n.nodeType === 1 ? (n as HTMLElement) : n.parentElement) : null;
+        return el?.closest('[data-editable="1"]') as HTMLElement | null;
+      };
       const it = list().find((e) => /^\d+\./.test(norm(e.textContent || '')))!;
-      fire(it); fire(document.activeElement as HTMLElement); // create items 2 and 3
-      (document.activeElement as HTMLElement)?.blur?.();
+      fire(it); fire(caretBlock() || it); // create items 2 and 3 (caret follows each Enter)
+      editor.commitAllDirty();
       return list().filter((e) => /^\d+\./.test(norm(e.textContent || ''))).slice(0, 3).map((e) => e.getAttribute('data-anchor')!);
     }, Array.from(bytes));
 
@@ -674,14 +680,22 @@ test.describe('DocxEditor — block editor end-to-end', () => {
     await page.keyboard.press('End');
     await page.keyboard.type(' X');
 
-    // Click item 2 (commits item 1 on blur). Focus MUST land on item 2 — the bug dropped it to <body>.
+    // Click item 2 (commits item 1 on blur). The caret MUST land in item 2 — the bug dropped it to
+    // <body>. (Single-root: the active ELEMENT is the editing-host root; the active BLOCK is where
+    // the caret sits, so we assert via the selection, not document.activeElement.)
+    const caretAnchor = () =>
+      page.evaluate(() => {
+        const n = getSelection()?.anchorNode;
+        const el = n ? (n.nodeType === 1 ? (n as HTMLElement) : n.parentElement) : null;
+        return el?.closest('[data-editable="1"]')?.getAttribute('data-anchor') ?? null;
+      });
     await page.locator(`#mtest [data-anchor="${anchors[1]}"]`).click();
-    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-anchor'))).toBe(anchors[1]);
+    expect(await caretAnchor()).toBe(anchors[1]);
     await page.keyboard.type('BB');
 
-    // Click item 3 (commits item 2). Same focus requirement, and typing into the empty item works.
+    // Click item 3 (commits item 2). Same caret requirement, and typing into the empty item works.
     await page.locator(`#mtest [data-anchor="${anchors[2]}"]`).click();
-    expect(await page.evaluate(() => document.activeElement?.getAttribute('data-anchor'))).toBe(anchors[2]);
+    expect(await caretAnchor()).toBe(anchors[2]);
     await page.keyboard.type('CC');
 
     // Commit the last item; assert numbering stayed 1/2/3 and every item kept its typed text.
@@ -718,7 +732,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       const container = document.createElement('div');
       document.body.appendChild(container);
       const editor = D.DocxEditor.open(container, bin, D, {});
-      const list = () => Array.from(container.querySelectorAll('p[data-anchor][contenteditable="true"]')) as HTMLElement[];
+      const list = () => Array.from(container.querySelectorAll('p[data-anchor][data-editable="1"]')) as HTMLElement[];
       const isLi = (e: HTMLElement) => !!e.querySelector(':scope > [data-list-marker]');
       const caretEnd = (el: HTMLElement) => {
         el.focus();
@@ -734,7 +748,14 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       // Build a 4-item numbered list.
       caretEnd(list().find((e) => norm(e.textContent || '').length > 20)!);
       editor.toggleList('decimal');
-      for (let i = 0; i < 3; i++) { const cur = document.activeElement as HTMLElement; caretEnd(cur); cur.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); }
+      // Single-root: the active block is where the caret sits (the editing-host root is
+      // document.activeElement), so resolve the current item from the selection each iteration.
+      const caretBlock = () => {
+        const n = getSelection()?.anchorNode;
+        const el = n ? (n.nodeType === 1 ? (n as HTMLElement) : n.parentElement) : null;
+        return el?.closest('[data-editable="1"]') as HTMLElement | null;
+      };
+      for (let i = 0; i < 3; i++) { const cur = caretBlock(); if (!cur) break; caretEnd(cur); cur.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); }
 
       const liItems = () => list().filter(isLi);
       const snapshot = () => liItems().slice(0, 4).map((e) => ({ num: norm(e.textContent || '').match(/^(\d+)\./)?.[1] ?? null, indentPx: parseFloat(getComputedStyle(e).marginLeft) }));
@@ -786,7 +807,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
 
       const norm = (s: string) => (s || '').replace(/[\u200E\u200F]/g, '').replace(/\s+/g, ' ').trim();
       const target = Array.from(
-        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+        container.querySelectorAll('p[data-anchor][data-editable="1"]'),
       ).find((e) => norm((e as HTMLElement).textContent || '').length > 10) as HTMLElement;
 
       // Inject a leading + trailing RLM into the block's first text node, exactly as the
@@ -815,7 +836,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       const blockCountAfter = container.querySelectorAll('[data-anchor]').length;
       // The new (empty) paragraph should follow the one still holding the original text.
       const labelsBlock = Array.from(
-        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+        container.querySelectorAll('p[data-anchor][data-editable="1"]'),
       ).find((e) => norm((e as HTMLElement).textContent || '').length > 10) as HTMLElement;
       const next = labelsBlock ? (labelsBlock.nextElementSibling as HTMLElement | null) : null;
       const newIsEmpty = !!next && norm(next.textContent || '') === '';
@@ -851,7 +872,7 @@ test.describe('DocxEditor — block editor end-to-end', () => {
       };
 
       const target = (Array.from(
-        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+        container.querySelectorAll('p[data-anchor][data-editable="1"]'),
       ) as HTMLElement[]).find((e) => norm(e.textContent || '').length > 12)!;
       const anchor = target.getAttribute('data-anchor')!;
       const firstWord = norm(target.textContent || '').slice(0, 4);

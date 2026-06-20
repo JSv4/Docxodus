@@ -27,13 +27,13 @@ test.describe('DocxEditor — clear paragraph borders', () => {
       const blank: Uint8Array = D.DocxSessionBridge.CreateBlankDocx();
       const editor = D.DocxEditor.open(container, blank, D, {});
 
-      const body = container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const body = container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
       body.focus();
       editor.insertHorizontalRule(24); // thick bottom border on a new empty paragraph after `body`
       const borderedBefore = countBordered(container);
 
       // Focus the rule paragraph (the last addressable paragraph) and clear its borders.
-      const ps = container.querySelectorAll('p[data-anchor][contenteditable="true"]');
+      const ps = container.querySelectorAll('p[data-anchor][data-editable="1"]');
       const rule = ps[ps.length - 1] as HTMLElement;
       rule.focus();
       editor.clearParagraphBorders();

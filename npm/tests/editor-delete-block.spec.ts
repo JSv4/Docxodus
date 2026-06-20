@@ -22,10 +22,10 @@ test.describe('DocxEditor — deleteBlock', () => {
       const blank: Uint8Array = D.DocxSessionBridge.CreateBlankDocx();
       const editor = D.DocxEditor.open(container, blank, D, {});
       const editCount = () =>
-        container.querySelectorAll('p[data-anchor][contenteditable="true"]').length;
+        container.querySelectorAll('p[data-anchor][data-editable="1"]').length;
       const tableCount = () => container.querySelectorAll('table').length;
       const firstEditable = () =>
-        container.querySelector('p[data-anchor][contenteditable="true"]') as HTMLElement;
+        container.querySelector('p[data-anchor][data-editable="1"]') as HTMLElement;
 
       // (a) Sole-block guard: deleting the only block is a no-op.
       let blk = firstEditable();
@@ -48,7 +48,7 @@ test.describe('DocxEditor — deleteBlock', () => {
 
       // (b) Delete the stray empty rule paragraph (focus the empty one).
       const eds = Array.from(
-        container.querySelectorAll('p[data-anchor][contenteditable="true"]'),
+        container.querySelectorAll('p[data-anchor][data-editable="1"]'),
       ) as HTMLElement[];
       const stray = eds.find((b) => (b.textContent || '').trim() === '')!;
       stray.focus();
@@ -59,7 +59,7 @@ test.describe('DocxEditor — deleteBlock', () => {
       // (c) Inside-a-table guard: insert a table, focus a cell, deleteBlock is inert.
       firstEditable().focus();
       editor.insertTable(1, 1, {});
-      const cell = container.querySelector('table p[data-anchor][contenteditable="true"]') as HTMLElement;
+      const cell = container.querySelector('table p[data-anchor][data-editable="1"]') as HTMLElement;
       cell.focus();
       const tablesBefore = tableCount();
       editor.deleteBlock();
