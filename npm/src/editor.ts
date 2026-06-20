@@ -497,6 +497,18 @@ export class DocxEditor {
   private replacing = false;
 
   /**
+   * Client-side undo grouping. The editor is the SOLE driver of the session's Undo/Redo, so a
+   * compound editor action (multi-block format, cross-block delete/type-over) records how many
+   * session ops it performed; one editor.undo() reverses the whole group. Every successful mutation
+   * goes through `op()`: ungrouped → a group of 1 (unchanged single-edit UX); inside `group()` →
+   * folded into the surrounding unit. `redoGroups` mirrors it for redo and is cleared by any new edit.
+   */
+  private readonly undoGroups: number[] = [];
+  private readonly redoGroups: number[] = [];
+  private groupDepth = 0;
+  private groupOps = 0;
+
+  /**
    * The last real (non-collapsed) text selection inside an editable block. A toolbar control that
    * must take focus to be used — the font-size combobox — blurs the block and collapses the live
    * selection, so without this an operation triggered from such a control could only target the
@@ -1098,11 +1110,36 @@ export class DocxEditor {
     return i > 0 ? all[i - 1] : null;
   }
 
+  /** Parse a session mutation's EditResult AND record it for undo grouping (parseEdit is used only
+   *  for mutation results). A standalone (ungrouped) success pushes a group of 1 (single-edit UX is
+   *  unchanged); inside `group()`, successes accumulate into the surrounding group. */
   private parseEdit(json: string): EditResultLite {
+    let res: EditResultLite;
     try {
-      return JSON.parse(json) as EditResultLite;
+      res = JSON.parse(json) as EditResultLite;
     } catch {
-      return { success: false };
+      res = { success: false };
+    }
+    if (res.success) {
+      if (this.groupDepth > 0) this.groupOps++;
+      else { this.undoGroups.push(1); this.redoGroups.length = 0; }
+    }
+    return res;
+  }
+
+  /** Coalesce every session mutation performed in `fn` into ONE undo unit (atomic compound edit). */
+  private group(fn: () => void): void {
+    this.groupDepth++;
+    const before = this.groupOps;
+    try {
+      fn();
+    } finally {
+      this.groupDepth--;
+      if (this.groupDepth === 0) {
+        const n = this.groupOps - before;
+        this.groupOps = 0;
+        if (n > 0) { this.undoGroups.push(n); this.redoGroups.length = 0; }
+      }
     }
   }
 
@@ -1154,13 +1191,16 @@ export class DocxEditor {
       const unid = b.getAttribute("data-anchor");
       return { block: b, fullId: unid ? this.unidToFullId.get(unid) : undefined, span: this.blockSpanForSelection(b) };
     });
-    for (const t of targets) {
-      if (!t.fullId || (t.span && t.span.length === 0)) continue;
-      const synced = this.syncBlock(t.block, t.fullId);
-      this.exports.DocxSessionBridge.ApplyFormat(
-        this.handle, synced, t.span ? JSON.stringify(t.span) : "", JSON.stringify(op),
-      );
-    }
+    // One atomic undo for the whole multi-block format (parseEdit records each op into the group).
+    this.group(() => {
+      for (const t of targets) {
+        if (!t.fullId || (t.span && t.span.length === 0)) continue;
+        const synced = this.syncBlock(t.block, t.fullId);
+        this.parseEdit(this.exports.DocxSessionBridge.ApplyFormat(
+          this.handle, synced, t.span ? JSON.stringify(t.span) : "", JSON.stringify(op),
+        ));
+      }
+    });
     this.remount();
     return true;
   }
@@ -1173,11 +1213,14 @@ export class DocxEditor {
       const unid = b.getAttribute("data-anchor");
       return { block: b, fullId: unid ? this.unidToFullId.get(unid) : undefined };
     });
-    for (const t of targets) {
-      if (!t.fullId) continue;
-      const synced = this.syncBlock(t.block, t.fullId);
-      run(synced);
-    }
+    // One atomic undo for the whole multi-block paragraph op (parseEdit records each into the group).
+    this.group(() => {
+      for (const t of targets) {
+        if (!t.fullId) continue;
+        const synced = this.syncBlock(t.block, t.fullId);
+        this.parseEdit(run(synced));
+      }
+    });
     this.remount();
     return true;
   }
@@ -1566,16 +1609,32 @@ export class DocxEditor {
     this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 
-  /** Undo the last edit (re-renders the document). */
+  /** Undo the last edit GROUP (re-renders the document). A compound edit (multi-block format,
+   *  cross-block delete/type-over) was recorded as one group of N session ops, so it reverses in a
+   *  single call. Falls back to a single session Undo for any ungrouped history. */
   undo(): void {
     if (this.closed) return;
-    if (this.exports.DocxSessionBridge.Undo(this.handle)) this.remount();
+    const n = this.undoGroups.pop();
+    if (n === undefined) {
+      if (this.exports.DocxSessionBridge.Undo(this.handle)) this.remount();
+      return;
+    }
+    let undone = 0;
+    for (let i = 0; i < n; i++) if (this.exports.DocxSessionBridge.Undo(this.handle)) undone++;
+    if (undone > 0) { this.redoGroups.push(undone); this.remount(); }
   }
 
-  /** Redo the last undone edit (re-renders the document). */
+  /** Redo the last undone edit GROUP (re-renders the document). */
   redo(): void {
     if (this.closed) return;
-    if (this.exports.DocxSessionBridge.Redo(this.handle)) this.remount();
+    const n = this.redoGroups.pop();
+    if (n === undefined) {
+      if (this.exports.DocxSessionBridge.Redo(this.handle)) this.remount();
+      return;
+    }
+    let redone = 0;
+    for (let i = 0; i < n; i++) if (this.exports.DocxSessionBridge.Redo(this.handle)) redone++;
+    if (redone > 0) { this.undoGroups.push(redone); this.remount(); }
   }
 
   /** Which inline formats the current selection carries — for ribbon button highlighting. */
