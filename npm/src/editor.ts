@@ -477,6 +477,26 @@ function completeArgs(
   ];
 }
 
+/** The structural-input listeners an editor instance owns on its editing-host root. */
+interface RootHandlers {
+  beforeinput: (ev: Event) => void;
+  keydown: (ev: Event) => void;
+  blur: (ev: Event) => void;
+}
+type RootWithHandlers = HTMLElement & { __docxEditorHandlers?: RootHandlers };
+
+/** Detach whatever editor's structural listeners are currently on `root` (recorded on the
+ *  element itself). Lets a fresh open on a re-used container take over input even if a prior
+ *  instance was never closed (e.g. a bfcache restore). */
+function removeRootHandlers(root: HTMLElement): void {
+  const h = (root as RootWithHandlers).__docxEditorHandlers;
+  if (!h) return;
+  root.removeEventListener("beforeinput", h.beforeinput);
+  root.removeEventListener("keydown", h.keydown);
+  root.removeEventListener("blur", h.blur, true);
+  delete (root as RootWithHandlers).__docxEditorHandlers;
+}
+
 export class DocxEditor {
   private readonly exports: DocxEditorExports;
   private readonly container: HTMLElement;
@@ -517,6 +537,29 @@ export class DocxEditor {
    * block, and cleared when a caret is collapsed inside a block (so it never goes stale).
    */
   private lastSelection: { unid: string; span: { start: number; length: number } } | null = null;
+
+  /**
+   * The editing-host root this instance currently has structural listeners on (the container in
+   * continuous mode, the page container in paginated mode). The single root is REUSED across
+   * re-opens (the demo re-opens on the same container) and IS the contenteditable host, so the
+   * listeners are bound PER OPEN (not once) and removed on close — otherwise a 2nd open's Enter/
+   * Backspace would be handled by the first, now-closed instance and fall through to native
+   * contenteditable (cloning the block's data-anchor → model corruption on the next remount).
+   */
+  private wiredRoot: HTMLElement | null = null;
+  private readonly boundBeforeInput = (ev: Event): void => this.onBeforeInput(ev as InputEvent);
+  private readonly boundKeydown = (ev: Event): void => {
+    const block = this.keydownBlock(ev);
+    if (block) this.onKeydown(block, ev as KeyboardEvent);
+  };
+  private readonly boundBlur = (ev: Event): void => {
+    // Commit when focus leaves the editor. Capture so a `blur` dispatched on a descendant block
+    // reaches here. IGNORE transient internal focus shifts (relatedTarget still inside the editor)
+    // — between-block commits are handled by selectionchange.
+    const rt = (ev as FocusEvent).relatedTarget as Node | null;
+    if (rt && this.editRoot.contains(rt)) return;
+    this.commitAllDirty();
+  };
 
   private constructor(
     container: HTMLElement,
@@ -626,6 +669,9 @@ export class DocxEditor {
     this.closed = true;
     if (typeof document !== "undefined")
       document.removeEventListener("selectionchange", this.onSelectionChange);
+    // Detach the structural-input listeners so a re-open on the SAME container wires fresh handlers
+    // bound to the new instance (otherwise this closed instance keeps handling Enter/Backspace).
+    this.unwireRoot();
     this.exports.DocxSessionBridge.CloseSession(this.handle);
   }
 
@@ -994,34 +1040,39 @@ export class DocxEditor {
   }
 
   /** Turn `root` into the single contenteditable editing host so a native selection spans blocks.
-   *  Per-block focus/blur/keydown live on the blocks (see wireBlock); the root only owns beforeinput
-   *  (cross-block input routing, Task 5). */
+   *  Structural input (keydown for split/merge, beforeinput for cross-block routing, blur for
+   *  commit-on-exit) lives on the root, NOT per block — see wireBlock; the blocks are tabindex-
+   *  focusable but are not their own editing hosts.
+   *
+   *  Listeners are (re)attached PER OPEN, keyed on the element via `__docxEditorHandlers`, with
+   *  STABLE bound references so the browser de-dupes repeat calls (a continuous remount re-uses the
+   *  same container). A re-open on a re-used container must take over input from any prior instance:
+   *  this instance's `close()` unwires it, but we also defensively drop a leftover handler set the
+   *  element still carries (e.g. a host that re-opened without closing). The previous once-only
+   *  dataset guard left a now-closed instance's handlers bound after a re-open, so Enter/Backspace
+   *  fell through to native contenteditable — cloning a block's data-anchor → model corruption. */
   private makeRootEditable(root: HTMLElement): void {
     root.setAttribute("contenteditable", "true");
-    // A non-paginated remount reuses the SAME container element, so guard against attaching the
-    // listeners twice (which would fire every structural keydown / beforeinput route twice — e.g.
-    // an Enter would split a paragraph into three). Paginated remounts build a fresh page root each
-    // time, which simply has no flag yet.
-    if (root.dataset.editorRootWired === "1") return;
-    root.dataset.editorRootWired = "1";
-    root.addEventListener("beforeinput", (ev) => this.onBeforeInput(ev as InputEvent));
-    // Keydown fires on the editing host (the root) during real editing, not on the block, so the
-    // structural-key handler lives here and resolves the target block from the event/selection.
-    root.addEventListener("keydown", (ev) => {
-      const block = this.keydownBlock(ev);
-      if (block) this.onKeydown(block, ev as KeyboardEvent);
-    });
-    // Commit when focus leaves the editor. Capture so a `blur` dispatched on a descendant block
-    // reaches here (the test pattern `block.dispatchEvent(new Event('blur'))`). But IGNORE transient
-    // internal focus shifts — setting a selection moves focus from a tabindex block to the
-    // contenteditable host, firing a block blur whose relatedTarget is inside the editor; committing
-    // then would re-render (detach) the block mid-interaction. Between-block commits are handled by
-    // selectionchange, so skipping internal shifts here loses nothing.
-    root.addEventListener("blur", (ev) => {
-      const rt = (ev as FocusEvent).relatedTarget as Node | null;
-      if (rt && this.editRoot.contains(rt)) return; // focus stayed inside the editor — not a real exit
-      this.commitAllDirty();
-    }, true);
+    if (this.wiredRoot === root) return; // already this instance's host (continuous remount) — no double-wire
+    this.unwireRoot();                   // moved host (paginated reflow) — detach from the old one
+    removeRootHandlers(root);            // drop a different instance's leftover handlers (re-open without close)
+    const handlers: RootHandlers = {
+      beforeinput: this.boundBeforeInput,
+      keydown: this.boundKeydown,
+      blur: this.boundBlur,
+    };
+    root.addEventListener("beforeinput", handlers.beforeinput);
+    root.addEventListener("keydown", handlers.keydown);
+    root.addEventListener("blur", handlers.blur, true);
+    (root as RootWithHandlers).__docxEditorHandlers = handlers;
+    this.wiredRoot = root;
+  }
+
+  /** Detach this instance's structural listeners from its editing-host root. */
+  private unwireRoot(): void {
+    if (!this.wiredRoot) return;
+    removeRootHandlers(this.wiredRoot);
+    this.wiredRoot = null;
   }
 
   /** The block a keydown targets: the event's block (synthetic dispatch on a block), else the
