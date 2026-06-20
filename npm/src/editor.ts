@@ -861,7 +861,7 @@ export class DocxEditor {
         return;
       case "paste":
         ev.preventDefault();
-        if (model) this.handlePaste(model);
+        if (model) this.handlePaste(model, ev.dataTransfer?.getData("text/plain") ?? "");
         return;
     }
   }
@@ -941,9 +941,57 @@ export class DocxEditor {
     if (target && after) { this.activeBlock = target; placeCaretAtOffset(target, after.offset); }
   }
 
-  private typeOverSelection(_model: MultiBlockSelection, _text: string): void { /* Task 7 */ }
-  private splitAtSelection(_model: MultiBlockSelection): void { /* Task 7 */ }
-  private handlePaste(_model: MultiBlockSelection): void { /* Task 7 */ }
+  /** The content offset where a collapsed multi-block selection lands (end of the first block's
+   *  retained prefix) — the caret/insert point after the selection is removed. */
+  private joinOffsetOf(model: MultiBlockSelection): number {
+    const first = model.blocks[0];
+    return first.span ? first.span.start : blockContentText(first.el).length;
+  }
+
+  /** Replace a multi-block selection with `text`: collapse it, then insert at the join. Collapse +
+   *  insert + commit are one atomic undo. Insertion uses the proven single-block native path (place
+   *  caret → execCommand insertText → commit) rather than fragile post-merge span math. */
+  private typeOverSelection(model: MultiBlockSelection, text: string): void {
+    if (this.closed || !model.isMultiBlock) return;
+    const firstIdx = this.blockIndex(model.blocks[0].el);
+    const offset = this.joinOffsetOf(model);
+    this.group(() => {
+      this.deleteSelectionInner(model);
+      this.remount(); // materialize the merged block before the native insert
+      const block = this.editableList()[Math.max(0, firstIdx)];
+      if (!block) return;
+      this.activeBlock = block;
+      placeCaretAtOffset(block, offset);
+      if (text && typeof document !== "undefined" && typeof document.execCommand === "function") {
+        document.execCommand("insertText", false, text); // collapsed single-block → routed native
+      }
+      const id = this.idOf(block);
+      if (id) this.syncBlock(block, id); // commit the typed text into the same undo group
+    });
+    const block = this.editableList()[Math.max(0, firstIdx)];
+    if (block) { this.activeBlock = block; placeCaretAtOffset(block, offset + text.length); }
+  }
+
+  /** Enter over a multi-block selection: collapse it, then split at the join — one atomic undo. */
+  private splitAtSelection(model: MultiBlockSelection): void {
+    if (this.closed || !model.isMultiBlock) return;
+    const firstIdx = this.blockIndex(model.blocks[0].el);
+    const offset = this.joinOffsetOf(model);
+    this.group(() => {
+      this.deleteSelectionInner(model);
+      this.remount();
+      const block = this.editableList()[Math.max(0, firstIdx)];
+      if (!block) return;
+      this.activeBlock = block;
+      placeCaretAtOffset(block, offset);
+      this.splitAtCaret(block); // splits at the placed caret (records into the group)
+    });
+  }
+
+  /** Plain-text paste over a multi-block selection (v1): replace it with the pasted text. */
+  private handlePaste(model: MultiBlockSelection, text: string): void {
+    this.typeOverSelection(model, text);
+  }
 
   /** Turn `root` into the single contenteditable editing host so a native selection spans blocks.
    *  Per-block focus/blur/keydown live on the blocks (see wireBlock); the root only owns beforeinput
@@ -1021,6 +1069,11 @@ export class DocxEditor {
         return;
       }
     }
+    // Enter over a MULTI-BLOCK selection is a compound edit (collapse then split / line break):
+    // let beforeinput route it to splitAtSelection rather than splitting the active block here.
+    // (Backspace/Delete already fall through to beforeinput because their handlers require a
+    // collapsed caret.) Don't preventDefault so the beforeinput fires.
+    if (ev.key === "Enter" && !ev.isComposing && !!this.selectionModel()?.isMultiBlock) return;
     // Shift+Enter inserts an intra-paragraph line break (a real w:br on commit),
     // not a paragraph split. Deterministic across browsers and allowed in cells
     // (a line break changes no table structure).
