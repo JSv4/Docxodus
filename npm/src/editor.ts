@@ -100,6 +100,11 @@ interface AnchorTargetLite {
 
 const EDITABLE_TAGS = new Set(["P", "H1", "H2", "H3", "H4", "H5", "H6"]);
 
+/** Canonical selector for an editable body block. Decoupled from the contenteditable attribute so
+ *  the single-root model (one contenteditable surface; blocks marked editable by attribute) and the
+ *  legacy per-block model both resolve the same set. */
+const EDITABLE_SELECTOR = '[data-anchor][data-editable="1"]';
+
 // ─── M1: inline HTML → markdown (preserve formatting on edit) ───────────────
 
 interface InlineSeg {
@@ -536,7 +541,7 @@ export class DocxEditor {
   private editableBlockOf(node: Node | null): HTMLElement | null {
     if (!node) return null;
     const start = node.nodeType === 1 ? (node as HTMLElement) : node.parentElement;
-    const block = start?.closest<HTMLElement>('[data-anchor][contenteditable="true"]') ?? null;
+    const block = start?.closest<HTMLElement>(EDITABLE_SELECTOR) ?? null;
     return block && this.editRoot.contains(block) ? block : null;
   }
 
@@ -673,6 +678,7 @@ export class DocxEditor {
     // table structure. Anything the projection does not index (unstamped content) stays read-only.
     if (!unid || !this.unidToFullId.has(unid)) return;
     el.setAttribute("contenteditable", "true");
+    el.setAttribute("data-editable", "1");
     // Generated list markers (number/bullet + suffix) are not editable content — keep the
     // caret out of them so offsets stay aligned with the paragraph's run text.
     el.querySelectorAll<HTMLElement>("[data-list-marker]").forEach((m) => m.setAttribute("contenteditable", "false"));
@@ -991,7 +997,7 @@ export class DocxEditor {
   /** The editable block immediately before `el` in document order, or null. */
   private previousEditable(el: HTMLElement): HTMLElement | null {
     const all = Array.from(
-      this.editRoot.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'),
+      this.editRoot.querySelectorAll<HTMLElement>(EDITABLE_SELECTOR),
     );
     const i = all.indexOf(el);
     return i > 0 ? all[i - 1] : null;
@@ -1016,7 +1022,7 @@ export class DocxEditor {
   private selectedBlocks(): HTMLElement[] {
     const sel = typeof window !== "undefined" ? window.getSelection() : null;
     const all = Array.from(
-      this.editRoot.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'),
+      this.editRoot.querySelectorAll<HTMLElement>(EDITABLE_SELECTOR),
     );
     if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
       const range = sel.getRangeAt(0);
@@ -1518,7 +1524,7 @@ export class DocxEditor {
 
   /** Editable blocks in document order. */
   private editableList(): HTMLElement[] {
-    return Array.from(this.editRoot.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'));
+    return Array.from(this.editRoot.querySelectorAll<HTMLElement>(EDITABLE_SELECTOR));
   }
 
   private blockIndex(el: HTMLElement): number {
