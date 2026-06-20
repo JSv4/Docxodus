@@ -18,6 +18,7 @@
  */
 
 import { paginateHtml } from "./pagination.js";
+import { readSelection, type MultiBlockSelection } from "./editor-selection.js";
 
 /** The subset of WASM bridge exports the editor needs (as exposed on `window.Docxodus`). */
 export interface DocxEditorExports {
@@ -264,7 +265,7 @@ function domOffsetForContentOffset(s: string, n: number): number {
  * text and injected bidi marks. This is the offset DocxSession ops expect (the paragraph's run
  * text, not the rendered number/bullet or bidi marks the converter injects).
  */
-function contentOffsetOf(block: HTMLElement, container: Node, offset: number): number {
+export function contentOffsetOf(block: HTMLElement, container: Node, offset: number): number {
   let count = 0;
   let done = false;
   const walk = (node: Node): void => {
@@ -301,7 +302,7 @@ function caretOffsetIn(block: HTMLElement): number | null {
 
 /** Visible content text of `block`, excluding generated list-marker text (the same content
  *  caretOffsetIn/contentOffsetOf count). */
-function blockContentText(block: HTMLElement): string {
+export function blockContentText(block: HTMLElement): string {
   let out = "";
   const walk = (node: Node): void => {
     if (node.nodeType === 3 /* TEXT_NODE */) {
@@ -374,7 +375,7 @@ export type FormatKey = "bold" | "italic" | "underline" | "strike" | "code" | "s
 export type EditorAlignment = "left" | "center" | "right" | "justify";
 
 /** The selection's content-text {start,length} within `block` (excludes markers), or null. */
-function selectionSpanIn(block: HTMLElement): { start: number; length: number } | null {
+export function selectionSpanIn(block: HTMLElement): { start: number; length: number } | null {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
   if (!sel || sel.rangeCount === 0) return null;
   const range = sel.getRangeAt(0);
@@ -1109,28 +1110,17 @@ export class DocxEditor {
 
   // ─── Multi-block selection helpers (format a whole stack of paragraphs at once) ──────
 
-  /** Editable blocks the current selection covers, in document order. Uses Range.comparePoint
-   *  (robust to a selection boundary that normalized onto a wrapper element rather than a block
-   *  or text node — Range.intersectsNode misses the end block at a `(block, childCount)` boundary).
-   *  A collapsed or single-block selection yields just the active block. */
+  /** The full multi-block selection model (covered body blocks + per-block spans), or null when the
+   *  selection is collapsed/empty/outside the body. Tables are a selection boundary. */
+  private selectionModel(): MultiBlockSelection | null {
+    return readSelection(this.editRoot, { contentOffsetOf, blockContentText, selectionSpanIn });
+  }
+
+  /** Editable blocks the current selection covers, in document order. A multi-block selection
+   *  yields all covered body blocks (via the selection model); otherwise just the active block. */
   private selectedBlocks(): HTMLElement[] {
-    const sel = typeof window !== "undefined" ? window.getSelection() : null;
-    const all = Array.from(
-      this.editRoot.querySelectorAll<HTMLElement>(EDITABLE_SELECTOR),
-    );
-    if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
-      const range = sel.getRangeAt(0);
-      const hit = all.filter((b) => {
-        try {
-          const startsAfterEnd = range.comparePoint(b, 0) > 0; // block begins after the selection ends
-          const endsBeforeStart = range.comparePoint(b, b.childNodes.length) < 0; // block ends before it starts
-          return !startsAfterEnd && !endsBeforeStart;
-        } catch {
-          return false;
-        }
-      });
-      if (hit.length > 1) return hit;
-    }
+    const model = this.selectionModel();
+    if (model && model.isMultiBlock) return model.blocks.map((b) => b.el);
     return this.activeBlock ? [this.activeBlock] : [];
   }
 
