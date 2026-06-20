@@ -866,8 +866,81 @@ export class DocxEditor {
     }
   }
 
-  // ─── Compound cross-block edits (implemented in Tasks 6–7) ───────────────
-  private deleteSelection(_model: MultiBlockSelection): void { /* Task 6 */ }
+  // ─── Compound cross-block edits ──────────────────────────────────────────
+
+  /** Full anchor id for a block element (via its bare unid), or null. */
+  private idOf(el: HTMLElement): string | null {
+    const unid = el.getAttribute("data-anchor");
+    return unid ? this.unidToFullId.get(unid) ?? null : null;
+  }
+
+  /** Perform the trim/delete/merge session ops for a multi-block selection — NO group/remount/caret
+   *  (callers wrap in group() and remount). Returns the surviving (merged) block's anchor id and the
+   *  caret/join content offset, or null if it couldn't run. Anchor ids are re-threaded across each op
+   *  because a text edit re-hashes a block's unid. */
+  private deleteSelectionInner(model: MultiBlockSelection): { id: string; offset: number } | null {
+    const blocks = model.blocks;
+    if (blocks.length < 2) return null;
+    const firstSel = blocks[0];
+    const lastSel = blocks[blocks.length - 1];
+    const firstFull = this.idOf(firstSel.el);
+    const lastFull = this.idOf(lastSel.el);
+    if (!firstFull || !lastFull) return null;
+
+    // Compute the retained prefix/suffix text BEFORE mutating, so we can undo MergeParagraphs'
+    // sentence-joining space (it inserts one space when both sides end/start non-whitespace — right
+    // for Backspace-join, wrong for a delete-selection where the halves must join seamlessly).
+    const firstText = blockContentText(firstSel.el);
+    const lastText = blockContentText(lastSel.el);
+    const prefix = firstSel.span ? firstText.slice(0, firstSel.span.start) : firstText;
+    const suffix = lastSel.span ? lastText.slice(lastSel.span.length) : "";
+    const offset = prefix.length; // caret/join lands at the end of the retained prefix
+    const joinAddsSpace =
+      prefix.length > 0 && suffix.length > 0 &&
+      !/\s$/.test(prefix) && !/^\s/.test(suffix);
+
+    // 1) trim the first block's selected tail.
+    let firstId = this.syncBlock(firstSel.el, firstFull);
+    if (firstSel.span && firstSel.span.length > 0) {
+      const r = this.parseEdit(this.exports.DocxSessionBridge.ReplaceTextAtSpan(
+        this.handle, firstId, firstSel.span.start, firstSel.span.length, ""));
+      if (r.success) firstId = r.modified?.[0]?.id ?? firstId;
+    }
+    // 2) trim the last block's selected head.
+    let lastId = this.syncBlock(lastSel.el, lastFull);
+    if (lastSel.span && lastSel.span.length > 0) {
+      const r = this.parseEdit(this.exports.DocxSessionBridge.ReplaceTextAtSpan(
+        this.handle, lastId, 0, lastSel.span.length, ""));
+      if (r.success) lastId = r.modified?.[0]?.id ?? lastId;
+    }
+    // 3) delete whole middle blocks.
+    for (let i = 1; i < blocks.length - 1; i++) {
+      const mid = this.idOf(blocks[i].el);
+      if (mid) this.parseEdit(this.exports.DocxSessionBridge.DeleteBlock(this.handle, mid));
+    }
+    // 4) merge the (trimmed) last block into the (trimmed) first block.
+    const m = this.parseEdit(this.exports.DocxSessionBridge.MergeParagraphs(this.handle, firstId, lastId));
+    let mergedId = m.modified?.[0]?.id ?? firstId;
+    // 5) remove MergeParagraphs' join space so the delete is seamless ("Al"+"arlie" → "Alarlie").
+    if (m.success && joinAddsSpace) {
+      const r = this.parseEdit(this.exports.DocxSessionBridge.ReplaceTextAtSpan(
+        this.handle, mergedId, offset, 1, ""));
+      if (r.success) mergedId = r.modified?.[0]?.id ?? mergedId;
+    }
+    return { id: mergedId, offset };
+  }
+
+  /** Delete a multi-block selection: collapse it (trim/delete/merge) as one atomic undo, then
+   *  re-render and place the caret at the join. */
+  private deleteSelection(model: MultiBlockSelection): void {
+    if (this.closed || !model.isMultiBlock) return;
+    const firstIdx = this.blockIndex(model.blocks[0].el);
+    const after = this.group(() => this.deleteSelectionInner(model));
+    this.remount(firstIdx, false);
+    const target = this.editableList()[Math.max(0, firstIdx)];
+    if (target && after) { this.activeBlock = target; placeCaretAtOffset(target, after.offset); }
+  }
+
   private typeOverSelection(_model: MultiBlockSelection, _text: string): void { /* Task 7 */ }
   private splitAtSelection(_model: MultiBlockSelection): void { /* Task 7 */ }
   private handlePaste(_model: MultiBlockSelection): void { /* Task 7 */ }
@@ -1168,12 +1241,13 @@ export class DocxEditor {
     return res;
   }
 
-  /** Coalesce every session mutation performed in `fn` into ONE undo unit (atomic compound edit). */
-  private group(fn: () => void): void {
+  /** Coalesce every session mutation performed in `fn` into ONE undo unit (atomic compound edit).
+   *  Returns whatever `fn` returns. */
+  private group<T>(fn: () => T): T {
     this.groupDepth++;
     const before = this.groupOps;
     try {
-      fn();
+      return fn();
     } finally {
       this.groupDepth--;
       if (this.groupDepth === 0) {
