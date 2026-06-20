@@ -11,6 +11,15 @@ undo/redo) done; runnable demo with a full ribbon at `npm/examples/editor.html` 
 demo`); Mlists (bullets/numbered) done — all 7 requested controls shipped.** M3 (worker
 offload) / M4 (re-paginate-on-edit) are next.
 
+**Multi-block selection & actions — DONE** (branch `feat/editor-multi-block-selection`, stacked on
+PR #234). The edit surface moved from per-block `contenteditable` to a **single contenteditable
+root**, so a real user can select across blocks (drag / Shift+Click / Shift+Arrow) and apply
+formatting, paragraph ops, and destructive edits (type-over / Backspace-Delete / Enter / plain-text
+paste) to the whole selection, as one atomic undo. Tables are a selection boundary (v1). npm-only.
+See `docs/architecture/multi_block_selection.md`. (This is the resolution of the per-block →
+single-root note below; the invariants still hold — render is still an incremental projection,
+DocxSession is still the model of record.)
+
 ## Architecture invariants (do not break)
 
 1. **Model-of-record = the live OOXML in `DocxSession`** (lossless `Save`). The IR is

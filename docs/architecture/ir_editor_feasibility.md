@@ -325,7 +325,9 @@ authoritative re-render; the worker wins.
 | Render substrate | `WmlToHtmlConverter` → faithful HTML; **new `data-anchor` stamp** | C# (additive) |
 | Pagination | `pagination.ts` flows blocks into page boxes | TS, main thread |
 | Incremental render | **new `RenderBlockHtml(anchor)`**; patch only that DOM node | C# + TS |
-| Edit surface | React; per-block `contenteditable`; debounce-committed | TS, main thread |
+| Edit surface | a **single `contenteditable` root** (so a native selection spans blocks); body blocks are `tabindex`-focusable, not editing hosts; structural/cross-block input intercepted in `beforeinput` and routed to `DocxSession` | TS, main thread |
+
+> Update: the edit surface shipped as a single contenteditable root (not per-block), which is what makes multi-block selection & actions reachable. See `docs/architecture/multi_block_selection.md`.
 
 **Data flow for one edit**
 
