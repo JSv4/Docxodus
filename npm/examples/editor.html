@@ -291,7 +291,9 @@
       if (editor && styleEl.value) { editor.setParagraphStyle(styleEl.value); }
       styleEl.value = '';
     });
-    // Highlight active formats for the current selection.
+    // Highlight active formats for the current selection. Multi-block selections are native now
+    // (single contenteditable root): drag / Shift+Click / Shift+Arrow across paragraphs, then any
+    // ribbon command applies to every selected block. queryFormatState reflects the selection start.
     document.addEventListener('selectionchange', () => {
       if (!editor) return;
       const st = editor.queryFormatState();
