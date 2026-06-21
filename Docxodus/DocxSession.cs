@@ -16,6 +16,11 @@ namespace Docxodus;
 
 public enum Position { Before, After }
 
+/// <summary>Alignment of a paragraph tab stop (CT_TabStop/@w:val) inserted by
+/// <see cref="DocxSession.InsertTab"/>. v1 surfaces Right (a right-margin tab stop for
+/// left+right-on-one-baseline lines like a filing masthead's "As filed… / Reg No." row).</summary>
+public enum TabStopAlignment { Left, Center, Right }
+
 /// <summary>
 /// How <see cref="DocxSession.Grep"/> and the <c>FindBy*</c> helpers treat Unicode
 /// whitespace variants (NBSP, narrow NBSP, thin space) when matching. Word documents
@@ -3428,6 +3433,7 @@ public sealed class DocxSession : IDisposable
             SplitInlineContainersAtOffset(element, characterOffset);
             MoveInlineChildrenAfter(element, characterOffset, second);
 
+            bool styleRebased = false;
             if (newPPr is not null)
             {
                 // pageBreakBefore is a once-only property: the original paragraph keeps it; the new
@@ -3459,14 +3465,37 @@ public sealed class DocxSession : IDisposable
                             new XElement(W.pStyle, new XAttribute(W.val, nextStyle)));
                         newPPr.ReplaceWith(rebuilt);
                         newPPr = rebuilt;
+                        styleRebased = true;
                     }
                 }
+            }
 
-                // Re-mint Unids on the new paragraph's property subtree so cloned property elements
-                // (jc, ind, numPr, ...) don't carry the original's Unid onto a second element.
+            // Carry the run formatting in effect AT THE SPLIT POINT (the last run remaining in the
+            // original, i.e. the run just before the caret) onto the new paragraph's MARK rPr, so
+            // freshly-typed text in the new paragraph continues in the same bold/italic/font/size
+            // (Word behavior — "set Times once and keep typing"; DS230). CarryMarkFormatToFreshRuns
+            // stamps it onto typed runs. Skipped when the next-paragraph-style rebase reset the
+            // paragraph (heading -> Normal), so headings still reset (DS046). Works even when the
+            // original paragraph had NO pPr (a bare <w:p>) — create one to hold the mark.
+            var splitPointRPr = element.Elements(W.r).LastOrDefault()?.Element(W.rPr);
+            if (splitPointRPr is not null && !styleRebased)
+            {
+                if (newPPr is null) { newPPr = new XElement(W.pPr); second.AddFirst(newPPr); }
+                newPPr.Element(W.rPr)?.Remove();
+                var markRPr = new XElement(splitPointRPr);
+                markRPr.Elements(W.rPrChange).Remove(); // don't carry a tracked-change record
+                // The paragraph-mark w:rPr sits just before w:sectPr / w:pPrChange in CT_PPr.
+                if (newPPr.Element(W.sectPr) is { } sect) sect.AddBeforeSelf(markRPr);
+                else if (newPPr.Element(W.pPrChange) is { } pc) pc.AddBeforeSelf(markRPr);
+                else newPPr.Add(markRPr);
+            }
+
+            // Re-mint Unids on the new paragraph's property subtree so cloned property elements
+            // (jc, ind, numPr, the carried mark rPr, ...) don't carry the original's Unid onto a
+            // second element.
+            if (newPPr is not null)
                 foreach (var el in newPPr.DescendantsAndSelf())
                     el.Attributes(PtOpenXml.Unid).Remove();
-            }
 
             UnidHelper.AssignToSelfAndDescendants(second);
             element.AddAfterSelf(second);
@@ -4214,6 +4243,92 @@ public sealed class DocxSession : IDisposable
             _ = _history.PopForUndo();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
+    }
+
+    /// <summary>
+    /// Insert a tab character at <paramref name="characterOffset"/> in the paragraph named by
+    /// <paramref name="anchorId"/>, ensuring a tab stop of <paramref name="alignment"/> on the
+    /// paragraph (for Right, at the section's right content margin). Lets a single paragraph hold
+    /// left text + a tab + right-aligned text on one baseline (a filing masthead's "As filed… /
+    /// Registration No." row) without resorting to a two-column table.
+    /// </summary>
+    public EditResult InsertTab(string anchorId, int characterOffset, TabStopAlignment alignment = TabStopAlignment.Right)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "InsertTab requires a paragraph anchor", anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+
+        var totalText = ParagraphText(element);
+        if (characterOffset < 0 || characterOffset > totalText.Length)
+            return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                $"offset {characterOffset} out of [0, {totalText.Length}]", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            // 1. Ensure the tab STOP on the paragraph (w:pPr/w:tabs/w:tab), de-duped. For a Right
+            //    stop the position is the section's right content margin so the right text aligns to
+            //    the page margin (a filing masthead row).
+            var pPr = element.Element(W.pPr);
+            if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+            var valStr = alignment switch
+            {
+                TabStopAlignment.Right => "right",
+                TabStopAlignment.Center => "center",
+                _ => "left",
+            };
+            var posStr = ResolveTabStopPosition(target, alignment)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var tabs = pPr.Element(W.tabs) is { } existing ? new XElement(existing) : new XElement(W.tabs);
+            var already = tabs.Elements(W.tab).Any(t =>
+                (string?)t.Attribute(W.val) == valStr && (string?)t.Attribute(W.pos) == posStr);
+            if (!already)
+                tabs.Add(new XElement(W.tab, new XAttribute(W.val, valStr), new XAttribute(W.pos, posStr)));
+            SetPPrChildInOrder(pPr, tabs);
+
+            // 2. Insert a tab RUN (<w:r><w:tab/></w:r>) at the offset, reusing the split machinery:
+            //    move the at-or-past-offset inline children aside, append the tab, move them back.
+            SplitRunsAtOffset(element, characterOffset);
+            SplitInlineContainersAtOffset(element, characterOffset);
+            var tail = new XElement(W.p);
+            MoveInlineChildrenAfter(element, characterOffset, tail);
+            var tabRun = new XElement(W.r, new XElement(W.tab));
+            UnidHelper.AssignToSelfAndDescendants(tabRun);
+            element.Add(tabRun);
+            foreach (var child in tail.Elements().ToList()) { child.Remove(); element.Add(child); }
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { target.Anchor },
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>The tab-stop position in twips for an alignment: Right -> the governing section's
+    /// right content margin (page width - left - right margin); Left/Center -> 0. Falls back to a
+    /// US-Letter content width (9360 twips) when the section can't be resolved.</summary>
+    private int ResolveTabStopPosition(AnchorTarget target, TabStopAlignment alignment)
+    {
+        if (alignment != TabStopAlignment.Right) return 0;
+        var sect = Internal.BlockMetadataOps.GetSectionInfo(_doc!, target);
+        if (sect is null) return 9360;
+        var content = sect.PageWidthTwips - sect.MarginLeftTwips - sect.MarginRightTwips;
+        return content > 0 ? content : 9360;
     }
 
     /// <summary>
@@ -5212,24 +5327,56 @@ public sealed class DocxSession : IDisposable
             foreach (var run in blocks[0].RunElements)
                 paragraph.Add(new XElement(run));
         foreach (var m in postMarkers) paragraph.Add(m);
-        CarryMarkFontToFontlessRuns(paragraph, pPr);
+        CarryMarkFormatToFreshRuns(paragraph, pPr);
     }
 
-    /// <summary>If the paragraph mark carries an explicit font but a (freshly built, markdown-sourced)
-    /// run does not, stamp the mark font onto that run. Retyping an empty but font-bearing paragraph —
-    /// e.g. typing into a freshly-inserted table cell that inherited the document font — then keeps the
-    /// font instead of falling back to docDefaults. No-op for the common paragraph whose mark has no
-    /// w:rFonts, and it never overrides a run's own explicit font.</summary>
-    private static void CarryMarkFontToFontlessRuns(XElement paragraph, XElement? pPr)
+    /// <summary>If the paragraph mark carries explicit run formatting (font, bold, italic, underline,
+    /// size, …) but a (freshly built, markdown-sourced) run does not carry THAT property, stamp the
+    /// mark's value onto the run. This is what lets a fresh paragraph continue the formatting in effect
+    /// where it was created: typing into a freshly-inserted table cell that inherited the document font,
+    /// AND typing after an Enter split whose new paragraph carries the split-point run formatting on its
+    /// mark (DS230). Never overrides a run's own explicit property; the tracked-change record
+    /// (w:rPrChange) is not carried. No-op for the common paragraph whose mark has no run properties.</summary>
+    private static void CarryMarkFormatToFreshRuns(XElement paragraph, XElement? pPr)
     {
-        var markFont = (string?)pPr?.Element(W.rPr)?.Element(W.rFonts)?.Attribute(W.ascii);
-        if (markFont is null) return;
+        var markRPr = pPr?.Element(W.rPr);
+        if (markRPr is null) return;
         foreach (var run in paragraph.Elements(W.r))
         {
             var rPr = run.Element(W.rPr);
             if (rPr is null) { rPr = new XElement(W.rPr); run.AddFirst(rPr); }
-            if (rPr.Element(W.rFonts) is null) SetRunFontInOrder(rPr, markFont);
+            foreach (var src in markRPr.Elements())
+            {
+                if (src.Name == W.rPrChange) continue;       // a tracked-change record, not formatting
+                if (rPr.Element(src.Name) is not null) continue; // never override the run's own property
+                InsertRPrChildInOrder(rPr, new XElement(src));
+            }
         }
+    }
+
+    /// <summary>CT_RPr child order (ECMA-376 EG_RPrBase) used to insert a run-property element so the
+    /// run validates. Names not listed sort last (stable).</summary>
+    private static readonly System.Collections.Generic.Dictionary<XName, int> RPrChildOrder =
+        new XName[]
+        {
+            W.rStyle, W.rFonts, W.b, W.bCs, W.i, W.iCs, W.caps, W.smallCaps, W.strike, W.dstrike,
+            W.outline, W.shadow, W.emboss, W.imprint, W.noProof, W.snapToGrid, W.vanish, W.webHidden,
+            W.color, W.spacing, W.kern, W.position, W.sz, W.szCs, W.highlight, W.u, W.effect,
+            W.bdr, W.shd, W.fitText, W.vertAlign, W.rtl, W.cs, W.em, W.lang, W.eastAsianLayout,
+            W.specVanish, W.oMath,
+        }
+        .Select((name, i) => (name, i))
+        .ToDictionary(t => t.name, t => t.i);
+
+    /// <summary>Insert a run-property element into <paramref name="rPr"/> at its CT_RPr-ordered position
+    /// so the run remains schema-valid (a bare Add would land at the end, after lower-ordered siblings).</summary>
+    private static void InsertRPrChildInOrder(XElement rPr, XElement child)
+    {
+        int order = RPrChildOrder.TryGetValue(child.Name, out var o) ? o : int.MaxValue;
+        var after = rPr.Elements()
+            .FirstOrDefault(e => (RPrChildOrder.TryGetValue(e.Name, out var eo) ? eo : int.MaxValue) > order);
+        if (after is not null) after.AddBeforeSelf(child);
+        else rPr.Add(child);
     }
 
     private void ApplyReplaceTextTracked(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)

@@ -127,6 +127,116 @@ public class DocxSessionS1FeaturesTests
         Assert.Null(run.Element(W + "rPr")?.Element(W + "rFonts"));
     }
 
+    // ─── F1c: Enter inherits run formatting ─────────────────────────────
+
+    [Fact]
+    public void DS230_SplitAtEnd_NewParagraphInheritsRunFormatting()
+    {
+        // Drafting a uniformly-formatted filing: format a whole paragraph bold + Times + 16pt
+        // (direct run formatting, as the editor's ribbon applies it), press Enter at the end, and
+        // keep typing. The new line must continue in the SAME formatting (matches Word) — not reset
+        // to the document default.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+        session.ApplyFormat(anchor, null, new FormatOp { Bold = true, FontFamily = "Times New Roman", FontSizePts = 16 });
+
+        var split = session.SplitParagraph(anchor, "First paragraph.".Length); // Enter at end
+        Assert.True(split.Success, split.Error?.Message);
+        var newAnchor = split.Created!.Single().Id;
+
+        var typed = session.ReplaceText(newAnchor, "continued");
+        Assert.True(typed.Success, typed.Error?.Message);
+
+        var root = DocumentXml(session.Save());
+        var run = root.Descendants(W + "r").First(r => r.Value == "continued");
+        var rPr = run.Element(W + "rPr");
+        Assert.NotNull(rPr);
+        Assert.NotNull(rPr!.Element(W + "b"));                                                  // bold carried
+        Assert.Equal("Times New Roman", (string?)rPr.Element(W + "rFonts")?.Attribute(W + "ascii")); // font carried
+        Assert.Equal("32", (string?)rPr.Element(W + "sz")?.Attribute(W + "val"));               // 16pt carried
+    }
+
+    [Fact]
+    public void DS231_SplitInheritance_ProducesValidOoxml()
+    {
+        // The carried paragraph-mark rPr must be inserted in schema order so the document validates.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+        session.ApplyFormat(anchor, null, new FormatOp { Bold = true, FontFamily = "Georgia", FontSizePts = 18 });
+        var split = session.SplitParagraph(anchor, "First paragraph.".Length);
+        session.ReplaceText(split.Created!.Single().Id, "more");
+
+        var bytes = session.Save();
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(doc).ToList();
+        Assert.Empty(errors);
+    }
+
+    // ─── F1d: right tab stop ────────────────────────────────────────────
+
+    [Fact]
+    public void DS240_InsertTab_Right_AddsRightTabStopAndTabRun()
+    {
+        // The "As filed… / Registration No." filing row: one paragraph, left text + a right-aligned
+        // tab stop at the margin + a tab + (later) right text — no two-column table needed.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        var r = session.InsertTab(anchor, "First paragraph.".Length, TabStopAlignment.Right);
+        Assert.True(r.Success, r.Error?.Message);
+
+        var root = DocumentXml(session.Save());
+        var para = root.Descendants(W + "p").First(p => p.Value.Contains("First paragraph."));
+
+        // A right tab STOP on the paragraph (w:pPr/w:tabs/w:tab with val=right, a positive pos).
+        var stop = para.Element(W + "pPr")?.Element(W + "tabs")?.Element(W + "tab");
+        Assert.NotNull(stop);
+        Assert.Equal("right", (string?)stop!.Attribute(W + "val"));
+        Assert.True(int.Parse((string)stop.Attribute(W + "pos")!) > 0);
+
+        // A tab RUN in the content (a w:tab whose parent is a w:r), after the text.
+        var tabRun = para.Descendants(W + "tab").Where(t => t.Parent!.Name == W + "r").ToList();
+        Assert.Single(tabRun);
+    }
+
+    [Fact]
+    public void DS241_InsertTab_ProducesValidOoxml_AndRoundTrips()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+        session.InsertTab(anchor, "First paragraph.".Length, TabStopAlignment.Right);
+
+        var bytes = session.Save();
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(doc).ToList();
+        Assert.Empty(errors);
+
+        // Round-trips: reopen sees the tab stop survive.
+        using var session2 = new DocxSession(bytes);
+        var root = DocumentXml(session2.Save());
+        Assert.Contains(root.Descendants(W + "tab"),
+            t => t.Parent!.Name == W + "tabs" && (string?)t.Attribute(W + "val") == "right");
+    }
+
+    [Fact]
+    public void DS242_InsertTab_Twice_DoesNotDuplicateTheStop()
+    {
+        // Idempotent stop: applying a right tab on the same paragraph again must not stack a second
+        // identical stop (a tab RUN is added each time — that's content — but the STOP is de-duped).
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+        session.InsertTab(anchor, "First paragraph.".Length, TabStopAlignment.Right);
+        session.InsertTab(anchor, "First paragraph.".Length, TabStopAlignment.Right);
+
+        var root = DocumentXml(session.Save());
+        var para = root.Descendants(W + "p").First(p => p.Value.Contains("First paragraph."));
+        var stops = para.Element(W + "pPr")!.Element(W + "tabs")!.Elements(W + "tab")
+            .Where(t => (string?)t.Attribute(W + "val") == "right").ToList();
+        Assert.Single(stops);
+    }
+
     // ─── F2: paragraph borders ──────────────────────────────────────────
 
     [Fact]

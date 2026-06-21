@@ -978,6 +978,7 @@ export interface DocxodusWasmExports {
     SplitParagraph: (handle: number, anchor: string, offset: number) => string;
     MergeParagraphs: (handle: number, first: string, second: string) => string;
     InsertHorizontalRule: (handle: number, anchor: string, pos: string, ruleJson: string) => string;
+    InsertTab: (handle: number, anchor: string, characterOffset: number, alignment: string) => string;
     InsertTable: (handle: number, anchor: string, pos: string, rows: number, cols: number, optionsJson: string) => string;
     InsertTableRow: (handle: number, cellAnchor: string, pos: string) => string;
     InsertTableColumn: (handle: number, cellAnchor: string, pos: string) => string;

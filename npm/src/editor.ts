@@ -40,6 +40,7 @@ export interface DocxEditorExports {
     MergeParagraphs: (handle: number, first: string, second: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
     InsertHorizontalRule: (handle: number, anchor: string, pos: string, ruleJson: string) => string;
+    InsertTab: (handle: number, anchor: string, characterOffset: number, alignment: string) => string;
     InsertTable: (
       handle: number,
       anchor: string,
@@ -575,8 +576,20 @@ export class DocxEditor {
   };
   private readonly boundBlur = (ev: Event): void => {
     // Commit when focus leaves the editor. Capture so a `blur` dispatched on a descendant block
-    // reaches here. IGNORE transient internal focus shifts (relatedTarget still inside the editor)
-    // — between-block commits are handled by selectionchange.
+    // reaches here.
+    // A TABLE CELL is its own contenteditable host, so leaving it fires a blur even when focus
+    // stays inside the editor (relatedTarget is another block). Commit that cell HERE — the
+    // relatedTarget guard below would otherwise skip it, and the selectionchange between-block
+    // commit never fires across the cell-host teardown, so the typed text would sit uncommitted and
+    // be erased by the next remount (complex-filing smoke-test data-loss bug). Scoped to CELLS: body
+    // blocks aren't their own hosts (no real blur) and already commit via selectionchange; committing
+    // them on the blur a remount fires while swapping the DOM would interfere with structural ops.
+    const tgt = ev.target as HTMLElement | null;
+    if (!this.replacing && tgt && tgt.closest("table") && this.editableBlockOf(tgt) === tgt) {
+      this.commitBlock(tgt);
+    }
+    // IGNORE transient internal focus shifts (relatedTarget still inside the editor) for the
+    // full-editor flush — between-block commits are handled above + by selectionchange.
     const rt = (ev as FocusEvent).relatedTarget as Node | null;
     if (rt && this.editRoot.contains(rt)) return;
     this.commitAllDirty();
@@ -1123,6 +1136,10 @@ export class DocxEditor {
       if (fmt[k]) { ev.preventDefault(); this.format(fmt[k]); return; }
       if (k === "z") { ev.preventDefault(); ev.shiftKey ? this.redo() : this.undo(); return; }
       if (k === "y") { ev.preventDefault(); this.redo(); return; }
+      // Context-aware Select-All: native selectAll mis-selects the first contenteditable=false
+      // table island; intercept so Ctrl/Cmd+A selects all BODY blocks (tables a boundary) from the
+      // body, or all of a TABLE's cells from inside it (so one font applies to the whole table).
+      if (k === "a") { ev.preventDefault(); this.selectAllBlocks(el); return; }
     }
     // Inside a table cell, structural ops that change the TABLE GRID (cross-cell merge,
     // list-nest, focus-jumping Tab) stay INERT — the single-block model can't give them
@@ -1399,9 +1416,48 @@ export class DocxEditor {
   /** Editable blocks the current selection covers, in document order. A multi-block selection
    *  yields all covered body blocks (via the selection model); otherwise just the active block. */
   private selectedBlocks(): HTMLElement[] {
+    // A selection within ONE table covers cell-paragraph blocks. readSelection treats a table as a
+    // boundary and excludes its cells, so resolve that case explicitly (powers Ctrl+A-in-a-table →
+    // apply a font to every cell). Multiple cells → those cells; otherwise fall through.
+    const cells = this.selectedTableCells();
+    if (cells.length > 1) return cells;
     const model = this.selectionModel();
     if (model && model.isMultiBlock) return model.blocks.map((b) => b.el);
     return this.activeBlock ? [this.activeBlock] : [];
+  }
+
+  /** The cell-paragraph blocks a non-collapsed selection covers when it lies within a SINGLE table
+   *  (else []). Used so a whole-table selection (Ctrl+A inside a cell) formats every cell. */
+  private selectedTableCells(): HTMLElement[] {
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return [];
+    const range = sel.getRangeAt(0);
+    const startCell = this.editableBlockOf(range.startContainer);
+    const table = startCell?.closest("table");
+    if (!table || !this.editRoot.contains(table)) return [];
+    const endCell = this.editableBlockOf(range.endContainer);
+    if (!endCell || endCell.closest("table") !== table) return []; // selection escapes the table
+    return Array.from(table.querySelectorAll<HTMLElement>(EDITABLE_SELECTOR))
+      .filter((c) => range.intersectsNode(c));
+  }
+
+  /** Select-All for the single contenteditable root: from inside a TABLE, select that table's cell
+   *  paragraphs; otherwise select all BODY blocks (tables excluded — a v1 selection boundary). */
+  private selectAllBlocks(active: HTMLElement | null): void {
+    if (typeof window === "undefined") return;
+    const table = active?.closest("table");
+    const targets = table
+      ? Array.from(table.querySelectorAll<HTMLElement>(EDITABLE_SELECTOR))
+      : this.editableList().filter((b) => !b.closest("table"));
+    if (targets.length === 0) return;
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    range.setStart(targets[0], 0);
+    const last = targets[targets.length - 1];
+    range.setEnd(last, last.childNodes.length);
+    sel.removeAllRanges();
+    sel.addRange(range);
   }
 
   /** The selection's span within `block`, clipped to the block (for inline ops across blocks):
@@ -1686,6 +1742,32 @@ export class DocxEditor {
     // remount from the active block's index re-renders the new rule whether it landed just
     // above (at idx) or just below (at idx+1) the active block.
     this.remount(idx, false);
+  }
+
+  /**
+   * Insert a tab at the caret in the active paragraph, ensuring a tab stop of `alignment` on it
+   * (for "right", at the section's right content margin). Lets a single line hold left text + a tab
+   * + right-aligned text on one baseline — a filing masthead's "As filed… / Registration No." row —
+   * instead of faking it with a two-column table. Inert inside a table cell.
+   */
+  insertTab(alignment: "left" | "center" | "right" = "right"): void {
+    const block = this.activeBlock;
+    if (this.closed || !block || block.closest("table")) return;
+    const unid = block.getAttribute("data-anchor");
+    if (!unid) return;
+    let fullId = this.unidToFullId.get(unid);
+    if (!fullId) return;
+    const idx = this.blockIndex(block);
+    const rawOffset = caretOffsetIn(block); // capture before commit
+    fullId = this.syncBlock(block, fullId); // flush any uncommitted typing first
+    const offset = rawOffset == null
+      ? blockContentText(block).trim().length // no caret resolved → end of the committed text
+      : trimmedSplitOffset(block, rawOffset);
+    const res = this.parseEdit(this.exports.DocxSessionBridge.InsertTab(this.handle, fullId, offset, alignment));
+    if (!res.success) return;
+    // Re-render this paragraph; put the caret at its end so the user types the right-side text
+    // after the tab.
+    this.remount(idx, true);
   }
 
   /**

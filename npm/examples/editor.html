@@ -92,6 +92,7 @@
       <button id="hrThick" title="Insert thick rule">&#9608;&#9608;</button>
       <button id="hrDouble" title="Insert double rule">&#9552;&#9552;</button>
       <button id="hrClear" title="Clear rule / paragraph border">&#9472;&#10007;</button>
+      <button id="tabRight" title="Right tab stop (left text on the same line as right-aligned text)">&#8677;|</button>
       <button id="table" title="Insert table">&#8862;</button>
       <button id="delblock" title="Delete this block">&#128465;</button>
       <span class="sep"></span>
@@ -228,6 +229,7 @@
       ['hrThick', () => editor && editor.insertHorizontalRule(24, 'single', rulePos())],
       ['hrDouble', () => editor && editor.insertHorizontalRule(12, 'double', rulePos())],
       ['hrClear', () => editor && editor.clearParagraphBorders()],
+      ['tabRight', () => editor && editor.insertTab('right')],
       ['delblock', () => editor && editor.deleteBlock()],
     ]) {
       const b = document.getElementById(id);
@@ -328,14 +330,17 @@
       if (table) {
         const r = table.getBoundingClientRect();
         tableTools.style.display = 'inline-flex';
-        tableTools.style.left = (window.scrollX + r.left) + 'px';
-        // Place the toolbar where it won't cover (and intercept clicks on) editable body content.
+        tableTools.style.flexDirection = 'row';
+        // Place the toolbar where it covers neither editable body content NOR the table's own cells.
         // The gaps just above and below a table usually hold editable blocks (e.g. the filing
         // "(Exact name…)" line above, "1 Rocket Road" below). Geometry test (robust to however the
         // converter wraps blocks): float ABOVE if that band is clear of body blocks and the sticky
-        // header; else float BELOW if that band is clear; else, when both gaps are tight, overlay
-        // the table's own bottom edge (the table is contenteditable=false, so the toolbar never
-        // sits over — or intercepts clicks on — editable body content).
+        // header; else BELOW if clear; else (both gaps tight, e.g. a SHORT table sandwiched between
+        // text) dock to the side gutter as a VERTICAL strip — narrow enough to fit a gutter a wide
+        // horizontal toolbar wouldn't, so it never sits over the table's editable cells. The old
+        // "overlay the table's own bottom" fallback covered the cells of a short table, so a click
+        // meant to enter a cell hit an "insert row/col" button (round-7 fix). Only if no gutter fits
+        // does it float just below (at worst covers a blank/rule line, never cells).
         const headerBottom = document.querySelector('header').getBoundingClientRect().bottom;
         const h = tableTools.offsetHeight;
         const bodyBlocks = Array.from(document.querySelectorAll('#editor [data-editable="1"]'))
@@ -348,9 +353,21 @@
         });
         const aboveTop = r.top - h - 6;
         const belowTop = r.bottom + 6;
-        const top = (bandClear(aboveTop) && aboveTop > headerBottom + 4) ? aboveTop
-          : bandClear(belowTop) ? belowTop
-          : r.bottom - h; // overlay the table's own (non-editable) bottom rather than body content
+        let left = r.left;
+        let top;
+        if (bandClear(aboveTop) && aboveTop > headerBottom + 4) {
+          top = aboveTop;
+        } else if (bandClear(belowTop)) {
+          top = belowTop;
+        } else {
+          // Both gaps tight: a VERTICAL strip in a side gutter, never over the cells.
+          tableTools.style.flexDirection = 'column';
+          const vw = tableTools.offsetWidth;
+          if (r.right + 6 + vw <= window.innerWidth) { left = r.right + 6; top = r.top; }
+          else if (r.left - 6 - vw >= 0) { left = r.left - 6 - vw; top = r.top; }
+          else { tableTools.style.flexDirection = 'row'; top = belowTop; } // no gutter fits
+        }
+        tableTools.style.left = (window.scrollX + left) + 'px';
         tableTools.style.top = (window.scrollY + top) + 'px';
       } else {
         tableTools.style.display = 'none';

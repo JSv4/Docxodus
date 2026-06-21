@@ -20,6 +20,11 @@ internal static class DocxSessionJson
     public static Position ParsePos(string s) =>
         string.Equals(s, "before", System.StringComparison.OrdinalIgnoreCase) ? Position.Before : Position.After;
 
+    public static TabStopAlignment ParseTabAlignment(string s) =>
+        string.Equals(s, "right", System.StringComparison.OrdinalIgnoreCase) ? TabStopAlignment.Right
+        : string.Equals(s, "center", System.StringComparison.OrdinalIgnoreCase) ? TabStopAlignment.Center
+        : TabStopAlignment.Left;
+
     public static DocxSessionSettings ParseSettings(string settingsJson)
     {
         if (string.IsNullOrEmpty(settingsJson)) return new DocxSessionSettings();

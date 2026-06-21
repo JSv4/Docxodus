@@ -175,6 +175,21 @@ export class DocxSession {
   }
 
   /**
+   * Insert a tab at `characterOffset`, ensuring a tab stop of `alignment` on the paragraph. A
+   * `"right"` stop lands at the section's right content margin, so left text + a tab + right text
+   * share one baseline (a filing masthead's "As filed… / Registration No." row) without a table.
+   */
+  insertTab(
+    anchorId: string,
+    characterOffset: number,
+    alignment: "left" | "center" | "right" = "right",
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.InsertTab(this.handle, anchorId, characterOffset, alignment),
+    ) as EditResult;
+  }
+
+  /**
    * Insert a `rows`×`cols` table before/after the block. `options` controls borders, row-major
    * cell markdown, and cell alignment. The returned `EditResult.created` lists the cell-paragraph
    * anchors (row-major), so each cell can then be addressed to fill/format.

@@ -72,6 +72,7 @@ This is symmetric by design: anything the projector can emit, the parser can acc
 
 - If you can see it in the projection output, you can write it in a payload.
 - If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`), then edit cells with `ReplaceCellContent` or address each cell-paragraph anchor; reshape with `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` (by a cell-paragraph anchor; v1 assumes a rectangular grid, no `w:gridSpan`).
+- If you need left text + right-aligned text on one baseline (a filing masthead's "As filed… / Reg No." row) → `InsertTab(anchor, characterOffset, TabStopAlignment)` inserts a `w:tab` run at the offset and ensures a tab stop on the paragraph; a `Right` stop lands at the section's right content margin (page width − margins from the governing `w:sectPr`). De-duped and idempotent. No two-column table needed.
 - If you need a footnote, comment, or image → those are v2 ops, currently rejected with a clear error.
 - For everything OOXML can do that markdown can't (complex tables, math, content controls, drawings) → `session.Raw.*`.
 

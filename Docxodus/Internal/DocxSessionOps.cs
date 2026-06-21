@@ -179,6 +179,9 @@ internal static class DocxSessionOps
             anchorId, position,
             string.IsNullOrEmpty(ruleJson) ? null : ParseRuleEdge(ruleJson)));
 
+    public static string InsertTab(int handle, string anchorId, int characterOffset, TabStopAlignment alignment) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertTab(anchorId, characterOffset, alignment));
+
     private static ParagraphBorderEdge? ParseRuleEdge(string json)
     {
         // The rule JSON is itself a border-edge object; reuse the named-property parser by
