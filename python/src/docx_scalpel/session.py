@@ -32,6 +32,7 @@ from .enums import (
     ProjectionDepth,
     ProjectionScopes,
     RegexOptions,
+    TabStopAlignment,
     WhitespaceMode,
 )
 from .types import (
@@ -841,6 +842,28 @@ class DocxSession:
             self._call(
                 "split_paragraph",
                 {"anchorId": anchor_id, "characterOffset": character_offset},
+            )
+        )
+
+    def insert_tab(
+        self,
+        anchor_id: str,
+        character_offset: int,
+        alignment: TabStopAlignment = TabStopAlignment.RIGHT,
+    ) -> EditResult:
+        """Insert a tab at ``character_offset``, ensuring a tab stop of ``alignment`` on the
+        paragraph. A ``RIGHT`` stop lands at the section's right content margin, so left text
+        + a tab + right-aligned text share one baseline (a filing masthead's "As filed… /
+        Registration No." row) without a two-column table.
+        """
+        return EditResult._from_wire(
+            self._call(
+                "insert_tab",
+                {
+                    "anchorId": anchor_id,
+                    "characterOffset": character_offset,
+                    "alignment": alignment.value,
+                },
             )
         )
 

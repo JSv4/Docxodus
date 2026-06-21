@@ -61,6 +61,8 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId"), ParsePos(args, "position"), Str(args, "markdown")),
         "split_paragraph" => DocxSessionOps.SplitParagraph(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset")),
+        "insert_tab" => DocxSessionOps.InsertTab(
+            Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), ParseTabAlignment(args, "alignment")),
         "merge_paragraphs" => DocxSessionOps.MergeParagraphs(
             Handle(args), Str(args, "firstAnchorId"), Str(args, "secondAnchorId")),
 
@@ -330,6 +332,9 @@ internal static class Dispatcher
 
     private static Position ParsePos(JsonElement args, string name) =>
         DocxSessionJson.ParsePos(Str(args, name));
+
+    private static TabStopAlignment ParseTabAlignment(JsonElement args, string name) =>
+        DocxSessionJson.ParseTabAlignment(Str(args, name));
 
     private static CharSpan? ParseOptionalSpan(JsonElement args, string name)
     {

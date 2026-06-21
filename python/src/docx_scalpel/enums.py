@@ -37,6 +37,19 @@ class Position(str, Enum):
     AFTER = "after"
 
 
+class TabStopAlignment(str, Enum):
+    """Alignment of a paragraph tab stop inserted by ``DocxSession.insert_tab``.
+
+    ``RIGHT`` places the stop at the section's right content margin, so left text +
+    a tab + right-aligned text share one baseline (a filing masthead row) without a
+    two-column table.
+    """
+
+    LEFT = "left"
+    CENTER = "center"
+    RIGHT = "right"
+
+
 class EditErrorCode(str, Enum):
     """All ``EditResult.error.code`` values the .NET surface can emit.
 
