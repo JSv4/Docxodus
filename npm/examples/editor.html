@@ -325,12 +325,21 @@
         const r = table.getBoundingClientRect();
         tableTools.style.display = 'inline-flex';
         tableTools.style.left = (window.scrollX + r.left) + 'px';
-        // Prefer just above the table; if that would tuck under the sticky header (or off-screen
-        // for a table near the page top), drop it just below the table's top edge instead so it
-        // never overlaps the first row.
+        // Place the toolbar where it won't cover (and intercept clicks on) document content. The
+        // space just above a table usually holds an editable body block (e.g. the S-1 "(Exact
+        // name…)" line) — putting the toolbar there blocks clicks on it. Geometry test (robust to
+        // however the converter wraps blocks): if an above-placement band would intersect any
+        // editable body block, OR it'd tuck under the sticky header, drop the toolbar just BELOW
+        // the table instead; otherwise float it above.
         const headerBottom = document.querySelector('header').getBoundingClientRect().bottom;
         const aboveTop = r.top - tableTools.offsetHeight - 6;
-        const top = aboveTop > headerBottom + 4 ? aboveTop : r.bottom + 6;
+        const bodyBlocks = Array.from(document.querySelectorAll('#editor [data-editable="1"]'));
+        const aboveCollides = bodyBlocks.some((b) => {
+          if (table.contains(b)) return false; // ignore the table's own cell paragraphs
+          const rb = b.getBoundingClientRect();
+          return rb.bottom > aboveTop && rb.top < r.top; // block lies in the above-placement band
+        });
+        const top = (!aboveCollides && aboveTop > headerBottom + 4) ? aboveTop : r.bottom + 6;
         tableTools.style.top = (window.scrollY + top) + 'px';
       } else {
         tableTools.style.display = 'none';

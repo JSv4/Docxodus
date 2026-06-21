@@ -327,7 +327,15 @@ export function blockContentText(block: HTMLElement): string {
  * trimmed length keeps the split offset consistent with what was committed.
  */
 function trimmedSplitOffset(block: HTMLElement, domOffset: number): number {
-  const content = blockContentText(block);
+  return toCommittedOffset(blockContentText(block), domOffset);
+}
+
+/** Map a DOM/content offset (which counts the placeholder + edge whitespace the converter renders)
+ *  to the COMMITTED run-text offset the session holds (it trims leading/trailing whitespace). A span
+ *  built from raw DOM offsets overshoots the committed run, and ApplyFormat then silently no-ops —
+ *  e.g. setFontFamily/setFontSize on a freshly-typed line (whose DOM keeps a trailing placeholder
+ *  space) wouldn't apply. Subtracting leading whitespace and clamping to the trimmed length fixes it. */
+function toCommittedOffset(content: string, domOffset: number): number {
   const leading = content.length - content.replace(/^\s+/, "").length;
   const trimmedLen = content.trim().length;
   return Math.max(0, Math.min(domOffset - Math.min(domOffset, leading), trimmedLen));
@@ -660,6 +668,9 @@ export class DocxEditor {
   /** Lossless DOCX bytes reflecting all edits. */
   save(): Uint8Array {
     this.assertOpen();
+    // Flush any in-progress typing first. A programmatic save() (no blur / caret-leave) must not
+    // silently drop text the user just typed — including table-cell paragraphs (S-1 smoke-test bug).
+    this.commitAllDirty();
     return this.exports.DocxSessionBridge.Save(this.handle);
   }
 
@@ -1382,30 +1393,66 @@ export class DocxEditor {
 
   /** The selection's span within `block`, clipped to the block (for inline ops across blocks):
    *  the first block runs selection-start→end-of-block, middle blocks are whole, the last block
-   *  runs start-of-block→selection-end. Returns null for a whole-block apply. */
+   *  runs start-of-block→selection-end. Returns null for a whole-block apply.
+   *
+   *  Offsets are mapped DOM→COMMITTED: the session trims leading/trailing whitespace (e.g. an empty
+   *  paragraph renders a placeholder space, and freshly-typed text lands after it), so a raw DOM
+   *  offset would overshoot the committed run and the op would be dropped — this is exactly why a
+   *  multi-block Bold over just-typed lines used to skip the last block. Clamping to the committed
+   *  length, and returning null when the selection covers the whole committed content, makes the
+   *  common "select these paragraphs → Bold" gesture format every block including the last. */
   private blockSpanForSelection(block: HTMLElement): { start: number; length: number } | null {
     const sel = typeof window !== "undefined" ? window.getSelection() : null;
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
     const range = sel.getRangeAt(0);
     const hasStart = block.contains(range.startContainer);
     const hasEnd = block.contains(range.endContainer);
-    if (hasStart && hasEnd) return selectionSpanIn(block);
-    const contentLen = blockContentText(block).length;
+    const content = blockContentText(block);
+    const committedLen = content.trim().length;
+    const toCommitted = (domOffset: number): number => toCommittedOffset(content, domOffset);
+    // A span covering the block's entire committed content is a whole-block apply (null): robust,
+    // offset-free, and the common case. Otherwise return the trimmed-clamped partial span.
+    const spanOrWhole = (start: number, end: number): { start: number; length: number } | null =>
+      start <= 0 && end >= committedLen ? null : { start, length: Math.max(0, end - start) };
+    if (hasStart && hasEnd) {
+      const s = selectionSpanIn(block);
+      if (!s) return null;
+      return spanOrWhole(toCommitted(s.start), toCommitted(s.start + s.length));
+    }
     if (hasStart) {
-      const start = contentOffsetOf(block, range.startContainer, range.startOffset);
-      return { start, length: Math.max(0, contentLen - start) };
+      return spanOrWhole(toCommitted(contentOffsetOf(block, range.startContainer, range.startOffset)), committedLen);
     }
     if (hasEnd) {
-      const end = contentOffsetOf(block, range.endContainer, range.endOffset);
-      return { start: 0, length: end };
+      return spanOrWhole(0, toCommitted(contentOffsetOf(block, range.endContainer, range.endOffset)));
     }
-    return { start: 0, length: contentLen }; // fully-spanned middle block
+    return null; // fully-spanned middle block → whole-block apply
+  }
+
+  /** Clamp a content-offset span (from `selectionSpanIn` or the `lastSelection` cache) to the
+   *  committed run, returning null for a whole-block (offset-free) apply. Without this, selecting a
+   *  freshly-typed line — whose DOM keeps a trailing placeholder space — yields a span one longer
+   *  than the committed run, so the engine's `ApplyFormat` overshoots and silently no-ops (the S-1
+   *  company-name font wouldn't apply). Used by the single-block format paths. */
+  private clampSpanToCommitted(
+    block: HTMLElement,
+    span: { start: number; length: number } | null,
+  ): { start: number; length: number } | null {
+    if (!span) return null;
+    const content = blockContentText(block);
+    const committedLen = content.trim().length;
+    const start = toCommittedOffset(content, span.start);
+    const end = toCommittedOffset(content, span.start + span.length);
+    if (end <= start) return null;
+    if (start <= 0 && end >= committedLen) return null; // whole block → robust offset-free apply
+    return { start, length: end - start };
   }
 
   /** Apply an inline ApplyFormat op to each block's slice of the selection, then re-render.
    *  Returns false (caller falls back to the single-block path) for a 1-block selection. */
   private applyInlineOpAcrossBlocks(blocks: HTMLElement[], op: object): boolean {
     if (blocks.length <= 1) return false;
+    const startIdx = this.blockIndex(blocks[0]);
+    const endIdx = this.blockIndex(blocks[blocks.length - 1]);
     const targets = blocks.map((b) => {
       const unid = b.getAttribute("data-anchor");
       return { block: b, fullId: unid ? this.unidToFullId.get(unid) : undefined, span: this.blockSpanForSelection(b) };
@@ -1421,13 +1468,35 @@ export class DocxEditor {
       }
     });
     this.remount();
+    this.restoreMultiBlockSelection(startIdx, endIdx); // keep the selection so commands can chain
     return true;
+  }
+
+  /** Re-establish a native selection spanning editable blocks [startIdx..endIdx] after a remount, so
+   *  a multi-block format leaves the same paragraphs selected and the next command applies to all of
+   *  them (no re-select). Indices are stable: a format op never adds/removes blocks. */
+  private restoreMultiBlockSelection(startIdx: number, endIdx: number): void {
+    if (typeof window === "undefined" || startIdx < 0 || endIdx <= startIdx) return;
+    const list = this.editableList();
+    const first = list[startIdx];
+    const last = list[endIdx];
+    if (!first || !last) return;
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    range.setStart(first, 0);
+    range.setEnd(last, last.childNodes.length);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    this.activeBlock = first;
   }
 
   /** Apply a whole-block (paragraph-level) op to each selected block, then re-render.
    *  Returns false for a 1-block selection (caller uses the single-block path). */
   private applyParagraphOpAcrossBlocks(blocks: HTMLElement[], run: (fullId: string) => string): boolean {
     if (blocks.length <= 1) return false;
+    const startIdx = this.blockIndex(blocks[0]);
+    const endIdx = this.blockIndex(blocks[blocks.length - 1]);
     const targets = blocks.map((b) => {
       const unid = b.getAttribute("data-anchor");
       return { block: b, fullId: unid ? this.unidToFullId.get(unid) : undefined };
@@ -1441,6 +1510,7 @@ export class DocxEditor {
       }
     });
     this.remount();
+    this.restoreMultiBlockSelection(startIdx, endIdx); // keep the selection so commands can chain
     return true;
   }
 
@@ -1467,7 +1537,7 @@ export class DocxEditor {
     let fullId = this.unidToFullId.get(unid);
     if (!fullId) return;
 
-    const span = selectionSpanIn(block);
+    const span = this.clampSpanToCommitted(block, selectionSpanIn(block));
     const on = value ?? !selectionHasFormat(key, block);
     // Super/subscript map to the single-valued w:vertAlign; the rest are boolean toggles.
     const op =
@@ -1508,6 +1578,7 @@ export class DocxEditor {
     // the last real selection cached for this block so a sub-range still sizes (finding 3).
     let span = selectionSpanIn(block);
     if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
+    span = this.clampSpanToCommitted(block, span);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
@@ -1542,6 +1613,7 @@ export class DocxEditor {
     if (!fullId) return;
     let span = selectionSpanIn(block);
     if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
+    span = this.clampSpanToCommitted(block, span);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
