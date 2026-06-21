@@ -160,6 +160,12 @@ public sealed record TableInsertOptions
     /// A non-null list whose length != the column count is a caller error (rejected). Drives
     /// unequal layouts like the S-1's wide-left / narrow-right filing-header row.</summary>
     public IReadOnlyList<int>? ColumnWidths { get; init; }
+
+    /// <summary>Run font family (w:rFonts ascii/hAnsi/cs) stamped on every cell so an inserted
+    /// table matches the surrounding document font instead of the blank-doc default. Seeded
+    /// content runs get it directly; empty cells carry it on the paragraph-mark run properties
+    /// so later typing inherits it. null/"" = leave cells fontless (inherit docDefaults).</summary>
+    public string? CellFontFamily { get; init; }
 }
 
 /// <summary>List membership for <see cref="DocxSession.ApplyListFormat"/>.</summary>
@@ -4273,7 +4279,7 @@ public sealed class DocxSession : IDisposable
 
                     int idx = r * cols + c;
                     string? md = contents is not null && idx < contents.Count ? contents[idx] : null;
-                    var paras = BuildCellParagraphs(md, opts.CellAlignment);
+                    var paras = BuildCellParagraphs(md, opts.CellAlignment, opts.CellFontFamily);
                     foreach (var p in paras) tc.Add(p);
                     cellParagraphs.AddRange(paras);
                     tr.Add(tc);
@@ -4325,8 +4331,10 @@ public sealed class DocxSession : IDisposable
         }
     }
 
-    /// <summary>Build the cell's paragraph(s) from optional markdown + alignment. Always >= 1 paragraph.</summary>
-    private static List<XElement> BuildCellParagraphs(string? markdown, ParagraphAlignment? align)
+    /// <summary>Build the cell's paragraph(s) from optional markdown + alignment + font. Always >= 1
+    /// paragraph. <paramref name="cellFont"/> (when non-empty) is stamped on seeded content runs and
+    /// on each paragraph's mark run properties so empty cells carry the font for later typing.</summary>
+    private static List<XElement> BuildCellParagraphs(string? markdown, ParagraphAlignment? align, string? cellFont)
     {
         var result = new List<XElement>();
         if (!string.IsNullOrEmpty(markdown))
@@ -4354,6 +4362,27 @@ public sealed class DocxSession : IDisposable
                 SetPPrChildInOrder(pPr, new XElement(W.jc, new XAttribute(W.val, val)));
             }
         }
+
+        if (!string.IsNullOrEmpty(cellFont))
+            foreach (var p in result)
+            {
+                // Mark run properties carry the font so an empty cell keeps it when later typing
+                // rebuilds the runs (ApplyReplaceTextAccept reads the mark font). w:rPr is the last
+                // CT_PPr child before w:sectPr, so SetPPrChildInOrder places it after any w:jc.
+                var pPr = p.Element(W.pPr);
+                if (pPr is null) { pPr = new XElement(W.pPr); p.AddFirst(pPr); }
+                var markRPr = pPr.Element(W.rPr);
+                if (markRPr is null) { markRPr = new XElement(W.rPr); SetPPrChildInOrder(pPr, markRPr); }
+                SetRunFontInOrder(markRPr, cellFont);
+
+                // Seeded content runs render in the font immediately.
+                foreach (var run in p.Elements(W.r))
+                {
+                    var rPr = run.Element(W.rPr);
+                    if (rPr is null) { rPr = new XElement(W.rPr); run.AddFirst(rPr); }
+                    SetRunFontInOrder(rPr, cellFont);
+                }
+            }
         return result;
     }
 
@@ -5183,6 +5212,24 @@ public sealed class DocxSession : IDisposable
             foreach (var run in blocks[0].RunElements)
                 paragraph.Add(new XElement(run));
         foreach (var m in postMarkers) paragraph.Add(m);
+        CarryMarkFontToFontlessRuns(paragraph, pPr);
+    }
+
+    /// <summary>If the paragraph mark carries an explicit font but a (freshly built, markdown-sourced)
+    /// run does not, stamp the mark font onto that run. Retyping an empty but font-bearing paragraph —
+    /// e.g. typing into a freshly-inserted table cell that inherited the document font — then keeps the
+    /// font instead of falling back to docDefaults. No-op for the common paragraph whose mark has no
+    /// w:rFonts, and it never overrides a run's own explicit font.</summary>
+    private static void CarryMarkFontToFontlessRuns(XElement paragraph, XElement? pPr)
+    {
+        var markFont = (string?)pPr?.Element(W.rPr)?.Element(W.rFonts)?.Attribute(W.ascii);
+        if (markFont is null) return;
+        foreach (var run in paragraph.Elements(W.r))
+        {
+            var rPr = run.Element(W.rPr);
+            if (rPr is null) { rPr = new XElement(W.rPr); run.AddFirst(rPr); }
+            if (rPr.Element(W.rFonts) is null) SetRunFontInOrder(rPr, markFont);
+        }
     }
 
     private void ApplyReplaceTextTracked(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)
@@ -5455,21 +5502,25 @@ public sealed class DocxSession : IDisposable
 
         if (op.FontFamily is not null)
         {
-            // w:rFonts is the first EG_RPrBase child after an optional w:rStyle, so it must be
-            // placed there (a bare rPr.Add would append after w:sz/w:vertAlign → out of schema
-            // order). "" clears the explicit font so the run inherits the style/default.
+            // "" clears the explicit font so the run inherits the style/default.
             rPr.Element(W.rFonts)?.Remove();
-            if (op.FontFamily.Length > 0)
-            {
-                var rFonts = new XElement(W.rFonts,
-                    new XAttribute(W.ascii, op.FontFamily),
-                    new XAttribute(W.hAnsi, op.FontFamily),
-                    new XAttribute(W.cs, op.FontFamily));
-                var rStyle = rPr.Element(W.rStyle);
-                if (rStyle is not null) rStyle.AddAfterSelf(rFonts);
-                else rPr.AddFirst(rFonts);
-            }
+            if (op.FontFamily.Length > 0) SetRunFontInOrder(rPr, op.FontFamily);
         }
+    }
+
+    /// <summary>Set (or replace) the run's w:rFonts (ascii/hAnsi/cs) in schema order. w:rFonts is the
+    /// first EG_RPrBase child after an optional w:rStyle, so a bare rPr.Add would land after
+    /// w:sz/w:vertAlign and break CT_RPr order.</summary>
+    private static void SetRunFontInOrder(XElement rPr, string family)
+    {
+        rPr.Element(W.rFonts)?.Remove();
+        var rFonts = new XElement(W.rFonts,
+            new XAttribute(W.ascii, family),
+            new XAttribute(W.hAnsi, family),
+            new XAttribute(W.cs, family));
+        var rStyle = rPr.Element(W.rStyle);
+        if (rStyle is not null) rStyle.AddAfterSelf(rFonts);
+        else rPr.AddFirst(rFonts);
     }
 
     internal static XElement BuildParagraphFromParsedBlock(Internal.ParsedBlock block)

@@ -1173,6 +1173,10 @@ export interface TableInsertOptions {
    *  whose length != the column count is rejected. Drives unequal layouts like the S-1's
    *  wide-left / narrow-right filing-header row. */
   columnWidths?: number[];
+  /** Run font family stamped on every cell so the table matches the surrounding document font
+   *  instead of the blank-doc default. Empty cells carry it on the paragraph mark so typing
+   *  inherits it. Omit/"" ⇒ cells inherit docDefaults. The editor passes this automatically. */
+  cellFontFamily?: string;
 }
 
 export interface DocxSessionSettings {

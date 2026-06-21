@@ -83,7 +83,7 @@
       <button data-list="bullet" title="Bullet list">&#8226;</button>
       <button data-list="decimal" title="Numbered list">1.</button>
       <span class="sep"></span>
-      <select id="rulepos" title="Insert rules above or below the active block"
+      <select id="rulepos" title="Insert rules and tables above or below the active block"
               style="font: inherit; padding:5px 6px; border:1px solid #c3c7cc; border-radius:6px; background:#f6f7f8;">
         <option value="below">Below</option>
         <option value="above">Above</option>
@@ -114,8 +114,9 @@
   <p class="hint">
     Click a paragraph or heading to edit it. Select text and use the ribbon (or <b>Ctrl+B/I/U</b>) to format.
     <b>Enter</b> splits a block, <b>Backspace</b> at the start merges with the previous one; <b>Ctrl+Z</b> undoes.
-    Edits re-render only the affected block. Table <b>cell text is editable</b> (structure is fixed —
-    Enter/Tab inside a cell are inert). <b>Save</b> downloads a lossless .docx.
+    Edits re-render only the affected block. Table <b>cell text is editable</b> — <b>Enter</b> stacks a
+    line within the cell, Tab is inert; edit the grid with the floating table toolbar. <b>Save</b>
+    downloads a lossless .docx.
   </p>
   <div id="editor" class="continuous"></div>
 
@@ -267,8 +268,11 @@
       const cell = e.target.closest('[data-r]');
       if (!cell || !editor) return;
       e.preventDefault();
+      // "Above" forces the table before the active block (insert above a non-empty paragraph);
+      // "Below" keeps the smart default (before an empty line, after a non-empty one).
+      const pos = rulePos() === 'above' ? 'above' : undefined;
       editor.insertTable((+cell.dataset.r) + 1, (+cell.dataset.c) + 1,
-        { borderless: gridBorderless.checked, cellAlignment: document.getElementById('gridalign').value });
+        { borderless: gridBorderless.checked, cellAlignment: document.getElementById('gridalign').value }, pos);
       closePicker();
     });
     tableBtn.addEventListener('mousedown', (e) => e.preventDefault());
@@ -325,21 +329,28 @@
         const r = table.getBoundingClientRect();
         tableTools.style.display = 'inline-flex';
         tableTools.style.left = (window.scrollX + r.left) + 'px';
-        // Place the toolbar where it won't cover (and intercept clicks on) document content. The
-        // space just above a table usually holds an editable body block (e.g. the S-1 "(Exact
-        // name…)" line) — putting the toolbar there blocks clicks on it. Geometry test (robust to
-        // however the converter wraps blocks): if an above-placement band would intersect any
-        // editable body block, OR it'd tuck under the sticky header, drop the toolbar just BELOW
-        // the table instead; otherwise float it above.
+        // Place the toolbar where it won't cover (and intercept clicks on) editable body content.
+        // The gaps just above and below a table usually hold editable blocks (e.g. the filing
+        // "(Exact name…)" line above, "1 Rocket Road" below). Geometry test (robust to however the
+        // converter wraps blocks): float ABOVE if that band is clear of body blocks and the sticky
+        // header; else float BELOW if that band is clear; else, when both gaps are tight, overlay
+        // the table's own bottom edge (the table is contenteditable=false, so the toolbar never
+        // sits over — or intercepts clicks on — editable body content).
         const headerBottom = document.querySelector('header').getBoundingClientRect().bottom;
-        const aboveTop = r.top - tableTools.offsetHeight - 6;
-        const bodyBlocks = Array.from(document.querySelectorAll('#editor [data-editable="1"]'));
-        const aboveCollides = bodyBlocks.some((b) => {
-          if (table.contains(b)) return false; // ignore the table's own cell paragraphs
+        const h = tableTools.offsetHeight;
+        const bodyBlocks = Array.from(document.querySelectorAll('#editor [data-editable="1"]'))
+          // ignore the table's own cells and EMPTY lines (a trailing blank paragraph or a rule is
+          // fine to float over — only real text content must stay uncovered).
+          .filter((b) => !table.contains(b) && (b.textContent || '').trim().length > 0);
+        const bandClear = (top) => !bodyBlocks.some((b) => {
           const rb = b.getBoundingClientRect();
-          return rb.bottom > aboveTop && rb.top < r.top; // block lies in the above-placement band
+          return rb.bottom > top && rb.top < top + h; // a body block overlaps the [top, top+h] band
         });
-        const top = (!aboveCollides && aboveTop > headerBottom + 4) ? aboveTop : r.bottom + 6;
+        const aboveTop = r.top - h - 6;
+        const belowTop = r.bottom + 6;
+        const top = (bandClear(aboveTop) && aboveTop > headerBottom + 4) ? aboveTop
+          : bandClear(belowTop) ? belowTop
+          : r.bottom - h; // overlay the table's own (non-editable) bottom rather than body content
         tableTools.style.top = (window.scrollY + top) + 'px';
       } else {
         tableTools.style.display = 'none';

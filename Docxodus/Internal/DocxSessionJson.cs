@@ -157,7 +157,7 @@ internal static class DocxSessionJson
     /// <summary>
     /// Parse a <see cref="TableInsertOptions"/> wire object:
     /// { borderless?: bool, cellContents?: string[], cellAlignment?: "left"|"center"|"right"|"justify",
-    ///   columnWidths?: number[] (twips, one per column) }.
+    ///   columnWidths?: number[] (twips, one per column), cellFontFamily?: string }.
     /// </summary>
     public static TableInsertOptions ParseTableInsertOptions(string json)
     {
@@ -192,6 +192,7 @@ internal static class DocxSessionJson
             CellContents = cells,
             CellAlignment = align,
             ColumnWidths = widths,
+            CellFontFamily = TryGetString(root, "cellFontFamily", null),
         };
     }
 

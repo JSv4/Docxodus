@@ -434,6 +434,19 @@ function selectRange(el: HTMLElement, start: number, length: number): void {
   }
 }
 
+/** Select a block's entire content. Used to keep a whole-block selection alive after a single-block
+ *  format re-renders the node, so commands chain (font → bold on the same cell) without re-selecting,
+ *  mirroring the multi-block path. */
+function selectWholeBlock(el: HTMLElement): void {
+  const sel = typeof window !== "undefined" ? window.getSelection() : null;
+  if (!sel || !el.isConnected) return;
+  el.focus();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
 /**
  * True when `el`'s immediate parent is a paragraph-border `<div>` the full render wrapped it in
  * (CreateBorderDivs groups visibly-bordered paragraphs into a div). The body wrapper div has no
@@ -1537,7 +1550,8 @@ export class DocxEditor {
     let fullId = this.unidToFullId.get(unid);
     if (!fullId) return;
 
-    const span = this.clampSpanToCommitted(block, selectionSpanIn(block));
+    const raw = selectionSpanIn(block);
+    const span = this.clampSpanToCommitted(block, raw);
     const on = value ?? !selectionHasFormat(key, block);
     // Super/subscript map to the single-valued w:vertAlign; the rest are boolean toggles.
     const op =
@@ -1556,8 +1570,21 @@ export class DocxEditor {
     if (!res.success) return;
     if (this.affectsList(res)) { this.remount(this.blockIndex(block), false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
-    if (fresh && span) selectRange(fresh, span.start, span.length);
-    else fresh?.focus();
+    this.restoreSingleBlockSelection(fresh, span, raw);
+  }
+
+  /** After a single-block format re-render, keep the selection alive so commands chain: the partial
+   *  span if there was one, else the whole block when a covering selection was applied, else just
+   *  focus (a collapsed caret stays collapsed). */
+  private restoreSingleBlockSelection(
+    fresh: HTMLElement | null,
+    span: { start: number; length: number } | null,
+    hadSelection: { start: number; length: number } | null,
+  ): void {
+    if (!fresh) return;
+    if (span) selectRange(fresh, span.start, span.length);
+    else if (hadSelection) selectWholeBlock(fresh);
+    else fresh.focus();
   }
 
   /**
@@ -1576,9 +1603,9 @@ export class DocxEditor {
     if (!fullId) return;
     // Use the live selection; if the font-size combobox stole focus and collapsed it, fall back to
     // the last real selection cached for this block so a sub-range still sizes (finding 3).
-    let span = selectionSpanIn(block);
-    if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
-    span = this.clampSpanToCommitted(block, span);
+    let rawSel = selectionSpanIn(block);
+    if (!rawSel && this.lastSelection && this.lastSelection.unid === unid) rawSel = this.lastSelection.span;
+    const span = this.clampSpanToCommitted(block, rawSel);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
@@ -1591,8 +1618,7 @@ export class DocxEditor {
     if (!res.success) return;
     if (this.affectsList(res)) { this.remount(this.blockIndex(block), false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
-    if (fresh && span) selectRange(fresh, span.start, span.length);
-    else fresh?.focus();
+    this.restoreSingleBlockSelection(fresh, span, rawSel);
   }
 
   /**
@@ -1611,9 +1637,9 @@ export class DocxEditor {
     if (!unid) return;
     let fullId = this.unidToFullId.get(unid);
     if (!fullId) return;
-    let span = selectionSpanIn(block);
-    if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
-    span = this.clampSpanToCommitted(block, span);
+    let rawSel = selectionSpanIn(block);
+    if (!rawSel && this.lastSelection && this.lastSelection.unid === unid) rawSel = this.lastSelection.span;
+    const span = this.clampSpanToCommitted(block, rawSel);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
@@ -1626,8 +1652,7 @@ export class DocxEditor {
     if (!res.success) return;
     if (this.affectsList(res)) { this.remount(this.blockIndex(block), false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
-    if (fresh && span) selectRange(fresh, span.start, span.length);
-    else fresh?.focus();
+    this.restoreSingleBlockSelection(fresh, span, rawSel);
   }
 
   /** Set paragraph alignment (left/center/right/justify) on the active block. */
@@ -1668,6 +1693,33 @@ export class DocxEditor {
    * markdown) seeds the cells, `options.borderless` makes an invisible layout table, and
    * `options.cellAlignment` aligns every cell. Re-renders fully (tables need document context).
    */
+  /** The run font family (primary family, unquoted) the active block renders in, so an inserted
+   *  table can match the surrounding document instead of the blank-doc default. If the anchor block
+   *  is empty (e.g. a horizontal-rule paragraph), borrow the nearest non-empty editable block's font
+   *  so a table inserted next to a rule still matches the body. */
+  private resolveInheritedFont(block: HTMLElement): string | undefined {
+    if (typeof getComputedStyle !== "function") return undefined;
+    const primary = (el: HTMLElement): string | undefined => {
+      // The run font lives on the rendered <span> (w:rFonts), not the <p> (which keeps the
+      // paragraph-style default) — read the first run span, falling back to the block itself.
+      const target = (el.querySelector("span") as HTMLElement | null) ?? el;
+      const fam = getComputedStyle(target).fontFamily;
+      if (!fam) return undefined;
+      const first = fam.split(",")[0].trim().replace(/^["']|["']$/g, "");
+      return first || undefined;
+    };
+    if (blockContentText(block).trim().length > 0) return primary(block);
+    const list = this.editableList();
+    const i = list.indexOf(block);
+    for (let d = 1; d < list.length; d++) {
+      const prev = i - d >= 0 ? list[i - d] : null;
+      const next = i + d < list.length ? list[i + d] : null;
+      for (const cand of [prev, next])
+        if (cand && blockContentText(cand).trim().length > 0) return primary(cand);
+    }
+    return primary(block);
+  }
+
   insertTable(
     rows: number,
     cols: number,
@@ -1676,7 +1728,9 @@ export class DocxEditor {
       cellContents?: string[];
       cellAlignment?: EditorAlignment;
       columnWidths?: number[];
+      cellFontFamily?: string;
     },
+    position?: "above" | "below",
   ): void {
     const block = this.activeBlock;
     if (this.closed || !block) return;
@@ -1691,14 +1745,20 @@ export class DocxEditor {
     // a reachable paragraph below (S-1 smoke-test findings 2 + 4). Otherwise insert after.
     const emptyHere =
       !block.closest("table") && blockContentText(block).replace(/[\s ]+/g, "").length === 0;
+    // An explicit position wins (the demo's Above/Below selector — a table can go ABOVE a non-empty
+    // block); otherwise keep the empty-paragraph smart default.
+    const where = position ? (position === "above" ? "before" : "after") : emptyHere ? "before" : "after";
+    // Inherit the document font so cells aren't stranded on the blank-doc default (Calibri).
+    const cellFontFamily = options?.cellFontFamily ?? this.resolveInheritedFont(block);
+    const merged = cellFontFamily ? { ...options, cellFontFamily } : options;
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.InsertTable(
         this.handle,
         fullId,
-        emptyHere ? "before" : "after",
+        where,
         rows,
         cols,
-        options ? JSON.stringify(options) : "",
+        merged ? JSON.stringify(merged) : "",
       ),
     );
     if (!res.success) return;
@@ -1864,6 +1924,7 @@ export class DocxEditor {
     let fullId = this.unidToFullId.get(unid);
     if (!fullId) return;
     const idx = this.blockIndex(block);
+    const raw = selectionSpanIn(block);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.SetParagraphFormat(this.handle, fullId, JSON.stringify(op)),
@@ -1872,7 +1933,8 @@ export class DocxEditor {
     // A border change adds/removes the wrapping border <div>, so a single-block swap can't restructure
     // it correctly — re-render fully (like list edits) so the wrapper appears/disappears cleanly.
     if (this.affectsList(res) || op.clearBorders) { this.remount(idx, false); return; }
-    this.swapBlock(block, unid, res.modified?.[0])?.focus();
+    const fresh = this.swapBlock(block, unid, res.modified?.[0]);
+    this.restoreSingleBlockSelection(fresh, this.clampSpanToCommitted(block, raw), raw);
   }
 
   /** Set the paragraph style of the active block — or of every block in a multi-block selection

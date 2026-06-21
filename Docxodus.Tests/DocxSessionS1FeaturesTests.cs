@@ -501,4 +501,119 @@ public class DocxSessionS1FeaturesTests
         // [tbl, originalParagraph, sectPr] — exactly one direct body paragraph, not two.
         Assert.Equal(1, body.Elements(W + "p").Count());
     }
+
+    // ─── F5: table cells inherit the document font ──────────────────────
+
+    [Fact]
+    public void DS223_InsertTable_CellFontFamily_StampsSeededRunFonts()
+    {
+        // A table inserted into a Times document should have Times cells, not the
+        // blank-doc docDefaults (Calibri). Seeded content runs carry the font directly.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        var r = session.InsertTable(anchor, Position.After, 1, 2, new TableInsertOptions
+        {
+            Borderless = true,
+            CellFontFamily = "Times New Roman",
+            CellContents = new[] { "Texas", "7370" },
+        });
+        Assert.True(r.Success, r.Error?.Message);
+
+        var tbl = DocumentXml(session.Save()).Descendants(W + "tbl").Single();
+        foreach (var run in tbl.Descendants(W + "r").Where(x => x.Value.Length > 0))
+        {
+            var ascii = (string?)run.Element(W + "rPr")?.Element(W + "rFonts")?.Attribute(W + "ascii");
+            Assert.Equal("Times New Roman", ascii);
+        }
+    }
+
+    [Fact]
+    public void DS224_InsertTable_CellFontFamily_StampsEmptyCellMarkFont()
+    {
+        // Empty cells (the editor's grid-picker flow) carry the font on the paragraph-mark
+        // run properties so later typing inherits it.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        var r = session.InsertTable(anchor, Position.After, 2, 2, new TableInsertOptions
+        {
+            Borderless = true,
+            CellFontFamily = "Times New Roman",
+        });
+        Assert.True(r.Success, r.Error?.Message);
+
+        var tbl = DocumentXml(session.Save()).Descendants(W + "tbl").Single();
+        foreach (var cellP in tbl.Descendants(W + "tc").Select(tc => tc.Element(W + "p")!))
+        {
+            var markAscii = (string?)cellP.Element(W + "pPr")?.Element(W + "rPr")?
+                .Element(W + "rFonts")?.Attribute(W + "ascii");
+            Assert.Equal("Times New Roman", markAscii);
+        }
+    }
+
+    [Fact]
+    public void DS225_TypingIntoEmptyFontCell_InheritsTheMarkFont()
+    {
+        // The critical typed-later path: the editor commits text into an empty cell via
+        // ReplaceText, which rebuilds runs. The new run must inherit the cell's mark font.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        var r = session.InsertTable(anchor, Position.After, 1, 2, new TableInsertOptions
+        {
+            Borderless = true,
+            CellFontFamily = "Times New Roman",
+        });
+        Assert.True(r.Success, r.Error?.Message);
+        var cellAnchor = r.Created[0].Id;
+
+        var typed = session.ReplaceText(cellAnchor, "Texas");
+        Assert.True(typed.Success, typed.Error?.Message);
+
+        var tbl = DocumentXml(session.Save()).Descendants(W + "tbl").Single();
+        var run = tbl.Descendants(W + "r").First(x => x.Value == "Texas");
+        var ascii = (string?)run.Element(W + "rPr")?.Element(W + "rFonts")?.Attribute(W + "ascii");
+        Assert.Equal("Times New Roman", ascii);
+    }
+
+    [Fact]
+    public void DS226_InsertTable_CellFontFamily_Validates()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        var r = session.InsertTable(anchor, Position.After, 2, 2, new TableInsertOptions
+        {
+            Borderless = true,
+            CellFontFamily = "Times New Roman",
+            CellContents = new[] { "Texas", "7370" },
+        });
+        Assert.True(r.Success, r.Error?.Message);
+
+        var bytes = session.Save();
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(doc).ToList();
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void DS227_InsertTable_NoCellFontFamily_LeavesCellsFontless()
+    {
+        // Default (no CellFontFamily) preserves prior behavior — cells inherit docDefaults.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        var r = session.InsertTable(anchor, Position.After, 1, 2, new TableInsertOptions
+        {
+            Borderless = true,
+            CellContents = new[] { "Texas", "7370" },
+        });
+        Assert.True(r.Success, r.Error?.Message);
+
+        var tbl = DocumentXml(session.Save()).Descendants(W + "tbl").Single();
+        var run = tbl.Descendants(W + "r").First(x => x.Value == "Texas");
+        Assert.Null(run.Element(W + "rPr")?.Element(W + "rFonts"));
+    }
 }
