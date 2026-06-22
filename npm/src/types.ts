@@ -991,6 +991,7 @@ export interface DocxodusWasmExports {
     SetListLevel: (handle: number, anchor: string, delta: number) => string;
     RemoveListMembership: (handle: number, anchor: string) => string;
     ApplyListFormat: (handle: number, anchor: string, kind: string) => string;
+    ApplyMultilevelNumbering: (handle: number, anchor: string, levelsJson: string, level: number, restart: boolean) => string;
     ReplaceCellContent: (handle: number, anchor: string, md: string) => string;
     RawGetXml: (handle: number, anchor: string) => string;
     RawInsertXml: (handle: number, anchor: string, pos: string, xml: string) => string;
@@ -1164,6 +1165,23 @@ export interface ParagraphFormatOp {
   bottomBorder?: ParagraphBorderEdge;
   /** Remove all paragraph borders before applying any top/bottom border in this op. */
   clearBorders?: boolean;
+}
+
+/** One level of a configurable multi-level numbering scheme for `DocxSession.applyMultilevelNumbering`. */
+export interface NumberingLevel {
+  format: "decimal" | "lowerLetter" | "upperLetter" | "lowerRoman" | "upperRoman" | "bullet";
+  /** w:lvlText template, e.g. "%1.", "%1.%2", "(%3)" (or the literal glyph for bullet). */
+  levelText: string;
+  /** Starting number (default 1). */
+  start?: number;
+  /** Left indent in twips; default 720*(level+1). */
+  indentLeft?: number;
+  /** Hanging indent in twips; default 360. */
+  hanging?: number;
+  /** Level justification; default left. */
+  justify?: "left" | "center" | "right";
+  /** Font for a bullet glyph; only meaningful for format: "bullet". */
+  bulletFont?: string;
 }
 
 /** Options for `DocxSession.insertTable`. */

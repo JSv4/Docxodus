@@ -25,6 +25,7 @@ import type {
   ParagraphFormatOp,
   TableInsertOptions,
   ListFormat,
+  NumberingLevel,
   GrepOptions,
   ListMembership,
   ReplaceOptions,
@@ -277,6 +278,17 @@ export class DocxSession {
   /** Make the paragraph a bullet/numbered list item, or remove list membership ("none"). */
   applyListFormat(anchorId: string, kind: ListFormat): EditResult {
     return JSON.parse(this.wasm.ApplyListFormat(this.handle, anchorId, kind)) as EditResult;
+  }
+
+  /**
+   * Apply a configurable multi-level numbering scheme; the paragraph becomes a list item at
+   * `level`. Identical schemes continue one sequence; `restart` starts a new one. After this,
+   * {@link setListLevel} (Tab/Shift+Tab) promotes/demotes and {@link removeListMembership} removes it.
+   */
+  applyMultilevelNumbering(anchorId: string, levels: NumberingLevel[], level = 0, restart = false): EditResult {
+    return JSON.parse(
+      this.wasm.ApplyMultilevelNumbering(this.handle, anchorId, JSON.stringify(levels), level, restart),
+    ) as EditResult;
   }
 
   // ─── Tier D: cell content ────────────────────────────────────────────
