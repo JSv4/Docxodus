@@ -57,6 +57,8 @@ export interface DocxEditorExports {
     SetParagraphStyle: (handle: number, anchor: string, styleId: string) => string;
     SetParagraphFormat: (handle: number, anchor: string, opJson: string) => string;
     ApplyListFormat: (handle: number, anchor: string, kind: string) => string;
+    ApplyMultilevelNumbering: (handle: number, anchor: string, levelsJson: string, level: number, restart: boolean) => string;
+    RemoveListMembership: (handle: number, anchor: string) => string;
     SetListLevel: (handle: number, anchor: string, delta: number) => string;
     GetListMembership: (handle: number, anchor: string) => string;
     RenderBlockHtml: (
@@ -219,6 +221,20 @@ interface EditResultLite {
   modified?: AnchorRef[];
   error?: { message?: string };
 }
+
+/** Canonical legal outline scheme applied by {@link DocxEditor.toggleLegalNumbering}:
+ *  1. / 1.1 / (a) / (i) / (A) / (I) / … each with a hanging indent. */
+const DEFAULT_OUTLINE = [
+  { format: "decimal", levelText: "%1." },
+  { format: "decimal", levelText: "%1.%2" },
+  { format: "lowerLetter", levelText: "(%3)" },
+  { format: "lowerRoman", levelText: "(%4)" },
+  { format: "upperLetter", levelText: "(%5)" },
+  { format: "upperRoman", levelText: "(%6)" },
+  { format: "lowerLetter", levelText: "(%7)" },
+  { format: "lowerRoman", levelText: "(%8)" },
+  { format: "upperLetter", levelText: "(%9)" },
+];
 
 /** True if `block` renders as a list item (has a generated marker as its first child). */
 function isListBlock(block: HTMLElement): boolean {
@@ -1959,6 +1975,48 @@ export class DocxEditor {
     if (!res.success) return;
     // Numbering continuation across the list needs whole-document context — re-render fully
     // (a single-block render would show every numbered item as "1.").
+    this.remount(idx, false);
+  }
+
+  /** Apply the built-in legal outline numbering (1. / 1.1 / (a) / (i) …) to the active block — or
+   *  remove it when the block is already a list item. Tab/Shift+Tab change level (existing wiring).
+   *  Multi-block aware (applies to every selected block). */
+  toggleLegalNumbering(): void {
+    const block = this.activeBlock;
+    if (this.closed || !block) return;
+    const blocks = this.selectedBlocks();
+    if (blocks.length > 1) {
+      const startIdx = this.blockIndex(blocks[0]);
+      const endIdx = this.blockIndex(blocks[blocks.length - 1]);
+      this.group(() => {
+        for (const b of blocks) {
+          const unid = b.getAttribute("data-anchor");
+          if (!unid) continue;
+          const fid = this.unidToFullId.get(unid);
+          if (!fid) continue;
+          const synced = this.syncBlock(b, fid);
+          this.parseEdit(this.exports.DocxSessionBridge.ApplyMultilevelNumbering(
+            this.handle, synced, JSON.stringify(DEFAULT_OUTLINE), 0, false));
+        }
+      });
+      this.remount();
+      this.restoreMultiBlockSelection(startIdx, endIdx);
+      return;
+    }
+    const unid = block.getAttribute("data-anchor");
+    if (!unid) return;
+    let fullId = this.unidToFullId.get(unid);
+    if (!fullId) return;
+    const idx = this.blockIndex(block);
+    fullId = this.syncBlock(block, fullId);
+    const res = this.parseEdit(
+      isListBlock(block)
+        ? this.exports.DocxSessionBridge.RemoveListMembership(this.handle, fullId)
+        : this.exports.DocxSessionBridge.ApplyMultilevelNumbering(
+            this.handle, fullId, JSON.stringify(DEFAULT_OUTLINE), 0, false),
+    );
+    if (!res.success) return;
+    // Numbering continuation needs whole-document context (a single-block render shows "1." for all).
     this.remount(idx, false);
   }
 
