@@ -251,6 +251,24 @@ function isInMarker(node: Node | null): boolean {
   return false;
 }
 
+/** Copy the first content run's font-family + font-size onto a list item's generated marker spans,
+ *  so a re-fonted clause's number/bullet matches its text in the editor preview (the converter
+ *  renders the marker in the document default). No-op when there is no marker or no explicit run
+ *  font. Preview-only — does not touch the session/OOXML. */
+function syncMarkerFontToRun(block: HTMLElement): void {
+  const markers = block.querySelectorAll<HTMLElement>("[data-list-marker]");
+  if (markers.length === 0) return;
+  const contentRun = Array.from(block.querySelectorAll<HTMLElement>("span")).find(
+    (s) => !isInMarker(s) && (s.textContent ?? "").length > 0,
+  );
+  if (!contentRun) return;
+  const { fontFamily, fontSize } = contentRun.style;
+  markers.forEach((m) => {
+    if (fontFamily) m.style.fontFamily = fontFamily;
+    if (fontSize) m.style.fontSize = fontSize;
+  });
+}
+
 /**
  * Unicode bidi formatting marks the HTML converter injects to preserve visual order: LRM/RLM/ALM,
  * the embedding/override controls, and the isolates (see WmlToHtmlConverter — a paragraph/run gets
@@ -828,6 +846,12 @@ export class DocxEditor {
     // Generated list markers (number/bullet + suffix) are not editable content — keep the
     // caret out of them so offsets stay aligned with the paragraph's run text.
     el.querySelectorAll<HTMLElement>("[data-list-marker]").forEach((m) => m.setAttribute("contenteditable", "false"));
+    // The converter renders the generated number/bullet marker in the document-default font, so a
+    // re-fonted list item used to show its text in (say) Times while the "1." stayed Calibri — which
+    // read as the font change "skipping" list items. Make the marker glyph follow the paragraph's
+    // run font + size in the editor preview (the saved OOXML is unaffected — the marker font there
+    // comes from the numbering definition, and real renderers resolve it correctly).
+    syncMarkerFontToRun(el);
     // Baseline for the commit diff: CONTENT text (list markers + injected bidi marks excluded),
     // matching the session's flat run-text offset space.
     el.dataset.committedText = blockContentText(el);
@@ -1624,6 +1648,7 @@ export class DocxEditor {
 
     const raw = selectionSpanIn(block);
     const span = this.clampSpanToCommitted(block, raw);
+    const caret = raw ? null : caretOffsetIn(block);
     const on = value ?? !selectionHasFormat(key, block);
     // Super/subscript map to the single-valued w:vertAlign; the rest are boolean toggles.
     const op =
@@ -1642,7 +1667,7 @@ export class DocxEditor {
     if (!res.success) return;
     if (this.affectsList(res)) { this.remount(this.blockIndex(block), false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
-    this.restoreSingleBlockSelection(fresh, span, raw);
+    this.restoreSingleBlockSelection(fresh, span, raw, caret);
   }
 
   /** After a single-block format re-render, keep the selection alive so commands chain: the partial
@@ -1652,10 +1677,16 @@ export class DocxEditor {
     fresh: HTMLElement | null,
     span: { start: number; length: number } | null,
     hadSelection: { start: number; length: number } | null,
+    caretOffset: number | null = null,
   ): void {
     if (!fresh) return;
     if (span) selectRange(fresh, span.start, span.length);
     else if (hadSelection) selectWholeBlock(fresh);
+    // A collapsed caret: place a REAL caret back in the block (not just focus()). focus() alone
+    // leaves the selection anchored outside the block, so a chained command (e.g. setAlignment then
+    // Bold) reads stale state and no-ops — restoring the caret lets inline ops chain after a
+    // paragraph-level op.
+    else if (caretOffset != null) placeCaretAtOffset(fresh, caretOffset);
     else fresh.focus();
   }
 
@@ -1678,6 +1709,7 @@ export class DocxEditor {
     let rawSel = selectionSpanIn(block);
     if (!rawSel && this.lastSelection && this.lastSelection.unid === unid) rawSel = this.lastSelection.span;
     const span = this.clampSpanToCommitted(block, rawSel);
+    const caret = rawSel ? null : caretOffsetIn(block);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
@@ -1690,7 +1722,7 @@ export class DocxEditor {
     if (!res.success) return;
     if (this.affectsList(res)) { this.remount(this.blockIndex(block), false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
-    this.restoreSingleBlockSelection(fresh, span, rawSel);
+    this.restoreSingleBlockSelection(fresh, span, rawSel, caret);
   }
 
   /**
@@ -1712,6 +1744,7 @@ export class DocxEditor {
     let rawSel = selectionSpanIn(block);
     if (!rawSel && this.lastSelection && this.lastSelection.unid === unid) rawSel = this.lastSelection.span;
     const span = this.clampSpanToCommitted(block, rawSel);
+    const caret = rawSel ? null : caretOffsetIn(block);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyFormat(
@@ -1724,7 +1757,7 @@ export class DocxEditor {
     if (!res.success) return;
     if (this.affectsList(res)) { this.remount(this.blockIndex(block), false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
-    this.restoreSingleBlockSelection(fresh, span, rawSel);
+    this.restoreSingleBlockSelection(fresh, span, rawSel, caret);
   }
 
   /** Set paragraph alignment (left/center/right/justify) on the active block. */
@@ -1942,6 +1975,15 @@ export class DocxEditor {
     this.remount(idx, false);
   }
 
+  /**
+   * Change the active list item's outline level: `delta > 0` demotes it deeper (e.g. 1. → 1.1),
+   * `delta < 0` promotes it shallower. The button-driven equivalent of Tab / Shift+Tab for the
+   * legal-numbering outline; a no-op on a non-list block.
+   */
+  changeListLevel(delta: number): void {
+    this.setListLevel(delta);
+  }
+
   /** Toggle (or set) page-break-before on the active block. */
   pageBreakBefore(value = true): void {
     this.applyParagraphFormat({ pageBreakBefore: value });
@@ -2073,6 +2115,7 @@ export class DocxEditor {
     if (!fullId) return;
     const idx = this.blockIndex(block);
     const raw = selectionSpanIn(block);
+    const caret = raw ? null : caretOffsetIn(block);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.SetParagraphFormat(this.handle, fullId, JSON.stringify(op)),
@@ -2082,7 +2125,7 @@ export class DocxEditor {
     // it correctly — re-render fully (like list edits) so the wrapper appears/disappears cleanly.
     if (this.affectsList(res) || op.clearBorders) { this.remount(idx, false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
-    this.restoreSingleBlockSelection(fresh, this.clampSpanToCommitted(block, raw), raw);
+    this.restoreSingleBlockSelection(fresh, this.clampSpanToCommitted(block, raw), raw, caret);
   }
 
   /** Set the paragraph style of the active block — or of every block in a multi-block selection

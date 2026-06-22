@@ -308,12 +308,11 @@ test.describe('Editor — legal contract cover page (GUI reproduction)', () => {
     expect(reopened.numbered).toBe(4); // 1. / 1.1 / (a) / (b) all reopened
   });
 
-  // ── Known multi-block formatting gap (live characterisation test) ─────────────────────────────
-  // A document-wide font change (Ctrl+A then pick a font) reaches plain prose blocks but currently
-  // SKIPS legal-numbered list items — the synthetic numbering marker throws off the committed-span
-  // offset mapping in the multi-block inline path. This test pins the CURRENT behaviour; if the
-  // engine is fixed to cover list items it will fail, which is the signal to update this assertion.
-  test('multi-block font change reaches prose but currently skips legal-numbered list items', async ({
+  // A document-wide font change (Ctrl+A then pick a font) reaches plain prose blocks AND legal-
+  // numbered list items — both the clause text and its generated number marker. (An earlier
+  // measurement read the list item's first span, which is the marker; that made the change "look"
+  // like it skipped list items when only the marker glyph lagged — now fixed.)
+  test('multi-block font change reaches prose and legal-numbered list items (text + marker)', async ({
     page,
   }) => {
     await boot(page);
@@ -330,20 +329,24 @@ test.describe('Editor — legal contract cover page (GUI reproduction)', () => {
     await page.keyboard.press('Control+a');
     await page.selectOption('#fontfamily', 'Georgia');
 
-    const fonts = await page.evaluate(() =>
-      [...document.querySelectorAll('#editor [data-anchor]')].map((b) => {
-        const span = b.querySelector('span');
-        return {
-          text: (b.textContent || '').slice(0, 12),
-          font: span ? getComputedStyle(span).fontFamily : '',
-        };
-      }),
-    );
+    const fonts = await page.evaluate(() => {
+      const blocks = [...document.querySelectorAll('#editor [data-anchor]')];
+      const prose = blocks.find((b) => /Alpha/.test(b.textContent || ''))!;
+      const listItem = blocks.find((b) => b.querySelector(':scope > [data-list-marker]'))!;
+      const marker = listItem.querySelector('[data-list-marker]') as HTMLElement;
+      const content = Array.from(listItem.querySelectorAll('span')).find(
+        (s) => !s.closest('[data-list-marker]') && /Beta/.test(s.textContent || ''),
+      ) as HTMLElement;
+      return {
+        prose: getComputedStyle(prose.querySelector('span') as HTMLElement).fontFamily,
+        listContent: getComputedStyle(content).fontFamily,
+        listMarker: getComputedStyle(marker).fontFamily,
+      };
+    });
 
-    const prose = fonts.find((f) => f.text.includes('Alpha'))!;
-    const listItem = fonts.find((f) => /Beta/.test(f.text))!;
-    expect(prose.font).toContain('Georgia'); // prose block picks up the new font
-    expect(listItem.font).not.toContain('Georgia'); // list item is skipped (known gap)
+    expect(fonts.prose).toContain('Georgia'); // prose block picks up the new font
+    expect(fonts.listContent).toContain('Georgia'); // the clause text picks it up
+    expect(fonts.listMarker).toContain('Georgia'); // and so does the number marker (fix)
   });
 
   // ── Engine-level omissions: features a real agreement page needs but the editor cannot author ──
@@ -359,6 +362,44 @@ test.describe('Editor — legal contract cover page (GUI reproduction)', () => {
     expect(joined).not.toMatch(/footnote/);
     expect(joined).not.toMatch(/footer/);
     expect(joined).not.toMatch(/page number|page-number/);
+  });
+
+  // The legal-numbering outline level can be changed by dedicated ribbon buttons (not only by
+  // Tab/Shift+Tab) — the demo's §→ / §← buttons drive DocxEditor.changeListLevel.
+  test('demo: §→ / §← buttons demote and promote the legal-numbering level', async ({ page }) => {
+    await boot(page);
+    await focusSeed(page);
+    await typeAtCaret(page, 'Some clause heading');
+    await page.click('#legalNum');
+
+    const focusListItem = () =>
+      page.evaluate(() => {
+        const p = document.querySelector('#editor p[data-anchor]') as HTMLElement;
+        p.focus();
+        const r = document.createRange();
+        r.selectNodeContents(p);
+        r.collapse(false);
+        const s = window.getSelection()!;
+        s.removeAllRanges();
+        s.addRange(r);
+        document.dispatchEvent(new Event('selectionchange'));
+      });
+    const level = () =>
+      page.evaluate(() => {
+        const D = (window as any).__demo;
+        const ed = D.getEditor();
+        const p = document.querySelector('#editor p[data-anchor]') as HTMLElement;
+        const fullId = ed.unidToFullId.get(p.getAttribute('data-anchor'));
+        return JSON.parse(D.exports.DocxSessionBridge.GetListMembership(ed.handle, fullId)).level;
+      });
+
+    expect(await level()).toBe(0);
+    await focusListItem();
+    await page.click('#listDemote');
+    expect(await level()).toBe(1);
+    await focusListItem();
+    await page.click('#listPromote');
+    expect(await level()).toBe(0);
   });
 
   // Footnotes are output-only in the engine (DocxSession has no AddFootnote; the editor's full

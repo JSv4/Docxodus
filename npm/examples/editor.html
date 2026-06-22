@@ -85,6 +85,8 @@
       <button data-list="bullet" title="Bullet list">&#8226;</button>
       <button data-list="decimal" title="Numbered list">1.</button>
       <button id="legalNum" title="Legal / outline numbering — 1. / 1.1 / (a); Tab and Shift+Tab change level">1.&sect;</button>
+      <button id="listPromote" title="Promote outline level — shallower (1.1 &rarr; 1.)">&sect;&larr;</button>
+      <button id="listDemote" title="Demote outline level — deeper (1. &rarr; 1.1)">&sect;&rarr;</button>
       <span class="sep"></span>
       <select id="rulepos" title="Insert rules and tables above or below the active block"
               style="font: inherit; padding:5px 6px; border:1px solid #c3c7cc; border-radius:6px; background:#f6f7f8;">
@@ -237,6 +239,8 @@
       ['hangIndent', () => editor && editor.setIndent({ left: 720, firstLine: -360 })],
       ['firstLineIndent', () => editor && editor.setIndent({ firstLine: 360 })],
       ['legalNum', () => editor && editor.toggleLegalNumbering()],
+      ['listDemote', () => editor && editor.changeListLevel(1)],
+      ['listPromote', () => editor && editor.changeListLevel(-1)],
     ]) {
       const b = document.getElementById(id);
       b.addEventListener('mousedown', (e) => e.preventDefault());
