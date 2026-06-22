@@ -189,6 +189,15 @@ public static partial class DocxSessionBridge
     public static string ApplyListFormat(int h, string anchor, string kind) =>
         DocxSessionOps.ApplyListFormat(h, anchor, DocxSessionJson.ParseListFormat(kind));
 
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ApplyMultilevelNumbering"/>. <paramref name="levelsJson"/>
+    /// is a NumberingLevel[] wire array (see <c>DocxSessionJson.ParseNumberingLevels</c>): each
+    /// { format, levelText, start?, indentLeft?, hanging?, justify?, bulletFont? }.
+    /// </summary>
+    [JSExport]
+    public static string ApplyMultilevelNumbering(int h, string anchor, string levelsJson, int level, bool restart) =>
+        DocxSessionOps.ApplyMultilevelNumbering(h, anchor, DocxSessionJson.ParseNumberingLevels(levelsJson), level, restart);
+
     [JSExport]
     public static string ReplaceCellContent(int h, string anchor, string md) =>
         DocxSessionOps.ReplaceCellContent(h, anchor, md);
