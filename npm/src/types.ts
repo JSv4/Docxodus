@@ -1152,6 +1152,10 @@ export interface ParagraphFormatOp {
   alignment?: "left" | "center" | "right" | "justify";
   /** Adjust the left indent by this many twips (1440 = 1 inch); clamped at 0. */
   indentDelta?: number;
+  /** Absolute left indent in twips (w:ind/@w:left). Omit to leave unchanged. */
+  leftIndent?: number;
+  /** Signed special indent in twips: >0 first-line, <0 hanging, 0 clears both. Omit = unchanged. */
+  firstLineIndent?: number;
   /** Page-break-before: true to add, false to remove. */
   pageBreakBefore?: boolean;
   /** Top paragraph border (`w:pBdr/w:top`). Omit to leave unchanged. */
