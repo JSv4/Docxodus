@@ -84,6 +84,7 @@
       <span class="sep"></span>
       <button data-list="bullet" title="Bullet list">&#8226;</button>
       <button data-list="decimal" title="Numbered list">1.</button>
+      <button id="legalNum" title="Legal / outline numbering — 1. / 1.1 / (a); Tab and Shift+Tab change level">1.&sect;</button>
       <span class="sep"></span>
       <select id="rulepos" title="Insert rules and tables above or below the active block"
               style="font: inherit; padding:5px 6px; border:1px solid #c3c7cc; border-radius:6px; background:#f6f7f8;">
@@ -235,6 +236,7 @@
       ['delblock', () => editor && editor.deleteBlock()],
       ['hangIndent', () => editor && editor.setIndent({ left: 720, firstLine: -360 })],
       ['firstLineIndent', () => editor && editor.setIndent({ firstLine: 360 })],
+      ['legalNum', () => editor && editor.toggleLegalNumbering()],
     ]) {
       const b = document.getElementById(id);
       b.addEventListener('mousedown', (e) => e.preventDefault());
