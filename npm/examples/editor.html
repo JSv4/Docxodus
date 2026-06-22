@@ -78,6 +78,8 @@
       <span class="sep"></span>
       <button data-indent="-720" title="Decrease indent">&#8676;</button>
       <button data-indent="720" title="Increase indent">&#8677;</button>
+      <button id="hangIndent" title="Hanging indent (number/letter hangs; wrapped text indented)">&#8676;H</button>
+      <button id="firstLineIndent" title="First-line indent">H&#8677;</button>
       <button data-pagebreak title="Insert page break before">&#10515;</button>
       <span class="sep"></span>
       <button data-list="bullet" title="Bullet list">&#8226;</button>
@@ -231,6 +233,8 @@
       ['hrClear', () => editor && editor.clearParagraphBorders()],
       ['tabRight', () => editor && editor.insertTab('right')],
       ['delblock', () => editor && editor.deleteBlock()],
+      ['hangIndent', () => editor && editor.setIndent({ left: 720, firstLine: -360 })],
+      ['firstLineIndent', () => editor && editor.setIndent({ firstLine: 360 })],
     ]) {
       const b = document.getElementById(id);
       b.addEventListener('mousedown', (e) => e.preventDefault());

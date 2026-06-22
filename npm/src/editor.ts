@@ -1903,6 +1903,12 @@ export class DocxEditor {
     this.applyParagraphFormat({ indentDelta: deltaTwips });
   }
 
+  /** Set absolute left and/or signed first-line indent (twips). firstLine >0 = first-line indent,
+   *  <0 = hanging, 0 = clear. Multi-block aware (applies to every selected block). */
+  setIndent(opts: { left?: number; firstLine?: number }): void {
+    this.applyParagraphFormat({ leftIndent: opts.left, firstLineIndent: opts.firstLine });
+  }
+
   /** Change the active list item's nesting level by `delta` (+1 deeper, −1 shallower). */
   private setListLevel(delta: number): void {
     const block = this.activeBlock;
@@ -1988,6 +1994,8 @@ export class DocxEditor {
   private applyParagraphFormat(op: {
     alignment?: EditorAlignment;
     indentDelta?: number;
+    leftIndent?: number;
+    firstLineIndent?: number;
     pageBreakBefore?: boolean;
     clearBorders?: boolean;
   }): void {
