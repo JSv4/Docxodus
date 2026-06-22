@@ -133,6 +133,16 @@ public sealed record ParagraphFormatOp
 {
     public ParagraphAlignment? Alignment { get; init; }
     public int? IndentDelta { get; init; }
+
+    /// <summary>Absolute left indent in twips (<c>w:ind/@w:left</c>). null = unchanged. Applied
+    /// before <see cref="IndentDelta"/> when both are set (the editor never sends both).</summary>
+    public int? LeftIndent { get; init; }
+
+    /// <summary>Signed special indent in twips: &gt;0 sets <c>w:ind/@w:firstLine</c> (and removes
+    /// @hanging); &lt;0 sets <c>w:ind/@w:hanging</c> = abs(value) (and removes @firstLine); 0 clears
+    /// both; null = unchanged. Mirrors Word's "Special: First line / Hanging".</summary>
+    public int? FirstLineIndent { get; init; }
+
     public bool? PageBreakBefore { get; init; }
 
     /// <summary>Top paragraph border (<c>w:pBdr/w:top</c>). null = leave unchanged.</summary>
@@ -4146,22 +4156,34 @@ public sealed class DocxSession : IDisposable
                 if (pbb) SetPPrChildInOrder(pPr, new XElement(W.pageBreakBefore));
             }
 
-            if (op.IndentDelta is { } delta && delta != 0)
+            if (op.LeftIndent is not null || (op.IndentDelta is { } id0 && id0 != 0) || op.FirstLineIndent is not null)
             {
                 var ind = pPr.Element(W.ind);
-                // Parse the current left indent tolerantly: documents exported by Google Docs (and
-                // others) emit non-integer twips like w:left="12.996749877929688", which a bare
-                // (int?) cast rejects with a FormatException. AttributeToTwips is the same helper the
-                // HTML converter uses (decimal → truncate), so we read what the doc renders and write
-                // back a clean integer.
-                int cur = ind is null ? 0 : WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.left)) ?? 0;
-                int next = Math.Max(0, cur + delta);
-                if (ind is null)
+                if (ind is null) { ind = new XElement(W.ind); SetPPrChildInOrder(pPr, ind); }
+
+                // Absolute left first, then the delta (rarely both; documented order).
+                if (op.LeftIndent is { } absLeft)
+                    ind.SetAttributeValue(W.left, Math.Max(0, absLeft));
+                if (op.IndentDelta is { } delta && delta != 0)
                 {
-                    ind = new XElement(W.ind);
-                    SetPPrChildInOrder(pPr, ind);
+                    // Parse the current left indent tolerantly: documents exported by Google Docs (and
+                    // others) emit non-integer twips like w:left="12.996749877929688", which a bare
+                    // (int?) cast rejects. AttributeToTwips (decimal → truncate) is the converter's helper.
+                    int cur = WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.left)) ?? 0;
+                    ind.SetAttributeValue(W.left, Math.Max(0, cur + delta));
                 }
-                ind.SetAttributeValue(W.left, next);
+
+                // Signed special indent: >0 first-line, <0 hanging, 0 clears both (@firstLine and
+                // @hanging are mutually exclusive in OOXML).
+                if (op.FirstLineIndent is { } fl)
+                {
+                    ind.Attribute(W.firstLine)?.Remove();
+                    ind.Attribute(W.hanging)?.Remove();
+                    if (fl > 0) ind.SetAttributeValue(W.firstLine, fl);
+                    else if (fl < 0) ind.SetAttributeValue(W.hanging, -fl);
+                }
+
+                if (!ind.Attributes().Any()) ind.Remove(); // never leave an empty <w:ind/>
             }
 
             if (op.ClearBorders is true || op.TopBorder is not null || op.BottomBorder is not null)

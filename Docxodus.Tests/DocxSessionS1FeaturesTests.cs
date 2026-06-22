@@ -726,4 +726,69 @@ public class DocxSessionS1FeaturesTests
         var run = tbl.Descendants(W + "r").First(x => x.Value == "Texas");
         Assert.Null(run.Element(W + "rPr")?.Element(W + "rFonts"));
     }
+
+    // ─── F-indent: hanging / first-line indent ──────────────────────────
+
+    private static XElement? FirstInd(byte[] docxBytes) =>
+        DocumentXml(docxBytes).Descendants(W + "p").First().Element(W + "pPr")?.Element(W + "ind");
+
+    [Fact]
+    public void DS243_SetParagraphFormat_LeftIndent_SetsWIndLeft()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        var r = session.SetParagraphFormat(anchor, new ParagraphFormatOp { LeftIndent = 1440 });
+        Assert.True(r.Success, r.Error?.Message);
+
+        var ind = FirstInd(session.Save());
+        Assert.Equal("1440", (string?)ind?.Attribute(W + "left"));
+    }
+
+    [Fact]
+    public void DS244_SetParagraphFormat_FirstLineIndentPositive_SetsFirstLine_RemovesHanging()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        session.SetParagraphFormat(anchor, new ParagraphFormatOp { LeftIndent = 720, FirstLineIndent = -360 });
+        var r = session.SetParagraphFormat(anchor, new ParagraphFormatOp { FirstLineIndent = 360 });
+        Assert.True(r.Success, r.Error?.Message);
+
+        var ind = FirstInd(session.Save());
+        Assert.Equal("360", (string?)ind?.Attribute(W + "firstLine"));
+        Assert.Null((string?)ind?.Attribute(W + "hanging"));
+    }
+
+    [Fact]
+    public void DS245_SetParagraphFormat_FirstLineIndentNegative_SetsHanging_RemovesFirstLine()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        session.SetParagraphFormat(anchor, new ParagraphFormatOp { FirstLineIndent = 200 });
+        var r = session.SetParagraphFormat(anchor, new ParagraphFormatOp { LeftIndent = 720, FirstLineIndent = -360 });
+        Assert.True(r.Success, r.Error?.Message);
+
+        var ind = FirstInd(session.Save());
+        Assert.Equal("360", (string?)ind?.Attribute(W + "hanging"));
+        Assert.Equal("720", (string?)ind?.Attribute(W + "left"));
+        Assert.Null((string?)ind?.Attribute(W + "firstLine"));
+    }
+
+    [Fact]
+    public void DS246_SetParagraphFormat_FirstLineIndentZero_ClearsBoth_KeepsLeft()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        session.SetParagraphFormat(anchor, new ParagraphFormatOp { LeftIndent = 720, FirstLineIndent = -360 });
+        var r = session.SetParagraphFormat(anchor, new ParagraphFormatOp { FirstLineIndent = 0 });
+        Assert.True(r.Success, r.Error?.Message);
+
+        var ind = FirstInd(session.Save());
+        Assert.Null((string?)ind?.Attribute(W + "hanging"));
+        Assert.Null((string?)ind?.Attribute(W + "firstLine"));
+        Assert.Equal("720", (string?)ind?.Attribute(W + "left"));
+    }
 }
