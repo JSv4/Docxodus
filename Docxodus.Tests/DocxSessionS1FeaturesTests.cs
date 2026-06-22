@@ -791,4 +791,13 @@ public class DocxSessionS1FeaturesTests
         Assert.Null((string?)ind?.Attribute(W + "firstLine"));
         Assert.Equal("720", (string?)ind?.Attribute(W + "left"));
     }
+
+    [Fact]
+    public void DS247_ParseParagraphFormatOp_ReadsLeftAndFirstLineIndent()
+    {
+        var op = Docxodus.Internal.DocxSessionJson.ParseParagraphFormatOp(
+            "{\"leftIndent\":720,\"firstLineIndent\":-360}");
+        Assert.Equal(720, op.LeftIndent);
+        Assert.Equal(-360, op.FirstLineIndent);
+    }
 }

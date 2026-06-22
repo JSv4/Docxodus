@@ -113,8 +113,9 @@ internal static class DocxSessionJson
 
     /// <summary>
     /// Parse a ParagraphFormatOp wire object: { alignment?: "left"|"center"|"right"|"justify",
-    /// indentDelta?: int (twips), pageBreakBefore?: bool }. Missing fields leave that property
-    /// unchanged.
+    /// indentDelta?: int (twips), leftIndent?: int (twips), firstLineIndent?: int (signed twips:
+    /// &gt;0 first-line, &lt;0 hanging, 0 clears), pageBreakBefore?: bool }. Missing fields leave
+    /// that property unchanged.
     /// </summary>
     public static ParagraphFormatOp ParseParagraphFormatOp(string json)
     {
@@ -132,10 +133,18 @@ internal static class DocxSessionJson
         int? indentDelta = root.TryGetProperty("indentDelta", out var d) && d.ValueKind == JsonValueKind.Number
             ? d.GetInt32()
             : null;
+        int? leftIndent = root.TryGetProperty("leftIndent", out var li) && li.ValueKind == JsonValueKind.Number
+            ? li.GetInt32()
+            : null;
+        int? firstLineIndent = root.TryGetProperty("firstLineIndent", out var fli) && fli.ValueKind == JsonValueKind.Number
+            ? fli.GetInt32()
+            : null;
         return new ParagraphFormatOp
         {
             Alignment = align,
             IndentDelta = indentDelta,
+            LeftIndent = leftIndent,
+            FirstLineIndent = firstLineIndent,
             PageBreakBefore = TryGetBoolNullable(root, "pageBreakBefore"),
             TopBorder = ParseBorderEdge(root, "topBorder"),
             BottomBorder = ParseBorderEdge(root, "bottomBorder"),
