@@ -830,4 +830,62 @@ public class DocxSessionS1FeaturesTests
             (string?)abs.Elements(W + "lvl").First(l => (string?)l.Attribute(W + "ilvl") == "1")
                 .Element(W + "numFmt")?.Attribute(W + "val"));
     }
+
+    [Fact]
+    public void DS249_ApplyMultilevelNumbering_SetsNumPr()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+        var levels = new System.Collections.Generic.List<NumberingLevel>
+        {
+            new() { Format = NumberFormat.Decimal, LevelText = "%1." },
+            new() { Format = NumberFormat.Decimal, LevelText = "%1.%2" },
+            new() { Format = NumberFormat.LowerLetter, LevelText = "(%3)" },
+        };
+        var res = session.ApplyMultilevelNumbering(anchor, levels, level: 0);
+        Assert.True(res.Success, res.Error?.Message);
+
+        var numPr = DocumentXml(session.Save()).Descendants(W + "p").First()
+            .Element(W + "pPr")?.Element(W + "numPr");
+        Assert.NotNull(numPr);
+        Assert.Equal("0", (string?)numPr!.Element(W + "ilvl")?.Attribute(W + "val"));
+    }
+
+    [Fact]
+    public void DS250_ApplyMultilevelNumbering_ThenSetListLevel_Promotes()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+        var levels = new System.Collections.Generic.List<NumberingLevel>
+        {
+            new() { Format = NumberFormat.Decimal, LevelText = "%1." },
+            new() { Format = NumberFormat.LowerLetter, LevelText = "(%2)" },
+        };
+        var applied = session.ApplyMultilevelNumbering(anchor, levels, level: 0);
+        Assert.True(applied.Success, applied.Error?.Message);
+
+        var bumped = session.SetListLevel(applied.Modified[0].Id, 1);
+        Assert.True(bumped.Success, bumped.Error?.Message);
+
+        var ilvl = DocumentXml(session.Save()).Descendants(W + "p").First()
+            .Element(W + "pPr")?.Element(W + "numPr")?.Element(W + "ilvl")?.Attribute(W + "val");
+        Assert.Equal("1", (string?)ilvl);
+    }
+
+    [Fact]
+    public void DS251_ApplyMultilevelNumbering_RoundTrips()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+        var levels = new System.Collections.Generic.List<NumberingLevel>
+        {
+            new() { Format = NumberFormat.LowerLetter, LevelText = "(%1)" },
+        };
+        session.ApplyMultilevelNumbering(anchor, levels, 0);
+
+        using var reopened = new DocxSession(session.Save());
+        var numPr = DocumentXml(reopened.Save()).Descendants(W + "p").First()
+            .Element(W + "pPr")?.Element(W + "numPr");
+        Assert.NotNull(numPr);
+    }
 }

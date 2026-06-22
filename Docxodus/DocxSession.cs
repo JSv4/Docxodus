@@ -4969,6 +4969,56 @@ public sealed class DocxSession : IDisposable
         }
     }
 
+    /// <summary>
+    /// Apply a caller-configurable multi-level numbering scheme to a paragraph, making it a list
+    /// item at <paramref name="level"/>. Identical schemes share one numbering instance (continue a
+    /// single sequence); <paramref name="restart"/> mints a fresh sequence. After this the paragraph
+    /// projects as an <c>li</c> — use <see cref="SetListLevel"/> (Tab/Shift+Tab) to promote/demote
+    /// and <see cref="RemoveListMembership"/> to remove it.
+    /// </summary>
+    public EditResult ApplyMultilevelNumbering(string anchorId, IReadOnlyList<NumberingLevel> levels,
+        int level = 0, bool restart = false)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (levels is null || levels.Count == 0 || levels.Count > 9)
+            return EditResult.Fail(EditErrorCode.ValidationFailed, "levels must have 1-9 entries", anchorId);
+        if (level < 0 || level >= levels.Count)
+            return EditResult.Fail(EditErrorCode.InvalidListLevel, $"level {level} out of range", anchorId);
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "ApplyMultilevelNumbering requires a paragraph anchor", anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            int numId = Internal.NumberingFactory.EnsureMultilevel(_doc!, levels, restart);
+            var pPr = element.Element(W.pPr);
+            if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+            pPr.Element(W.numPr)?.Remove();
+            SetPPrChildInOrder(pPr, new XElement(W.numPr,
+                new XElement(W.ilvl, new XAttribute(W.val, level)),
+                new XElement(W.numId, new XAttribute(W.val, numId))));
+            // Flush the body part, like SetListLevel, so the WASM typed-DOM/XDocument divergence
+            // doesn't drop the numPr on Save / re-render.
+            _doc!.MainDocumentPart!.PutXDocument();
+
+            InvalidateProjectionCache();
+            var freshIndex = Project().AnchorIndex;
+            var updated = freshIndex.Values.FirstOrDefault(t => t.Unid == target.Unid)?.Anchor ?? target.Anchor;
+            return new EditResult { Success = true, Modified = new[] { updated }, Patch = ProjectScope(target) };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
     // ─── Tier E: annotations ────────────────────────────────────────────
 
     /// <summary>
