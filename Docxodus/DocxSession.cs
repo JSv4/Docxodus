@@ -585,6 +585,35 @@ public enum NumberFormat
 }
 
 /// <summary>
+/// One level of a caller-configurable multi-level numbering scheme for
+/// <see cref="DocxSession.ApplyMultilevelNumbering"/>. Maps to one <c>w:lvl</c>.
+/// </summary>
+public sealed record NumberingLevel
+{
+    /// <summary>The <c>w:numFmt</c> for this level (decimal, lowerLetter, …, bullet).</summary>
+    public required NumberFormat Format { get; init; }
+
+    /// <summary>The <c>w:lvlText</c> template, e.g. "%1.", "%1.%2", "(%3)". For a bullet level this
+    /// is the literal glyph.</summary>
+    public required string LevelText { get; init; }
+
+    /// <summary>The <c>w:start</c> value (default 1).</summary>
+    public int Start { get; init; } = 1;
+
+    /// <summary>Left indent in twips for this level; null = 720*(ilvl+1).</summary>
+    public int? IndentLeft { get; init; }
+
+    /// <summary>Hanging indent in twips (default 360).</summary>
+    public int Hanging { get; init; } = 360;
+
+    /// <summary>Level justification (<c>w:lvlJc</c>); null = left.</summary>
+    public ParagraphAlignment? Justify { get; init; }
+
+    /// <summary>Font for a bullet glyph (<c>w:rPr/w:rFonts</c>); ignored unless Format = Bullet.</summary>
+    public string? BulletFont { get; init; }
+}
+
+/// <summary>
 /// Numbering facts for a list-item paragraph. Returned by
 /// <see cref="DocxSession.GetListMembership"/> and surfaced as
 /// <see cref="BlockMetadata.List"/>.

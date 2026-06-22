@@ -255,4 +255,125 @@ internal static class NumberingFactory
         }
         return mutated;
     }
+
+    // ─── Configurable multi-level numbering ──────────────────────────────
+
+    /// <summary>Map a <see cref="NumberFormat"/> to its <c>w:numFmt</c> value.</summary>
+    private static string NumFmtVal(NumberFormat f) => f switch
+    {
+        NumberFormat.Decimal => "decimal",
+        NumberFormat.UpperLetter => "upperLetter",
+        NumberFormat.LowerLetter => "lowerLetter",
+        NumberFormat.UpperRoman => "upperRoman",
+        NumberFormat.LowerRoman => "lowerRoman",
+        NumberFormat.Bullet => "bullet",
+        _ => "decimal",
+    };
+
+    /// <summary>Deterministic 8-hex nsid derived from a scheme's level definitions, so identical
+    /// schemes find-or-create ONE abstractNum (FNV-1a; stable across runs, unlike
+    /// string.GetHashCode).</summary>
+    private static string SchemeNsid(System.Collections.Generic.IReadOnlyList<NumberingLevel> levels)
+    {
+        unchecked
+        {
+            uint h = 2166136261;
+            void Mix(string s) { foreach (char c in s) { h ^= c; h *= 16777619; } h ^= '|'; h *= 16777619; }
+            foreach (var l in levels)
+            {
+                Mix(NumFmtVal(l.Format)); Mix(l.LevelText); Mix(l.Start.ToString());
+                Mix((l.IndentLeft ?? -1).ToString()); Mix(l.Hanging.ToString());
+                Mix(l.Justify?.ToString() ?? ""); Mix(l.BulletFont ?? "");
+            }
+            return h.ToString("X8");
+        }
+    }
+
+    private static XElement BuildAbstractNumFromLevels(int absId, string nsid,
+        System.Collections.Generic.IReadOnlyList<NumberingLevel> levels)
+    {
+        var an = new XElement(W + "abstractNum",
+            new XAttribute(W + "abstractNumId", absId),
+            new XElement(W + "nsid", new XAttribute(W + "val", nsid)),
+            new XElement(W + "multiLevelType", new XAttribute(W + "val", "hybridMultilevel")));
+        for (int i = 0; i < levels.Count && i < 9; i++)
+        {
+            var lv = levels[i];
+            string jc = lv.Justify switch
+            {
+                ParagraphAlignment.Center => "center",
+                ParagraphAlignment.Right => "right",
+                _ => "left",
+            };
+            var pPr = new XElement(W + "pPr",
+                new XElement(W + "ind",
+                    new XAttribute(W + "left", lv.IndentLeft ?? 720 * (i + 1)),
+                    new XAttribute(W + "hanging", lv.Hanging)));
+            var lvl = new XElement(W + "lvl",
+                new XAttribute(W + "ilvl", i),
+                new XElement(W + "start", new XAttribute(W + "val", lv.Start)),
+                new XElement(W + "numFmt", new XAttribute(W + "val", NumFmtVal(lv.Format))),
+                new XElement(W + "lvlText", new XAttribute(W + "val", lv.LevelText)),
+                new XElement(W + "lvlJc", new XAttribute(W + "val", jc)),
+                pPr);
+            if (lv.Format == NumberFormat.Bullet && !string.IsNullOrEmpty(lv.BulletFont))
+                lvl.Add(new XElement(W + "rPr",
+                    new XElement(W + "rFonts",
+                        new XAttribute(W + "ascii", lv.BulletFont),
+                        new XAttribute(W + "hAnsi", lv.BulletFont),
+                        new XAttribute(W + "hint", "default"))));
+            an.Add(lvl);
+        }
+        return an;
+    }
+
+    /// <summary>
+    /// Ensure an abstractNum for the given caller-configurable scheme exists (deduped by hashed
+    /// nsid) and return a numId. <paramref name="restart"/>=false reuses an existing num (one
+    /// continuous sequence); true mints a fresh num (new sequence).
+    /// </summary>
+    public static int EnsureMultilevel(WordprocessingDocument doc,
+        System.Collections.Generic.IReadOnlyList<NumberingLevel> levels, bool restart)
+    {
+        var main = doc.MainDocumentPart ?? throw new InvalidOperationException("no MainDocumentPart");
+        var part = main.NumberingDefinitionsPart;
+        if (part is null)
+        {
+            part = main.AddNewPart<NumberingDefinitionsPart>();
+            part.PutXDocument(new XDocument(
+                new XElement(W + "numbering", new XAttribute(XNamespace.Xmlns + "w", W.NamespaceName))));
+        }
+        var root = part.GetXDocument().Root!;
+        string nsid = SchemeNsid(levels);
+
+        var abstractNum = root.Elements(W + "abstractNum")
+            .FirstOrDefault(a => (string?)a.Element(W + "nsid")?.Attribute(W + "val") == nsid);
+        if (abstractNum is null)
+        {
+            int absId = NextId(root, "abstractNum", "abstractNumId");
+            abstractNum = BuildAbstractNumFromLevels(absId, nsid, levels);
+            // CT_Numbering order: numPicBullet*, abstractNum*, num* — keep abstractNums grouped.
+            var lastAbstract = root.Elements(W + "abstractNum").LastOrDefault();
+            if (lastAbstract is not null) lastAbstract.AddAfterSelf(abstractNum);
+            else
+            {
+                var firstNum = root.Elements(W + "num").FirstOrDefault();
+                if (firstNum is not null) firstNum.AddBeforeSelf(abstractNum); else root.Add(abstractNum);
+            }
+        }
+        var abstractId = (string)abstractNum.Attribute(W + "abstractNumId")!;
+
+        XElement? num = restart ? null : root.Elements(W + "num")
+            .FirstOrDefault(n => (string?)n.Element(W + "abstractNumId")?.Attribute(W + "val") == abstractId);
+        if (num is null)
+        {
+            int numId = NextId(root, "num", "numId");
+            num = new XElement(W + "num",
+                new XAttribute(W + "numId", numId),
+                new XElement(W + "abstractNumId", new XAttribute(W + "val", abstractId)));
+            root.Add(num); // nums come after abstractNums
+        }
+        part.PutXDocument();
+        return (int)num.Attribute(W + "numId")!;
+    }
 }

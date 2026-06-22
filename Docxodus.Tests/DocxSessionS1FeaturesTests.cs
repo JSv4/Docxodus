@@ -800,4 +800,34 @@ public class DocxSessionS1FeaturesTests
         Assert.Equal(720, op.LeftIndent);
         Assert.Equal(-360, op.FirstLineIndent);
     }
+
+    // ─── F-numbering: configurable multi-level numbering ─────────────────
+
+    [Fact]
+    public void DS248_EnsureMultilevel_BuildsAbstractNum_AndDedupsSameScheme()
+    {
+        var bytes = DocxSession.CreateBlankDocxBytes();
+        using var stream = new MemoryStream(); // expandable — adding a numbering part grows the package
+        stream.Write(bytes, 0, bytes.Length);
+        stream.Position = 0;
+        using var doc = WordprocessingDocument.Open(stream, true);
+        var levels = new System.Collections.Generic.List<NumberingLevel>
+        {
+            new() { Format = NumberFormat.Decimal, LevelText = "%1." },
+            new() { Format = NumberFormat.LowerLetter, LevelText = "(%2)" },
+        };
+        int n1 = Docxodus.Internal.NumberingFactory.EnsureMultilevel(doc, levels, restart: false);
+        int n2 = Docxodus.Internal.NumberingFactory.EnsureMultilevel(doc, levels, restart: false);
+        Assert.Equal(n1, n2); // same scheme → same numId (one continuous sequence)
+
+        int n3 = Docxodus.Internal.NumberingFactory.EnsureMultilevel(doc, levels, restart: true);
+        Assert.NotEqual(n1, n3); // restart → fresh numId
+
+        var root = doc.MainDocumentPart!.NumberingDefinitionsPart!.GetXDocument().Root!;
+        var abs = root.Elements(W + "abstractNum").Single(a =>
+            a.Elements(W + "lvl").Any(l => (string?)l.Element(W + "lvlText")?.Attribute(W + "val") == "(%2)"));
+        Assert.Equal("lowerLetter",
+            (string?)abs.Elements(W + "lvl").First(l => (string?)l.Attribute(W + "ilvl") == "1")
+                .Element(W + "numFmt")?.Attribute(W + "val"));
+    }
 }
