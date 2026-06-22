@@ -888,4 +888,15 @@ public class DocxSessionS1FeaturesTests
             .Element(W + "pPr")?.Element(W + "numPr");
         Assert.NotNull(numPr);
     }
+
+    [Fact]
+    public void DS252_ParseNumberingLevels_ReadsArray()
+    {
+        var levels = Docxodus.Internal.DocxSessionJson.ParseNumberingLevels(
+            "[{\"format\":\"decimal\",\"levelText\":\"%1.\"},{\"format\":\"lowerLetter\",\"levelText\":\"(%2)\",\"hanging\":300}]");
+        Assert.Equal(2, levels.Count);
+        Assert.Equal(NumberFormat.Decimal, levels[0].Format);
+        Assert.Equal("(%2)", levels[1].LevelText);
+        Assert.Equal(300, levels[1].Hanging);
+    }
 }

@@ -213,6 +213,10 @@ internal static class DocxSessionOps
     public static string ApplyListFormat(int handle, string anchorId, ListFormat kind) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).ApplyListFormat(anchorId, kind));
 
+    public static string ApplyMultilevelNumbering(int handle, string anchorId,
+        System.Collections.Generic.IReadOnlyList<NumberingLevel> levels, int level, bool restart) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ApplyMultilevelNumbering(anchorId, levels, level, restart));
+
     // ─── Tier D: tables ─────────────────────────────────────────────────
 
     public static string ReplaceCellContent(int handle, string cellAnchorId, string markdown) =>

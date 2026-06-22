@@ -218,6 +218,48 @@ internal static class DocxSessionJson
         _ => ListFormat.None,
     };
 
+    /// <summary>
+    /// Parse a NumberingLevel[] wire array: [{ format, levelText, start?, indentLeft?, hanging?,
+    /// justify?, bulletFont? }]. Unknown formats fall back to decimal.
+    /// </summary>
+    public static IReadOnlyList<NumberingLevel> ParseNumberingLevels(string json)
+    {
+        var list = new List<NumberingLevel>();
+        if (string.IsNullOrEmpty(json)) return list;
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array) return list;
+        foreach (var e in doc.RootElement.EnumerateArray())
+        {
+            NumberFormat fmt = TryGetString(e, "format", null)?.ToLowerInvariant() switch
+            {
+                "upperletter" => NumberFormat.UpperLetter,
+                "lowerletter" => NumberFormat.LowerLetter,
+                "upperroman" => NumberFormat.UpperRoman,
+                "lowerroman" => NumberFormat.LowerRoman,
+                "bullet" => NumberFormat.Bullet,
+                _ => NumberFormat.Decimal,
+            };
+            ParagraphAlignment? jc = TryGetString(e, "justify", null)?.ToLowerInvariant() switch
+            {
+                "center" => ParagraphAlignment.Center,
+                "right" => ParagraphAlignment.Right,
+                "left" => ParagraphAlignment.Left,
+                _ => null,
+            };
+            list.Add(new NumberingLevel
+            {
+                Format = fmt,
+                LevelText = TryGetString(e, "levelText", "") ?? "",
+                Start = e.TryGetProperty("start", out var s) && s.ValueKind == JsonValueKind.Number ? s.GetInt32() : 1,
+                IndentLeft = e.TryGetProperty("indentLeft", out var il) && il.ValueKind == JsonValueKind.Number ? il.GetInt32() : null,
+                Hanging = e.TryGetProperty("hanging", out var hg) && hg.ValueKind == JsonValueKind.Number ? hg.GetInt32() : 360,
+                Justify = jc,
+                BulletFont = TryGetString(e, "bulletFont", null),
+            });
+        }
+        return list;
+    }
+
     public static FindOptions? ParseFindOptions(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object) return null;
