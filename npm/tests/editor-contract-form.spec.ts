@@ -48,26 +48,18 @@ async function boot(page: Page) {
   await page.waitForFunction(() => !!(window as any).__demo.getEditor());
 }
 
-/** Type text at the caret through the editor's own input path (execCommand insertText). */
+/** Type text at the caret through NATIVE keyboard input (the path a human types through). An earlier
+ *  version injected text with document.execCommand('insertText'); that bypassed the editor's pending-
+ *  edit tracking enough that the LAST item typed before save was not flushed, so this suite could
+ *  pass while the document was subtly wrong. Native typing commits like a real user. */
 async function typeAtCaret(page: Page, text: string) {
-  await page.evaluate((t) => {
-    document.execCommand('insertText', false, t);
-  }, text);
+  await page.keyboard.type(text);
 }
 
-/** Place a collapsed caret at the end of the first editable body block (the seed paragraph). */
+/** Place the caret in the first editable body block (the seed paragraph) with a real click, so the
+ *  subsequent native typing lands at a real caret. */
 async function focusSeed(page: Page) {
-  await page.evaluate(() => {
-    const p = document.querySelector('#editor p[data-anchor][data-editable="1"]') as HTMLElement;
-    p.focus();
-    const r = document.createRange();
-    r.selectNodeContents(p);
-    r.collapse(false);
-    const s = window.getSelection()!;
-    s.removeAllRanges();
-    s.addRange(r);
-    document.dispatchEvent(new Event('selectionchange'));
-  });
+  await page.click('#editor p[data-anchor][data-editable="1"]');
 }
 
 /** Select the entire contents of the body block whose text contains `textMatch`. */
@@ -262,6 +254,11 @@ test.describe('Editor — legal contract cover page (GUI reproduction)', () => {
     // multi-level legal numbering 1. / 1.1 / (a) / (b)
     const numbered = blocks.filter((b) => b.ilvl !== null);
     expect(numbered.map((b) => b.ilvl)).toEqual([0, 1, 2, 2]);
+    // Each numbered item must keep its OWN text. Without this, the suite passed on a CORRUPTED list:
+    // a list-level (Tab) change used to restore the caret to the start of the item, so the
+    // type → Tab → Enter → type build collapsed clauses (in reverse) into the last item, leaving the
+    // earlier items empty — yet the ilvl/numId/bold flags above all still matched. Assert the text.
+    expect(numbered.map((b) => b.text)).toEqual([T.clause1, T.clause11, T.clauseA, T.clauseB]);
     // all four share one numbering instance (a single continuous list)
     const numIds = new Set(numbered.map((b) => b.numId));
     expect(numIds.size).toBe(1);
