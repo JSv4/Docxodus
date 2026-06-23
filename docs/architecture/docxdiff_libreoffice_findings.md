@@ -162,6 +162,83 @@ text — because header/footer scopes are **deliberately not diffed**
 behaves identically (0 revisions, keeps left's header). Not a defect; the
 round-trip "accept==right" gate does not apply to undiffed scopes.
 
+## Round-2 expanded coverage (31 scenarios)
+
+Added bug-prone categories to the corpus: table column insert/delete, table-cell
+format, structural footnote insert/delete, multi-paragraph delete/insert,
+whole-paragraph replace, and a styled-heading move. **All 31 round-trip
+content-clean** (header/footer-only edits report `(scope-ok)`). Highlights vs the
+WmlComparer oracle and LibreOffice:
+
+| scenario | ours | oracle | LO | note |
+|---|---|---|---|---|
+| table-insert-column | 2 | 2 | (whole-table) | match oracle after F3; both ours & LO render whole-table replace |
+| table-delete-column | 2 | 2 | (whole-table) | match oracle after F3 |
+| table-cell-format | 0 | 0 | 0 | format-in-cell reported by neither — oracle-consistent |
+| footnote-insert | 3 | 3 | 3 | match |
+| footnote-delete | 2 | 3 | 3 | ours one fewer (granularity); content round-trips |
+| multi-paragraph-delete | 5 | — | 6 | granularity |
+| multi-paragraph-insert | 3 | — | 1 | ours finer |
+| whole-paragraph-replace | 17 | — | 2 | ours word-level (far finer); LO whole-paragraph |
+| move-heading-block | 2 (move) | — | 3 | ours emits native move; LO del+ins |
+
+No new genuine defects in round 2 beyond F3 (already fixed). The table column
+add/remove rendering is whole-table-replace in BOTH ours and LibreOffice — they
+are equivalent in crudeness there (column-precise table markup is a deferred v1
+limitation).
+
+## Round-3 exhaustive sweep (10 advanced categories, parallel + adversarial)
+
+A parallel agent sweep built and tested 10 advanced edit categories the base
+lacks (each synthesized into a variant, diffed, and compared to the WmlComparer
+oracle + LibreOffice, then any suspect was adversarially re-verified from scratch):
+
+| category | ours | oracle | LO | verdict |
+|---|---|---|---|---|
+| merged-cell-gridspan | 2 | 11 | 2 | oracle-consistent (ours coarser per-cell, LO-equal; round-trips) |
+| image-insert | 1 | 1 | 1 | ✅ media import intact post-F1 (no dangling rId; png imported byte-identical) |
+| hyperlink-insert | 1 | 1 | 1 | ours FINER than oracle (keeps the live hyperlink + rel; oracle flattens it) |
+| comment-insert | 0 | 0 | 1 | oracle-consistent (comments are a non-revision annotation layer; LO cruder) |
+| section-pagesetup-change | 0 | 0 | 0 | oracle-consistent (sectPrChange is a documented Task-4 gap; round-trips) |
+| paragraph-align-indent | 0 | 0 | 0 | oracle-consistent (pPr-only change; round-trips) |
+| bookmark-range-edit | 2 | 2 | 2 | text edit correct; body-level bookmarkEnd drop is **deliberate** (see below) |
+| complex-field-edit | 2 | 2 | 2 | oracle-consistent (field structure preserved) |
+| nested-table-edit | 1 | 1 | 2 | oracle-consistent (LO cruder) |
+| **content-control-sdt** | 1 | 1 | 1 | 🐞 **GENUINE BUG — reject contract violated; FIXED (F4)** |
+
+**One genuine defect found (F4, fixed); the other nine are oracle-consistent or
+ours-finer.** The image-insert result specifically re-confirms F1 did not regress
+inline-image media import (the image part imports with no dangling relationship).
+
+### F4 — inserted content-control (`w:sdt`) text leaked on reject — **FIXED**
+
+`Compare` emitted runs inserted inside a `w:sdtContent` BARE (no `w:ins`), so
+`RejectRevisions` (which strips `w:ins`/`w:del`) left them — `reject ≠ left`, a
+core-contract violation that silently retains content the user rejected.
+`GetRevisions` was correct (1 insertion); only the markup renderer failed.
+`IrMarkupRenderer.WrapRunLevel` wrapped a container's DIRECT children, but a
+`w:sdt`'s runs live nested under `w:sdtContent` (not a direct child), so neither
+got wrapped. Fix: a new `WrapContainerChild` descends through `w:sdtContent`
+(`w:ins`/`w:del` is a valid child there) and wraps its run-level children. The
+oracle flattens the sdt instead; ours keeps the content control AND tracks the
+insertion. Test `DocxDiffTests.Compare_InsertedContentControl_RejectStripsTheInsertedText`.
+
+### bookmark-range-edit — body-level `w:bookmarkEnd` drop is DELIBERATE (not a defect)
+
+The sweep flagged that 6 body-level `w:bookmarkEnd` markers (siblings of `w:p`,
+outside any paragraph) are dropped from `Compare` output (192 starts / 186 ends),
+even in an identity diff. This is an **intentional, documented** IR-reader
+decision (`IrReader.AppendBlocks` / `IsDroppedParagraphChild`): WmlComparer strips
+**all** bookmarks (`MarkupSimplifier RemoveBookmarks=true`), and modeling a
+body-level `bookmarkEnd` as an opaque block previously produced a spurious content
+block the markup round-trip could not toggle (WC022). Ours therefore drops
+body-level markers (oracle-consistent — the oracle drops all 192) while preserving
+the 186 intra-paragraph bookmarks (strictly **better** than the oracle, which
+keeps zero). It is not a regression vs the blessed oracle. A future enhancement
+could preserve body-level markers too for full bookmark fidelity beyond the
+oracle, but that reintroduces the WC022 round-trip-toggle problem and is out of
+scope. Recorded as a known limitation, not fixed.
+
 ## Round-1 status
 
 20/22 content-clean (body+notes+header/footer). The 2 non-clean are the

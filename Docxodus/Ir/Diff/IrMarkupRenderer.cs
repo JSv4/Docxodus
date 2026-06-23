@@ -1467,14 +1467,10 @@ internal static class IrMarkupRenderer
             var container = new XElement(runLevel.Name, runLevel.Attributes());
             if (insGrade)
                 state.RegisterMediaReferences(container);   // hyperlink r:id rides on the container element
-            // Wrap every run-level CHILD; structural children (e.g. sdtPr) pass through untouched.
+            // Wrap every run-level CHILD (descending through a w:sdtContent wrapper); structural children
+            // (e.g. sdtPr) pass through untouched.
             foreach (var child in runLevel.Elements())
-            {
-                if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.smartTag)
-                    container.Add(WrapRunLevel(child, kind, state));
-                else
-                    container.Add(new XElement(child));
-            }
+                container.Add(WrapContainerChild(child, kind, state));
             return container;
         }
 
@@ -1485,6 +1481,30 @@ internal static class IrMarkupRenderer
         if (insGrade)
             state.RegisterMediaReferences(clone);   // the cloned run is the live tree node media import remaps
         return rev;
+    }
+
+    /// <summary>
+    /// Wrap a child of a run-level container (see <see cref="WrapRunLevel"/>). A run-level child
+    /// (<c>w:r</c>/<c>w:hyperlink</c>/<c>w:smartTag</c>/<c>w:sdt</c>) is wrapped in the revision element; a
+    /// <c>w:sdtContent</c> is PRESERVED as a wrapper and its OWN run-level children wrapped. The runs of an
+    /// inline content control live under <c>w:sdtContent</c>, NOT as direct <c>w:sdt</c> children, and
+    /// <c>w:ins</c>/<c>w:del</c> is a valid child of <c>w:sdtContent</c>. Without this descent an
+    /// inserted/deleted <c>w:sdt</c>'s content was emitted BARE (no <c>w:ins</c>/<c>w:del</c>), so
+    /// <see cref="RevisionProcessor"/> reject did not strip it — the content leaked through, breaking the
+    /// <c>reject ≡ left</c> contract. Structural children (<c>w:sdtPr</c>, …) pass through untouched.
+    /// </summary>
+    private static XElement WrapContainerChild(XElement child, RevKind kind, RenderState state)
+    {
+        if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.smartTag || child.Name == W.sdt)
+            return WrapRunLevel(child, kind, state);
+        if (child.Name == W.sdtContent)
+        {
+            var content = new XElement(child.Name, child.Attributes());
+            foreach (var inner in child.Elements())
+                content.Add(WrapContainerChild(inner, kind, state));
+            return content;
+        }
+        return new XElement(child);
     }
 
     /// <summary>Mark a paragraph's end-of-paragraph mark inserted/deleted: an EMPTY <c>w:ins</c>/<c>w:del</c>
