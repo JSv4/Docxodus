@@ -161,6 +161,23 @@ public class DocxDiffTests
     }
 
     [Fact]
+    public void GetRevisions_TableColumnChange_ReportsWholeTableReplace()
+    {
+        // A column add/remove bails the MARKUP renderer to a whole-table del(left)+ins(right) fallback
+        // (see Compare_DeletedTableColumn_RejectRestoresTheColumn). GetRevisions must mirror that: it
+        // previously returned ZERO revisions for a column-count change (the per-cell path drops the
+        // surplus cell), diverging from the WmlComparer oracle — which reports a Deleted + Inserted pair —
+        // and silently hiding the change from revision consumers even though the markup tracks it.
+        var left = TableDoc(new[] { "a", "b" });          // 1 row, 2 columns
+        var right = TableDoc(new[] { "a", "b", "c" });    // 1 row, 3 columns — a column added
+
+        var revisions = DocxDiff.GetRevisions(left, right);
+
+        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Deleted);
+        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Inserted);
+    }
+
+    [Fact]
     public void Compare_IdenticalDocuments_HasNoTrackedChanges()
     {
         var doc = Doc("Unchanged paragraph one.", "Unchanged paragraph two.");

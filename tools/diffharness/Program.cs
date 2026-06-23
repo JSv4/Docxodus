@@ -47,17 +47,24 @@ switch (args[0])
         foreach (var el in mdoc.RootElement.EnumerateArray())
         {
             var id = el.GetProperty("id").GetString()!;
+            var undiffedScope = el.TryGetProperty("undiffedScopeOnly", out var u) && u.GetBoolean();
             var dir = Path.Combine(corpus, id);
             var r = DiffRunner.Run(Path.Combine(dir, "left.docx"), Path.Combine(dir, "right.docx"), dir, author);
             total++;
-            if (!r.ContentClean) fails++;
+            // For an undiffed-scope-only edit (header/footer), accept!=right on that scope is EXPECTED and
+            // oracle-consistent — drop the accept-side header/footer gate from the pass criterion.
+            var pass = undiffedScope
+                ? r.AcceptBodyEqualsRight && r.RejectBodyEqualsLeft && r.AcceptNotesEqualRight
+                  && r.RejectNotesEqualLeft && r.RejectHdrFtrSetEqualsLeft
+                : r.ContentClean;
+            if (!pass) fails++;
             string Pair(bool a, bool b) => $"{(a ? "Y" : "n")}/{(b ? "Y" : "n")}";
             Console.WriteLine(
                 $"{id,-26} {Pair(r.AcceptBodyEqualsRight, r.RejectBodyEqualsLeft),9} " +
                 $"{Pair(r.AcceptNotesEqualRight, r.RejectNotesEqualLeft),9} " +
                 $"{Pair(r.AcceptHdrFtrSetEqualsRight, r.RejectHdrFtrSetEqualsLeft),9} " +
                 $"{r.RevisionCountFine,5} {r.HdrFtrPartsOurs + "/" + r.HdrFtrPartsOriginal,7}" +
-                $"{(r.ContentClean ? "" : "  <-- FAIL")}");
+                $"{(pass ? (undiffedScope ? "  (scope-ok)" : "") : "  <-- FAIL")}");
         }
         Console.WriteLine($"\n{total - fails}/{total} content-clean; {fails} failed. " +
             "(hf# = header/footer part count ours/original; >orig = duplicate-part bloat)");

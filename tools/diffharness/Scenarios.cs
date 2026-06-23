@@ -16,7 +16,11 @@ namespace DiffHarness;
 internal static class Scenarios
 {
     private sealed record Scenario(
-        string Id, string Feature, string EditType, string Desc, Action<WordprocessingDocument> Mutate);
+        string Id, string Feature, string EditType, string Desc, Action<WordprocessingDocument> Mutate,
+        // True for edits confined to a scope DocxDiff deliberately does not diff (header/footer), matching
+        // the WmlComparer oracle. For these, accept!=right on that scope is EXPECTED, not a defect — the
+        // round-trip pass criterion drops the accept-side header/footer gate.
+        bool UndiffedScopeOnly = false);
 
     public static int Generate(string basePath, string outRoot)
     {
@@ -32,7 +36,8 @@ internal static class Scenarios
             File.WriteAllBytes(Path.Combine(dir, "left.docx"), baseBytes);
             var right = Apply(baseBytes, s.Mutate);
             File.WriteAllBytes(Path.Combine(dir, "right.docx"), right);
-            manifest.Add(new { id = s.Id, feature = s.Feature, editType = s.EditType, desc = s.Desc });
+            manifest.Add(new { id = s.Id, feature = s.Feature, editType = s.EditType, desc = s.Desc,
+                                undiffedScopeOnly = s.UndiffedScopeOnly });
             Console.WriteLine($"  + {s.Id}");
         }
         File.WriteAllText(Path.Combine(outRoot, "manifest.json"),
@@ -116,8 +121,8 @@ internal static class Scenarios
                 r => r.Color = new Color { Val = "FF0000" })),
 
         new("format-underline-run", "format", "format",
-            "Underline a run.",
-            d => SetRunFormat(Body(d), "Purchase and Sale of Preferred Stock",
+            "Underline a run (anchor chosen NOT already underlined).",
+            d => SetRunFormat(Body(d), "shall apply to each such closing",
                 r => r.Underline = new Underline { Val = UnderlineValues.Single })),
 
         // ===== styles =====
@@ -147,16 +152,61 @@ internal static class Scenarios
         new("header-edit", "header", "replace",
             "Edit text in a running header.",
             d => ReplaceInPart(HeaderContaining(d, "redline this against prior NVCA versions"),
-                               "prior NVCA versions", "prior model versions")),
+                               "prior NVCA versions", "prior model versions"),
+            UndiffedScopeOnly: true),
 
         new("footer-edit", "footer", "replace",
             "Edit text in a running footer.",
-            d => ReplaceInPart(FooterContaining(d, "ACTIVE/"), "ACTIVE/", "DRAFT/")),
+            d => ReplaceInPart(FooterContaining(d, "ACTIVE/"), "ACTIVE/", "DRAFT/"),
+            UndiffedScopeOnly: true),
 
         // ===== footnotes =====
         new("footnote-edit", "footnote", "replace",
             "Edit text inside a footnote.",
             d => ReplaceInPart(FootnotesRoot(d), "mandatory tranches", "mandatory funding tranches")),
+
+        // ===== round 2: tables (column ops, cell format) =====
+        new("table-insert-column", "table", "insert-block",
+            "Append a column (a w:tc per row + a w:gridCol) to the first table.",
+            d => InsertTableColumn(FirstTable(d))),
+
+        new("table-delete-column", "table", "delete-block",
+            "Delete the last column from the first table.",
+            d => DeleteTableColumn(FirstTable(d))),
+
+        new("table-cell-format", "table", "format",
+            "Bold a table cell's text without changing it.",
+            d => SetRunFormat(FirstTable(d), "Total Shares", r => r.Bold = new Bold())),
+
+        // ===== round 2: footnotes (structural) =====
+        new("footnote-insert", "footnote", "insert-block",
+            "Add a new footnote and reference it from a body paragraph.",
+            d => InsertFootnote(d, "Purchase and Sale of Preferred Stock",
+                               "Newly inserted footnote text for diff testing.")),
+
+        new("footnote-delete", "footnote", "delete-block",
+            "Delete a footnote and its body reference.",
+            d => DeleteFirstFootnote(d)),
+
+        // ===== round 2: multi-paragraph + structural body =====
+        new("multi-paragraph-delete", "body-para", "delete-block",
+            "Delete three consecutive body paragraphs.",
+            d => DeleteConsecutiveParas(Body(d), "Purchase and Sale of Preferred Stock", 3)),
+
+        new("multi-paragraph-insert", "body-para", "insert-block",
+            "Insert three consecutive new paragraphs.",
+            d => InsertConsecutiveParas(Body(d), "Purchase and Sale of Preferred Stock", 3)),
+
+        new("whole-paragraph-replace", "body-para", "replace",
+            "Replace ALL text of a paragraph with entirely new text.",
+            d => ReplaceWholeParagraph(Body(d), "shall apply to each such closing",
+                                       "This paragraph has been completely rewritten for diff testing.")),
+
+        new("move-heading-block", "body-para", "move",
+            "Move a (styled) heading paragraph to a distant location.",
+            d => MoveTopLevelPara(Body(d),
+                    moveText: "Purchase and Sale of Preferred Stock",
+                    afterAnchor: "shall apply to each such closing unless otherwise specified")),
 
         // ===== mixed / stress =====
         new("multi-edit", "mixed", "mixed",
@@ -297,5 +347,94 @@ internal static class Scenarios
         if (rows.Count < 2)
             throw new InvalidOperationException("table has too few rows to delete safely");
         rows[^1].Remove();  // delete the last (data) row, keeping at least the header
+    }
+
+    // ---- round 2 primitives --------------------------------------------------------------------
+
+    private static void InsertTableColumn(Table table)
+    {
+        var grid = table.Elements<TableGrid>().FirstOrDefault();
+        if (grid is null) { grid = new TableGrid(); table.PrependChild(grid); }
+        grid.AppendChild(new GridColumn { Width = "1500" });
+
+        bool firstRow = true;
+        foreach (var row in table.Elements<TableRow>())
+        {
+            var lastCell = row.Elements<TableCell>().LastOrDefault();
+            var newCell = lastCell != null
+                ? (TableCell)lastCell.CloneNode(true)
+                : new TableCell(new Paragraph());
+            if (firstRow)
+            {
+                var t = newCell.Descendants<Text>().FirstOrDefault();
+                if (t is not null) { t.Text = "New Column"; t.Space = SpaceProcessingModeValues.Preserve; }
+                else newCell.AppendChild(new Paragraph(new Run(new Text("New Column"))));
+                firstRow = false;
+            }
+            row.AppendChild(newCell);
+        }
+    }
+
+    private static void DeleteTableColumn(Table table)
+    {
+        table.Elements<TableGrid>().FirstOrDefault()?.Elements<GridColumn>().LastOrDefault()?.Remove();
+        foreach (var row in table.Elements<TableRow>())
+            row.Elements<TableCell>().LastOrDefault()?.Remove();
+    }
+
+    private static void InsertFootnote(WordprocessingDocument d, string anchorText, string footnoteText)
+    {
+        var main = d.MainDocumentPart!;
+        var footnotes = main.FootnotesPart?.Footnotes
+            ?? throw new InvalidOperationException("no footnotes part");
+        long newId = footnotes.Elements<Footnote>().Select(f => f.Id?.Value ?? 0L).DefaultIfEmpty(0L).Max() + 1;
+        footnotes.AppendChild(new Footnote(
+            new Paragraph(new Run(new Text(footnoteText) { Space = SpaceProcessingModeValues.Preserve })))
+        { Id = newId });
+
+        var run = Body(d).Descendants<Run>()
+            .FirstOrDefault(r => r.Elements<Text>().Any(t => t.Text.Contains(anchorText)))
+            ?? throw new InvalidOperationException($"no run containing '{anchorText}'");
+        run.InsertAfterSelf(new Run(new FootnoteReference { Id = newId }));
+    }
+
+    private static void DeleteFirstFootnote(WordprocessingDocument d)
+    {
+        var main = d.MainDocumentPart!;
+        var fnRef = main.Document!.Body!.Descendants<FootnoteReference>().FirstOrDefault()
+            ?? throw new InvalidOperationException("no footnote reference in body");
+        long id = fnRef.Id?.Value ?? throw new InvalidOperationException("footnote reference has no id");
+        (fnRef.Ancestors<Run>().FirstOrDefault() ?? (OpenXmlElement)fnRef).Remove();
+        main.FootnotesPart?.Footnotes?.Elements<Footnote>()
+            .FirstOrDefault(f => f.Id?.Value == id)?.Remove();
+    }
+
+    private static void DeleteConsecutiveParas(Body body, string anchor, int count)
+    {
+        var start = FindTopLevelPara(body, anchor);
+        var elems = body.Elements().ToList();
+        int idx = elems.IndexOf(start);
+        var toRemove = elems.Skip(idx).OfType<Paragraph>().Take(count).ToList();
+        foreach (var p in toRemove) p.Remove();
+    }
+
+    private static void InsertConsecutiveParas(Body body, string anchor, int count)
+    {
+        Paragraph last = FindTopLevelPara(body, anchor);
+        for (int i = 0; i < count; i++)
+        {
+            var np = new Paragraph(new Run(
+                new Text($"Inserted paragraph number {i + 1} for diff testing.")
+                { Space = SpaceProcessingModeValues.Preserve }));
+            last.InsertAfterSelf(np);
+            last = np;
+        }
+    }
+
+    private static void ReplaceWholeParagraph(Body body, string anchor, string newText)
+    {
+        var p = FindTopLevelPara(body, anchor);
+        foreach (var r in p.Elements<Run>().ToList()) r.Remove();
+        p.AppendChild(new Run(new Text(newText) { Space = SpaceProcessingModeValues.Preserve }));
     }
 }

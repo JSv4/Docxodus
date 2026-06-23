@@ -137,6 +137,23 @@ check was too strict (compared the note store in part order); it now compares th
 **multiset of per-note texts** (`TextExtractor.NoteTexts`), which is
 renumber-robust. `body-replace-phrase` is content-clean after the harness fix.
 
+### F3 — GetRevisions returned 0 for a table column add/remove — **FIXED** (commit on this branch)
+
+A column add/remove bails the markup renderer to a whole-table del(left)+ins(right) fallback (so the
+Compare output and LibreOffice both render whole-table replace, and round-trip holds), but
+`IrRevisionRenderer` had no matching fallback — `GetRevisions` returned **0** for a column-count change,
+diverging from the WmlComparer oracle (**2** revisions) and silently hiding a change the markup tracks.
+Fix: `IrRevisionRenderer.RenderModifyBlock` now detects the same unpaired-cell condition
+(`TableDiffNeedsWholeTableFallback`) and emits a Deleted(left table) + Inserted(right table) pair.
+`table-insert-column`/`table-delete-column` now report **2** (matching the oracle). Regression test:
+`DocxDiffTests.GetRevisions_TableColumnChange_ReportsWholeTableReplace`. Guard: 463 tests green.
+
+> **Table column add/remove rendering** (both ours and LibreOffice): a single-column change renders as a
+> WHOLE-TABLE delete + whole-table insert in BOTH engines — not column-precise. They are equivalent in
+> crudeness here; column-precise table markup is a deferred v1 limitation
+> (`ir_diff_engine.md`). **Format changes inside table cells** are reported by neither ours nor the oracle
+> (`table-cell-format`: 0/0) — oracle-consistent, not a defect.
+
 ### header-edit / footer-edit — documented limitation (matches oracle)
 
 After F1, both show `reject==left` ✓ and `accept≠right` only for the header/footer

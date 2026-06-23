@@ -506,6 +506,20 @@ internal static class IrRevisionRenderer
     {
         if (op.TableDiff is { } tableDiff)
         {
+            // A column add/remove bails the MARKUP renderer to a whole-table del(left)+ins(right) fallback
+            // (IrMarkupRenderer.RenderModifyRow returns false on an unpaired/surplus cell). Mirror it here so
+            // GetRevisions REPORTS the change — a Deleted + Inserted pair, matching the WmlComparer oracle —
+            // instead of silently dropping it (the per-cell RenderTableDiff path is column-count-stable in v1).
+            if (TableDiffNeedsWholeTableFallback(tableDiff))
+            {
+                if (op.LeftAnchor is { } la)
+                    sink.Add(new IrRevision(IrRevisionType.Deleted, BlockText(la, ctx.Left, ctx.Settings),
+                        ctx.Author, ctx.Date, LeftAnchor: la));
+                if (op.RightAnchor is { } ra)
+                    sink.Add(new IrRevision(IrRevisionType.Inserted, BlockText(ra, ctx.Right, ctx.Settings),
+                        ctx.Author, ctx.Date, RightAnchor: ra));
+                return;
+            }
             RenderTableDiff(tableDiff, ctx, sink);
             return;
         }
@@ -1279,6 +1293,16 @@ internal static class IrRevisionRenderer
     }
 
     // ------------------------------------------------------------------ table recursion
+
+    /// <summary>
+    /// A table diff requires the whole-table del+ins fallback when a ModifyRow's cell-op list carries an
+    /// UNPAIRED cell (a column add/remove — <c>IrTableDiffer</c> emits a cell op missing its left or right
+    /// anchor for a surplus column). This mirrors <c>IrMarkupRenderer.RenderModifyRow</c>'s bail so the
+    /// revision projection agrees with the produced markup (and the WmlComparer oracle's del+ins pair).
+    /// </summary>
+    private static bool TableDiffNeedsWholeTableFallback(IrTableDiff td) =>
+        td.RowOps.Any(r => r.Kind == IrRowOpKind.ModifyRow && r.CellOps is { } cells
+            && cells.Any(c => c.LeftCellAnchor == null || c.RightCellAnchor == null));
 
     private static void RenderTableDiff(IrTableDiff tableDiff, in Context ctx, List<IrRevision> sink)
     {
