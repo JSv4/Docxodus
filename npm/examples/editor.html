@@ -5,117 +5,274 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Docxodus — minimal block editor demo</title>
   <style>
-    :root { color-scheme: light; }
+    /* Word-style ribbon chrome. Purely cosmetic — every #id and data-* hook the editor and the
+       Playwright specs use is preserved; only the markup grouping and styling changed. */
+    :root {
+      color-scheme: light;
+      --w-blue: #2b579a; --w-blue-d: #1f3f70;
+      --w-hover: #eef3fb; --w-active: #cfe1f7; --w-active-bd: #7aa7da;
+      --w-border: #d2d0ce; --w-divider: #e6e4e2; --w-ink: #201f1e; --w-muted: #605e5c;
+      --w-canvas: #e6e6e6; --w-ribbon: #fbfbfa;
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #eceef1; color: #1c1e21; }
-    header { position: sticky; top: 0; z-index: 10; display: flex; gap: 12px; align-items: center;
-      flex-wrap: wrap; padding: 10px 16px; background: #fff; border-bottom: 1px solid #d7dade; }
-    header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
-    header .spacer { flex: 1; }
-    button, label.btn { font: inherit; padding: 6px 12px; border: 1px solid #c3c7cc; border-radius: 6px;
-      background: #f6f7f8; cursor: pointer; }
-    button:hover, label.btn:hover { background: #eceef1; }
-    button:disabled { opacity: .5; cursor: default; }
-    #status { font-size: 12px; color: #65676b; }
-    label.toggle { font-size: 13px; display: inline-flex; gap: 5px; align-items: center; cursor: pointer; }
-    #editor { max-width: 920px; margin: 24px auto; padding: 0 16px 80px; }
-    /* Continuous mode: give blocks a page-like sheet. Paginated mode brings its own page boxes. */
+    body { margin: 0; font-family: "Segoe UI", -apple-system, Roboto, sans-serif; background: var(--w-canvas); color: var(--w-ink); }
+
+    /* ── Header = Quick-Access bar + Tab strip + Ribbon body ── */
+    header { position: sticky; top: 0; z-index: 10; background: #fff; border-bottom: 1px solid #e1dfdd;
+      box-shadow: 0 1px 0 rgba(0,0,0,.03); }
+
+    /* Quick-Access toolbar (Word's blue title band): app name, file ops, undo/redo, view + status. */
+    .qat { display: flex; align-items: center; gap: 5px; padding: 5px 12px; background: var(--w-blue); color: #fff; }
+    .qat .wordmark { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 600; margin-right: 8px; }
+    .qat .wordmark .logo { width: 19px; height: 19px; display: grid; place-items: center; background: #fff;
+      color: var(--w-blue); border-radius: 3px; font-weight: 800; font-size: 12px; }
+    .qat .qbtn { display: inline-grid; place-items: center; width: 28px; height: 26px; border: 0; border-radius: 4px;
+      background: transparent; color: #fff; cursor: pointer; }
+    .qat .qbtn:hover { background: rgba(255,255,255,.18); }
+    .qat .qbtn:disabled { opacity: .45; cursor: default; }
+    .qat .qbtn:disabled:hover { background: transparent; }
+    .qat .qbtn svg { width: 16px; height: 16px; display: block; }
+    .qat .qsep { width: 1px; height: 18px; background: rgba(255,255,255,.32); margin: 0 4px; }
+    .qat .grow { flex: 1; }
+    .qat label.toggle { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #fff; cursor: pointer; }
+    #status { font-size: 12px; color: rgba(255,255,255,.88); min-width: 150px; text-align: right; }
+
+    /* Ribbon tab strip. Tabs are visual (Home active) — every control stays in one always-visible body. */
+    .tabs { display: flex; align-items: flex-end; gap: 1px; padding: 0 8px; background: #fff; border-bottom: 1px solid #e1dfdd; }
+    .tabs .tab { font: inherit; font-size: 12.5px; color: #444; padding: 7px 13px 6px; border: 0; background: transparent;
+      cursor: default; border-bottom: 2px solid transparent; }
+    .tabs .tab.file { background: var(--w-blue); color: #fff; border-radius: 3px 3px 0 0; }
+    .tabs .tab.active { color: var(--w-blue); border-bottom-color: var(--w-blue); font-weight: 600; }
+
+    /* Ribbon body: captioned groups divided by thin rules, the Word "Home" tab. */
+    .ribbon { display: flex; align-items: stretch; flex-wrap: wrap; padding: 4px 4px 2px; background: var(--w-ribbon); }
+    .ribbon[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+    .group { display: flex; flex-direction: column; padding: 2px 7px 0; border-right: 1px solid var(--w-divider); }
+    .group:last-child { border-right: 0; }
+    .group .gbody { flex: 1; display: flex; flex-direction: column; justify-content: center; gap: 3px; }
+    .group .row { display: flex; align-items: center; gap: 2px; }
+    .group .cap { font-size: 10px; color: var(--w-muted); text-align: center; padding: 3px 0 3px; }
+
+    .ribbon button { display: inline-grid; place-items: center; min-width: 28px; height: 28px; padding: 0 5px;
+      border: 1px solid transparent; border-radius: 4px; background: transparent; color: #2a2a2a; cursor: pointer;
+      font: inherit; line-height: 1; }
+    .ribbon button:hover { background: var(--w-hover); border-color: #cfe0f4; }
+    .ribbon button.active { background: var(--w-active); border-color: var(--w-active-bd); color: var(--w-blue-d); }
+    .ribbon button svg { width: 16px; height: 16px; display: block; }
+    .ribbon button .lt { font-size: 13px; font-weight: 600; }
+    .ribbon button b { font-weight: 800; } .ribbon button i { font-style: italic; }
+    .ribbon button u { text-decoration: underline; } .ribbon button s { text-decoration: line-through; }
+
+    .ribbon select, .ribbon input[type="number"] { font: inherit; height: 26px; padding: 2px 6px;
+      border: 1px solid var(--w-border); border-radius: 3px; background: #fff; color: #1f1f1f; }
+    .ribbon select:hover, .ribbon input[type="number"]:hover { border-color: #a9d0f5; }
+    #fontfamily { min-width: 144px; } #fontsize { width: 66px; } #rulepos { width: 74px; } #style { min-width: 96px; }
+
+    .hint { max-width: 920px; margin: 12px auto 0; padding: 8px 16px; font-size: 12px; color: var(--w-muted); }
+
+    /* Document canvas — grey desk, white page sheet with a soft shadow (Word print layout). */
+    #editor { max-width: 920px; margin: 22px auto; padding: 0 16px 96px; }
     #editor.continuous > * { background: #fff; }
-    #editor.continuous { background: #fff; padding: 56px 72px; border-radius: 4px;
-      box-shadow: 0 1px 4px rgba(0,0,0,.12); }
-    [contenteditable="true"]:focus { outline: 2px solid #4c8bf5; outline-offset: 2px; border-radius: 2px; }
-    [contenteditable="true"]:hover { background: #f3f8ff; }
-    .hint { max-width: 920px; margin: 0 auto; padding: 8px 16px; font-size: 12px; color: #65676b; }
-    .sep { width: 1px; align-self: stretch; background: #d7dade; margin: 2px 4px; }
-    .ribbon { display: inline-flex; gap: 4px; align-items: center; }
-    .ribbon[aria-disabled="true"] { opacity: .4; pointer-events: none; }
-    .ribbon button { min-width: 30px; padding: 5px 8px; }
-    .ribbon button.active { background: #d9e7ff; border-color: #4c8bf5; }
-    .ribbon select { font: inherit; padding: 5px 6px; border: 1px solid #c3c7cc; border-radius: 6px; background: #f6f7f8; }
+    #editor.continuous { background: #fff; padding: 64px 84px; border-radius: 2px;
+      box-shadow: 0 2px 10px rgba(0,0,0,.16), 0 0 0 1px rgba(0,0,0,.04); }
+    [contenteditable="true"]:focus { outline: 1.5px solid #7aa7da; outline-offset: 2px; border-radius: 2px; }
+    [contenteditable="true"]:hover { background: #f4f8fe; }
+
+    /* Floating table toolbar + grid picker: match the ribbon button look. */
+    #tabletools button, #gridpicker select { font: inherit; }
+    #tabletools button { min-width: 30px; height: 26px; padding: 0 8px; border: 1px solid var(--w-border);
+      border-radius: 4px; background: #fff; color: #2a2a2a; cursor: pointer; font-size: 12px; }
+    #tabletools button:hover { background: var(--w-hover); border-color: #cfe0f4; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Docxodus editor</h1>
-    <button id="new" title="New blank document">New</button>
-    <label class="btn">Open<input id="file" type="file" accept=".docx" hidden /></label>
-    <button id="save" disabled>Save</button>
-    <span class="sep"></span>
-    <div class="ribbon" id="ribbon" aria-disabled="true">
-      <button data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
-      <button data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
-      <button data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
-      <button data-cmd="strike" title="Strikethrough"><s>S</s></button>
-      <button data-cmd="code" title="Inline code">&lt;/&gt;</button>
-      <button data-cmd="superscript" title="Superscript">x&#178;</button>
-      <button data-cmd="subscript" title="Subscript">x&#8322;</button>
-      <input id="fontsize" type="number" min="1" max="1638" step="0.5" list="fontsizes"
-             placeholder="Size" title="Font size (points) — type any value or pick a preset"
-             style="width:70px; font: inherit; padding:5px 6px; border:1px solid #c3c7cc; border-radius:6px; background:#f6f7f8;" />
-      <datalist id="fontsizes">
-        <option>8</option><option>9</option><option>10</option><option>11</option>
-        <option>12</option><option>14</option><option>16</option><option>18</option>
-        <option>20</option><option>24</option><option>28</option><option>36</option>
-        <option>48</option><option>72</option><option>96</option>
-      </datalist>
-      <select id="fontfamily" title="Font family — applies to the selection"
-              style="font: inherit; padding:5px 6px; border:1px solid #c3c7cc; border-radius:6px; background:#f6f7f8; max-width:140px;">
-        <option value="">Font…</option>
-        <option>Calibri</option>
-        <option>Times New Roman</option>
-        <option>Arial</option>
-        <option>Georgia</option>
-        <option>Cambria</option>
-        <option>Courier New</option>
-        <option>Verdana</option>
-        <option>Garamond</option>
-      </select>
-      <span class="sep"></span>
-      <button data-align="left" title="Align left">L</button>
-      <button data-align="center" title="Align center">C</button>
-      <button data-align="right" title="Align right">R</button>
-      <button data-align="justify" title="Justify">J</button>
-      <span class="sep"></span>
-      <button data-indent="-720" title="Decrease indent">&#8676;</button>
-      <button data-indent="720" title="Increase indent">&#8677;</button>
-      <button id="hangIndent" title="Hanging indent (number/letter hangs; wrapped text indented)">&#8676;H</button>
-      <button id="firstLineIndent" title="First-line indent">H&#8677;</button>
-      <button data-pagebreak title="Insert page break before">&#10515;</button>
-      <span class="sep"></span>
-      <button data-list="bullet" title="Bullet list">&#8226;</button>
-      <button data-list="decimal" title="Numbered list">1.</button>
-      <button id="legalNum" title="Legal / outline numbering — 1. / 1.1 / (a); Tab and Shift+Tab change level">1.&sect;</button>
-      <button id="listPromote" title="Promote outline level — shallower (1.1 &rarr; 1.)">&sect;&larr;</button>
-      <button id="listDemote" title="Demote outline level — deeper (1. &rarr; 1.1)">&sect;&rarr;</button>
-      <span class="sep"></span>
-      <select id="rulepos" title="Insert rules and tables above or below the active block"
-              style="font: inherit; padding:5px 6px; border:1px solid #c3c7cc; border-radius:6px; background:#f6f7f8;">
-        <option value="below">Below</option>
-        <option value="above">Above</option>
-      </select>
-      <button id="hr" title="Insert horizontal rule">&#9473;&#9473;</button>
-      <button id="hrThick" title="Insert thick rule">&#9608;&#9608;</button>
-      <button id="hrDouble" title="Insert double rule">&#9552;&#9552;</button>
-      <button id="hrClear" title="Clear rule / paragraph border">&#9472;&#10007;</button>
-      <button id="tabRight" title="Right tab stop (left text on the same line as right-aligned text)">&#8677;|</button>
-      <button id="table" title="Insert table">&#8862;</button>
-      <button id="delblock" title="Delete this block">&#128465;</button>
-      <span class="sep"></span>
-      <select id="style" title="Paragraph style">
-        <option value="">Style…</option>
-        <option value="Normal">Normal</option>
-        <option value="Heading1">Heading 1</option>
-        <option value="Heading2">Heading 2</option>
-        <option value="Heading3">Heading 3</option>
-        <option value="Title">Title</option>
-      </select>
-      <span class="sep"></span>
-      <button id="undo" title="Undo (Ctrl+Z)">&#8634;</button>
-      <button id="redo" title="Redo (Ctrl+Shift+Z)">&#8635;</button>
+    <!-- Quick-Access toolbar (Word's blue band): wordmark · file ops · undo/redo · view · status. -->
+    <div class="qat">
+      <span class="wordmark"><span class="logo">D</span>Docxodus</span>
+      <button id="new" class="qbtn" title="New blank document">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M4 1.9h5.3L12.2 4.8V13.6a.6.6 0 0 1-.6.6H4a.6.6 0 0 1-.6-.6V2.5a.6.6 0 0 1 .6-.6Z"/><path d="M9.2 2v2.9H12"/></svg>
+      </button>
+      <label class="qbtn" title="Open a .docx file">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2 4.4a.8.8 0 0 1 .8-.8H6l1.4 1.6h5.8a.8.8 0 0 1 .8.8V12a.8.8 0 0 1-.8.8H2.8A.8.8 0 0 1 2 12Z"/></svg>
+        <input id="file" type="file" accept=".docx" hidden />
+      </label>
+      <button id="save" class="qbtn" title="Save — download a lossless .docx" disabled>
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><path d="M2.8 2.6H11L13.4 5v8a.6.6 0 0 1-.6.6H3a.6.6 0 0 1-.6-.6V3.2a.6.6 0 0 1 .4-.6Z"/><path d="M5 2.6h5v3.1H5z"/><rect x="4.6" y="8.5" width="6.8" height="4.1" rx=".4"/></svg>
+      </button>
+      <span class="qsep"></span>
+      <button id="undo" class="qbtn" title="Undo (Ctrl+Z)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><path d="M5.2 3.8 2.3 6.6l2.9 2.8"/><path d="M2.7 6.6h6.6a3.7 3.7 0 0 1 3.7 3.7v1"/></svg>
+      </button>
+      <button id="redo" class="qbtn" title="Redo (Ctrl+Shift+Z)">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"><path d="M10.8 3.8l2.9 2.8-2.9 2.8"/><path d="M13.3 6.6H6.7A3.7 3.7 0 0 0 3 10.3v1"/></svg>
+      </button>
+      <span class="grow"></span>
+      <label class="toggle"><input id="paginated" type="checkbox" /> Paginated</label>
+      <span class="qsep"></span>
+      <span id="status">Booting WASM…</span>
     </div>
-    <label class="toggle"><input id="paginated" type="checkbox" /> Paginated</label>
-    <span class="spacer"></span>
-    <span id="status">Booting WASM…</span>
+
+    <!-- Ribbon tab strip. Tabs are visual (Home active); all groups stay visible below. -->
+    <div class="tabs">
+      <button class="tab file" type="button" tabindex="-1">File</button>
+      <button class="tab active" type="button" tabindex="-1">Home</button>
+      <button class="tab" type="button" tabindex="-1">Insert</button>
+      <button class="tab" type="button" tabindex="-1">Layout</button>
+    </div>
+
+    <!-- Ribbon body: captioned groups. #ribbon keeps the aria-disabled gate + all data-*/id hooks. -->
+    <div class="ribbon" id="ribbon" aria-disabled="true">
+      <!-- Font -->
+      <div class="group">
+        <div class="gbody">
+          <div class="row">
+            <select id="fontfamily" title="Font family — applies to the selection">
+              <option value="">Font…</option>
+              <option>Calibri</option>
+              <option>Times New Roman</option>
+              <option>Arial</option>
+              <option>Georgia</option>
+              <option>Cambria</option>
+              <option>Courier New</option>
+              <option>Verdana</option>
+              <option>Garamond</option>
+            </select>
+            <input id="fontsize" type="number" min="1" max="1638" step="0.5" list="fontsizes"
+                   placeholder="Size" title="Font size (points) — type any value or pick a preset" />
+            <datalist id="fontsizes">
+              <option>8</option><option>9</option><option>10</option><option>11</option>
+              <option>12</option><option>14</option><option>16</option><option>18</option>
+              <option>20</option><option>24</option><option>28</option><option>36</option>
+              <option>48</option><option>72</option><option>96</option>
+            </datalist>
+          </div>
+          <div class="row">
+            <button data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+            <button data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+            <button data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+            <button data-cmd="strike" title="Strikethrough"><s>S</s></button>
+            <button data-cmd="code" title="Inline code"><span class="lt">&lt;/&gt;</span></button>
+            <button data-cmd="superscript" title="Superscript"><span class="lt">x&#178;</span></button>
+            <button data-cmd="subscript" title="Subscript"><span class="lt">x&#8322;</span></button>
+          </div>
+        </div>
+        <div class="cap">Font</div>
+      </div>
+
+      <!-- Paragraph: alignment, indent, page break -->
+      <div class="group">
+        <div class="gbody">
+          <div class="row">
+            <button data-align="left" title="Align left">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2.6" width="14" height="1.5" rx=".7"/><rect x="1" y="6.3" width="9" height="1.5" rx=".7"/><rect x="1" y="10" width="14" height="1.5" rx=".7"/><rect x="1" y="13.7" width="9" height="1.5" rx=".7"/></svg>
+            </button>
+            <button data-align="center" title="Center">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2.6" width="14" height="1.5" rx=".7"/><rect x="3.5" y="6.3" width="9" height="1.5" rx=".7"/><rect x="1" y="10" width="14" height="1.5" rx=".7"/><rect x="3.5" y="13.7" width="9" height="1.5" rx=".7"/></svg>
+            </button>
+            <button data-align="right" title="Align right">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2.6" width="14" height="1.5" rx=".7"/><rect x="6" y="6.3" width="9" height="1.5" rx=".7"/><rect x="1" y="10" width="14" height="1.5" rx=".7"/><rect x="6" y="13.7" width="9" height="1.5" rx=".7"/></svg>
+            </button>
+            <button data-align="justify" title="Justify">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2.6" width="14" height="1.5" rx=".7"/><rect x="1" y="6.3" width="14" height="1.5" rx=".7"/><rect x="1" y="10" width="14" height="1.5" rx=".7"/><rect x="1" y="13.7" width="14" height="1.5" rx=".7"/></svg>
+            </button>
+          </div>
+          <div class="row">
+            <button data-indent="-720" title="Decrease indent">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2.5" width="14" height="1.4" rx=".7"/><rect x="6" y="6" width="9" height="1.4" rx=".7"/><rect x="6" y="9.6" width="9" height="1.4" rx=".7"/><rect x="1" y="13.1" width="14" height="1.4" rx=".7"/><path d="M4.3 6.1 1.4 8.4l2.9 2.3z"/></svg>
+            </button>
+            <button data-indent="720" title="Increase indent">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2.5" width="14" height="1.4" rx=".7"/><rect x="6" y="6" width="9" height="1.4" rx=".7"/><rect x="6" y="9.6" width="9" height="1.4" rx=".7"/><rect x="1" y="13.1" width="14" height="1.4" rx=".7"/><path d="M1.4 6.1 4.3 8.4 1.4 10.7z"/></svg>
+            </button>
+            <button id="hangIndent" title="Hanging indent (number/letter hangs; wrapped text indented)">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2.6" width="14" height="1.4" rx=".7"/><rect x="5" y="6.2" width="10" height="1.4" rx=".7"/><rect x="5" y="9.8" width="10" height="1.4" rx=".7"/><rect x="5" y="13.4" width="10" height="1.4" rx=".7"/></svg>
+            </button>
+            <button id="firstLineIndent" title="First-line indent">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="5" y="2.6" width="10" height="1.4" rx=".7"/><rect x="1" y="6.2" width="14" height="1.4" rx=".7"/><rect x="1" y="9.8" width="14" height="1.4" rx=".7"/><rect x="1" y="13.4" width="14" height="1.4" rx=".7"/></svg>
+            </button>
+            <button data-pagebreak title="Insert page break before">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"><rect x="3" y="1.6" width="10" height="12.8" rx="1"/><line x1="3" y1="8" x2="13" y2="8" stroke-dasharray="2 1.4" stroke-width="1.5"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="cap">Paragraph</div>
+      </div>
+
+      <!-- Lists / outline numbering -->
+      <div class="group">
+        <div class="gbody">
+          <div class="row">
+            <button data-list="bullet" title="Bullet list">
+              <svg viewBox="0 0 16 16" fill="currentColor"><circle cx="2.4" cy="3.6" r="1.4"/><rect x="5.4" y="2.9" width="9.6" height="1.4" rx=".7"/><circle cx="2.4" cy="8" r="1.4"/><rect x="5.4" y="7.3" width="9.6" height="1.4" rx=".7"/><circle cx="2.4" cy="12.4" r="1.4"/><rect x="5.4" y="11.7" width="9.6" height="1.4" rx=".7"/></svg>
+            </button>
+            <button data-list="decimal" title="Numbered list">
+              <svg viewBox="0 0 16 16"><g fill="currentColor"><rect x="5.4" y="2.9" width="9.6" height="1.4" rx=".7"/><rect x="5.4" y="7.3" width="9.6" height="1.4" rx=".7"/><rect x="5.4" y="11.7" width="9.6" height="1.4" rx=".7"/></g><g fill="currentColor" font-family="'Segoe UI',sans-serif" font-size="4.6" font-weight="700"><text x="0.5" y="5.4">1</text><text x="0.5" y="9.8">2</text><text x="0.5" y="14.2">3</text></g></svg>
+            </button>
+            <button id="legalNum" title="Legal / outline numbering — 1. / 1.1 / (a); Tab and Shift+Tab change level">
+              <svg viewBox="0 0 16 16"><g fill="currentColor" font-family="'Segoe UI',sans-serif" font-size="4.1" font-weight="700"><text x="0.4" y="4.6">1.</text><text x="2.7" y="9.3">a.</text><text x="2.7" y="14">b.</text></g><g fill="currentColor"><rect x="4.7" y="2.9" width="10.3" height="1.3" rx=".6"/><rect x="6.8" y="7.6" width="8.2" height="1.3" rx=".6"/><rect x="6.8" y="12.3" width="8.2" height="1.3" rx=".6"/></g></svg>
+            </button>
+            <button id="listPromote" title="Promote outline level — shallower (1.1 &rarr; 1.)">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9.6 4 6.1 8l3.5 4"/><g stroke-width="1.3"><line x1="11.5" y1="4.5" x2="13.5" y2="4.5"/><line x1="11.5" y1="8" x2="13.5" y2="8"/><line x1="11.5" y1="11.5" x2="13.5" y2="11.5"/></g></svg>
+            </button>
+            <button id="listDemote" title="Demote outline level — deeper (1. &rarr; 1.1)">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 4 9.9 8l-3.5 4"/><g stroke-width="1.3"><line x1="2.5" y1="4.5" x2="4.5" y2="4.5"/><line x1="2.5" y1="8" x2="4.5" y2="8"/><line x1="2.5" y1="11.5" x2="4.5" y2="11.5"/></g></svg>
+            </button>
+          </div>
+        </div>
+        <div class="cap">Lists</div>
+      </div>
+
+      <!-- Insert: rules, tab stop, table, delete block -->
+      <div class="group">
+        <div class="gbody">
+          <div class="row">
+            <select id="rulepos" title="Insert rules and tables above or below the active block">
+              <option value="below">Below</option>
+              <option value="above">Above</option>
+            </select>
+            <button id="hr" title="Insert horizontal rule">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="7.3" width="14" height="1.5" rx=".7"/></svg>
+            </button>
+            <button id="hrThick" title="Insert thick rule">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="6" width="14" height="3.2" rx="1"/></svg>
+            </button>
+            <button id="hrDouble" title="Insert double rule">
+              <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="5.4" width="14" height="1.3" rx=".6"/><rect x="1" y="9.3" width="14" height="1.3" rx=".6"/></svg>
+            </button>
+            <button id="hrClear" title="Clear rule / paragraph border">
+              <svg viewBox="0 0 16 16"><rect x="1" y="11.6" width="14" height="1.4" rx=".7" fill="currentColor" opacity=".5"/><path d="M4 3 10 9 M10 3 4 9" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </button>
+            <button id="tabRight" title="Right tab stop (left text on the same line as right-aligned text)">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"><line x1="1.6" y1="8" x2="11" y2="8"/><path d="M8 5 11.2 8 8 11"/><line x1="13.6" y1="3.5" x2="13.6" y2="12.5"/></svg>
+            </button>
+            <button id="table" title="Insert table">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.1"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><line x1="1.5" y1="6.2" x2="14.5" y2="6.2"/><line x1="1.5" y1="9.9" x2="14.5" y2="9.9"/><line x1="5.8" y1="2.5" x2="5.8" y2="13.5"/><line x1="10.2" y1="2.5" x2="10.2" y2="13.5"/></svg>
+            </button>
+            <button id="delblock" title="Delete this block">
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.4h10"/><path d="M6.2 4.4V3.1a1 1 0 0 1 1-1h1.6a1 1 0 0 1 1 1v1.3"/><path d="M4.4 4.4 5 12.9a1 1 0 0 0 1 .9h4a1 1 0 0 0 1-.9l.6-8.5"/><line x1="6.7" y1="6.6" x2="6.95" y2="11.5"/><line x1="9.3" y1="6.6" x2="9.05" y2="11.5"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="cap">Insert</div>
+      </div>
+
+      <!-- Styles -->
+      <div class="group">
+        <div class="gbody">
+          <div class="row">
+            <select id="style" title="Paragraph style">
+              <option value="">Style…</option>
+              <option value="Normal">Normal</option>
+              <option value="Heading1">Heading 1</option>
+              <option value="Heading2">Heading 2</option>
+              <option value="Heading3">Heading 3</option>
+              <option value="Title">Title</option>
+            </select>
+          </div>
+        </div>
+        <div class="cap">Styles</div>
+      </div>
+    </div>
   </header>
   <p class="hint">
     Click a paragraph or heading to edit it. Select text and use the ribbon (or <b>Ctrl+B/I/U</b>) to format.
