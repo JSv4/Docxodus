@@ -270,7 +270,7 @@ jobs:
       contents: read
     steps:
       - name: Download wheel + sdist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: dist-*
