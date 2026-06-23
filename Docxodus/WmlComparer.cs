@@ -6216,12 +6216,19 @@ namespace Docxodus
         // a benign dangling reference on cloned right-side content whose TEXT is unchanged — it must be skipped,
         // not thrown, because the ContentHash round-trip still holds (precise rId remap is tracked separately).
         internal static XElement MoveRelatedPartsToDestination(PackagePart partOfDeletedContent, PackagePart partInNewDocument,
-            XElement contentElement, bool skipDanglingRelationships = false)
+            XElement contentElement, bool skipDanglingRelationships = false, bool skipHeaderFooterReferences = false)
         {
             var elementsToUpdate = contentElement
                 .Descendants()
                 .Where(d => d.Attributes().Any(a => ComparisonUnitWord.s_RelationshipAttributeNames.Contains(a.Name)))
                 .Where(d => d.Name != C.externalData)
+                // The IR renderer clones whole blocks (paragraphs), which can carry a w:sectPr with
+                // w:headerReference/w:footerReference. Header/footer scopes are NOT diffed, so the LEFT
+                // package's parts (already present, same r:ids — both sides derive from one base) are
+                // authoritative; importing the RIGHT's would duplicate them as P<guid> parts. The legacy
+                // WmlComparer callers only ever pass a w:drawing, so they never opt in (default false).
+                .Where(d => !skipHeaderFooterReferences
+                            || (d.Name != W.headerReference && d.Name != W.footerReference))
                 .ToList();
             foreach (var element in elementsToUpdate)
             {

@@ -46,6 +46,42 @@ public class IrMarkupRendererTests
         return IrMarkupRenderer.Render(script, left, right, settings);
     }
 
+    /// <summary>Count the header + footer parts attached to a document's main part.</summary>
+    private static int HeaderFooterPartCount(WmlDocument doc)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var w = WordprocessingDocument.Open(ms, false);
+        var main = w.MainDocumentPart!;
+        return main.HeaderParts.Count() + main.FooterParts.Count();
+    }
+
+    // ----------------------------------------------------------------- header/footer part hygiene
+
+    /// <summary>
+    /// Regression: a mid-document section-break paragraph (inner <c>w:sectPr</c> with a
+    /// <c>w:headerReference</c>) is an Equal block, which the renderer clones from the RIGHT document.
+    /// Importing that clone's related parts must NOT copy the RIGHT header part into the LEFT-based output
+    /// as a duplicate — header/footer scopes are deliberately not diffed, so the LEFT package's parts are
+    /// authoritative. Before the fix the output carried two header parts (the LEFT original plus a
+    /// <c>P&lt;guid&gt;.xml</c> copy of the RIGHT's), diverging from the clean WmlComparer oracle.
+    /// </summary>
+    [Fact]
+    public void Render_does_not_duplicate_header_parts_for_equal_section_break_block()
+    {
+        string Body(string firstWord) =>
+            $"<w:p><w:r><w:t>{firstWord} first section body text here</w:t></w:r></w:p>" +
+            "<w:p><w:pPr><w:sectPr><w:headerReference w:type=\"default\" r:id=\"rIdHdr1\"/>" +
+            "<w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:pPr></w:p>" +
+            "<w:p><w:r><w:t>second section body text here</w:t></w:r></w:p>";
+        const string header = "<w:p><w:r><w:t>Running header</w:t></w:r></w:p>";
+        var left = IrTestDocuments.FromBodyAndHeaderXml(Body("Original"), header);
+        var right = IrTestDocuments.FromBodyAndHeaderXml(Body("Modified"), header);
+
+        var rendered = RenderMarkup(left, right);
+
+        Assert.Equal(HeaderFooterPartCount(left), HeaderFooterPartCount(rendered));
+    }
+
     /// <summary>The per-block ContentHash sequence over a document's BODY, descending into table cells, in
     /// document order. This is the text/structure fingerprint the invariant compares — modeled run format is
     /// deliberately excluded (FormatChanged is a Task-4 gap), so it rides on ContentHash, not record equality.</summary>

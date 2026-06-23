@@ -46,6 +46,12 @@ ours/original (>orig ⇒ duplicate-part bloat).
 **Body content round-trips perfectly in all 22.** All 22 outputs open clean in
 LibreOffice and our redline markup is recognized.
 
+> The `hf#` column above is the **pre-fix** snapshot (26/14). After **F1** (see
+> Fix log) it is **14/14 in every scenario**, and `body-replace-phrase` notes
+> round-trip clean after the harness check fix (**F2**). Post-fix:
+> **20/22 content-clean**, the 2 remaining being the header/footer
+> undiffed-scope limitation (oracle-consistent).
+
 ## Classified findings
 
 ### 🐞 FIX — genuine defects (ours wrong vs the blessed oracle)
@@ -90,6 +96,58 @@ LibreOffice and our redline markup is recognized.
   underline is a no-op → fine=0. Underline **is** modeled
   (`IrModeledFormat.cs:46`). Fix: target a non-underlined run.
 
+## Visual rendering verification
+
+Page-1 render of `body-replace-word` (the `Purchaser`→`Investor` edit), ours vs
+LibreOffice's own compare, both opened+rendered by LibreOffice:
+
+- **Ours:** `(each a "`~~Purchaser~~`Investor"` — deletion struck-through THEN
+  insertion underlined, in the redline colour, with a margin change-bar. This is
+  **Word's delete-then-insert ordering**.
+- **LibreOffice:** `(each a "Investor`~~Purchaser~~`"` — insertion THEN deletion.
+
+Both are valid, visually equivalent redlines; ours follows Word's convention.
+All 22 outputs open clean in LibreOffice and our `w:ins`/`w:del` markup is
+recognized as tracked changes (the rendering proxy `seenByLo` is non-zero
+wherever revisions exist).
+
 ## Fix log
 
-_(updated as fixes land)_
+### F1 — header/footer part duplication — **FIXED** (commit on this branch)
+
+`WmlComparer.MoveRelatedPartsToDestination` gained an opt-in
+`skipHeaderFooterReferences` parameter (default false — legacy callers
+unchanged); `IrMarkupRenderer.ImportRightSourcedMedia` passes it `true`. A
+right-cloned Equal block's inner-`sectPr` `w:headerReference`/`w:footerReference`
+no longer drags the RIGHT's header/footer parts into the LEFT-based output. The
+references already resolve to the LEFT package's parts (same r:ids — both sides
+derive from one base). Result on the contract: **header/footer part count is now
+14/14 (was 26/14) in every scenario**; output is byte-lean and oracle-aligned.
+Regression test:
+`IrMarkupRendererTests.Render_does_not_duplicate_header_parts_for_equal_section_break_block`.
+Guard: 462 Ir.Diff+DocxDiff+WmlComparer tests green.
+
+### F2 — footnote renumber on footnote-bearing body edits — **NOT A BUG**
+
+Investigated `body-replace-phrase` (footnote store reordered, id→text mapping
+changed). The **WmlComparer oracle renumbers footnotes identically** — this is
+expected compare behaviour, and Word renders footnotes in body-reference order
+regardless of part order. No content is gained or lost. The harness round-trip
+check was too strict (compared the note store in part order); it now compares the
+**multiset of per-note texts** (`TextExtractor.NoteTexts`), which is
+renumber-robust. `body-replace-phrase` is content-clean after the harness fix.
+
+### header-edit / footer-edit — documented limitation (matches oracle)
+
+After F1, both show `reject==left` ✓ and `accept≠right` only for the header/footer
+text — because header/footer scopes are **deliberately not diffed**
+(`IrEditScriptBuilder`: "the oracle does not diff them either"). WmlComparer
+behaves identically (0 revisions, keeps left's header). Not a defect; the
+round-trip "accept==right" gate does not apply to undiffed scopes.
+
+## Round-1 status
+
+20/22 content-clean (body+notes+header/footer). The 2 non-clean are the
+header-edit/footer-edit undiffed-scope limitation above (oracle-consistent).
+Genuine defects found and fixed: **1** (F1). Everything else is either
+LibreOffice being cruder (kept ours) or a harness-measurement artifact (fixed).

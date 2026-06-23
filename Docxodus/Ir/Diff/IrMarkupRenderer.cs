@@ -223,8 +223,14 @@ internal static class IrMarkupRenderer
         // reflection-based OpenXmlPackage.GetPackage()).
         var leftPkgPart = leftStreamDoc.GetPackage().GetPart(main.Uri);
         var rightPkgPart = rightStreamDoc.GetPackage().GetPart(rightMain.Uri);
+        // skipHeaderFooterReferences: a right-cloned Equal block can carry an inner w:sectPr whose
+        // w:headerReference/w:footerReference r:ids would otherwise drag the RIGHT's header/footer parts in
+        // as P<guid> duplicates. Those scopes are not diffed; the LEFT package's parts (same r:ids — shared
+        // base) are authoritative, so the cloned references already resolve there. Media (drawings) still import.
         foreach (var clone in rightClones)
-            WmlComparer.MoveRelatedPartsToDestination(rightPkgPart, leftPkgPart, clone, skipDanglingRelationships: true);
+            WmlComparer.MoveRelatedPartsToDestination(
+                rightPkgPart, leftPkgPart, clone, skipDanglingRelationships: true,
+                skipHeaderFooterReferences: true);
     }
 
     // ----------------------------------------------------------------- block-op dispatch

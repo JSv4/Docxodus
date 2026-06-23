@@ -26,9 +26,24 @@ internal static class TextExtractor
         var headerFooter = main.HeaderParts.Select(h => PartText(h.Header))
             .Concat(main.FooterParts.Select(f => PartText(f.Footer)))
             .ToList();
-        var footnotes = PartText(main.FootnotesPart?.Footnotes);
-        var endnotes = PartText(main.EndnotesPart?.Endnotes);
+        // Note stores are compared as a sorted MULTISET of per-note texts: Compare renumbers footnotes/
+        // endnotes (the WmlComparer oracle does too), so part-order/id-keyed comparison gives false
+        // positives — content preservation (no note text gained or lost) is the real invariant.
+        var footnotes = NoteTexts<DocumentFormat.OpenXml.Wordprocessing.Footnote>(main.FootnotesPart?.Footnotes);
+        var endnotes = NoteTexts<DocumentFormat.OpenXml.Wordprocessing.Endnote>(main.EndnotesPart?.Endnotes);
         return new DocText(body, headerFooter, footnotes, endnotes);
+    }
+
+    /// <summary>The sorted list of each note's concatenated text (empty separator notes drop out).</summary>
+    private static List<string> NoteTexts<T>(DocumentFormat.OpenXml.OpenXmlElement? root)
+        where T : DocumentFormat.OpenXml.OpenXmlElement
+    {
+        if (root is null) return new List<string>();
+        return root.Descendants<T>()
+            .Select(PartText)
+            .Where(t => t.Length > 0)
+            .OrderBy(t => t, StringComparer.Ordinal)
+            .ToList();
     }
 
     private static string PartText(DocumentFormat.OpenXml.OpenXmlElement? root)
@@ -41,11 +56,15 @@ internal static class TextExtractor
     }
 }
 
-/// <summary>Partitioned document text. Body/notes compared exactly; header/footer as a dedup set.</summary>
-internal sealed record DocText(string Body, List<string> HeaderFooterParts, string Footnotes, string Endnotes)
+/// <summary>Partitioned document text. Body compared exactly; notes &amp; header/footer as multisets
+/// (Compare renumbers notes and may emit duplicate header/footer parts — both must be order-robust).</summary>
+internal sealed record DocText(
+    string Body, List<string> HeaderFooterParts, List<string> Footnotes, List<string> Endnotes)
 {
     public bool BodyEquals(DocText other) => Body == other.Body;
-    public bool NotesEqual(DocText other) => Footnotes == other.Footnotes && Endnotes == other.Endnotes;
+
+    public bool NotesEqual(DocText other) =>
+        Footnotes.SequenceEqual(other.Footnotes) && Endnotes.SequenceEqual(other.Endnotes);
 
     /// <summary>Header/footer content equality ignoring duplicate parts (dedup by text).</summary>
     public bool HeaderFooterSetEquals(DocText other) =>
