@@ -33,6 +33,32 @@ internal static class IrCompositeMerger
             .Select(r => IrEditScriptBuilder.Build(baseIr, r.Ir, settings))
             .ToList();
 
+        // 1a. Note scopes (footnote/endnote) are NOT yet merged across reviewers (a documented v1 limitation —
+        //     IrCompositeScript.NoteOps is always null; see docs/architecture/ir_diff_engine.md), so a reviewer's
+        //     note CONTENT edit (a non-EqualBlock note op; a pure id-shift from renumbering carries no content
+        //     and is ignored) is dropped from the consolidated output. For an N>=2 consolidate that drop is a
+        //     dangerous SILENT loss with no single-call fallback, so we fail fast with an attributed message
+        //     rather than lose it. (A SINGLE-reviewer consolidate degrades to a body-level merge and likewise
+        //     omits note edits — but there the caller has a faithful fallback in DocxDiff.Compare, and the
+        //     established single-reviewer body-parity corpus exercises exactly this shape, so we do NOT hard-fail
+        //     it; use Compare for full note fidelity on one reviewer.) This is the real guard the renderer's
+        //     NoteOps==null tripwire cannot provide — the drop happens HERE, before any composite NoteOps exists.
+        if (reviewers.Count >= 2)
+        {
+            for (int i = 0; i < rawScripts.Count; i++)
+            {
+                if (rawScripts[i].NoteOps is { } notes &&
+                    notes.Any(nd => nd.Ops.Any(o => o.Kind is not IrEditOpKind.EqualBlock)))
+                {
+                    throw new System.NotSupportedException(
+                        $"DocxDiff.Consolidate does not yet merge footnote/endnote edits across multiple reviewers, " +
+                        $"but reviewer '{reviewers[i].Author}' (index {i}) edited a note scope. This is a documented " +
+                        $"v1 limitation (docs/architecture/ir_diff_engine.md); remove the note-scope edit before " +
+                        $"consolidating, or diff that reviewer alone with DocxDiff.Compare for full note fidelity.");
+                }
+            }
+        }
+
         // 2. Decide, per reviewer move group, NATIVE (non-colliding single-reviewer move → keep
         //    MoveBlock/MoveModifyBlock) vs LOWER (colliding move → del/ins), and assign a GLOBAL move-group
         //    id so two reviewers' independent native moves never share a w:name.
@@ -53,6 +79,22 @@ internal static class IrCompositeMerger
         MergeBlockStream(baseOrder, byBase, insertsAfter, reviewers, baseIr, policy, settings,
             ops, conflicts, ref nextConflictId);
         return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts));
+    }
+
+    /// <summary>
+    /// A load-bearing composite invariant. Unlike <see cref="System.Diagnostics.Debug.Assert(bool, string)"/>
+    /// — which is <c>[Conditional("DEBUG")]</c> and therefore stripped from Release builds (the configuration
+    /// this library ships in AND the one CI runs its tests under, <c>dotnet test -c Release</c>) — this is
+    /// enforced at runtime in EVERY build. These guard content-integrity invariants (token/table tiling and
+    /// totality, no un-lowered structural op, single base-anchored op), where a violation would otherwise
+    /// silently emit a CORRUPT or LOSSY consolidated document; the O(n)-per-merged-block check is paid
+    /// deliberately to fail fast instead of losing content. A throw here is an engine bug, not caller error.
+    /// </summary>
+    private static void Invariant(bool condition, string message)
+    {
+        if (!condition)
+            throw new System.InvalidOperationException(
+                "DocxDiff consolidate invariant violated (engine bug): " + message);
     }
 
     /// <summary>
@@ -199,7 +241,7 @@ internal static class IrCompositeMerger
             }
         }
 
-        System.Diagnostics.Debug.Assert(
+        Invariant(
             result.All(o =>
                 o.Kind is not (IrEditOpKind.SplitBlock or IrEditOpKind.MergeBlock)
                 && (o.Kind is not (IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock)
@@ -250,7 +292,7 @@ internal static class IrCompositeMerger
         foreach (var op in script.Operations)
             LowerOneStructuralOp(op, lowered);
 
-        System.Diagnostics.Debug.Assert(
+        Invariant(
             lowered.All(o => o.Kind is not (IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock
                 or IrEditOpKind.SplitBlock or IrEditOpKind.MergeBlock)),
             "LowerStructuralOps must leave no Move/Split/Merge op before composite grouping.");
@@ -378,7 +420,7 @@ internal static class IrCompositeMerger
                 ComposeBaseTokenAt(pos, reviewerDiffs, policy, baseAnchor, ref nextConflictId, result, conflicts);
         }
 
-        System.Diagnostics.Debug.Assert(AssertTilesBase(result, baseTokenCount),
+        Invariant(AssertTilesBase(result, baseTokenCount),
             "ComposeTokenSpans: emitted left spans must tile [0, baseTokenCount) exactly once.");
         return result;
     }
@@ -758,7 +800,7 @@ internal static class IrCompositeMerger
             // BlockResultText can't distinguish) must never reach the consensus emit (which keeps only
             // touched[0] and silently drops the rest). v1 routes such edits to the block-level conflict
             // branch; if one ever lands here an edit is being silently dropped (B4 regression).
-            System.Diagnostics.Debug.Assert(
+            Invariant(
                 !(touched.Count > 1 && touched.Any(e => IsUncomparableModify(e.Op))),
                 "Multi-reviewer uncomparable edit reached consensus emit — a non-paragraph edit is being silently dropped.");
             var (rev, op) = touched[0];
@@ -811,7 +853,7 @@ internal static class IrCompositeMerger
                 ref nextConflictId, out var tableConflicts, out var authoredRows);
             conflicts.AddRange(tableConflicts);
 
-            System.Diagnostics.Debug.Assert(AssertTilesBaseTable(authoredRows, baseTable),
+            Invariant(AssertTilesBaseTable(authoredRows, baseTable),
                 "ComposeTableDiffs: authored rows/cells must tile the base table's rows/cells exactly once.");
 
             var structOp = touched[0].Op with { TableDiff = merged };
@@ -882,7 +924,7 @@ internal static class IrCompositeMerger
         // Exactly one op appended by THIS call consumes/restores the base anchor (LeftAnchor == anchor) — the
         // block-level analogue of the token path's AssertTilesBase totality invariant. Scoped to ops appended
         // here (Skip(priorCount)) so the check is O(emitted), not an O(N) rescan of the accumulated stream.
-        System.Diagnostics.Debug.Assert(
+        Invariant(
             ops.Skip(priorCount).Count(o => o.Op.LeftAnchor == anchor) == 1,
             "StackAll block-conflict must emit exactly one base-anchored op (reject ≡ base).");
     }

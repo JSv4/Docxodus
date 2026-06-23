@@ -33,6 +33,16 @@ public class DocxDiffOpsConsolidateTests
     }
 
     [Fact]
+    public void ParseSettings_reads_culture_so_it_is_reachable_off_dotnet()
+    {
+        // Regression (engine audit): DocxDiffSettings.Culture is a real .NET setting (consumed by the
+        // tokenizer for case folding) but ParseSettings never read a "culture" key, so it was unreachable
+        // from every non-.NET layer (WASM/npm/python). The wire parser must surface it.
+        var s = DocxDiffOps.ParseSettings("{\"caseInsensitive\":true,\"culture\":\"tr-TR\"}");
+        Assert.Equal("tr-TR", s.Culture?.Name);
+    }
+
+    [Fact]
     public void ConflictResolution_setting_parsed_from_wire()
     {
         var b = Doc("the quick brown fox");

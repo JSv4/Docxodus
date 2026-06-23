@@ -790,6 +790,7 @@ class DocxDiffSettings:
     deterministic: bool = True
     date_time_for_revisions: str | None = None
     case_insensitive: bool = False
+    culture: str | None = None
     conflate_breaking_and_nonbreaking_spaces: bool = True
     word_separators: str | None = None
     detect_moves: bool = True
@@ -810,6 +811,8 @@ class DocxDiffSettings:
             wire["dateTimeForRevisions"] = self.date_time_for_revisions
         if self.case_insensitive:
             wire["caseInsensitive"] = True
+        if self.culture is not None:
+            wire["culture"] = self.culture
         if not self.conflate_breaking_and_nonbreaking_spaces:
             wire["conflateBreakingAndNonbreakingSpaces"] = False
         if self.word_separators is not None:

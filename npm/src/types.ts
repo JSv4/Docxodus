@@ -436,6 +436,8 @@ export interface DocxDiffSettings {
   dateTimeForRevisions?: string;
   /** Case-fold word match keys (default false). */
   caseInsensitive?: boolean;
+  /** Culture name (e.g. "tr-TR") for case folding when `caseInsensitive` is true; default invariant/ordinal. */
+  culture?: string;
   /** Fold NBSP (U+00A0) to ordinary space in match keys (default true). */
   conflateBreakingAndNonbreakingSpaces?: boolean;
   /** Override the word/separator split characters (default: engine's set). */

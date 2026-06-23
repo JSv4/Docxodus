@@ -65,6 +65,35 @@ public class DocxDiffTests
         return new WmlDocument("test.docx", stream.ToArray());
     }
 
+    // A one-or-more-row table document (each inner array is a row of cell texts), with all required parts.
+    private static WmlDocument TableDoc(params string[][] rows)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            var table = new DocumentFormat.OpenXml.Wordprocessing.Table();
+            foreach (var row in rows)
+            {
+                var tr = new DocumentFormat.OpenXml.Wordprocessing.TableRow();
+                foreach (var cellText in row)
+                    tr.Append(new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                        new Paragraph(new Run(new Text(cellText)))));
+                table.Append(tr);
+            }
+            // A table must be followed by a paragraph for a valid body; it is equal on both sides.
+            mainPart.Document = new Document(new Body(table, new Paragraph()));
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new DocDefaults(
+                new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                    new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                new ParagraphPropertiesDefault()));
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("test.docx", stream.ToArray());
+    }
+
     // Body-level <w:t> texts of a document, for round-trip comparison.
     private static List<string> BodyTexts(WmlDocument doc)
     {
@@ -111,6 +140,24 @@ public class DocxDiffTests
         using var wdoc = WordprocessingDocument.Open(stream, false);
         var body = wdoc.MainDocumentPart!.Document.Body!;
         Assert.True(body.Descendants<InsertedRun>().Any() || body.Descendants<DeletedRun>().Any());
+    }
+
+    [Fact]
+    public void Compare_DeletedTableColumn_RejectRestoresTheColumn()
+    {
+        // Regression (engine audit, MEDIUM — reject fidelity): a deleted trailing table column produced a
+        // left-surplus cell op that RenderModifyRow dropped (the `ci >= rightCells.Count` break), so the
+        // deleted column was never marked w:del and RejectRevisions did NOT restore it. A column-structure
+        // change must bail to the whole-table del(left)+ins(right) fallback so reject ≡ left exactly.
+        var left = TableDoc(new[] { "a", "b", "c" });
+        var right = TableDoc(new[] { "a", "b" });
+
+        var result = DocxDiff.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));   // accept ⇒ right (2 columns)
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));    // reject ⇒ left (3 columns — "c" restored)
     }
 
     [Fact]
@@ -382,6 +429,32 @@ public class DocxDiffTests
         // (With moves on the engine MAY report a move; this is a settings-mapping spot check, not a
         // move-detection assertion, so we only assert the off-switch suppresses the Moved type.)
         Assert.NotNull(withMoves);
+    }
+
+    [Fact]
+    public void Settings_ExplicitEmptyWordSeparators_IsHonoredNotRevertedToDefault()
+    {
+        // Regression (engine audit): an explicitly EMPTY WordSeparators array was silently swapped for the
+        // default set (the `Length: > 0` guard), contradicting the "only null falls back" contract. An
+        // explicit set — even empty — must win.
+        var ir = new DocxDiffSettings { WordSeparators = System.Array.Empty<char>() }.ToIrDiffSettings();
+        Assert.Empty(ir.WordSeparators);
+
+        // A null set still falls back to the documented default.
+        var deflt = new DocxDiffSettings { WordSeparators = null }.ToIrDiffSettings();
+        Assert.NotEmpty(deflt.WordSeparators);
+    }
+
+    [Fact]
+    public void Settings_InvalidExplicitDate_ThrowsArgumentException()
+    {
+        // Regression (engine audit): an explicit DateTimeForRevisions was stamped verbatim into w:date with
+        // no validation, so garbage produced schema-questionable markup with no boundary error. A
+        // non-parseable value must throw at the boundary instead.
+        var left = Doc("one two");
+        var right = Doc("one three");
+        var settings = new DocxDiffSettings { DateTimeForRevisions = "not-a-date" };
+        Assert.Throws<System.ArgumentException>(() => DocxDiff.GetRevisions(left, right, settings));
     }
 
     [Fact]

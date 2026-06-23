@@ -177,9 +177,7 @@ public static class DocxDiff
         WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
         DocxDiffConsolidateSettings? settings = null)
     {
-        ArgumentNullException.ThrowIfNull(baseDocument);
-        ArgumentNullException.ThrowIfNull(reviewers);
-        var s = settings ?? new DocxDiffConsolidateSettings();
+        var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
         var diff = s.Diff.ToIrDiffSettings();
         if (reviewers.Count == 0) return baseDocument;
         var baseIr = IrReader.Read(baseDocument, ReadOpts);
@@ -228,9 +226,7 @@ public static class DocxDiff
         WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
         DocxDiffConsolidateSettings? settings = null)
     {
-        ArgumentNullException.ThrowIfNull(baseDocument);
-        ArgumentNullException.ThrowIfNull(reviewers);
-        var s = settings ?? new DocxDiffConsolidateSettings();
+        var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
         var diff = s.Diff.ToIrDiffSettings();
         if (reviewers.Count == 0) return System.Array.Empty<DocxDiffConflict>();
         var baseIr = IrReader.Read(baseDocument, ReadOpts);
@@ -270,9 +266,7 @@ public static class DocxDiff
         WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
         DocxDiffConsolidateSettings? settings = null)
     {
-        ArgumentNullException.ThrowIfNull(baseDocument);
-        ArgumentNullException.ThrowIfNull(reviewers);
-        var s = settings ?? new DocxDiffConsolidateSettings();
+        var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
         var diff = s.Diff.ToIrDiffSettings();
         if (reviewers.Count == 0) return System.Array.Empty<DocxDiffConsolidatedRevision>();
         var baseIr = IrReader.Read(baseDocument, ReadOpts);
@@ -324,9 +318,7 @@ public static class DocxDiff
         WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
         DocxDiffConsolidateSettings? settings = null)
     {
-        ArgumentNullException.ThrowIfNull(baseDocument);
-        ArgumentNullException.ThrowIfNull(reviewers);
-        var s = settings ?? new DocxDiffConsolidateSettings();
+        var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
         var diff = s.Diff.ToIrDiffSettings();
         if (reviewers.Count == 0)
             return IrCompositeScriptJson.Write(new IrCompositeScript(
@@ -336,6 +328,35 @@ public static class DocxDiff
         var revIr = reviewers.Select(r => (r.Author, IrReader.Read(r.Document, ReadOpts))).ToList();
         var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
         return IrCompositeScriptJson.Write(script);
+    }
+
+    /// <summary>
+    /// Validate the shared consolidate arguments once for all four N-way entry points and resolve the
+    /// settings: rejects a null base/reviewers, a null <see cref="DocxDiffConsolidateSettings.Diff"/>, and any
+    /// null reviewer element or reviewer <see cref="DocxDiffReviewer.Document"/> — surfacing a clear,
+    /// attributed <see cref="ArgumentException"/> at the public boundary instead of a downstream
+    /// <see cref="NullReferenceException"/>.
+    /// </summary>
+    private static DocxDiffConsolidateSettings ValidateConsolidateArgs(
+        WmlDocument baseDocument, IReadOnlyList<DocxDiffReviewer> reviewers,
+        DocxDiffConsolidateSettings? settings)
+    {
+        ArgumentNullException.ThrowIfNull(baseDocument);
+        ArgumentNullException.ThrowIfNull(reviewers);
+        var s = settings ?? new DocxDiffConsolidateSettings();
+        if (s.Diff is null)
+            throw new ArgumentException(
+                $"{nameof(DocxDiffConsolidateSettings)}.{nameof(DocxDiffConsolidateSettings.Diff)} must not be null.",
+                nameof(settings));
+        for (int i = 0; i < reviewers.Count; i++)
+        {
+            if (reviewers[i] is null)
+                throw new ArgumentException($"reviewers[{i}] is null.", nameof(reviewers));
+            if (reviewers[i].Document is null)
+                throw new ArgumentException(
+                    $"reviewers[{i}].Document is null (author '{reviewers[i].Author}').", nameof(reviewers));
+        }
+        return s;
     }
 }
 
@@ -397,7 +418,8 @@ public enum DocxDiffFormatComparison
 /// Settings for <see cref="DocxDiff"/>. Defaults mirror <see cref="WmlComparerSettings"/> so the engine
 /// reproduces the shipped comparer's word granularity and normalization out of the box, with two honest
 /// deviations called out below (<see cref="Deterministic"/> revision dates and
-/// <see cref="FormatComparison"/> defaulting to modeled-only). Immutable; construct fresh per call.
+/// <see cref="FormatComparison"/> defaulting to modeled-only). Its properties are settable; construct a
+/// fresh instance per call rather than mutating one shared across concurrent diffs.
 /// </summary>
 /// <remarks>
 /// This is the public mirror of the internal <c>IrDiffSettings</c>; it exposes the consumer-relevant
@@ -426,7 +448,9 @@ public sealed class DocxDiffSettings
     /// The ISO-8601 date string stamped on every revision and on the produced markup's <c>w:date</c>
     /// attributes. When null (the default), the date is derived from <see cref="Deterministic"/>: the fixed
     /// epoch when deterministic, else <c>DateTime.Now</c> in round-trip ("o") format captured once per diff.
-    /// An explicit non-null value always wins over both.
+    /// An explicit non-null value always wins over both, and must be a parseable ISO-8601 date/time (it is
+    /// stamped verbatim into the markup's <c>w:date</c> attributes) — a non-parseable value throws
+    /// <see cref="ArgumentException"/>.
     /// </summary>
     public string? DateTimeForRevisions { get; set; }
 
@@ -453,9 +477,11 @@ public sealed class DocxDiffSettings
 
     /// <summary>
     /// Characters that split a run's text into word vs. separator tokens; each separator character becomes
-    /// its own token. Null (the default) uses the same default set as
+    /// its own token. <b>Null (the default)</b> uses the same default set as
     /// <see cref="WmlComparerSettings.WordSeparators"/>
-    /// (<c>{ ' ', '-', ')', '(', ';', ',', and CJK punctuation }</c>).
+    /// (<c>{ ' ', '-', ')', '(', ';', ',', and CJK punctuation }</c>). An <b>explicit set is honored
+    /// verbatim — including an empty array</b>, which means nothing splits (the run becomes a single token,
+    /// modulo NBSP conflation); only null falls back to the default.
     /// </summary>
     public char[]? WordSeparators { get; set; }
 
@@ -512,6 +538,17 @@ public sealed class DocxDiffSettings
             (false, null) => (false, DateTime.Now.ToString("o", CultureInfo.InvariantCulture)),
         };
 
+        // An explicit date is stamped verbatim into every w:date attribute (xsd:dateTime); validate it parses
+        // so garbage fails at the boundary instead of producing schema-questionable markup. The deterministic
+        // epoch and the captured DateTime.Now are always valid, so only the caller-supplied value is checked.
+        if (DateTimeForRevisions is { } supplied &&
+            !DateTimeOffset.TryParse(supplied, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out _))
+        {
+            throw new ArgumentException(
+                $"DateTimeForRevisions '{supplied}' is not a valid ISO-8601 date/time.",
+                nameof(DateTimeForRevisions));
+        }
+
         return new IrDiffSettings
         {
             AuthorForRevisions = AuthorForRevisions,
@@ -520,8 +557,9 @@ public sealed class DocxDiffSettings
             CaseInsensitive = CaseInsensitive,
             Culture = Culture,
             ConflateBreakingAndNonbreakingSpaces = ConflateBreakingAndNonbreakingSpaces,
-            WordSeparators = WordSeparators is { Length: > 0 }
-                ? System.Collections.Immutable.ImmutableHashSet.CreateRange(WordSeparators)
+            // Only NULL falls back to the default set; an explicit set — even empty — is honored verbatim.
+            WordSeparators = WordSeparators is { } seps
+                ? System.Collections.Immutable.ImmutableHashSet.CreateRange(seps)
                 : IrDiffSettings.DefaultWordSeparators,
             RenderMoves = DetectMoves,
             MoveSimilarityThreshold = MoveSimilarityThreshold,

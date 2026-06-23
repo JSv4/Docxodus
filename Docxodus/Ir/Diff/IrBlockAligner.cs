@@ -383,7 +383,7 @@ internal static class IrBlockAligner
             leftoverRight.Remove(rj);
         }
 
-        // M2.6 1:N split / N:1 merge containment scan (gated; default OFF during the build-out).
+        // M2.6 1:N split / N:1 merge containment scan (gated by IrDiffSettings.DetectSplitMerge — ON by default).
         //
         // PLACEMENT RATIONALE. The scan runs AFTER SimilarityPair (and the table residue) so that a
         // better 1:1 pairing always wins first — a clean Modified pair is never torn into a
@@ -962,7 +962,12 @@ internal static class IrBlockAligner
 
             if (rightKind[j] == IrAlignmentKind.Merge)
             {
-                var mg = mergeByRight[j];
+                // A Merge-stamped right block always has exactly one recorded group (one right per merge),
+                // so a miss is an engine bug — fail loud with a clear message rather than a bare
+                // KeyNotFoundException (and never a silent skip, unlike Split's expected non-first-member miss).
+                if (!mergeByRight.TryGetValue(j, out var mg))
+                    throw new System.InvalidOperationException(
+                        $"IrBlockAligner: right block {j} is Merge-stamped but no merge group was recorded for it.");
                 entries.Add(new IrAlignedBlock(IrAlignmentKind.Merge, null, rightBlocks[j],
                     IrNodeList.From(mg.PluralIndexes.Select(mi => leftBlocks[mi]).ToList())));
 

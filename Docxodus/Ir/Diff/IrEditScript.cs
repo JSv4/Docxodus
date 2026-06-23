@@ -64,10 +64,11 @@ internal enum IrEditOpKind
     /// entry). Structurally identical to <see cref="MoveBlock"/> (source + destination op sharing a
     /// <see cref="IrEditOp.MoveGroupId"/>) but the DESTINATION op carries a non-null
     /// <see cref="IrEditOp.TokenDiff"/> describing the in-move edit.
-    /// <para><b>Reachability.</b> The M2.1/M2.2-Task-2 aligner never emits
-    /// <see cref="IrAlignmentKind.MovedModified"/> (similarity-based fuzzy moves are M2.2 Task 3), so
-    /// this op kind is UNTESTED-UNTIL-TASK-3. The builder branch that produces it is written now so the
-    /// surface is stable; it activates automatically when the aligner starts producing the kind.</para>
+    /// <para><b>Reachability.</b> Emitted: the similarity-based cross-gap fuzzy-move detection
+    /// (<see cref="IrBlockAligner"/>'s <c>DetectCrossGapMoves</c>) produces
+    /// <see cref="IrAlignmentKind.MovedModified"/> for a relocated-and-edited block, which the builder
+    /// projects to a <see cref="MoveModifyBlock"/> source + destination pair (the destination carrying the
+    /// in-move <see cref="IrEditOp.TokenDiff"/>).</para>
     /// </summary>
     MoveModifyBlock,
 

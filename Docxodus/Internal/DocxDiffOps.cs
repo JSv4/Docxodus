@@ -84,6 +84,12 @@ internal static class DocxDiffOps
             settings.DateTimeForRevisions = date.GetString();
         if (TryGetBool(root, "caseInsensitive", out var ci))
             settings.CaseInsensitive = ci;
+        if (root.TryGetProperty("culture", out var culture) && culture.ValueKind == JsonValueKind.String)
+        {
+            var name = culture.GetString();
+            if (!string.IsNullOrEmpty(name))
+                settings.Culture = System.Globalization.CultureInfo.GetCultureInfo(name!);
+        }
         if (TryGetBool(root, "conflateBreakingAndNonbreakingSpaces", out var conflate))
             settings.ConflateBreakingAndNonbreakingSpaces = conflate;
         if (root.TryGetProperty("wordSeparators", out var seps) && seps.ValueKind == JsonValueKind.String)

@@ -351,6 +351,27 @@ public class IrDiffTokenizerTests
         Assert.NotEqual(Tok(a).Single().MatchKey, Tok(b).Single().MatchKey);
     }
 
+    [Fact]
+    public void Linked_word_key_is_sentinel_framed_so_it_cannot_alias_a_literal_word()
+    {
+        // Invariant guard (pins existing, correct behavior — an engine-audit "collision" finding that
+        // turned out to be a FALSE POSITIVE: the suffix is ALREADY sentinel-framed on main). The
+        // hyperlink-target suffix leads with U+0001 (XML-illegal in text) like every other atomic key. A
+        // normalized word/separator MatchKey is always derived from w:t text and therefore can NEVER contain
+        // U+0001, so this framing is exactly what prevents a LINKED word from aliasing a LITERAL word that
+        // merely spells "<word>lnk:<target>" (':' '/' '.' are non-separators → such a literal is one token).
+        // This case had only "linked ≠ plain" / "different targets differ" coverage before; this locks the
+        // framing itself so the non-collision guarantee can't silently regress.
+        const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        var linked = IrReader.Read(IrTestDocuments.FromBodyXmlWithHyperlinks(
+            $"<w:p><w:hyperlink r:id=\"r1\" xmlns:r=\"{R}\"><w:r><w:t>foo</w:t></w:r></w:hyperlink></w:p>",
+            ("r1", "https://a.example")), NoSources).Body.Blocks.OfType<IrParagraph>().First();
+
+        var linkedKey = Tok(linked).Single().MatchKey;
+        Assert.Contains('\u0001', linkedKey);                          // the link suffix is sentinel-framed
+        Assert.DoesNotContain('\u0001', Tok(TextPara("foolnk")).Single().MatchKey); // a plain word never is
+    }
+
     // --- field transparency ----------------------------------------------
 
     [Fact]

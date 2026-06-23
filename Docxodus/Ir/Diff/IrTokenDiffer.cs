@@ -166,21 +166,18 @@ internal static class IrTokenDiffer
                 rev.Add((IrTokenOpKind.Equal, curX, curY));
             }
 
-            // The single non-diagonal edit at this D-step.
-            if (d > 0)
+            // The single non-diagonal edit at this D-step (d > 0 throughout this loop, so an edit always exists).
+            if (curX == prevX)
             {
-                if (curX == prevX)
-                {
-                    // Insert: right token at prevY..curY-1 (one token, curY-1).
-                    curY--;
-                    rev.Add((IrTokenOpKind.Insert, -1, curY));
-                }
-                else
-                {
-                    // Delete: left token curX-1.
-                    curX--;
-                    rev.Add((IrTokenOpKind.Delete, curX, -1));
-                }
+                // Insert: right token at prevY..curY-1 (one token, curY-1).
+                curY--;
+                rev.Add((IrTokenOpKind.Insert, -1, curY));
+            }
+            else
+            {
+                // Delete: left token curX-1.
+                curX--;
+                rev.Add((IrTokenOpKind.Delete, curX, -1));
             }
         }
 

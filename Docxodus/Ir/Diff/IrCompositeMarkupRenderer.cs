@@ -51,9 +51,13 @@ internal static class IrCompositeMarkupRenderer
         ArgumentNullException.ThrowIfNull(settings);
 
         // v1 limitation: note-scope (footnote/endnote) merging is not yet implemented in the composite path.
-        // The merger never populates NoteOps today; assert so this can't silently drop note diffs if that changes.
-        System.Diagnostics.Debug.Assert(script.NoteOps == null || script.NoteOps.Count == 0,
-            "IrCompositeMarkupRenderer does not yet render composite NoteOps; note merging is a follow-on.");
+        // The merger never populates NoteOps today (IrCompositeMerger fails fast on a reviewer note edit), so
+        // this guard never fires; it is a RUNTIME check (not Debug.Assert — which is stripped in the Release
+        // build this library ships in and CI tests under) so a future change that starts populating NoteOps
+        // without renderer support fails loudly instead of silently dropping note diffs.
+        if (script.NoteOps is { Count: > 0 })
+            throw new System.InvalidOperationException(
+                "IrCompositeMarkupRenderer does not yet render composite NoteOps; note merging is a follow-on.");
 
         // Re-read base + each reviewer WITH provenance (RetainSources=true) + Accept view — the SAME options the
         // two-way renderer uses — so block anchors in the script resolve to source w:p/w:tbl elements to clone.

@@ -579,6 +579,16 @@ internal static class IrMarkupRenderer
             return true;
         }
 
+        // A column add/remove (a cell op missing its left or right anchor — IrTableDiffer.DiffCells emits these
+        // for surplus cells) cannot be rendered as in-place per-cell markup: a deleted column's cell op would be
+        // dropped (the `ci >= rightCells.Count` cutoff below), so RejectRevisions would NOT restore the column,
+        // and an added column's cell would render unmarked. Bail to the caller's whole-table del(left)+ins(right)
+        // fallback, which round-trips exactly (reject ≡ left, accept ≡ right) at the cost of coarser markup —
+        // the honest representation, since the per-cell renderer is column-count-stable in v1.
+        foreach (var cellOp in rowOp.CellOps)
+            if (cellOp.LeftCellAnchor == null || cellOp.RightCellAnchor == null)
+                return false;
+
         var newRow = new XElement(W.tr);
         foreach (var pre in rightRowSrc.Elements().Where(e => e.Name != W.tc))
             newRow.Add(StripUnids(new XElement(pre)));

@@ -85,7 +85,7 @@ public static partial class DocxDiffBridge
     /// attribution). Returns an empty array on error.
     /// </summary>
     /// <param name="baseBytes">The shared base/original document.</param>
-    /// <param name="reviewersJson">JSON array of reviewers ({name, bytes} pairs) mirroring the consolidate input.</param>
+    /// <param name="reviewersJson">JSON array of reviewers — each <c>{"author": string, "docB64": base64-docx}</c> (the shape <see cref="DocxDiffOps.ParseReviewers"/> reads; an element lacking <c>docB64</c> is skipped).</param>
     /// <param name="settingsJson">JSON object mirroring <c>DocxDiffSettings</c>; empty string for defaults.</param>
     [JSExport]
     public static byte[] Consolidate(byte[] baseBytes, string reviewersJson, string settingsJson)
