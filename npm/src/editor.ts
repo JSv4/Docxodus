@@ -494,13 +494,40 @@ function inBorderWrapper(el: HTMLElement): boolean {
   return /border-(top|bottom|left|right):\s*(?!none)[^;]+/i.test(style);
 }
 
+/** The element whose computed style represents the RUN formatting at a selection boundary. A text
+ *  node maps to its parent run span. An ELEMENT container — which the browser reports when a whole
+ *  paragraph is selected via triple-click / selectNodeContents / our Select-All (startContainer is
+ *  the block `<p>`, not a text node) — is descended into the content leaf at the boundary, because
+ *  bold/italic/underline live on the inner run spans, not on the block. Reading the block element
+ *  there returned the paragraph default (normal weight), so the format toggle mis-read a fully-bold
+ *  paragraph as not-bold and re-ADDED bold instead of removing it. Generated list markers
+ *  (contenteditable=false) are skipped so a list item's marker glyph never decides the run state. */
+function formatProbeElement(container: Node, offset: number): HTMLElement | null {
+  if (container.nodeType === 3) return container.parentElement; // text node → its run span (unchanged)
+  const kids = Array.from(container.childNodes);
+  // The content node at the boundary: the boundary child (or first content node after it), skipping
+  // markers; else the last content child; else the container itself (e.g. an empty block).
+  let node: Node | null =
+    kids.slice(offset).find((c) => !isInMarker(c)) ??
+    kids.filter((c) => !isInMarker(c)).pop() ??
+    container;
+  for (let guard = 0; node && node.nodeType === 1 && guard < 64; guard++) {
+    const child: ChildNode | undefined = Array.from((node as HTMLElement).childNodes).find(
+      (c) => !isInMarker(c),
+    );
+    if (!child) break;
+    node = child;
+  }
+  return node ? (node.nodeType === 3 ? node.parentElement : (node as HTMLElement)) : null;
+}
+
 /** Whether the current selection's start already carries `key`, read from computed style. */
 function selectionHasFormat(key: FormatKey, fallback: HTMLElement): boolean {
   const sel = typeof window !== "undefined" ? window.getSelection() : null;
   let el: HTMLElement | null = fallback;
   if (sel && sel.rangeCount > 0) {
-    const n = sel.getRangeAt(0).startContainer;
-    el = n.nodeType === 3 ? n.parentElement : (n as HTMLElement);
+    const r = sel.getRangeAt(0);
+    el = formatProbeElement(r.startContainer, r.startOffset) ?? fallback;
   }
   if (!el || typeof getComputedStyle !== "function") return false;
   const cs = getComputedStyle(el);
@@ -1966,13 +1993,18 @@ export class DocxEditor {
     if (!unid) return;
     let fullId = this.unidToFullId.get(unid);
     if (!fullId) return;
+    const caret = caretOffsetIn(block); // capture BEFORE the op, like format()/splitAtCaret()
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(this.exports.DocxSessionBridge.SetListLevel(this.handle, fullId, delta));
     if (!res.success) return;
     // A level change ripples through the whole list's numbering — re-render with full document
-    // context (a single-block render can't compute nested numbering), keeping the caret in place.
-    this.remount(idx, false);
+    // context (a single-block render can't compute nested numbering). A level change leaves the
+    // item's text unchanged, so restore the caret to where the user was (not offset 0); otherwise a
+    // following Enter splits at the start and the item's text migrates into the next item, so
+    // type → Tab → Enter → type would corrupt the list. Fall back to the line end if there was no
+    // caret (e.g. a button-driven changeListLevel with no live selection).
+    this.remount(idx, caret == null, caret);
   }
 
   /**
@@ -2010,14 +2042,16 @@ export class DocxEditor {
       membership.format.toLowerCase().startsWith(kind === "bullet" ? "bullet" : "decimal");
 
     const idx = this.blockIndex(block); // capture before the op
+    const caret = caretOffsetIn(block); // and the caret, so a full remount keeps it in place
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       this.exports.DocxSessionBridge.ApplyListFormat(this.handle, fullId, isThisKind ? "none" : kind),
     );
     if (!res.success) return;
     // Numbering continuation across the list needs whole-document context — re-render fully
-    // (a single-block render would show every numbered item as "1.").
-    this.remount(idx, false);
+    // (a single-block render would show every numbered item as "1."). Toggling list membership
+    // leaves the text unchanged, so restore the caret (not offset 0) — see setListLevel.
+    this.remount(idx, caret == null, caret);
   }
 
   /** Apply the built-in legal outline numbering (1. / 1.1 / (a) / (i) …) to the active block — or
@@ -2050,6 +2084,7 @@ export class DocxEditor {
     let fullId = this.unidToFullId.get(unid);
     if (!fullId) return;
     const idx = this.blockIndex(block);
+    const caret = caretOffsetIn(block); // preserve caret across the full remount (see setListLevel)
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(
       isListBlock(block)
@@ -2059,7 +2094,10 @@ export class DocxEditor {
     );
     if (!res.success) return;
     // Numbering continuation needs whole-document context (a single-block render shows "1." for all).
-    this.remount(idx, false);
+    // Numbering doesn't change the text, so keep the caret where it was — otherwise a following
+    // Enter splits at offset 0 and the item's text migrates into the next item (type → #legalNum →
+    // Enter → type would corrupt the list, the way Tab did before).
+    this.remount(idx, caret == null, caret);
   }
 
   /** Clear all paragraph borders (e.g. remove an inserted horizontal rule) on the active block —
@@ -2153,32 +2191,45 @@ export class DocxEditor {
     this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 
+  /** Block index to re-focus after an undo/redo remount so CONSECUTIVE keyboard history shortcuts
+   *  keep working: the root keydown handler dispatches only when keydownBlock(ev) resolves a block,
+   *  but a history remount with focusIndex -1 leaves the caret on the bare host with activeBlock
+   *  null, so the next Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y is silently dropped. Re-focus the pre-op active
+   *  block when there is one (remount clamps the index to the new block count), else the first
+   *  editable block. */
+  private historyFocusIndex(): number {
+    const idx = this.activeBlock ? this.blockIndex(this.activeBlock) : -1;
+    return idx >= 0 ? idx : 0;
+  }
+
   /** Undo the last edit GROUP (re-renders the document). A compound edit (multi-block format,
    *  cross-block delete/type-over) was recorded as one group of N session ops, so it reverses in a
    *  single call. Falls back to a single session Undo for any ungrouped history. */
   undo(): void {
     if (this.closed) return;
+    const focus = this.historyFocusIndex();
     const n = this.undoGroups.pop();
     if (n === undefined) {
-      if (this.exports.DocxSessionBridge.Undo(this.handle)) this.remount();
+      if (this.exports.DocxSessionBridge.Undo(this.handle)) this.remount(focus, false, null, false);
       return;
     }
     let undone = 0;
     for (let i = 0; i < n; i++) if (this.exports.DocxSessionBridge.Undo(this.handle)) undone++;
-    if (undone > 0) { this.redoGroups.push(undone); this.remount(); }
+    if (undone > 0) { this.redoGroups.push(undone); this.remount(focus, false, null, false); }
   }
 
   /** Redo the last undone edit GROUP (re-renders the document). */
   redo(): void {
     if (this.closed) return;
+    const focus = this.historyFocusIndex();
     const n = this.redoGroups.pop();
     if (n === undefined) {
-      if (this.exports.DocxSessionBridge.Redo(this.handle)) this.remount();
+      if (this.exports.DocxSessionBridge.Redo(this.handle)) this.remount(focus, false, null, false);
       return;
     }
     let redone = 0;
     for (let i = 0; i < n; i++) if (this.exports.DocxSessionBridge.Redo(this.handle)) redone++;
-    if (redone > 0) { this.undoGroups.push(redone); this.remount(); }
+    if (redone > 0) { this.undoGroups.push(redone); this.remount(focus, false, null, false); }
   }
 
   /** Which inline formats the current selection carries — for ribbon button highlighting. */
@@ -2234,7 +2285,14 @@ export class DocxEditor {
    * `focusIndex` (caret at start, or end if `caretAtEnd`) — addressed by index because a
    * block's content-hashed unid changes across the save/reproject a remount performs.
    */
-  private remount(focusIndex = -1, caretAtEnd = false): void {
+  private remount(focusIndex = -1, caretAtEnd = false, caretOffset: number | null = null, flushDirty = true): void {
+    // Flush any block still holding uncommitted typed text into the session BEFORE re-rendering from
+    // it; otherwise a structural edit's full re-render silently wipes a sibling block the user typed
+    // into but never synced (e.g. the last clause typed before formatting an earlier list caption —
+    // the editor commits a block on a collapsed caret move-away, but a non-collapsed selection or a
+    // focus-first click can leave it uncommitted). Undo/redo opt out: they must not commit pending
+    // typing as a new edit before reversing history.
+    if (flushDirty) this.commitAllDirty();
     this.refreshAnchorMap();
     const bytes = this.exports.DocxSessionBridge.Save(this.handle);
     const fullHtml = this.exports.DocumentConverter.ConvertDocxToHtmlComplete(
@@ -2248,7 +2306,15 @@ export class DocxEditor {
       const target = blocks[Math.min(focusIndex, blocks.length - 1)];
       if (target) {
         this.activeBlock = target;
-        placeCaretAtOffset(target, caretAtEnd ? (target.textContent ?? "").length : 0);
+        // Prefer an explicit content offset (clamped to the re-rendered block) so a caller that
+        // captured the caret before the op can keep it in place; else end (caretAtEnd) or start.
+        const offset =
+          caretOffset != null
+            ? Math.min(caretOffset, blockContentText(target).length)
+            : caretAtEnd
+              ? (target.textContent ?? "").length
+              : 0;
+        placeCaretAtOffset(target, offset);
       }
     }
   }
