@@ -275,6 +275,21 @@ This means a body that references footnote id `2` ("See Section 1.2…") with an
 - `tools/diffharness/lo/lo_footnote_check.py` — headless-LibreOffice load + footnote-count/text report (the independent validity backstop).
 - `DocxDiffScenarioTests.Scenario_PreservesFootnoteStructure` — the in-process id↔reference↔text round-trip oracle (asserts at the OOXML id level, immune to LibreOffice's positional quirk).
 
+### `OpenXmlValidator` Does NOT Resolve Note-Body (note-in-note) References — a validation blind spot
+
+**Status:** Documented gotcha
+**Discovered:** 2026-06-23 (non-body scope fidelity audit)
+
+#### The corner case
+
+A footnote/endnote definition body may itself contain a `w:footnoteReference`/`w:endnoteReference` (a note that cites another note — "note-in-note"). The SDK `OpenXmlValidator` validates references in the **document body** against the notes part, but does **not** resolve references that live **inside a note definition body**. So a *dangling* nested reference (one pointing to a note id that no longer exists after renumbering) produces **zero** schema errors — the validator simply does not check it.
+
+This is a trap for any pipeline that uses "no new `OpenXmlValidator` errors" as its footnote-integrity oracle: it will pass a document whose note-in-note references dangle. In Docxodus this masked a real `DocxDiff` bug where `RenumberNoteIds` renumbered a body-referenced note's definition (e.g. id 5 → 2) but left a nested reference to it (inside another note's body) at the stale id 5.
+
+#### How to actually catch it
+
+Resolve **every** `footnoteReference`/`endnoteReference` in the document — body **and** inside every note definition body — against the note part's definition ids yourself; do not rely on the validator. See `DocxDiffFootnoteRobustnessTests.AllUnresolvedFootnoteRefs` (counts unresolved references across both scopes) and the fix in `IrMarkupRenderer.RenumberNoteIds` (records each definition's old→new id and remaps nested references).
+
 ---
 
 ## Table/Cell Width as Percent-Suffixed String (`w:tblW` / `w:tcW` with `w:type="pct"`)

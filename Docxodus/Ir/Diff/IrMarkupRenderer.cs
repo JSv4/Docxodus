@@ -190,6 +190,14 @@ internal static class IrMarkupRenderer
                 RenumberNoteIds(main, W.endnoteReference, W.endnote, W.endnotes,
                     main.EndnotesPart, wDocRight.MainDocumentPart?.EndnotesPart);
 
+                // Comment-id uniqueness pass: a commented paragraph that was EDITED bails to the whole-block
+                // del(left)+ins(right) fallback (ParagraphCarriesComments), which CLONES both source paragraphs —
+                // so the comment's range markers + reference land once in the w:del copy and once in the w:ins
+                // copy, sharing one id (schema-invalid: Sem_UniqueAttributeValue). Give the DELETED copy a fresh
+                // comment id + a copied definition so each side resolves to exactly one comment; accept keeps the
+                // right (original-id) comment, reject the left (fresh-id) comment.
+                DeduplicateRevisionDuplicatedCommentIds(main);
+
                 // Carry right-only styles + numbering into the left-based package.
                 if (main.StyleDefinitionsPart != null &&
                     wDocRight.MainDocumentPart?.StyleDefinitionsPart != null)
@@ -460,7 +468,8 @@ internal static class IrMarkupRenderer
         bool rightIsPara = ResolveBlock(op.RightAnchor, state.RightSource) is IrParagraph;
 
         if (op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
-            op.TextboxDiffs is null)   // textbox-interior diffs are not finely rendered in Task 3
+            op.TextboxDiffs is null &&            // textbox-interior diffs are not finely rendered in Task 3
+            !ParagraphCarriesComments(op, state)) // comment anchors are dropped by the IR — see below
         {
             RenderModifiedParagraph(op, tokenDiff, state, sink);
             return;
@@ -482,6 +491,27 @@ internal static class IrMarkupRenderer
             EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
         if (op.RightAnchor != null)
             EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+    }
+
+    /// <summary>
+    /// True iff either source paragraph of a Modified pair carries comment plumbing — a
+    /// <c>w:commentRangeStart</c>/<c>w:commentRangeEnd</c>/<c>w:commentReference</c>. The IR DROPS these markers
+    /// from a paragraph (rule N15: they are recorded as <c>IrCommentStore</c> char-offset spans for the markdown
+    /// projection, never carried as inline nodes), so the fine token-diff path — which rebuilds the paragraph
+    /// from the IR's runs — emits the edited paragraph WITHOUT them, orphaning the comment definition (the body
+    /// loses the range start/end + reference while <c>comments.xml</c> keeps the now-unanchored <c>w:comment</c>).
+    /// Bailing such a paragraph to the conservative whole-block <c>del(left)+ins(right)</c> fallback CLONES the
+    /// raw source paragraphs (comment markers intact), so accept keeps the right paragraph's comment and reject
+    /// the left's — a clean round-trip at the cost of coarser per-word markup on commented paragraphs only. (The
+    /// blessed WmlComparer oracle drops comments ENTIRELY on any edit, so this is strictly ahead of it; carrying
+    /// comment markers through the token diff for fine-grained marked-up comment edits is a future enhancement.)
+    /// </summary>
+    private static bool ParagraphCarriesComments(IrEditOp op, RenderState state)
+    {
+        static bool Has(XElement? p) => p != null && p.DescendantsAndSelf().Any(e =>
+            e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference);
+        return Has(SourceElement(op.LeftAnchor, state.Left))
+            || Has(SourceElement(op.RightAnchor, state.RightSource));
     }
 
 
@@ -1139,6 +1169,10 @@ internal static class IrMarkupRenderer
 
         var orderedDefs = new List<XElement>();
         var assignedIdByDef = new Dictionary<XElement, string>();
+        // Each renumbered definition's OLD id → NEW id, so a reference to it that the body walk did NOT visit
+        // (one nested INSIDE another note's body — a note that cites a note) can be remapped afterwards. Without
+        // this the nested ref keeps the old id while its definition moves, dangling on accept/reject.
+        var idRemap = new Dictionary<string, string>(StringComparer.Ordinal);
         // Real notes renumber to 1..N — but a RESERVED boilerplate note can occupy a POSITIVE id (Word's
         // continuationNotice rides at id 1 in the NVCA contract), and reserved notes keep their ids and lead the
         // part. Starting the real-note counter at 1 would then re-mint id 1 for the first real note, colliding
@@ -1180,7 +1214,9 @@ internal static class IrMarkupRenderer
             next++;
             if (def != null)
             {
+                var defOldId = (string?)def.Attribute(W.id);
                 def.SetAttributeValue(W.id, newId);
+                if (defOldId != null && defOldId != newId) idRemap[defOldId] = newId;
                 assignedIdByDef[def] = newId;
                 orderedDefs.Add(def);
             }
@@ -1199,8 +1235,80 @@ internal static class IrMarkupRenderer
         foreach (var note in orderedDefs)
             noteRoot.Add(note);
 
+        // Remap NESTED references — a same-kind note reference living inside another note's body (a note that
+        // cites a note). The body walk above renumbered every body reference + definition, but never visited
+        // references inside note bodies, so a nested reference to a renumbered definition still carries the OLD
+        // id and would dangle. Rewrite each nested reference whose id was renumbered to its definition's new id.
+        // (Cross-kind nesting — an endnote reference inside a footnote body, or vice versa — is remapped by the
+        // OTHER scope's pass only if that scope's part is scanned; v1 scans each part for its OWN kind, which
+        // covers the footnote-cites-footnote / endnote-cites-endnote cases the corpus and Word produce.)
+        if (idRemap.Count > 0)
+            foreach (var nestedRef in noteRoot.Descendants(refName))
+            {
+                var id = (string?)nestedRef.Attribute(W.id);
+                if (id != null && idRemap.TryGetValue(id, out var mapped))
+                    nestedRef.SetAttributeValue(W.id, mapped);
+            }
+
         main.PutXDocument();
         notePart.PutXDocument();
+    }
+
+    /// <summary>
+    /// Give a fresh comment id (+ a copied definition) to the DELETED copy of any comment that the whole-block
+    /// fallback duplicated across a <c>w:del</c>/<c>w:ins</c> pair (an edited commented paragraph — see
+    /// <see cref="ParagraphCarriesComments"/>). A comment id appearing on markers inside BOTH a <c>w:del</c> and
+    /// a <c>w:ins</c> subtree is the duplication: the right/inserted copy keeps the original id (accept ≡ right);
+    /// the left/deleted copy's markers (<c>w:commentRangeStart</c>/<c>End</c>/<c>w:commentReference</c>) are
+    /// remapped to a fresh id whose definition is cloned into the comments part (reject ≡ left). Each revision
+    /// side then resolves to exactly one comment; the opposite side's definition is a harmless orphan (as with
+    /// reference-deleted footnotes). No-op when there is no comments part or no such duplication.
+    /// </summary>
+    private static void DeduplicateRevisionDuplicatedCommentIds(MainDocumentPart main)
+    {
+        var commentsPart = main.WordprocessingCommentsPart;
+        if (commentsPart == null)
+            return;
+        var body = main.GetXDocument().Root?.Element(W.body);
+        if (body == null)
+            return;
+
+        var markerNames = new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference };
+        bool Inside(XElement e, XName wrapper) => e.Ancestors().Any(a => a.Name == wrapper);
+        var markers = body.Descendants().Where(e => markerNames.Contains(e.Name)).ToList();
+        string? IdOf(XElement e) => (string?)e.Attribute(W.id);
+
+        var delIds = markers.Where(m => Inside(m, W.del)).Select(IdOf).Where(id => id != null).ToHashSet();
+        var insIds = markers.Where(m => Inside(m, W.ins)).Select(IdOf).Where(id => id != null).ToHashSet();
+        var duplicated = delIds.Where(insIds.Contains).ToHashSet();
+        if (duplicated.Count == 0)
+            return;
+
+        var commentsRoot = commentsPart.GetXDocument().Root;
+        if (commentsRoot == null)
+            return;
+        int nextId = commentsRoot.Elements(W.comment)
+            .Select(c => int.TryParse((string?)c.Attribute(W.id), out var v) ? v : -1)
+            .DefaultIfEmpty(-1).Max() + 1;
+
+        bool commentsChanged = false;
+        foreach (var oldId in duplicated)
+        {
+            var newId = (nextId++).ToString();
+            foreach (var m in markers.Where(m => IdOf(m) == oldId && Inside(m, W.del)))
+                m.SetAttributeValue(W.id, newId);
+            var def = commentsRoot.Elements(W.comment).FirstOrDefault(c => (string?)c.Attribute(W.id) == oldId);
+            if (def != null)
+            {
+                var copy = new XElement(def);
+                copy.SetAttributeValue(W.id, newId);
+                commentsRoot.Add(copy);
+                commentsChanged = true;
+            }
+        }
+        main.PutXDocument();
+        if (commentsChanged)
+            commentsPart.PutXDocument();
     }
 
     // ----------------------------------------------------------------- native move markup

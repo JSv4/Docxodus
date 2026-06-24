@@ -148,6 +148,77 @@ public class DocxDiffFootnoteRobustnessTests
         Assert.Equal(ReferencedFootnoteTexts(left), ReferencedFootnoteTexts(rejected));
     }
 
+    /// <summary>A doc where footnote 2's BODY cites footnote 5 (a note-in-note reference), and footnote 5 is
+    /// ALSO referenced from the document body — so the body-reference renumber pass remaps footnote 5's
+    /// definition id, and the nested reference inside footnote 2 must be remapped too or it dangles.</summary>
+    private static byte[] BuildNoteInNoteDoc()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles(new DocDefaults(new RunPropertiesDefault(
+                new RunPropertiesBaseStyle(new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" }))));
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            var fn = main.AddNewPart<FootnotesPart>();
+            WritePartXml(fn, $"<w:footnotes xmlns:w=\"{W}\">" +
+                "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>" +
+                "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>" +
+                // footnote 2's body itself references footnote 5 (note-in-note)
+                "<w:footnote w:id=\"2\"><w:p><w:r><w:t xml:space=\"preserve\">Outer note citing </w:t></w:r><w:r><w:footnoteReference w:id=\"5\"/></w:r></w:p></w:footnote>" +
+                "<w:footnote w:id=\"5\"><w:p><w:r><w:t xml:space=\"preserve\">Inner note, also body-cited.</w:t></w:r></w:p></w:footnote>" +
+                "</w:footnotes>");
+            WritePartXml(main, $"<w:document xmlns:w=\"{W}\"><w:body>" +
+                "<w:p><w:r><w:t xml:space=\"preserve\">Alpha cites the outer note.</w:t></w:r><w:r><w:footnoteReference w:id=\"2\"/></w:r></w:p>" +
+                "<w:p><w:r><w:t xml:space=\"preserve\">Beta cites the inner note.</w:t></w:r><w:r><w:footnoteReference w:id=\"5\"/></w:r></w:p>" +
+                "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:body></w:document>");
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>Every footnote reference ANYWHERE (document body AND inside note definition bodies) that does
+    /// NOT resolve to exactly one footnote definition in the part.</summary>
+    private static List<string> AllUnresolvedFootnoteRefs(WmlDocument doc)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var w = WordprocessingDocument.Open(ms, false);
+        var main = w.MainDocumentPart!;
+        var fnRoot = main.FootnotesPart?.GetXDocument().Root;
+        var defCounts = (fnRoot?.Elements(System.Xml.Linq.XName.Get("footnote", W))
+                            .Select(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("id", W)))
+                            .Where(x => x != null).Select(x => x!) ?? Enumerable.Empty<string>())
+                        .GroupBy(x => x).ToDictionary(g => g.Key, g => g.Count());
+        var refs = new List<System.Xml.Linq.XElement>();
+        var body = main.GetXDocument().Root?.Element(System.Xml.Linq.XName.Get("body", W));
+        if (body != null) refs.AddRange(body.Descendants(System.Xml.Linq.XName.Get("footnoteReference", W)));
+        if (fnRoot != null) refs.AddRange(fnRoot.Descendants(System.Xml.Linq.XName.Get("footnoteReference", W)));
+        return refs.Select(r => (string?)r.Attribute(System.Xml.Linq.XName.Get("id", W)))
+                   .Where(id => id == null || !defCounts.TryGetValue(id, out var n) || n != 1)
+                   .Select(id => id ?? "(null)").ToList();
+    }
+
+    [Fact]
+    public void NestedNoteReference_ToRenumberedNote_StaysResolvable()
+    {
+        // A note-in-note reference (footnote 2 -> footnote 5) must survive the body-reference renumber that
+        // remaps footnote 5's definition id. Before the fix, the nested ref kept id 5 while the definition moved
+        // to id 2, dangling on compare/accept/reject. (OpenXmlValidator does not resolve note-body refs, so the
+        // structural check below — not the schema check — is the oracle for this gap.)
+        var left = new WmlDocument("left.docx", BuildNoteInNoteDoc());
+        var right = new WmlDocument("right.docx", ReplaceWord(left.DocumentByteArray, "Alpha", "Gamma"));
+
+        var result = DocxDiff.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+
+        Assert.Equal(new List<string>(), AllUnresolvedFootnoteRefs(result));
+        Assert.Equal(new List<string>(), AllUnresolvedFootnoteRefs(accepted));
+        Assert.Equal(new List<string>(), AllUnresolvedFootnoteRefs(rejected));
+
+        var ids = FootnoteIds(result);
+        Assert.Equal(ids.Distinct().Count(), ids.Count);
+    }
+
     [Fact]
     public void DeletingReferenceToGappedIdFootnote_KeepsStructureResolvable()
     {
@@ -170,6 +241,74 @@ public class DocxDiffFootnoteRobustnessTests
         var rejected = RevisionProcessor.RejectRevisions(result);
         Assert.Equal(ReferencedFootnoteTexts(right), ReferencedFootnoteTexts(accepted));
         Assert.Equal(ReferencedFootnoteTexts(left), ReferencedFootnoteTexts(rejected));
+    }
+
+    // ---- comment-anchor round-trip (a commented paragraph that is EDITED) ----------------------
+
+    private static byte[] BuildCommentedDoc()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles(new DocDefaults(new RunPropertiesDefault(
+                new RunPropertiesBaseStyle(new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" }))));
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            var cp = main.AddNewPart<WordprocessingCommentsPart>();
+            WritePartXml(cp, $"<w:comments xmlns:w=\"{W}\">" +
+                "<w:comment w:id=\"0\" w:author=\"Reviewer\" w:date=\"2020-01-01T00:00:00Z\" w:initials=\"R\"><w:p><w:r><w:t xml:space=\"preserve\">The reviewer note.</w:t></w:r></w:p></w:comment>" +
+                "</w:comments>");
+            WritePartXml(main, $"<w:document xmlns:w=\"{W}\"><w:body>" +
+                "<w:p><w:commentRangeStart w:id=\"0\"/><w:r><w:t xml:space=\"preserve\">The commented sentence here.</w:t></w:r><w:commentRangeEnd w:id=\"0\"/>" +
+                "<w:r><w:rPr><w:rStyle w:val=\"CommentReference\"/></w:rPr><w:commentReference w:id=\"0\"/></w:r></w:p>" +
+                "<w:p><w:r><w:t xml:space=\"preserve\">A plain trailing paragraph.</w:t></w:r></w:p>" +
+                "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:body></w:document>");
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>The body must carry exactly ONE balanced comment anchor — one commentRangeStart, one
+    /// commentRangeEnd, one commentReference, all sharing an id that RESOLVES to a comments.xml definition.
+    /// (An extra orphaned definition in the comments part is schema-valid, exactly as a reference-deleted
+    /// footnote leaves an orphaned definition.)</summary>
+    private static bool OneResolvedCommentAnchor(WmlDocument doc)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var w = WordprocessingDocument.Open(ms, false);
+        var main = w.MainDocumentPart!;
+        var body = main.GetXDocument().Root?.Element(System.Xml.Linq.XName.Get("body", W));
+        List<string?> Ids(string n) => body?.Descendants(System.Xml.Linq.XName.Get(n, W))
+            .Select(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("id", W))).ToList() ?? new();
+        var rs = Ids("commentRangeStart"); var re = Ids("commentRangeEnd"); var rf = Ids("commentReference");
+        if (rs.Count != 1 || re.Count != 1 || rf.Count != 1) return false;
+        if (rs[0] != re[0] || re[0] != rf[0]) return false;
+        var defIds = main.WordprocessingCommentsPart?.Comments?.Elements<Comment>()
+            .Select(c => c.Id?.Value).ToHashSet() ?? new HashSet<string?>();
+        return defIds.Contains(rs[0]);
+    }
+
+    [Fact]
+    public void EditingCommentedParagraph_PreservesCommentAnchorsOnRoundTrip()
+    {
+        // Editing a word inside a commented paragraph must not orphan the comment: accept ≡ right and
+        // reject ≡ left must each carry exactly ONE balanced comment anchor (rangeStart + rangeEnd + reference)
+        // resolving to a comments.xml definition. (The IR drops comment markers from paragraphs, so the fine
+        // token-diff path loses them; the conservative whole-block fallback preserves them, and a comment-id
+        // dedup pass keeps the duplicated del/ins copies schema-valid.)
+        var left = new WmlDocument("left.docx", BuildCommentedDoc());
+        var right = new WmlDocument("right.docx", ReplaceWord(left.DocumentByteArray, "commented", "annotated"));
+
+        var result = DocxDiff.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+
+        Assert.True(OneResolvedCommentAnchor(accepted), "accept must keep one resolved comment anchor (right)");
+        Assert.True(OneResolvedCommentAnchor(rejected), "reject must keep one resolved comment anchor (left)");
+
+        // No NEW schema errors from the Compare output (the duplicated del/ins comment ids are deduped).
+        var baseErrors = SchemaErrors(left);
+        var newErrors = SchemaErrors(result).Where(e => !baseErrors.Contains(e)).ToList();
+        Assert.True(newErrors.Count == 0, $"schema errors: {string.Join(" | ", newErrors.Take(5))}");
     }
 
     // ---- helpers (mirrors DocxDiffScenarioTests, scoped to footnotes) --------------------------
