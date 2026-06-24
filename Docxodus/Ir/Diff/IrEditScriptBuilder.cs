@@ -440,6 +440,27 @@ internal static class IrEditScriptBuilder
         {
             bool l = leftStore.Notes.ContainsKey(id) && !referencedLeft.Contains(id);
             bool r = rightStore.Notes.ContainsKey(id) && !referencedRight.Contains(id);
+
+            // A footnote's identity is its w:id, so each id must correspond EXACTLY ONCE. When a note's
+            // REFERENCE was deleted on one side but its DEFINITION still exists on the other (the def lingers,
+            // unreferenced), the reference-driven AlignNoteReferences pass already emitted a one-sided surplus
+            // entry for the side that kept its reference: a kept-left reference → (id, null); a kept-right
+            // reference → (null, id). The lingering definition is the SAME note, so reconcile that surplus into a
+            // matched (id, id) pair instead of appending a SECOND entry — appending here would emit a second
+            // w:footnote definition with the same id (one inserted, one deleted): the duplicate-id corruption.
+            // A matched pair re-diffs the (usually unchanged) definition: a no-op when content is equal, a content
+            // diff otherwise — never a duplicate.
+            if (r && !l)
+            {
+                int idx = correspondence.FindIndex(c => c.Left == id && c.Right == null);
+                if (idx >= 0) { correspondence[idx] = (id, id); continue; }
+            }
+            else if (l && !r)
+            {
+                int idx = correspondence.FindIndex(c => c.Right == id && c.Left == null);
+                if (idx >= 0) { correspondence[idx] = (id, id); continue; }
+            }
+
             if (l && r) correspondence.Add((id, id));
             else if (r) correspondence.Add((null, id));
             else if (l) correspondence.Add((id, null));

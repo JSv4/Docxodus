@@ -25,15 +25,18 @@ switch (args[0])
         var author = args.Length > 4 ? args[4] : "Docxodus";
         var report = DiffRunner.Run(args[1], args[2], args[3], author);
         Console.WriteLine(
-            $"content-clean:{report.ContentClean}  " +
+            $"content-clean:{report.ContentClean}  note-struct:{report.NoteStructureClean}  " +
             $"body(acc/rej):{report.AcceptBodyEqualsRight}/{report.RejectBodyEqualsLeft}  " +
             $"notes(acc/rej):{report.AcceptNotesEqualRight}/{report.RejectNotesEqualLeft}  " +
             $"hdrftr(acc/rej):{report.AcceptHdrFtrSetEqualsRight}/{report.RejectHdrFtrSetEqualsLeft}  " +
             $"revs(fine/compat):{report.RevisionCountFine}/{report.RevisionCountCompat}  " +
             $"hdrftrParts ours/orig:{report.HdrFtrPartsOurs}/{report.HdrFtrPartsOriginal}");
+        if (!report.NoteStructureClean) Console.WriteLine(
+            $"  NOTE-STRUCT FAIL: fnUnique={report.OursFootnoteIdsUnique} enUnique={report.OursEndnoteIdsUnique} " +
+            $"fnResolve={report.OursFootnoteRefsAllResolve} enResolve={report.OursEndnoteRefsAllResolve}");
         if (report.AcceptBodyFirstDiff is { } a) Console.WriteLine("  ACCEPT BODY DIFF: " + a);
         if (report.RejectBodyFirstDiff is { } rj) Console.WriteLine("  REJECT BODY DIFF: " + rj);
-        return report.ContentClean ? 0 : 1;
+        return report.ContentClean && report.NoteStructureClean ? 0 : 1;
     }
     case "diffall":
     {
@@ -43,7 +46,7 @@ switch (args[0])
         var manifestPath = Path.Combine(corpus, "manifest.json");
         using var mdoc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifestPath));
         int fails = 0, total = 0;
-        Console.WriteLine($"{"scenario",-26} {"body",9} {"notes",9} {"hdrftr",9} {"fine",5} {"hf#",7}");
+        Console.WriteLine($"{"scenario",-26} {"body",9} {"notes",9} {"hdrftr",9} {"nstruct",7} {"fine",5} {"hf#",7}");
         foreach (var el in mdoc.RootElement.EnumerateArray())
         {
             var id = el.GetProperty("id").GetString()!;
@@ -53,16 +56,18 @@ switch (args[0])
             total++;
             // For an undiffed-scope-only edit (header/footer), accept!=right on that scope is EXPECTED and
             // oracle-consistent — drop the accept-side header/footer gate from the pass criterion.
-            var pass = undiffedScope
+            // Note STRUCTURE (unique ids, refs resolve) must hold for EVERY scenario regardless of scope.
+            var pass = (undiffedScope
                 ? r.AcceptBodyEqualsRight && r.RejectBodyEqualsLeft && r.AcceptNotesEqualRight
                   && r.RejectNotesEqualLeft && r.RejectHdrFtrSetEqualsLeft
-                : r.ContentClean;
+                : r.ContentClean) && r.NoteStructureClean;
             if (!pass) fails++;
             string Pair(bool a, bool b) => $"{(a ? "Y" : "n")}/{(b ? "Y" : "n")}";
             Console.WriteLine(
                 $"{id,-26} {Pair(r.AcceptBodyEqualsRight, r.RejectBodyEqualsLeft),9} " +
                 $"{Pair(r.AcceptNotesEqualRight, r.RejectNotesEqualLeft),9} " +
                 $"{Pair(r.AcceptHdrFtrSetEqualsRight, r.RejectHdrFtrSetEqualsLeft),9} " +
+                $"{(r.NoteStructureClean ? "Y" : "n"),7} " +
                 $"{r.RevisionCountFine,5} {r.HdrFtrPartsOurs + "/" + r.HdrFtrPartsOriginal,7}" +
                 $"{(pass ? (undiffedScope ? "  (scope-ok)" : "") : "  <-- FAIL")}");
         }

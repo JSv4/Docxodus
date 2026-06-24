@@ -30,26 +30,8 @@ namespace Docxodus.Tests;
 /// </summary>
 public class DocxDiffScenarioTests
 {
-    /// <summary>
-    /// Scenarios that edit a FOOTNOTE-REFERENCING paragraph currently expose an unfixed engine bug: the
-    /// produced footnotes part gets a DUPLICATE footnote id (and a body footnote reference is dropped),
-    /// so the output is schema-invalid — even though the body + note TEXT round-trips. The WmlComparer
-    /// oracle handles the same inputs cleanly, and the corruption reproduces on the real NVCA contract
-    /// (e.g. body-replace-word → footnote id 1 duplicated). Tracked by
-    /// <see cref="FootnoteReferencingParagraphEdit_CorruptsFootnoteIds_KnownBug"/>; these scenarios are
-    /// excluded from the schema-validity theory until the note-path fix lands (then move them back).
-    /// </summary>
-    private static readonly HashSet<string> KnownFootnoteIdBug = new()
-    {
-        "body-replace-word", "body-delete-paragraph", "body-split-paragraph",
-        "whole-paragraph-replace", "multi-edit",
-    };
-
     public static IEnumerable<object[]> AllScenarios() =>
         DocxDiffScenarioFixtures.Names().Select(n => new object[] { n });
-
-    public static IEnumerable<object[]> SchemaCleanScenarios() =>
-        DocxDiffScenarioFixtures.Names().Where(n => !KnownFootnoteIdBug.Contains(n)).Select(n => new object[] { n });
 
     // ---- universal invariants (hold for EVERY scenario) ----------------------------------------
 
@@ -73,10 +55,10 @@ public class DocxDiffScenarioTests
         Assert.Equal(HeaderFooterPartCount(left), HeaderFooterPartCount(result));
     }
 
-    // ---- schema validity (every scenario EXCEPT the known footnote-id bug) ----------------------
+    // ---- schema validity (EVERY scenario — the footnote-referencing edits are now clean too) ----
 
     [Theory]
-    [MemberData(nameof(SchemaCleanScenarios))]
+    [MemberData(nameof(AllScenarios))]
     public void Scenario_ProducesSchemaValidOutput(string scenario)
     {
         var (left, right) = DocxDiffScenarioFixtures.Build(scenario);
@@ -88,25 +70,43 @@ public class DocxDiffScenarioTests
             $"Compare introduced {newErrors.Count} new schema error(s): {string.Join(" | ", newErrors.Take(5))}");
     }
 
+    // ---- footnote-structure integrity (oracle layer 2: id ↔ reference ↔ text) -------------------
+
     /// <summary>
-    /// Characterizes the KNOWN footnote-id bug (see <see cref="KnownFootnoteIdBug"/>): editing a
-    /// footnote-referencing paragraph currently produces a duplicate footnote id. This test asserts the
-    /// bug is STILL present, so it stays green while tracked — when the note-path fix lands, this test
-    /// FAILS, which is the signal to delete it and fold these scenarios back into
-    /// <see cref="Scenario_ProducesSchemaValidOutput"/>. The oracle (WmlComparer) is clean on these inputs.
+    /// Footnote-structure round-trip — the structural counterpart to the text round-trip above. For EVERY
+    /// scenario, <see cref="DocxDiff.Compare"/>'s output must be footnote-structurally sound:
+    /// <list type="number">
+    /// <item><b>Unique definition ids.</b> No two real <c>w:footnote</c> definitions share a <c>@w:id</c>.</item>
+    /// <item><b>Every body reference resolves.</b> Each body <c>w:footnoteReference @w:id</c> names exactly one
+    /// definition.</item>
+    /// <item><b>Accept ≡ right / reject ≡ left at the id→ref→text level.</b> Resolving each body reference (in
+    /// document order) to its definition text yields the RIGHT document's referenced-footnote sequence on accept
+    /// and the LEFT's on reject — not just the order-insensitive multiset the text round-trip checks.</item>
+    /// </list>
+    /// This is the invariant the duplicate-id / dropped-reference corruption violated.
     /// </summary>
-    [Fact]
-    public void FootnoteReferencingParagraphEdit_CorruptsFootnoteIds_KnownBug()
+    [Theory]
+    [MemberData(nameof(AllScenarios))]
+    public void Scenario_PreservesFootnoteStructure(string scenario)
     {
-        var stillBuggy = new List<string>();
-        foreach (var scenario in KnownFootnoteIdBug)
-        {
-            var (left, right) = DocxDiffScenarioFixtures.Build(scenario);
-            var ids = FootnoteIds(DocxDiff.Compare(left, right));
-            if (ids.Count != ids.Distinct().Count())
-                stillBuggy.Add(scenario);
-        }
-        Assert.Equal(KnownFootnoteIdBug.OrderBy(x => x), stillBuggy.OrderBy(x => x));
+        var (left, right) = DocxDiffScenarioFixtures.Build(scenario);
+        var result = DocxDiff.Compare(left, right);
+
+        // (1) unique definition ids in the Compare output.
+        var ids = FootnoteIds(result);
+        Assert.True(ids.Count == ids.Distinct().Count(),
+            $"duplicate footnote id(s) in Compare output: [{string.Join(",", ids)}]");
+
+        // (2) every body footnote reference resolves to exactly one definition.
+        var unresolved = UnresolvedReferenceIds(result);
+        Assert.True(unresolved.Count == 0,
+            $"body footnote reference(s) resolve to ≠1 definition: [{string.Join(",", unresolved)}]");
+
+        // (3) id → ref → text integrity: accept ≡ right, reject ≡ left in body-reference order.
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(ReferencedFootnoteTexts(right), ReferencedFootnoteTexts(accepted));
+        Assert.Equal(ReferencedFootnoteTexts(left), ReferencedFootnoteTexts(rejected));
     }
 
     /// <summary>Sanity: the synthetic base is itself schema-valid and an identity diff is a clean no-op.</summary>
@@ -156,6 +156,48 @@ public class DocxDiffScenarioTests
         return footnotes is null
             ? new List<long>()
             : footnotes.Elements<Footnote>().Where(f => f.Id is not null).Select(f => f.Id!.Value).ToList();
+    }
+
+    /// <summary>Body footnote-reference ids (document order) that do NOT resolve to exactly one definition.</summary>
+    private static List<string> UnresolvedReferenceIds(WmlDocument doc)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var w = WordprocessingDocument.Open(ms, false);
+        var main = w.MainDocumentPart!;
+        var defIds = (main.FootnotesPart?.Footnotes?.Elements<Footnote>()
+                         .Where(f => f.Id is not null)
+                         .Select(f => f.Id!.Value) ?? Enumerable.Empty<long>())
+                     .ToList();
+        var defCount = defIds.GroupBy(x => x).ToDictionary(g => g.Key, g => g.Count());
+        var bad = new List<string>();
+        foreach (var r in main.Document?.Body?.Descendants<FootnoteReference>() ?? Enumerable.Empty<FootnoteReference>())
+        {
+            var id = r.Id?.Value;
+            if (id is null || !defCount.TryGetValue(id.Value, out var n) || n != 1)
+                bad.Add(id?.ToString() ?? "(null)");
+        }
+        return bad;
+    }
+
+    /// <summary>For each body footnote reference (document order), the text of the footnote definition it
+    /// resolves to — the id ↔ reference ↔ text projection. Unresolvable references surface as "(unresolved)" so
+    /// a dropped reference or dangling id changes the sequence rather than silently matching.</summary>
+    private static List<string> ReferencedFootnoteTexts(WmlDocument doc)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var w = WordprocessingDocument.Open(ms, false);
+        var main = w.MainDocumentPart!;
+        var defText = new Dictionary<long, string>();
+        foreach (var f in main.FootnotesPart?.Footnotes?.Elements<Footnote>() ?? Enumerable.Empty<Footnote>())
+            if (f.Id is not null)
+                defText[f.Id.Value] = string.Concat(f.Descendants<Text>().Select(t => t.Text));
+        var seq = new List<string>();
+        foreach (var r in main.Document?.Body?.Descendants<FootnoteReference>() ?? Enumerable.Empty<FootnoteReference>())
+        {
+            var id = r.Id?.Value;
+            seq.Add(id is not null && defText.TryGetValue(id.Value, out var t) ? t : "(unresolved)");
+        }
+        return seq;
     }
 
     private static int HeaderFooterPartCount(WmlDocument doc)

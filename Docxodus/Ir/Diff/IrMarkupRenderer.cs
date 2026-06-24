@@ -1139,16 +1139,32 @@ internal static class IrMarkupRenderer
 
         var orderedDefs = new List<XElement>();
         var assignedIdByDef = new Dictionary<XElement, string>();
-        int next = 1;
+        // Real notes renumber to 1..N — but a RESERVED boilerplate note can occupy a POSITIVE id (Word's
+        // continuationNotice rides at id 1 in the NVCA contract), and reserved notes keep their ids and lead the
+        // part. Starting the real-note counter at 1 would then re-mint id 1 for the first real note, colliding
+        // with continuationNotice (a duplicate w:id on EVERY edit, even body/format-only). Start above the
+        // highest positive reserved id so the renumbered range is disjoint from the kept boilerplate ids. The
+        // {-1,0}-only reserved set (the synthetic corpus, and most docs) yields 1 — unchanged.
+        int next = reserved
+            .Select(n => int.TryParse((string?)n.Attribute(W.id), out var v) ? v : 0)
+            .Where(v => v > 0)
+            .DefaultIfEmpty(0)
+            .Max() + 1;
         foreach (var r in bodyRefs)
         {
             var oldId = (string?)r.Attribute(W.id);
             if (oldId == null) continue;
             bool isDel = r.Ancestors().Any(a => a.Name == W.del);
-            // del → next deleted-only definition (in produced part order); ins/equal → the live definition with the
-            // reference's (right) id.
+            // ins/equal → the live definition with the reference's (right) id. del → the next deleted-only
+            // definition (left-sourced, vanishes on accept); but a del reference whose note was NOT deleted —
+            // its DEFINITION is preserved (a matched note whose only reference was deleted, so the def lingers
+            // unreferenced) has no deleted-only def to consume, so fall back to the LIVE def carrying the
+            // reference's id. Without the fallback the del reference gets a fresh sequential id while its
+            // preserved def keeps its original id, and reject dangles (the renumbered reference resolves to no
+            // definition) whenever the original id ≠ the reference's ordinal — masked by the {1,2}-in-order
+            // corpus, exposed by gapped ids (e.g. the NVCA contract's 111 footnotes).
             XElement? def = isDel
-                ? (delDefs.Count > 0 ? delDefs.Dequeue() : null)
+                ? (delDefs.Count > 0 ? delDefs.Dequeue() : liveById.GetValueOrDefault(oldId))
                 : liveById.GetValueOrDefault(oldId);
 
             // A note referenced more than once corresponds once: the FIRST reference fixes its id; later references
@@ -1281,21 +1297,24 @@ internal static class IrMarkupRenderer
                 case IrTokenOpKind.FormatChanged:
                 {
                     var (rs, re) = RightSpanChars(rightTokens, tokenOp);
-                    foreach (var r in rightRuns.Slice(rs, re))
+                    var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
+                    foreach (var r in rightRuns.Slice(rs, re, zs, ze))
                         content.Add(WrapRunLevel(r, RevKind.MoveTo, state));   // moved-and-unchanged
                     break;
                 }
                 case IrTokenOpKind.Insert:
                 {
                     var (s, e) = RightSpanChars(rightTokens, tokenOp);
-                    foreach (var r in rightRuns.Slice(s, e))
+                    var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
+                    foreach (var r in rightRuns.Slice(s, e, zs, ze))
                         content.Add(WrapRunLevel(r, RevKind.Ins, state));
                     break;
                 }
                 case IrTokenOpKind.Delete:
                 {
                     var (s, e) = LeftSpanChars(leftTokens, tokenOp);
-                    foreach (var r in leftRuns.Slice(s, e))
+                    var (zs, ze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
+                    foreach (var r in leftRuns.Slice(s, e, zs, ze))
                         content.Add(WrapRunLevel(r, RevKind.Del, state));
                     break;
                 }
@@ -1774,13 +1793,15 @@ internal static class IrMarkupRenderer
                     // holds byte-for-byte.
                     var (rs, re) = RightSpanChars(rightTokens, tokenOp);
                     var (ls, le) = LeftSpanChars(leftTokens, tokenOp);
+                    var (rzs, rze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
+                    var (lzs, lze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
                     string rawRight = RawSpanText(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
                     string rawLeft = RawSpanText(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
                     if (!string.Equals(rawLeft, rawRight, StringComparison.Ordinal))
                     {
-                        foreach (var r in leftRuns.Slice(ls, le))
+                        foreach (var r in leftRuns.Slice(ls, le, lzs, lze))
                             content.Add(WrapRunLevel(r, RevKind.Del, state));
-                        foreach (var r in rightRuns.Slice(rs, re))
+                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
                             content.Add(WrapRunLevel(r, RevKind.Ins, state));   // registers media on its clone
                     }
                     else if (tokenOp.Kind == IrTokenOpKind.FormatChanged)
@@ -1795,7 +1816,7 @@ internal static class IrMarkupRenderer
                         // covering right chars [cursor, cursor+len), clone the LEFT run's rPr at the aligned left
                         // char (ls + (cursor-rs)) as the old formatting, preserving modeled AND unmodeled left rPr.
                         int cursor = rs;
-                        foreach (var r in rightRuns.Slice(rs, re))
+                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
                         {
                             state.RegisterMediaReferences(r);
                             // Only a w:r carries run formatting — bookmarks/zero-width markers pass through
@@ -1814,7 +1835,7 @@ internal static class IrMarkupRenderer
                     }
                     else
                     {
-                        foreach (var r in rightRuns.Slice(rs, re))
+                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
                         {
                             state.RegisterMediaReferences(r);
                             content.Add(r);
@@ -1825,14 +1846,16 @@ internal static class IrMarkupRenderer
                 case IrTokenOpKind.Insert:
                 {
                     var (s, e) = RightSpanChars(rightTokens, tokenOp);
-                    foreach (var r in rightRuns.Slice(s, e))
+                    var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
+                    foreach (var r in rightRuns.Slice(s, e, zs, ze))
                         content.Add(WrapRunLevel(r, RevKind.Ins, state));   // registers media on its clone
                     break;
                 }
                 case IrTokenOpKind.Delete:
                 {
                     var (s, e) = LeftSpanChars(leftTokens, tokenOp);
-                    foreach (var r in leftRuns.Slice(s, e))
+                    var (zs, ze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
+                    foreach (var r in leftRuns.Slice(s, e, zs, ze))
                         content.Add(WrapRunLevel(r, RevKind.Del, state));
                     break;
                 }
@@ -1969,6 +1992,19 @@ internal static class IrMarkupRenderer
         }
         return true;
     }
+
+    /// <summary>Whether the half-open token range <c>[start,end)</c> STARTS / ENDS with a zero-width token — a
+    /// tab, break, note ref, image, opaque, or textbox placeholder, each contributing 0 chars (<c>StartChar ==
+    /// EndChar</c>). A boundary zero-width token sits exactly at the op's start/end char, which two adjacent ops
+    /// share; the caller passes these flags to <see cref="SourceRunModel.Slice"/> so the op that OWNS the token
+    /// (it is the op's first / last token) claims it and the other does not — keeping a tail footnote reference
+    /// from being dropped and a shared tab from being double-counted.</summary>
+    private static (bool Start, bool End) ZeroWidthBoundaries(
+        IReadOnlyList<IrDiffToken> tokens, int start, int end) =>
+        end <= start
+            ? (false, false)
+            : (tokens[start].StartChar == tokens[start].EndChar,
+               tokens[end - 1].StartChar == tokens[end - 1].EndChar);
 
     /// <summary>Concatenate the RAW token text over a half-open token-index span (empty span ⇒ "").</summary>
     private static string RawSpanText(IReadOnlyList<IrDiffToken> tokens, int start, int end)
@@ -2433,9 +2469,18 @@ internal static class IrMarkupRenderer
 
         /// <summary>Produce run-level XElements covering the half-open char span [start,end). Run children that
         /// fall (partly) inside the span are grouped back into per-source-run <c>w:r</c> clones carrying the
-        /// original <c>w:rPr</c>; a straddling <c>w:t</c> is split. Zero-width segments are included iff their
-        /// position lies within [start,end) (so a zero-width boundary token attaches to exactly one side).</summary>
-        public List<XElement> Slice(int start, int end)
+        /// original <c>w:rPr</c>; a straddling <c>w:t</c> is split.
+        /// <para><b>Boundary zero-width ownership.</b> A zero-width inline (footnote/endnote reference, drawing,
+        /// tab, break, …) occupies a single char position that two adjacent token ops SHARE (one ends there, the
+        /// next starts there). It belongs to whichever op's token range holds it as its FIRST or LAST token — the
+        /// diff already decided this. The caller passes <paramref name="includeStartZeroWidth"/> (its first token
+        /// is zero-width) / <paramref name="includeEndZeroWidth"/> (its last token is zero-width); a STRICTLY
+        /// interior zero-width is always taken. Without this, a half-open char span both DROPS a trailing
+        /// zero-width (it sits at <c>end</c>, which no op's interior and no later op covers — the footnote-ref
+        /// corruption) and DOUBLE-COUNTS a boundary one (an equal tab claimed both as equal by the op that owns it
+        /// AND as deleted by the next op's start). Defaults <c>(true,false)</c> reproduce the original
+        /// always-start-inclusive / end-exclusive rule for callers that don't pass token boundaries.</para></summary>
+        public List<XElement> Slice(int start, int end, bool includeStartZeroWidth = true, bool includeEndZeroWidth = false)
         {
             var result = new List<XElement>();
 
@@ -2503,10 +2548,15 @@ internal static class IrMarkupRenderer
 
             foreach (var seg in _segments)
             {
-                bool overlaps = start == end
-                    ? (seg.Start == start && seg.IsZeroWidth)         // empty span: only zero-width at the point
-                    : seg.Start < end && seg.End > start ||           // text overlap
-                      (seg.IsZeroWidth && seg.Start >= start && seg.Start < end);
+                bool overlaps;
+                if (start == end)
+                    overlaps = seg.Start == start && seg.IsZeroWidth;     // empty span: only zero-width at the point
+                else if (seg.IsZeroWidth)
+                    overlaps = (seg.Start > start && seg.Start < end)     // strictly interior: always taken
+                            || (seg.Start == start && includeStartZeroWidth)  // leading: only if this op owns it
+                            || (seg.Start == end && includeEndZeroWidth);     // trailing: only if this op owns it
+                else
+                    overlaps = seg.Start < end && seg.End > start;        // text overlap
 
                 // A zero-width inline (note ref, drawing, tab, …) sits at ONE char position two adjacent
                 // token-ops can SHARE (prev op's end char == this op's start char), so a char-span slice would
