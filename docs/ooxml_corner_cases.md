@@ -359,6 +359,79 @@ Non-numeric values return `null` and are skipped instead of throwing.
 
 ---
 
+## DocxDiff: zero-width markers that are NOT diff tokens (bookmarks, field plumbing, soft hyphens)
+
+### Symptom
+
+Diffing two DOCX with `DocxDiff` and editing a paragraph that carries a bookmark, a `REF`/`PAGEREF` field,
+or a `w:noBreakHyphen`/`w:softHyphen`/`w:sym` produced output where, after accept or reject:
+
+- a `w:bookmarkStart`/`w:bookmarkEnd` was **dropped** (orphaning the bookmark, dangling every
+  `w:hyperlink @w:anchor` and `REF`/`PAGEREF`/`NOTEREF`/`HYPERLINK \l` reference that targets it),
+- the same bookmark **id was duplicated** across the `w:del` and `w:ins` copy (`Sem_UniqueAttributeValue`),
+- a whole `REF` **field vanished** when the text *before* it was edited, and
+- a body character was **dropped** next to a non-breaking/soft hyphen (the reject of a
+  "Company‑Controlled Intellectual" run lost the "I").
+
+The SDK `OpenXmlValidator` caught only the duplicate id; the dropped marker / dropped field / dropped char are
+schema-valid (the validator does not resolve cross-references), so they require a STRUCTURAL round-trip oracle
+(bookmark id↔name↔reference integrity + body-text `reject ≡ left` / `accept ≡ right`).
+
+### The corner case
+
+The IR diff engine reconstructs an edited paragraph by **slicing the SOURCE run-level XML** at character
+offsets the **token diff** decided. A run-level element is one of three kinds with respect to that offset
+math:
+
+| element | IR / tokenizer treats it as | source slicer must treat it as |
+|---|---|---|
+| `w:t` text | N chars | N chars (splittable) |
+| `w:bookmarkStart`/`End`, `w:fldChar`, `w:instrText` | **dropped / 0 chars, NOT a token** | **0 chars but ALWAYS emitted** |
+| `w:noBreakHyphen`/`w:softHyphen`/`w:sym` | **1 char of text** (e.g. U+2011) | **1 char** |
+
+Two distinct bugs followed from violating that table:
+
+1. **Boundary drop.** Because a bookmark/field marker is *not a diff token*, the token-driven
+   boundary-ownership flags (`includeStart/EndZeroWidth`) were blind to it, so a marker sitting exactly at an
+   edit boundary was claimed by neither adjacent op and disappeared. Fix: flag these markers `AlwaysKeep` in the
+   slicer (taken anywhere in `[start,end]`), then reconcile context in post-render passes (`NormalizeBookmarks`,
+   `NormalizeFields`).
+2. **Off-by-one.** `w:noBreakHyphen`/`w:softHyphen`/`w:sym` ARE one character in the IR (the reader emits an
+   `IrTextRun`), so the tokenizer counts them — but the slicer counted them as zero-width. Every such element
+   shifted the slice by one and dropped an adjacent character. Fix: the slicer advances the char counter by one
+   for them, matching the IR.
+
+A bookmark/field present in BOTH documents is *unchanged by the edit* (only the surrounding text moved), so its
+correct representation is a single **bare** (untracked) pair that survives both accept and reject — NOT a
+tracked `w:ins`/`w:del` copy. `NormalizeBookmarks`/`NormalizeFields` collapse to that; a wholly inserted/deleted
+bookmark or field keeps its revision context. Bookmarks nested in opaque content (`m:oMath`, `w:drawing`) are
+deliberately left untouched — they are part of that element's canonical content hash, so renumbering them would
+break `reject ≡ left`.
+
+### Word vs LibreOffice
+
+No genuine Word-vs-LibreOffice *divergence* was found for bookmark/cross-reference handling: with the fixes,
+both the bookmark structural round-trip and (per the `lo_bookmark_check.py` oracle design) LibreOffice's own
+`GetReference` field resolution agree that every reference resolves. The one non-divergent quirk worth noting:
+the strict ECMA-376 schema rejects `<w:w w:val="0">` (character scale 0), which the real NVCA COI source carries
+65× and which Word writes and tolerates — the diff merely relocates those runs, so it is a *source* quirk, not a
+diff defect (it appears identically when validating the input).
+
+### Relevant code
+
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `SourceRunModel` (`AlwaysKeep`/`FieldPlumbingKeep`, the 1-char
+  hyphen/sym segment), `NormalizeBookmarks`, `NormalizeFields`, `ExpandFieldForRevision`.
+- `Docxodus/Ir/IrReader.cs` — `EmitRunChild` (N7/N8: `noBreakHyphen`/`softHyphen`/`sym` → 1-char `IrTextRun`).
+- `Docxodus/WmlComparer.cs` — `AddNumberingChildInSchemaOrder` (numbering-merge child order).
+
+### Tests
+
+`Docxodus.Tests/DocxDiffBookmarkStructureTests.cs` + `DocxDiffBookmarkFixtures.cs` (synthetic corpus),
+`DocxDiffBookmarkRealDocTests.cs` (real NVCA COI/SPA), and the `bkmk-struct` column + `lo/lo_bookmark_check.py`
+oracle in `tools/diffharness`.
+
+---
+
 ## Contributing
 
 When adding new corner cases to this document:

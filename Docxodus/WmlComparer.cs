@@ -2230,12 +2230,7 @@ namespace Docxodus
                 cloned.SetAttributeValue(W.abstractNumId, targetId);
                 abstractNumIdMap[fromAbstractNumId.Value] = targetId;
 
-                // Add in correct position (before w:num elements per schema order)
-                var firstNum = toNumberingXDoc.Root.Elements(W.num).FirstOrDefault();
-                if (firstNum != null)
-                    firstNum.AddBeforeSelf(cloned);
-                else
-                    toNumberingXDoc.Root.Add(cloned);
+                AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
             }
 
             // Copy num elements that don't exist in destination
@@ -2272,7 +2267,7 @@ namespace Docxodus
                     var abstractNumIdElement = cloned.Element(W.abstractNumId);
                     if (abstractNumIdElement != null)
                         abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
-                    toNumberingXDoc.Root.Add(cloned);
+                    AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
                 }
                 else
                 {
@@ -2284,11 +2279,34 @@ namespace Docxodus
                         if (abstractNumIdElement != null)
                             abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
                     }
-                    toNumberingXDoc.Root.Add(cloned);
+                    AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
                 }
             }
 
             toNumberingPart.PutXDocument(toNumberingXDoc);
+        }
+
+        /// <summary>
+        /// Insert a child into <c>w:numbering</c> respecting the schema order
+        /// <c>w:numPicBullet* w:abstractNum* w:num* w:numIdMacAtCleanup?</c>: place it BEFORE the first existing
+        /// child of a higher rank (so a copied <c>w:num</c> lands before a trailing <c>w:numIdMacAtCleanup</c>
+        /// rather than after it — appending blindly produced a Sch_UnexpectedElementContentExpectingComplex).
+        /// </summary>
+        private static void AddNumberingChildInSchemaOrder(XElement numbering, XElement child)
+        {
+            static int Rank(XElement e) => e.Name.LocalName switch
+            {
+                "numPicBullet" => 0,
+                "abstractNum" => 1,
+                "num" => 2,
+                _ => 3,             // numIdMacAtCleanup (and any trailing element) sorts last
+            };
+            int rank = Rank(child);
+            var firstLater = numbering.Elements().FirstOrDefault(e => Rank(e) > rank);
+            if (firstLater != null)
+                firstLater.AddBeforeSelf(child);
+            else
+                numbering.Add(child);
         }
 
         /// <summary>

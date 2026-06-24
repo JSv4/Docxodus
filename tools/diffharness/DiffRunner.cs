@@ -58,6 +58,12 @@ internal static class DiffRunner
         //    corruption violated (schema-invalid output that LibreOffice silently dropped a note from).
         var note = CheckNoteStructure(ours.DocumentByteArray);
 
+        // 6) Bookmark / internal cross-reference STRUCTURE: the Compare output's bookmark ids must be unique and
+        //    1:1 paired (every w:bookmarkStart has a w:bookmarkEnd of the same id), and every internal reference
+        //    (hyperlink w:anchor, REF/PAGEREF/NOTEREF/HYPERLINK \l in w:instrText/w:fldSimple) must resolve to a
+        //    surviving bookmark NAME — the invariant the dropped-marker / duplicate-id corruption violated.
+        var bkmk = CheckBookmarkStructure(ours.DocumentByteArray);
+
         var report = new RoundTripReport(
             AcceptBodyEqualsRight: accept.BodyEquals(rightText),
             RejectBodyEqualsLeft: reject.BodyEquals(leftText),
@@ -75,7 +81,10 @@ internal static class DiffRunner
             OursFootnoteIdsUnique: note.FootnoteIdsUnique,
             OursEndnoteIdsUnique: note.EndnoteIdsUnique,
             OursFootnoteRefsAllResolve: note.FootnoteRefsAllResolve,
-            OursEndnoteRefsAllResolve: note.EndnoteRefsAllResolve);
+            OursEndnoteRefsAllResolve: note.EndnoteRefsAllResolve,
+            OursBookmarkIdsUnique: bkmk.IdsUnique,
+            OursBookmarkPairingOk: bkmk.PairingOk,
+            OursBookmarkRefsAllResolve: bkmk.RefsAllResolve);
         File.WriteAllText(Path.Combine(outDir, "roundtrip.json"),
             JsonSerializer.Serialize(report, Json));
         return report;
@@ -119,6 +128,79 @@ internal static class DiffRunner
         bool FootnoteIdsUnique, bool EndnoteIdsUnique,
         bool FootnoteRefsAllResolve, bool EndnoteRefsAllResolve);
 
+    /// <summary>Bookmark / internal cross-reference STRUCTURE on a produced document: bookmark ids are unique,
+    /// every <c>w:bookmarkStart</c> pairs 1:1 with a <c>w:bookmarkEnd</c>, and every internal reference resolves
+    /// to a surviving bookmark name. Mirrors <c>DocxDiffBookmarkStructureTests</c> so the corpus + real-doc runs
+    /// flag bookmark corruption headlessly — the structural counterpart to <see cref="CheckNoteStructure"/>.</summary>
+    private static BookmarkStructure CheckBookmarkStructure(byte[] bytes)
+    {
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var body = doc.MainDocumentPart?.GetXDocument().Root?.Element(W + "body");
+        if (body == null)
+            return new BookmarkStructure(true, true, true);
+
+        string Id(XElement e) => (string?)e.Attribute(W + "id") ?? "";
+        var startIds = body.Descendants(W + "bookmarkStart").Select(Id).ToList();
+        var endIds = body.Descendants(W + "bookmarkEnd").Select(Id).ToList();
+        bool idsUnique = startIds.Count == startIds.Distinct().Count()
+                      && endIds.Count == endIds.Distinct().Count();
+        bool pairingOk = startIds.OrderBy(x => x).SequenceEqual(endIds.OrderBy(x => x));
+
+        var names = new HashSet<string>(body.Descendants(W + "bookmarkStart")
+            .Select(e => (string?)e.Attribute(W + "name") ?? "").Where(n => n.Length > 0));
+        bool refsResolve = InternalReferenceTargets(body).All(t => names.Contains(t));
+
+        return new BookmarkStructure(idsUnique, pairingOk, refsResolve);
+    }
+
+    /// <summary>Every internal-reference target NAME in the body: hyperlink <c>w:anchor</c> + the bookmark
+    /// argument of every REF/PAGEREF/NOTEREF/HYPERLINK \l instruction (from <c>w:instrText</c> field runs and
+    /// <c>w:fldSimple</c>). The <c>_GoBack</c>/<c>_Toc</c>-only no-target instructions yield nothing.</summary>
+    private static IEnumerable<string> InternalReferenceTargets(XElement body)
+    {
+        foreach (var h in body.Descendants(W + "hyperlink"))
+        {
+            var anchor = (string?)h.Attribute(W + "anchor");
+            if (!string.IsNullOrEmpty(anchor)) yield return anchor!;
+        }
+        foreach (var f in body.Descendants(W + "fldSimple"))
+            if (RefTarget((string?)f.Attribute(W + "instr") ?? "") is { } t) yield return t;
+
+        var instr = "";
+        foreach (var e in body.Descendants().Where(x =>
+                     x.Name == W + "fldChar" || x.Name == W + "instrText" || x.Name == W + "delInstrText"))
+        {
+            if (e.Name == W + "fldChar")
+            {
+                var type = (string?)e.Attribute(W + "fldCharType");
+                if (type == "begin") instr = "";
+                else if (type is "separate" or "end")
+                {
+                    if (RefTarget(instr) is { } t) yield return t;
+                    instr = "";
+                }
+            }
+            else instr += e.Value;
+        }
+    }
+
+    private static string? RefTarget(string instr)
+    {
+        var toks = System.Text.RegularExpressions.Regex.Matches(instr.Trim(), "\"[^\"]*\"|\\S+")
+            .Select(m => m.Value).ToList();
+        if (toks.Count == 0) return null;
+        var kw = toks[0].ToUpperInvariant();
+        if (kw is "REF" or "PAGEREF" or "NOTEREF")
+            return toks.Count >= 2 ? toks[1].Trim('"') : null;
+        if (kw == "HYPERLINK")
+            for (int i = 1; i < toks.Count - 1; i++)
+                if (toks[i] == "\\l") return toks[i + 1].Trim('"');
+        return null;
+    }
+
+    private readonly record struct BookmarkStructure(bool IdsUnique, bool PairingOk, bool RefsAllResolve);
+
     /// <summary>Return a short human-readable description of the first divergence, or null if equal.</summary>
     private static string? FirstDiff(string a, string b)
     {
@@ -150,7 +232,10 @@ internal sealed record RoundTripReport(
     bool OursFootnoteIdsUnique = true,
     bool OursEndnoteIdsUnique = true,
     bool OursFootnoteRefsAllResolve = true,
-    bool OursEndnoteRefsAllResolve = true)
+    bool OursEndnoteRefsAllResolve = true,
+    bool OursBookmarkIdsUnique = true,
+    bool OursBookmarkPairingOk = true,
+    bool OursBookmarkRefsAllResolve = true)
 {
     /// <summary>Content-level round-trip success: body + notes + header/footer (dedup) all match.</summary>
     public bool ContentClean =>
@@ -163,6 +248,12 @@ internal sealed record RoundTripReport(
     public bool NoteStructureClean =>
         OursFootnoteIdsUnique && OursEndnoteIdsUnique &&
         OursFootnoteRefsAllResolve && OursEndnoteRefsAllResolve;
+
+    /// <summary>Bookmark / internal cross-reference structural soundness of the produced document: unique
+    /// bookmark ids, 1:1 start↔end pairing, and every internal reference resolving to a surviving bookmark
+    /// name (the dropped-marker / duplicate-id / dangling-reference guard).</summary>
+    public bool BookmarkStructureClean =>
+        OursBookmarkIdsUnique && OursBookmarkPairingOk && OursBookmarkRefsAllResolve;
 }
 
 internal sealed record RevDto(

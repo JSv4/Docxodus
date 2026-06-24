@@ -198,6 +198,24 @@ internal static class IrMarkupRenderer
                 // right (original-id) comment, reject the left (fresh-id) comment.
                 DeduplicateRevisionDuplicatedCommentIds(main);
 
+                // Bookmark normalization pass: an edit straddling a bookmark range endpoint, or a dense
+                // overlapping content-region layout, can leave the rendered body with a duplicate bookmark id
+                // (schema-invalid Sem_UniqueAttributeValue), an unpaired marker, or a COMMON bookmark surviving
+                // only one of accept/reject. Reconcile, identity-aware: a bookmark present in BOTH sources is
+                // collapsed to a single BARE pair (survives accept AND reject); a genuinely inserted/deleted one
+                // keeps its w:ins/w:del context; ids are made unique and every start↔end re-paired — so reject ≡
+                // left / accept ≡ right at the bookmark-structure level and every REF/PAGEREF/NOTEREF/HYPERLINK\l
+                // + internal hyperlink anchor still resolves.
+                NormalizeBookmarks(main, BodyBookmarkNames(state.Left), BodyBookmarkNames(state.RightSource));
+
+                // Field-context normalization: field plumbing (w:fldChar/w:instrText) is kept across edit
+                // boundaries (AlwaysKeep) so a REF/PAGEREF field is never orphaned, but a boundary may leave the
+                // plumbing in the wrong revision wrapper (e.g. a begin/separate run wrapped in w:ins after the
+                // text before the field was edited — the field would then vanish on reject). Re-home each field's
+                // plumbing to the field's own context: bare for an unchanged or result-edited field (survives
+                // accept AND reject), left in w:del/w:ins for a wholly deleted/inserted field.
+                NormalizeFields(main);
+
                 // Carry right-only styles + numbering into the left-based package.
                 if (main.StyleDefinitionsPart != null &&
                     wDocRight.MainDocumentPart?.StyleDefinitionsPart != null)
@@ -1311,6 +1329,333 @@ internal static class IrMarkupRenderer
             commentsPart.PutXDocument();
     }
 
+    // ----------------------------------------------------------------- bookmark normalization
+
+    /// <summary>
+    /// Reconcile bookmark markers in the rendered body so every bookmark has a UNIQUE id, a 1:1
+    /// start↔end pairing, and its NAME intact. An edit straddling a bookmark range endpoint — or a
+    /// whole-block <c>del(left)+ins(right)</c> bail of a bookmark-bearing paragraph — emits the SAME
+    /// bookmark id (and name) on both the <c>w:del</c> (left) and <c>w:ins</c> (right) side, which is
+    /// schema-invalid (<c>Sem_UniqueAttributeValue</c>) and ambiguous to any cross-reference resolver.
+    /// <para>Two cases, distinguished by whether the bookmark survives as a BARE (untracked) marker:</para>
+    /// <list type="bullet">
+    /// <item><b>Touches an equal region</b> (a bare endpoint exists): the bookmark is unchanged across the
+    /// edit, so collapse it to a SINGLE bare start+end (lift any tracked copy out of its <c>w:ins</c>/
+    /// <c>w:del</c> wrapper). It then survives BOTH accept and reject, wrapping the surviving content.</item>
+    /// <item><b>Wholly inside a rewritten / whole-block-bailed span</b> (no bare endpoint): keep BOTH tracked
+    /// copies but renumber them to unique ids. Accept drops the <c>w:del</c> copy and keeps the <c>w:ins</c>
+    /// one; reject the reverse — each resolution lands exactly one, paired, name-preserved bookmark.</item>
+    /// </list>
+    /// Either way the Compare output carries unique, 1:1-paired bookmarks with names intact, so every
+    /// <c>REF</c>/<c>PAGEREF</c>/<c>NOTEREF</c>/<c>HYPERLINK \l</c> field and internal hyperlink anchor still
+    /// resolves. The blessed <see cref="WmlComparer"/> oracle strips ALL bookmarks on any edit; this preserves
+    /// them.
+    /// </summary>
+    private static void NormalizeBookmarks(MainDocumentPart main, HashSet<string> leftNames, HashSet<string> rightNames)
+    {
+        var doc = main.GetXDocument();
+        var body = doc.Root?.Element(W.body);
+        if (body == null)
+            return;
+
+        // Only RUN-LEVEL bookmarks are reconciled here. A bookmark NESTED inside opaque content (a math
+        // m:oMath, a w:drawing, a textbox) is part of that element's canonical content hash — renumbering or
+        // removing it would silently change the opaque blob and break reject ≡ left (the IR hashes the whole
+        // oMath, bookmark included). Such bookmarks round-trip WITH their opaque host untouched.
+        var starts = body.Descendants(W.bookmarkStart).Where(IsRunLevelBookmark).ToList();
+        var ends = body.Descendants(W.bookmarkEnd).Where(IsRunLevelBookmark).ToList();
+        if (starts.Count == 0 && ends.Count == 0)
+            return;
+
+        static string? IdOf(XElement e) => (string?)e.Attribute(W.id);
+
+        bool changed = false;
+
+        // (A) Identity-aware collapse. A bookmark present in BOTH sources is UNCHANGED by the edit (only the text
+        // around it moved), so it should be a single BARE pair that survives accept AND reject — collapsing the
+        // del/ins copies (or recovering a side the dense-layout renderer dropped, which would otherwise leave the
+        // bookmark surviving only one resolution). EXCEPTION: a whole-block-bailed paragraph (its paragraph mark
+        // is itself tracked) cannot host a bare marker that survives both — there the del copy + ins copy each
+        // survive their own resolution, so keep both and let (B) renumber them unique. A genuinely inserted /
+        // deleted bookmark (one source only) keeps its w:ins/w:del context untouched.
+        foreach (var grp in starts.Where(s => (string?)s.Attribute(W.name) != null)
+                     .GroupBy(s => (string)s.Attribute(W.name)!).ToList())
+        {
+            var name = grp.Key;
+            var nameStarts = grp.ToList();
+            var ids = new HashSet<string>(nameStarts.Select(IdOf).Where(i => i != null)!);
+            var nameEnds = ends.Where(e => IdOf(e) is { } id && ids.Contains(id)).ToList();
+
+            bool common = leftNames.Contains(name) && rightNames.Contains(name);
+            if (!common)
+                continue; // inserted/deleted: leave revision context; (B)/(C) keep ids unique + paired
+            if (nameStarts.Concat(nameEnds).Any(IsInWholeBlockRevisedParagraph))
+                continue; // whole-block: del + ins copies each carry the name into their own resolution
+
+            // Collapse to a single bare start + bare end (both survive accept AND reject).
+            var keepStart = nameStarts[0];
+            var keepEnd = nameEnds.Count > 0 ? nameEnds[0] : null;
+            foreach (var s in nameStarts)
+                if (!ReferenceEquals(s, keepStart)) { RemoveBookmarkMarker(s); changed = true; }
+            foreach (var e in nameEnds)
+                if (!ReferenceEquals(e, keepEnd)) { RemoveBookmarkMarker(e); changed = true; }
+            if (LiftBookmarkBare(keepStart)) changed = true;
+            if (keepEnd != null && LiftBookmarkBare(keepEnd)) changed = true;
+        }
+
+        // (B) Renumber the remaining duplicate ids (bookmarks wholly inside a rewritten / whole-block span) so
+        //     each tracked copy is unique. Re-pair by document order; copy 0 keeps the id, copies 1.. get fresh.
+        var liveStarts = body.Descendants(W.bookmarkStart).Where(IsRunLevelBookmark)
+            .GroupBy(s => IdOf(s) ?? "").ToDictionary(g => g.Key, g => g.ToList());
+        var liveEnds = body.Descendants(W.bookmarkEnd).Where(IsRunLevelBookmark)
+            .GroupBy(e => IdOf(e) ?? "").ToDictionary(g => g.Key, g => g.ToList());
+        var dupIds = liveStarts.Where(kv => kv.Value.Count > 1).Select(kv => kv.Key)
+            .Union(liveEnds.Where(kv => kv.Value.Count > 1).Select(kv => kv.Key)).ToList();
+        if (dupIds.Count > 0)
+        {
+            int next = GlobalMaxBookmarkId(main) + 1;
+            foreach (var id in dupIds)
+            {
+                var ss = liveStarts.TryGetValue(id, out var sl) ? sl : new List<XElement>();
+                var es = liveEnds.TryGetValue(id, out var el) ? el : new List<XElement>();
+                int copies = Math.Max(ss.Count, es.Count);
+                for (int k = 1; k < copies; k++)
+                {
+                    string fresh = (next++).ToString();
+                    if (k < ss.Count) ss[k].SetAttributeValue(W.id, fresh);
+                    if (k < es.Count) es[k].SetAttributeValue(W.id, fresh);
+                    changed = true;
+                }
+            }
+        }
+
+        // (C) Reconcile pairing — GUARANTEE every run-level bookmarkStart has a matching bookmarkEnd and vice
+        //     versa. A cross-paragraph range whose far endpoint lands in a churned span can be dropped by the
+        //     token-diff renderer in dense, overlapping-bookmark layouts (the NVCA _DV_/_cp_text_ content-region
+        //     bookmarks); a post-render guarantee keeps the output schema-sound and every cross-reference
+        //     resolvable regardless of that edge. An orphaned START (its END was dropped) is re-closed with a
+        //     synthetic zero-width end in the start's own revision context (so accept/reject keep it together);
+        //     an orphaned END (its START — the name carrier — was dropped) is removed (nothing can reference a
+        //     nameless marker). Faithful to the structure round-trip: the bookmark NAME survives and resolves.
+        var startById = body.Descendants(W.bookmarkStart).Where(IsRunLevelBookmark)
+            .GroupBy(s => IdOf(s) ?? "").ToDictionary(g => g.Key, g => g.ToList());
+        var endById = body.Descendants(W.bookmarkEnd).Where(IsRunLevelBookmark)
+            .GroupBy(e => IdOf(e) ?? "").ToDictionary(g => g.Key, g => g.ToList());
+        foreach (var (id, sl) in startById)
+        {
+            int have = endById.TryGetValue(id, out var el) ? el.Count : 0;
+            for (int k = have; k < sl.Count; k++)
+            {
+                sl[k].AddAfterSelf(new XElement(W.bookmarkEnd, new XAttribute(W.id, id)));
+                changed = true;
+            }
+        }
+        foreach (var (id, el) in endById)
+        {
+            int have = startById.TryGetValue(id, out var sl) ? sl.Count : 0;
+            for (int k = have; k < el.Count; k++)
+            {
+                RemoveBookmarkMarker(el[k]);
+                changed = true;
+            }
+        }
+
+        if (changed)
+            main.PutXDocument();
+    }
+
+    /// <summary>The set of body bookmark NAMES in a source IR document — scanned from each block's provenance
+    /// source element (bookmarks are dropped from the IR model by rule N3 but retained on the source XML). Used
+    /// to classify a rendered bookmark as common (in both sources) / inserted / deleted for round-trip-correct
+    /// normalization.</summary>
+    private static HashSet<string> BodyBookmarkNames(IrDocument? source)
+    {
+        var names = new HashSet<string>();
+        if (source == null)
+            return names;
+        foreach (var block in source.Body.Blocks)
+        {
+            var el = block.Source.Element;
+            if (el == null)
+                continue;
+            foreach (var bk in el.DescendantsAndSelf(W.bookmarkStart))
+                if ((string?)bk.Attribute(W.name) is { } n && n.Length > 0)
+                    names.Add(n);
+        }
+        return names;
+    }
+
+    /// <summary>True iff the marker's nearest enclosing <c>w:p</c> has a TRACKED paragraph mark
+    /// (<c>w:pPr/w:rPr/w:del</c> or <c>w:ins</c>) — i.e. it sits in a whole-block-bailed deleted/inserted
+    /// paragraph, where a bare marker could not survive both accept and reject.</summary>
+    private static bool IsInWholeBlockRevisedParagraph(XElement marker)
+    {
+        var p = marker.Ancestors(W.p).FirstOrDefault();
+        var mark = p?.Element(W.pPr)?.Element(W.rPr);
+        return mark != null && (mark.Element(W.del) != null || mark.Element(W.ins) != null);
+    }
+
+    /// <summary>True iff the bookmark marker sits at the paragraph/body run level — its ancestors up to the
+    /// enclosing <c>w:p</c>/<c>w:body</c> are only run-level wrappers (ins/del/hyperlink/sdt/smartTag/fldSimple).
+    /// A bookmark reached through anything else (a math <c>m:oMath</c>, a <c>w:drawing</c>, a textbox) is part of
+    /// that opaque element's content hash and must NOT be renumbered/removed by the normalizer.</summary>
+    private static bool IsRunLevelBookmark(XElement marker)
+    {
+        for (var a = marker.Parent; a != null; a = a.Parent)
+        {
+            if (a.Name == W.p || a.Name == W.body || a.Name == W.tc)
+                return true;
+            if (a.Name != W.ins && a.Name != W.del && a.Name != W.hyperlink &&
+                a.Name != W.sdt && a.Name != W.sdtContent && a.Name != W.smartTag && a.Name != W.fldSimple)
+                return false;
+        }
+        return false;
+    }
+
+    /// <summary>Remove a bookmark marker, dropping the empty <c>w:ins</c>/<c>w:del</c> wrapper that held only it.
+    /// No-op if the marker (or its wrapper) was already detached by an earlier reconciliation step.</summary>
+    private static void RemoveBookmarkMarker(XElement marker)
+    {
+        var parent = marker.Parent;
+        if (parent == null)
+            return;
+        marker.Remove();
+        if ((parent.Name == W.ins || parent.Name == W.del) && parent.Parent != null && !parent.Elements().Any())
+            parent.Remove();
+    }
+
+    /// <summary>If the marker is the sole child of a <c>w:ins</c>/<c>w:del</c> wrapper, lift it OUT to a bare
+    /// sibling (a start before the wrapper, an end after) so it survives BOTH accept and reject while keeping the
+    /// bookmark wrapping the run content. Returns true if it moved.</summary>
+    private static bool LiftBookmarkBare(XElement marker)
+    {
+        var parent = marker.Parent;
+        if (parent == null || (parent.Name != W.ins && parent.Name != W.del) || parent.Parent == null)
+            return false;
+        marker.Remove();
+        if (marker.Name == W.bookmarkEnd) parent.AddAfterSelf(marker);
+        else parent.AddBeforeSelf(marker);
+        if (!parent.Elements().Any())
+            parent.Remove();
+        return true;
+    }
+
+    /// <summary>The largest integer bookmark id present in ANY part of the document (body + headers/footers +
+    /// note parts), so a freshly allocated id collides with no existing bookmark anywhere.</summary>
+    private static int GlobalMaxBookmarkId(MainDocumentPart main)
+    {
+        int max = 0;
+        void Scan(XElement? root)
+        {
+            if (root == null) return;
+            foreach (var m in root.Descendants().Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd))
+                if (int.TryParse((string?)m.Attribute(W.id), out var v) && v > max)
+                    max = v;
+        }
+        Scan(main.GetXDocument().Root);
+        foreach (var h in main.HeaderParts) Scan(h.GetXDocument().Root);
+        foreach (var f in main.FooterParts) Scan(f.GetXDocument().Root);
+        if (main.FootnotesPart != null) Scan(main.FootnotesPart.GetXDocument().Root);
+        if (main.EndnotesPart != null) Scan(main.EndnotesPart.GetXDocument().Root);
+        return max;
+    }
+
+    // ----------------------------------------------------------------- field-context normalization
+
+    /// <summary>
+    /// Re-home each fldChar field's plumbing (the <c>w:r</c>s carrying <c>w:fldChar</c>/<c>w:instrText</c>) to the
+    /// field's OWN revision context. Field plumbing is kept across edit boundaries (AlwaysKeep) so a field is
+    /// never orphaned, but a boundary can leave a begin/separate/end or instruction run in the wrong wrapper —
+    /// e.g. wrapped in <c>w:ins</c> when the text BEFORE the field was edited, which would make the field vanish
+    /// on reject. The field's home context is read from its RESULT runs: an unchanged field (result bare) or a
+    /// result-EDITED field (result split del/ins) → all plumbing BARE (survives accept AND reject); a wholly
+    /// deleted/inserted field keeps its plumbing in <c>w:del</c>/<c>w:ins</c> (toggles with the field).
+    /// </summary>
+    private static void NormalizeFields(MainDocumentPart main)
+    {
+        var body = main.GetXDocument().Root?.Element(W.body);
+        if (body == null)
+            return;
+
+        static bool IsBareRun(XElement r) => !r.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del);
+
+        bool changed = false;
+        foreach (var p in body.Descendants(W.p))
+        {
+            // Walk this paragraph's runs in document order, grouping each top-level fldChar field (begin..end)
+            // into its plumbing runs (fldChar / instrText) and result runs (the visible display between separate
+            // and end). Nested fields fold into the enclosing one (their plumbing is still field plumbing).
+            var fields = new List<(List<XElement> Plumbing, List<XElement> Result)>();
+            (List<XElement> Plumbing, List<XElement> Result)? cur = null;
+            int depth = 0;
+            bool afterSeparate = false;
+            foreach (var r in p.Descendants(W.r))
+            {
+                var fc = r.Element(W.fldChar);
+                var ty = fc != null ? (string?)fc.Attribute(W.fldCharType) : null;
+                bool hasInstr = r.Element(W.instrText) != null || r.Element(W.delInstrText) != null;
+                if (ty == "begin")
+                {
+                    if (depth == 0) { cur = (new(), new()); fields.Add(cur.Value); afterSeparate = false; }
+                    depth++;
+                    cur?.Plumbing.Add(r);
+                }
+                else if (ty == "separate")
+                {
+                    if (depth >= 1) { cur?.Plumbing.Add(r); if (depth == 1) afterSeparate = true; }
+                }
+                else if (ty == "end")
+                {
+                    if (depth >= 1) cur?.Plumbing.Add(r);
+                    depth--;
+                    if (depth == 0) { cur = null; afterSeparate = false; }
+                }
+                else if (depth >= 1)
+                {
+                    if (hasInstr || !afterSeparate) cur?.Plumbing.Add(r);   // instruction / pre-separate plumbing
+                    else cur?.Result.Add(r);                                // the visible field result
+                }
+            }
+
+            foreach (var (plumbing, result) in fields)
+            {
+                // Home context from the result: del-only → del, ins-only → ins, else (bare or result-edited) → bare.
+                bool anyResultDel = result.Any(r => r.Ancestors(W.del).Any());
+                bool anyResultIns = result.Any(r => r.Ancestors(W.ins).Any());
+                bool anyResultBare = result.Any(IsBareRun);
+                bool toBare = anyResultBare || !(anyResultDel ^ anyResultIns); // bare, no result, or mixed → bare
+                if (!toBare)
+                    continue; // wholly deleted/inserted field: plumbing already toggles with it
+                foreach (var pr in plumbing)
+                    if (!IsBareRun(pr) && LiftRunBare(pr))
+                        changed = true;
+            }
+        }
+
+        if (changed)
+            main.PutXDocument();
+    }
+
+    /// <summary>Lift a run out of its sole-child <c>w:ins</c>/<c>w:del</c> wrapper to bare. A run lifted out of a
+    /// deletion is no longer deleted, so its <c>w:delText</c>/<c>w:delInstrText</c> revert to
+    /// <c>w:t</c>/<c>w:instrText</c>. Returns true if it moved.</summary>
+    private static bool LiftRunBare(XElement run)
+    {
+        var w = run.Parent;
+        if (w == null || (w.Name != W.ins && w.Name != W.del) || w.Parent == null)
+            return false;
+        if (w.Name == W.del)
+        {
+            foreach (var dt in run.DescendantsAndSelf(W.delText).ToList()) dt.Name = W.t;
+            foreach (var di in run.DescendantsAndSelf(W.delInstrText).ToList()) di.Name = W.instrText;
+        }
+        run.Remove();
+        w.AddBeforeSelf(run);
+        if (!w.Elements().Any())
+            w.Remove();
+        return true;
+    }
+
     // ----------------------------------------------------------------- native move markup
 
     /// <summary>
@@ -1407,7 +1752,7 @@ internal static class IrMarkupRenderer
                     var (rs, re) = RightSpanChars(rightTokens, tokenOp);
                     var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
                     foreach (var r in rightRuns.Slice(rs, re, zs, ze))
-                        content.Add(WrapRunLevel(r, RevKind.MoveTo, state));   // moved-and-unchanged
+                        content.AddRange(WrapFieldAware(r, RevKind.MoveTo, state));   // moved-and-unchanged
                     break;
                 }
                 case IrTokenOpKind.Insert:
@@ -1415,7 +1760,7 @@ internal static class IrMarkupRenderer
                     var (s, e) = RightSpanChars(rightTokens, tokenOp);
                     var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
                     foreach (var r in rightRuns.Slice(s, e, zs, ze))
-                        content.Add(WrapRunLevel(r, RevKind.Ins, state));
+                        content.AddRange(WrapFieldAware(r, RevKind.Ins, state));
                     break;
                 }
                 case IrTokenOpKind.Delete:
@@ -1423,7 +1768,7 @@ internal static class IrMarkupRenderer
                     var (s, e) = LeftSpanChars(leftTokens, tokenOp);
                     var (zs, ze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
                     foreach (var r in leftRuns.Slice(s, e, zs, ze))
-                        content.Add(WrapRunLevel(r, RevKind.Del, state));
+                        content.AddRange(WrapFieldAware(r, RevKind.Del, state));
                     break;
                 }
             }
@@ -1440,7 +1785,7 @@ internal static class IrMarkupRenderer
         var runChildren = para.Elements().Where(e => e.Name != W.pPr).ToList();
         foreach (var child in runChildren)
             child.Remove();
-        var wrapped = runChildren.Select(c => WrapRunLevel(c, kind, state)).ToList();
+        var wrapped = runChildren.SelectMany(c => WrapFieldAware(c, kind, state)).ToList();
         if (pPr != null)
             pPr.AddAfterSelf(wrapped);
         else
@@ -1566,7 +1911,7 @@ internal static class IrMarkupRenderer
 
         var wrapped = new List<XElement>();
         foreach (var child in runChildren)
-            wrapped.Add(WrapRunLevel(child, kind, state));
+            wrapped.AddRange(WrapFieldAware(child, kind, state));
 
         // Re-insert wrapped runs after pPr (or at the front if no pPr).
         if (pPr != null)
@@ -1588,6 +1933,9 @@ internal static class IrMarkupRenderer
         // A w:hyperlink (and sdt/smartTag) is NOT a valid child of w:ins/w:del — the schema requires the
         // hyperlink OUTSIDE: w:hyperlink > w:ins > w:r. So for a container, keep the wrapper and wrap its inner
         // run-level children individually. For a plain run-level element (w:r, bookmark, …) wrap it directly.
+        // (A w:fldSimple is handled upstream by ExpandFieldForRevision — it is EXPANDED to fldChar runs before
+        // reaching here, since w:fldSimple is not in w:del's content model and keeping its wrapper bare would
+        // leave a dangling empty field on accept/reject.)
         bool insGrade = !IsDeleteGrade(kind);
         if (runLevel.Name == W.hyperlink || runLevel.Name == W.sdt || runLevel.Name == W.smartTag)
         {
@@ -1908,9 +2256,9 @@ internal static class IrMarkupRenderer
                     if (!string.Equals(rawLeft, rawRight, StringComparison.Ordinal))
                     {
                         foreach (var r in leftRuns.Slice(ls, le, lzs, lze))
-                            content.Add(WrapRunLevel(r, RevKind.Del, state));
+                            content.AddRange(WrapFieldAware(r, RevKind.Del, state));
                         foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
-                            content.Add(WrapRunLevel(r, RevKind.Ins, state));   // registers media on its clone
+                            content.AddRange(WrapFieldAware(r, RevKind.Ins, state));   // registers media on its clone
                     }
                     else if (tokenOp.Kind == IrTokenOpKind.FormatChanged)
                     {
@@ -1956,7 +2304,7 @@ internal static class IrMarkupRenderer
                     var (s, e) = RightSpanChars(rightTokens, tokenOp);
                     var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
                     foreach (var r in rightRuns.Slice(s, e, zs, ze))
-                        content.Add(WrapRunLevel(r, RevKind.Ins, state));   // registers media on its clone
+                        content.AddRange(WrapFieldAware(r, RevKind.Ins, state));   // registers media on its clone
                     break;
                 }
                 case IrTokenOpKind.Delete:
@@ -1964,7 +2312,7 @@ internal static class IrMarkupRenderer
                     var (s, e) = LeftSpanChars(leftTokens, tokenOp);
                     var (zs, ze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
                     foreach (var r in leftRuns.Slice(s, e, zs, ze))
-                        content.Add(WrapRunLevel(r, RevKind.Del, state));
+                        content.AddRange(WrapFieldAware(r, RevKind.Del, state));
                     break;
                 }
             }
@@ -2159,7 +2507,43 @@ internal static class IrMarkupRenderer
     {
         foreach (var t in runLevel.DescendantsAndSelf(W.t).ToList())
             t.Name = W.delText;
+        // A deleted field instruction is w:delInstrText (mirrors Word; w:instrText alone in a w:del confuses
+        // a field re-parser). Only field runs carry instrText, so this is a no-op for ordinary text.
+        foreach (var it in runLevel.DescendantsAndSelf(W.instrText).ToList())
+            it.Name = W.delInstrText;
     }
+
+    /// <summary>
+    /// A <c>w:fldSimple</c> is NOT a valid child of <c>w:ins</c>/<c>w:del</c>, so wrapping a field-bearing
+    /// run-level element directly is schema-invalid and keeping the <c>w:fldSimple</c> wrapper bare leaves a
+    /// DANGLING empty field on accept/reject (e.g. an orphaned <c>REF</c> after the referencing paragraph is
+    /// deleted — the field code survives with no content). Expand it to the equivalent <c>fldChar</c> run
+    /// sequence (begin / instrText / separate / cached result / end) so the WHOLE field — code and result —
+    /// rides in revision-wrappable runs and toggles cleanly: accept of a deletion drops the entire field,
+    /// reject restores it live. Any non-field run-level element is yielded unchanged.
+    /// </summary>
+    private static IEnumerable<XElement> ExpandFieldForRevision(XElement runLevel)
+    {
+        if (runLevel.Name != W.fldSimple)
+        {
+            yield return runLevel;
+            yield break;
+        }
+        var instr = (string?)runLevel.Attribute(W.instr) ?? "";
+        yield return new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin")));
+        yield return new XElement(W.r,
+            new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), instr));
+        yield return new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate")));
+        foreach (var child in runLevel.Elements())   // the cached result (display) content
+            yield return new XElement(child);
+        yield return new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end")));
+    }
+
+    /// <summary>Wrap a run-level element in a revision (<see cref="WrapRunLevel"/>), first expanding a
+    /// <c>w:fldSimple</c> via <see cref="ExpandFieldForRevision"/> so a field is fully deletable/insertable.
+    /// Yields one or more wrapped run-level elements.</summary>
+    private static IEnumerable<XElement> WrapFieldAware(XElement runLevel, RevKind kind, RenderState state) =>
+        ExpandFieldForRevision(runLevel).Select(part => WrapRunLevel(part, kind, state));
 
     // ----------------------------------------------------------------- rPrChange (format change)
 
@@ -2534,10 +2918,27 @@ internal static class IrMarkupRenderer
             else
             {
                 // A non-run, non-container run-level element (bookmarkStart/End, proofErr, commentRangeStart…):
-                // zero-width, atomic, kept whole.
-                _segments.Add(new Segment(runLevel, charOffset, charOffset, SegmentKind.ZeroWidth) { Chain = chain });
+                // zero-width, atomic, kept whole. Bookmark markers are flagged AlwaysKeep so a boundary one is
+                // never dropped (they are not diff tokens, so the token-driven boundary flags cannot see them).
+                _segments.Add(new Segment(runLevel, charOffset, charOffset, SegmentKind.ZeroWidth)
+                    { Chain = chain, AlwaysKeep = IsAlwaysKeepMarker(runLevel.Name) });
             }
         }
+
+        /// <summary>A run-level structural marker that is zero-width, NOT a diff token, and must survive every
+        /// edit boundary — a bookmark range endpoint. Dropping one would orphan the bookmark and dangle its
+        /// cross-reference. (Comment-range plumbing is handled separately by the whole-block
+        /// <c>ParagraphCarriesComments</c> bail; field plumbing is handled by <see cref="FieldPlumbingKeep"/>.)
+        /// </summary>
+        private static bool IsAlwaysKeepMarker(XName name) =>
+            name == W.bookmarkStart || name == W.bookmarkEnd;
+
+        /// <summary>Field plumbing (<c>w:fldChar</c>/<c>w:instrText</c>/<c>w:delInstrText</c>) — zero-width, not a
+        /// diff token, so it must never be dropped at an edit boundary (that orphans the field and dangles its
+        /// cross-reference). <c>NormalizeFields</c> re-homes any plumbing that lands in the wrong revision
+        /// context back to the field's own context.</summary>
+        private static bool FieldPlumbingKeep(XName name) =>
+            name == W.fldChar || name == W.instrText || name == W.delInstrText;
 
         private void WalkRun(XElement run, ref int charOffset, ContainerChain chain)
         {
@@ -2562,10 +2963,26 @@ internal static class IrMarkupRenderer
                         charOffset += t.Value.Length;
                     _segments.Add(new Segment(run, start, charOffset, SegmentKind.RunOther) { OtherChild = child, Chain = chain });
                 }
+                else if (child.Name == W.noBreakHyphen || child.Name == W.softHyphen || child.Name == W.sym)
+                {
+                    // N7/N8: the IR reads these as a SINGLE text character (U+2011 / U+00AD / the symbol glyph), so
+                    // the slicer MUST advance the char counter by 1 to stay aligned with the tokenizer — else a
+                    // boundary slice over this run is off by one and drops an adjacent character (the reject of a
+                    // "Company‑Controlled Intellectual" run dropped the "I"). Emitted whole as its source element.
+                    int start = charOffset;
+                    charOffset += 1;
+                    _segments.Add(new Segment(run, start, charOffset, SegmentKind.RunOther) { OtherChild = child, Chain = chain });
+                }
                 else
                 {
-                    // tab/break/drawing/noteref/sym/… — zero-width run child.
-                    _segments.Add(new Segment(run, charOffset, charOffset, SegmentKind.RunOther) { OtherChild = child, Chain = chain });
+                    // tab/break/drawing/noteref/field-plumbing — zero-width run child. Field plumbing
+                    // (w:fldChar/w:instrText/w:delInstrText) is AlwaysKeep: like a bookmark marker it is not a diff
+                    // token, so begin/separate/end + instruction runs clustered at an edit boundary would otherwise
+                    // be dropped — orphaning the field and dangling its cross-reference (editing text BEFORE a REF
+                    // field dropped the whole field). NormalizeFields then re-homes the plumbing to the field's own
+                    // revision context. The visible field RESULT is ordinary tokenized text and is unaffected.
+                    _segments.Add(new Segment(run, charOffset, charOffset, SegmentKind.RunOther)
+                        { OtherChild = child, Chain = chain, AlwaysKeep = FieldPlumbingKeep(child.Name) });
                 }
             }
             if (!any)
@@ -2659,6 +3076,11 @@ internal static class IrMarkupRenderer
                 bool overlaps;
                 if (start == end)
                     overlaps = seg.Start == start && seg.IsZeroWidth;     // empty span: only zero-width at the point
+                else if (seg.IsZeroWidth && seg.AlwaysKeep)
+                    // A bookmark marker is taken anywhere in [start,end] (BOTH boundaries inclusive), regardless of
+                    // the token-driven ownership flags — it is not a diff token, so those flags can't see it and a
+                    // boundary bookmark would otherwise be dropped. _claimedZeroWidth keeps it once per model.
+                    overlaps = seg.Start >= start && seg.Start <= end;
                 else if (seg.IsZeroWidth)
                     overlaps = (seg.Start > start && seg.Start < end)     // strictly interior: always taken
                             || (seg.Start == start && includeStartZeroWidth)  // leading: only if this op owns it
@@ -2830,6 +3252,17 @@ internal static class IrMarkupRenderer
             public XElement? OtherChild { get; init; }
             public ContainerChain Chain { get; init; } = ContainerChain.Empty;
             public bool IsZeroWidth => Start == End;
+
+            /// <summary>True for a structural marker that must NEVER be dropped at an op boundary — a
+            /// <c>w:bookmarkStart</c>/<c>w:bookmarkEnd</c>. Unlike a content zero-width (footnote ref, drawing,
+            /// tab), a bookmark marker is NOT a diff token (rule N3 strips it from the token stream), so the
+            /// token-driven <c>includeStart/EndZeroWidth</c> ownership flags are blind to it and a boundary
+            /// bookmark would otherwise fall through the cracks (neither op claims it) — orphaning the bookmark
+            /// and dangling every cross-reference that targets it. An always-keep marker is taken anywhere in
+            /// the op's <c>[start,end]</c> (boundaries inclusive); the per-model <see cref="_claimedZeroWidth"/>
+            /// set still guarantees exactly-once emission, and <c>NormalizeBookmarks</c> reconciles the
+            /// del/ins-context duplicates a both-sides edit produces.</summary>
+            public bool AlwaysKeep { get; init; }
         }
     }
 }

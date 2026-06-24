@@ -31,12 +31,16 @@ switch (args[0])
             $"hdrftr(acc/rej):{report.AcceptHdrFtrSetEqualsRight}/{report.RejectHdrFtrSetEqualsLeft}  " +
             $"revs(fine/compat):{report.RevisionCountFine}/{report.RevisionCountCompat}  " +
             $"hdrftrParts ours/orig:{report.HdrFtrPartsOurs}/{report.HdrFtrPartsOriginal}");
+        Console.WriteLine($"  bkmk-struct:{report.BookmarkStructureClean}");
         if (!report.NoteStructureClean) Console.WriteLine(
             $"  NOTE-STRUCT FAIL: fnUnique={report.OursFootnoteIdsUnique} enUnique={report.OursEndnoteIdsUnique} " +
             $"fnResolve={report.OursFootnoteRefsAllResolve} enResolve={report.OursEndnoteRefsAllResolve}");
+        if (!report.BookmarkStructureClean) Console.WriteLine(
+            $"  BOOKMARK-STRUCT FAIL: idsUnique={report.OursBookmarkIdsUnique} pairing={report.OursBookmarkPairingOk} " +
+            $"refsResolve={report.OursBookmarkRefsAllResolve}");
         if (report.AcceptBodyFirstDiff is { } a) Console.WriteLine("  ACCEPT BODY DIFF: " + a);
         if (report.RejectBodyFirstDiff is { } rj) Console.WriteLine("  REJECT BODY DIFF: " + rj);
-        return report.ContentClean && report.NoteStructureClean ? 0 : 1;
+        return report.ContentClean && report.NoteStructureClean && report.BookmarkStructureClean ? 0 : 1;
     }
     case "diffall":
     {
@@ -46,7 +50,7 @@ switch (args[0])
         var manifestPath = Path.Combine(corpus, "manifest.json");
         using var mdoc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifestPath));
         int fails = 0, total = 0;
-        Console.WriteLine($"{"scenario",-26} {"body",9} {"notes",9} {"hdrftr",9} {"nstruct",7} {"fine",5} {"hf#",7}");
+        Console.WriteLine($"{"scenario",-26} {"body",9} {"notes",9} {"hdrftr",9} {"nstruct",7} {"bkmk",5} {"fine",5} {"hf#",7}");
         foreach (var el in mdoc.RootElement.EnumerateArray())
         {
             var id = el.GetProperty("id").GetString()!;
@@ -60,7 +64,7 @@ switch (args[0])
             var pass = (undiffedScope
                 ? r.AcceptBodyEqualsRight && r.RejectBodyEqualsLeft && r.AcceptNotesEqualRight
                   && r.RejectNotesEqualLeft && r.RejectHdrFtrSetEqualsLeft
-                : r.ContentClean) && r.NoteStructureClean;
+                : r.ContentClean) && r.NoteStructureClean && r.BookmarkStructureClean;
             if (!pass) fails++;
             string Pair(bool a, bool b) => $"{(a ? "Y" : "n")}/{(b ? "Y" : "n")}";
             Console.WriteLine(
@@ -68,6 +72,7 @@ switch (args[0])
                 $"{Pair(r.AcceptNotesEqualRight, r.RejectNotesEqualLeft),9} " +
                 $"{Pair(r.AcceptHdrFtrSetEqualsRight, r.RejectHdrFtrSetEqualsLeft),9} " +
                 $"{(r.NoteStructureClean ? "Y" : "n"),7} " +
+                $"{(r.BookmarkStructureClean ? "Y" : "n"),5} " +
                 $"{r.RevisionCountFine,5} {r.HdrFtrPartsOurs + "/" + r.HdrFtrPartsOriginal,7}" +
                 $"{(pass ? (undiffedScope ? "  (scope-ok)" : "") : "  <-- FAIL")}");
         }

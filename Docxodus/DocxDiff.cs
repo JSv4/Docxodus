@@ -65,7 +65,9 @@ public static class DocxDiff
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
-        var diff = (settings ?? new DocxDiffSettings()).ToIrDiffSettings();
+        var s = settings ?? new DocxDiffSettings();
+        PreflightCompatibility(s, left, right);
+        var diff = s.ToIrDiffSettings();
         var irLeft = IrReader.Read(left, ReadOpts);
         var irRight = IrReader.Read(right, ReadOpts);
         var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
@@ -90,7 +92,9 @@ public static class DocxDiff
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
-        var diff = (settings ?? new DocxDiffSettings()).ToIrDiffSettings();
+        var s = settings ?? new DocxDiffSettings();
+        PreflightCompatibility(s, left, right);
+        var diff = s.ToIrDiffSettings();
         var irLeft = IrReader.Read(left, ReadOpts);
         var irRight = IrReader.Read(right, ReadOpts);
         var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
@@ -115,7 +119,9 @@ public static class DocxDiff
     {
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
-        var diff = (settings ?? new DocxDiffSettings()).ToIrDiffSettings();
+        var s = settings ?? new DocxDiffSettings();
+        PreflightCompatibility(s, left, right);
+        var diff = s.ToIrDiffSettings();
         var irLeft = IrReader.Read(left, ReadOpts);
         var irRight = IrReader.Read(right, ReadOpts);
         var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
@@ -180,6 +186,7 @@ public static class DocxDiff
         var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
         var diff = s.Diff.ToIrDiffSettings();
         if (reviewers.Count == 0) return baseDocument;
+        PreflightCompatibility(s.Diff, new[] { baseDocument }.Concat(reviewers.Select(r => r.Document)).ToArray());
         var baseIr = IrReader.Read(baseDocument, ReadOpts);
         var revIr = reviewers.Select(r => (r.Author, IrReader.Read(r.Document, ReadOpts))).ToList();
         var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
@@ -331,6 +338,59 @@ public static class DocxDiff
     }
 
     /// <summary>
+    /// Pre-flight a document against the DocxDiff feature catalog, returning a warning for each construct
+    /// DocxDiff has not had a fidelity campaign for. Does NOT diff anything and does not change
+    /// <see cref="Compare(WmlDocument, WmlDocument, DocxDiffSettings?)"/>; the caller decides whether to log,
+    /// gate, or throw on <see cref="DocxDiffCompatibilityReport.HasWarnings"/>. See
+    /// <see cref="DocxDiffCompatibility"/> for the catalog (the campaign roadmap).
+    /// </summary>
+    public static DocxDiffCompatibilityReport InspectCompatibility(WmlDocument doc) =>
+        DocxDiffCompatibility.Inspect(doc);
+
+    /// <inheritdoc cref="InspectCompatibility(WmlDocument)"/>
+    public static DocxDiffCompatibilityReport InspectCompatibility(byte[] docxBytes) =>
+        DocxDiffCompatibility.Inspect(docxBytes);
+
+    // ----------------------------------------------------------------- compatibility pre-flight
+
+    /// <summary>
+    /// Opt-in pre-flight a diff's inputs against the compatibility catalog. A no-op (NO scan, zero cost) unless
+    /// <see cref="DocxDiffSettings.OnCompatibilityWarning"/> or <see cref="DocxDiffSettings.ThrowOnCompatibilityWarning"/>
+    /// is set. When engaged and a warning is found, invokes the callback then optionally throws
+    /// <see cref="DocxDiffCompatibilityException"/>.
+    /// </summary>
+    private static void PreflightCompatibility(DocxDiffSettings settings, params WmlDocument[] inputs)
+    {
+        if (settings.OnCompatibilityWarning == null && !settings.ThrowOnCompatibilityWarning)
+            return;
+        var report = CombineCompatibility(inputs);
+        if (!report.HasWarnings)
+            return;
+        settings.OnCompatibilityWarning?.Invoke(report);
+        if (settings.ThrowOnCompatibilityWarning)
+            throw new DocxDiffCompatibilityException(report);
+    }
+
+    /// <summary>Union the compatibility reports of several inputs: warnings keyed by feature id with occurrences
+    /// summed across inputs, CoveredPresent unioned.</summary>
+    private static DocxDiffCompatibilityReport CombineCompatibility(IReadOnlyList<WmlDocument> inputs)
+    {
+        var warnings = new Dictionary<string, DocxDiffCompatibilityFinding>();
+        var covered = new Dictionary<string, DocxDiffFeature>();
+        foreach (var input in inputs)
+        {
+            var r = DocxDiffCompatibility.Inspect(input);
+            foreach (var w in r.Warnings)
+                warnings[w.Feature.Id] = warnings.TryGetValue(w.Feature.Id, out var existing)
+                    ? existing with { Occurrences = existing.Occurrences + w.Occurrences }
+                    : w;
+            foreach (var c in r.CoveredPresent)
+                covered[c.Id] = c;
+        }
+        return new DocxDiffCompatibilityReport(warnings.Values.ToList(), covered.Values.ToList());
+    }
+
+    /// <summary>
     /// Validate the shared consolidate arguments once for all four N-way entry points and resolve the
     /// settings: rejects a null base/reviewers, a null <see cref="DocxDiffConsolidateSettings.Diff"/>, and any
     /// null reviewer element or reviewer <see cref="DocxDiffReviewer.Document"/> — surfacing a clear,
@@ -453,6 +513,25 @@ public sealed class DocxDiffSettings
     /// <see cref="ArgumentException"/>.
     /// </summary>
     public string? DateTimeForRevisions { get; set; }
+
+    /// <summary>
+    /// Optional pre-flight: a callback invoked once (BEFORE diffing) with a combined
+    /// <see cref="DocxDiffCompatibilityReport"/> when an input document contains a feature DocxDiff has not had a
+    /// fidelity campaign for (see <see cref="DocxDiffCompatibility"/>). Both inputs are inspected and their
+    /// warnings unioned (occurrences summed); only <see cref="DocxDiffCoverage.Untested"/>/
+    /// <see cref="DocxDiffCoverage.Partial"/> features trigger it. <b>Null (the default) skips the scan
+    /// entirely</b> — zero behavior and zero performance change. The diff then proceeds normally (non-fatal);
+    /// pair with <see cref="ThrowOnCompatibilityWarning"/> for a hard gate.
+    /// </summary>
+    public Action<DocxDiffCompatibilityReport>? OnCompatibilityWarning { get; set; }
+
+    /// <summary>
+    /// When true, a diff method THROWS <see cref="DocxDiffCompatibilityException"/> (after invoking
+    /// <see cref="OnCompatibilityWarning"/>, if set) when an input contains an under-tested feature — a hard
+    /// gate that produces no output. Default false. Orthogonal to <see cref="OnCompatibilityWarning"/>: the
+    /// pre-flight scan runs only when at least one of the two is engaged, so the default is still zero-cost.
+    /// </summary>
+    public bool ThrowOnCompatibilityWarning { get; set; }
 
     /// <summary>
     /// When true, word match keys are case-folded (per <see cref="Culture"/>, or ordinal/invariant when
