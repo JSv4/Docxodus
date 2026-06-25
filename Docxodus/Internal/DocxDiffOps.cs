@@ -46,6 +46,31 @@ internal static class DocxDiffOps
         return DocxDiff.GetEditScriptJson(left, right, settings);
     }
 
+    /// <summary>
+    /// Accept every tracked revision in a redlined DOCX — materialize the "right"/revised side. The byte-in,
+    /// byte-out counterpart of <see cref="Compare"/>: <c>Accept(Compare(left, right))</c> ≡ <c>right</c> (per-block
+    /// text level). Exposing accept/reject lets clients verify the round-trip contract, not just the shape of the
+    /// redline. Wraps <see cref="RevisionProcessor.AcceptRevisions(WmlDocument)"/>.
+    /// </summary>
+    public static byte[] AcceptRevisions(byte[] bytes)
+    {
+        if (bytes == null || bytes.Length == 0)
+            throw new ArgumentException("No document data provided", nameof(bytes));
+        return RevisionProcessor.AcceptRevisions(new WmlDocument("redline.docx", bytes)).DocumentByteArray;
+    }
+
+    /// <summary>
+    /// Reject every tracked revision in a redlined DOCX — materialize the "left"/original side:
+    /// <c>Reject(Compare(left, right))</c> ≡ <c>left</c> (per-block text level). Wraps
+    /// <see cref="RevisionProcessor.RejectRevisions(WmlDocument)"/>.
+    /// </summary>
+    public static byte[] RejectRevisions(byte[] bytes)
+    {
+        if (bytes == null || bytes.Length == 0)
+            throw new ArgumentException("No document data provided", nameof(bytes));
+        return RevisionProcessor.RejectRevisions(new WmlDocument("redline.docx", bytes)).DocumentByteArray;
+    }
+
     private static (WmlDocument left, WmlDocument right, DocxDiffSettings settings) Prepare(
         byte[] leftBytes, byte[] rightBytes, string? settingsJson)
     {

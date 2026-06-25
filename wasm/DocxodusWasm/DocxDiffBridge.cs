@@ -80,6 +80,46 @@ public static partial class DocxDiffBridge
     }
 
     /// <summary>
+    /// Accept every tracked revision in a redlined DOCX and return the resulting
+    /// bytes (materializes the "right"/revised side). The byte-in, byte-out
+    /// counterpart of <see cref="Compare"/> — <c>AcceptRevisions(Compare(left, right))</c>
+    /// ≡ <c>right</c> at the per-block text level — so clients can verify the
+    /// round-trip contract, not just the redline's shape. Empty array on error.
+    /// </summary>
+    [JSExport]
+    public static byte[] AcceptRevisions(byte[] bytes)
+    {
+        try
+        {
+            return DocxDiffOps.AcceptRevisions(bytes);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"DocxDiff.AcceptRevisions error: {ex.GetType().Name}: {ex.Message}");
+            return Array.Empty<byte>();
+        }
+    }
+
+    /// <summary>
+    /// Reject every tracked revision in a redlined DOCX and return the resulting
+    /// bytes (materializes the "left"/original side) — <c>RejectRevisions(Compare(left, right))</c>
+    /// ≡ <c>left</c> at the per-block text level. Empty array on error.
+    /// </summary>
+    [JSExport]
+    public static byte[] RejectRevisions(byte[] bytes)
+    {
+        try
+        {
+            return DocxDiffOps.RejectRevisions(bytes);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"DocxDiff.RejectRevisions error: {ex.GetType().Name}: {ex.Message}");
+            return Array.Empty<byte>();
+        }
+    }
+
+    /// <summary>
     /// Consolidate multiple reviewers' edits against a shared base DOCX and return
     /// the merged redlined DOCX as bytes (native tracked-changes markup, per-author
     /// attribution). Returns an empty array on error.

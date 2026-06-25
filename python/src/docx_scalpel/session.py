@@ -73,6 +73,8 @@ __all__ = [
     "docx_diff_compare",
     "docx_diff_get_revisions",
     "docx_diff_get_edit_script",
+    "docx_diff_accept_revisions",
+    "docx_diff_reject_revisions",
     "docx_diff_consolidate",
     "docx_diff_get_conflicts",
     "docx_diff_get_consolidated_revisions",
@@ -191,6 +193,34 @@ def docx_diff_get_edit_script(
             f"docx_diff_get_edit_script: expected str, got {type(result).__name__}"
         )
     return result
+
+
+def docx_diff_accept_revisions(redline: bytes) -> bytes:
+    """Accept every tracked revision in a redlined DOCX; return the resulting bytes.
+
+    Materializes the "right"/revised side: ``docx_diff_accept_revisions(
+    docx_diff_compare(left, right))`` equals ``right`` at the per-block text level.
+    Mirrors .NET ``RevisionProcessor.AcceptRevisions`` via ``DocxDiffOps``. The
+    byte-in, byte-out counterpart of :func:`docx_diff_compare` — together they let
+    a caller verify the round-trip contract of the redline, not just its shape.
+    """
+    result = _call("docx_diff_accept_revisions", {"docxB64": base64.b64encode(redline).decode("ascii")})
+    if not isinstance(result, dict) or "docxB64" not in result:
+        raise TypeError(f"docx_diff_accept_revisions: expected {{docxB64}}, got {result!r}")
+    return base64.b64decode(result["docxB64"])
+
+
+def docx_diff_reject_revisions(redline: bytes) -> bytes:
+    """Reject every tracked revision in a redlined DOCX; return the resulting bytes.
+
+    Materializes the "left"/original side: ``docx_diff_reject_revisions(
+    docx_diff_compare(left, right))`` equals ``left`` at the per-block text level.
+    Mirrors .NET ``RevisionProcessor.RejectRevisions`` via ``DocxDiffOps``.
+    """
+    result = _call("docx_diff_reject_revisions", {"docxB64": base64.b64encode(redline).decode("ascii")})
+    if not isinstance(result, dict) or "docxB64" not in result:
+        raise TypeError(f"docx_diff_reject_revisions: expected {{docxB64}}, got {result!r}")
+    return base64.b64decode(result["docxB64"])
 
 
 # ---------------------------------------------------------------------------

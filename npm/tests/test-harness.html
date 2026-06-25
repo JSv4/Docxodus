@@ -152,6 +152,29 @@
                     return { error: { message: e.message } };
                 }
             },
+            // Accept / reject all tracked revisions in a redlined DOCX → bytes.
+            docxDiffAcceptRevisions: function(redlineBytes) {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.AcceptRevisions(redlineBytes);
+                    if (result.length === 0) {
+                        return { error: { message: 'DocxDiff.AcceptRevisions returned empty result' } };
+                    }
+                    return { docxBytes: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+            docxDiffRejectRevisions: function(redlineBytes) {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.RejectRevisions(redlineBytes);
+                    if (result.length === 0) {
+                        return { error: { message: 'DocxDiff.RejectRevisions returned empty result' } };
+                    }
+                    return { docxBytes: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
 
             // DocxDiff consolidate (composite N-way): base64-encode each reviewer
             // doc into the [{author,docB64}] wire shape the bridge base64-decodes.

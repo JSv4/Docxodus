@@ -935,6 +935,10 @@ export interface DocxodusWasmExports {
       rightBytes: Uint8Array,
       settingsJson: string
     ) => string;
+    /** Accept all tracked revisions in a redlined DOCX → "right"-side bytes, or empty array on error. */
+    AcceptRevisions: (bytes: Uint8Array) => Uint8Array;
+    /** Reject all tracked revisions in a redlined DOCX → "left"-side bytes, or empty array on error. */
+    RejectRevisions: (bytes: Uint8Array) => Uint8Array;
     /** Consolidated redlined DOCX bytes (native markup), or empty array on error. */
     Consolidate: (
       baseBytes: Uint8Array,
