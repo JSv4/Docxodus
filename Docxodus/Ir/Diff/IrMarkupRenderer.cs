@@ -190,13 +190,15 @@ internal static class IrMarkupRenderer
                 RenumberNoteIds(main, W.endnoteReference, W.endnote, W.endnotes,
                     main.EndnotesPart, wDocRight.MainDocumentPart?.EndnotesPart);
 
-                // Comment-id uniqueness pass: a commented paragraph that was EDITED bails to the whole-block
-                // del(left)+ins(right) fallback (ParagraphCarriesComments), which CLONES both source paragraphs —
-                // so the comment's range markers + reference land once in the w:del copy and once in the w:ins
-                // copy, sharing one id (schema-invalid: Sem_UniqueAttributeValue). Give the DELETED copy a fresh
-                // comment id + a copied definition so each side resolves to exactly one comment; accept keeps the
-                // right (original-id) comment, reject the left (fresh-id) comment.
-                DeduplicateRevisionDuplicatedCommentIds(main);
+                // Comment fidelity passes (the comment analogue of NormalizeBookmarks). A commented paragraph now
+                // renders FINELY (token-granular), carrying its range markers + reference run through the diff.
+                // First merge any RIGHT-only comment definitions (+ commentsExtended/commentsIds threading) the
+                // emitted right-sourced content references, so the LEFT-based comments part resolves every
+                // reference. Then reconcile the body's markers to unique ids, 1:1 range pairing, and exactly-one
+                // resolved definition per reference — collapsing an unchanged comment to a single bare range
+                // (survives accept AND reject) and renumber-deduping a rewritten comment's del/ins copies.
+                MergeRightCommentDefinitions(main, wDocRight.MainDocumentPart);
+                NormalizeComments(main, BodyCommentIds(state.Left), BodyCommentIds(state.RightSource), state);
 
                 // Bookmark normalization pass: an edit straddling a bookmark range endpoint, or a dense
                 // overlapping content-region layout, can leave the rendered body with a duplicate bookmark id
@@ -486,9 +488,11 @@ internal static class IrMarkupRenderer
         bool rightIsPara = ResolveBlock(op.RightAnchor, state.RightSource) is IrParagraph;
 
         if (op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
-            op.TextboxDiffs is null &&            // textbox-interior diffs are not finely rendered in Task 3
-            !ParagraphCarriesComments(op, state)) // comment anchors are dropped by the IR — see below
+            op.TextboxDiffs is null)             // textbox-interior diffs are not finely rendered in Task 3
         {
+            // Commented paragraphs render finely too: comment range markers + the commentReference run ride
+            // through the token diff as AlwaysKeep zero-width markers (IsAlwaysKeepMarker / WalkRun), then
+            // NormalizeComments reconciles them to unique/paired/resolved markup. (Was: bailed to whole-block.)
             RenderModifiedParagraph(op, tokenDiff, state, sink);
             return;
         }
@@ -510,28 +514,6 @@ internal static class IrMarkupRenderer
         if (op.RightAnchor != null)
             EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
     }
-
-    /// <summary>
-    /// True iff either source paragraph of a Modified pair carries comment plumbing — a
-    /// <c>w:commentRangeStart</c>/<c>w:commentRangeEnd</c>/<c>w:commentReference</c>. The IR DROPS these markers
-    /// from a paragraph (rule N15: they are recorded as <c>IrCommentStore</c> char-offset spans for the markdown
-    /// projection, never carried as inline nodes), so the fine token-diff path — which rebuilds the paragraph
-    /// from the IR's runs — emits the edited paragraph WITHOUT them, orphaning the comment definition (the body
-    /// loses the range start/end + reference while <c>comments.xml</c> keeps the now-unanchored <c>w:comment</c>).
-    /// Bailing such a paragraph to the conservative whole-block <c>del(left)+ins(right)</c> fallback CLONES the
-    /// raw source paragraphs (comment markers intact), so accept keeps the right paragraph's comment and reject
-    /// the left's — a clean round-trip at the cost of coarser per-word markup on commented paragraphs only. (The
-    /// blessed WmlComparer oracle drops comments ENTIRELY on any edit, so this is strictly ahead of it; carrying
-    /// comment markers through the token diff for fine-grained marked-up comment edits is a future enhancement.)
-    /// </summary>
-    private static bool ParagraphCarriesComments(IrEditOp op, RenderState state)
-    {
-        static bool Has(XElement? p) => p != null && p.DescendantsAndSelf().Any(e =>
-            e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference);
-        return Has(SourceElement(op.LeftAnchor, state.Left))
-            || Has(SourceElement(op.RightAnchor, state.RightSource));
-    }
-
 
     /// <summary>
     /// Render a Modified table pair from its <see cref="IrTableDiff"/> (Task 4): build the new table from the
@@ -1272,61 +1254,417 @@ internal static class IrMarkupRenderer
         notePart.PutXDocument();
     }
 
-    /// <summary>
-    /// Give a fresh comment id (+ a copied definition) to the DELETED copy of any comment that the whole-block
-    /// fallback duplicated across a <c>w:del</c>/<c>w:ins</c> pair (an edited commented paragraph — see
-    /// <see cref="ParagraphCarriesComments"/>). A comment id appearing on markers inside BOTH a <c>w:del</c> and
-    /// a <c>w:ins</c> subtree is the duplication: the right/inserted copy keeps the original id (accept ≡ right);
-    /// the left/deleted copy's markers (<c>w:commentRangeStart</c>/<c>End</c>/<c>w:commentReference</c>) are
-    /// remapped to a fresh id whose definition is cloned into the comments part (reject ≡ left). Each revision
-    /// side then resolves to exactly one comment; the opposite side's definition is a harmless orphan (as with
-    /// reference-deleted footnotes). No-op when there is no comments part or no such duplication.
-    /// </summary>
-    private static void DeduplicateRevisionDuplicatedCommentIds(MainDocumentPart main)
+    // ----------------------------------------------------------------- comment normalization
+
+    private static readonly XNamespace W14ns = "http://schemas.microsoft.com/office/word/2010/wordml";
+    private static readonly XNamespace W15ns = "http://schemas.microsoft.com/office/word/2012/wordml";
+    private static readonly XNamespace W16cidNs = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+
+    /// <summary>The set of comment ids ANCHORED in a source IR document's body — scanned from each block's
+    /// provenance source element for <c>w:commentRangeStart</c>/<c>w:commentReference</c> ids (the comment
+    /// analogue of <see cref="BodyBookmarkNames"/>). Used to classify a rendered comment as common (in both
+    /// sources) / right-added / left-deleted for round-trip-correct normalization.</summary>
+    internal static HashSet<string> BodyCommentIds(IrDocument? source)
     {
-        var commentsPart = main.WordprocessingCommentsPart;
-        if (commentsPart == null)
+        var ids = new HashSet<string>();
+        if (source == null)
+            return ids;
+        foreach (var block in source.Body.Blocks)
+        {
+            var el = block.Source.Element;
+            if (el == null)
+                continue;
+            foreach (var m in el.DescendantsAndSelf()
+                         .Where(e => e.Name == W.commentRangeStart || e.Name == W.commentReference))
+                if ((string?)m.Attribute(W.id) is { Length: > 0 } i)
+                    ids.Add(i);
+        }
+        return ids;
+    }
+
+    /// <summary>
+    /// Merge RIGHT-only comment definitions (+ their <c>commentsExtended</c> reply links and
+    /// <c>commentsIds</c> durable ids) into the output's LEFT-based comments part. The fine path emits
+    /// right-sourced content (equal/insert spans, EqualBlock) verbatim, so a comment ADDED in the right document
+    /// has its markers in the body but its <c>w:comment</c> definition only in the RIGHT package — it would
+    /// dangle. Copy each referenced-but-undefined right comment in (creating the comments part if the left had
+    /// none), then carry its threading metadata so a right-added reply still links to its parent. No-op when the
+    /// right has no comments part or every referenced comment already resolves.
+    /// </summary>
+    internal static void MergeRightCommentDefinitions(MainDocumentPart main, MainDocumentPart? rightMain)
+    {
+        var rightRoot = rightMain?.WordprocessingCommentsPart?.GetXDocument().Root;
+        if (rightRoot == null)
             return;
         var body = main.GetXDocument().Root?.Element(W.body);
         if (body == null)
             return;
 
-        var markerNames = new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference };
-        bool Inside(XElement e, XName wrapper) => e.Ancestors().Any(a => a.Name == wrapper);
-        var markers = body.Descendants().Where(e => markerNames.Contains(e.Name)).ToList();
-        string? IdOf(XElement e) => (string?)e.Attribute(W.id);
+        var referenced = body.Descendants()
+            .Where(e => e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference)
+            .Select(e => (string?)e.Attribute(W.id)).Where(id => id != null).ToHashSet();
 
-        var delIds = markers.Where(m => Inside(m, W.del)).Select(IdOf).Where(id => id != null).ToHashSet();
-        var insIds = markers.Where(m => Inside(m, W.ins)).Select(IdOf).Where(id => id != null).ToHashSet();
-        var duplicated = delIds.Where(insIds.Contains).ToHashSet();
-        if (duplicated.Count == 0)
+        var have = main.WordprocessingCommentsPart?.GetXDocument().Root?.Elements(W.comment)
+            .Select(c => (string?)c.Attribute(W.id)).Where(id => id != null).ToHashSet() ?? new HashSet<string?>();
+        var toAdd = referenced.Where(id => !have.Contains(id))
+            .Select(id => rightRoot.Elements(W.comment).FirstOrDefault(c => (string?)c.Attribute(W.id) == id))
+            .Where(def => def != null).Select(def => def!).ToList();
+        if (toAdd.Count == 0)
             return;
 
-        var commentsRoot = commentsPart.GetXDocument().Root;
-        if (commentsRoot == null)
-            return;
-        int nextId = commentsRoot.Elements(W.comment)
-            .Select(c => int.TryParse((string?)c.Attribute(W.id), out var v) ? v : -1)
-            .DefaultIfEmpty(-1).Max() + 1;
-
-        bool commentsChanged = false;
-        foreach (var oldId in duplicated)
+        var outRoot = EnsureCommentsRoot(main);
+        var addedParaIds = new HashSet<string>();
+        foreach (var def in toAdd)
         {
-            var newId = (nextId++).ToString();
-            foreach (var m in markers.Where(m => IdOf(m) == oldId && Inside(m, W.del)))
-                m.SetAttributeValue(W.id, newId);
-            var def = commentsRoot.Elements(W.comment).FirstOrDefault(c => (string?)c.Attribute(W.id) == oldId);
-            if (def != null)
+            outRoot.Add(new XElement(def));
+            foreach (var pid in def.Descendants().Attributes((W14ns + "paraId")))
+                if ((string?)pid is { Length: > 0 } v) addedParaIds.Add(v);
+        }
+        main.WordprocessingCommentsPart!.PutXDocument();
+
+        // Carry threading metadata for the merged comments (paraId-keyed), so a right-added reply keeps its link.
+        if (addedParaIds.Count > 0)
+        {
+            // Guard the commentsExtended merge on the right actually HAVING that part (mirrors the commentsIds
+            // guard below). Otherwise the eager `?? AddNewPart<…>()` creates an empty /word/commentsExtended.xml on
+            // the LEFT-derived output, and MergeRightThreadingEntries early-returns on the null rightRoot BEFORE
+            // seeding it — leaving a rootless part (Sch_MissingPartRootElement) for the common case of a
+            // non-threaded right-added comment whose definition paragraph carries a w14:paraId.
+            if (rightMain!.WordprocessingCommentsExPart != null)
+                MergeRightThreadingEntries(
+                    main.WordprocessingCommentsExPart ?? main.AddNewPart<WordprocessingCommentsExPart>(),
+                    rightMain.WordprocessingCommentsExPart,
+                    W15ns + "commentsEx", W15ns + "commentEx", W15ns + "paraId", addedParaIds,
+                    $"<w15:commentsEx xmlns:w=\"{W.w.NamespaceName}\" xmlns:w15=\"{W15ns.NamespaceName}\"/>");
+            if (rightMain.WordprocessingCommentsIdsPart != null)
+                MergeRightThreadingEntries(
+                    main.WordprocessingCommentsIdsPart ?? main.AddNewPart<WordprocessingCommentsIdsPart>(),
+                    rightMain.WordprocessingCommentsIdsPart,
+                    W16cidNs + "commentsIds", W16cidNs + "commentId", W16cidNs + "paraId", addedParaIds,
+                    $"<w16cid:commentsIds xmlns:w=\"{W.w.NamespaceName}\" xmlns:w16cid=\"{W16cidNs.NamespaceName}\"/>");
+        }
+    }
+
+    /// <summary>Copy every entry of <paramref name="rightPart"/> whose paraId attribute is in
+    /// <paramref name="paraIds"/> into <paramref name="outPart"/> (seeded from <paramref name="seedXml"/> when
+    /// empty), skipping paraIds already present. Shared by the <c>commentsExtended</c> + <c>commentsIds</c>
+    /// threading merges.</summary>
+    private static void MergeRightThreadingEntries(OpenXmlPart outPart, OpenXmlPart? rightPart,
+        XName rootName, XName entryName, XName paraIdAttr, HashSet<string> paraIds, string seedXml)
+    {
+        var rightRoot = rightPart?.GetXDocument().Root;
+        if (rightRoot == null)
+            return;
+        var outRoot = EnsurePartRoot(outPart, seedXml);
+        var present = outRoot.Elements(entryName).Select(e => (string?)e.Attribute(paraIdAttr)).ToHashSet();
+        bool changed = false;
+        foreach (var entry in rightRoot.Elements(entryName)
+                     .Where(e => (string?)e.Attribute(paraIdAttr) is { } p && paraIds.Contains(p) && !present.Contains(p)))
+        {
+            outRoot.Add(new XElement(entry));
+            changed = true;
+        }
+        if (changed)
+            outPart.PutXDocument();
+    }
+
+    /// <summary>Get the output comments part's root, creating an empty <c>w:comments</c> part if the left had
+    /// none (a right-added comment with no left comments at all).</summary>
+    private static XElement EnsureCommentsRoot(MainDocumentPart main)
+    {
+        var part = main.WordprocessingCommentsPart ?? main.AddNewPart<WordprocessingCommentsPart>();
+        return EnsurePartRoot(part, $"<w:comments xmlns:w=\"{W.w.NamespaceName}\" xmlns:w14=\"{W14ns.NamespaceName}\"/>");
+    }
+
+    /// <summary>Return a part's XDocument root, seeding it from <paramref name="seedXml"/> when the part is
+    /// empty (a freshly <c>AddNewPart</c>'d part has an empty stream — <see cref="PtOpenXmlExtensions.GetXDocument"/>
+    /// returns a rootless <see cref="XDocument"/>). The seed root is added to the SAME cached XDocument the caller
+    /// then mutates + <c>PutXDocument</c>s, so there is no stream/annotation staleness.</summary>
+    private static XElement EnsurePartRoot(OpenXmlPart part, string seedXml)
+    {
+        var xdoc = part.GetXDocument();
+        if (xdoc.Root == null)
+            xdoc.Add(XElement.Parse(seedXml));
+        return xdoc.Root!;
+    }
+
+    /// <summary>
+    /// Reconcile the rendered body's comment markers so every <c>w:commentReference</c> resolves to exactly one
+    /// <c>w:comment</c>, every <c>w:commentRangeStart</c> id is unique and pairs 1:1 with a
+    /// <c>w:commentRangeEnd</c> of the same id, and an unchanged comment survives BOTH accept and reject. The
+    /// comment analogue of <see cref="NormalizeBookmarks"/>; three phases:
+    /// <list type="bullet">
+    /// <item><b>(A) collapse.</b> A comment present in BOTH sources (common) that still has a BARE marker is
+    /// position-stable (it anchors equal content): collapse each of its three marker kinds to a single bare
+    /// survivor (lifting one out of a <c>w:ins</c>/<c>w:del</c> wrapper if needed) so it survives accept AND
+    /// reject. The fine path can emit the SAME marker both bare (from the right model's equal span) and
+    /// revision-wrapped (from the left model's del span) at an edit boundary — this de-duplicates that.</item>
+    /// <item><b>(B) dedup.</b> A comment whose markers are wholly inside BOTH a <c>w:del</c> and a <c>w:ins</c>
+    /// subtree (a wholly rewritten anchor, or a comment in a whole-block-bailed table/opaque) has no bare
+    /// survivor: give the DELETED copy a fresh id + a cloned definition (paraId-stripped so threading never
+    /// collides). Accept ≡ right comment, reject ≡ left comment.</item>
+    /// <item><b>(C) pair + resolve.</b> Drop any marker/reference whose id has no definition; re-close an
+    /// orphaned start with a synthetic zero-width end in the start's own context; drop an orphaned end.</item>
+    /// </list>
+    /// The blessed <see cref="WmlComparer"/> oracle drops ALL comments on any edit; this preserves them with
+    /// fine per-word markup.
+    /// </summary>
+    internal static void NormalizeComments(MainDocumentPart main, HashSet<string> leftIds, HashSet<string> rightIds,
+        RenderState state)
+    {
+        var doc = main.GetXDocument();
+        var body = doc.Root?.Element(W.body);
+        if (body == null)
+            return;
+        var commentsPart = main.WordprocessingCommentsPart;
+
+        static string? IdOf(XElement e) => (string?)e.Attribute(W.id);
+        static bool Inside(XElement e, XName wrapper) => e.Ancestors().Any(a => a.Name == wrapper);
+        static bool IsBare(XElement e) => !e.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del);
+        List<XElement> Markers() => body.Descendants()
+            .Where(e => (e.Name == W.commentRangeStart || e.Name == W.commentRangeEnd || e.Name == W.commentReference)
+                        && IsRunLevelCommentMarker(e)).ToList();
+
+        bool changed = false;
+
+        // (A) Identity-aware collapse — common comment with a bare survivor → single bare marker per kind.
+        foreach (var id in Markers().Select(IdOf).Where(i => i != null).Distinct().ToList())
+        {
+            if (!(leftIds.Contains(id!) && rightIds.Contains(id!)))
+                continue; // right-added / left-deleted: keep its revision context
+            var all = Markers().Where(m => IdOf(m) == id).ToList();
+            if (!all.Any(IsBare))
+                continue; // all wrapped (rewritten anchor) → (B)
+            foreach (var kind in new[] { W.commentRangeStart, W.commentRangeEnd, W.commentReference })
             {
-                var copy = new XElement(def);
-                copy.SetAttributeValue(W.id, newId);
-                commentsRoot.Add(copy);
-                commentsChanged = true;
+                var kinds = all.Where(m => m.Name == kind).ToList();
+                if (kinds.Count == 0)
+                    continue;
+                // Pick the survivor by POSITION so the collapsed range ENCLOSES the surviving content on BOTH
+                // sides, then lift it bare: the commentRangeStart must precede both the w:del and the w:ins (the
+                // leftmost copy in document order), the commentRangeEnd must follow both (the RIGHTMOST copy).
+                // Keeping a del-side end — even a BARE one that happens to sit before the deleted run — would
+                // leave the inserted (accept) / deleted (reject) content OUTSIDE the range, bracketing nothing for
+                // a wholly-rewritten or wholly-deleted anchor. Position is what matters; the lift is a no-op when
+                // the survivor is already bare. The reference is zero-width: either copy resolves the same.
+                var keep = kind == W.commentRangeEnd ? kinds[kinds.Count - 1] : kinds[0];
+                foreach (var m in kinds)
+                    if (!ReferenceEquals(m, keep)) { RemoveCommentMarker(m); changed = true; }
+                if (!IsBare(keep) && LiftCommentMarkerBare(keep))
+                    changed = true;
             }
         }
-        main.PutXDocument();
-        if (commentsChanged)
-            commentsPart.PutXDocument();
+
+        // (A2) A comment present in only ONE source is added/deleted by the edit. A BARE marker (it landed in
+        //      equal content) would survive BOTH accept and reject — leaking a right-added comment into reject,
+        //      or keeping a left-deleted comment on accept. Wrap each bare marker in the matching revision
+        //      element so it toggles with its side: right-added → w:ins (reject drops it); left-deleted → w:del
+        //      (accept drops it). Markers already in their revision context are left alone.
+        foreach (var id in Markers().Select(IdOf).Where(i => i != null).Distinct().ToList())
+        {
+            bool rightAdded = rightIds.Contains(id!) && !leftIds.Contains(id!);
+            bool leftDeleted = leftIds.Contains(id!) && !rightIds.Contains(id!);
+            if (!rightAdded && !leftDeleted)
+                continue;
+            var kind = rightAdded ? RevKind.Ins : RevKind.Del;
+            foreach (var m in Markers().Where(m => IdOf(m) == id && IsBare(m)).ToList())
+            {
+                WrapCommentMarkerInRevision(m, kind, state);
+                changed = true;
+            }
+        }
+
+        // (B) Renumber/dedup remaining del∩ins duplicates → fresh id + cloned definition for the deleted copy.
+        var commentsRoot = commentsPart?.GetXDocument().Root;
+        if (commentsRoot != null)
+        {
+            var markers = Markers();
+            var delIds = markers.Where(m => Inside(m, W.del)).Select(IdOf).Where(i => i != null).ToHashSet();
+            var insIds = markers.Where(m => Inside(m, W.ins)).Select(IdOf).Where(i => i != null).ToHashSet();
+            var duplicated = delIds.Where(insIds.Contains).ToList();
+            if (duplicated.Count > 0)
+            {
+                int nextId = commentsRoot.Elements(W.comment)
+                    .Select(c => int.TryParse((string?)c.Attribute(W.id), out var v) ? v : -1)
+                    .DefaultIfEmpty(-1).Max() + 1;
+                int nextParaId = MaxParaId(commentsRoot) + 1;
+                foreach (var oldId in duplicated)
+                {
+                    var newId = (nextId++).ToString();
+                    foreach (var m in markers.Where(m => IdOf(m) == oldId && Inside(m, W.del)))
+                        m.SetAttributeValue(W.id, newId);
+                    var def = commentsRoot.Elements(W.comment).FirstOrDefault(c => (string?)c.Attribute(W.id) == oldId);
+                    if (def != null)
+                    {
+                        var copy = new XElement(def);
+                        copy.SetAttributeValue(W.id, newId);
+                        // Give the clone its OWN w14:paraId(s) so it never duplicates a threading key — and carry
+                        // its commentsExtended/commentsIds entry under the fresh paraId so the REJECT-side clone
+                        // (a threaded reply, say) keeps its parent link, exactly as the accept-side original does.
+                        foreach (var pAttr in copy.Descendants().Attributes(W14ns + "paraId").ToList())
+                        {
+                            var oldPara = (string)pAttr;
+                            var freshPara = (nextParaId++).ToString("X8");
+                            pAttr.Value = freshPara;
+                            CloneThreadingEntryForParaId(main, oldPara, freshPara);
+                        }
+                        commentsRoot.Add(copy);
+                    }
+                }
+                commentsPart!.PutXDocument();
+                changed = true;
+            }
+        }
+
+        // (C) Pair + resolve. Drop unresolvable markers, then guarantee 1:1 start↔end pairing.
+        var defIds = commentsPart?.GetXDocument().Root?.Elements(W.comment)
+            .Select(c => (string?)c.Attribute(W.id)).Where(i => i != null).ToHashSet() ?? new HashSet<string?>();
+        foreach (var m in Markers().Where(m => !defIds.Contains(IdOf(m))).ToList())
+        {
+            RemoveCommentMarker(m);
+            changed = true;
+        }
+        var liveMarkers = Markers();
+        var startsById = liveMarkers.Where(m => m.Name == W.commentRangeStart)
+            .GroupBy(m => IdOf(m) ?? "").ToDictionary(g => g.Key, g => g.ToList());
+        var endsById = liveMarkers.Where(m => m.Name == W.commentRangeEnd)
+            .GroupBy(m => IdOf(m) ?? "").ToDictionary(g => g.Key, g => g.ToList());
+        foreach (var (id, sl) in startsById)
+        {
+            int have = endsById.TryGetValue(id, out var el) ? el.Count : 0;
+            for (int k = have; k < sl.Count; k++)
+            {
+                sl[k].AddAfterSelf(new XElement(W.commentRangeEnd, new XAttribute(W.id, id)));
+                changed = true;
+            }
+        }
+        foreach (var (id, el) in endsById)
+        {
+            int have = startsById.TryGetValue(id, out var sl) ? sl.Count : 0;
+            for (int k = have; k < el.Count; k++)
+            {
+                RemoveCommentMarker(el[k]);
+                changed = true;
+            }
+        }
+
+        if (changed)
+            main.PutXDocument();
+    }
+
+    /// <summary>True iff the comment marker sits at the paragraph/body run level (its ancestors up to the
+    /// enclosing <c>w:p</c>/<c>w:body</c>/<c>w:tc</c> are only run-level wrappers — including the <c>w:r</c> that
+    /// hosts a <c>w:commentReference</c>). A marker reached through opaque content (math, drawing, textbox) is
+    /// part of that element's content hash and must NOT be reconciled.</summary>
+    private static bool IsRunLevelCommentMarker(XElement marker)
+    {
+        for (var a = marker.Parent; a != null; a = a.Parent)
+        {
+            if (a.Name == W.p || a.Name == W.body || a.Name == W.tc)
+                return true;
+            if (a.Name != W.r && a.Name != W.ins && a.Name != W.del && a.Name != W.hyperlink &&
+                a.Name != W.sdt && a.Name != W.sdtContent && a.Name != W.smartTag && a.Name != W.fldSimple)
+                return false;
+        }
+        return false;
+    }
+
+    /// <summary>Remove a comment marker, dropping an emptied <c>w:ins</c>/<c>w:del</c> wrapper. A
+    /// <c>w:commentReference</c> lives in a <c>w:r</c>: drop the whole run when it carries no text, else just the
+    /// reference element.</summary>
+    private static void RemoveCommentMarker(XElement marker)
+    {
+        if (marker.Name == W.commentReference)
+        {
+            var run = marker.Parent;
+            if (run is { Name: var n } && n == W.r &&
+                !run.Elements().Any(e => e.Name == W.t || e.Name == W.delText))
+            {
+                var wrapper = run.Parent;
+                run.Remove();
+                if (wrapper != null && (wrapper.Name == W.ins || wrapper.Name == W.del) && !wrapper.Elements().Any())
+                    wrapper.Remove();
+                return;
+            }
+            marker.Remove();
+            return;
+        }
+        var parent = marker.Parent;
+        if (parent == null)
+            return;
+        marker.Remove();
+        if ((parent.Name == W.ins || parent.Name == W.del) && parent.Parent != null && !parent.Elements().Any())
+            parent.Remove();
+    }
+
+    /// <summary>Lift a comment marker out of its sole-child <c>w:ins</c>/<c>w:del</c> wrapper to bare (a start
+    /// before the wrapper, an end after; a reference run via <see cref="LiftRunBare"/>) so it survives BOTH
+    /// accept and reject. Returns true if it moved.</summary>
+    private static bool LiftCommentMarkerBare(XElement marker)
+    {
+        if (marker.Name == W.commentReference)
+        {
+            var run = marker.Parent;
+            return run is { Name: var rn } && rn == W.r && LiftRunBare(run);
+        }
+        var parent = marker.Parent;
+        if (parent == null || (parent.Name != W.ins && parent.Name != W.del) || parent.Parent == null)
+            return false;
+        marker.Remove();
+        if (marker.Name == W.commentRangeEnd) parent.AddAfterSelf(marker);
+        else parent.AddBeforeSelf(marker);
+        if (!parent.Elements().Any())
+            parent.Remove();
+        return true;
+    }
+
+    /// <summary>The largest 8-hex <c>w14:paraId</c> present on any comment-definition paragraph (so a freshly
+    /// allocated clone paraId collides with none).</summary>
+    private static int MaxParaId(XElement commentsRoot)
+    {
+        int max = 0;
+        foreach (var v in commentsRoot.Descendants().Attributes(W14ns + "paraId").Select(a => (string)a))
+            if (int.TryParse(v, System.Globalization.NumberStyles.HexNumber, null, out var n) && n > max)
+                max = n;
+        return max;
+    }
+
+    /// <summary>Carry a comment's threading metadata onto a freshly-paraId'd dedup clone: clone the
+    /// <c>commentsExtended</c> (<c>w15:commentEx</c>) and <c>commentsIds</c> (<c>w16cid:commentId</c>) entries that
+    /// keyed off <paramref name="oldParaId"/> under <paramref name="freshParaId"/>, preserving each entry's
+    /// <c>paraIdParent</c>/<c>durableId</c>. So the reject-side clone of a threaded reply still links to its
+    /// parent. No-op when the part/entry is absent.</summary>
+    private static void CloneThreadingEntryForParaId(MainDocumentPart main, string oldParaId, string freshParaId)
+    {
+        void Clone(OpenXmlPart? part, XName entryName, XName paraIdAttr)
+        {
+            var root = part?.GetXDocument().Root;
+            var src = root?.Elements(entryName).FirstOrDefault(e => (string?)e.Attribute(paraIdAttr) == oldParaId);
+            if (root == null || src == null)
+                return;
+            var copy = new XElement(src);
+            copy.SetAttributeValue(paraIdAttr, freshParaId);
+            root.Add(copy);
+            part!.PutXDocument();
+        }
+        Clone(main.WordprocessingCommentsExPart, W15ns + "commentEx", W15ns + "paraId");
+        Clone(main.WordprocessingCommentsIdsPart, W16cidNs + "commentId", W16cidNs + "paraId");
+    }
+
+    /// <summary>Wrap a BARE comment marker in a <c>w:ins</c>/<c>w:del</c> so it toggles with its revision side (a
+    /// right-added or left-deleted comment whose marker landed in equal content). The <c>commentReference</c>'s
+    /// host <c>w:r</c> is wrapped (a marker element is wrapped directly); both are valid children of
+    /// <c>w:ins</c>/<c>w:del</c>.</summary>
+    private static void WrapCommentMarkerInRevision(XElement marker, RevKind kind, RenderState state)
+    {
+        var target = marker;
+        if (marker.Name == W.commentReference && marker.Parent?.Name == W.r)
+            target = marker.Parent;
+        if (target.Parent == null)
+            return;
+        var rev = new XElement(RevElementName(kind), state.RevisionAttributes());
+        target.ReplaceWith(rev);
+        rev.Add(target);
     }
 
     // ----------------------------------------------------------------- bookmark normalization
@@ -2926,12 +3264,16 @@ internal static class IrMarkupRenderer
         }
 
         /// <summary>A run-level structural marker that is zero-width, NOT a diff token, and must survive every
-        /// edit boundary — a bookmark range endpoint. Dropping one would orphan the bookmark and dangle its
-        /// cross-reference. (Comment-range plumbing is handled separately by the whole-block
-        /// <c>ParagraphCarriesComments</c> bail; field plumbing is handled by <see cref="FieldPlumbingKeep"/>.)
-        /// </summary>
+        /// edit boundary — a bookmark range endpoint or a COMMENT range endpoint. Dropping one would orphan the
+        /// marker and dangle its cross-reference (a bookmark's REF field, a comment's <c>w:comment</c>
+        /// definition). Carried through the fine token-diff path exactly like a bookmark, then reconciled to
+        /// unique/paired/resolved by <see cref="NormalizeComments"/> (the comment analogue of
+        /// <see cref="NormalizeBookmarks"/>). (Field plumbing is handled by <see cref="FieldPlumbingKeep"/>; the
+        /// <c>commentReference</c> RUN — zero text — is flagged AlwaysKeep where it is walked in
+        /// <see cref="WalkRun"/>.)</summary>
         private static bool IsAlwaysKeepMarker(XName name) =>
-            name == W.bookmarkStart || name == W.bookmarkEnd;
+            name == W.bookmarkStart || name == W.bookmarkEnd ||
+            name == W.commentRangeStart || name == W.commentRangeEnd;
 
         /// <summary>Field plumbing (<c>w:fldChar</c>/<c>w:instrText</c>/<c>w:delInstrText</c>) — zero-width, not a
         /// diff token, so it must never be dropped at an edit boundary (that orphans the field and dangles its
@@ -2975,14 +3317,16 @@ internal static class IrMarkupRenderer
                 }
                 else
                 {
-                    // tab/break/drawing/noteref/field-plumbing — zero-width run child. Field plumbing
-                    // (w:fldChar/w:instrText/w:delInstrText) is AlwaysKeep: like a bookmark marker it is not a diff
-                    // token, so begin/separate/end + instruction runs clustered at an edit boundary would otherwise
-                    // be dropped — orphaning the field and dangling its cross-reference (editing text BEFORE a REF
-                    // field dropped the whole field). NormalizeFields then re-homes the plumbing to the field's own
-                    // revision context. The visible field RESULT is ordinary tokenized text and is unaffected.
+                    // tab/break/drawing/noteref/field-plumbing/commentReference — zero-width run child. Field
+                    // plumbing (w:fldChar/w:instrText/w:delInstrText) AND a w:commentReference are AlwaysKeep:
+                    // like a bookmark marker neither is a diff token, so one clustered at an edit boundary would
+                    // otherwise be dropped — orphaning the field/comment and dangling its cross-reference (editing
+                    // text BEFORE a REF field dropped the whole field; editing a commented word dropped the
+                    // reference). NormalizeFields re-homes field plumbing; NormalizeComments reconciles the
+                    // comment reference. The visible field RESULT is ordinary tokenized text and is unaffected.
                     _segments.Add(new Segment(run, charOffset, charOffset, SegmentKind.RunOther)
-                        { OtherChild = child, Chain = chain, AlwaysKeep = FieldPlumbingKeep(child.Name) });
+                        { OtherChild = child, Chain = chain,
+                          AlwaysKeep = FieldPlumbingKeep(child.Name) || child.Name == W.commentReference });
                 }
             }
             if (!any)

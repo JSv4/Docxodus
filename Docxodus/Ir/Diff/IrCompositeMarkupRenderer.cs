@@ -127,6 +127,9 @@ internal static class IrCompositeMarkupRenderer
                 // Carry each reviewer's missing styles + numbering into the base-based package (continuity for
                 // right-only styles / legal numbering referenced by cloned content). Order is reviewer index;
                 // first-writer-wins matches the two-way single-right behavior for a one-reviewer consolidate.
+                // Same loop merges each reviewer's right-only COMMENT definitions (+ commentsExtended/commentsIds
+                // threading) into the base-based comments part — comment markers are AlwaysKeep, so they ride the
+                // composite token diff exactly as in two-way Compare and must be reconciled the same way.
                 foreach (var reviewer in reviewers)
                 {
                     using var revStream = new OpenXmlMemoryStreamDocument(reviewer.Doc);
@@ -135,7 +138,18 @@ internal static class IrCompositeMarkupRenderer
                         wDocRev.MainDocumentPart?.StyleDefinitionsPart != null)
                         WmlComparer.CopyMissingStylesFromOneDocToAnother(wDocRev, wDoc);
                     WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRev, wDoc);
+                    IrMarkupRenderer.MergeRightCommentDefinitions(main, wDocRev.MainDocumentPart);
                 }
+
+                // Reconcile the assembled body's comment markers (unique ids, 1:1 range pairing, exactly-one
+                // resolved definition per reference) — the multi-source analogue of the two-way NormalizeComments.
+                // Left = base; "right" = the union of every reviewer's anchored comment ids (accept ≡ reviewers).
+                var reviewerCommentIds = new HashSet<string>();
+                foreach (var rir in reviewerIrs)
+                    foreach (var id in IrMarkupRenderer.BodyCommentIds(rir))
+                        reviewerCommentIds.Add(id);
+                IrMarkupRenderer.NormalizeComments(main, IrMarkupRenderer.BodyCommentIds(baseIr),
+                    reviewerCommentIds, state);
             }
             return streamDoc.GetModifiedWmlDocument();
         }

@@ -128,8 +128,9 @@ public static class DocxDiffCompatibility
         new(new("footnotesEndnotes", "Footnotes & endnotes", DocxDiffCoverage.Covered,
                 "Footnote/endnote + note-in-note campaigns.", "#239/#240"),
             roots => Count(roots, W + "footnoteReference", W + "endnoteReference")),
-        new(new("comments", "Comments", DocxDiffCoverage.Partial,
-                "An edited commented paragraph bails to a coarse whole-block del+ins (no fine comment-edit markup)."),
+        new(new("comments", "Comments", DocxDiffCoverage.Covered,
+                "Comment fidelity campaign: fine per-word markup on edited commented paragraphs + "
+                + "id/range/reference/definition + threaded reply integrity.", "#243"),
             roots => Count(roots, W + "commentReference")),
         new(new("complexFields", "Complex fields (TOC/SEQ/INDEX/...)", DocxDiffCoverage.Partial,
                 "REF/PAGEREF are solid; other field types are uncampaigned."),
