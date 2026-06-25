@@ -56,6 +56,7 @@ from .errors import DocxodusHostNotFoundError, DocxodusTransportError, DocxScalp
 from .session import (
     DocxSession,
     convert_docx_to_html,
+    docx_diff_accept_revisions,
     docx_diff_compare,
     docx_diff_consolidate,
     docx_diff_get_conflicts,
@@ -63,6 +64,7 @@ from .session import (
     docx_diff_get_consolidated_revisions,
     docx_diff_get_edit_script,
     docx_diff_get_revisions,
+    docx_diff_reject_revisions,
     open_session,
     ping,
 )
@@ -120,6 +122,7 @@ __all__ = [
     # entry points
     "DocxSession",
     "convert_docx_to_html",
+    "docx_diff_accept_revisions",
     "docx_diff_compare",
     "docx_diff_consolidate",
     "docx_diff_get_conflicts",
@@ -127,6 +130,7 @@ __all__ = [
     "docx_diff_get_consolidated_revisions",
     "docx_diff_get_revisions",
     "docx_diff_get_edit_script",
+    "docx_diff_reject_revisions",
     "open_session",
     "ping",
     "shutdown_host",

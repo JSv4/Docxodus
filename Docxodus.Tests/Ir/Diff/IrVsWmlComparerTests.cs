@@ -61,9 +61,16 @@ namespace Docxodus.Tests.Ir.Diff;
 /// is mechanically detectable (see <see cref="DivergenceCause"/>).</item>
 /// </list>
 ///
-/// <para>The test ASSERTS only totality invariants: zero NEW_ERROR, every pair classified, and every
-/// DIVERGENT pair has a detail file. There is deliberately NO match-rate threshold — the controller
-/// adjudicates the triage table from the emitted report.</para>
+/// <para>The test asserts the totality invariants (zero NEW_ERROR, every pair classified, every DIVERGENT
+/// pair has a detail file) AND a <b>gated semantic ratchet</b> over the adjudicated baseline distribution:
+/// a Match-rate floor, a Divergent ceiling, and per-cause ceilings on the genuine-fidelity-loss buckets
+/// (ScopeGapNewEmpty / OldEmpty / OpaqueGap / Unclassified). A quality regression that still PARSES — the
+/// IR engine silently starting to over- or under-report vs WmlComparer — moves a case out of Match (or into
+/// a fidelity-loss bucket) and turns the test RED. The benign documented-granularity buckets
+/// (TokenSpanGranularity / PunctuationBoundary / MoveSemantics / FormatOnly / SpecialChars) are bounded only
+/// by the Divergent ceiling so legitimate render-grain tuning is not over-constrained. The floors/ceilings
+/// are a RATCHET: when the engine improves, tighten them to the new numbers (they may only move the good
+/// way). The full triage table is still emitted for the controller to adjudicate.</para>
 /// </remarks>
 [Trait("Category", "Differential")]
 public class IrVsWmlComparerTests
@@ -259,7 +266,7 @@ public class IrVsWmlComparerTests
                 _out.WriteLine($"  {cause,-22} {fine,6} {compat,8}");
         }
 
-        // ----- assertions: totality only (controller adjudicates the triage; NO match-rate threshold) ----
+        // ----- assertions: totality invariants -----------------------------------------------------------
         Assert.Equal(2 * pairs.Count, results.Count); // totality: every pair classified, both directions
         Assert.Equal(results.Count, compatResults.Count); // the compatible-mode pass classifies every pair too
         Assert.True(newErrors == 0,
@@ -267,6 +274,64 @@ public class IrVsWmlComparerTests
         foreach (var r in results.Where(r => r.Class == Classification.Divergent))
             Assert.True(File.Exists(Path.Combine(artifactsDir, DetailFileName(r.Label))),
                 $"DIVERGENT pair missing its detail file: {r.Label}");
+
+        // ----- gated semantic ratchet -------------------------------------------------------------------
+        // Totality alone stays green even if the engine silently begins to over- or under-report (a quality
+        // regression that still parses). These floors/ceilings — captured from the adjudicated baseline of
+        // 184 comparisons (92 WC pairs × 2 directions) — turn such a regression RED: any case that LEAVES the
+        // Match bucket drops the Match floor, and any case that worsens INTO a genuine-fidelity-loss bucket
+        // breaks a per-cause ceiling. They are a RATCHET — when the engine improves, tighten to the new
+        // numbers; they may only move in the good direction (floors up, ceilings down).
+        //
+        // SCOPE / KNOWN GAP (be honest about what this catches): the gates are bucket-COUNT gates, so they catch
+        // a regression that MOVES a case out of Match (MatchFloor) or into divergence (DivergentCeiling / the
+        // per-cause ceilings). They do NOT catch a regression that worsens WITHIN an already-Divergent case while
+        // it stays in the unceilinged TokenSpanGranularity bucket (e.g. a PARTIAL under-report on a mixed
+        // body+note pair that keeps newB.Total > 0 and a clean letter-bag containment). That specific note-/scope-
+        // content gap is closed elsewhere — positively, by content round-trips: DocxDiffScenarioTests (synthetic
+        // note edits) and DocxDiffBookmarkRealDocTests (the DD001 real-doc fixture's right side now edits footnote
+        // AND endnote CONTENT, so accept≡right / reject≡left on referenced-note TEXT exercises the note-diff path).
+        // So the perturbation guarantee here is: an over/under-report that shifts a previously-MATCH pair fails the
+        // Match floor; within-bucket note/scope fidelity is guarded by those content round-trips.
+        //
+        // The absolute numbers are COUPLED to the current TestFiles/WC corpus snapshot (WcCorpus globs it at
+        // runtime). Adding/removing a WC file legitimately re-shifts the distribution — re-baseline these
+        // constants then (a louder red here than a silent miss, by design).
+        int match     = results.Count(r => r.Class == Classification.Match);
+        int divergent = results.Count(r => r.Class == Classification.Divergent);
+        int oldError  = results.Count(r => r.Class == Classification.OldError);
+        int Cause(DivergenceCause c) => results.Count(r => r.Class == Classification.Divergent && r.Cause == c);
+
+        const int MatchFloor = 96;        // semantic agreement (Fine mode); may only RISE
+        const int DivergentCeiling = 66;  // total semantic divergence; may only FALL
+        const int OldErrorCeiling = 2;    // WC-BodyBookmarks both directions — the legacy engine throws. A CEILING
+                                          // (not exact): if a WmlComparer fix stops it throwing, fewer is fine.
+
+        Assert.True(match >= MatchFloor,
+            $"Match rate REGRESSED: {match} < floor {MatchFloor}. A pair that previously agreed left the Match " +
+            $"bucket — the IR engine is now over/under-reporting vs WmlComparer. See the triage table above.");
+        Assert.True(divergent <= DivergentCeiling,
+            $"Divergence GREW: {divergent} > ceiling {DivergentCeiling}. New semantic disagreement introduced.");
+        Assert.True(oldError <= OldErrorCeiling,
+            $"OldError GREW: {oldError} > ceiling {OldErrorCeiling}. More pairs now throw in the legacy WmlComparer " +
+            "than the baseline — likely a corpus change; re-baseline after confirming it is not an IR-side regression.");
+
+        // Genuine-fidelity-loss causes — these may not grow (baseline: all 0 except Unclassified=2).
+        Assert.True(Cause(DivergenceCause.ScopeGapNewEmpty) <= 0,
+            $"ScopeGapNewEmpty rose to {Cause(DivergenceCause.ScopeGapNewEmpty)}: IR surfaced NOTHING where WmlComparer reported revisions (an under-report / scope miss).");
+        Assert.True(Cause(DivergenceCause.OldEmpty) <= 0,
+            $"OldEmpty rose to {Cause(DivergenceCause.OldEmpty)}: IR reported revisions where WmlComparer surfaced none (an over-report).");
+        Assert.True(Cause(DivergenceCause.OpaqueGap) <= 0,
+            $"OpaqueGap rose to {Cause(DivergenceCause.OpaqueGap)}: IR missed an opaque/section sub-block the old engine covered.");
+        Assert.True(Cause(DivergenceCause.Unclassified) <= 2,
+            $"Unclassified rose to {Cause(DivergenceCause.Unclassified)}: an unexplained divergence none of the mechanical heuristics can bucket — inspect its detail file.");
+
+        // The WmlComparer-compatible projection is the headline parity grain; its Match is the parity number
+        // and must not regress either (baseline 150/184).
+        const int CompatMatchFloor = 150;
+        int compatMatch = compatResults.Count(r => r.Class == Classification.Match);
+        Assert.True(compatMatch >= CompatMatchFloor,
+            $"WmlComparer-compatible Match REGRESSED: {compatMatch} < floor {CompatMatchFloor}.");
     }
 
     private void RunDirection(

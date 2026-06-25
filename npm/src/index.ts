@@ -1047,6 +1047,52 @@ export async function docxDiffGetEditScript(
   return result;
 }
 
+/**
+ * Accept every tracked revision in a redlined DOCX and return the resulting bytes
+ * (materializes the "right"/revised side). The byte-in, byte-out counterpart of
+ * {@link docxDiffCompare}: `docxDiffAcceptRevisions(await docxDiffCompare(left, right))`
+ * equals `right` at the per-block text level — so callers can verify the round-trip
+ * contract of a redline, not just inspect its shape.
+ *
+ * @param redline - A DOCX carrying tracked-changes markup (e.g. {@link docxDiffCompare} output).
+ * @returns The DOCX bytes with all revisions accepted.
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffAcceptRevisions(
+  redline: File | Uint8Array
+): Promise<Uint8Array> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(redline);
+  await yieldToMain();
+  const result = exports.DocxDiffBridge.AcceptRevisions(bytes);
+  if (result.length === 0) {
+    throw new Error("DocxDiff accept-revisions failed - empty result");
+  }
+  return result;
+}
+
+/**
+ * Reject every tracked revision in a redlined DOCX and return the resulting bytes
+ * (materializes the "left"/original side): `docxDiffRejectRevisions(await
+ * docxDiffCompare(left, right))` equals `left` at the per-block text level.
+ *
+ * @param redline - A DOCX carrying tracked-changes markup (e.g. {@link docxDiffCompare} output).
+ * @returns The DOCX bytes with all revisions rejected.
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffRejectRevisions(
+  redline: File | Uint8Array
+): Promise<Uint8Array> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(redline);
+  await yieldToMain();
+  const result = exports.DocxDiffBridge.RejectRevisions(bytes);
+  if (result.length === 0) {
+    throw new Error("DocxDiff reject-revisions failed - empty result");
+  }
+  return result;
+}
+
 // ─── DocxDiff consolidate (composite N-way) ─────────────────────────────────
 //
 // Merge several reviewers' edits against one shared base DOCX. Each reviewer is

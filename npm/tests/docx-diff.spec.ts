@@ -114,6 +114,57 @@ test.describe('DocxDiff (IR diff engine) bridge', () => {
     expect(result.error).toBeUndefined();
     expect(Array.isArray(result.revisions)).toBe(true);
   });
+
+  // The round-trip contract — NOT a shape/length check. compare(left,right) then
+  // accept ≡ right and reject ≡ left at the per-block text level. This rides the
+  // full client wire: Compare (bytes out), AcceptRevisions/RejectRevisions (bytes
+  // in→out, the new surface), all marshalled JS↔WASM. A wire/type-mapping break in
+  // any of those diff paths corrupts the bytes and breaks the text equality below.
+  test('accept/reject round-trip: accept ≡ right, reject ≡ left (text level)', async ({ page }) => {
+    const left = readTestFile('WC/WC001-Digits.docx');
+    const right = readTestFile('WC/WC001-Digits-Mod.docx');
+
+    const result = await page.evaluate(
+      ([l, r]) => {
+        const T = (window as any).DocxodusTests;
+        const text = (bytes: Uint8Array): string | { __err: unknown } => {
+          const h = T.convertToHtml(bytes);
+          if (h.error) return { __err: h.error };
+          return (h.html as string)
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/g, ' ')
+            .replace(/&amp;/g, '&')
+            .replace(/\s+/g, ' ')
+            .trim();
+        };
+        const cmp = T.docxDiffCompare(new Uint8Array(l), new Uint8Array(r));
+        if (cmp.error) return { stage: 'compare', err: cmp.error };
+        const acc = T.docxDiffAcceptRevisions(cmp.docxBytes);
+        if (acc.error) return { stage: 'accept', err: acc.error };
+        const rej = T.docxDiffRejectRevisions(cmp.docxBytes);
+        if (rej.error) return { stage: 'reject', err: rej.error };
+        return {
+          leftText: text(new Uint8Array(l)),
+          rightText: text(new Uint8Array(r)),
+          acceptText: text(acc.docxBytes),
+          rejectText: text(rej.docxBytes),
+        };
+      },
+      [Array.from(left), Array.from(right)]
+    );
+
+    expect((result as any).err, `failed at stage: ${(result as any).stage}`).toBeUndefined();
+    const r = result as {
+      leftText: string;
+      rightText: string;
+      acceptText: string;
+      rejectText: string;
+    };
+    expect(r.acceptText).toBe(r.rightText); // accept materializes the revised side
+    expect(r.rejectText).toBe(r.leftText); // reject restores the original side
+    // and the two sides genuinely differ — so the round-trip can't pass by echoing one input.
+    expect(r.rightText).not.toBe(r.leftText);
+  });
 });
 
 // Composite N-way consolidate: merge two reviewers' edits against a shared base.

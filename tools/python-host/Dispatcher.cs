@@ -34,6 +34,8 @@ internal static class Dispatcher
         "docx_diff_compare" => DocxDiffCompare(args),
         "docx_diff_get_revisions" => DocxDiffGetRevisions(args),
         "docx_diff_get_edit_script" => JsonString(DocxDiffGetEditScript(args)),
+        "docx_diff_accept_revisions" => DocxDiffAcceptRevisions(args),
+        "docx_diff_reject_revisions" => DocxDiffRejectRevisions(args),
         "docx_diff_consolidate" => DocxDiffConsolidate(args),
         "docx_diff_get_conflicts" => DocxDiffOps.GetConflictsJson(BaseB(args), ReviewersJson(args), DiffSettingsJson(args)),
         "docx_diff_get_consolidated_revisions" => DocxDiffOps.GetConsolidatedRevisionsJson(BaseB(args), ReviewersJson(args), DiffSettingsJson(args)),
@@ -216,6 +218,18 @@ internal static class Dispatcher
         var left = Convert.FromBase64String(Str(args, "leftB64"));
         var right = Convert.FromBase64String(Str(args, "rightB64"));
         return DocxDiffOps.GetEditScriptJson(left, right, DiffSettingsJson(args));
+    }
+
+    private static string DocxDiffAcceptRevisions(JsonElement args)
+    {
+        var bytes = DocxDiffOps.AcceptRevisions(Convert.FromBase64String(Str(args, "docxB64")));
+        return "{\"docxB64\":" + DocxSessionJson.JsonString(Convert.ToBase64String(bytes)) + "}";
+    }
+
+    private static string DocxDiffRejectRevisions(JsonElement args)
+    {
+        var bytes = DocxDiffOps.RejectRevisions(Convert.FromBase64String(Str(args, "docxB64")));
+        return "{\"docxB64\":" + DocxSessionJson.JsonString(Convert.ToBase64String(bytes)) + "}";
     }
 
     private static string DocxDiffConsolidate(JsonElement args)
