@@ -153,8 +153,19 @@ public static class DocxDiffCompatibility
         new(new("oleEmbeddedObjects", "OLE / embedded objects", DocxDiffCoverage.Untested,
                 "No coverage."),
             roots => Count(roots, W + "object", O + "OLEObject")),
-        new(new("revisionsInInput", "Pre-existing tracked changes in input", DocxDiffCoverage.Partial,
-                "Diffing already-tracked-changes input is a thin area."),
+        new(new("revisionsInInput", "Pre-existing tracked changes in input", DocxDiffCoverage.Covered,
+                "Characterized + pinned: the engine diffs the ACCEPTED VIEW of each input (rule N13), so the "
+                + "produced body carries only THIS diff's revisions. Pre-existing markup in carried-over parts "
+                + "(headers/footers, unchanged footnotes/endnotes, styles, comments) is passed through verbatim "
+                + "unless DocxDiffSettings.PreAcceptInputRevisions is set, which accepts BOTH inputs first so the "
+                + "result is revision-free except for this diff and round-trips against the accepted view in body/"
+                + "header/footer/note/style scopes. The flag cleans exactly the parts RevisionProcessor."
+                + "AcceptRevisions processes; carried-over parts it does NOT process — the comments part and the "
+                + "glossary (building-blocks) document part — keep their pre-existing revisions. "
+                + "Two honest costs of accept-all: it flattens prior authorship and change boundaries (you "
+                + "lose who edited what and where), and 'accept all' is itself a policy that overrides any change a "
+                + "prior reviewer had left unaccepted (effectively rejected). See ir_diff_engine.md + "
+                + "ooxml_corner_cases.md.", "PreAcceptInputRevisions"),
             roots => Count(roots, W + "ins", W + "del", W + "moveFrom", W + "moveTo")),
     };
 

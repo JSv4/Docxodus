@@ -469,6 +469,80 @@ oracle in `tools/diffharness`.
 
 ---
 
+## DocxDiff: `PreAcceptInputRevisions` accept-all flattens prior authorship
+
+**Status:** Documented (2026-06) — the `revisionsInInput` campaign.
+
+### The corner case
+
+This is not a Word-vs-spec divergence but a **lossy-by-design transformation** worth pinning, because "just
+accept-all both sides, then diff" looks innocent and is not. When an input is itself a redline (carries
+un-accepted `w:ins`/`w:del`/`w:moveFrom`), DocxDiff's default already diffs the **accepted view** (rule N13 —
+`IrReader` runs `RevisionView.Accept` before building the IR), so the produced *body* carries only the new
+diff's revisions. But the output package is cloned on the LEFT input and only the body (+ changed notes) is
+rebuilt, so pre-existing revision markup in **carried-over parts** (headers/footers, unchanged
+footnotes/endnotes, styles, comments) is passed through verbatim. The opt-in
+`DocxDiffSettings.PreAcceptInputRevisions` eliminates that by accepting BOTH whole inputs first (cleaning the
+body, headers/footers, notes, and styles — the parts `RevisionProcessor.AcceptRevisions` processes; a tracked
+change inside a comment *definition* or a glossary/building-blocks entry is NOT touched, since
+`RevisionProcessor.AcceptRevisions` does not process the comments part or the `GlossaryDocumentPart`) — but
+accept-all itself has two honest costs that a caller must understand before enabling it.
+
+### Minimal XML reproducer
+
+An input whose header carries a prior reviewer's tracked insertion (identical on both diff sides, so a pure
+carry-over, not a diff):
+
+```xml
+<!-- left.docx and right.docx both contain this header part -->
+<w:hdr>
+  <w:p>
+    <w:r><w:t xml:space="preserve">Header </w:t></w:r>
+    <w:ins w:id="99" w:author="OldReviewer" w:date="2020-01-01T00:00:00Z">
+      <w:r><w:t>CONFIDENTIAL</w:t></w:r>
+    </w:ins>
+  </w:p>
+</w:hdr>
+```
+
+### Behavior table
+
+| Setting | Output header | `accept(result)` header | `reject(result)` header | Round-trip in header? |
+|---|---|---|---|---|
+| default (`PreAcceptInputRevisions = false`) | `<w:ins author="OldReviewer">CONFIDENTIAL</w:ins>` **(leaked verbatim)** | `Header CONFIDENTIAL` | `Header ` (**leaked ins rejected → text dropped**) | **No** — `reject ≠ accept-view(left)` |
+| `PreAcceptInputRevisions = true` | `Header CONFIDENTIAL` (plain, accepted) | `Header CONFIDENTIAL` | `Header CONFIDENTIAL` | **Yes** |
+
+Word and LibreOffice behave the same on the *outputs* — there is no renderer divergence here. The divergence is
+between the default's leaked, non-round-tripping header and the flag's clean one.
+
+### Analysis — the two honest costs of accept-all
+
+Even with the flag fixing the leak/round-trip, accept-all is opinionated and lossy and must not be enabled
+silently:
+
+1. **It flattens pre-existing authorship and change boundaries.** Accepting collapses each input's own tracked
+   changes into final text. `OldReviewer` (and *where* their edit began/ended) is gone from the result; the
+   output's authorship reflects only the new diff. You cannot recover "who edited what" afterward.
+2. **"Accept all" is itself a policy.** Leaving a change in tracked form is how a reviewer defers or rejects it;
+   accept-all overrides that, materializing every insertion and dropping every deletion regardless of the prior
+   reviewer's intent. If the inputs' in-flight revisions must be preserved or re-adjudicated, resolve them by an
+   explicit policy first, then diff — do not reach for `PreAcceptInputRevisions`.
+
+### Relevant code
+
+- `Docxodus/DocxDiff.cs` — `DocxDiffSettings.PreAcceptInputRevisions` + the `PreAccept(...)` pre-pass wired into
+  all seven entry points; `IrMarkupRenderer.Render` clones the output on the LEFT package (the carry-over source).
+- `Docxodus/Ir/IrReader.cs` — `ApplyRevisionView` (rule N13: `RevisionView.Accept` before IR build).
+- `Docxodus/DocxDiffCompatibility.cs` — the `revisionsInInput` catalog entry (now `Covered`).
+
+### Tests
+
+`Docxodus.Tests/Ir/Diff/RevisionsInInputDefaultTests.cs` (pins the default: clean body + leaking carry-over +
+the broken header round-trip) and `PreAcceptInputRevisionsTests.cs` (the flag is the wrapper, no stale
+authorship, every-scope round-trip, schema validity, multi-author redline-of-a-redline).
+
+---
+
 ## Contributing
 
 When adding new corner cases to this document:

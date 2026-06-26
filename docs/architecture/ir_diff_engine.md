@@ -100,11 +100,37 @@ A `ModifyBlock` over a paragraph carries a `tokenDiff`; over a table, a `tableDi
 | `MoveMinimumWordCount` | `3` | `MoveMinimumTokenCount` | |
 | `RevisionGranularity` | `Fine` | `RevisionGranularity` | `Fine` = engine-native one-revision-per-token-span (byte-stable); `WmlComparerCompatible` = coalesce/trim/prune to match the legacy comparer's coarser revision set |
 | `FormatComparison` | `ModeledOnly` | `IrFormatComparison` | `ModeledOnly` reports only modeled-field deltas (false-negative on unmodeled rPr); `Full` sees every rPr difference |
+| `PreAcceptInputRevisions` | `false` | — (a pre-pass, not an `IrDiffSettings` field) | when true, runs `RevisionProcessor.AcceptRevisions` on EACH input before diffing — the first-class "accept-all both sides, then compare" wrapper. See [Inputs that already carry tracked changes](#inputs-that-already-carry-tracked-changes-rule-n13--preacceptinputrevisions). .NET-only in v1 (no bridge ripple). |
 
 ### Two honest defaults that deviate from `WmlComparerSettings`
 
 1. **Deterministic dates.** `WmlComparerSettings.DateTimeForRevisions` defaults to `DateTime.Now` — the same compare twice yields different dates. `DocxDiff` pins a fixed epoch by default so output is reproducible. Opt into wall-clock via `Deterministic = false`.
 2. **`FormatComparison = ModeledOnly`.** A `w:rPrChange`-grade report can only DESCRIBE modeled fields, so a format change driven by an undescribable unmodeled-only rPr flip (`w:lang`, `w:bCs`, complex-script toggles) is noise. `ModeledOnly` collapses that noise; the trade-off is a false negative on a visible-but-unmodeled change (e.g. `w:shd` run shading). `Full` restores byte-fidelity comparison.
+
+### Inputs that already carry tracked changes (rule N13 + `PreAcceptInputRevisions`)
+
+DocxDiff is frequently asked to diff a document that is itself a redline — its body, notes, headers, or comments already carry un-accepted `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`/`w:rPrChange`. The handling is **explicit and pinned**, not incidental. Characterization tests: `Docxodus.Tests/Ir/Diff/RevisionsInInputDefaultTests.cs` (default) and `PreAcceptInputRevisionsTests.cs` (the flag).
+
+**The default — diff the ACCEPTED VIEW, carry non-body markup through verbatim.**
+
+- **Rule N13 (the IR is a revision-free view).** `IrReader` resolves revisions with `RevisionView.Accept` on a working copy *before* building the IR (the original bytes are untouched). So the edit script — and therefore `GetRevisions`/`GetEditScriptJson` and the body of `Compare` — is computed over the **accepted view** of each side: an input's own `w:ins`/`w:del` never surface as their own diff, and the produced body carries only THIS diff's revisions, attributed to `AuthorForRevisions`. At the body level the round-trip already holds against the accepted view (`reject(result) ≡ accept-view(left)`, `accept(result) ≡ accept-view(right)`).
+- **The carry-over leak.** `IrMarkupRenderer` assembles the output on a **clone of the LEFT package** (so styles/numbering/theme/settings/section/media carry over by reuse — what WmlComparer does), and only the **body** (plus *changed* footnotes/endnotes) is rebuilt from accept-clean source. Everything else — **headers/footers, UNCHANGED footnotes/endnotes, styles, the comments part** — is passed through *verbatim from the original left input*. Any pre-existing revision markup there **survives into the result**, attributed to its ORIGINAL author. This is the documented limitation the inspector's `revisionsInInput` entry flags.
+- **Why the leak matters.** A leaked pre-existing `w:ins` in, say, a header is then *rejected* by `RejectRevisions` (it strips the insertion) — so under the default the round-trip does **not** hold in the carried-over scopes (`reject(result)` drops header text the accepted view of the left actually contains). Pinned by `Default_leak_breaks_the_header_round_trip`.
+
+**The opt-in — `PreAcceptInputRevisions` (default `false`).** When set, every input is run through `RevisionProcessor.AcceptRevisions` *before* it enters the pipeline, so both the IR read and the cloned output package are revision-free on both sides. It is, by construction, **exactly** `Compare(AcceptRevisions(left), AcceptRevisions(right))` — byte-for-byte identical to that wrapper (oracle: `Flag_on_is_byte_identical_to_accept_all_then_compare_wrapper`). The effect:
+
+- every `w:ins`/`w:del`/`w:moveFrom` in the result is attributable to THIS diff (no stale input revision passed through) in the body, header/footer, note, and style scopes;
+- the round-trip holds against the accepted view in those scopes;
+- the consumer revision list (`GetRevisions`) is unchanged — the flag only additionally cleans the rendered package's carried-over parts.
+
+**The flag's coverage is exactly what `RevisionProcessor.AcceptRevisions` processes** — the body, headers, footers, footnotes, endnotes, and styles part. Carried-over parts it does **not** process keep their pre-existing revisions: notably the `WordprocessingCommentsPart` (a tracked change inside a COMMENT *definition* survives — pinned by `PreAcceptInputRevisions_does_not_flatten_a_revision_inside_a_comment_definition`) and the `GlossaryDocumentPart` (building-blocks / AutoText entries; the renderer clones the whole left package, including the glossary part, verbatim). These are the honest boundaries of the accept-all pre-pass — resolve revisions in those parts separately if they matter. (The narrower `NumberingDefinitionsPart` carries only style-grade `pPrChange`/`rPrChange`, never `w:ins`/`w:del`, so it is outside the inspector's tracked-changes scope.)
+
+Applied uniformly to all seven entry points (`Compare`/`GetRevisions`/`GetEditScriptJson` and the four consolidate-family methods, accepting the base and every reviewer). **.NET-only in v1** — not yet surfaced on the WASM/npm/python bridges (deferred).
+
+**Two honest costs of accept-all (read before enabling).** Accept-all is a lossy, opinionated pre-flatten:
+
+1. **It flattens pre-existing authorship and change boundaries.** Accepting collapses each input's tracked changes into final text, so *who* made a prior edit and *where* the prior change boundaries were are lost — the result's authorship reflects only this diff.
+2. **"Accept all" is itself a policy.** It overrides any change a prior reviewer had left unaccepted — including one they had effectively rejected by leaving in tracked form — materializing every insertion and dropping every deletion. To preserve or re-adjudicate the inputs' in-flight revisions, resolve them by your own policy first, then diff. See `docs/ooxml_corner_cases.md` → "DocxDiff: `PreAcceptInputRevisions` accept-all flattens prior authorship".
 
 ## N-way composite / Consolidate
 

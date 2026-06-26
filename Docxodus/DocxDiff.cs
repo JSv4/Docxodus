@@ -66,6 +66,10 @@ public static class DocxDiff
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
         var s = settings ?? new DocxDiffSettings();
+        // Opt-in accept-all pre-flatten (default off → no-op): diff (and clone the output from) the accepted
+        // view of both inputs so no pre-existing input revision survives into the result. See the flag's docs.
+        left = PreAccept(s, left);
+        right = PreAccept(s, right);
         PreflightCompatibility(s, left, right);
         var diff = s.ToIrDiffSettings();
         var irLeft = IrReader.Read(left, ReadOpts);
@@ -93,6 +97,8 @@ public static class DocxDiff
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
         var s = settings ?? new DocxDiffSettings();
+        left = PreAccept(s, left);
+        right = PreAccept(s, right);
         PreflightCompatibility(s, left, right);
         var diff = s.ToIrDiffSettings();
         var irLeft = IrReader.Read(left, ReadOpts);
@@ -120,6 +126,8 @@ public static class DocxDiff
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
         var s = settings ?? new DocxDiffSettings();
+        left = PreAccept(s, left);
+        right = PreAccept(s, right);
         PreflightCompatibility(s, left, right);
         var diff = s.ToIrDiffSettings();
         var irLeft = IrReader.Read(left, ReadOpts);
@@ -186,6 +194,10 @@ public static class DocxDiff
         var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
         var diff = s.Diff.ToIrDiffSettings();
         if (reviewers.Count == 0) return baseDocument;
+        // Opt-in accept-all pre-flatten (default off → no-op): consolidate the accepted view of the base and
+        // every reviewer so no pre-existing input revision survives into the consolidated result.
+        baseDocument = PreAccept(s.Diff, baseDocument);
+        reviewers = PreAccept(s.Diff, reviewers);
         PreflightCompatibility(s.Diff, new[] { baseDocument }.Concat(reviewers.Select(r => r.Document)).ToArray());
         var baseIr = IrReader.Read(baseDocument, ReadOpts);
         var revIr = reviewers.Select(r => (r.Author, IrReader.Read(r.Document, ReadOpts))).ToList();
@@ -236,6 +248,8 @@ public static class DocxDiff
         var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
         var diff = s.Diff.ToIrDiffSettings();
         if (reviewers.Count == 0) return System.Array.Empty<DocxDiffConflict>();
+        baseDocument = PreAccept(s.Diff, baseDocument);
+        reviewers = PreAccept(s.Diff, reviewers);
         var baseIr = IrReader.Read(baseDocument, ReadOpts);
         var revIr = reviewers.Select(r => (r.Author, IrReader.Read(r.Document, ReadOpts))).ToList();
         var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
@@ -276,6 +290,8 @@ public static class DocxDiff
         var s = ValidateConsolidateArgs(baseDocument, reviewers, settings);
         var diff = s.Diff.ToIrDiffSettings();
         if (reviewers.Count == 0) return System.Array.Empty<DocxDiffConsolidatedRevision>();
+        baseDocument = PreAccept(s.Diff, baseDocument);
+        reviewers = PreAccept(s.Diff, reviewers);
         var baseIr = IrReader.Read(baseDocument, ReadOpts);
         var revIr = reviewers.Select(r => (r.Author, IrReader.Read(r.Document, ReadOpts))).ToList();
         var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
@@ -331,6 +347,8 @@ public static class DocxDiff
             return IrCompositeScriptJson.Write(new IrCompositeScript(
                 IrNodeList.From(System.Array.Empty<IrCompositeOp>()),
                 IrNodeList.From(System.Array.Empty<IrConflict>())));
+        baseDocument = PreAccept(s.Diff, baseDocument);
+        reviewers = PreAccept(s.Diff, reviewers);
         var baseIr = IrReader.Read(baseDocument, ReadOpts);
         var revIr = reviewers.Select(r => (r.Author, IrReader.Read(r.Document, ReadOpts))).ToList();
         var script = IrCompositeMerger.Merge(baseIr, revIr, s.ConflictResolution, diff);
@@ -417,6 +435,27 @@ public static class DocxDiff
                     $"reviewers[{i}].Document is null (author '{reviewers[i].Author}').", nameof(reviewers));
         }
         return s;
+    }
+
+    /// <summary>
+    /// Apply <see cref="DocxDiffSettings.PreAcceptInputRevisions"/>: when set, return the fully accepted view of
+    /// <paramref name="doc"/> (a new <see cref="WmlDocument"/>; the input is untouched) so both the IR read AND
+    /// the output-package clone are revision-free; when not set, return <paramref name="doc"/> unchanged so the
+    /// default path is byte-for-byte what it was before the flag existed.
+    /// </summary>
+    private static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc) =>
+        settings.PreAcceptInputRevisions ? RevisionProcessor.AcceptRevisions(doc) : doc;
+
+    /// <summary>Per-reviewer <see cref="PreAccept(DocxDiffSettings, WmlDocument)"/> for the N-way entry points;
+    /// returns the original list unchanged when the flag is off.</summary>
+    private static IReadOnlyList<DocxDiffReviewer> PreAccept(
+        DocxDiffSettings settings, IReadOnlyList<DocxDiffReviewer> reviewers)
+    {
+        if (!settings.PreAcceptInputRevisions)
+            return reviewers;
+        return reviewers
+            .Select(r => new DocxDiffReviewer { Author = r.Author, Document = RevisionProcessor.AcceptRevisions(r.Document) })
+            .ToList();
     }
 }
 
@@ -603,6 +642,35 @@ public sealed class DocxDiffSettings
     /// for byte-fidelity comparison.
     /// </summary>
     public DocxDiffFormatComparison FormatComparison { get; set; } = DocxDiffFormatComparison.ModeledOnly;
+
+    /// <summary>
+    /// When true, every input document is run through <see cref="RevisionProcessor.AcceptRevisions(WmlDocument)"/>
+    /// BEFORE it is diffed — so the comparison, AND the output package the markup renderer clones from those
+    /// inputs, are built over the fully <b>accepted view</b> of each side. This is the first-class, opt-in form
+    /// of the "accept-all-both-sides, then compare" wrapper. <b>Default false</b>, which is a zero behavior change:
+    /// the engine already diffs the accepted view at the edit-script/body level, but carries pre-existing
+    /// revision markup in carried-over parts (headers/footers, unchanged footnotes/endnotes, styles, comments)
+    /// straight through into the result. Setting this true runs the accept-all, which flattens the body,
+    /// headers/footers, footnotes/endnotes, and styles, so every revision the markup renderer emits in those
+    /// scopes is attributable to THIS diff (none is a stale input revision passed through) and the round-trip
+    /// holds against the accepted view of each side there. <b>Coverage is exactly the parts
+    /// <see cref="RevisionProcessor.AcceptRevisions(WmlDocument)"/> processes</b> — the main body,
+    /// headers/footers, footnotes/endnotes, and styles. Carried-over parts it does NOT process — notably the
+    /// comments part and the glossary (building-blocks / AutoText) document part — are left intact, so a
+    /// pre-existing revision inside a comment definition or a glossary entry survives regardless of this flag.
+    ///
+    /// <para><b>Two honest costs of accept-all (read before enabling).</b></para>
+    /// <para>1. <b>It flattens pre-existing authorship and change boundaries.</b> Accepting collapses each input's
+    /// own tracked changes into final text, so WHO made a prior edit and WHERE the prior change boundaries were
+    /// are lost — the result's authorship reflects only this diff, not the inputs' edit history.</para>
+    /// <para>2. <b>"Accept all" is itself a policy.</b> It overrides any change a prior reviewer had left
+    /// unaccepted — including one they had effectively rejected by leaving in tracked form — by materializing
+    /// every insertion and dropping every deletion. If you need to preserve or re-adjudicate the inputs'
+    /// in-flight revisions, do not enable this; resolve them first by your own policy, then diff.</para>
+    ///
+    /// <para>.NET-only in v1: not yet surfaced on the WASM/npm/python bridges.</para>
+    /// </summary>
+    public bool PreAcceptInputRevisions { get; set; }
 
     /// <summary>Map this public settings object onto the internal <c>IrDiffSettings</c>.</summary>
     internal IrDiffSettings ToIrDiffSettings()
