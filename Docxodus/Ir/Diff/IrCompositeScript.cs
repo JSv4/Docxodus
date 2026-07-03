@@ -30,8 +30,15 @@ internal sealed record IrSourceRightAnchor(int Reviewer, string Anchor);
 /// (so a cell is a mini-body). It is null when no reviewer changed the cell (base passthrough): the
 /// renderer then emits the base cell verbatim. The merged apply/JSON truth still lives in the parent op's
 /// <see cref="IrEditOp.TableDiff"/>; this is the renderer/revision ATTRIBUTION view.
+/// <para><b>Cell shell sourcing.</b> <see cref="ShellSourceReviewer"/>/<see cref="ShellRightCellAnchor"/>
+/// select which document supplies the cell's SHELL (<c>w:tcPr</c> — width/gridSpan/vMerge/borders/shading)
+/// in the composed output: -1/null (the default) = the BASE cell's shell; a reviewer index + that
+/// reviewer's right-cell anchor = the reviewer's shell (set by the merger when exactly one reviewer — or
+/// several agreeing reviewers, or a policy-resolved winner — changed the shell, so a width/merge-only edit
+/// composes instead of silently reverting to the base shell).</para>
 /// </summary>
-internal sealed record IrAuthoredCellOp(string? BaseCellAnchor, IrNodeList<IrCompositeOp>? ComposedBlockOps);
+internal sealed record IrAuthoredCellOp(string? BaseCellAnchor, IrNodeList<IrCompositeOp>? ComposedBlockOps,
+    int ShellSourceReviewer = -1, string? ShellRightCellAnchor = null);
 
 /// <summary>
 /// One ROW in a composed multi-reviewer table (FOLLOW-ON B). <see cref="Kind"/> mirrors

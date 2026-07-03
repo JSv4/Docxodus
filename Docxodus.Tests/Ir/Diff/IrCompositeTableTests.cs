@@ -366,10 +366,10 @@ public class IrCompositeTableTests
     /// (which clones the base row's cell skeleton, count-stable in v1) cannot compose the column change — so it
     /// bails to a recorded whole-table block conflict. No silent loss: a conflict is recorded under every
     /// policy, and BaseWins (which keeps the base table) rejects to base.
-    /// <para>(A pure <c>w:tcPr</c> width change is NOT modeled by the IR — it leaves every hash identical, so
-    /// the reviewer's table reads as EqualBlock (no touch) and composes trivially as single-source; only a
-    /// genuine cell-count change is a detectable STOP boundary. reject ≡ base is NOT asserted for
-    /// FirstReviewerWins/StackAll here: those emit the reviewer's column-changed table, and a 2-way column
+    /// <para>(A pure <c>w:tcPr</c> width change is a count-stable ModifyRow — the shell digest participates
+    /// in the cell ContentHash — so it composes per-cell and is NOT a STOP boundary; see the cell-shell tests
+    /// below. Only a genuine cell-count change is a detectable STOP boundary. reject ≡ base is NOT asserted
+    /// for FirstReviewerWins/StackAll here: those emit the reviewer's column-changed table, and a 2-way column
     /// ADD is not yet marked as a tracked insertion — a pre-existing whole-table-renderer limitation,
     /// independent of this follow-on. The fallback's job is no-silent-loss, which holds.)</para>
     /// </summary>
@@ -722,6 +722,161 @@ public class IrCompositeTableTests
             hashes.Add(IrHash.Compute(mem.ToArray()));
         }
         return hashes;
+    }
+
+    // ------------------------------------------------------------------ cell-shell (w:tcPr) edits
+
+    private static string CellW(string text, int widthTwips) =>
+        $"<w:tc><w:tcPr><w:tcW w:w=\"{widthTwips}\" w:type=\"dxa\"/></w:tcPr>" +
+        $"<w:p><w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p></w:tc>";
+
+    /// <summary>A 2x2 table whose four cells carry explicit tcW widths (row-major order).</summary>
+    private static WmlDocument WidthTable2x2(
+        (string Text, int W) c00, (string Text, int W) c01, (string Text, int W) c10, (string Text, int W) c11)
+        => IrTestDocuments.FromBodyXml(
+            Lead +
+            Table(
+                Row(CellW(c00.Text, c00.W), CellW(c01.Text, c01.W)),
+                Row(CellW(c10.Text, c10.W), CellW(c11.Text, c11.W))));
+
+    /// <summary>Every body-table <c>w:tcW/@w:w</c> value in document (row-major) order.</summary>
+    private static List<string> CellWidths(WmlDocument d)
+    {
+        var ns = (XNamespace)IrTestDocuments.W;
+        return XDocument.Parse(Docs.MainPartXml(d))
+            .Descendants(ns + "tcW")
+            .Select(e => e.Attribute(ns + "w")?.Value ?? "")
+            .ToList();
+    }
+
+    /// <summary>
+    /// Cell-shell visibility (pairwise): a WIDTH-ONLY cell edit — no text change anywhere — must be visible
+    /// to Compare and land on accept. Before the shell digest participated in the cell ContentHash, the table
+    /// pair classified EqualBlock and the edit silently vanished (a soundness gap, zero markup emitted).
+    /// </summary>
+    [Fact]
+    public void Pairwise_width_only_cell_edit_is_visible_and_lands()
+    {
+        var left = WidthTable2x2(("a one", 2000), ("b two", 2000), ("c three", 2000), ("d four", 2000));
+        var right = WidthTable2x2(("a one", 5000), ("b two", 2000), ("c three", 2000), ("d four", 2000));
+
+        var result = DocxDiff.Compare(left, right);
+        var accepted = RevisionAccepter.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+
+        // The width edit lands on accept (cell(0,0) = 5000) and text round-trips both ways.
+        Assert.Equal(CellWidths(right), CellWidths(accepted));
+        Assert.Equal(Docs.StructuralBody(right), Docs.StructuralBody(accepted));
+        Assert.Equal(Docs.StructuralBody(left), Docs.StructuralBody(rejected));
+    }
+
+    /// <summary>
+    /// Cell-shell compose: Alice changes ONLY cell(0,0)'s width, Bob edits cell(1,1)'s text → both compose,
+    /// no conflict, Alice's width + Bob's text both land on accept; reject ≡ base at the text level.
+    /// (Before the fix Alice's table read as EqualBlock and her width edit silently vanished.)
+    /// </summary>
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins)]
+    [InlineData(ConflictResolution.FirstReviewerWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void Width_only_edit_composes_with_other_reviewers_text_edit(ConflictResolution policy)
+    {
+        var baseDoc = WidthTable2x2(("a one", 2000), ("b two", 2000), ("c three", 2000), ("d four", 2000));
+        var alice = WidthTable2x2(("a one", 5000), ("b two", 2000), ("c three", 2000), ("d four", 2000));
+        var bob = WidthTable2x2(("a one", 2000), ("b two", 2000), ("c three", 2000), ("d BOB", 2000));
+
+        Assert.Empty(Conflicts(baseDoc, policy, ("Alice", alice), ("Bob", bob)));
+
+        var merged = Consolidate(baseDoc, policy, ("Alice", alice), ("Bob", bob));
+        var accepted = RevisionAccepter.AcceptRevisions(merged);
+        Assert.Contains("d BOB", Docs.PlainTextWithTables(accepted));
+        Assert.Equal(new[] { "5000", "2000", "2000", "2000" }, CellWidths(accepted));
+
+        Assert.Equal(Docs.StructuralBody(baseDoc), Reject(merged));
+    }
+
+    /// <summary>
+    /// Cell-shell consensus: two reviewers set the SAME new width on the same cell (texts untouched) → no
+    /// conflict, the agreed width lands once.
+    /// </summary>
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void Agreeing_width_edits_compose_without_conflict(ConflictResolution policy)
+    {
+        var baseDoc = WidthTable2x2(("a one", 2000), ("b two", 2000), ("c three", 2000), ("d four", 2000));
+        var alice = WidthTable2x2(("a one", 5000), ("b two", 2000), ("c three", 2000), ("d four", 2000));
+        var bob = WidthTable2x2(("a one", 5000), ("b two", 2000), ("c three", 2000), ("d four", 2000));
+
+        Assert.Empty(Conflicts(baseDoc, policy, ("Alice", alice), ("Bob", bob)));
+
+        var merged = Consolidate(baseDoc, policy, ("Alice", alice), ("Bob", bob));
+        var accepted = RevisionAccepter.AcceptRevisions(merged);
+        Assert.Equal(new[] { "5000", "2000", "2000", "2000" }, CellWidths(accepted));
+        Assert.Equal(Docs.StructuralBody(baseDoc), Reject(merged));
+    }
+
+    /// <summary>
+    /// Cell-shell conflict: two reviewers set DIFFERENT widths on the SAME cell (texts untouched) → a
+    /// recorded conflict (never a silent drop), resolved per policy: BaseWins keeps the base width;
+    /// FirstReviewerWins/StackAll take the first reviewer's width (shells cannot stack).
+    /// </summary>
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins)]
+    [InlineData(ConflictResolution.FirstReviewerWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void Competing_width_edits_same_cell_record_conflict(ConflictResolution policy)
+    {
+        var baseDoc = WidthTable2x2(("a one", 2000), ("b two", 2000), ("c three", 2000), ("d four", 2000));
+        var alice = WidthTable2x2(("a one", 3000), ("b two", 2000), ("c three", 2000), ("d four", 2000));
+        var bob = WidthTable2x2(("a one", 4000), ("b two", 2000), ("c three", 2000), ("d four", 2000));
+
+        var conflicts = Conflicts(baseDoc, policy, ("Alice", alice), ("Bob", bob));
+        Assert.NotEmpty(conflicts);
+        var authors = conflicts.SelectMany(c => c.Competitors.Select(x => x.Author)).Distinct().ToList();
+        Assert.Contains("Alice", authors);
+        Assert.Contains("Bob", authors);
+
+        var merged = Consolidate(baseDoc, policy, ("Alice", alice), ("Bob", bob));
+        var accepted = RevisionAccepter.AcceptRevisions(merged);
+        var expectedC00 = policy == ConflictResolution.BaseWins ? "2000" : "3000";
+        Assert.Equal(new[] { expectedC00, "2000", "2000", "2000" }, CellWidths(accepted));
+
+        // Text is untouched by shell edits — reject ≡ base and accept text ≡ base text.
+        Assert.Equal(Docs.StructuralBody(baseDoc), Reject(merged));
+        Assert.Equal(Docs.PlainTextWithTables(baseDoc), Docs.PlainTextWithTables(accepted));
+    }
+
+    /// <summary>
+    /// Cell MERGE (gridSpan) visibility: a reviewer merges two cells horizontally (row cell count changes,
+    /// gridSpan appears) while another reviewer edits a different row. The gridSpan reviewer's row has an
+    /// UNPAIRED cell → the column-structure STOP gate fires → whole-table block conflict recorded (no silent
+    /// loss; before the shell hash, the vMerge/gridSpan-only variant with a STABLE cell count read as
+    /// EqualBlock and vanished with no conflict at all).
+    /// </summary>
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins)]
+    [InlineData(ConflictResolution.FirstReviewerWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void GridSpan_merge_edit_is_visible_and_conflicts_loudly(ConflictResolution policy)
+    {
+        var baseDoc = Base2x2();
+        // Alice merges row 0's two cells into one spanning cell (cell count 2 → 1, gridSpan=2).
+        var alice = IrTestDocuments.FromBodyXml(
+            Lead +
+            Table(
+                Row("<w:tc><w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr>" +
+                    "<w:p><w:r><w:t xml:space=\"preserve\">a one b two</w:t></w:r></w:p></w:tc>"),
+                Row(Cell("c three"), Cell("d four"))));
+        var bob = Variant2x2("a one", "b two", "c three", "d BOB");
+
+        Assert.NotEmpty(Conflicts(baseDoc, policy, ("Alice", alice), ("Bob", bob)));
+
+        if (policy == ConflictResolution.BaseWins)
+        {
+            var merged = Consolidate(baseDoc, policy, ("Alice", alice), ("Bob", bob));
+            Assert.Equal(Docs.StructuralBody(baseDoc), Reject(merged));
+        }
     }
 
     // ------------------------------------------------------------------ helpers

@@ -138,6 +138,13 @@ internal static class IrCompositeScriptJson
             {
                 writer.WriteStartObject();
                 if (cell.BaseCellAnchor is { } bca) writer.WriteString("baseCellAnchor", bca);
+                // Additive shell attribution: present only when the merger sourced this cell's shell
+                // (w:tcPr) from a reviewer, so pre-existing JSON outputs are byte-unaffected.
+                if (cell.ShellSourceReviewer >= 0)
+                {
+                    writer.WriteNumber("shellSourceReviewer", cell.ShellSourceReviewer);
+                    if (cell.ShellRightCellAnchor is { } sra) writer.WriteString("shellRightCellAnchor", sra);
+                }
                 if (cell.ComposedBlockOps is { } blockOps)
                 {
                     writer.WriteStartArray("composedBlockOps");

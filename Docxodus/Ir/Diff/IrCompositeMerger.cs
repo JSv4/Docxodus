@@ -1234,11 +1234,11 @@ internal static class IrCompositeMerger
     /// so a column add/remove cannot be composed and the table FALLS BACK to the whole-table block conflict
     /// (documented non-goal; no silent loss — the base table is kept and the disagreement is recorded).
     /// <para>Detection: <see cref="IrTableDiffer"/> pairs cells POSITIONALLY, so a column add/remove surfaces
-    /// as an <see cref="IrCellOp"/> with ONE null anchor (an unpaired cell) within a ModifyRow. This is the
-    /// signal the IR actually models: gridSpan/vMerge and <c>w:tcPr</c> width changes are NOT folded into any
-    /// cell/row/table hash, so a pure cell-props change leaves every IR hash identical — the reviewer's table
-    /// then reads as <c>EqualBlock</c> (no touch) and never reaches this branch. The only column-structure
-    /// change the IR surfaces is a genuine cell-count difference, caught here.</para>
+    /// as an <see cref="IrCellOp"/> with ONE null anchor (an unpaired cell) within a ModifyRow. A pure
+    /// cell-props change (<c>w:tcPr</c> width/gridSpan/vMerge/shading) does NOT trip this gate: the shell
+    /// digest participates in the cell ContentHash (see <see cref="IrCell.ShellDigest"/>), so such an edit
+    /// surfaces as a count-stable ModifyRow whose cells all pair — composed per-cell with the shell sourced
+    /// from the editing reviewer (<see cref="ComposeCellShell"/>), not gated out here.</para>
     /// </summary>
     private static bool AllColumnStructureStable(List<(int Reviewer, IrEditOp Op)> touched)
     {
@@ -1451,7 +1451,11 @@ internal static class IrCompositeMerger
     /// The authored-cell view of ONE reviewer's ModifyRow: each changed cell (BlockOps non-null) becomes an
     /// <see cref="IrAuthoredCellOp"/> whose composed block ops are that reviewer's BlockOps wrapped as
     /// single-source composite ops (author = the reviewer); an unchanged cell (BlockOps null) is a base
-    /// passthrough (ComposedBlockOps null). Keyed by BASE cell anchor.
+    /// passthrough (ComposedBlockOps null). Keyed by BASE cell anchor. A changed cell's SHELL
+    /// (<c>w:tcPr</c>) is sourced from the reviewer's right cell (the shell digest participates in the
+    /// cell ContentHash, so a shell-only edit IS a changed cell — sourcing the shell from the reviewer is
+    /// what makes a width/merge-only edit land in the composed output instead of silently reverting to the
+    /// base shell; for a content-only edit the two shells are canonically identical, so this is inert).
     /// </summary>
     private static List<IrAuthoredCellOp> AuthoredCellsForSingleReviewer(
         IrRowOp op, IrRow baseRow, int reviewer, string author)
@@ -1465,7 +1469,9 @@ internal static class IrCompositeMerger
             if (cellOp?.BlockOps is { } blockOps)
             {
                 var composed = blockOps.Select(b => EmitOp(b, author, reviewer)).ToList();
-                result.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(composed)));
+                result.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(composed),
+                    ShellSourceReviewer: cellOp.RightCellAnchor != null ? reviewer : -1,
+                    ShellRightCellAnchor: cellOp.RightCellAnchor));
             }
             else
             {
@@ -1517,11 +1523,17 @@ internal static class IrCompositeMerger
                 var (reviewer, author, cellOp) = cellEditors[0];
                 mergedCellOps.Add(cellOp);
                 var composed = cellOp.BlockOps!.Select(b => EmitOp(b, author, reviewer)).ToList();
-                composedCells.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(composed)));
+                composedCells.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(composed),
+                    ShellSourceReviewer: cellOp.RightCellAnchor != null ? reviewer : -1,
+                    ShellRightCellAnchor: cellOp.RightCellAnchor));
                 continue;
             }
 
-            // ≥2 reviewers changed this cell — recurse into block/token composition over the cell mini-body.
+            // ≥2 reviewers changed this cell — recurse into block/token composition over the cell mini-body,
+            // and compose the cell SHELL (w:tcPr) separately: 0 shell-changers → base shell; all changers
+            // agree → that shell (consensus); ≥2 distinct shells → a recorded conflict resolved by policy.
+            var (shellReviewer, shellAnchor) = ComposeCellShell(
+                baseCell, baseCellAnchor, cellEditors, reviewers, policy, settings, ref nextConflictId, conflicts);
             var cellOps = new List<IrCompositeOp>();
             var cellConflicts = new List<IrConflict>();
             ComposeCellMiniBody(baseCell, cellEditors, reviewers, baseIr, policy, settings,
@@ -1529,8 +1541,94 @@ internal static class IrCompositeMerger
             conflicts.AddRange(cellConflicts);
             mergedCellOps.Add(new IrCellOp(baseCellAnchor, baseCellAnchor,
                 IrNodeList.From(cellOps.Select(c => c.Op))));
-            composedCells.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(cellOps)));
+            composedCells.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(cellOps),
+                shellReviewer, shellAnchor));
         }
+    }
+
+    /// <summary>
+    /// Compose the SHELL (<c>w:tcPr</c>) of one multi-editor cell across its editing reviewers, via the
+    /// <see cref="IrCell.ShellDigest"/> each reviewer's right cell carries. Editors whose right-cell shell
+    /// canonically equals the base cell's are not shell-changers (their edit was content-only). 0 changers →
+    /// the base shell (-1/null). All changers sharing ONE digest → consensus: the first (lowest reviewer
+    /// index) changer's shell. ≥2 distinct digests → a recorded <see cref="IrConflict"/> (anchored at the
+    /// base cell) resolved by <paramref name="policy"/>: BaseWins keeps the base shell; FirstReviewerWins and
+    /// StackAll take the first changer's shell (shells cannot stack — the disagreement is recorded either
+    /// way, so no reviewer's shell edit is ever silently dropped without a conflict).
+    /// </summary>
+    private static (int ShellReviewer, string? ShellAnchor) ComposeCellShell(
+        IrCell baseCell, string baseCellAnchor,
+        List<(int Reviewer, string Author, IrCellOp CellOp)> cellEditors,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
+        Docxodus.ConflictResolution policy, IrDiffSettings settings,
+        ref int nextConflictId, List<IrConflict> conflicts)
+    {
+        var changers = new List<(int Reviewer, string Author, string RightAnchor, IrHash Digest)>();
+        foreach (var (reviewer, author, cellOp) in cellEditors)
+        {
+            if (cellOp.RightCellAnchor is not { } rightAnchor)
+                continue;
+            var rightCell = FindCell(reviewers[reviewer].Ir, rightAnchor);
+            if (rightCell != null && !rightCell.ShellDigest.Equals(baseCell.ShellDigest))
+                changers.Add((reviewer, author, rightAnchor, rightCell.ShellDigest));
+        }
+        if (changers.Count == 0)
+            return (-1, null);
+        changers.Sort((a, b) => a.Reviewer.CompareTo(b.Reviewer));
+
+        bool allAgree = changers.All(c => c.Digest.Equals(changers[0].Digest));
+        if (!allAgree)
+        {
+            // The competitors name the contested cell by its BASE content (the disagreement — differing
+            // tcPr — is structural, recorded by the conflict's existence; mirrors RowResultText's rule).
+            conflicts.Add(new IrConflict(nextConflictId++, baseCellAnchor, 0, 0, policy,
+                IrNodeList.From(changers.Select(c =>
+                    new IrConflictCompetitor(c.Author, CellResultText(baseCell, settings))))));
+            if (policy == Docxodus.ConflictResolution.BaseWins)
+                return (-1, null);
+        }
+        return (changers[0].Reviewer, changers[0].RightAnchor);
+    }
+
+    /// <summary>Resolve a <c>tc:</c> cell anchor to its <see cref="IrCell"/> in <paramref name="ir"/> (cells
+    /// are not in <see cref="IrDocument.AnchorIndex"/>): walk every indexed table's rows/cells, recursing
+    /// into nested tables. Null for an unknown anchor. Anchors are unique, so the walk order is immaterial.</summary>
+    private static IrCell? FindCell(IrDocument ir, string cellAnchor)
+    {
+        foreach (var block in ir.AnchorIndex.Values)
+            if (block is IrTable tbl && FindCellInTable(tbl, cellAnchor) is { } found)
+                return found;
+        return null;
+    }
+
+    private static IrCell? FindCellInTable(IrTable tbl, string cellAnchor)
+    {
+        foreach (var row in tbl.Rows)
+            foreach (var cell in row.Cells)
+            {
+                if (cell.Anchor.ToString() == cellAnchor)
+                    return cell;
+                foreach (var b in cell.Blocks)
+                    if (b is IrTable nested && FindCellInTable(nested, cellAnchor) is { } found)
+                        return found;
+            }
+        return null;
+    }
+
+    /// <summary>The flat text of one cell (its paragraphs tokenized with the diff tokenizer, nested tables
+    /// recursed), for shell-conflict competitor reporting — the cell analogue of <see cref="RowResultText"/>.</summary>
+    private static string CellResultText(IrCell cell, IrDiffSettings settings)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var b in cell.Blocks)
+        {
+            if (b is IrParagraph cp)
+                foreach (var t in IrDiffTokenizer.Tokenize(cp, settings))
+                    sb.Append(t.Text);
+            else if (b is IrTable nested)
+                AppendTableText(nested, sb, settings);
+        }
+        return sb.ToString();
     }
 
     /// <summary>

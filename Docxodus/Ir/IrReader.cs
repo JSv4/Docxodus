@@ -1964,10 +1964,21 @@ internal static class IrReader
         int gridSpan = IntAttr(tcPr?.Element(W + "gridSpan"), W + "val") ?? 1;
         var vMerge = MapVMerge(tcPr?.Element(W + "vMerge"));
 
+        // Cell-SHELL digest: the canonical hash of the whole w:tcPr (width, gridSpan, vMerge, borders,
+        // shading, …). default(IrHash) = no tcPr. Folded into the cell's ContentHash below so a
+        // shell-only edit (cell width / merge change) is VISIBLE to the diff engine — without it such an
+        // edit left every cell/row/table hash identical, the table pair classified EqualBlock, and the
+        // edit silently vanished from both Compare and Consolidate with zero conflict recorded (a
+        // soundness bug). Also stored on the IrCell so the N-way merger can attribute/conflict competing
+        // shell edits without re-resolving source elements.
+        var shellDigest = tcPr != null ? IrHasher.CanonicalHash(tcPr) : default;
+
         var blocks = new List<IrBlock>();
         var fingerprints = new List<IrHash>();
         var cellBuilder = new IrContentHashBuilder();
         cellBuilder.AppendStructure(IrContentHashBuilder.StructureCell);
+        if (tcPr != null)
+            cellBuilder.AppendHash(shellDigest);
 
         foreach (var child in tc.Elements())
         {
@@ -1991,6 +2002,7 @@ internal static class IrReader
             cellBuilder.Build())
         {
             Source = ctx.Provenance(tc),
+            ShellDigest = shellDigest,
         };
         return (cell, fingerprints);
     }

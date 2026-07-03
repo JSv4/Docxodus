@@ -850,6 +850,30 @@ internal static class IrMarkupRenderer
         return null;
     }
 
+    /// <summary>The source <c>w:tc</c> a cell anchor resolves to in <paramref name="ir"/> (cells are not in
+    /// AnchorIndex): walk every indexed table's rows/cells, recursing into nested tables. Null if unknown.</summary>
+    private static XElement? FindCellSource(IrDocument ir, string cellAnchor)
+    {
+        foreach (var block in ir.AnchorIndex.Values)
+            if (block is IrTable tbl && FindCellSourceInTable(tbl, cellAnchor) is { } found)
+                return found;
+        return null;
+    }
+
+    private static XElement? FindCellSourceInTable(IrTable tbl, string cellAnchor)
+    {
+        foreach (var row in tbl.Rows)
+            foreach (var cell in row.Cells)
+            {
+                if (cell.Anchor.ToString() == cellAnchor)
+                    return cell.Source.Element;
+                foreach (var b in cell.Blocks)
+                    if (b is IrTable nested && FindCellSourceInTable(nested, cellAnchor) is { } found)
+                        return found;
+            }
+        return null;
+    }
+
     /// <summary>Emit a composed ModifyRow: a new <c>w:tr</c> from the BASE row's trPr + per-cell content (base
     /// passthrough or per-cell-block composite render).</summary>
     private static void EmitComposedModifyRow(
@@ -880,8 +904,20 @@ internal static class IrMarkupRenderer
             if (baseCellSrc == null)
                 continue;
 
+            // The cell SHELL (tcPr etc.) is cloned from the base cell by default; when the merger attributed
+            // the shell to a reviewer (ShellSourceReviewer/ShellRightCellAnchor — a changed cell, so a
+            // width/merge-only edit composes instead of silently reverting to the base shell), clone that
+            // reviewer's right-cell shell instead. Falls back to base if the reviewer cell is unresolvable.
+            var shellSrc = baseCellSrc;
+            if (cellOp.ShellSourceReviewer >= 0 && cellOp.ShellSourceReviewer < reviewerIrs.Count
+                && cellOp.ShellRightCellAnchor is { } shellAnchor
+                && FindCellSource(reviewerIrs[cellOp.ShellSourceReviewer], shellAnchor) is { } reviewerCellSrc)
+            {
+                shellSrc = reviewerCellSrc;
+            }
+
             var newCell = new XElement(W.tc);
-            foreach (var pre in baseCellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+            foreach (var pre in shellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
                 newCell.Add(StripUnids(new XElement(pre)));
 
             if (cellOp.ComposedBlockOps is { } blockOps)

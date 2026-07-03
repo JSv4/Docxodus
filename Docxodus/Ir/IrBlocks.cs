@@ -137,6 +137,15 @@ internal sealed record IrCell(IrAnchor Anchor, IrNodeList<IrBlock> Blocks,
     public IrProvenance Source { get; init; } = new();
 
     /// <summary>
+    /// Canonical hash of the cell's SHELL — the whole <c>w:tcPr</c> (width, gridSpan, vMerge, borders,
+    /// shading, …); <c>default(IrHash)</c> when the cell has no <c>w:tcPr</c>. Folded into
+    /// <see cref="ContentHash"/> by the reader so a shell-only edit is visible to the diff engine, and
+    /// exposed here so the N-way composite merger can distinguish WHICH reviewer changed a cell's shell
+    /// (attribute a single shell edit / conflict competing ones) without source-element access.
+    /// </summary>
+    public IrHash ShellDigest { get; init; }
+
+    /// <summary>
     /// True when this cell was delivered by a row-level <c>w:sdt</c> wrapping a <c>w:tc</c>
     /// (the SDT-unwrap discipline in <c>IrReader.BuildRow</c>), rather than being a direct
     /// <c>w:tc</c> child of the <c>w:tr</c>. It is EQUALITY-PARTICIPATING (a positional structural
