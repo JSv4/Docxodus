@@ -219,6 +219,91 @@ public class DocxDiffFootnoteRobustnessTests
         Assert.Equal(ids.Distinct().Count(), ids.Count);
     }
 
+    /// <summary>A doc where footnote 2's BODY cites ENDNOTE 5 (a CROSS-KIND note-in-note reference), and
+    /// endnote 5 is ALSO referenced from the document body — so the endnote renumber pass remaps endnote 5's
+    /// definition id, and the nested endnote reference inside the FOOTNOTES part must be remapped too or it
+    /// dangles. The same-kind nested remap (footnote-cites-footnote) cannot catch this: each kind's pass only
+    /// sweeps its OWN part for nested references.</summary>
+    private static byte[] BuildCrossKindNoteInNoteDoc()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles(new DocDefaults(new RunPropertiesDefault(
+                new RunPropertiesBaseStyle(new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" }))));
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            var fn = main.AddNewPart<FootnotesPart>();
+            WritePartXml(fn, $"<w:footnotes xmlns:w=\"{W}\">" +
+                "<w:footnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>" +
+                "<w:footnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>" +
+                // footnote 2's body references ENDNOTE 5 (cross-kind note-in-note)
+                "<w:footnote w:id=\"2\"><w:p><w:r><w:t xml:space=\"preserve\">Footnote citing an endnote </w:t></w:r><w:r><w:endnoteReference w:id=\"5\"/></w:r></w:p></w:footnote>" +
+                "</w:footnotes>");
+            var en = main.AddNewPart<EndnotesPart>();
+            WritePartXml(en, $"<w:endnotes xmlns:w=\"{W}\">" +
+                "<w:endnote w:type=\"separator\" w:id=\"-1\"><w:p><w:r><w:separator/></w:r></w:p></w:endnote>" +
+                "<w:endnote w:type=\"continuationSeparator\" w:id=\"0\"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote>" +
+                // endnote 8's body references FOOTNOTE 2 (the reverse cross-kind nesting)
+                "<w:endnote w:id=\"5\"><w:p><w:r><w:t xml:space=\"preserve\">The endnote, also body-cited.</w:t></w:r></w:p></w:endnote>" +
+                "<w:endnote w:id=\"8\"><w:p><w:r><w:t xml:space=\"preserve\">Endnote citing a footnote </w:t></w:r><w:r><w:footnoteReference w:id=\"2\"/></w:r></w:p></w:endnote>" +
+                "</w:endnotes>");
+            WritePartXml(main, $"<w:document xmlns:w=\"{W}\"><w:body>" +
+                "<w:p><w:r><w:t xml:space=\"preserve\">Alpha cites the footnote.</w:t></w:r><w:r><w:footnoteReference w:id=\"2\"/></w:r></w:p>" +
+                "<w:p><w:r><w:t xml:space=\"preserve\">Beta cites the endnote.</w:t></w:r><w:r><w:endnoteReference w:id=\"5\"/></w:r></w:p>" +
+                "<w:p><w:r><w:t xml:space=\"preserve\">Gamma cites the other endnote.</w:t></w:r><w:r><w:endnoteReference w:id=\"8\"/></w:r></w:p>" +
+                "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:body></w:document>");
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>Every note reference of <paramref name="refLocal"/> kind ANYWHERE (document body, footnotes
+    /// part, endnotes part) that does NOT resolve to exactly one definition of <paramref name="defLocal"/> kind
+    /// in its part. The cross-kind generalization of <see cref="AllUnresolvedFootnoteRefs"/>.</summary>
+    private static List<string> AllUnresolvedNoteRefs(WmlDocument doc, string refLocal, string defLocal, bool defsInFootnotesPart)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var w = WordprocessingDocument.Open(ms, false);
+        var main = w.MainDocumentPart!;
+        var fnRoot = main.FootnotesPart?.GetXDocument().Root;
+        var enRoot = main.EndnotesPart?.GetXDocument().Root;
+        var defRoot = defsInFootnotesPart ? fnRoot : enRoot;
+        var defCounts = (defRoot?.Elements(System.Xml.Linq.XName.Get(defLocal, W))
+                            .Where(e => e.Attribute(System.Xml.Linq.XName.Get("type", W)) == null)
+                            .Select(e => (string?)e.Attribute(System.Xml.Linq.XName.Get("id", W)))
+                            .Where(x => x != null).Select(x => x!) ?? Enumerable.Empty<string>())
+                        .GroupBy(x => x).ToDictionary(g => g.Key, g => g.Count());
+        var refs = new List<System.Xml.Linq.XElement>();
+        var body = main.GetXDocument().Root?.Element(System.Xml.Linq.XName.Get("body", W));
+        if (body != null) refs.AddRange(body.Descendants(System.Xml.Linq.XName.Get(refLocal, W)));
+        if (fnRoot != null) refs.AddRange(fnRoot.Descendants(System.Xml.Linq.XName.Get(refLocal, W)));
+        if (enRoot != null) refs.AddRange(enRoot.Descendants(System.Xml.Linq.XName.Get(refLocal, W)));
+        return refs.Select(r => (string?)r.Attribute(System.Xml.Linq.XName.Get("id", W)))
+                   .Where(id => id == null || !defCounts.TryGetValue(id, out var n) || n != 1)
+                   .Select(id => $"{refLocal}:{id ?? "(null)"}").ToList();
+    }
+
+    [Fact]
+    public void CrossKindNestedNoteReference_ToRenumberedNote_StaysResolvable()
+    {
+        // An ENDNOTE reference nested inside a FOOTNOTE body (and a footnote ref inside an endnote body) must
+        // survive the body-reference renumber that remaps the cited definitions' ids. Before the fix, each
+        // kind's renumber pass swept only its OWN part for nested references, so the cross-kind nested ref kept
+        // the stale id while its definition moved — dangling on compare/accept/reject.
+        var left = new WmlDocument("left.docx", BuildCrossKindNoteInNoteDoc());
+        var right = new WmlDocument("right.docx", ReplaceWord(left.DocumentByteArray, "Alpha", "Delta"));
+
+        var result = DocxDiff.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+
+        foreach (var doc in new[] { result, accepted, rejected })
+        {
+            Assert.Equal(new List<string>(), AllUnresolvedNoteRefs(doc, "endnoteReference", "endnote", defsInFootnotesPart: false));
+            Assert.Equal(new List<string>(), AllUnresolvedNoteRefs(doc, "footnoteReference", "footnote", defsInFootnotesPart: true));
+        }
+    }
+
     [Fact]
     public void DeletingReferenceToGappedIdFootnote_KeepsStructureResolvable()
     {
