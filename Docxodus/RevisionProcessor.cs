@@ -2725,11 +2725,15 @@ namespace Docxodus
                                 1;
                             int newGridSpan = gridSpan + g.Count() - 1;
                             XElement currentTcPr = g.First().Elements(W.tcPr).FirstOrDefault();
+                            // The absorbing cell may have NO tcPr at all (minimal cells) — synthesize one
+                            // carrying just the widened gridSpan instead of dereferencing null.
                             XElement newTcPr = new XElement(W.tcPr,
                                 currentTcPr != null ? currentTcPr.Attributes() : null,
                                 new XElement(W.gridSpan,
                                     new XAttribute(W.val, newGridSpan)),
-                                currentTcPr.Elements().Where(e => e.Name != W.gridSpan));
+                                currentTcPr != null
+                                    ? currentTcPr.Elements().Where(e => e.Name != W.gridSpan)
+                                    : null);
                             var orderedTcPr = new XElement(W.tcPr,
                                 newTcPr.Elements().OrderBy(e =>
                                 {

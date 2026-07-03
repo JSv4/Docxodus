@@ -670,6 +670,52 @@ internal static class IrMarkupRenderer
         return true;
     }
 
+    /// <summary>Emit a composed INSERTED cell (column add): clone the inserting reviewer's whole <c>w:tc</c>
+    /// under that reviewer's state (author attribution + media bucket), mark it <c>w:tcPr/w:cellIns</c> with
+    /// ins-marked content, and append it to <paramref name="newRow"/>. Unresolvable sources emit nothing
+    /// (defensive; the merger only records resolvable reviewer cells).</summary>
+    private static void EmitComposedInsertedCell(
+        IrAuthoredCellOp cellOp, IReadOnlyList<IrDocument> reviewerIrs, RenderState state, XElement newRow)
+    {
+        if (cellOp.ShellSourceReviewer < 0 || cellOp.ShellSourceReviewer >= reviewerIrs.Count
+            || cellOp.ShellRightCellAnchor is not { } anchor
+            || FindCellSource(reviewerIrs[cellOp.ShellSourceReviewer], anchor) is not { } src)
+            return;
+
+        var newCell = StripUnids(new XElement(src));
+        var savedAuthor = state.AuthorOverride;
+        var savedSource = state.RightSource;
+        var savedId = state.RightSourceId;
+        state.AuthorOverride = cellOp.Author;
+        state.RightSource = reviewerIrs[cellOp.ShellSourceReviewer];
+        state.RightSourceId = cellOp.ShellSourceReviewer;
+        state.RegisterMediaReferences(newCell);
+        MarkWholeCell(newCell, RevKind.Ins, state);
+        state.AuthorOverride = savedAuthor;
+        state.RightSource = savedSource;
+        state.RightSourceId = savedId;
+        newRow.Add(newCell);
+    }
+
+    /// <summary>Mark a whole table cell inserted/deleted with Word's native cell-revision marks: a
+    /// <c>w:tcPr/w:cellIns</c>|<c>w:cellDel</c> marker (appended in tcPr — the cell-revision marks sit at the
+    /// end of the property order) plus every paragraph in the cell run-and-mark wrapped. Accept then removes a
+    /// <c>cellDel</c> cell / keeps a <c>cellIns</c> cell bare; reject restores / removes it —
+    /// <see cref="RevisionProcessor"/> implements both sides.</summary>
+    private static void MarkWholeCell(XElement tc, RevKind kind, RenderState state)
+    {
+        var tcPr = tc.Element(W.tcPr);
+        if (tcPr == null)
+        {
+            tcPr = new XElement(W.tcPr);
+            tc.AddFirst(tcPr);
+        }
+        tcPr.Elements().Where(e => e.Name == W.cellIns || e.Name == W.cellDel).Remove();
+        tcPr.Add(new XElement(kind == RevKind.Ins ? W.cellIns : W.cellDel, state.RevisionAttributes()));
+        foreach (var p in tc.Descendants(W.p).ToList())
+            MarkWholeParagraph(p, kind, state);
+    }
+
     /// <summary>Mark a whole table row inserted/deleted: a <c>w:trPr/w:ins</c>|<c>w:del</c> marker (APPENDED in
     /// trPr — the row-revision markers are near the end of the property order) plus every paragraph in the row
     /// run-and-mark wrapped. Accept/reject then add/remove the entire row (and the empty-table cleanup drops the
@@ -899,10 +945,31 @@ internal static class IrMarkupRenderer
 
         foreach (var cellOp in cells)
         {
+            // A reviewer-INSERTED cell (column add): the whole cell clones from the reviewer, marked
+            // w:tcPr/w:cellIns + ins-marked content — accept keeps it, reject removes it.
+            if (cellOp.Kind == IrAuthoredCellKind.InsertCell)
+            {
+                EmitComposedInsertedCell(cellOp, reviewerIrs, state, newRow);
+                continue;
+            }
+
             XElement? baseCellSrc = cellOp.BaseCellAnchor != null
                 && baseCellsByAnchor.TryGetValue(cellOp.BaseCellAnchor, out var bc) ? bc : null;
             if (baseCellSrc == null)
                 continue;
+
+            // A reviewer-DELETED base cell (column remove): the base cell marked w:tcPr/w:cellDel +
+            // del-marked content — accept removes it, reject restores it.
+            if (cellOp.Kind == IrAuthoredCellKind.DeleteCell)
+            {
+                var deletedCell = StripUnids(new XElement(baseCellSrc));
+                var savedAuthor0 = state.AuthorOverride;
+                state.AuthorOverride = cellOp.Author;
+                MarkWholeCell(deletedCell, RevKind.Del, state);
+                state.AuthorOverride = savedAuthor0;
+                newRow.Add(deletedCell);
+                continue;
+            }
 
             // The cell SHELL (tcPr etc.) is cloned from the base cell by default; when the merger attributed
             // the shell to a reviewer (ShellSourceReviewer/ShellRightCellAnchor — a changed cell, so a
@@ -1160,7 +1227,7 @@ internal static class IrMarkupRenderer
     /// </summary>
     /// <returns>Each renumbered definition's OLD id → NEW id (empty when nothing renumbered), for the caller's
     /// nested-reference sweep across both note parts.</returns>
-    private static Dictionary<string, string> RenumberNoteIds(MainDocumentPart main, XName refName, XName noteName, XName rootName,
+    internal static Dictionary<string, string> RenumberNoteIds(MainDocumentPart main, XName refName, XName noteName, XName rootName,
         OpenXmlPart? notePart, OpenXmlPart? rightNotePart)
     {
         var empty = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -1295,7 +1362,7 @@ internal static class IrMarkupRenderer
     /// after both <see cref="RenumberNoteIds"/> passes, with both kinds' old→new maps — a per-pass sweep
     /// cannot fix cross-kind nesting because the other kind's remap does not exist yet.
     /// </summary>
-    private static void RemapNestedNoteReferences(MainDocumentPart main,
+    internal static void RemapNestedNoteReferences(MainDocumentPart main,
         Dictionary<string, string> footnoteRemap, Dictionary<string, string> endnoteRemap)
     {
         if (footnoteRemap.Count == 0 && endnoteRemap.Count == 0)
@@ -3118,7 +3185,7 @@ internal static class IrMarkupRenderer
 
     /// <summary>Strip the reader-assigned <c>pt:Unid</c> bookkeeping attributes/elements from a cloned element so
     /// the output carries no engine-internal markup.</summary>
-    private static XElement StripUnids(XElement el)
+    internal static XElement StripUnids(XElement el)
     {
         foreach (var attr in el.DescendantsAndSelf().Attributes()
                      .Where(a => a.Name.Namespace == PtOpenXml.pt || a.Name == PtOpenXml.Unid).ToList())
@@ -3225,9 +3292,18 @@ internal static class IrMarkupRenderer
             return name;
         }
 
+        /// <summary>RIGHT-sourced clone roots that carry a footnote/endnote REFERENCE, bucketed by
+        /// <see cref="RightSourceId"/> — the composite renderer's note-id rewrite pass walks these to remap
+        /// each reviewer-sourced reference from that reviewer's id space to the base-anchored output space.
+        /// Unused (empty) in a two-way render (the rewrite pass only runs in the composite path).</summary>
+        public Dictionary<int, List<XElement>> NoteRefClonesBySource { get; } = new();
+
         /// <summary>Record a RIGHT-sourced clone for media import iff it references any relationship id (an
         /// image embed/link), into the bucket for the currently-active <see cref="RightSourceId"/>. The recorded
-        /// element is the live tree node; importing happens post-assembly. Two-way always records into bucket 0.</summary>
+        /// element is the live tree node; importing happens post-assembly. Two-way always records into bucket 0.
+        /// Also records the clone into <see cref="NoteRefClonesBySource"/> when it carries a footnote/endnote
+        /// reference — the composite note-id rewrite's per-reviewer attribution rides the same choke point
+        /// every right-sourced clone already passes through.</summary>
         public void RegisterMediaReferences(XElement clone)
         {
             if (clone.DescendantsAndSelf().Attributes().Any(a => a.Name.Namespace == R.r))
@@ -3235,6 +3311,13 @@ internal static class IrMarkupRenderer
                 if (!RightSourcedClonesBySource.TryGetValue(RightSourceId, out var list))
                     RightSourcedClonesBySource[RightSourceId] = list = new List<XElement>();
                 list.Add(clone);
+            }
+            if (clone.DescendantsAndSelf()
+                    .Any(e => e.Name == W.footnoteReference || e.Name == W.endnoteReference))
+            {
+                if (!NoteRefClonesBySource.TryGetValue(RightSourceId, out var refs))
+                    NoteRefClonesBySource[RightSourceId] = refs = new List<XElement>();
+                refs.Add(clone);
             }
         }
     }

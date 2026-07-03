@@ -76,24 +76,45 @@ public class DocxDiffConsolidateApiTests
     }
 
     [Fact]
-    public void Consolidate_multireviewer_note_edit_fails_loud_instead_of_silently_dropping_it()
+    public void Consolidate_multireviewer_note_edit_composes_instead_of_failing_or_dropping()
     {
-        // Regression (engine audit, v1 limitation made LOUD): the merger does not build composite note-scope
-        // ops, so a reviewer's footnote/endnote CONTENT edit was silently dropped from the consolidated
-        // document. For an N>=2 consolidate (no single-call fallback) it must fail fast
-        // (NotSupportedException) rather than lose the edit silently. r1 edits only the body; r2 edits the
-        // footnote — so the merge would silently drop r2's note edit.
+        // Was (v1): the merger did not build composite note-scope ops, so an N>=2 consolidate with a
+        // reviewer note edit failed fast (NotSupportedException) rather than silently dropping it. The
+        // N-way note merge now COMPOSES it: r1's body edit and r2's footnote edit both land on accept,
+        // and reject restores the base note text.
         const string bodyA = "<w:p><w:r><w:t xml:space=\"preserve\">shared body</w:t></w:r></w:p>";
         const string bodyB = "<w:p><w:r><w:t xml:space=\"preserve\">shared body edited</w:t></w:r></w:p>";
         var b = Docxodus.Tests.Ir.IrTestDocuments.FromBodyXmlWithFootnote(bodyA, "original note");
         var r1 = Docxodus.Tests.Ir.IrTestDocuments.FromBodyXmlWithFootnote(bodyB, "original note");
         var r2 = Docxodus.Tests.Ir.IrTestDocuments.FromBodyXmlWithFootnote(bodyA, "edited note text");
-        Assert.Throws<System.NotSupportedException>(() =>
-            DocxDiff.Consolidate(b, new[]
-            {
-                new DocxDiffReviewer { Document = r1, Author = "Bob" },
-                new DocxDiffReviewer { Document = r2, Author = "Fred" },
-            }));
+
+        var merged = DocxDiff.Consolidate(b, new[]
+        {
+            new DocxDiffReviewer { Document = r1, Author = "Bob" },
+            new DocxDiffReviewer { Document = r2, Author = "Fred" },
+        });
+
+        var accepted = RevisionAccepter.AcceptRevisions(merged);
+        var rejected = RevisionProcessor.RejectRevisions(merged);
+
+        Assert.Contains("shared body edited", Docxodus.Tests.Ir.Diff.Docs.PlainText(accepted));
+        Assert.Contains("edited note text", FootnotePartText(accepted));
+        Assert.DoesNotContain("original note", FootnotePartText(accepted));
+
+        Assert.Equal(Docxodus.Tests.Ir.Diff.Docs.PlainText(b), Docxodus.Tests.Ir.Diff.Docs.PlainText(rejected));
+        Assert.Contains("original note", FootnotePartText(rejected));
+        Assert.DoesNotContain("edited note text", FootnotePartText(rejected));
+    }
+
+    /// <summary>The concatenated text of the footnotes part (all notes).</summary>
+    private static string FootnotePartText(WmlDocument doc)
+    {
+        using var ms = new System.IO.MemoryStream(doc.DocumentByteArray);
+        using var w = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(ms, false);
+        var root = w.MainDocumentPart?.FootnotesPart?.GetXDocument().Root;
+        if (root == null) return string.Empty;
+        System.Xml.Linq.XNamespace ns = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        return string.Concat(root.Descendants(ns + "t").Select(t => t.Value));
     }
 
     [Fact]

@@ -41,7 +41,8 @@ namespace Docxodus.Tests.Ir.Diff;
 /// wrong relation (it never holds — that mismatch IS the point, quantified below). A case's PASS rides on
 /// the rigorous, demonstrable property that OUR engine produces the SOUND inline-merge result, over
 /// normalized body plaintext (<see cref="RevisionEquivalence.Normalize"/> of every <c>w:t</c> in document
-/// order, descending into tables; note stores excluded — note-scope consolidation is a known v1 limitation):
+/// order, descending into tables, PLUS the referenced footnote/endnote texts in body-reference order — the
+/// metric covers note scopes since the N-way note merge landed):
 /// <list type="bullet">
 /// <item><b>Single reviewer — accept ≡ right (char-exact).</b> <c>ours-accepted-body</c> equals the REVIEWER
 /// document's body EXACTLY — the same accept ≡ right contract <c>WmlComparer.Compare</c> obeys, which a sound
@@ -298,15 +299,44 @@ public class ConsolidateParityScoreboardTests
 
     /// <summary>The body plaintext of a document WITHOUT accepting revisions (the source-of-truth reviewer
     /// content): concatenation of every <c>w:t</c> per top-level block, blocks joined by newline, descending
-    /// into tables. Note stores are excluded (note-scope consolidation is a v1 limitation).</summary>
+    /// into tables — PLUS the referenced footnote/endnote texts in body-reference order (stable under the
+    /// engine's body-order note renumbering). Notes joined the metric when N-way note-scope consolidation
+    /// landed; the single-reviewer accept ≡ right ratchet now covers them too.</summary>
     private static string BodyText(WmlDocument doc)
     {
         using var ms = new MemoryStream(doc.DocumentByteArray);
         using var wDoc = WordprocessingDocument.Open(ms, false);
-        var body = wDoc.MainDocumentPart?.Document?.Body;
+        var main = wDoc.MainDocumentPart;
+        var body = main?.Document?.Body;
         if (body is null)
             return string.Empty;
-        return BlockText(XElement.Parse(body.OuterXml));
+        var bodyXml = XElement.Parse(body.OuterXml);
+        var sb = new StringBuilder(BlockText(bodyXml));
+        AppendReferencedNoteTexts(sb, bodyXml, main!.FootnotesPart, "footnoteReference", "footnote");
+        AppendReferencedNoteTexts(sb, bodyXml, main.EndnotesPart, "endnoteReference", "endnote");
+        return sb.ToString();
+    }
+
+    /// <summary>Append each body-referenced note's text (in body-reference order, so the view is stable
+    /// under the renumber pass), one line per reference; a dangling reference appends "(unresolved)".</summary>
+    private static void AppendReferencedNoteTexts(
+        StringBuilder sb, XElement bodyXml, OpenXmlPart? notePart, string refLocal, string defLocal)
+    {
+        var refs = bodyXml.Descendants(W + refLocal).ToList();
+        if (refs.Count == 0)
+            return;
+        var defText = new Dictionary<string, string>(StringComparer.Ordinal);
+        var root = notePart?.GetXDocument().Root;
+        if (root != null)
+            foreach (var d in root.Elements(W + defLocal))
+                if ((string?)d.Attribute(W + "id") is { } id)
+                    defText[id] = string.Concat(d.Descendants(W + "t").Select(t => t.Value));
+        foreach (var r in refs)
+        {
+            var id = (string?)r.Attribute(W + "id");
+            sb.Append('\n')
+              .Append(id != null && defText.TryGetValue(id, out var t) ? t : "(unresolved)");
+        }
     }
 
     private static string BlockText(XElement bodyXml)

@@ -74,6 +74,23 @@ internal static class IrCompositeRevisionRenderer
             else
                 RenderSingleSource(op, baseIr, reviewers, settings, moveSourceOp, result);
         }
+
+        // NOTE SCOPES: project each composed note diff's ops through the same per-op paths, appended after
+        // the body ops (footnotes then endnotes — the merger's NoteOps ordering), mirroring the two-way
+        // renderer's body-then-notes revision order.
+        if (script.NoteOps is { } noteOps)
+        {
+            foreach (var noteDiff in noteOps)
+            {
+                foreach (var op in noteDiff.Ops)
+                {
+                    if (op.AuthoredTokens != null)
+                        RenderComposed(op, baseIr, reviewers, settings, script.Conflicts, result);
+                    else
+                        RenderSingleSource(op, baseIr, reviewers, settings, moveSourceOp, result);
+                }
+            }
+        }
         return result;
     }
 
@@ -143,6 +160,36 @@ internal static class IrCompositeRevisionRenderer
                         break;
                     foreach (var cellOp in cells)
                     {
+                        // A reviewer-added cell (column add) → one Inserted revision with the reviewer
+                        // cell's text; a reviewer-removed base cell (column remove) → one Deleted revision
+                        // with the base cell's text — so column edits are visible to consumers.
+                        if (cellOp.Kind == IrAuthoredCellKind.InsertCell)
+                        {
+                            if (cellOp.ShellSourceReviewer >= 0 && cellOp.ShellSourceReviewer < reviewers.Count
+                                && cellOp.ShellRightCellAnchor is { } ica)
+                            {
+                                string text = CellTextByAnchor(reviewers[cellOp.ShellSourceReviewer].Ir, ica, settings);
+                                if (text.Length > 0)
+                                    sink.Add((
+                                        new IrRevision(IrRevisionType.Inserted, text, cellOp.Author,
+                                            settings.DateTimeForRevisions, RightAnchor: ica),
+                                        cellOp.Author, op.ConflictId));
+                            }
+                            continue;
+                        }
+                        if (cellOp.Kind == IrAuthoredCellKind.DeleteCell)
+                        {
+                            if (cellOp.BaseCellAnchor is { } dca)
+                            {
+                                string text = CellTextByAnchor(baseIr, dca, settings);
+                                if (text.Length > 0)
+                                    sink.Add((
+                                        new IrRevision(IrRevisionType.Deleted, text, cellOp.Author,
+                                            settings.DateTimeForRevisions, LeftAnchor: dca),
+                                        cellOp.Author, op.ConflictId));
+                            }
+                            continue;
+                        }
                         if (cellOp.ComposedBlockOps is not { } blockOps)
                             continue; // base passthrough → no revision
                         foreach (var cellBlock in blockOps)
@@ -157,6 +204,37 @@ internal static class IrCompositeRevisionRenderer
                 }
             }
         }
+    }
+
+    /// <summary>The concatenated paragraph text of ONE cell resolved by anchor (cells are not in
+    /// <see cref="IrDocument.AnchorIndex"/>; nested tables recursed), for cell insert/delete revision text.</summary>
+    private static string CellTextByAnchor(IrDocument ir, string cellAnchor, IrDiffSettings settings)
+    {
+        foreach (var block in ir.AnchorIndex.Values)
+            if (block is IrTable tbl && FindCellText(tbl, cellAnchor, settings) is { } text)
+                return text;
+        return string.Empty;
+    }
+
+    private static string? FindCellText(IrTable tbl, string cellAnchor, IrDiffSettings settings)
+    {
+        foreach (var row in tbl.Rows)
+            foreach (var cell in row.Cells)
+            {
+                if (cell.Anchor.ToString() == cellAnchor)
+                {
+                    var sb = new StringBuilder();
+                    foreach (var b in cell.Blocks)
+                        if (b is IrParagraph p)
+                            foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+                                sb.Append(t.Text);
+                    return sb.ToString();
+                }
+                foreach (var b in cell.Blocks)
+                    if (b is IrTable nested && FindCellText(nested, cellAnchor, settings) is { } text)
+                        return text;
+            }
+        return null;
     }
 
     /// <summary>The concatenated cell text of a row resolved by anchor, for whole-row insert/delete revision

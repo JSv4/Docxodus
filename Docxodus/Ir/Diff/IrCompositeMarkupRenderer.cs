@@ -50,15 +50,6 @@ internal static class IrCompositeMarkupRenderer
         ArgumentNullException.ThrowIfNull(reviewers);
         ArgumentNullException.ThrowIfNull(settings);
 
-        // v1 limitation: note-scope (footnote/endnote) merging is not yet implemented in the composite path.
-        // The merger never populates NoteOps today (IrCompositeMerger fails fast on a reviewer note edit), so
-        // this guard never fires; it is a RUNTIME check (not Debug.Assert — which is stripped in the Release
-        // build this library ships in and CI tests under) so a future change that starts populating NoteOps
-        // without renderer support fails loudly instead of silently dropping note diffs.
-        if (script.NoteOps is { Count: > 0 })
-            throw new System.InvalidOperationException(
-                "IrCompositeMarkupRenderer does not yet render composite NoteOps; note merging is a follow-on.");
-
         // Re-read base + each reviewer WITH provenance (RetainSources=true) + Accept view — the SAME options the
         // two-way renderer uses — so block anchors in the script resolve to source w:p/w:tbl elements to clone.
         var readOpts = new IrReaderOptions { RetainSources = true, RevisionView = RevisionView.Accept };
@@ -124,6 +115,12 @@ internal static class IrCompositeMarkupRenderer
 
                 main.PutXDocument();
 
+                // NOTE SCOPES (N-way): rewrite reviewer-sourced body note references into the base-anchored
+                // output id space, apply the composed per-note diffs inside the footnotes/endnotes parts
+                // (creating reviewer-inserted definitions under fresh ids), then run the SAME body-order
+                // renumber + cross-kind nested-reference sweep the two-way renderer runs.
+                RenderCompositeNoteScopes(script, state, main, baseIr, reviewerIrs, settings);
+
                 // Carry each reviewer's missing styles + numbering into the base-based package (continuity for
                 // right-only styles / legal numbering referenced by cloned content). Order is reviewer index;
                 // first-writer-wins matches the two-way single-right behavior for a one-reviewer consolidate.
@@ -188,6 +185,253 @@ internal static class IrCompositeMarkupRenderer
         }
 
         RenderOneCompositeBlock(compositeOp, baseIr, reviewerIrs, state, sink);
+    }
+
+    // ------------------------------------------------------------------ N-way note scopes
+
+    /// <summary>
+    /// The composite note-scope phase (the N-way analogue of the two-way renderer's note pipeline):
+    /// <list type="number">
+    /// <item><b>Reference rewrite.</b> Reviewer-sourced cloned body content carries footnote/endnote
+    /// references in THAT reviewer's id space (which diverges from the base space whenever the reviewer's
+    /// note numbering shifted, and can collide across reviewers). Using the merger's per-reviewer id maps
+    /// (<see cref="IrCompositeScript.NoteIdMaps"/>) plus fresh output ids allocated for reviewer-INSERTED
+    /// notes, every reviewer-sourced reference (tracked per reviewer via
+    /// <see cref="IrMarkupRenderer.RenderState.NoteRefClonesBySource"/>) is rewritten to the base-anchored
+    /// output id space. References inside <c>w:del</c>/<c>w:moveFrom</c> content are skipped — deleted
+    /// content clones from the BASE side and already carries base ids.</item>
+    /// <item><b>Definition apply.</b> Each composed note diff renders inside the output part: a base-matched
+    /// note's blocks are replaced by its composed ops (per-op reviewer sourcing/attribution via
+    /// <see cref="RenderOneCompositeBlock"/>); a reviewer-inserted note's definition is cloned from the
+    /// reviewer's part under its fresh output id, its ins-marked content rendered from the reviewer.</item>
+    /// <item><b>Renumber.</b> The SAME body-order renumber + cross-kind nested-reference sweep the two-way
+    /// renderer runs (<see cref="IrMarkupRenderer.RenumberNoteIds"/>/<see cref="IrMarkupRenderer.RemapNestedNoteReferences"/>).</item>
+    /// </list>
+    /// No-op when no reviewer has any note diff.
+    /// </summary>
+    private static void RenderCompositeNoteScopes(
+        IrCompositeScript script,
+        IrMarkupRenderer.RenderState state,
+        MainDocumentPart main,
+        IrDocument baseIr,
+        IReadOnlyList<IrDocument> reviewerIrs,
+        IrDiffSettings settings)
+    {
+        if (script.NoteIdMaps is null && script.NoteOps is null)
+            return;
+
+        // ---- 1. Allocate output ids: matched -> base id; inserted -> fresh (deterministic order). ----
+        // outputIdByReviewer[(reviewer, kind, reviewerId)] -> output id.
+        var outputId = new Dictionary<(int Reviewer, IrNoteKind Kind, string ReviewerId), string>();
+        var freshIdByInserted = new Dictionary<(IrNoteKind Kind, int Reviewer, string ReviewerId), string>();
+        long nextFresh = MaxPositiveNoteId(main) + 1;
+        if (script.NoteIdMaps is { } maps)
+        {
+            foreach (var m in maps)
+            {
+                if (m.BaseNoteId is { } baseId)
+                {
+                    outputId[(m.Reviewer, m.Kind, m.ReviewerNoteId)] = baseId;
+                }
+                else
+                {
+                    var fresh = nextFresh.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    nextFresh++;
+                    outputId[(m.Reviewer, m.Kind, m.ReviewerNoteId)] = fresh;
+                    freshIdByInserted[(m.Kind, m.Reviewer, m.ReviewerNoteId)] = fresh;
+                }
+            }
+        }
+
+        // ---- 2. Rewrite reviewer-sourced body references to the output id space. ----
+        foreach (var (reviewer, clones) in state.NoteRefClonesBySource.OrderBy(kvp => kvp.Key))
+        {
+            if (reviewer < 0)
+                continue;   // base-sourced clones already carry base ids
+            foreach (var clone in clones)
+            {
+                foreach (var refEl in clone.DescendantsAndSelf()
+                             .Where(e => e.Name == W.footnoteReference || e.Name == W.endnoteReference))
+                {
+                    // Deleted/moved-from content is BASE-sourced (cloned from the left side) even inside a
+                    // reviewer-registered clone — its references already carry base ids.
+                    if (refEl.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom))
+                        continue;
+                    var kind = refEl.Name == W.footnoteReference ? IrNoteKind.Footnote : IrNoteKind.Endnote;
+                    var id = (string?)refEl.Attribute(W.id);
+                    if (id != null && outputId.TryGetValue((reviewer, kind, id), out var mapped) && mapped != id)
+                        refEl.SetAttributeValue(W.id, mapped);
+                }
+            }
+        }
+        main.PutXDocument();
+
+        // ---- 3. Apply the composed note diffs inside the parts. ----
+        if (script.NoteOps is { Count: > 0 } noteOps)
+        {
+            ApplyCompositeNoteDiffs(
+                noteOps.Where(n => n.Kind == IrNoteKind.Footnote).ToList(), isFootnote: true,
+                main, baseIr, reviewerIrs, state, freshIdByInserted, settings);
+            ApplyCompositeNoteDiffs(
+                noteOps.Where(n => n.Kind == IrNoteKind.Endnote).ToList(), isFootnote: false,
+                main, baseIr, reviewerIrs, state, freshIdByInserted, settings);
+        }
+
+        // ---- 4. Body-order renumber + cross-kind nested-reference sweep (the two-way pipeline). ----
+        var footnoteRemap = IrMarkupRenderer.RenumberNoteIds(main, W.footnoteReference, W.footnote, W.footnotes,
+            main.FootnotesPart, null);
+        var endnoteRemap = IrMarkupRenderer.RenumberNoteIds(main, W.endnoteReference, W.endnote, W.endnotes,
+            main.EndnotesPart, null);
+        IrMarkupRenderer.RemapNestedNoteReferences(main, footnoteRemap, endnoteRemap);
+    }
+
+    /// <summary>The highest positive <c>w:id</c> across the output package's footnotes AND endnotes parts
+    /// (0 when there are none) — the floor for fresh reviewer-inserted note ids, kept above both kinds so a
+    /// fresh id can never collide with any base id of either part.</summary>
+    private static long MaxPositiveNoteId(MainDocumentPart main)
+    {
+        long max = 0;
+        foreach (var part in new OpenXmlPart?[] { main.FootnotesPart, main.EndnotesPart })
+        {
+            var root = part?.GetXDocument().Root;
+            if (root == null)
+                continue;
+            foreach (var el in root.Elements())
+            {
+                if (long.TryParse((string?)el.Attribute(W.id), out var id) && id > max)
+                    max = id;
+            }
+        }
+        return max;
+    }
+
+    /// <summary>
+    /// Apply the composed diffs of ONE note kind inside the output part (creating the part from the
+    /// inserting reviewer's boilerplate when the base lacks it): a base-matched diff replaces the note's
+    /// block children with its rendered composite ops; a reviewer-inserted diff clones the reviewer's note
+    /// shell under its fresh output id and renders the reviewer's (ins-marked) content into it.
+    /// </summary>
+    private static void ApplyCompositeNoteDiffs(
+        List<IrCompositeNoteDiff> diffs, bool isFootnote,
+        MainDocumentPart main, IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs,
+        IrMarkupRenderer.RenderState state,
+        IReadOnlyDictionary<(IrNoteKind Kind, int Reviewer, string ReviewerId), string> freshIdByInserted,
+        IrDiffSettings settings)
+    {
+        if (diffs.Count == 0)
+            return;
+        var noteName = isFootnote ? W.footnote : W.endnote;
+        var kind = isFootnote ? IrNoteKind.Footnote : IrNoteKind.Endnote;
+
+        var part = EnsureCompositeNotePart(main, isFootnote, diffs, reviewerIrs);
+        var root = part?.GetXDocument().Root;
+        if (root == null)
+            return;
+
+        bool changed = false;
+        foreach (var diff in diffs)
+        {
+            XElement? noteEl;
+            if (diff.BaseNoteId is { } baseId)
+            {
+                // Base-matched: locate the base-cloned definition by its base id.
+                noteEl = root.Elements(noteName).FirstOrDefault(e => (string?)e.Attribute(W.id) == baseId);
+                if (noteEl == null)
+                    continue;
+            }
+            else
+            {
+                // Reviewer-inserted: clone the reviewer's note shell under the fresh output id.
+                var shell = ReviewerNoteShell(reviewerIrs, diff.SourceReviewer, kind, diff.ReviewerNoteId);
+                if (shell == null || diff.ReviewerNoteId is not { } revId
+                    || !freshIdByInserted.TryGetValue((kind, diff.SourceReviewer, revId), out var freshId))
+                    continue;
+                noteEl = new XElement(noteName, shell.Attributes());
+                foreach (var pre in shell.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+                    noteEl.Add(IrMarkupRenderer.StripUnids(new XElement(pre)));
+                noteEl.SetAttributeValue(W.id, freshId);
+                root.Add(noteEl);
+            }
+
+            // Render the composed ops with the SAME per-op reviewer sourcing the body uses.
+            var noteBlocks = new List<XElement>();
+            foreach (var op in diff.Ops)
+                RenderOneCompositeBlock(op, baseIr, reviewerIrs, state, noteBlocks);
+            if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
+                foreach (var b in noteBlocks)
+                    IrMarkupRenderer.SimplifyMoveMarkup(b);
+            foreach (var b in noteBlocks)
+                IrMarkupRenderer.StripUnids(b);
+
+            noteEl.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).Remove();
+            noteEl.Add(noteBlocks);
+            changed = true;
+        }
+
+        if (changed)
+        {
+            foreach (var attr in root.DescendantsAndSelf().Attributes()
+                         .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
+                attr.Remove();
+            part!.PutXDocument();
+        }
+    }
+
+    /// <summary>Return the output's footnotes/endnotes part, creating one seeded with the FIRST inserting
+    /// reviewer's reserved boilerplate notes (ids ≤ 0) when the base package lacks the part but a reviewer
+    /// inserted a note of that kind (the composite analogue of the two-way <c>EnsureNotePart</c>). Null only
+    /// when there is genuinely no part to apply to.</summary>
+    private static OpenXmlPart? EnsureCompositeNotePart(
+        MainDocumentPart main, bool isFootnote,
+        List<IrCompositeNoteDiff> diffs, IReadOnlyList<IrDocument> reviewerIrs)
+    {
+        var existing = isFootnote ? (OpenXmlPart?)main.FootnotesPart : main.EndnotesPart;
+        if (existing != null)
+            return existing;
+
+        // Base has no part: only reviewer-INSERTED notes can require one. Seed boilerplate from the first
+        // inserting reviewer's note part root (reached through the reviewer IR's source elements).
+        var kind = isFootnote ? IrNoteKind.Footnote : IrNoteKind.Endnote;
+        XElement? reviewerRoot = null;
+        foreach (var diff in diffs.Where(d => d.BaseNoteId == null))
+        {
+            reviewerRoot = ReviewerNoteShell(reviewerIrs, diff.SourceReviewer, kind, diff.ReviewerNoteId)
+                ?.Document?.Root;
+            if (reviewerRoot != null)
+                break;
+        }
+        if (reviewerRoot == null)
+            return null;
+
+        var rootName = isFootnote ? W.footnotes : W.endnotes;
+        var noteName = isFootnote ? W.footnote : W.endnote;
+        var newPart = isFootnote ? (OpenXmlPart)main.AddNewPart<FootnotesPart>() : main.AddNewPart<EndnotesPart>();
+        var newRoot = new XElement(rootName, reviewerRoot.Attributes());
+        foreach (var note in reviewerRoot.Elements(noteName)
+                     .Where(n => int.TryParse((string?)n.Attribute(W.id), out var id) && id <= 0))
+            newRoot.Add(IrMarkupRenderer.StripUnids(new XElement(note)));
+        var xDoc = newPart.GetXDocument();
+        if (xDoc.Root == null)
+            xDoc.Add(newRoot);
+        else
+            xDoc.Root.ReplaceWith(newRoot);
+        newPart.PutXDocument();
+        return newPart;
+    }
+
+    /// <summary>The <c>w:footnote</c>/<c>w:endnote</c> SOURCE element of reviewer
+    /// <paramref name="reviewer"/>'s note <paramref name="reviewerNoteId"/>, reached through the reviewer
+    /// IR's note store (the note's first block's source element's parent IS the note element, since note
+    /// blocks are direct children of the definition). Null when unresolvable.</summary>
+    private static XElement? ReviewerNoteShell(
+        IReadOnlyList<IrDocument> reviewerIrs, int reviewer, IrNoteKind kind, string? reviewerNoteId)
+    {
+        if (reviewer < 0 || reviewer >= reviewerIrs.Count || reviewerNoteId == null)
+            return null;
+        var store = kind == IrNoteKind.Footnote ? reviewerIrs[reviewer].Footnotes : reviewerIrs[reviewer].Endnotes;
+        if (!store.Notes.TryGetValue(reviewerNoteId, out var scope) || scope.Blocks.Count == 0)
+            return null;
+        return scope.Blocks[0].Source.Element?.Parent;
     }
 
     /// <summary>

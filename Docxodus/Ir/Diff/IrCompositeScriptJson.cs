@@ -145,6 +145,13 @@ internal static class IrCompositeScriptJson
                     writer.WriteNumber("shellSourceReviewer", cell.ShellSourceReviewer);
                     if (cell.ShellRightCellAnchor is { } sra) writer.WriteString("shellRightCellAnchor", sra);
                 }
+                // Additive cell kind + attribution: present only for a reviewer-inserted/-deleted cell
+                // (column add/remove), so pre-existing JSON outputs are byte-unaffected.
+                if (cell.Kind != IrAuthoredCellKind.Content)
+                {
+                    writer.WriteString("cellKind", cell.Kind.ToString());
+                    writer.WriteString("cellAuthor", cell.Author);
+                }
                 if (cell.ComposedBlockOps is { } blockOps)
                 {
                     writer.WriteStartArray("composedBlockOps");
@@ -293,15 +300,19 @@ internal static class IrCompositeScriptJson
         writer.WriteEndArray();
     }
 
-    private static void WriteNoteDiff(Utf8JsonWriter writer, IrNoteDiff diff)
+    /// <summary>One N-way composed note diff: <c>kind</c> + <c>baseNoteId</c> (base-matched) or
+    /// <c>sourceReviewer</c>/<c>reviewerNoteId</c> (reviewer-inserted), with the composed ops written
+    /// through the SAME composite-op writer the body uses (per-op attribution included).</summary>
+    private static void WriteNoteDiff(Utf8JsonWriter writer, IrCompositeNoteDiff diff)
     {
         writer.WriteStartObject();
         writer.WriteString("kind", diff.Kind.ToString());
-        writer.WriteString("noteId", diff.NoteId);
-        if (diff.LeftNoteId is { } leftId) writer.WriteString("leftNoteId", leftId);
+        if (diff.BaseNoteId is { } baseId) writer.WriteString("baseNoteId", baseId);
+        if (diff.SourceReviewer >= 0) writer.WriteNumber("sourceReviewer", diff.SourceReviewer);
+        if (diff.ReviewerNoteId is { } revId) writer.WriteString("reviewerNoteId", revId);
         writer.WriteStartArray("ops");
         foreach (var op in diff.Ops)
-            WriteEmbeddedOp(writer, op);
+            WriteCompositeOp(writer, op);
         writer.WriteEndArray();
         writer.WriteEndObject();
     }
