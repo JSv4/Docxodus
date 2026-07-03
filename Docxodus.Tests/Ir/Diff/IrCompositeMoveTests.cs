@@ -14,7 +14,8 @@ namespace Docxodus.Tests.Ir.Diff;
 /// FOLLOW-ON A: native move composition in the consolidate engine. A SINGLE reviewer's non-colliding
 /// MoveBlock/MoveModifyBlock renders as a NATIVE move (w:moveFrom/w:moveTo, authored to that reviewer,
 /// move-group-id globally namespaced). Colliding moves (move-vs-edit on the same base block; two reviewers
-/// moving the same block) STAY lowered to del/ins as a recorded conflict. Split/Merge stay lowered.
+/// moving the same block) STAY lowered to del/ins as a recorded conflict. Uncontested Split/Merge now
+/// compose natively too — see <see cref="IrCompositeSplitMergeTests"/>.
 /// Gated on <see cref="IrDiffSettings.RenderMoves"/> (DetectMoves=false ⇒ moves still lower).
 /// </summary>
 public class IrCompositeMoveTests

@@ -317,21 +317,22 @@ public class IrCompositeTableTests
         Assert.Equal(Docs.StructuralBody(baseDoc), Reject(merged));
     }
 
-    // ------------------------------------------------------------------ 8. MovedRow fallback (STOP boundary)
+    // ------------------------------------------------------------------ 8. MovedRow composition + contested fallback
 
     /// <summary>
-    /// #8 — MovedRow present → block-level conflict fallback (STOP boundary). When any reviewer's table diff
-    /// has a MovedRow, the per-cell compose bails to the existing whole-table block conflict. No silent loss;
-    /// reject ≡ base.
+    /// #8 — An UNCONTESTED reviewer row move COMPOSES with another reviewer's edit to a different row: the
+    /// move lands (lowered to the del+ins row shape the two-way renderer itself uses), Bob's cell edit lands,
+    /// no conflict, reject ≡ base. (Was: ANY MovedRow → whole-table conflict fallback; the sole-toucher gate
+    /// now composes it — the row analogue of the block move plan.)
     /// </summary>
     [Theory]
     [InlineData(ConflictResolution.BaseWins)]
     [InlineData(ConflictResolution.FirstReviewerWins)]
     [InlineData(ConflictResolution.StackAll)]
-    public void MovedRow_falls_back_to_block_conflict(ConflictResolution policy)
+    public void Uncontested_MovedRow_composes_with_other_reviewers_row_edit(ConflictResolution policy)
     {
         // A 3-row table with UNIQUE row hashes so the row aligner anchors them; Alice reorders rows
-        // (a MovedRow), Bob edits a cell — two reviewers touch the same base table.
+        // (a MovedRow of "alpha row"), Bob edits a DIFFERENT row's cell — no contention on alpha.
         var baseDoc = IrTestDocuments.FromBodyXml(
             Lead +
             Table(
@@ -351,7 +352,51 @@ public class IrCompositeTableTests
                 Row(Cell("bravo row EDIT")),
                 Row(Cell("charlie row"))));
 
-        // Falls back to a recorded whole-table conflict — no silent loss.
+        Assert.Empty(Conflicts(baseDoc, policy, ("Alice", alice), ("Bob", bob)));
+
+        var merged = Consolidate(baseDoc, policy, ("Alice", alice), ("Bob", bob));
+        var accept = Accept(merged);
+        Assert.Contains("bravo row EDIT", accept);
+        Assert.Contains("alpha row", accept);
+        // Alice's move landed: alpha now AFTER bravo in the accepted row order.
+        Assert.True(accept.IndexOf("bravo row", System.StringComparison.Ordinal)
+                    < accept.IndexOf("alpha row", System.StringComparison.Ordinal),
+            $"alpha row should follow bravo row after the accepted move; accept body: {accept}");
+        Assert.Equal(1, CountOccurrences(accept, "alpha row"));
+
+        Assert.Equal(Docs.StructuralBody(baseDoc), Reject(merged));
+    }
+
+    /// <summary>
+    /// #8b — A CONTESTED row move (Bob EDITS the same base row Alice moves) still falls back to the
+    /// whole-table block conflict (STOP boundary). No silent loss; reject ≡ base.
+    /// </summary>
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins)]
+    [InlineData(ConflictResolution.FirstReviewerWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void Contested_MovedRow_falls_back_to_block_conflict(ConflictResolution policy)
+    {
+        var baseDoc = IrTestDocuments.FromBodyXml(
+            Lead +
+            Table(
+                Row(Cell("alpha row")),
+                Row(Cell("bravo row")),
+                Row(Cell("charlie row"))));
+        var alice = IrTestDocuments.FromBodyXml(
+            Lead +
+            Table(
+                Row(Cell("bravo row")),
+                Row(Cell("alpha row")),   // alpha moved down (a row move)
+                Row(Cell("charlie row"))));
+        var bob = IrTestDocuments.FromBodyXml(
+            Lead +
+            Table(
+                Row(Cell("alpha row EDIT")),   // edits the SAME row Alice moves
+                Row(Cell("bravo row")),
+                Row(Cell("charlie row"))));
+
+        // Contested move → recorded whole-table conflict — no silent loss.
         Assert.NotEmpty(Conflicts(baseDoc, policy, ("Alice", alice), ("Bob", bob)));
 
         var merged = Consolidate(baseDoc, policy, ("Alice", alice), ("Bob", bob));

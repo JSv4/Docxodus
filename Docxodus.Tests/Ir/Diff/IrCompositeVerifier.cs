@@ -229,7 +229,9 @@ internal static class IrCompositeVerifier
     }
 
     /// <summary>Reconstruct ONE composite block's accepted text (a cell paragraph block): Equal/FormatOnly →
-    /// base text; Insert → reviewer text; Modify → <see cref="ReconstructModify"/>; Delete → nothing.</summary>
+    /// base text; Insert → reviewer text; Modify → <see cref="ReconstructModify"/>; Delete → nothing;
+    /// native Split/Merge/Move mirror the body switch (a split contributes each right member, a merge the
+    /// merged right paragraph, a move destination the relocated block; a move source contributes nothing).</summary>
     private static string ReconstructCompositeBlock(
         IrCompositeOp cop, IrDocument baseIr,
         IReadOnlyList<(string Author, IrDocument Ir)> revIr, IrDiffSettings settings) =>
@@ -239,6 +241,12 @@ internal static class IrCompositeVerifier
             IrEditOpKind.DeleteBlock => string.Empty,
             IrEditOpKind.InsertBlock => ReviewerBlockText(revIr, cop.SourceReviewer, cop.Op.RightAnchor!, settings),
             IrEditOpKind.ModifyBlock => ReconstructModify(cop, baseIr, revIr, settings),
+            IrEditOpKind.SplitBlock => string.Concat(
+                cop.Op.SplitMergeAnchors!.Select(a => ReviewerBlockText(revIr, cop.SourceReviewer, a, settings))),
+            IrEditOpKind.MergeBlock => ReviewerBlockText(revIr, cop.SourceReviewer, cop.Op.RightAnchor!, settings),
+            IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock => cop.Op.IsMoveSource != true
+                ? ReviewerBlockText(revIr, cop.SourceReviewer, cop.Op.RightAnchor!, settings)
+                : string.Empty,
             _ => string.Empty,
         };
 
