@@ -556,8 +556,16 @@ function handleGetVersion(): {
 
 /**
  * Main message handler.
+ *
+ * Registered via addEventListener rather than the `self.onmessage =` property
+ * form: the .NET WASM runtime's worker-environment detection (ENVIRONMENT_IS_WORKER
+ * in dotnet.js's asset loader) treats a truthy `globalThis.onmessage` as a signal
+ * that special handling is needed, and a bug in that check (dotnet/runtime#114918,
+ * a regression from .NET 8) leaves the asset-loading promises unresolved forever —
+ * dotnet.create() hangs with no error. addEventListener does not set the
+ * `onmessage` property, so it sidesteps the bug entirely.
  */
-self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
+self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
   const request = event.data;
 
   try {
@@ -777,7 +785,7 @@ self.onmessage = async (event: MessageEvent<WorkerRequest>) => {
       error: String(error),
     } as WorkerResponse);
   }
-};
+});
 
 // Signal that the worker is ready
 self.postMessage({ type: "ready" });

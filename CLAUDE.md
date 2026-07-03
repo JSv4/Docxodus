@@ -157,7 +157,7 @@ Playwright tests serve from `npm/dist/wasm/` — if you edit C#, .ts, or the har
 
 ## Architecture Overview
 
-Docxodus is a library for manipulating Open XML documents (DOCX, XLSX, PPTX) built on top of the Open XML SDK. It is a fork of OpenXmlPowerTools upgraded to .NET 8.0. All code is in the `Docxodus` namespace.
+Docxodus is a library for manipulating Open XML documents (DOCX, XLSX, PPTX) built on top of the Open XML SDK. It is a fork of OpenXmlPowerTools upgraded to .NET 10.0. All code is in the `Docxodus` namespace.
 
 ### Repository Layout
 
@@ -170,7 +170,7 @@ This repo is not just a .NET library — it ships a four-layer stack. Changes to
 | Unit tests | `Docxodus.Tests/` | xUnit tests for the core library (~1,000+ tests). |
 | CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool`-installable wrappers over the library. |
 | WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` shells (`DocumentConverter.cs`, `DocumentComparer.cs`, `DocxSessionBridge.cs`) exposing the library to JS via .NET WASM. `DocxSessionBridge` is now a thin passthrough to `DocxSessionOps`. |
-| Stdio host | `tools/python-host/` | .NET 8 console binary (`docxodus-pyhost`) that reads NDJSON requests on stdin and dispatches to `DocxSessionOps`. The upcoming python-docxodus pip package will subprocess this. |
+| Stdio host | `tools/python-host/` | .NET 10 console binary (`docxodus-pyhost`) that reads NDJSON requests on stdin and dispatches to `DocxSessionOps`. The upcoming python-docxodus pip package will subprocess this. |
 | npm/TypeScript | `npm/` | Wrapper around the WASM bridge — `src/index.ts` is the public API, `src/react.ts` is the React hook layer, `src/docxodus.worker.ts`/`worker-proxy.ts` run WASM off the main thread. |
 | Web demo | `web/DocxodusWeb/` | Blazor/web demo app (separate workflow). |
 
@@ -331,8 +331,8 @@ See `docs/architecture/comment_rendering.md` for detailed comment rendering docu
 
 ### Target Frameworks
 
-Library targets: `net8.0`
-Tests target: `net8.0`
+Library targets: `net10.0`
+Tests target: `net10.0`
 
 ### Dependencies
 
@@ -351,7 +351,7 @@ Test files are in `TestFiles/` directory with prefixes indicating their purpose:
 
 ## Legacy Migration Notes
 
-Docxodus is a fork of OpenXmlPowerTools, upgraded from net45/net46/netstandard2.0 → .NET 8.0 and from Open XML SDK 2.8.1 → 3.x. A few artifacts of that migration are worth knowing when reading code:
+Docxodus is a fork of OpenXmlPowerTools, upgraded from net45/net46/netstandard2.0 → .NET 8.0 → .NET 10.0 and from Open XML SDK 2.8.1 → 3.x. A few artifacts of that migration are worth knowing when reading code:
 
 - **`GetPackage()` extension in `PtOpenXmlUtil.cs`** — Open XML SDK 3.x made the internal `Package` private; we access it via reflection. Use this extension rather than reaching for `OpenXmlPackage.Package` directly.
 - **`PartTypeInfo` pattern** — replaces SDK 2.x's `FontPartType`/`ImagePartType` enums when adding parts.
