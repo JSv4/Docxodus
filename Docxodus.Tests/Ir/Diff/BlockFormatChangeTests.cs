@@ -297,6 +297,25 @@ public class BlockFormatChangeTests
         Assert.Equal(Texts(left), Texts(RevisionProcessor.RejectRevisions(result)));
     }
 
+    // ------------------------------------------------------------------ Consolidate pPr merge (sub-project B)
+
+    [Fact]
+    public void PPrDigest_distinguishes_paragraph_properties_but_ignores_mark_sect_markers()
+    {
+        var opts = new IrReaderOptions { RetainSources = false };
+        IrParagraph P(string pInner) => (IrParagraph)IrReader.Read(
+            IrTestDocuments.FromBodyXml($"<w:p>{pInner}<w:r><w:t>Text.</w:t></w:r></w:p>"), opts).Body.Blocks[0];
+
+        var plain = P("");
+        var centered = P("<w:pPr><w:jc w:val=\"center\"/></w:pPr>");
+        var centered2 = P("<w:pPr><w:jc w:val=\"center\"/></w:pPr>");
+        var centeredBoldMark = P("<w:pPr><w:jc w:val=\"center\"/><w:rPr><w:b/></w:rPr></w:pPr>");
+
+        Assert.NotEqual(plain.PPrDigest, centered.PPrDigest);          // a jc change is visible
+        Assert.Equal(centered.PPrDigest, centered2.PPrDigest);         // identical pPr → identical digest
+        Assert.Equal(centered.PPrDigest, centeredBoldMark.PPrDigest);  // the mark rPr is NOT part of the pPr digest
+    }
+
     // ------------------------------------------------------------------ mid-doc inline sectPr (follow-up A3)
 
     private const string InlineSectBody =
