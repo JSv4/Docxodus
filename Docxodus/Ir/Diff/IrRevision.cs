@@ -52,7 +52,16 @@ internal enum IrRevisionType
 internal sealed record IrFormatChangeDetails(
     IReadOnlyDictionary<string, string> OldProperties,
     IReadOnlyDictionary<string, string> NewProperties,
-    IReadOnlyList<string> ChangedPropertyNames);
+    IReadOnlyList<string> ChangedPropertyNames,
+    IrFormatChangeScope Scope = IrFormatChangeScope.Run);
+
+/// <summary>
+/// Which property container a <see cref="IrRevisionType.FormatChanged"/> revision describes
+/// (block-format-change family, 2026-07-03). <see cref="Run"/> is the pre-campaign rPr-grade report;
+/// <see cref="Paragraph"/> reports a pPr delta (<c>w:pPrChange</c>-grade); the table and section members
+/// arrive with their phases. Mirrors the public <c>DocxDiffFormatChangeScope</c> member-for-member.
+/// </summary>
+internal enum IrFormatChangeScope { Run, Paragraph, TableCell, TableRow, Table, Section }
 
 /// <summary>
 /// One consumer-facing revision rendered from an <see cref="IrEditScript"/> by

@@ -79,7 +79,7 @@
           "anchor": "p:body:7c838a2f5d4d325446adde7a1163cbd2",
           "type": "paragraph",
           "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "formatFingerprint": "320fbff7a8b608925c952981c109740771b95ae61e7aa67f3533c1deffeea671",
+          "formatFingerprint": "a290c997df38fcd83d4020d97ea5cc101e2b414029d4991f9b81aed3d70dae22",
           "format": {
             "indentFirstLineTwips": 720
           },
@@ -334,12 +334,14 @@
           "anchor": "tbl:body:c8d7175430d2890a576660d37129f163",
           "type": "table",
           "contentHash": "c60d6efcfec67711d6e42f4593db64a70e11cef6d12dd8d8d91032517fd23a6b",
-          "formatFingerprint": "549c2673f7eb0860f2a0ec348c07d25f7f6c3205ee910d85aaa8647835380265",
-          "unmodeledTablePropsDigest": "e3b2065618a5b88b9d54000afefd2c4f31f9e723f0a6e49b09fbeb6c46275b66",
+          "formatFingerprint": "1ab5b4358593cb7ee5edaeed906b430a95679a3a3d3b33256462bd975a609190",
+          "tblPrDigest": "f796fbb9ea0e5c952e4ac34545a24b69e36f352061e72469166dc2c436d0c5b4",
+          "tblGridDigest": "4daeac856fff71bf53cc6d54ec179b2fa4fdd1a6ea66672d047fbaf6d4d2571a",
           "rows": [
             {
               "anchor": "tr:body:e8bdb46a6049b85bf736a116172aa698",
               "contentHash": "6388b39e798bc0f65ac19e42edb20ada3fc09f2c6a0b64f596db335b120480a6",
+              "trPrDigest": "c82d2cc77537cb3b5e375162dd2b6b88fce690eea821baebd547dc44cb73e91c",
               "cells": [
                 {
                   "anchor": "tc:body:7e5725c56b3c6a509d2e7f94eb039700",
@@ -445,6 +447,7 @@
             {
               "anchor": "tr:body:0ccf61cd16ddae9157a69e40b104eac2",
               "contentHash": "5461b6d01b7befd8c9bb79ba671b6c4925758a185e56d5d3fc8b07c46e9f3de4",
+              "trPrDigest": "1c072ce319bc893c590ad44b32ba4ab3aa57d5ad0bf9830afaadfe4481a95eb9",
               "cells": [
                 {
                   "anchor": "tc:body:53b3533e536d099b8499e0bb6378d9f3",
@@ -546,6 +549,7 @@
             {
               "anchor": "tr:body:e8c370dc2c43583b20481cfb2b918429",
               "contentHash": "3d4ffec88645b3fa8de3c1f45a6d1e2afdf58c1eeaf4325e4e593716549f7081",
+              "trPrDigest": "398e123558f1535dcacb9f2d3453779e1f49fceb25cd004563dd307ac4f4ab7c",
               "cells": [
                 {
                   "anchor": "tc:body:39010edcc6d54555dd8c656c367ffb06",
@@ -647,6 +651,7 @@
             {
               "anchor": "tr:body:ec2b0178c1ed827fe07f7bad4e17ba9d",
               "contentHash": "f954400fbaecb0498004a1428132bb0be9f2bcf7b174db9a481a70b1af8e77ea",
+              "trPrDigest": "aa228767d0a0c91099f7492c360601fd863850f8245932c4bb4f0bcf79858e61",
               "cells": [
                 {
                   "anchor": "tc:body:01ed3206c7b3b1fcfa1565ac36c955b1",
@@ -737,6 +742,7 @@
             {
               "anchor": "tr:body:1843ff78897be6fc3f47daca69287603",
               "contentHash": "ec9f002c0007355711bdb41504567acbe492148fca8e7a65accaa76d00fd8f46",
+              "trPrDigest": "c82d2cc77537cb3b5e375162dd2b6b88fce690eea821baebd547dc44cb73e91c",
               "cells": [
                 {
                   "anchor": "tc:body:74e62cd028b3e3f92f1cd0344964b3b0",
@@ -952,8 +958,9 @@
           "anchor": "tbl:body:7fb34211628333ee9bdf43bc5295e2d5",
           "type": "table",
           "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "formatFingerprint": "5cbe1021b96fa15eb47969ea1c19e3889573436331d8798939f0aa08afda187a",
-          "unmodeledTablePropsDigest": "d82eb44a009ea3166afb577b68e97b64eda396a361fc71bfcdb096a812af5847",
+          "formatFingerprint": "b5c26031bb7802e935123e73c6b430cee7e6810137c442f799501567494b841d",
+          "tblPrDigest": "f796fbb9ea0e5c952e4ac34545a24b69e36f352061e72469166dc2c436d0c5b4",
+          "tblGridDigest": "4daeac856fff71bf53cc6d54ec179b2fa4fdd1a6ea66672d047fbaf6d4d2571a",
           "rows": []
         },
         {
@@ -1249,8 +1256,9 @@
           "anchor": "tbl:body:87af15db45543f97d692b9cd6ec13d05",
           "type": "table",
           "contentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "formatFingerprint": "a3d6f87c6ac9e78e66323ce45b822b09c5a04630ea3c21ac689289f659c4803c",
-          "unmodeledTablePropsDigest": "7a0e64a1117e67cf087c5f7f7f32ab6ccdc8e3157ee173652d96314f944cc658",
+          "formatFingerprint": "d6c03e7ac4a65e7cc93e15b826e295514d031c7625079ef886b6a45d28005993",
+          "tblPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
+          "tblGridDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
           "rows": []
         },
         {
@@ -1694,12 +1702,14 @@
           "anchor": "tbl:body:1a45e2fbb3b8f8b210fdc984f054c9b8",
           "type": "table",
           "contentHash": "55aa3030158aca10bcc43aa580148984b18ebbb0690e00e91a253c2665284194",
-          "formatFingerprint": "694e172b56ac1daa96e9f23221ce49d7f8cbd75353e2cf2a12222f0bfc2af3d0",
-          "unmodeledTablePropsDigest": "a7a3328c62b7b57bbeb952b761400970bfd2fbdfba5c7d5a9b659200749bb4ff",
+          "formatFingerprint": "ead00781b1c5ed58c3afcf03173de1bcc94f7a4feceb1441007c49200b5f4022",
+          "tblPrDigest": "f796fbb9ea0e5c952e4ac34545a24b69e36f352061e72469166dc2c436d0c5b4",
+          "tblGridDigest": "4daeac856fff71bf53cc6d54ec179b2fa4fdd1a6ea66672d047fbaf6d4d2571a",
           "rows": [
             {
               "anchor": "tr:body:7c8023eee1329d28746ffc26d91cf695",
               "contentHash": "6d44aa18ca47ab841a3400c313e0d2f3cd5730db5dac204961f5a7a432763ece",
+              "trPrDigest": "c82d2cc77537cb3b5e375162dd2b6b88fce690eea821baebd547dc44cb73e91c",
               "cells": [
                 {
                   "anchor": "tc:body:3595bc5ae367117e296d78d17399786a",
@@ -1805,6 +1815,7 @@
             {
               "anchor": "tr:body:252eb99fb6b6d940011b00fbf1f36083",
               "contentHash": "a83ff55b15d21aa056668323c59840f5a51204a90e1de2055ddda9c8a188049d",
+              "trPrDigest": "1c072ce319bc893c590ad44b32ba4ab3aa57d5ad0bf9830afaadfe4481a95eb9",
               "cells": [
                 {
                   "anchor": "tc:body:d611ad45ce9fc9de24236bad44615416",
@@ -1906,6 +1917,7 @@
             {
               "anchor": "tr:body:33f8bd80ed7b5e6ba5cb4b71536fdbf8",
               "contentHash": "33051ff4fb4e5578351f9f78db4614b536d78c4806f76cc54bfd6dc055d89487",
+              "trPrDigest": "398e123558f1535dcacb9f2d3453779e1f49fceb25cd004563dd307ac4f4ab7c",
               "cells": [
                 {
                   "anchor": "tc:body:224578c16824aeff9a2dfc944ada3538",
@@ -2007,6 +2019,7 @@
             {
               "anchor": "tr:body:781c597974e8157b8e6c34c8f2d628d2",
               "contentHash": "d8a40815e108b000caed9350815ac656c1b12fa369ac38acf2c64228b35075b2",
+              "trPrDigest": "aa228767d0a0c91099f7492c360601fd863850f8245932c4bb4f0bcf79858e61",
               "cells": [
                 {
                   "anchor": "tc:body:2e8679d009d7c38b209b250cf2f1f9e7",
@@ -2097,6 +2110,7 @@
             {
               "anchor": "tr:body:1ae18185fc7a2b0ddaf6d45c627156b2",
               "contentHash": "ceb5de79783e9ddad1f68117ef8f4b895b14ab565dddd83c02c98c2c1c6b52fe",
+              "trPrDigest": "6d87dc1c26028949f5edefa9c83808e3a5d09b044676c3fed7ee8bdf12203769",
               "cells": [
                 {
                   "anchor": "tc:body:a10838254cd87fa9d2c1f0ac6e6588cd",
@@ -2399,7 +2413,7 @@
           "anchor": "li:body:fc95bfdd312b25f9eef4034a4cf0ea80",
           "type": "paragraph",
           "contentHash": "3f311cf0e8c03e10067ccde6919bc097c97532e3c09c41ac19a65656274f6235",
-          "formatFingerprint": "08934c82c3d98d30637d0378274225f737e4059e2251aad30d33de22ecd3ccd5",
+          "formatFingerprint": "187f3f8fc30ec80a4656ebf8c41f42994237a1d71cf0fc826b418e9eef2564ac",
           "list": {
             "numId": 34,
             "abstractNumId": 18,
@@ -3208,12 +3222,14 @@
           "anchor": "tbl:hdr1:eb7a5600ad66c0a6a0d71b28b0a80627",
           "type": "table",
           "contentHash": "537bfbbfbeb3c9d72360349d48dda0231b2263d4b10d1885de1f33d04400b9cf",
-          "formatFingerprint": "92fa7acc1cfc5e64607e34d1c3eb6229187bb87378b101036de5c32fec711e00",
-          "unmodeledTablePropsDigest": "a051d21db7ca89fe48335bb7024dc10041e2bfaa1f1782a50ef61f73d61a2b07",
+          "formatFingerprint": "4522c0a0fe571c94e3a90782b494c0a396071d395103c3a3d66491660699c229",
+          "tblPrDigest": "e70c2ed378acf4e31b54c5003cf7d67d045f45d15e119c0910a5823973111cee",
+          "tblGridDigest": "7f82718b8ff5e4bb6d13bfcb07a19afebd7471e98d37b7681d48e633cf45bddc",
           "rows": [
             {
               "anchor": "tr:hdr1:d1d182f52317b2307512df7e7095e674",
               "contentHash": "2390985a3fa283f7ca9dcf5a1526af5c82d6546298858bda4c53668f6fc6515e",
+              "trPrDigest": "e3eac8de624473f33b338ed3b3fca7da4d3fa39ae14dff45b1a4a1e7783abcb8",
               "cells": [
                 {
                   "anchor": "tc:hdr1:cfe6e08cb1e4c81e0391652536637b13",
@@ -3314,12 +3330,14 @@
           "anchor": "tbl:hdr3:eb7a5600ad66c0a6a0d71b28b0a80627",
           "type": "table",
           "contentHash": "7ac16c769fa7d34f7725e13b57515a82ab677c1b1087b7daf3dcddb77f0c2d9c",
-          "formatFingerprint": "3736536cf5ada1a3fec77994940cd623395bbb572c791659979143162dcfaebf",
-          "unmodeledTablePropsDigest": "c1cb7699ad1f7dc12505046f97e07a038a3aec260736c93e14cabe7eaae308a7",
+          "formatFingerprint": "004953a3644d960ba06d673f86958b37af461d8ae305248b8e1e0efe88040999",
+          "tblPrDigest": "fa8fc74b012bf1db4db97260206b029d20df77b93276e67a23b61a3a21ddf5ec",
+          "tblGridDigest": "c884c2c02e1bbf3a1c4a4fae20b77cd6ef8559b6366108aae79feaed531f7220",
           "rows": [
             {
               "anchor": "tr:hdr3:d1d182f52317b2307512df7e7095e674",
               "contentHash": "e0b84cb05e5d1b6bed54a9cb61fc76b0e2dce4c37d82136d2acdb23aec2f7d56",
+              "trPrDigest": "47517fa977ce651d98667823e136dec6c9831825c7b76d29877db5e45d8bd4b4",
               "cells": [
                 {
                   "anchor": "tc:hdr3:cfe6e08cb1e4c81e0391652536637b13",

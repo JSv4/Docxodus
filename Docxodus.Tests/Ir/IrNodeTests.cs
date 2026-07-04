@@ -80,7 +80,8 @@ public class IrNodeTests
             ContentHash = IrHash.Compute("table"),
             FormatFingerprint = IrHash.Compute("tablefmt"),
             Rows = IrNodeList.From(new[] { row }),
-            UnmodeledTablePropsDigest = EmptyDigest,
+            TblPrDigest = EmptyDigest,
+            TblGridDigest = EmptyDigest,
         };
 
         Assert.Single(table.Rows);
@@ -154,7 +155,8 @@ public class IrNodeTests
             ContentHash = contentHash,
             FormatFingerprint = formatHash,
             Rows = IrNodeList.Empty<IrRow>(),
-            UnmodeledTablePropsDigest = EmptyDigest,
+            TblPrDigest = EmptyDigest,
+            TblGridDigest = EmptyDigest,
         };
 
         Assert.False(paragraph.Equals((object)table));

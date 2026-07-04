@@ -7,12 +7,14 @@
           "anchor": "tbl:body:c8d7175430d2890a576660d37129f163",
           "type": "table",
           "contentHash": "635e64f513dc1a315d811aa80ea06b1d1627a06b19bc22394a726f7b14e7c362",
-          "formatFingerprint": "0bf0f014628ca3f0252c2084a923d44d9c0be06641ae3a62de7932c2586dce68",
-          "unmodeledTablePropsDigest": "927ce4fc46968e260da586201418344b8f87aeb294e5c60208894965bf2c13c6",
+          "formatFingerprint": "04b1239405110e3cc9edd39ccfb20c9540d1d63819e933ea32e9726301dd37b9",
+          "tblPrDigest": "a7f2f84f9c54361e758bcf69e8a0e058c947ae46eedb509e128ee2a866047c29",
+          "tblGridDigest": "5eaa2abab143a1d46cda861cb565d6e323976bea7343f22820323e8338505418",
           "rows": [
             {
               "anchor": "tr:body:e8bdb46a6049b85bf736a116172aa698",
               "contentHash": "5ede621dcbe923c1d2fc617a143b4880ee3304980959cce0b32bb1b22efef0a5",
+              "trPrDigest": "c9ebcc267e01a0d44bef3e8a245dbff8edc75dd492f28be48f7a0992c557e9a0",
               "cells": [
                 {
                   "anchor": "tc:body:7e5725c56b3c6a509d2e7f94eb039700",
@@ -85,6 +87,7 @@
             {
               "anchor": "tr:body:0ccf61cd16ddae9157a69e40b104eac2",
               "contentHash": "0dbfcc7dfbfee7053e7895cd78a62dd42fcc834b2191375d47a6d61c1fb8959b",
+              "trPrDigest": "92b3072ef77b7ed0b6491f6e6be1d26eaa7dd941b8204edd8ca6b20adc5554a0",
               "cells": [
                 {
                   "anchor": "tc:body:53b3533e536d099b8499e0bb6378d9f3",
@@ -171,6 +174,7 @@
             {
               "anchor": "tr:body:e8c370dc2c43583b20481cfb2b918429",
               "contentHash": "0f16f8a5232201521e24b543e8e5463342c0cf321df8d0b5d970048ba310181b",
+              "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
               "cells": [
                 {
                   "anchor": "tc:body:39010edcc6d54555dd8c656c367ffb06",
@@ -248,12 +252,14 @@
           "anchor": "tbl:body:1a45e2fbb3b8f8b210fdc984f054c9b8",
           "type": "table",
           "contentHash": "26dd3ccfc602430303f04d6e593669fa2322cb26cfc360d594e7f303c9d1dffc",
-          "formatFingerprint": "53e7b07376b4f169e2dfd7022b7843c4da7de79a92d4541db8c0f85b763e79db",
-          "unmodeledTablePropsDigest": "764b1b85ea877f964661c43caf9faee9f8221b1d2bbcbda227819fb0c18c34db",
+          "formatFingerprint": "46fb4f88fa4a14a6ebd5f2359f0328a1819ac95d9190d6ed26ddcdb55889d162",
+          "tblPrDigest": "a7f2f84f9c54361e758bcf69e8a0e058c947ae46eedb509e128ee2a866047c29",
+          "tblGridDigest": "5eaa2abab143a1d46cda861cb565d6e323976bea7343f22820323e8338505418",
           "rows": [
             {
               "anchor": "tr:body:7c8023eee1329d28746ffc26d91cf695",
               "contentHash": "5ede621dcbe923c1d2fc617a143b4880ee3304980959cce0b32bb1b22efef0a5",
+              "trPrDigest": "c9ebcc267e01a0d44bef3e8a245dbff8edc75dd492f28be48f7a0992c557e9a0",
               "cells": [
                 {
                   "anchor": "tc:body:3595bc5ae367117e296d78d17399786a",
@@ -326,6 +332,7 @@
             {
               "anchor": "tr:body:252eb99fb6b6d940011b00fbf1f36083",
               "contentHash": "b02c25f8abb085ed5e252b3bdac8d434749a97371d42f65d1dc56e094aa1b53b",
+              "trPrDigest": "92b3072ef77b7ed0b6491f6e6be1d26eaa7dd941b8204edd8ca6b20adc5554a0",
               "cells": [
                 {
                   "anchor": "tc:body:d611ad45ce9fc9de24236bad44615416",
@@ -390,6 +397,7 @@
             {
               "anchor": "tr:body:33f8bd80ed7b5e6ba5cb4b71536fdbf8",
               "contentHash": "129d28bfc9914eae3b10a578bb2afe35c7f17be3b3d7949acb8010dbde65e9fe",
+              "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
               "cells": [
                 {
                   "anchor": "tc:body:224578c16824aeff9a2dfc944ada3538",

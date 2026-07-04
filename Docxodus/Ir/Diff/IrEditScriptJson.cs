@@ -53,6 +53,13 @@ internal static class IrEditScriptJson
                     WriteNoteDiff(writer, noteOp);
                 writer.WriteEndArray();
             }
+            if (script.HeaderFooterOps is { } headerFooterOps)
+            {
+                writer.WriteStartArray("headerFooterOps");
+                foreach (var hfOp in headerFooterOps)
+                    WriteHeaderFooterDiff(writer, hfOp);
+                writer.WriteEndArray();
+            }
             writer.WriteEndObject();
         }
 
@@ -116,6 +123,27 @@ internal static class IrEditScriptJson
         writer.WriteString("kind", diff.Kind.ToString());
         writer.WriteString("noteId", diff.NoteId);
         if (diff.LeftNoteId is { } leftId) writer.WriteString("leftNoteId", leftId);
+        writer.WriteStartArray("ops");
+        foreach (var op in diff.Ops)
+            WriteOp(writer, op);
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    // ------------------------------------------------------------------ header/footer diff
+
+    private static void WriteHeaderFooterDiff(Utf8JsonWriter writer, IrHeaderFooterDiff diff)
+    {
+        writer.WriteStartObject();
+        writer.WriteBoolean("isHeader", diff.IsHeader);
+        writer.WriteString("kind", diff.Kind.ToString());
+        writer.WriteNumber("sectionIndex", diff.SectionIndex);
+        writer.WriteString("scope", diff.ScopeName);
+        if (diff.LeftScopeName is { } leftScope) writer.WriteString("leftScope", leftScope);
+        // Part URIs serialize as strings (package-relative, e.g. "/word/header1.xml") so the diff-as-data
+        // consumer can identify the story's part and Read(Write(s)) stays exactly record-equal.
+        if (diff.LeftPartUri is { } leftUri) writer.WriteString("leftPartUri", leftUri.ToString());
+        if (diff.RightPartUri is { } rightUri) writer.WriteString("rightPartUri", rightUri.ToString());
         writer.WriteStartArray("ops");
         foreach (var op in diff.Ops)
             WriteOp(writer, op);
@@ -226,7 +254,34 @@ internal static class IrEditScriptJson
             noteOps = IrNodeList.From(list);
         }
 
-        return new IrEditScript(IrNodeList.From(ops), noteOps);
+        IrNodeList<IrHeaderFooterDiff>? headerFooterOps = null;
+        if (root.TryGetProperty("headerFooterOps", out var hfOpsElement))
+        {
+            var list = new List<IrHeaderFooterDiff>();
+            foreach (var hfElement in hfOpsElement.EnumerateArray())
+                list.Add(ReadHeaderFooterDiff(hfElement));
+            headerFooterOps = IrNodeList.From(list);
+        }
+
+        return new IrEditScript(IrNodeList.From(ops), noteOps, headerFooterOps);
+    }
+
+    private static IrHeaderFooterDiff ReadHeaderFooterDiff(JsonElement element)
+    {
+        bool isHeader = element.GetProperty("isHeader").GetBoolean();
+        var kind = Enum.Parse<Docxodus.Ir.IrHeaderFooterKind>(element.GetProperty("kind").GetString()!);
+        int sectionIndex = element.GetProperty("sectionIndex").GetInt32();
+        string scope = element.GetProperty("scope").GetString()!;
+        string? leftScope = element.TryGetProperty("leftScope", out var ls) ? ls.GetString() : null;
+        Uri? leftPartUri = element.TryGetProperty("leftPartUri", out var lu)
+            ? new Uri(lu.GetString()!, UriKind.RelativeOrAbsolute) : null;
+        Uri? rightPartUri = element.TryGetProperty("rightPartUri", out var ru)
+            ? new Uri(ru.GetString()!, UriKind.RelativeOrAbsolute) : null;
+        var ops = new List<IrEditOp>();
+        foreach (var opElement in element.GetProperty("ops").EnumerateArray())
+            ops.Add(ReadOp(opElement));
+        return new IrHeaderFooterDiff(isHeader, kind, sectionIndex, scope, leftScope,
+            leftPartUri, rightPartUri, IrNodeList.From(ops));
     }
 
     private static IrNoteDiff ReadNoteDiff(JsonElement element)

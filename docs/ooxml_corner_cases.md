@@ -543,6 +543,52 @@ authorship, every-scope round-trip, schema validity, multi-author redline-of-a-r
 
 ---
 
+## `*PrChange` inners are CT_*Base: rejecting a property change must NOT drop what lives outside it
+
+**Discovered:** 2026-07-03, block-format-change family.
+
+Word's block-level property-revision markers store the OLD properties in an inner element whose type is the `…Base` variant of the container — which **excludes** the sibling content that is not part of the tracked property change:
+
+- `w:pPrChange`'s inner `w:pPr` is `CT_PPrBase` — no paragraph-mark `w:rPr`, and **no inline `w:sectPr`**.
+- `w:sectPrChange`'s inner `w:sectPr` is `CT_SectPrBase` — **no `w:headerReference`/`w:footerReference`**.
+
+### The trap
+
+A naive reject implementation replaces the whole container with the inner:
+
+```
+// WRONG — drops the references / inline sectPr that were never part of the change
+if (element.Name == W.sectPr && element.Element(W.sectPrChange) != null)
+    return element.Element(W.sectPrChange).Element(W.sectPr);
+```
+
+Because the inner is reference-less, rejecting a `w:sectPrChange` deletes the section's headers and footers; rejecting a `w:pPrChange` on a section-final paragraph deletes the section break. This is a **silent** structural loss — the document still validates.
+
+### Word's behavior
+
+Word rejects the tracked *property* change (restores the old page setup / paragraph properties) while **keeping** the references and the inline `w:sectPr` intact — they were never revised.
+
+| Reject a `w:sectPrChange` (section had a `w:headerReference`) | Header reference after reject |
+|---|---|
+| Word | preserved |
+| Docxodus (before fix) | **dropped** |
+| Docxodus (after fix) | preserved |
+
+### The fix
+
+`RevisionProcessor.RejectRevisionsForPartTransform` rebuilds the container: keep the CURRENT out-of-scope children (references for sectPr; the mark `w:rPr` + inline `w:sectPr` for pPr), restore the inner's in-scope properties.
+
+### Relevant code
+
+- `Docxodus/RevisionProcessor.cs` — the `w:sectPr`/`w:sectPrChange` and `w:pPr`/`w:pPrChange` reject branches.
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `ApplySectPrChange`/`ApplyBlockFormatChanges` produce the markers with reference-less CT_*Base inners (so they round-trip only *with* the fix).
+
+### Tests
+
+`Docxodus.Tests/Ir/Diff/BlockFormatChangeTests.cs` — `RejectRevisions_preserves_inline_sectPr_when_rejecting_a_pPrChange` and `SectPrChange_reject_preserves_header_footer_references`.
+
+---
+
 ## Contributing
 
 When adding new corner cases to this document:

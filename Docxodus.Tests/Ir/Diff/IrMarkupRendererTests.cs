@@ -192,13 +192,31 @@ public class IrMarkupRendererTests
         {
             case IrParagraph p:
                 sink.Add("pf:" + IrModeledFormat.BlockSignature(p, settings));
+                // A3: an inline (in-pPr) sectPr's modeled page setup must round-trip too (accept≡right,
+                // reject≡left) — it is folded into the fingerprint but not the BlockSignature.
+                if (p.InlineSectionFormat is { } isf)
+                    sink.Add("psec:" + IrHasher.FingerprintSectionFormat(isf).ToHex());
                 break;
             case IrTable t:
-                sink.Add("tblf:" + t.ContentHash.ToHex());
+                // Include the SHELL digests (block-format-change family): tblPr/tblGrid are in the
+                // FormatFingerprint (not ContentHash), so without them the round-trip assertion would be
+                // blind to a w:tblPrChange / w:tblGridChange / w:trPrChange that failed to restore. (tcPr is
+                // already in ContentHash via ShellDigest, so it rides BodyContentHashes.)
+                sink.Add("tblf:" + t.ContentHash.ToHex()
+                    + "|tblPr:" + t.TblPrDigest.ToHex() + "|tblGrid:" + t.TblGridDigest.ToHex());
                 foreach (var row in t.Rows)
+                {
+                    // Two independent, tracked row-shell projections — each verifies its own round-trip
+                    // (accept≡right, reject≡left): `trf:` = the w:trPr children only (TrPrShellDigest, w:trPrChange),
+                    // `tprex:` = the w:tblPrEx children only (TrPrExDigest, w:tblPrExChange, follow-up A2). Both use
+                    // the trackable per-element subset, NOT the fingerprint's tblPrEx-inclusive TrPrDigest, so each
+                    // marker's reject is byte-verified against exactly what that marker restores.
+                    sink.Add("trf:" + row.TrPrShellDigest.ToHex());
+                    sink.Add("tprex:" + row.TrPrExDigest.ToHex());
                     foreach (var cell in row.Cells)
                         foreach (var b in cell.Blocks)
                             CollectFormatSignatures(b, settings, sink);
+                }
                 break;
             default:
                 sink.Add(block.GetType().Name + "f:" + block.ContentHash.ToHex());
@@ -245,7 +263,78 @@ public class IrMarkupRendererTests
             $"ACCEPT-NOTES≠RIGHT {label}\n  accept: [{string.Join(", ", acceptNotes)}]\n  right:  [{string.Join(", ", rightNotes)}]");
         Assert.True(rejectNotes.SequenceEqual(leftNotes),
             $"REJECT-NOTES≠LEFT {label}\n  reject: [{string.Join(", ", rejectNotes)}]\n  left:   [{string.Join(", ", leftNotes)}]");
+
+        // STRENGTHENED (2026-07-03): header/footer STORY content must round-trip too. Referenced stories
+        // only, empty ≡ absent (accepting a deleted story / rejecting an inserted one leaves an EMPTY
+        // story — Word's own behavior — which must compare equal to the other side's absent story).
+        var acceptStories = StoryContentHashes(accepted);
+        var rightStories = StoryContentHashes(right);
+        var rejectStories = StoryContentHashes(rejected);
+        var leftStories = StoryContentHashes(left);
+        Assert.True(acceptStories.SequenceEqual(rightStories),
+            $"ACCEPT-STORIES≠RIGHT {label}\n  accept: [{string.Join(", ", acceptStories)}]\n  right:  [{string.Join(", ", rightStories)}]");
+        Assert.True(rejectStories.SequenceEqual(leftStories),
+            $"REJECT-STORIES≠LEFT {label}\n  reject: [{string.Join(", ", rejectStories)}]\n  left:   [{string.Join(", ", leftStories)}]");
+
+        // STRENGTHENED (block-format-change family, Phase 3): the trailing section PROPERTIES must round-trip —
+        // accept ≡ right, reject ≡ left. Reference-normalized (header/footer references are owned by the
+        // header/footer machinery and compared by StoryContentHashes above), so this checks page setup only.
+        Assert.Equal(TrailingSectPrPropsDigest(right), TrailingSectPrPropsDigest(accepted));
+        Assert.Equal(TrailingSectPrPropsDigest(left), TrailingSectPrPropsDigest(rejected));
     }
+
+    /// <summary>Canonical hash of the trailing sectPr's PROPERTY children (ignoring header/footer references,
+    /// the sectPrChange marker, and rsids); "none" when the body has no trailing sectPr. The reference-normalized
+    /// section-property fingerprint the block-format-change round-trip compares.</summary>
+    private static string TrailingSectPrPropsDigest(WmlDocument doc)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root?.Element(W.body);
+        var sectPr = body?.Elements(W.sectPr).LastOrDefault();
+        if (sectPr == null)
+            return "none";
+        var c = new XElement("sect");
+        foreach (var e in sectPr.Elements().Where(e =>
+                     e.Name != W.headerReference && e.Name != W.footerReference && e.Name != W.sectPrChange))
+            c.Add(new XElement(e));
+        return Docxodus.Ir.IrHasher.CanonicalHash(c).ToHex();
+    }
+
+    /// <summary>
+    /// The referenced header/footer STORY content-hash projection (2026-07-03 campaign): for every
+    /// explicit body reference cell (section ordinal × kind, headers then footers, deterministic order),
+    /// the story's per-block ContentHashes — skipping stories with no visible text (an empty story ≡ an
+    /// absent story: the round-trip's reject-of-inserted / accept-of-deleted leaves an empty part).
+    /// </summary>
+    private static List<string> StoryContentHashes(WmlDocument doc)
+    {
+        var ir = IrReader.Read(doc, ReadOpts);
+        var result = new List<string>();
+        foreach (var (tag, stories) in new[] { ("hdr", ir.Headers), ("ftr", ir.Footers) })
+        {
+            var cells = new List<(int Section, IrHeaderFooterKind Kind, IrHeaderFooter Story)>();
+            foreach (var hf in stories)
+                foreach (var r in hf.References)
+                    cells.Add((r.SectionIndex, r.Kind, hf));
+            foreach (var (section, kind, story) in cells.OrderBy(c => c.Section).ThenBy(c => c.Kind))
+            {
+                if (!story.Scope.Blocks.Any(BlockHasVisibleText))
+                    continue;
+                result.Add($"{tag}@s{section}:{kind}");
+                foreach (var b in story.Scope.Blocks)
+                    CollectHashes(b, result);
+            }
+        }
+        return result;
+    }
+
+    private static bool BlockHasVisibleText(IrBlock block) => block switch
+    {
+        IrParagraph p => p.Inlines.OfType<IrTextRun>().Any(r => !string.IsNullOrWhiteSpace(r.Text)),
+        IrTable t => t.Rows.Any(row => row.Cells.Any(c => c.Blocks.Any(BlockHasVisibleText))),
+        _ => true, // opaque/image blocks count as content
+    };
 
     // ----------------------------------------------------------------- targeted unit shapes
 
@@ -1351,6 +1440,212 @@ public class IrMarkupRendererTests
         return validator.Validate(wd).Count(e =>
             e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema &&
             !OxPt.WcTests.ExpectedErrors.Contains(e.Description));
+    }
+
+    // ----------------------------------------------------------------- header/footer story markup (2026-07-03)
+
+    [Fact]
+    public void Render_matched_header_story_marks_up_and_round_trips()
+    {
+        var left = HeaderFooterFixtures.Simple(new[] { "Body" }, headerParas: new[] { "CONFIDENTIAL Draft 1" });
+        var right = HeaderFooterFixtures.Simple(new[] { "Body" }, headerParas: new[] { "CONFIDENTIAL Draft 2" });
+
+        var rendered = RenderMarkup(left, right);
+
+        var headerXml = Assert.Single(HeaderFooterFixtures.StoryPartsXml(rendered));
+        Assert.Contains("<w:ins", headerXml);
+        Assert.Contains("<w:del", headerXml);
+        Assert.Contains("Open-Xml-PowerTools", headerXml);
+
+        Assert.Equal("CONFIDENTIAL Draft 2",
+            Assert.Single(HeaderFooterFixtures.StoryTexts(RevisionProcessor.AcceptRevisions(rendered))));
+        Assert.Equal("CONFIDENTIAL Draft 1",
+            Assert.Single(HeaderFooterFixtures.StoryTexts(RevisionProcessor.RejectRevisions(rendered))));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+    }
+
+    [Fact]
+    public void Render_matched_footer_story_round_trips()
+    {
+        var left = HeaderFooterFixtures.Simple(
+            new[] { "Body" }, headerParas: new[] { "Same header" }, footerParas: new[] { "Acme Corp 2025" });
+        var right = HeaderFooterFixtures.Simple(
+            new[] { "Body" }, headerParas: new[] { "Same header" }, footerParas: new[] { "Acme Corp 2026" });
+
+        var rendered = RenderMarkup(left, right);
+
+        // The unchanged header part is carried verbatim (no markup); the footer carries the diff.
+        var parts = HeaderFooterFixtures.StoryPartsXml(rendered);
+        Assert.Equal(2, parts.Count);
+        Assert.DoesNotContain("<w:ins", parts[0]);
+        Assert.Contains("<w:ins", parts[1]);
+
+        Assert.Equal(new[] { "Same header", "Acme Corp 2026" },
+            HeaderFooterFixtures.StoryTexts(RevisionProcessor.AcceptRevisions(rendered)));
+        Assert.Equal(new[] { "Same header", "Acme Corp 2025" },
+            HeaderFooterFixtures.StoryTexts(RevisionProcessor.RejectRevisions(rendered)));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+    }
+
+    [Fact]
+    public void Render_header_revision_ids_unique_across_scopes()
+    {
+        var left = HeaderFooterFixtures.Simple(new[] { "Body one" }, headerParas: new[] { "Header v1" });
+        var right = HeaderFooterFixtures.Simple(new[] { "Body two" }, headerParas: new[] { "Header v2" });
+
+        var rendered = RenderMarkup(left, right);
+
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var main = wd.MainDocumentPart!;
+        var ids = new List<string>();
+        foreach (var part in new[] { (OpenXmlPart)main }.Concat(main.HeaderParts))
+        {
+            var root = XDocument.Load(part.GetStream(FileMode.Open, FileAccess.Read)).Root!;
+            ids.AddRange(root.Descendants()
+                .Where(e => e.Name == W.ins || e.Name == W.del)
+                .Select(e => (string?)e.Attribute(W.id))
+                .Where(v => v != null)!);
+        }
+        Assert.True(ids.Count >= 2, "expected revisions in both body and header");
+        Assert.Equal(ids.Count, ids.Distinct().Count());
+    }
+
+    [Fact]
+    public void Render_gate_off_keeps_left_header_verbatim()
+    {
+        var left = HeaderFooterFixtures.Simple(new[] { "Body" }, headerParas: new[] { "Header v1" });
+        var right = HeaderFooterFixtures.Simple(new[] { "Body" }, headerParas: new[] { "Header v2" });
+
+        var rendered = RenderMarkup(left, right, new IrDiffSettings { CompareHeadersFooters = false });
+
+        var headerXml = Assert.Single(HeaderFooterFixtures.StoryPartsXml(rendered));
+        Assert.DoesNotContain("<w:ins", headerXml);
+        Assert.Contains("Header v1", headerXml);
+        Assert.DoesNotContain("Header v2", headerXml);
+    }
+
+    [Fact]
+    public void Render_inserted_first_page_header_adds_part_reference_and_titlePg()
+    {
+        var left = HeaderFooterFixtures.Simple(new[] { "Body" }, headerParas: new[] { "Running" });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(
+                    new[] { "Body" },
+                    Headers: new[] { ("default", "rIdH1"), ("first", "rIdH2") }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdH1"] = new[] { "Running" },
+                ["rIdH2"] = new[] { "Cover page banner" },
+            },
+            titlePg: true);
+
+        var rendered = RenderMarkup(left, right);
+
+        // The output gains the first-page story: part + w:headerReference@first + w:titlePg on the sectPr.
+        Assert.Equal("Cover page banner",
+            HeaderFooterFixtures.ReferencedStoryText(rendered, isHeader: true, sectionIndex: 0, kind: "first"));
+        using (var ms = new MemoryStream(rendered.DocumentByteArray))
+        using (var wd = WordprocessingDocument.Open(ms, false))
+        {
+            var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+            var sectPr = body.Elements(W.sectPr).Last();
+            Assert.NotNull(sectPr.Element(W.titlePg));
+        }
+
+        // Accept keeps the inserted story; reject empties it (empty ≡ absent at the text level — Word's
+        // own behavior for rejecting an inserted header story).
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        Assert.Equal("Cover page banner",
+            HeaderFooterFixtures.ReferencedStoryText(accepted, isHeader: true, sectionIndex: 0, kind: "first"));
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        Assert.Equal("",
+            HeaderFooterFixtures.ReferencedStoryText(rejected, isHeader: true, sectionIndex: 0, kind: "first"));
+
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+    }
+
+    [Fact]
+    public void Render_deleted_footer_story_marks_content_deleted()
+    {
+        var left = HeaderFooterFixtures.Simple(
+            new[] { "Body" }, headerParas: new[] { "Running" }, footerParas: new[] { "Legacy footer line" });
+        var right = HeaderFooterFixtures.Simple(new[] { "Body" }, headerParas: new[] { "Running" });
+
+        var rendered = RenderMarkup(left, right);
+
+        // The part and its reference stay; the content is marked deleted.
+        var footerXml = HeaderFooterFixtures.StoryPartsXml(rendered)[1];
+        Assert.Contains("<w:del", footerXml);
+
+        // Accept empties the story (≡ right's absent story at the text level); reject restores it.
+        Assert.Equal("",
+            HeaderFooterFixtures.ReferencedStoryText(
+                RevisionProcessor.AcceptRevisions(rendered), isHeader: false, sectionIndex: 0, kind: "default"));
+        Assert.Equal("Legacy footer line",
+            HeaderFooterFixtures.ReferencedStoryText(
+                RevisionProcessor.RejectRevisions(rendered), isHeader: false, sectionIndex: 0, kind: "default"));
+
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(RevisionProcessor.AcceptRevisions(rendered)));
+    }
+
+    [Fact]
+    public void Render_inserted_even_footer_ensures_evenAndOddHeaders()
+    {
+        var left = HeaderFooterFixtures.Simple(new[] { "Body" }, footerParas: new[] { "Odd pages" });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(
+                    new[] { "Body" },
+                    Footers: new[] { ("default", "rIdF1"), ("even", "rIdF2") }),
+            },
+            footerParts: new Dictionary<string, string[]>
+            {
+                ["rIdF1"] = new[] { "Odd pages" },
+                ["rIdF2"] = new[] { "Even pages" },
+            },
+            evenAndOddHeaders: true);
+
+        var rendered = RenderMarkup(left, right);
+
+        Assert.Equal("Even pages",
+            HeaderFooterFixtures.ReferencedStoryText(rendered, isHeader: false, sectionIndex: 0, kind: "even"));
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var settingsRoot = wd.MainDocumentPart!.DocumentSettingsPart!.GetXDocument().Root!;
+        Assert.NotNull(settingsRoot.Element(W.evenAndOddHeaders));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+    }
+
+    [Fact]
+    public void Render_image_added_to_header_imports_media_into_header_part()
+    {
+        var left = HeaderFooterFixtures.Simple(new[] { "Body" }, headerParas: new[] { "Notice" });
+        var right = HeaderFooterFixtures.WithImageInFirstHeaderPart(
+            HeaderFooterFixtures.Simple(new[] { "Body" },
+                headerParas: new[] { "Notice", HeaderFooterFixtures.ImageParagraphXml("rIdImg1") }),
+            "rIdImg1");
+
+        var rendered = RenderMarkup(left, right);
+
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var headerPart = wd.MainDocumentPart!.HeaderParts.Single();
+        var headerRoot = XDocument.Load(headerPart.GetStream(FileMode.Open, FileAccess.Read)).Root!;
+        XNamespace a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        XNamespace r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        var embedId = (string?)headerRoot.Descendants(a + "blip").Single().Attribute(r + "embed");
+        Assert.NotNull(embedId);
+        // The embed id resolves against the HEADER part's own relationships (rels are part-scoped).
+        var imagePart = headerPart.GetPartById(embedId!);
+        Assert.StartsWith("image/", imagePart.ContentType);
     }
 
     // ----------------------------------------------------------------- author override (composite groundwork)

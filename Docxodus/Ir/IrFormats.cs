@@ -106,6 +106,12 @@ internal sealed record IrParaFormat
     public bool? KeepLines { get; init; }
     public bool? PageBreakBefore { get; init; }
 
+    /// <summary>Direct list membership (`w:numPr/w:numId/@w:val`) as written; null when absent.</summary>
+    public int? NumId { get; init; }
+
+    /// <summary>Direct list level (`w:numPr/w:ilvl/@w:val`) as written; null when absent.</summary>
+    public int? Ilvl { get; init; }
+
     /// <summary>
     /// Digest of unmodeled `w:pPr` children (§6.4) so a change in an unmodeled paragraph
     /// property still flips the format fingerprint instead of being silently treated as equal.

@@ -50,8 +50,140 @@ internal static class IrEditScriptBuilder
         var alignment = IrBlockAligner.Align(left, right, settings);
         var bodyOps = ProjectAlignment(left.Body.Blocks, alignment, settings);
         var noteOps = BuildNoteOps(left, right, settings);
+        var headerFooterOps = BuildHeaderFooterOps(left, right, settings);
         return new IrEditScript(IrNodeList.From(bodyOps),
-            noteOps.Count == 0 ? null : IrNodeList.From(noteOps));
+            noteOps.Count == 0 ? null : IrNodeList.From(noteOps),
+            headerFooterOps);
+    }
+
+    // ------------------------------------------------------------------ header/footer scopes (2026-07-03)
+
+    /// <summary>
+    /// Diff the header and footer STORIES of <paramref name="left"/> vs <paramref name="right"/> —
+    /// the capability the WmlComparer oracle lacks (it ignores header/footer differences), mirroring
+    /// Word Compare's default-on "Headers and footers" granularity. Gated by
+    /// <see cref="IrDiffSettings.CompareHeadersFooters"/>.
+    ///
+    /// <para><b>Pairing (the Word-faithfulness core).</b> Word binds a story to a (section, occurrence
+    /// kind) cell, inheriting the previous section's story when a section carries no reference of that
+    /// kind. Scope names (<c>hdr1</c>…) are per-document positional labels over part-enumeration order —
+    /// NOT stable across two documents — so pairing walks the effective story grid instead: for each
+    /// section ordinal and kind, resolve each side's effective story (explicit reference, else inherited
+    /// carry-forward), pair the two cells, then de-duplicate to distinct (left part, right part) pairs so
+    /// an inherited story referenced by several sections is diffed once, at its first cell. A left part
+    /// that would pair with two DIFFERENT right parts keeps its first pairing (a part can only be rebuilt
+    /// once); a right part reused across cells is fine — each left part rebuilds to that story and the
+    /// per-cell text equivalence holds.</para>
+    ///
+    /// <para><b>Ops.</b> A matched pair runs the block aligner over the two stories' block lists exactly
+    /// like a note or a cell (a header-text edit surfaces as a ModifyBlock token diff); an all-Equal pair
+    /// emits NOTHING (the unchanged story keeps today's verbatim part carry-over); a right-only story is
+    /// all InsertBlock; a left-only story all DeleteBlock. Deterministic order: headers (section
+    /// ascending, kind Default&lt;First&lt;Even), then footers.</para>
+    /// </summary>
+    private static IrNodeList<IrHeaderFooterDiff>? BuildHeaderFooterOps(
+        IrDocument left, IrDocument right, IrDiffSettings settings)
+    {
+        if (!settings.CompareHeadersFooters)
+            return null;
+
+        var diffs = new List<IrHeaderFooterDiff>();
+        BuildOneHeaderFooterScope(left.Headers, right.Headers, isHeader: true, settings, diffs);
+        BuildOneHeaderFooterScope(left.Footers, right.Footers, isHeader: false, settings, diffs);
+        return diffs.Count == 0 ? null : IrNodeList.From(diffs);
+    }
+
+    private static readonly IrHeaderFooterKind[] HeaderFooterKinds =
+        { IrHeaderFooterKind.Default, IrHeaderFooterKind.First, IrHeaderFooterKind.Even };
+
+    private static void BuildOneHeaderFooterScope(
+        IrNodeList<IrHeaderFooter> leftParts, IrNodeList<IrHeaderFooter> rightParts,
+        bool isHeader, IrDiffSettings settings, List<IrHeaderFooterDiff> diffs)
+    {
+        // The grid spans every section either side references; a tail section with no references of a
+        // kind inherits (carry-forward), so it needs no explicit cell of its own beyond the dedup below.
+        int sectionCount = 0;
+        foreach (var hf in leftParts.Concat(rightParts))
+            foreach (var r in hf.References)
+                sectionCount = Math.Max(sectionCount, r.SectionIndex + 1);
+
+        var leftGrid = EffectiveStoryGrid(leftParts, sectionCount);
+        var rightGrid = EffectiveStoryGrid(rightParts, sectionCount);
+
+        var seenPairs = new HashSet<(Uri?, Uri?)>();
+        var usedLeftParts = new HashSet<Uri>();
+        for (int s = 0; s < sectionCount; s++)
+        {
+            foreach (var kind in HeaderFooterKinds)
+            {
+                leftGrid.TryGetValue((s, kind), out var l);
+                rightGrid.TryGetValue((s, kind), out var r);
+                if (l is null && r is null)
+                    continue;
+                if (!seenPairs.Add((l?.Scope.PartUri, r?.Scope.PartUri)))
+                    continue; // this exact story pair already diffed at an earlier cell
+                if (l?.Scope.PartUri is { } leftUri && !usedLeftParts.Add(leftUri))
+                    continue; // left part already rebuilt against another right story — first pairing wins
+
+                List<IrEditOp> ops;
+                if (l is not null && r is not null)
+                {
+                    var alignment = IrBlockAligner.AlignBlocks(l.Scope.Blocks, r.Scope.Blocks, settings);
+                    ops = ProjectAlignment(l.Scope.Blocks, alignment, settings);
+                    if (!ops.Any(o => o.Kind is not IrEditOpKind.EqualBlock))
+                        continue; // unchanged story — keep the verbatim part carry-over
+                }
+                else if (r is not null)
+                {
+                    ops = r.Scope.Blocks
+                        .Select(b => new IrEditOp(IrEditOpKind.InsertBlock, null, b.Anchor.ToString(), null, null, null))
+                        .ToList();
+                }
+                else
+                {
+                    ops = l!.Scope.Blocks
+                        .Select(b => new IrEditOp(IrEditOpKind.DeleteBlock, b.Anchor.ToString(), null, null, null, null))
+                        .ToList();
+                }
+                if (ops.Count == 0)
+                    continue; // an empty story on one side only — nothing to render or report
+
+                diffs.Add(new IrHeaderFooterDiff(isHeader, kind, s,
+                    ScopeName: (r ?? l)!.ScopeName, LeftScopeName: l?.ScopeName,
+                    LeftPartUri: l?.Scope.PartUri, RightPartUri: r?.Scope.PartUri,
+                    IrNodeList.From(ops)));
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resolve one side's effective story per (section ordinal, kind) cell: an explicit body reference
+    /// wins (the FIRST reference when a section carries duplicates), else the previous section's
+    /// effective story carries forward (Word's inheritance rule); the first section with no reference
+    /// has no story. Deterministic — built from the reader's document-ordered reference lists.
+    /// </summary>
+    private static Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> EffectiveStoryGrid(
+        IrNodeList<IrHeaderFooter> parts, int sectionCount)
+    {
+        var explicitCells = new Dictionary<(int, IrHeaderFooterKind), IrHeaderFooter>();
+        foreach (var hf in parts)
+            foreach (var r in hf.References)
+                if (!explicitCells.ContainsKey((r.SectionIndex, r.Kind)))
+                    explicitCells[(r.SectionIndex, r.Kind)] = hf;
+
+        var grid = new Dictionary<(int, IrHeaderFooterKind), IrHeaderFooter>();
+        foreach (var kind in HeaderFooterKinds)
+        {
+            IrHeaderFooter? current = null;
+            for (int s = 0; s < sectionCount; s++)
+            {
+                if (explicitCells.TryGetValue((s, kind), out var hf))
+                    current = hf;
+                if (current is not null)
+                    grid[(s, kind)] = current;
+            }
+        }
+        return grid;
     }
 
     // ------------------------------------------------------------------ note scopes (M2.4 Task 1)

@@ -132,6 +132,18 @@ public static class DocxDiffCompatibility
                 "Comment fidelity campaign: fine per-word markup on edited commented paragraphs + "
                 + "id/range/reference/definition + threaded reply integrity.", "#243"),
             roots => Count(roots, W + "commentReference")),
+        new(new("headersFooters", "Headers & footers", DocxDiffCoverage.Covered,
+                "Header/footer story comparison (2026-07-03 campaign): stories pair per section ordinal x "
+                + "occurrence kind with Word's inheritance rule (Word Compare's default-on 'Headers and "
+                + "footers' granularity, gated by DocxDiffSettings.CompareHeadersFooters, default true); "
+                + "changed stories rebuild with native w:ins/w:del inside their parts, inserted/deleted "
+                + "stories add/mark the part with reference + titlePg/evenAndOddHeaders ensured — so "
+                + "accept ≡ right / reject ≡ left extends to header/footer scopes. Fine-mode revisions "
+                + "carry hdr/ftr anchors; the edit-script JSON carries headerFooterOps. v1 ceilings: "
+                + "sections pair by ordinal; sectPr/settings flags are ensured, not revision-tracked "
+                + "(no w:sectPrChange); Consolidate does not merge header/footer scopes.",
+                "CompareHeadersFooters"),
+            roots => Count(roots, W + "headerReference", W + "footerReference")),
         new(new("complexFields", "Complex fields (TOC/SEQ/INDEX/...)", DocxDiffCoverage.Partial,
                 "REF/PAGEREF are solid; other field types are uncampaigned."),
             roots => CountInstr(roots, @"\b(TOC|INDEX|SEQ|HYPERLINK|STYLEREF|MERGEFIELD|DOCPROPERTY|INCLUDETEXT)\b")),
@@ -156,7 +168,7 @@ public static class DocxDiffCompatibility
         new(new("revisionsInInput", "Pre-existing tracked changes in input", DocxDiffCoverage.Covered,
                 "Characterized + pinned: the engine diffs the ACCEPTED VIEW of each input (rule N13), so the "
                 + "produced body carries only THIS diff's revisions. Pre-existing markup in carried-over parts "
-                + "(headers/footers, unchanged footnotes/endnotes, styles, comments) is passed through verbatim "
+                + "(UNCHANGED header/footer stories, unchanged footnotes/endnotes, styles, comments) is passed through verbatim "
                 + "unless DocxDiffSettings.PreAcceptInputRevisions is set, which accepts BOTH inputs first so the "
                 + "result is revision-free except for this diff and round-trips against the accepted view in body/"
                 + "header/footer/note/style scopes. The flag cleans exactly the parts RevisionProcessor."

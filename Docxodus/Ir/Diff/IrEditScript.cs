@@ -1,5 +1,6 @@
 #nullable enable
 
+using System;
 using Docxodus.Ir;
 
 namespace Docxodus.Ir.Diff;
@@ -179,6 +180,39 @@ internal sealed record IrTextboxDiff(IrNodeList<IrEditOp> Ops);
 internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrEditOp> Ops, string? LeftNoteId = null);
 
 /// <summary>
+/// The block-level diff of ONE header/footer story (the header/footer scope-diff campaign, 2026-07-03).
+/// A story is the effective header (or footer) of one occurrence kind for one body section; stories pair
+/// across documents by (section ordinal, kind) with Word's previous-section inheritance rule, then
+/// de-duplicate to distinct (left part, right part) pairs — an inherited story referenced by several
+/// sections is diffed once, at its first cell.
+/// </summary>
+/// <remarks>
+/// <para><b>Naming convention (the <see cref="IrNoteDiff"/> convention).</b> <see cref="ScopeName"/> is
+/// the RIGHT document's scope name (<c>hdr1</c>/<c>ftr2</c>…) for a matched or inserted story — the
+/// produced content is right-shaped — and the LEFT scope name for a deleted-only story.
+/// <see cref="LeftScopeName"/> is the left scope name when a left story exists, null for a right-only
+/// (inserted) story. Scope names are per-document positional labels; the STABLE pairing axis is the
+/// (section, kind) cell, which is why both part URIs are carried for the markup renderer.</para>
+/// <para><b>Whole-story insert/delete.</b> A story present on only one side has no counterpart to align:
+/// a right-only story's <see cref="Ops"/> are all <see cref="IrEditOpKind.InsertBlock"/>; a left-only
+/// story's are all <see cref="IrEditOpKind.DeleteBlock"/>. A matched story runs the full block aligner
+/// over its two block lists, exactly like a note or a cell.</para>
+/// <para><b>Part URIs.</b> <see cref="LeftPartUri"/>/<see cref="RightPartUri"/> are the source part URIs
+/// (<see cref="Docxodus.Ir.IrScope.PartUri"/>) — the markup renderer locates the output part (a clone of
+/// the left package) by <see cref="LeftPartUri"/> and clones an inserted story's shell/relationships from
+/// <see cref="RightPartUri"/>.</para>
+/// </remarks>
+internal sealed record IrHeaderFooterDiff(
+    bool IsHeader,
+    IrHeaderFooterKind Kind,
+    int SectionIndex,
+    string ScopeName,
+    string? LeftScopeName,
+    Uri? LeftPartUri,
+    Uri? RightPartUri,
+    IrNodeList<IrEditOp> Ops);
+
+/// <summary>
 /// The kind of a row-level operation in an <see cref="IrTableDiff"/> (M2.2 Task 4). Rows carry a
 /// <c>ContentHash</c> but no <c>FormatFingerprint</c>, so there is no row-level FormatOnly — the kinds
 /// reduce to content classifications.
@@ -254,11 +288,18 @@ internal sealed record IrTableDiff(IrNodeList<IrRowOp> RowOps);
 /// <para><b>Note scopes (M2.4 Task 1).</b> <see cref="NoteOps"/> carries the per-note block diffs for the
 /// footnote and endnote scopes, in a DETERMINISTIC document order appended AFTER the body
 /// <see cref="Operations"/>: footnotes first (by note id, numeric ascending), then endnotes (by note id,
-/// numeric ascending). This mirrors <see cref="WmlComparer.GetRevisions"/>'s coverage exactly — body, then
-/// footnotes, then endnotes (it does NOT diff header/footer scopes, so neither do we). Each
-/// <see cref="IrNoteDiff"/>'s anchors live in the note's own <c>fn</c>/<c>en</c> scope, so they never
-/// collide with body anchors.</para>
+/// numeric ascending). This mirrors <see cref="WmlComparer.GetRevisions"/>'s coverage — body, then
+/// footnotes, then endnotes. Each <see cref="IrNoteDiff"/>'s anchors live in the note's own
+/// <c>fn</c>/<c>en</c> scope, so they never collide with body anchors.</para>
+/// <para><b>Header/footer scopes (2026-07-03 campaign).</b> <see cref="HeaderFooterOps"/> carries the
+/// per-story block diffs for the header and footer scopes — a capability the WmlComparer oracle LACKS
+/// (it ignores header/footer differences entirely); DocxDiff is strictly ahead here, mirroring Word
+/// Compare's own default-on "Headers and footers" granularity. Deterministic order: headers first
+/// (section ordinal ascending, then kind Default&lt;First&lt;Even), then footers likewise. Null when no
+/// story changed or <see cref="IrDiffSettings.CompareHeadersFooters"/> is false, so pre-campaign scripts
+/// serialize byte-identically. Anchors live in the per-part <c>hdrN</c>/<c>ftrN</c> scopes.</para>
 /// </remarks>
 internal sealed record IrEditScript(
     IrNodeList<IrEditOp> Operations,
-    IrNodeList<IrNoteDiff>? NoteOps = null);
+    IrNodeList<IrNoteDiff>? NoteOps = null,
+    IrNodeList<IrHeaderFooterDiff>? HeaderFooterOps = null);

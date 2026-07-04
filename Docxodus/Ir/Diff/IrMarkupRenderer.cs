@@ -145,6 +145,19 @@ internal static class IrMarkupRenderer
                 // Preserve the trailing top-level sectPr (a direct child of w:body that is NOT inside a pPr).
                 var trailingSectPr = bodyEl.Elements(W.sectPr).LastOrDefault();
 
+                // Trailing-section property tracking (block-format-change family, Phase 3): when the left/right
+                // trailing sectPr differ in their PROPERTIES (page size/margins/columns/…, ignoring header/footer
+                // references + rsids), stamp native w:sectPrChange — the right properties are applied and the left
+                // properties preserved in the marker. References (owned by the header/footer machinery, which runs
+                // later and mutates them) and any mid-document sectPr inside a pPr are untouched (v1 ceilings).
+                if (settings.TrackBlockFormatChanges && trailingSectPr != null)
+                {
+                    var rightTrailingSectPr = wDocRight.MainDocumentPart?.GetXDocument().Root?
+                        .Element(W.body)?.Elements(W.sectPr).LastOrDefault();
+                    if (rightTrailingSectPr != null && SectPrPropsDiffer(trailingSectPr, rightTrailingSectPr))
+                        ApplySectPrChange(trailingSectPr, trailingSectPr, rightTrailingSectPr, state);
+                }
+
                 bodyEl.Elements().Where(e => e.Name != W.sectPr).Remove();
                 // Re-add the rendered blocks BEFORE the trailing sectPr (schema: sectPr is last in body).
                 if (trailingSectPr != null)
@@ -179,6 +192,14 @@ internal static class IrMarkupRenderer
                 // round-trips note content too. Done BEFORE PutXDocument of the note parts.
                 if (script.NoteOps is { Count: > 0 })
                     RenderNoteScopes(script.NoteOps, state, wDoc, main, wDocRight, settings);
+
+                // Header/footer story markup (2026-07-03 campaign): apply each changed story's edit ops
+                // INSIDE its header/footer part (the output package carries the LEFT parts; a changed
+                // story is rebuilt from its ops with native w:ins/w:del markup, so accept/reject
+                // round-trips header/footer content too). Unchanged stories keep the verbatim carry-over.
+                if (script.HeaderFooterOps is { Count: > 0 })
+                    RenderHeaderFooterScopes(script.HeaderFooterOps, state, main,
+                        wDocRight.MainDocumentPart, settings, streamDoc, rightStream);
 
                 // Note-id renumber pass (M2.6 Task 1): mirror the oracle's ChangeFootnoteEndnoteReferencesToUniqueRange.
                 // Walk the produced body in document order; every footnote/endnote reference gets a sequential id
@@ -284,10 +305,13 @@ internal static class IrMarkupRenderer
                 break;
 
             case IrEditOpKind.FormatOnlyBlock:
-                // Text-equal, block-format-differing. Emit the right paragraph but stamp each run with a
-                // w:rPrChange carrying the LEFT run's old rPr (so reject restores the left formatting). A
-                // non-paragraph FormatOnly pair (no run model) falls through to a verbatim right emit.
-                EmitFormatOnlyParagraph(op, state, sink);
+                // Text-equal, block-format-differing. A paragraph stamps per-run w:rPrChange + w:pPrChange;
+                // a TABLE stamps the native table-shell property markers (block-format-change family); any
+                // other non-paragraph pair falls through to a verbatim right emit.
+                if (ResolveBlock(op.RightAnchor, state.RightSource) is IrTable)
+                    EmitFormatOnlyTable(op, state, sink);
+                else
+                    EmitFormatOnlyParagraph(op, state, sink);
                 break;
 
             case IrEditOpKind.InsertBlock:
@@ -538,6 +562,8 @@ internal static class IrMarkupRenderer
         // Carry the table's non-row prelude (tblPr, tblGrid, …) from the right shell.
         foreach (var pre in rightTbl.Elements().Where(e => e.Name != W.tr))
             newTbl.Add(StripUnids(new XElement(pre)));
+        // Table-level shell changes (block-format-change family): tblPr / tblGrid.
+        ApplyTableLevelShellChanges(newTbl, leftTbl, state);
 
         foreach (var rowOp in tableDiff.RowOps)
         {
@@ -548,6 +574,9 @@ internal static class IrMarkupRenderer
                     if (!rightRowsByAnchor.TryGetValue(rowOp.RightRowAnchor ?? "", out var src)) return false;
                     var row = StripUnids(new XElement(src));
                     state.RegisterMediaReferences(row);
+                    // An EqualRow (content-equal) may still carry a trPr/tcPr shell change — track it.
+                    if (rowOp.LeftRowAnchor is { } ela && leftRowsByAnchor.TryGetValue(ela, out var eleft))
+                        ApplyRowAndCellShellChanges(row, eleft, state);
                     newTbl.Add(row);
                     break;
                 }
@@ -571,7 +600,8 @@ internal static class IrMarkupRenderer
                 case IrRowOpKind.ModifyRow:
                 {
                     if (!rightRowsByAnchor.TryGetValue(rowOp.RightRowAnchor ?? "", out var rightSrc)) return false;
-                    if (!RenderModifyRow(rowOp, rightSrc, state, newTbl))
+                    XElement? leftRowSrc = rowOp.LeftRowAnchor is { } mla && leftRowsByAnchor.TryGetValue(mla, out var ml) ? ml : null;
+                    if (!RenderModifyRow(rowOp, rightSrc, leftRowSrc, state, newTbl))
                         return false;
                     break;
                 }
@@ -602,9 +632,11 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>Render a ModifyRow: build the new row from the RIGHT row shell, replacing each paired cell's
-    /// content per its block ops, and whole-marking an unpaired (column-surplus) cell. Returns false to bail to
-    /// the caller's fallback if the structure can't be resolved.</summary>
-    private static bool RenderModifyRow(IrRowOp rowOp, XElement rightRowSrc, RenderState state, XElement newTbl)
+    /// content per its block ops, and whole-marking an unpaired (column-surplus) cell. When
+    /// <paramref name="leftRowSrc"/> is supplied, the row's <c>w:trPr</c> and each paired cell's <c>w:tcPr</c>
+    /// shell change is tracked (block-format-change family). Returns false to bail to the caller's fallback if
+    /// the structure can't be resolved.</summary>
+    private static bool RenderModifyRow(IrRowOp rowOp, XElement rightRowSrc, XElement? leftRowSrc, RenderState state, XElement newTbl)
     {
         // Without a per-cell op list, emit the right row as-is (content-equal row that fell into a ModifyRow by
         // row-property change only) — still round-trips.
@@ -612,6 +644,8 @@ internal static class IrMarkupRenderer
         {
             var row0 = StripUnids(new XElement(rightRowSrc));
             state.RegisterMediaReferences(row0);
+            if (leftRowSrc != null)
+                ApplyRowAndCellShellChanges(row0, leftRowSrc, state);
             newTbl.Add(row0);
             return true;
         }
@@ -666,6 +700,9 @@ internal static class IrMarkupRenderer
             newRow.Add(StripUnids(new XElement(rightCells[ci])));
 
         state.RegisterMediaReferences(newRow);
+        // Track this row's trPr + each cell's tcPr shell change against the accepted-state left row.
+        if (leftRowSrc != null)
+            ApplyRowAndCellShellChanges(newRow, leftRowSrc, state);
         newTbl.Add(newRow);
         return true;
     }
@@ -1194,6 +1231,232 @@ internal static class IrMarkupRenderer
                 attr.Remove();
             part.PutXDocument();
         }
+    }
+
+    // ----------------------------------------------------------------- header/footer story markup (2026-07-03)
+
+    /// <summary>
+    /// Apply header/footer story edit ops inside the output package's header/footer parts. A MATCHED
+    /// story (both part URIs set) locates the LEFT part by URI — the output is a left-package clone, so
+    /// left URIs resolve directly — renders its ops through the shared <see cref="RenderBlockOp"/>
+    /// dispatch (story anchors resolve in the shared AnchorIndex; revision ids draw from the same
+    /// <see cref="RenderState"/> counter as the body, staying document-unique), and replaces the part
+    /// root's block-level children. Right-sourced clones inside a story import their media/hyperlink
+    /// relationships into THAT part (header/footer parts own their relationships — the main-part import
+    /// cannot resolve them).
+    /// </summary>
+    private static void RenderHeaderFooterScopes(
+        IReadOnlyList<IrHeaderFooterDiff> hfOps, RenderState state, MainDocumentPart main,
+        MainDocumentPart? rightMain, IrDiffSettings settings,
+        OpenXmlMemoryStreamDocument leftStreamDoc, OpenXmlMemoryStreamDocument rightStreamDoc)
+    {
+        foreach (var diff in hfOps)
+        {
+            if (diff.LeftPartUri is { } leftUri)
+            {
+                // Matched (rebuild with token-level markup) or deleted-only (all content marked w:del —
+                // the part and its reference stay; accept leaves an empty story, Word's own behavior).
+                var part = FindHeaderFooterPart(main, diff.IsHeader, leftUri);
+                if (part is null)
+                    continue; // left part vanished (malformed input) — keep the carry-over
+                ApplyHeaderFooterDiffToPart(diff, part, state, settings, rightMain, leftStreamDoc, rightStreamDoc);
+            }
+            else
+            {
+                InsertHeaderFooterStory(diff, state, main, rightMain, settings, leftStreamDoc, rightStreamDoc);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Render a RIGHT-only (inserted) story: create a fresh header/footer part seeded from the right
+    /// part's root shell, render the all-insert ops into it, attach a <c>w:headerReference</c>/
+    /// <c>w:footerReference</c> (typed by the story's kind) to the output body's sectPr at the story's
+    /// section ordinal, and ensure the visibility flag the story needs — <c>w:titlePg</c> on that sectPr
+    /// for a First story, <c>w:evenAndOddHeaders</c> in the settings part for an Even story (ensured,
+    /// not revision-tracked — sectPr/settings changes are outside w:sectPrChange scope in v1). Accept
+    /// keeps the inserted content; reject strips it, leaving an EMPTY story — text-level ≡ the left's
+    /// absent story, matching Word's own reject behavior for an inserted header.
+    /// </summary>
+    private static void InsertHeaderFooterStory(
+        IrHeaderFooterDiff diff, RenderState state, MainDocumentPart main, MainDocumentPart? rightMain,
+        IrDiffSettings settings, OpenXmlMemoryStreamDocument leftStreamDoc,
+        OpenXmlMemoryStreamDocument rightStreamDoc)
+    {
+        if (rightMain is null || diff.RightPartUri is null)
+            return;
+        var rightPart = FindHeaderFooterPart(rightMain, diff.IsHeader, diff.RightPartUri);
+        var rightRoot = rightPart?.GetXDocument().Root;
+        if (rightRoot is null)
+            return;
+
+        // Locate the target sectPr FIRST — a story that cannot attach must not create an orphan part.
+        // Document-order sectPr enumeration matches the reader's section ordinals. A section ordinal the
+        // output body cannot represent (the section structure itself changed) is skipped: the revisions
+        // surface still reports the story, the markup omission is a documented v1 ceiling.
+        var mainXDoc = main.GetXDocument();
+        var body = mainXDoc.Root?.Element(W.body);
+        if (body is null)
+            return;
+        var sectPrs = body.Descendants(W.sectPr).ToList();
+        if (diff.SectionIndex >= sectPrs.Count)
+            return;
+        var sectPr = sectPrs[diff.SectionIndex];
+
+        OpenXmlPart newPart = diff.IsHeader
+            ? main.AddNewPart<HeaderPart>()
+            : main.AddNewPart<FooterPart>();
+        var newRoot = new XElement(rightRoot.Name, rightRoot.Attributes());
+        var xDoc = newPart.GetXDocument();
+        if (xDoc.Root == null)
+            xDoc.Add(newRoot);
+        else
+            xDoc.Root.ReplaceWith(newRoot);
+
+        int clonesBefore = state.RightSourcedClones.Count;
+        var blocks = new List<XElement>();
+        foreach (var op in diff.Ops)
+            RenderBlockOp(op, state, blocks);
+        if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
+            foreach (var b in blocks)
+                SimplifyMoveMarkup(b);
+        newRoot.Add(blocks);
+
+        ImportStorySourcedRelationships(diff, state, clonesBefore, newPart, rightMain,
+            leftStreamDoc, rightStreamDoc);
+
+        foreach (var attr in newRoot.DescendantsAndSelf().Attributes()
+                     .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
+            attr.Remove();
+        newPart.PutXDocument();
+
+        // Attach the reference (header/footer references lead the CT_SectPr sequence, so AddFirst is
+        // always schema-ordered — the DocumentBuilder convention) and ensure the visibility flag.
+        var refName = diff.IsHeader ? W.headerReference : W.footerReference;
+        string typeValue = diff.Kind switch
+        {
+            IrHeaderFooterKind.First => "first",
+            IrHeaderFooterKind.Even => "even",
+            _ => "default",
+        };
+        sectPr.AddFirst(new XElement(refName,
+            new XAttribute(W.type, typeValue),
+            new XAttribute(R.id, main.GetIdOfPart(newPart))));
+        if (diff.Kind == IrHeaderFooterKind.First && sectPr.Element(W.titlePg) is null)
+            InsertIntoSectPr(sectPr, new XElement(W.titlePg));
+        if (diff.Kind == IrHeaderFooterKind.Even)
+            EnsureEvenAndOddHeaders(main);
+        main.PutXDocument();
+    }
+
+    /// <summary>Elements that FOLLOW <c>w:titlePg</c> in the CT_SectPr sequence — an insertion lands
+    /// before the first of these (or at the end), keeping the sectPr schema-ordered.</summary>
+    private static readonly XName[] SectPrAfterTitlePg =
+        { W.textDirection, W.bidi, W.rtlGutter, W.docGrid, W.printerSettings, W.sectPrChange };
+
+    private static void InsertIntoSectPr(XElement sectPr, XElement element)
+    {
+        var firstTail = sectPr.Elements().FirstOrDefault(e => SectPrAfterTitlePg.Contains(e.Name));
+        if (firstTail is null)
+            sectPr.Add(element);
+        else
+            firstTail.AddBeforeSelf(element);
+    }
+
+    /// <summary>Ensure the settings part carries <c>w:evenAndOddHeaders</c> (required for an Even story
+    /// to be effective), reordering the settings children per the standard afterwards.</summary>
+    private static void EnsureEvenAndOddHeaders(MainDocumentPart main)
+    {
+        var settingsPart = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
+        var xDoc = settingsPart.GetXDocument();
+        var root = xDoc.Root;
+        if (root is null)
+        {
+            root = new XElement(W.settings, new XAttribute(XNamespace.Xmlns + "w", W.w));
+            xDoc.Add(root);
+        }
+        if (root.Element(W.evenAndOddHeaders) is null)
+        {
+            root.Add(new XElement(W.evenAndOddHeaders));
+            var ordered = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(root);
+            root.ReplaceWith(ordered);
+        }
+        settingsPart.PutXDocument();
+    }
+
+    /// <summary>The output package's header (or footer) part with the given URI, or null.</summary>
+    private static OpenXmlPart? FindHeaderFooterPart(MainDocumentPart main, bool isHeader, Uri partUri)
+    {
+        var parts = isHeader ? main.HeaderParts.Cast<OpenXmlPart>() : main.FooterParts.Cast<OpenXmlPart>();
+        return parts.FirstOrDefault(p => p.Uri == partUri);
+    }
+
+    /// <summary>
+    /// Render one story diff's ops into <paramref name="part"/>: same recipe as a note scope — render,
+    /// simplify moves, strip pt bookkeeping, replace the root's block-level children (keeping any
+    /// non-block prelude) — plus the PER-PART media import: clones registered while rendering THIS
+    /// story's ops are right-HEADER-part-sourced, so their relationships import from the right story
+    /// part into this output part (not the main part).
+    /// </summary>
+    private static void ApplyHeaderFooterDiffToPart(
+        IrHeaderFooterDiff diff, OpenXmlPart part, RenderState state, IrDiffSettings settings,
+        MainDocumentPart? rightMain, OpenXmlMemoryStreamDocument leftStreamDoc,
+        OpenXmlMemoryStreamDocument rightStreamDoc)
+    {
+        var xDoc = part.GetXDocument();
+        var root = xDoc.Root;
+        if (root is null)
+            return;
+
+        // Slice the clone registry around this story's render so ONLY its clones import into this part.
+        int clonesBefore = state.RightSourcedClones.Count;
+        var blocks = new List<XElement>();
+        foreach (var op in diff.Ops)
+            RenderBlockOp(op, state, blocks);
+        if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
+            foreach (var b in blocks)
+                SimplifyMoveMarkup(b);
+
+        root.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).Remove();
+        root.Add(blocks);
+
+        ImportStorySourcedRelationships(diff, state, clonesBefore, part, rightMain,
+            leftStreamDoc, rightStreamDoc);
+
+        foreach (var attr in root.DescendantsAndSelf().Attributes()
+                     .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
+            attr.Remove();
+        part.PutXDocument();
+    }
+
+    /// <summary>
+    /// Import media parts + hyperlink/external relationships referenced by the clones registered during
+    /// one story's render (<paramref name="clonesBefore"/> marks the registry watermark) from the RIGHT
+    /// story part into the output story part. Relationship ids are part-scoped in OOXML, which is why the
+    /// body's main-part import cannot serve header/footer content.
+    /// </summary>
+    private static void ImportStorySourcedRelationships(
+        IrHeaderFooterDiff diff, RenderState state, int clonesBefore, OpenXmlPart outputPart,
+        MainDocumentPart? rightMain, OpenXmlMemoryStreamDocument leftStreamDoc,
+        OpenXmlMemoryStreamDocument rightStreamDoc)
+    {
+        if (rightMain is null || diff.RightPartUri is null)
+            return;
+        var storyClones = state.RightSourcedClones.Skip(clonesBefore).ToList();
+        if (storyClones.Count == 0)
+            return;
+        var rightPart = FindHeaderFooterPart(rightMain, diff.IsHeader, diff.RightPartUri);
+        if (rightPart is null)
+            return;
+
+        ImportHyperlinkAndExternalRelationships(storyClones, outputPart, rightPart);
+
+        var outPkgPart = leftStreamDoc.GetPackage().GetPart(outputPart.Uri);
+        var rightPkgPart = rightStreamDoc.GetPackage().GetPart(rightPart.Uri);
+        foreach (var clone in storyClones)
+            WmlComparer.MoveRelatedPartsToDestination(
+                rightPkgPart, outPkgPart, clone, skipDanglingRelationships: true,
+                skipHeaderFooterReferences: true);
     }
 
     // ----------------------------------------------------------------- note-id renumber (M2.6 Task 1)
@@ -2188,6 +2451,10 @@ internal static class IrMarkupRenderer
 
         var dest = StripUnids(new XElement(src));
         state.RegisterMediaReferences(dest);
+        // A moved paragraph whose pPr also changed tracks the property change at the DESTINATION
+        // (Word's own shape: moveTo content + pPrChange). Source/reject keeps the left paragraph verbatim.
+        if (SourceElement(op.LeftAnchor, state.Left) is { } leftMovedPara && leftMovedPara.Name == W.p)
+            ApplyBlockFormatChanges(dest, leftMovedPara, src, state);
         MarkWholeParagraphAs(dest, RevKind.MoveTo, state);
         BracketParagraphWithMoveRange(dest, isFrom: false, moveName, state);
         sink.Add(dest);
@@ -2213,6 +2480,7 @@ internal static class IrMarkupRenderer
         var rightPPr = rightPara.Element(W.pPr);
         if (rightPPr != null)
             newPara.Add(StripUnids(new XElement(rightPPr)));
+        ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
 
         var content = new List<XElement>();
         foreach (var tokenOp in tokenDiff.Ops)
@@ -2512,6 +2780,7 @@ internal static class IrMarkupRenderer
         var rightPPr = rightPara.Element(W.pPr);
         if (rightPPr != null)
             newPara.Add(StripUnids(new XElement(rightPPr)));
+        ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
 
         int cursor = 0;
         foreach (var child in rightPara.Elements().Where(e => e.Name != W.pPr))
@@ -2527,6 +2796,36 @@ internal static class IrMarkupRenderer
             newPara.Add(clone);
         }
         sink.Add(newPara);
+    }
+
+    /// <summary>
+    /// Render a text-equal, format-differing TABLE pair (block-format-change family): emit the RIGHT table
+    /// verbatim (its content equals the left's — this is a FormatOnly pair) and stamp the native table-shell
+    /// property-revision markers (<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/<c>w:trPrChange</c>/<c>w:tcPrChange</c>)
+    /// wherever a shell differs. Rows and cells pair positionally — safe because ContentHash-equality guarantees
+    /// an identical row/cell structure. Accept ≡ right shells; reject ≡ left shells.
+    /// </summary>
+    private static void EmitFormatOnlyTable(IrEditOp op, RenderState state, List<XElement> sink)
+    {
+        var rightTbl = SourceElement(op.RightAnchor, state.RightSource);
+        var leftTbl = SourceElement(op.LeftAnchor, state.Left);
+        if (rightTbl == null || leftTbl == null || rightTbl.Name != W.tbl || leftTbl.Name != W.tbl)
+        {
+            EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true);
+            return;
+        }
+
+        var newTbl = StripUnids(new XElement(rightTbl));
+        state.RegisterMediaReferences(newTbl);
+        ApplyTableLevelShellChanges(newTbl, leftTbl, state);
+
+        // FormatOnly ⇒ ContentHash-equal ⇒ identical row/cell structure, so rows pair positionally.
+        var leftRows = leftTbl.Elements(W.tr).ToList();
+        var newRows = newTbl.Elements(W.tr).ToList();
+        for (int i = 0; i < newRows.Count && i < leftRows.Count; i++)
+            ApplyRowAndCellShellChanges(newRows[i], leftRows[i], state);
+
+        sink.Add(newTbl);
     }
 
     // ------------------------------------------------------- composite (multi-author) modify path
@@ -2688,6 +2987,7 @@ internal static class IrMarkupRenderer
         var rightPPr = rightPara.Element(W.pPr);
         if (rightPPr != null)
             newPara.Add(StripUnids(new XElement(rightPPr)));
+        ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
 
         newPara.Add(BuildTokenOpContent(tokenDiff, leftTokens, rightTokens, leftRuns, rightRuns, state));
         sink.Add(newPara);
@@ -3055,6 +3355,275 @@ internal static class IrMarkupRenderer
         rPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), inner));
     }
 
+    /// <summary>
+    /// Stamp native PARAGRAPH-property revision markup (block-format-change family, 2026-07-03) on an
+    /// emitted right-sourced paragraph: a <c>w:pPrChange</c> as the LAST child of the paragraph's pPr when
+    /// the pPr differs under the format-comparison policy (inner = the LEFT pPr minus <c>w:rPr</c>/
+    /// <c>w:sectPr</c>/<c>w:pPrChange</c> — the CT_PPrBase constraint: the mark rPr and section props are
+    /// outside pPrChange scope by schema), and a <c>w:pPr/w:rPr/w:rPrChange</c> when the paragraph-MARK
+    /// rPr differs canonically (inner = the LEFT mark rPr). Accept keeps the right properties (markers
+    /// drop); reject restores the left (RevisionProcessor swaps the inner back, carrying the current mark
+    /// rPr and inline sectPr). No-op when <see cref="IrDiffSettings.TrackBlockFormatChanges"/> is off —
+    /// the Consolidate-pipeline pin.
+    /// </summary>
+    private static void ApplyBlockFormatChanges(XElement newPara, XElement leftPara, XElement rightPara, RenderState state)
+    {
+        // Two independent slices: pPr (+ mark rPr) gated on the PARAGRAPH flag, the inline sectPr gated on
+        // the block flag (so the composite can stamp pPrChange but not sectPrChange — B1 vs B2).
+        bool trackPPr = state.Settings.TrackParagraphFormatChanges;
+        bool trackSect = state.Settings.TrackBlockFormatChanges;
+        if (!trackPPr && !trackSect)
+            return;
+
+        var leftPPr = leftPara.Element(W.pPr);
+        var rightPPr = rightPara.Element(W.pPr);
+
+        // Policy-gated pPr delta: ModeledOnly compares the modeled ParaKey (the delta a consumer-grade
+        // report can describe; unmodeled-only deltas stay untracked — the documented rPr-parallel blind
+        // spot); Full compares canonically (unid/rsid-stripped, rPr/sectPr/pPrChange excluded).
+        bool pPrDiffers = trackPPr && (state.Settings.FormatComparison == IrFormatComparison.ModeledOnly
+            ? IrModeledFormat.ParaKey(IrReader.MapParaFormat(leftPPr)) !=
+              IrModeledFormat.ParaKey(IrReader.MapParaFormat(rightPPr))
+            : !IrHasher.CanonicalHash(PPrForCompare(leftPPr)).Equals(IrHasher.CanonicalHash(PPrForCompare(rightPPr))));
+
+        // The paragraph-MARK rPr is outside pPrChange by schema; Word tracks it as w:pPr/w:rPr/w:rPrChange.
+        // Compared canonically under both policies (the mark has no token to carry a run-level rPrChange).
+        bool markDiffers = trackPPr && !IrHasher.CanonicalHash(MarkRPrForCompare(leftPPr))
+            .Equals(IrHasher.CanonicalHash(MarkRPrForCompare(rightPPr)));
+
+        // Mid-document section-property change (A3): the emitted right pPr already carries the right inline
+        // w:sectPr (cloned above); when the left pPr also had one and their PROPERTIES differ, it is tracked
+        // as w:sectPrChange INSIDE that sectPr (NOT in the pPrChange inner — CT_PPrBase excludes sectPr). A
+        // one-sided inline sectPr (added/removed) is a structural change, not a property change — left as-is.
+        var leftInlineSect = leftPPr?.Element(W.sectPr);
+        var newPPrForSect = newPara.Element(W.pPr);
+        var rightInlineSect = newPPrForSect?.Element(W.sectPr);
+        bool sectDiffers = trackSect && leftInlineSect != null && rightInlineSect != null
+            && SectPrPropsDiffer(leftInlineSect, rightInlineSect);
+
+        if (!pPrDiffers && !markDiffers && !sectDiffers)
+            return;
+
+        var pPr = newPara.Element(W.pPr);
+        if (pPr == null)
+        {
+            pPr = new XElement(W.pPr);
+            newPara.AddFirst(pPr);
+        }
+
+        if (markDiffers)
+        {
+            var markRPr = pPr.Element(W.rPr);
+            if (markRPr == null)
+            {
+                markRPr = new XElement(W.rPr);
+                // Schema position: the mark rPr follows every pPr property child, before sectPr/pPrChange.
+                var before = pPr.Elements().FirstOrDefault(e => e.Name == W.sectPr || e.Name == W.pPrChange);
+                if (before != null) before.AddBeforeSelf(markRPr);
+                else pPr.Add(markRPr);
+            }
+            markRPr.Elements(W.rPrChange).Remove();
+            var leftMark = leftPPr?.Element(W.rPr);
+            var markInner = leftMark != null
+                ? StripUnids(new XElement(W.rPr, leftMark.Attributes(),
+                      leftMark.Elements().Where(e => e.Name != W.rPrChange)))
+                : new XElement(W.rPr);
+            markRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), markInner));
+        }
+
+        if (pPrDiffers)
+        {
+            var inner = leftPPr != null
+                ? StripUnids(new XElement(W.pPr, leftPPr.Attributes(),
+                      leftPPr.Elements().Where(e => e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange)))
+                : new XElement(W.pPr);
+            pPr.Elements(W.pPrChange).Remove();
+            pPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), inner));   // last child of pPr
+        }
+
+        if (sectDiffers)
+            // output (rightInlineSect) currently holds the RIGHT props; old = leftInlineSect.
+            ApplySectPrChange(rightInlineSect!, leftInlineSect!, rightInlineSect!, state);
+    }
+
+    /// <summary>The pPrChange-comparable projection of a pPr: its property children only (no mark rPr, no
+    /// inline sectPr, no pPrChange marker); a null pPr compares as an EMPTY pPr (no direct properties).</summary>
+    private static XElement PPrForCompare(XElement? pPr) =>
+        pPr == null
+            ? new XElement(W.pPr)
+            : new XElement(W.pPr, pPr.Attributes(),
+                  pPr.Elements().Where(e => e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange));
+
+    /// <summary>The paragraph-mark rPr of a pPr, minus any rPrChange marker; null/absent compares as empty.</summary>
+    private static XElement MarkRPrForCompare(XElement? pPr)
+    {
+        var rPr = pPr?.Element(W.rPr);
+        return rPr == null
+            ? new XElement(W.rPr)
+            : new XElement(W.rPr, rPr.Attributes(), rPr.Elements().Where(e => e.Name != W.rPrChange));
+    }
+
+    // ----------------------------------------------- table-shell property revisions (block-format family)
+
+    // Per-shell inner-exclusion sets (the CT_*Base vs CT_* delta): a *PrChange's inner carries the shell's
+    // FORMAT children only — never its own change marker or the revision markers a redline layers on top.
+    private static readonly XName[] TblPrInnerExclude = { W.tblPrChange };
+    private static readonly XName[] TblGridInnerExclude = { W.tblGridChange };
+    private static readonly XName[] TrPrInnerExclude = { W.ins, W.del, W.trPrChange };
+    private static readonly XName[] TcPrInnerExclude = { W.cellIns, W.cellDel, W.cellMerge, W.tcPrChange };
+    private static readonly XName[] TblPrExInnerExclude = { W.tblPrExChange };
+
+    /// <summary>
+    /// Stamp the two TABLE-LEVEL native shell markers where the emitted right shell differs from the left:
+    /// <c>w:tblPrChange</c> and <c>w:tblGridChange</c>. Row/cell shells are handled per-row by
+    /// <see cref="ApplyRowAndCellShellChanges"/> (the Modified-table path interleaves inserted/deleted rows,
+    /// so only the caller — which pairs rows by anchor — knows the correct left row). No-op when block-format
+    /// tracking is off.
+    /// </summary>
+    private static void ApplyTableLevelShellChanges(XElement newTbl, XElement leftTbl, RenderState state)
+    {
+        if (!state.Settings.TrackBlockFormatChanges)
+            return;
+
+        ApplyShellChange(newTbl, W.tblPr, W.tblPrChange, leftTbl.Element(W.tblPr), state, idOnly: false, TblPrInnerExclude);
+        ApplyShellChange(newTbl, W.tblGrid, W.tblGridChange, leftTbl.Element(W.tblGrid), state, idOnly: true, TblGridInnerExclude);
+    }
+
+    /// <summary>Stamp a row's <c>w:trPrChange</c> and each of its cells' <c>w:tcPrChange</c> (cells paired
+    /// positionally against the left row) where the emitted right shells differ from the left. No-op when
+    /// block-format tracking is off.</summary>
+    private static void ApplyRowAndCellShellChanges(XElement newRow, XElement leftRow, RenderState state)
+    {
+        if (!state.Settings.TrackBlockFormatChanges)
+            return;
+
+        ApplyShellChange(newRow, W.trPr, W.trPrChange, leftRow.Element(W.trPr), state, idOnly: false, TrPrInnerExclude);
+        ApplyShellChange(newRow, W.tblPrEx, W.tblPrExChange, leftRow.Element(W.tblPrEx), state, idOnly: false, TblPrExInnerExclude);
+
+        var leftCells = leftRow.Elements(W.tc).ToList();
+        var newCells = newRow.Elements(W.tc).ToList();
+        for (int c = 0; c < newCells.Count && c < leftCells.Count; c++)
+            ApplyShellChange(newCells[c], W.tcPr, W.tcPrChange, leftCells[c].Element(W.tcPr), state, idOnly: false, TcPrInnerExclude);
+    }
+
+    /// <summary>
+    /// Core table-shell stamper. <paramref name="host"/> already carries the RIGHT shell (from a verbatim
+    /// clone) or none. When the left/right shells differ (canonical, excluding <paramref name="innerExclude"/>
+    /// + the change marker), append <paramref name="changeName"/> as the LAST child of the (right) shell,
+    /// creating an empty shell in schema position if the right had none. The change's inner is the LEFT shell's
+    /// format children (unids stripped, exclusions dropped). <paramref name="idOnly"/> ⇒ CT_Markup attributes
+    /// (a bare <c>w:id</c>, as <c>w:tblGridChange</c> requires); otherwise author/date/id.
+    /// </summary>
+    private static void ApplyShellChange(
+        XElement host, XName shellName, XName changeName, XElement? leftShell, RenderState state,
+        bool idOnly, XName[] innerExclude)
+    {
+        var rightShell = host.Element(shellName);
+        if (!ShellDiffers(leftShell, rightShell, changeName, innerExclude))
+            return;
+
+        if (rightShell == null)
+        {
+            rightShell = new XElement(shellName);
+            InsertShellInSchemaOrder(host, rightShell, shellName);
+        }
+
+        rightShell.Elements(changeName).Remove();   // idempotence
+
+        var inner = leftShell != null
+            ? StripUnids(new XElement(shellName, leftShell.Attributes(),
+                  leftShell.Elements().Where(e => e.Name != changeName && !innerExclude.Contains(e.Name))))
+            : new XElement(shellName);
+
+        var change = idOnly
+            ? new XElement(changeName, new XAttribute(W.id, state.NextId()), inner)
+            : new XElement(changeName, state.RevisionAttributes(), inner);
+        rightShell.Add(change);   // last child of the shell
+    }
+
+    /// <summary>True when two table shells differ ignoring their change markers, the listed revision markers,
+    /// and canonical noise (unids/rsids). An absent shell compares equal to an empty/format-less shell.</summary>
+    private static bool ShellDiffers(XElement? left, XElement? right, XName changeName, XName[] exclude)
+        => !IrHasher.CanonicalHash(CleanShell(left, changeName, exclude))
+            .Equals(IrHasher.CanonicalHash(CleanShell(right, changeName, exclude)));
+
+    /// <summary>A shell projected to its comparable format content under a FIXED container name (so absent vs
+    /// empty-shell compare equal): the shell's attributes + its non-excluded, non-change-marker children.</summary>
+    private static XElement CleanShell(XElement? shell, XName changeName, XName[] exclude)
+    {
+        var c = new XElement("shell");
+        if (shell != null)
+        {
+            c.Add(shell.Attributes());
+            foreach (var e in shell.Elements().Where(e => e.Name != changeName && !exclude.Contains(e.Name)))
+                c.Add(new XElement(e));
+        }
+        return c;
+    }
+
+    /// <summary>Insert a freshly-created shell element at its schema position: <c>w:tblPr</c> first in the
+    /// table; <c>w:tblGrid</c> after <c>w:tblPr</c>; <c>w:trPr</c> after an existing <c>w:tblPrEx</c> (CT_Row
+    /// orders <c>tblPrEx</c> before <c>trPr</c>), else first; <c>w:tcPr</c> first in the cell.</summary>
+    private static void InsertShellInSchemaOrder(XElement host, XElement shell, XName shellName)
+    {
+        if (shellName == W.tblGrid)
+        {
+            var tblPr = host.Element(W.tblPr);
+            if (tblPr != null) { tblPr.AddAfterSelf(shell); return; }
+        }
+        else if (shellName == W.trPr)
+        {
+            var tblPrEx = host.Element(W.tblPrEx);
+            if (tblPrEx != null) { tblPrEx.AddAfterSelf(shell); return; }
+        }
+        host.AddFirst(shell);
+    }
+
+    // -------------------------------------------------- trailing section-property revision (Phase 3)
+
+    /// <summary>A sectPr child that belongs to the tracked PROPERTY set: everything except the header/footer
+    /// references (owned by the header/footer machinery) and the change marker itself (CT_SectPrBase).</summary>
+    private static bool IsSectPrProp(XElement e)
+        => e.Name != W.headerReference && e.Name != W.footerReference && e.Name != W.sectPrChange;
+
+    /// <summary>True when two trailing sectPrs differ in their tracked PROPERTIES (page setup/columns/…),
+    /// ignoring header/footer references, the change marker, and canonical noise (rsids).</summary>
+    private static bool SectPrPropsDiffer(XElement left, XElement right)
+        => !IrHasher.CanonicalHash(SectPrPropsContainer(left)).Equals(IrHasher.CanonicalHash(SectPrPropsContainer(right)));
+
+    private static XElement SectPrPropsContainer(XElement sectPr)
+    {
+        var c = new XElement("sect");
+        foreach (var e in sectPr.Elements().Where(IsSectPrProp))
+            c.Add(new XElement(e));
+        return c;
+    }
+
+    /// <summary>
+    /// Stamp native <c>w:sectPrChange</c> on the output (left-based) trailing sectPr: capture the LEFT
+    /// properties into the change marker's inner (CT_SectPrBase — no references), replace the output's
+    /// properties with the RIGHT (accepted-state) properties, and keep the output's references (owned by the
+    /// header/footer machinery). Accept drops the marker (right properties remain); reject restores the left
+    /// properties while preserving the references (via the <see cref="RevisionProcessor"/> sectPrChange fix).
+    /// </summary>
+    private static void ApplySectPrChange(XElement outputSectPr, XElement oldSectPr, XElement rightSectPr, RenderState state)
+    {
+        // Snapshot BOTH the OLD (change-inner) props and the RIGHT (accepted) props BEFORE mutating output —
+        // `outputSectPr` may alias `oldSectPr` (the trailing case: output starts as the left clone) OR
+        // `rightSectPr` (the mid-doc inline case: output starts as the right clone), so reading either after
+        // the strip would be wrong.
+        var inner = new XElement(W.sectPr);
+        foreach (var e in oldSectPr.Elements().Where(IsSectPrProp))
+            inner.Add(StripUnids(new XElement(e)));
+        var rightProps = rightSectPr.Elements().Where(IsSectPrProp)
+            .Select(e => StripUnids(new XElement(e))).ToList();
+
+        outputSectPr.Elements().Where(IsSectPrProp).Remove();   // strip current props (references stay)
+        foreach (var e in rightProps)
+            outputSectPr.Add(e);                                 // apply the right (accepted) props after refs
+        outputSectPr.Add(new XElement(W.sectPrChange, state.RevisionAttributes(), inner));   // last child
+    }
+
     // ----------------------------------------------------------------- helpers
 
     /// <summary>
@@ -3065,7 +3634,7 @@ internal static class IrMarkupRenderer
     /// when that id is free in the left part (the common case — ids rarely collide across the two documents).
     /// </summary>
     private static void ImportHyperlinkAndExternalRelationships(
-        List<XElement> rightClones, MainDocumentPart leftMain, MainDocumentPart rightMain)
+        List<XElement> rightClones, OpenXmlPart leftMain, OpenXmlPart rightMain)
     {
         var leftHyper = leftMain.HyperlinkRelationships.ToDictionary(r => r.Id, StringComparer.Ordinal);
         var leftExternalIds = new HashSet<string>(leftMain.ExternalRelationships.Select(r => r.Id), StringComparer.Ordinal);
@@ -3133,7 +3702,7 @@ internal static class IrMarkupRenderer
     /// hyperlinks, external links, and data-part references alike). Deterministic: the first free
     /// <c>rIdRemap{n}</c> (n ascending from 1). The dedicated <c>rIdRemap</c> prefix avoids colliding with the
     /// document's own <c>rId{n}</c> numbering — the very collision this remap exists to resolve.</summary>
-    private static string FreshRelationshipId(MainDocumentPart leftMain)
+    private static string FreshRelationshipId(OpenXmlPart leftMain)
     {
         var used = new HashSet<string>(StringComparer.Ordinal);
         foreach (var rel in leftMain.Parts) used.Add(rel.RelationshipId);

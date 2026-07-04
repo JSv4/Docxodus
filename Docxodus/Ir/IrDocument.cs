@@ -28,8 +28,21 @@ internal sealed record IrScope(string Name, IrNodeList<IrBlock> Blocks, Uri? Par
 /// <summary>Which header/footer occurrence a part is bound to (`w:headerReference/@w:type`).</summary>
 internal enum IrHeaderFooterKind { Default, First, Even }
 
-/// <summary>A header or footer: its scope name, occurrence kind, and the scope holding its blocks.</summary>
-internal sealed record IrHeaderFooter(string ScopeName, IrHeaderFooterKind Kind, IrScope Scope);
+/// <summary>
+/// One body <c>w:sectPr</c> reference to a header/footer part: the referencing section's document-order
+/// ordinal (the index of its <c>sectPr</c> among <c>body.Descendants(w:sectPr)</c>) and the reference's
+/// <c>@w:type</c> kind. A part referenced by several sections carries one entry per reference, in
+/// section document order — the story-pairing axis for the header/footer scope diff.
+/// </summary>
+internal readonly record struct IrHeaderFooterRef(int SectionIndex, IrHeaderFooterKind Kind);
+
+/// <summary>A header or footer: its scope name, occurrence kind (the FIRST body reference's kind —
+/// back-compat for consumers that need one label), the scope holding its blocks, and every body section
+/// reference to the part (<see cref="References"/>, empty for an unreferenced part).</summary>
+internal sealed record IrHeaderFooter(string ScopeName, IrHeaderFooterKind Kind, IrScope Scope)
+{
+    public IrNodeList<IrHeaderFooterRef> References { get; init; } = IrNodeList.Empty<IrHeaderFooterRef>();
+}
 
 /// <summary>
 /// The immutable root of a Document IR snapshot.

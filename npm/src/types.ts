@@ -375,6 +375,21 @@ export interface Revision {
 }
 
 /**
+ * Which property container a FormatChanged revision describes.
+ * `run` (the default) is an rPr-grade report (bold/italic/fontSize/…); the others are the
+ * block-and-above scopes tracked by the block-format-change family: `paragraph` (pPr),
+ * `tableCell`/`tableRow`/`table` (tcPr/trPr/tblPr+tblGrid), and `section` (sectPr).
+ * Non-`run` scopes are only reported under Fine revision granularity.
+ */
+export type FormatChangeScope =
+  | "run"
+  | "paragraph"
+  | "tableCell"
+  | "tableRow"
+  | "table"
+  | "section";
+
+/**
  * Details about formatting changes for FormatChanged revisions.
  */
 export interface FormatChangeDetails {
@@ -389,8 +404,13 @@ export interface FormatChangeDetails {
   newProperties?: Record<string, string>;
   /**
    * List of property names that changed (e.g., "bold", "italic", "fontSize").
+   * For the table/section scopes this is a digest-grade marker (`["shell"]`, `["grid"]`).
    */
   changedPropertyNames?: string[];
+  /**
+   * Which property container this change describes (default `"run"`).
+   */
+  scope?: FormatChangeScope;
 }
 
 // ─── DocxDiff (IR diff engine) ──────────────────────────────────────────────
@@ -452,6 +472,21 @@ export interface DocxDiffSettings {
   revisionGranularity?: DocxDiffRevisionGranularity;
   /** Run-format comparison policy (default ModeledOnly). */
   formatComparison?: DocxDiffFormatComparison;
+  /**
+   * Compare header/footer stories (default true — Word Compare's own default).
+   * Changed stories get native tracked-changes markup inside their parts;
+   * Fine-mode revisions carry `hdr`/`ftr`-scoped anchors; the edit script
+   * carries `headerFooterOps`. Set false to ignore header/footer scopes (the
+   * pre-campaign behavior: left's headers/footers carried verbatim).
+   */
+  compareHeadersFooters?: boolean;
+
+  /**
+   * Track paragraph-and-above property changes (pPr/tcPr/trPr/tblPr/tblGrid/tblPrEx/sectPr) as native
+   * Word markup. Default true. Set false to restore the pre-campaign untracked-right-apply behavior.
+   * (Consolidate ignores block-format changes regardless.)
+   */
+  trackBlockFormatChanges?: boolean;
 }
 
 /**

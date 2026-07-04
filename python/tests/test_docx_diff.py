@@ -70,3 +70,15 @@ def test_accept_reject_are_distinct(test_files_dir: Path) -> None:
     right = (test_files_dir / "WC" / "WC001-Digits-Mod.docx").read_bytes()
     redline = docx_diff_compare(left, right)
     assert _text(docx_diff_accept_revisions(redline)) != _text(docx_diff_reject_revisions(redline))
+
+
+def test_docx_diff_settings_track_block_format_changes_to_wire() -> None:
+    """The track_block_format_changes opt-out only emits its wire key when disabled
+    (default True → omitted, matching the host's default-on behavior)."""
+    from docx_scalpel.types import DocxDiffSettings
+
+    assert DocxDiffSettings().track_block_format_changes is True
+    assert "trackBlockFormatChanges" not in DocxDiffSettings().to_wire()
+    assert DocxDiffSettings(track_block_format_changes=False).to_wire()[
+        "trackBlockFormatChanges"
+    ] is False
