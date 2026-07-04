@@ -747,6 +747,9 @@ public sealed class DocxDiffSettings
                 : IrFormatComparison.ModeledOnly,
             CompareHeadersFooters = CompareHeadersFooters,
             TrackBlockFormatChanges = TrackBlockFormatChanges,
+            // The paragraph slice defaults equal to the block flag (two-way behaves identically); only the
+            // composite diverges them (pPr on, table/section off) — see IrCompositeMerger.
+            TrackParagraphFormatChanges = TrackBlockFormatChanges,
         };
     }
 }

@@ -674,6 +674,10 @@ internal static class IrReader
         // Fingerprint AFTER the inline-sectPr map so its page setup participates (A3).
         var formatFingerprint = IrHasher.FingerprintBlock(paraFormat, RunFormatsInOrder(processed), inlineSectionFormat);
 
+        // pPrChange-comparable paragraph-property digest (Consolidate sub-project B): the pPr's children
+        // minus the mark rPr / inline sectPr / pPrChange marker, flattened so empty ≡ absent.
+        var pPrDigest = PPrPropsDigest(pPr);
+
         // Resolve the auto-number marker against the LIVE package while we have it (see
         // IrParagraph.ResolvedListMarker for the rationale). RetrieveListItem returns null for
         // non-list-items; it is the exact string the markdown projection consumes. Tolerance-wrapped
@@ -688,6 +692,7 @@ internal static class IrReader
             Inlines = IrNodeList.From(processed),
             InlineSectionBreakAnchor = inlineSectAnchor,
             InlineSectionFormat = inlineSectionFormat,
+            PPrDigest = pPrDigest,
             ResolvedListMarker = resolvedMarker,
             // The oracle's structural IsListItem verdict (numPr present inline or via the style chain,
             // numId-agnostic) — drives the emitter's trailing-blank rule for heading/Subtitle styles
@@ -1834,6 +1839,22 @@ internal static class IrReader
         foreach (var wrapper in wrappers)
             foreach (var child in wrapper.Elements())
                 container.Add(new XElement(child));
+        return IrHasher.CanonicalHash(container);
+    }
+
+    /// <summary>
+    /// Canonical hash of a paragraph's `w:pPr` PROPERTY children — everything except the mark `w:rPr`, the
+    /// inline `w:sectPr`, and the `w:pPrChange` marker (the pPrChange-comparable projection, per
+    /// <c>IrMarkupRenderer.PPrForCompare</c>). Flattened into a fixed-name container so empty ≡ absent (a
+    /// null / property-less pPr hashes identically). Backs <see cref="IrParagraph.PPrDigest"/> (Consolidate B).
+    /// </summary>
+    private static IrHash PPrPropsDigest(XElement? pPr)
+    {
+        var container = new XElement("ppr-props");
+        if (pPr != null)
+            foreach (var e in pPr.Elements()
+                         .Where(e => e.Name != W + "rPr" && e.Name != W + "sectPr" && e.Name != W + "pPrChange"))
+                container.Add(new XElement(e));
         return IrHasher.CanonicalHash(container);
     }
 

@@ -280,6 +280,17 @@ internal sealed record IrDiffSettings
     public bool TrackBlockFormatChanges { get; init; } = true;
 
     /// <summary>
+    /// DIFF-TIME setting (Consolidate sub-project B). The PARAGRAPH-scope slice of
+    /// <see cref="TrackBlockFormatChanges"/>: gates ONLY the <c>w:pPrChange</c> (paragraph properties + mark
+    /// rPr) detection/emission, NOT the table-shell or section variants. Defaults equal to
+    /// <see cref="TrackBlockFormatChanges"/> (so every two-way call behaves byte-identically — the split is
+    /// invisible outside the composite). The composite merger sets this TRUE while forcing
+    /// <see cref="TrackBlockFormatChanges"/> FALSE, so <c>Consolidate</c> merges reviewers' pPr changes
+    /// (B1) while table-shell/section composite merge stays a v1 ceiling (B2).
+    /// </summary>
+    public bool TrackParagraphFormatChanges { get; init; } = true;
+
+    /// <summary>
     /// REVISIONS-SURFACE setting (M2.3 Task 1). Author name stamped on every <see cref="IrRevision"/>'s
     /// <see cref="IrRevision.Author"/>. Default <c>"Open-Xml-PowerTools"</c> — copied verbatim from
     /// <c>WmlComparerSettings.AuthorForRevisions</c> (Docxodus/WmlComparer.cs ~line 54) so an IR-rendered

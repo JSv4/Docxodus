@@ -91,6 +91,16 @@ internal sealed record IrParagraph : IrBlock
     public IrSectionFormat? InlineSectionFormat { get; init; }
 
     /// <summary>
+    /// Canonical hash of this paragraph's `w:pPr` PROPERTIES — its children except the paragraph-mark
+    /// `w:rPr`, the inline `w:sectPr`, and the `w:pPrChange` marker (the pPrChange-comparable projection,
+    /// flattened so empty ≡ absent). NOT in <see cref="IrBlock.ContentHash"/> or the fingerprint — a
+    /// standalone projection so the N-way composite merger can attribute a paragraph-property change to a
+    /// reviewer (and consensus/conflict competing ones) without source-element access, exactly as
+    /// <see cref="IrCell.ShellDigest"/> does for a cell shell. Consolidate sub-project B.
+    /// </summary>
+    public IrHash PPrDigest { get; init; }
+
+    /// <summary>
     /// The oracle's <c>WmlToMarkdownConverter.IsListItem</c> verdict for this paragraph: a purely
     /// <em>structural</em> predicate — true iff a <c>w:numPr</c> is present inline (<c>w:pPr/w:numPr</c>)
     /// OR anywhere up the <c>pStyle → basedOn</c> chain, <b>regardless of whether that numPr carries a
