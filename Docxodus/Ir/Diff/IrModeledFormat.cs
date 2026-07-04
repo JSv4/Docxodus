@@ -117,13 +117,39 @@ internal static class IrModeledFormat
 
         // Block-format-change family (2026-07-03): the paragraph's own modeled format participates in
         // the signature, so a pPr-only change (jc/indent/spacing/style/numbering) classifies FormatOnly
-        // instead of Unchanged. Gated so the composite (Consolidate) pipeline can pin it off (v1 ceiling).
-        if (settings.TrackBlockFormatChanges)
+        // instead of Unchanged. Gated on the PARAGRAPH slice so the composite can turn pPr merge ON (B1)
+        // while keeping section OFF (B2) — in two-way the two flags are equal, so behavior is identical.
+        if (settings.TrackParagraphFormatChanges)
         {
             sb.Append('¶');
             sb.Append(ParaKey(paragraph.Format));
         }
+        // A3: an inline (in-pPr) sectPr's modeled page setup participates too, so a mid-document
+        // sectPr-only change classifies FormatOnly instead of Unchanged under ModeledOnly. Section slice.
+        if (settings.TrackBlockFormatChanges)
+        {
+            sb.Append('§');
+            sb.Append(SectionKey(paragraph.InlineSectionFormat));
+        }
 
+        return sb.ToString();
+    }
+
+    /// <summary>Modeled-only equality key for a SECTION format (block-format follow-up A3): the modeled
+    /// <see cref="IrSectionFormat"/> fields, framed like <see cref="ParaKey"/>; null maps to the empty key.</summary>
+    public static string SectionKey(IrSectionFormat? f)
+    {
+        if (f is null)
+            return string.Empty;
+        var sb = new StringBuilder();
+        Append(sb, "PgW", f.PageWidthTwips);
+        Append(sb, "PgH", f.PageHeightTwips);
+        Append(sb, "Land", f.Landscape);
+        Append(sb, "MT", f.MarginTopTwips);
+        Append(sb, "MB", f.MarginBottomTwips);
+        Append(sb, "ML", f.MarginLeftTwips);
+        Append(sb, "MR", f.MarginRightTwips);
+        Append(sb, "SType", f.SectionType);
         return sb.ToString();
     }
 

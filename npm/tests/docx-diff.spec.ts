@@ -115,6 +115,30 @@ test.describe('DocxDiff (IR diff engine) bridge', () => {
     expect(Array.isArray(result.revisions)).toBe(true);
   });
 
+  test('trackBlockFormatChanges=false suppresses block-format markup', async ({ page }) => {
+    // A paragraph-property-only change (jc) produces NO w:pPrChange when the opt-out is off.
+    const left = readTestFile('WC/WC001-Digits.docx');
+    const right = readTestFile('WC/WC001-Digits-Mod.docx');
+
+    const result = await page.evaluate(
+      ([l, r]) => {
+        return (window as any).DocxodusTests.docxDiffGetRevisions(
+          new Uint8Array(l),
+          new Uint8Array(r),
+          JSON.stringify({ trackBlockFormatChanges: false })
+        );
+      },
+      [Array.from(left), Array.from(right)]
+    );
+
+    expect(result.error).toBeUndefined();
+    // No block-format (non-Run) FormatChanged revisions when the flag is off.
+    const blockFmt = (result.revisions as any[]).filter(
+      (rev) => rev.formatChange && rev.formatChange.scope && rev.formatChange.scope !== 'run'
+    );
+    expect(blockFmt.length).toBe(0);
+  });
+
   // The round-trip contract — NOT a shape/length check. compare(left,right) then
   // accept ≡ right and reject ≡ left at the per-block text level. This rides the
   // full client wire: Compare (bytes out), AcceptRevisions/RejectRevisions (bytes

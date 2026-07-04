@@ -228,12 +228,18 @@ internal static class IrHasher
     /// followed by each run fingerprint's 32 bytes in order, SHA-256'd. Run order is
     /// significant, so a single bolded word flips the block fingerprint.
     /// </summary>
-    public static IrHash FingerprintBlock(IrParaFormat paraFormat, IEnumerable<IrRunFormat> runFormats)
+    public static IrHash FingerprintBlock(IrParaFormat paraFormat, IEnumerable<IrRunFormat> runFormats,
+                                          IrSectionFormat? inlineSection = null)
     {
         using var ms = new MemoryStream();
         WriteHash(ms, FingerprintParaFormat(paraFormat));
         foreach (var rf in runFormats)
             WriteHash(ms, FingerprintRunFormat(rf));
+        // Block-format follow-up A3: an inline (in-pPr) w:sectPr's page setup participates in the paragraph
+        // fingerprint so a mid-document sectPr-only change classifies FormatOnly (not Equal). The param is
+        // optional, so a paragraph WITHOUT an inline sectPr hashes byte-identically to before (no snapshot churn).
+        if (inlineSection != null)
+            WriteHash(ms, FingerprintSectionFormat(inlineSection));
         return IrHash.Compute(ms.GetBuffer().AsSpan(0, (int)ms.Length));
     }
 

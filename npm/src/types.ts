@@ -480,6 +480,13 @@ export interface DocxDiffSettings {
    * pre-campaign behavior: left's headers/footers carried verbatim).
    */
   compareHeadersFooters?: boolean;
+
+  /**
+   * Track paragraph-and-above property changes (pPr/tcPr/trPr/tblPr/tblGrid/tblPrEx/sectPr) as native
+   * Word markup. Default true. Set false to restore the pre-campaign untracked-right-apply behavior.
+   * (Consolidate ignores block-format changes regardless.)
+   */
+  trackBlockFormatChanges?: boolean;
 }
 
 /**

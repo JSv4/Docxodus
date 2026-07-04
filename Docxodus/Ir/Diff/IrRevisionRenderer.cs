@@ -572,6 +572,7 @@ internal static class IrRevisionRenderer
             // the Paragraph-scope FormatChanged first, then its token-level revisions (mirrors the markup
             // renderer stamping w:pPrChange on the modified paragraph).
             EmitParagraphScopeFormatChanged(op, ctx, sink);
+            EmitInlineSectionFormatChanged(op, ctx, sink);
 
             var leftTokens = ParagraphTokens(op.LeftAnchor, ctx.Left, ctx.Settings);
             var rightTokens = ParagraphTokens(op.RightAnchor, ctx.Right, ctx.Settings);
@@ -1256,6 +1257,7 @@ internal static class IrRevisionRenderer
         // empty paragraph (a blank line whose alignment changed still reports). Excluded in
         // WmlComparerCompatible mode by the scope filter in Render.
         bool paraEmitted = EmitParagraphScopeFormatChanged(op, ctx, sink);
+        EmitInlineSectionFormatChanged(op, ctx, sink);   // A3: mid-doc inline sectPr change
 
         // Non-paragraph FormatOnly (no tokens on either side): a TABLE reports its shell changes
         // (tblPr/tblGrid/trPr — content-equal, so rows/cells pair positionally); anything else is
@@ -1325,7 +1327,7 @@ internal static class IrRevisionRenderer
     /// </summary>
     private static bool ParaFormatDiffers(IrParagraph left, IrParagraph right, IrDiffSettings settings)
     {
-        if (!settings.TrackBlockFormatChanges)
+        if (!settings.TrackParagraphFormatChanges)   // paragraph slice (B1); composite keeps this on
             return false;
         return settings.FormatComparison == IrFormatComparison.ModeledOnly
             ? IrModeledFormat.ParaKey(left.Format) != IrModeledFormat.ParaKey(right.Format)
@@ -1355,6 +1357,32 @@ internal static class IrRevisionRenderer
             FormatChange: IrModeledFormat.ParaFormatChangeDetails(lp.Format, rp.Format),
             LeftAnchor: op.LeftAnchor, RightAnchor: op.RightAnchor));
         return true;
+    }
+
+    /// <summary>
+    /// Emit a Section-scope FormatChanged revision for a paired paragraph whose inline (in-<c>pPr</c>)
+    /// <c>w:sectPr</c> properties differ (block-format follow-up A3). Anchored on the paragraphs' inline
+    /// section-break anchors. Gated on <c>TrackBlockFormatChanges</c>; excluded from compatible mode by the
+    /// non-Run scope filter, like the trailing Section revision.
+    /// </summary>
+    private static void EmitInlineSectionFormatChanged(IrEditOp op, in Context ctx, List<IrRevision> sink)
+    {
+        if (!ctx.Settings.TrackBlockFormatChanges || op.LeftAnchor is null || op.RightAnchor is null)
+            return;
+        if (!ctx.Left.AnchorIndex.TryGetValue(op.LeftAnchor, out var lb) || lb is not IrParagraph lp)
+            return;
+        if (!ctx.Right.AnchorIndex.TryGetValue(op.RightAnchor, out var rb) || rb is not IrParagraph rp)
+            return;
+        if (lp.InlineSectionFormat is not { } lsf || rp.InlineSectionFormat is not { } rsf)
+            return;
+
+        var details = IrModeledFormat.SectionFormatChangeDetails(lsf, rsf);
+        if (details.ChangedPropertyNames.Count == 0)
+            return;
+        sink.Add(new IrRevision(IrRevisionType.FormatChanged, string.Empty, ctx.Author, ctx.Date,
+            FormatChange: details,
+            LeftAnchor: lp.InlineSectionBreakAnchor?.ToString() ?? op.LeftAnchor,
+            RightAnchor: rp.InlineSectionBreakAnchor?.ToString() ?? op.RightAnchor));
     }
 
     /// <summary>
@@ -1524,9 +1552,14 @@ internal static class IrRevisionRenderer
     {
         // Compare the flattened trackable projections (w:trPr children only, empty ≡ absent) — the exact
         // subset the markup's w:trPrChange/w:tcPrChange attribution uses — so GetRevisions and Compare agree
-        // (a w:tblPrEx-only or empty-vs-absent-shell change is untracked in BOTH, never reported by one alone).
+        // (an empty-vs-absent-shell change is untracked in BOTH, never reported by one alone).
         if (!left.TrPrShellDigest.Equals(right.TrPrShellDigest))
             sink.Add(TableShellRevision(IrFormatChangeScope.TableRow, "shell",
+                left.Anchor.ToString(), right.Anchor.ToString(), ctx));
+        // w:tblPrEx (row-level table property exceptions) — its own TableRow revision with a distinct
+        // changed-name so it never double-fires with the trPr "shell" revision.
+        if (!left.TrPrExDigest.Equals(right.TrPrExDigest))
+            sink.Add(TableShellRevision(IrFormatChangeScope.TableRow, "tblPrEx",
                 left.Anchor.ToString(), right.Anchor.ToString(), ctx));
 
         int cn = System.Math.Min(left.Cells.Count, right.Cells.Count);

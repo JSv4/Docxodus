@@ -192,6 +192,10 @@ public class IrMarkupRendererTests
         {
             case IrParagraph p:
                 sink.Add("pf:" + IrModeledFormat.BlockSignature(p, settings));
+                // A3: an inline (in-pPr) sectPr's modeled page setup must round-trip too (accept≡right,
+                // reject≡left) — it is folded into the fingerprint but not the BlockSignature.
+                if (p.InlineSectionFormat is { } isf)
+                    sink.Add("psec:" + IrHasher.FingerprintSectionFormat(isf).ToHex());
                 break;
             case IrTable t:
                 // Include the SHELL digests (block-format-change family): tblPr/tblGrid are in the
@@ -202,11 +206,13 @@ public class IrMarkupRendererTests
                     + "|tblPr:" + t.TblPrDigest.ToHex() + "|tblGrid:" + t.TblGridDigest.ToHex());
                 foreach (var row in t.Rows)
                 {
-                    // The TRACKABLE row-shell subset (w:trPr children only — TrPrShellDigest, not the
-                    // fingerprint's tblPrEx-inclusive TrPrDigest), so the round-trip contract verifies exactly
-                    // what the markup tracks: a w:tblPrEx-only change is untracked (right-applied) in BOTH the
-                    // markup and this assertion, mirroring how the pPr signature is modeled-grade.
+                    // Two independent, tracked row-shell projections — each verifies its own round-trip
+                    // (accept≡right, reject≡left): `trf:` = the w:trPr children only (TrPrShellDigest, w:trPrChange),
+                    // `tprex:` = the w:tblPrEx children only (TrPrExDigest, w:tblPrExChange, follow-up A2). Both use
+                    // the trackable per-element subset, NOT the fingerprint's tblPrEx-inclusive TrPrDigest, so each
+                    // marker's reject is byte-verified against exactly what that marker restores.
                     sink.Add("trf:" + row.TrPrShellDigest.ToHex());
+                    sink.Add("tprex:" + row.TrPrExDigest.ToHex());
                     foreach (var cell in row.Cells)
                         foreach (var b in cell.Blocks)
                             CollectFormatSignatures(b, settings, sink);

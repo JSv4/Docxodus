@@ -82,6 +82,25 @@ internal sealed record IrParagraph : IrBlock
     public IrAnchor? InlineSectionBreakAnchor { get; init; }
 
     /// <summary>
+    /// The modeled section-format of this paragraph's inline `w:pPr/w:sectPr` (an in-document section
+    /// transition), or null when absent. Distinct from <see cref="InlineSectionBreakAnchor"/> (the anchor):
+    /// this carries the page-setup PROPERTIES so a mid-document sectPr-only change is diffable. Folded into
+    /// <see cref="IrBlock.FormatFingerprint"/> (not <see cref="IrBlock.ContentHash"/> — page metadata, not
+    /// content), so such a change classifies FormatOnly and routes to a paired-paragraph emit path.
+    /// </summary>
+    public IrSectionFormat? InlineSectionFormat { get; init; }
+
+    /// <summary>
+    /// Canonical hash of this paragraph's `w:pPr` PROPERTIES — its children except the paragraph-mark
+    /// `w:rPr`, the inline `w:sectPr`, and the `w:pPrChange` marker (the pPrChange-comparable projection,
+    /// flattened so empty ≡ absent). NOT in <see cref="IrBlock.ContentHash"/> or the fingerprint — a
+    /// standalone projection so the N-way composite merger can attribute a paragraph-property change to a
+    /// reviewer (and consensus/conflict competing ones) without source-element access, exactly as
+    /// <see cref="IrCell.ShellDigest"/> does for a cell shell. Consolidate sub-project B.
+    /// </summary>
+    public IrHash PPrDigest { get; init; }
+
+    /// <summary>
     /// The oracle's <c>WmlToMarkdownConverter.IsListItem</c> verdict for this paragraph: a purely
     /// <em>structural</em> predicate — true iff a <c>w:numPr</c> is present inline (<c>w:pPr/w:numPr</c>)
     /// OR anywhere up the <c>pStyle → basedOn</c> chain, <b>regardless of whether that numPr carries a
@@ -138,6 +157,14 @@ internal sealed record IrRow(IrAnchor Anchor, IrNodeList<IrCell> Cells, IrHash C
     /// change is untracked in ALL three, not reported by one and ignored by another). NOT in the fingerprint.
     /// </summary>
     public IrHash TrPrShellDigest { get; init; }
+
+    /// <summary>
+    /// Canonical hash of the row's `w:tblPrEx` FLATTENED children (empty ≡ absent) — the row-level table
+    /// property exceptions, tracked independently of `w:trPr` (`w:tblPrExChange` markup). NOT in the
+    /// fingerprint (<see cref="TrPrDigest"/> already carries tblPrEx there); a parallel projection so the
+    /// markup + revision surfaces attribute a tblPrEx change without disturbing the trPr digests.
+    /// </summary>
+    public IrHash TrPrExDigest { get; init; }
 
     /// <summary>
     /// True when this row was delivered by a table-level <c>w:sdt</c> wrapping a <c>w:tr</c> (e.g. a

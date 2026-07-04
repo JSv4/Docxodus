@@ -155,7 +155,7 @@ internal static class IrMarkupRenderer
                     var rightTrailingSectPr = wDocRight.MainDocumentPart?.GetXDocument().Root?
                         .Element(W.body)?.Elements(W.sectPr).LastOrDefault();
                     if (rightTrailingSectPr != null && SectPrPropsDiffer(trailingSectPr, rightTrailingSectPr))
-                        ApplySectPrChange(trailingSectPr, rightTrailingSectPr, state);
+                        ApplySectPrChange(trailingSectPr, trailingSectPr, rightTrailingSectPr, state);
                 }
 
                 bodyEl.Elements().Where(e => e.Name != W.sectPr).Remove();
@@ -3368,7 +3368,11 @@ internal static class IrMarkupRenderer
     /// </summary>
     private static void ApplyBlockFormatChanges(XElement newPara, XElement leftPara, XElement rightPara, RenderState state)
     {
-        if (!state.Settings.TrackBlockFormatChanges)
+        // Two independent slices: pPr (+ mark rPr) gated on the PARAGRAPH flag, the inline sectPr gated on
+        // the block flag (so the composite can stamp pPrChange but not sectPrChange — B1 vs B2).
+        bool trackPPr = state.Settings.TrackParagraphFormatChanges;
+        bool trackSect = state.Settings.TrackBlockFormatChanges;
+        if (!trackPPr && !trackSect)
             return;
 
         var leftPPr = leftPara.Element(W.pPr);
@@ -3377,17 +3381,27 @@ internal static class IrMarkupRenderer
         // Policy-gated pPr delta: ModeledOnly compares the modeled ParaKey (the delta a consumer-grade
         // report can describe; unmodeled-only deltas stay untracked — the documented rPr-parallel blind
         // spot); Full compares canonically (unid/rsid-stripped, rPr/sectPr/pPrChange excluded).
-        bool pPrDiffers = state.Settings.FormatComparison == IrFormatComparison.ModeledOnly
+        bool pPrDiffers = trackPPr && (state.Settings.FormatComparison == IrFormatComparison.ModeledOnly
             ? IrModeledFormat.ParaKey(IrReader.MapParaFormat(leftPPr)) !=
               IrModeledFormat.ParaKey(IrReader.MapParaFormat(rightPPr))
-            : !IrHasher.CanonicalHash(PPrForCompare(leftPPr)).Equals(IrHasher.CanonicalHash(PPrForCompare(rightPPr)));
+            : !IrHasher.CanonicalHash(PPrForCompare(leftPPr)).Equals(IrHasher.CanonicalHash(PPrForCompare(rightPPr))));
 
         // The paragraph-MARK rPr is outside pPrChange by schema; Word tracks it as w:pPr/w:rPr/w:rPrChange.
         // Compared canonically under both policies (the mark has no token to carry a run-level rPrChange).
-        bool markDiffers = !IrHasher.CanonicalHash(MarkRPrForCompare(leftPPr))
+        bool markDiffers = trackPPr && !IrHasher.CanonicalHash(MarkRPrForCompare(leftPPr))
             .Equals(IrHasher.CanonicalHash(MarkRPrForCompare(rightPPr)));
 
-        if (!pPrDiffers && !markDiffers)
+        // Mid-document section-property change (A3): the emitted right pPr already carries the right inline
+        // w:sectPr (cloned above); when the left pPr also had one and their PROPERTIES differ, it is tracked
+        // as w:sectPrChange INSIDE that sectPr (NOT in the pPrChange inner — CT_PPrBase excludes sectPr). A
+        // one-sided inline sectPr (added/removed) is a structural change, not a property change — left as-is.
+        var leftInlineSect = leftPPr?.Element(W.sectPr);
+        var newPPrForSect = newPara.Element(W.pPr);
+        var rightInlineSect = newPPrForSect?.Element(W.sectPr);
+        bool sectDiffers = trackSect && leftInlineSect != null && rightInlineSect != null
+            && SectPrPropsDiffer(leftInlineSect, rightInlineSect);
+
+        if (!pPrDiffers && !markDiffers && !sectDiffers)
             return;
 
         var pPr = newPara.Element(W.pPr);
@@ -3426,6 +3440,10 @@ internal static class IrMarkupRenderer
             pPr.Elements(W.pPrChange).Remove();
             pPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), inner));   // last child of pPr
         }
+
+        if (sectDiffers)
+            // output (rightInlineSect) currently holds the RIGHT props; old = leftInlineSect.
+            ApplySectPrChange(rightInlineSect!, leftInlineSect!, rightInlineSect!, state);
     }
 
     /// <summary>The pPrChange-comparable projection of a pPr: its property children only (no mark rPr, no
@@ -3453,6 +3471,7 @@ internal static class IrMarkupRenderer
     private static readonly XName[] TblGridInnerExclude = { W.tblGridChange };
     private static readonly XName[] TrPrInnerExclude = { W.ins, W.del, W.trPrChange };
     private static readonly XName[] TcPrInnerExclude = { W.cellIns, W.cellDel, W.cellMerge, W.tcPrChange };
+    private static readonly XName[] TblPrExInnerExclude = { W.tblPrExChange };
 
     /// <summary>
     /// Stamp the two TABLE-LEVEL native shell markers where the emitted right shell differs from the left:
@@ -3479,6 +3498,7 @@ internal static class IrMarkupRenderer
             return;
 
         ApplyShellChange(newRow, W.trPr, W.trPrChange, leftRow.Element(W.trPr), state, idOnly: false, TrPrInnerExclude);
+        ApplyShellChange(newRow, W.tblPrEx, W.tblPrExChange, leftRow.Element(W.tblPrEx), state, idOnly: false, TblPrExInnerExclude);
 
         var leftCells = leftRow.Elements(W.tc).ToList();
         var newCells = newRow.Elements(W.tc).ToList();
@@ -3586,15 +3606,21 @@ internal static class IrMarkupRenderer
     /// header/footer machinery). Accept drops the marker (right properties remain); reject restores the left
     /// properties while preserving the references (via the <see cref="RevisionProcessor"/> sectPrChange fix).
     /// </summary>
-    private static void ApplySectPrChange(XElement outputSectPr, XElement rightSectPr, RenderState state)
+    private static void ApplySectPrChange(XElement outputSectPr, XElement oldSectPr, XElement rightSectPr, RenderState state)
     {
+        // Snapshot BOTH the OLD (change-inner) props and the RIGHT (accepted) props BEFORE mutating output —
+        // `outputSectPr` may alias `oldSectPr` (the trailing case: output starts as the left clone) OR
+        // `rightSectPr` (the mid-doc inline case: output starts as the right clone), so reading either after
+        // the strip would be wrong.
         var inner = new XElement(W.sectPr);
-        foreach (var e in outputSectPr.Elements().Where(IsSectPrProp))
+        foreach (var e in oldSectPr.Elements().Where(IsSectPrProp))
             inner.Add(StripUnids(new XElement(e)));
+        var rightProps = rightSectPr.Elements().Where(IsSectPrProp)
+            .Select(e => StripUnids(new XElement(e))).ToList();
 
-        outputSectPr.Elements().Where(IsSectPrProp).Remove();   // strip left props (references stay)
-        foreach (var e in rightSectPr.Elements().Where(IsSectPrProp))
-            outputSectPr.Add(StripUnids(new XElement(e)));       // append right props after the references
+        outputSectPr.Elements().Where(IsSectPrProp).Remove();   // strip current props (references stay)
+        foreach (var e in rightProps)
+            outputSectPr.Add(e);                                 // apply the right (accepted) props after refs
         outputSectPr.Add(new XElement(W.sectPrChange, state.RevisionAttributes(), inner));   // last child
     }
 

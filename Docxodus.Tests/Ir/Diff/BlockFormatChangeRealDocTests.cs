@@ -38,7 +38,7 @@ public class BlockFormatChangeRealDocTests
     /// <summary>Build the RIGHT document by mutating one instance of each family member in the LEFT bytes.</summary>
     private static WmlDocument Right(out bool[] applied)
     {
-        var localApplied = new bool[6];
+        var localApplied = new bool[7];
         using var ms = new MemoryStream();
         var bytes = File.ReadAllBytes(Fixture);
         ms.Write(bytes, 0, bytes.Length);
@@ -98,6 +98,17 @@ public class BlockFormatChangeRealDocTests
                 localApplied[5] = true;
             }
 
+            // (6) tblPrEx: add a row-level table-property exception to the first row (CT_Row puts tblPrEx
+            // first). This exercises w:tblPrExChange (an add: the left row has no tblPrEx).
+            var firstTr = body.Descendants(W + "tr").FirstOrDefault();
+            if (firstTr != null && firstTr.Element(W + "tblPrEx") == null)
+            {
+                firstTr.AddFirst(new XElement(W + "tblPrEx",
+                    new XElement(W + "tblBorders",
+                        new XElement(W + "top", new XAttribute(W + "val", "double"), new XAttribute(W + "sz", "8")))));
+                localApplied[6] = true;
+            }
+
             wd.MainDocumentPart.PutXDocument();
         }
         applied = localApplied;
@@ -115,12 +126,13 @@ public class BlockFormatChangeRealDocTests
         var result = DocxDiff.Compare(left, right, Settings);
         var body = BodyOf(result);
 
-        // All five native change markers present.
+        // All native change markers present (the full two-way table + section family).
         Assert.NotEmpty(body.Descendants(W + "pPrChange"));
         Assert.NotEmpty(body.Descendants(W + "tblPrChange"));
         Assert.NotEmpty(body.Descendants(W + "tblGridChange"));
         Assert.NotEmpty(body.Descendants(W + "trPrChange"));
         Assert.NotEmpty(body.Descendants(W + "tcPrChange"));
+        Assert.NotEmpty(body.Descendants(W + "tblPrExChange"));
         Assert.NotEmpty(body.Descendants(W + "sectPrChange"));
 
         // Schema-valid: the produced markup introduces NO NEW schema errors over the input (HC029 carries
@@ -140,7 +152,7 @@ public class BlockFormatChangeRealDocTests
 
         // No change markers survive accept OR reject (they resolve, never linger).
         foreach (var d in new[] { accepted, rejected })
-            foreach (var name in new[] { "pPrChange", "tblPrChange", "tblGridChange", "trPrChange", "tcPrChange", "sectPrChange" })
+            foreach (var name in new[] { "pPrChange", "tblPrChange", "tblGridChange", "trPrChange", "tcPrChange", "tblPrExChange", "sectPrChange" })
                 Assert.Empty(BodyOf(d).Descendants(W + name));
     }
 

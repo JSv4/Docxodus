@@ -689,6 +689,17 @@ public sealed class DocxDiffSettings
     /// </summary>
     public bool CompareHeadersFooters { get; set; } = true;
 
+    /// <summary>
+    /// Track paragraph-and-above property changes (block-format-change family) as native Word markup —
+    /// <c>w:pPrChange</c>/<c>w:tcPrChange</c>/<c>w:trPrChange</c>/<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/
+    /// <c>w:tblPrExChange</c>/<c>w:sectPrChange</c>. Default <c>true</c>. Set <c>false</c> to restore the
+    /// pre-2026-07-03 behavior: a paragraph/table/section property change is applied untracked (the right
+    /// properties win with no revision). Run-level <c>w:rPrChange</c> is unaffected (always tracked).
+    /// <c>Consolidate</c> forces this off internally (the N-way merge does not track block-format changes in
+    /// v1), regardless of this value.
+    /// </summary>
+    public bool TrackBlockFormatChanges { get; set; } = true;
+
     /// <summary>Map this public settings object onto the internal <c>IrDiffSettings</c>.</summary>
     internal IrDiffSettings ToIrDiffSettings()
     {
@@ -735,6 +746,10 @@ public sealed class DocxDiffSettings
                 ? IrFormatComparison.Full
                 : IrFormatComparison.ModeledOnly,
             CompareHeadersFooters = CompareHeadersFooters,
+            TrackBlockFormatChanges = TrackBlockFormatChanges,
+            // The paragraph slice defaults equal to the block flag (two-way behaves identically); only the
+            // composite diverges them (pPr on, table/section off) — see IrCompositeMerger.
+            TrackParagraphFormatChanges = TrackBlockFormatChanges,
         };
     }
 }

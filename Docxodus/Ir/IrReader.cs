@@ -659,16 +659,24 @@ internal static class IrReader
         ctx.CommentTracker?.FinishParagraph();
 
         var contentHash = ComputeParagraphContentHash(processed);
-        var formatFingerprint = IrHasher.FingerprintBlock(paraFormat, RunFormatsInOrder(processed));
 
         // An in-pPr w:sectPr marks an in-document section transition (the markdown projection emits a
         // {#sec:…} + thematic break after the paragraph and indexes the sectPr). Capture its anchor so
-        // the emitter and anchor index can reproduce that without re-walking the skipped pPr. The
-        // trailing top-level body sectPr is a standalone IrSectionBreak block, handled elsewhere.
+        // the emitter and anchor index can reproduce that without re-walking the skipped pPr, and (A3) its
+        // modeled section-format so a mid-document sectPr-only change is diffable. The trailing top-level
+        // body sectPr is a standalone IrSectionBreak block, handled elsewhere.
         var inlineSectPr = pPr?.Element(W + "sectPr");
         IrAnchor? inlineSectAnchor = inlineSectPr is null
             ? null
             : AnchorFor(IrAnchorKind.Sec, inlineSectPr, ctx);
+        var inlineSectionFormat = inlineSectPr is null ? null : MapSectionFormat(inlineSectPr);
+
+        // Fingerprint AFTER the inline-sectPr map so its page setup participates (A3).
+        var formatFingerprint = IrHasher.FingerprintBlock(paraFormat, RunFormatsInOrder(processed), inlineSectionFormat);
+
+        // pPrChange-comparable paragraph-property digest (Consolidate sub-project B): the pPr's children
+        // minus the mark rPr / inline sectPr / pPrChange marker, flattened so empty ≡ absent.
+        var pPrDigest = PPrPropsDigest(pPr);
 
         // Resolve the auto-number marker against the LIVE package while we have it (see
         // IrParagraph.ResolvedListMarker for the rationale). RetrieveListItem returns null for
@@ -683,6 +691,8 @@ internal static class IrReader
             List = listInfo,
             Inlines = IrNodeList.From(processed),
             InlineSectionBreakAnchor = inlineSectAnchor,
+            InlineSectionFormat = inlineSectionFormat,
+            PPrDigest = pPrDigest,
             ResolvedListMarker = resolvedMarker,
             // The oracle's structural IsListItem verdict (numPr present inline or via the style chain,
             // numId-agnostic) — drives the emitter's trailing-blank rule for heading/Subtitle styles
@@ -1832,6 +1842,22 @@ internal static class IrReader
         return IrHasher.CanonicalHash(container);
     }
 
+    /// <summary>
+    /// Canonical hash of a paragraph's `w:pPr` PROPERTY children — everything except the mark `w:rPr`, the
+    /// inline `w:sectPr`, and the `w:pPrChange` marker (the pPrChange-comparable projection, per
+    /// <c>IrMarkupRenderer.PPrForCompare</c>). Flattened into a fixed-name container so empty ≡ absent (a
+    /// null / property-less pPr hashes identically). Backs <see cref="IrParagraph.PPrDigest"/> (Consolidate B).
+    /// </summary>
+    private static IrHash PPrPropsDigest(XElement? pPr)
+    {
+        var container = new XElement("ppr-props");
+        if (pPr != null)
+            foreach (var e in pPr.Elements()
+                         .Where(e => e.Name != W + "rPr" && e.Name != W + "sectPr" && e.Name != W + "pPrChange"))
+                container.Add(new XElement(e));
+        return IrHasher.CanonicalHash(container);
+    }
+
     private static IrTable BuildTable(XElement tbl, ReadContext ctx)
     {
         var rows = new List<IrRow>();
@@ -1924,12 +1950,15 @@ internal static class IrReader
         // The trackable subset the markup + revision surfaces agree on: w:trPr children ONLY (no tblPrEx).
         var trPr = tr.Element(W + "trPr");
         var trPrShellDigest = ShellChildrenDigest(trPr != null ? new[] { trPr } : System.Array.Empty<XElement>());
+        // Row-level table property exceptions (w:tblPrEx), tracked independently of w:trPr.
+        var trPrExDigest = ShellChildrenDigest(tr.Elements(W + "tblPrEx"));
 
         var row = new IrRow(AnchorFor(IrAnchorKind.Tr, tr, ctx), IrNodeList.From(cells), rowBuilder.Build())
         {
             Source = ctx.Provenance(tr),
             TrPrDigest = trPrDigest,
             TrPrShellDigest = trPrShellDigest,
+            TrPrExDigest = trPrExDigest,
         };
         return (row, cellFingerprints);
     }
@@ -2059,40 +2088,39 @@ internal static class IrReader
 
     // --- section break ----------------------------------------------------
 
-    private static IrSectionBreak BuildSectionBreak(XElement sectPr, ReadContext ctx)
+    /// <summary>
+    /// Map a <c>w:sectPr</c>'s modeled section-format fields (page size / margins / orientation / type)
+    /// plus its unmodeled-children digest into an <see cref="IrSectionFormat"/>. Shared by
+    /// <see cref="BuildSectionBreak"/> (the trailing body sectPr) and <see cref="BuildParagraph"/> (an
+    /// inline in-<c>pPr</c> sectPr).
+    /// </summary>
+    internal static IrSectionFormat MapSectionFormat(XElement sectPr)
     {
         var pgSz = sectPr.Element(W + "pgSz");
-        int? pageWidth = IntAttr(pgSz, W + "w");
-        int? pageHeight = IntAttr(pgSz, W + "h");
         bool? landscape = (string?)pgSz?.Attribute(W + "orient") switch
         {
             "landscape" => true,
             null => null,
             _ => false,
         };
-
         var pgMar = sectPr.Element(W + "pgMar");
-        int? marginTop = IntAttr(pgMar, W + "top");
-        int? marginBottom = IntAttr(pgMar, W + "bottom");
-        int? marginLeft = IntAttr(pgMar, W + "left");
-        int? marginRight = IntAttr(pgMar, W + "right");
-
-        string? sectionType = AttrVal(sectPr.Element(W + "type"));
-
-        var digest = UnmodeledDigest(sectPr, SectPrConsumed);
-
-        var format = new IrSectionFormat
+        return new IrSectionFormat
         {
-            PageWidthTwips = pageWidth,
-            PageHeightTwips = pageHeight,
+            PageWidthTwips = IntAttr(pgSz, W + "w"),
+            PageHeightTwips = IntAttr(pgSz, W + "h"),
             Landscape = landscape,
-            MarginTopTwips = marginTop,
-            MarginBottomTwips = marginBottom,
-            MarginLeftTwips = marginLeft,
-            MarginRightTwips = marginRight,
-            SectionType = sectionType,
-            UnmodeledDigest = digest,
+            MarginTopTwips = IntAttr(pgMar, W + "top"),
+            MarginBottomTwips = IntAttr(pgMar, W + "bottom"),
+            MarginLeftTwips = IntAttr(pgMar, W + "left"),
+            MarginRightTwips = IntAttr(pgMar, W + "right"),
+            SectionType = AttrVal(sectPr.Element(W + "type")),
+            UnmodeledDigest = UnmodeledDigest(sectPr, SectPrConsumed),
         };
+    }
+
+    private static IrSectionBreak BuildSectionBreak(XElement sectPr, ReadContext ctx)
+    {
+        var format = MapSectionFormat(sectPr);
 
         // ContentHash: a single opaque hash of the whole sectPr — deterministic and simple. Resolver-aware
         // so a header/footer-reference rel-id renumber (r:id pointing at content-identical header/footer

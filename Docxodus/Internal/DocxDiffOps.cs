@@ -139,6 +139,8 @@ internal static class DocxDiffOps
                 : DocxDiffFormatComparison.ModeledOnly;
         if (TryGetBool(root, "compareHeadersFooters", out var compareHf))
             settings.CompareHeadersFooters = compareHf;
+        if (TryGetBool(root, "trackBlockFormatChanges", out var trackBlockFmt))
+            settings.TrackBlockFormatChanges = trackBlockFmt;
 
         return settings;
     }

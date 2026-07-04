@@ -803,6 +803,10 @@ class DocxDiffSettings:
     #: revisions carry hdr/ftr-scoped anchors; the edit script carries
     #: ``headerFooterOps``. False ignores header/footer scopes entirely.
     compare_headers_footers: bool = True
+    #: Track paragraph-and-above property changes (pPr/tcPr/trPr/tblPr/tblGrid/tblPrEx/sectPr) as native
+    #: Word markup. Default True; False restores the untracked-right-apply behavior. Consolidate ignores
+    #: block-format changes regardless.
+    track_block_format_changes: bool = True
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase keys the host's ``DocxDiffOps.ParseSettings`` reads. Only
@@ -834,6 +838,8 @@ class DocxDiffSettings:
             wire["formatComparison"] = int(self.format_comparison)
         if not self.compare_headers_footers:
             wire["compareHeadersFooters"] = False
+        if not self.track_block_format_changes:
+            wire["trackBlockFormatChanges"] = False
         return wire
 
 
