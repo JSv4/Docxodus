@@ -150,7 +150,7 @@ internal static class IrMarkupRenderer
                 // references + rsids), stamp native w:sectPrChange — the right properties are applied and the left
                 // properties preserved in the marker. References (owned by the header/footer machinery, which runs
                 // later and mutates them) and any mid-document sectPr inside a pPr are untouched (v1 ceilings).
-                if (settings.TrackBlockFormatChanges && trailingSectPr != null)
+                if (settings.TrackSectionFormatChanges && trailingSectPr != null)
                 {
                     var rightTrailingSectPr = wDocRight.MainDocumentPart?.GetXDocument().Root?
                         .Element(W.body)?.Elements(W.sectPr).LastOrDefault();
@@ -3398,7 +3398,7 @@ internal static class IrMarkupRenderer
         // Two independent slices: pPr (+ mark rPr) gated on the PARAGRAPH flag, the inline sectPr gated on
         // the block flag (so the composite can stamp pPrChange but not sectPrChange — B1 vs B2).
         bool trackPPr = state.Settings.TrackParagraphFormatChanges;
-        bool trackSect = state.Settings.TrackBlockFormatChanges;
+        bool trackSect = state.Settings.TrackSectionFormatChanges;
         if (!trackPPr && !trackSect)
             return;
 
@@ -3587,6 +3587,28 @@ internal static class IrMarkupRenderer
     /// AnchorIndex, unlike rows/cells).</summary>
     private static XElement? FindTableSource(IrDocument ir, string tableAnchor) =>
         ir.AnchorIndex.TryGetValue(tableAnchor, out var b) && b is IrTable t ? t.Source.Element : null;
+
+    /// <summary>Stamp <c>w:sectPrChange</c> on the composed output's trailing <c>w:sectPr</c> for a composed
+    /// section change (Consolidate B2): resolve the winning reviewer's trailing <c>w:sectPr</c> and apply its
+    /// properties (accept ≡ winner) while capturing the base properties into the marker (reject ≡ base),
+    /// attributed to the winner's author. Header/footer references are preserved (owned by the hdr/ftr
+    /// machinery). No-op when the section slice is off or no winner was attributed.</summary>
+    internal static void ApplyComposedTrailingSectPr(
+        XElement trailingSectPr, IrComposedShellRef? sectRef,
+        IReadOnlyList<IrDocument> reviewerIrs, RenderState state)
+    {
+        if (!state.Settings.TrackSectionFormatChanges || sectRef == null
+            || sectRef.Reviewer < 0 || sectRef.Reviewer >= reviewerIrs.Count)
+            return;
+        var winnerSectPr = SourceElement(sectRef.RightAnchor, reviewerIrs[sectRef.Reviewer]);
+        if (winnerSectPr == null || winnerSectPr.Name != W.sectPr || !SectPrPropsDiffer(trailingSectPr, winnerSectPr))
+            return;
+
+        var saved = state.AuthorOverride;
+        state.AuthorOverride = sectRef.Author;
+        ApplySectPrChange(trailingSectPr, trailingSectPr, winnerSectPr, state);
+        state.AuthorOverride = saved;
+    }
 
     /// <summary>
     /// Core table-shell stamper. <paramref name="host"/> already carries the RIGHT shell (from a verbatim

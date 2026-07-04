@@ -106,6 +106,32 @@ public class ConsolidateBlockFormatB2Tests
     public void Trailing_sectPr_only_edit_merges_with_marker_and_round_trips()
         => AssertSingleReviewerMerge(Base(), IrTestDocuments.FromBodyXml(Body(pgMarTop: "2880")), "w:sectPrChange");
 
+    [Fact]
+    public void Trailing_sectPr_change_reports_section_consolidated_revision()
+    {
+        var revs = DocxDiff.GetConsolidatedRevisions(Base(),
+            new[] { new DocxDiffReviewer { Author = "Alice", Document = IrTestDocuments.FromBodyXml(Body(pgMarTop: "2880")) } });
+        Assert.Contains(revs, r => r.FormatChange is { } fc && fc.Scope == DocxDiffFormatChangeScope.Section && r.Author == "Alice");
+    }
+
+    [Fact]
+    public void Inline_sectPr_change_merges_with_marker_and_round_trips()
+    {
+        // A mid-document inline section break (w:pPr/w:sectPr) whose page margin changes rides B1's paragraph
+        // FormatOnly path (BlockSignature includes the section key under the section slice).
+        static string InlineBody(string top) =>
+            $"<w:p><w:pPr><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"{top}\" w:bottom=\"1440\" w:left=\"1440\" w:right=\"1440\"/></w:sectPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>b</w:t></w:r></w:p>" +
+            "<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr>";
+        var baseDoc = IrTestDocuments.FromBodyXml(InlineBody("1440"));
+        var alice = IrTestDocuments.FromBodyXml(InlineBody("2880"));
+
+        var merged = Consolidate(baseDoc, ConflictResolution.BaseWins, ("Alice", alice));
+        Assert.Contains("w:sectPrChange", Xml(merged));
+        Assert.Equal(Docs.ShellSection(alice), Docs.ShellSection(Accept(merged)));
+        Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(Reject(merged)));
+    }
+
     // ------------------------------------------------------------------ Phase 1/2: consensus + conflict per family
 
     [Theory]

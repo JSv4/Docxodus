@@ -35,14 +35,13 @@ internal static class IrCompositeMerger
         // MergeNoteScopes (simpler — story pairing is by scope, no id-map machinery needed).
         settings = settings with { CompareHeadersFooters = false };
 
-        // Consolidate block-format merge (sub-project B). B1 merges reviewers' PARAGRAPH-property (w:pPr)
-        // changes: the paragraph slice is turned ON so per-reviewer diffs surface pPr changes as FormatOnly
-        // ops (composed by ComposePPr — consensus / conflict) and the composite renderer stamps pPrChange
-        // authored to the winning reviewer. The TABLE-shell and SECTION slices stay OFF (B2 ceiling) — a
-        // reviewer's shell/section-only edit is still ignored by Consolidate. text+pPr edits keep routing to
-        // the block-level conflict path (only pPr-ONLY edits compose in B1). Pinned by
-        // BlockFormatChangeTests.Consolidate_merges_pPr_but_not_shell_section_v1.
-        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true };
+        // Consolidate block-format merge (sub-project B). ALL THREE slices are turned ON — the composite merges
+        // reviewers' PARAGRAPH-property (w:pPr, B1), TABLE-shell (w:tcPr/trPr/tblPr/tblGrid/tblPrEx, B2) and
+        // SECTION (w:sectPr, B2) format changes with per-element attribution + native markup. The UMBRELLA
+        // TrackBlockFormatChanges stays FALSE so the shared two-way emit helpers never double-stamp on a
+        // conflict-path winner (they consult the specific slice). text+pPr edits keep routing to the
+        // block-level conflict path (never a silent format drop). Pinned by ConsolidateBlockFormatB2Tests.
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true };
 
         // 1. Raw pairwise scripts, NOT yet lowered — so PlanMoves can inspect every reviewer's move groups
         //    against the shared base anchor space before any move is collapsed to del/ins.
@@ -82,7 +81,14 @@ internal static class IrCompositeMerger
         var (noteOps, noteIdMaps) = MergeNoteScopes(
             baseIr, reviewers, rawScripts, policy, settings, conflicts, ref nextConflictId);
 
-        return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps);
+        // 5. TRAILING SECTION (B2): the document-final w:sectPr is not a body block op (Word compares it at the
+        //    document level), so compose it directly — base vs each reviewer's trailing IrSectionBreak.Format
+        //    (modeled + unmodeled digest), mirroring ComposeCellShell. The winner attribution rides to the
+        //    composite renderer, which stamps w:sectPrChange (inner = base) on the output's trailing sectPr.
+        var trailingSectPr = ComposeTrailingSection(
+            baseIr, reviewers, policy, settings, conflicts, ref nextConflictId);
+
+        return new IrCompositeScript(IrNodeList.From(ops), IrNodeList.From(conflicts), noteOps, noteIdMaps, trailingSectPr);
     }
 
     // ---- N-way note-scope merge ----
@@ -1713,6 +1719,39 @@ internal static class IrCompositeMerger
 
     private static IrComposedShellRef? ToShellRef((int Reviewer, string? Anchor, string Author) w) =>
         w.Reviewer >= 0 && w.Anchor is { } a ? new IrComposedShellRef(w.Reviewer, a, w.Author) : null;
+
+    /// <summary>
+    /// Compose the document-final (trailing) <c>w:sectPr</c> across reviewers (Consolidate B2). The trailing
+    /// section is NOT a body block op (Word compares it at the document level), so it is composed here directly:
+    /// a reviewer is a changer when its trailing <see cref="IrSectionBreak"/>'s <see cref="IrBlock.FormatFingerprint"/>
+    /// (modeled page setup + the unmodeled-digest catch-all) differs from base. 0 → base; all agree → the first
+    /// reviewer; ≥2 distinct → a recorded conflict resolved by policy. The winner attribution rides to the
+    /// composite renderer, which resolves that reviewer's raw trailing <c>w:sectPr</c> and stamps
+    /// <c>w:sectPrChange</c> (inner = base, references preserved).
+    /// </summary>
+    private static IrComposedShellRef? ComposeTrailingSection(
+        IrDocument baseIr,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
+        Docxodus.ConflictResolution policy, IrDiffSettings settings,
+        List<IrConflict> conflicts, ref int nextConflictId)
+    {
+        if (!settings.TrackSectionFormatChanges
+            || baseIr.Body.Blocks.Count == 0 || baseIr.Body.Blocks[^1] is not IrSectionBreak baseSec)
+            return null;
+
+        var changers = new List<(int Reviewer, string Author, IrHash Digest, string RightAnchor)>();
+        for (int r = 0; r < reviewers.Count; r++)
+        {
+            var blocks = reviewers[r].Ir.Body.Blocks;
+            if (blocks.Count == 0 || blocks[^1] is not IrSectionBreak rsec
+                || rsec.FormatFingerprint.Equals(baseSec.FormatFingerprint))
+                continue;
+            changers.Add((r, reviewers[r].Author, rsec.FormatFingerprint, rsec.Anchor.ToString()));
+        }
+
+        return ToShellRef(ComposeShellElement(
+            baseSec.Anchor.ToString(), changers, policy, ref nextConflictId, conflicts, "§section"));
+    }
 
     /// <summary>Attach the composed trPr/tblPrEx shell attribution onto the authored row op for
     /// <paramref name="rowAnchor"/>.</summary>

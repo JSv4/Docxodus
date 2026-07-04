@@ -54,7 +54,7 @@ internal static class IrCompositeRevisionRenderer
     {
         // Mirror IrCompositeMerger's forcing. B1 turns the PARAGRAPH slice ON so a single-source pPr op reports
         // a Paragraph-scope FormatChanged authored to its reviewer; table-shell/section slices stay OFF (B2).
-        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true };
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true };
 
         // Move-source pre-pass over the WHOLE composite script. Single-source ops are each rendered in
         // their own one-op mini-script (so IrRevisionRenderer honours per-op granularity/author), but a
