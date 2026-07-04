@@ -674,6 +674,89 @@ public class BlockFormatChangeTests
         Assert.Equal(new[] { "shell" }, rev.FormatChange.ChangedPropertyNames);
     }
 
+    // ------------------------------------------------------------------ gridSpan / vMerge (Issue #230)
+
+    // #230's flagged "harder sub-case": a cell's horizontal grid-span (`w:gridSpan`) and vertical merge
+    // (`w:vMerge`) both live INSIDE its `w:tcPr`, so a change to either — with the cell COUNT unchanged —
+    // rides `IrCell.ShellDigest` into the cell `ContentHash`, the table pair classifies Modified, and the
+    // edit is tracked as a native `w:tcPrChange` (TableCell FormatChanged), round-tripping at the tcPr-byte
+    // level. Before the shell digest these were INVISIBLE (the table pair classified EqualBlock and the edit
+    // silently vanished — the #230 soundness bug). These two fixtures are the direct proof against that bug.
+
+    // A 2-row, 1-column table; {v0}/{v1} inject each cell's vMerge markup (text held constant).
+    private static string VMergeTable(string v0, string v1) =>
+        "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid>" +
+        $"<w:tr><w:tc><w:tcPr><w:tcW w:w=\"4000\" w:type=\"dxa\"/>{v0}</w:tcPr><w:p><w:r><w:t>Top</w:t></w:r></w:p></w:tc></w:tr>" +
+        $"<w:tr><w:tc><w:tcPr><w:tcW w:w=\"4000\" w:type=\"dxa\"/>{v1}</w:tcPr><w:p><w:r><w:t>Bottom</w:t></w:r></w:p></w:tc></w:tr>" +
+        "</w:tbl><w:p><w:r><w:t>After.</w:t></w:r></w:p>";
+
+    [Fact]
+    public void VMergeOnly_cell_change_is_tracked_with_native_tcPrChange()
+    {
+        // Vertically merge the two rows' single column (add `w:vMerge` restart + continue). Text unchanged.
+        var left = IrTestDocuments.FromBodyXml(VMergeTable("", ""));
+        var right = IrTestDocuments.FromBodyXml(VMergeTable("<w:vMerge w:val=\"restart\"/>", "<w:vMerge/>"));
+
+        var result = DocxDiff.Compare(left, right, ModeledOnly);
+        var body = BodyOf(result);
+        Assert.NotEmpty(body.Descendants(W + "tcPrChange"));                    // tracked as a cell-shell change…
+        Assert.Empty(body.Descendants(W + "ins"));                             // …not a spurious content ins/del
+        Assert.Empty(body.Descendants(W + "del"));
+
+        // accept ≡ right (vMerge present on both cells), reject ≡ left (no vMerge anywhere).
+        Assert.Equal(2, BodyOf(RevisionProcessor.AcceptRevisions(result)).Descendants(W + "vMerge").Count());
+        Assert.Empty(BodyOf(RevisionProcessor.RejectRevisions(result)).Descendants(W + "vMerge"));
+
+        Assert.Contains(DocxDiff.GetRevisions(left, right, ModeledOnly), r =>
+            r.Type == DocxDiffRevisionType.FormatChanged
+            && r.FormatChange!.Scope == DocxDiffFormatChangeScope.TableCell);
+
+        AssertNoSchemaErrors(result);
+    }
+
+    // A 1-row table over a 3-column grid; the row's two cells carry grid-spans {s0}/{s1} (must sum to 3).
+    private static string GridSpanTable(int s0, int s1) =>
+        "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr>" +
+        "<w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid>" +
+        $"<w:tr><w:tc><w:tcPr><w:gridSpan w:val=\"{s0}\"/></w:tcPr><w:p><w:r><w:t>Left</w:t></w:r></w:p></w:tc>" +
+        $"<w:tc><w:tcPr><w:gridSpan w:val=\"{s1}\"/></w:tcPr><w:p><w:r><w:t>Right</w:t></w:r></w:p></w:tc></w:tr>" +
+        "</w:tbl><w:p><w:r><w:t>After.</w:t></w:r></w:p>";
+
+    [Fact]
+    public void GridSpanOnly_cell_change_is_tracked_with_native_tcPrChange()
+    {
+        // Redistribute the two cells' column span (2|1 → 1|2). Cell COUNT stable, text unchanged.
+        var left = IrTestDocuments.FromBodyXml(GridSpanTable(2, 1));
+        var right = IrTestDocuments.FromBodyXml(GridSpanTable(1, 2));
+
+        var result = DocxDiff.Compare(left, right, ModeledOnly);
+        var body = BodyOf(result);
+        Assert.NotEmpty(body.Descendants(W + "tcPrChange"));
+        Assert.Empty(body.Descendants(W + "ins"));
+        Assert.Empty(body.Descendants(W + "del"));
+
+        static string[] Spans(WmlDocument d) => BodyOf(d).Descendants(W + "gridSpan")
+            .Select(e => (string?)e.Attribute(W + "val") ?? "").ToArray();
+        Assert.Equal(new[] { "1", "2" }, Spans(RevisionProcessor.AcceptRevisions(result)));   // accept ≡ right
+        Assert.Equal(new[] { "2", "1" }, Spans(RevisionProcessor.RejectRevisions(result)));   // reject ≡ left
+
+        Assert.Contains(DocxDiff.GetRevisions(left, right, ModeledOnly), r =>
+            r.Type == DocxDiffRevisionType.FormatChanged
+            && r.FormatChange!.Scope == DocxDiffFormatChangeScope.TableCell);
+
+        AssertNoSchemaErrors(result);
+    }
+
+    private static void AssertNoSchemaErrors(WmlDocument doc)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator().Validate(wd)
+            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
+            .Select(e => e.Description).ToList();
+        Assert.True(errors.Count == 0, string.Join("\n", errors));
+    }
+
     [Fact]
     public void TableFamily_and_pPr_outputs_are_schema_valid()
     {

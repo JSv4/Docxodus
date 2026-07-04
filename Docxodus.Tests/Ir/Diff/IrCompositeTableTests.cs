@@ -992,6 +992,38 @@ public class IrCompositeTableTests
         Assert.Equal(Docs.StructuralBody(baseDoc), Reject(merged));
     }
 
+    /// <summary>
+    /// Issue #230, consolidate side: a reviewer's vMerge-ONLY cell-shell edit (vertically merge two rows,
+    /// cell count STABLE, text untouched) composes just like a width/shading edit — it lands on accept and
+    /// reject ≡ base, no conflict. Before the shell digest participated in the cell ContentHash this read as
+    /// EqualBlock and the reviewer's structural intent vanished with zero conflict recorded.
+    /// </summary>
+    [Theory]
+    [InlineData(ConflictResolution.BaseWins)]
+    [InlineData(ConflictResolution.FirstReviewerWins)]
+    [InlineData(ConflictResolution.StackAll)]
+    public void VMerge_only_cell_edit_composes(ConflictResolution policy)
+    {
+        // A 2-row, 1-column table (one lead paragraph above); {v0}/{v1} inject each cell's vMerge markup.
+        static WmlDocument VTable(string v0, string v1) => IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>lead</w:t></w:r></w:p>" +
+            "<w:tbl><w:tblPr><w:tblW w:w=\"0\" w:type=\"auto\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"4000\"/></w:tblGrid>" +
+            $"<w:tr><w:tc><w:tcPr><w:tcW w:w=\"4000\" w:type=\"dxa\"/>{v0}</w:tcPr><w:p><w:r><w:t>Top</w:t></w:r></w:p></w:tc></w:tr>" +
+            $"<w:tr><w:tc><w:tcPr><w:tcW w:w=\"4000\" w:type=\"dxa\"/>{v1}</w:tcPr><w:p><w:r><w:t>Bottom</w:t></w:r></w:p></w:tc></w:tr>" +
+            "</w:tbl>");
+
+        var baseDoc = VTable("", "");
+        var reviewer = VTable("<w:vMerge w:val=\"restart\"/>", "<w:vMerge/>");
+
+        Assert.Empty(Conflicts(baseDoc, policy, ("Alice", reviewer)));
+
+        var merged = Consolidate(baseDoc, policy, ("Alice", reviewer));
+        var accepted = RevisionAccepter.AcceptRevisions(merged);
+        var ns = (XNamespace)IrTestDocuments.W;
+        Assert.Equal(2, XDocument.Parse(Docs.MainPartXml(accepted)).Descendants(ns + "vMerge").Count());  // reviewer's merge lands
+        Assert.Equal(Docs.StructuralBody(baseDoc), Reject(merged));                                       // reject ≡ base
+    }
+
     // ------------------------------------------------------------------ helpers
 
     private static int CountOccurrences(string haystack, string needle)
