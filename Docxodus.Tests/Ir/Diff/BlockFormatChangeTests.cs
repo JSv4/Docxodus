@@ -347,6 +347,37 @@ public class BlockFormatChangeTests
             .OfType<IrParagraph>().Select(p => p.PPrDigest.ToHex()).ToArray();
 
     [Fact]
+    public void Consolidate_agree_pPr_disagree_run_format_is_a_conflict_not_a_silent_drop()
+    {
+        // Adversarial-review regression: two reviewers AGREE on pPr (both center) but DISAGREE on RUN format
+        // (Alice bolds, Bob italicizes the same run). Composing by the pPr digest alone would declare
+        // consensus and silently drop Bob's italic. Composing by the full block signature records a conflict —
+        // NEITHER reviewer's edit vanishes from the data.
+        var baseDoc = IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Hello there.</w:t></w:r></w:p>");
+        var alice = IrTestDocuments.FromBodyXml(
+            "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:rPr><w:b/></w:rPr><w:t>Hello there.</w:t></w:r></w:p>");
+        var bob = IrTestDocuments.FromBodyXml(
+            "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:rPr><w:i/></w:rPr><w:t>Hello there.</w:t></w:r></w:p>");
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Document = alice, Author = "Alice" },
+            new DocxDiffReviewer { Document = bob, Author = "Bob" },
+        };
+
+        // Their formats differ (bold vs italic) → a recorded conflict, both competitors present.
+        var conflict = Assert.Single(DocxDiff.GetConflicts(baseDoc, reviewers));
+        Assert.Equal(2, conflict.Competitors.Count);
+
+        // FirstReviewerWins → Alice's format applied (center + bold); Bob recorded, not dropped; reject ≡ base.
+        var firstWins = DocxDiff.Consolidate(baseDoc, reviewers,
+            new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.FirstReviewerWins });
+        var accepted = BodyOf(RevisionProcessor.AcceptRevisions(firstWins));
+        Assert.Equal("center", (string?)accepted.Descendants(W + "jc").Single().Attribute(W + "val"));
+        Assert.Single(accepted.Descendants(W + "b"));                                    // Alice's bold applied
+        Assert.Empty(BodyOf(RevisionProcessor.RejectRevisions(firstWins)).Descendants(W + "jc"));  // reject ≡ base
+    }
+
+    [Fact]
     public void Consolidate_pPr_merge_round_trips_at_the_byte_level_across_reviewers()
     {
         // Three body paragraphs; three reviewers touch different paragraphs' pPr — P0 changed by one reviewer,

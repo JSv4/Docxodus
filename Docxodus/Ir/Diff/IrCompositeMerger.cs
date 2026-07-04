@@ -1029,25 +1029,25 @@ internal static class IrCompositeMerger
             return;
         }
 
-        // CONSOLIDATE B1: multi-reviewer PARAGRAPH-PROPERTY (pPr-only) changes. A pPr change is a FormatOnly
-        // op (text equal, format differs); the text-based consensus/conflict below cannot SEE a pPr
-        // disagreement (it would silently drop a competitor, or wrongly keep base when reviewers actually
-        // agree). Route them through ComposePPr: all-agree → consensus (one op, authored to the first
-        // reviewer); ≥2 distinct → a recorded conflict resolved by policy. Fires only when EVERY toucher is a
-        // pPr-changing paragraph FormatOnly edit — a mixed set (text edits, run-format-only, tables) falls
-        // through to the existing paths. Table-shell/section changes are NOT paragraphs, so they never reach
-        // here (B2 ceiling). text+pPr edits are ModifyBlock (not FormatOnly) → also fall through (B2).
+        // CONSOLIDATE B1: multi-reviewer paragraph FORMAT-only changes (text equal, pPr and/or run/mark format
+        // differs). Such an op is a FormatOnlyBlock; the text-based consensus/conflict below cannot SEE the
+        // format disagreement (it would silently drop a competitor, or wrongly keep base when reviewers agree).
+        // Route them through ComposeParagraphFormat, which compares the FULL boundary-normalized block
+        // signature (run formats + pPr): all-agree → consensus (one op, authored to the first reviewer);
+        // ≥2 distinct → a recorded conflict resolved by policy — a competitor is NEVER silently dropped. Fires
+        // only when EVERY toucher is a paragraph FormatOnly format edit; a mixed set (text ModifyBlocks,
+        // tables) falls through. Table-shell/section changes are NOT paragraphs → never reach here (B2).
         if (settings.TrackParagraphFormatChanges
             && baseIr.AnchorIndex.TryGetValue(anchor, out var pBlk) && pBlk is IrParagraph basePara
-            && touched.All(e => IsParagraphPPrOnlyEdit(e.Op, reviewers[e.Reviewer].Ir, basePara)))
+            && touched.All(e => IsParagraphFormatEdit(e.Op, reviewers[e.Reviewer].Ir, basePara, settings)))
         {
-            int winner = ComposePPr(basePara, anchor, touched, reviewers, policy, settings, ref nextConflictId, conflicts);
+            var (winner, pcid) = ComposeParagraphFormat(basePara, anchor, touched, reviewers, policy, settings, ref nextConflictId, conflicts);
             if (winner < 0)
-                ops.Add(EqualOp(anchor));                                          // base pPr wins
+                ops.Add(EqualOp(anchor));                                          // base format wins
             else
             {
                 var (rev, op) = touched.First(e => e.Reviewer == winner);
-                ops.Add(EmitOp(op, reviewers[rev].Author, rev));                   // winner's pPr, authored
+                ops.Add(EmitOp(op, reviewers[rev].Author, rev, pcid));             // winner's format, authored (+ conflict id if any)
             }
             return;
         }
@@ -1970,56 +1970,65 @@ internal static class IrCompositeMerger
     /// StackAll take the first changer's shell (shells cannot stack — the disagreement is recorded either
     /// way, so no reviewer's shell edit is ever silently dropped without a conflict).
     /// </summary>
-    /// <summary>True when <paramref name="op"/> is a paragraph FormatOnly edit whose PARAGRAPH properties
-    /// (`w:pPr`) actually changed vs the base (not a run-format-only FormatOnly). Consolidate B1.</summary>
-    private static bool IsParagraphPPrOnlyEdit(IrEditOp op, IrDocument reviewerIr, IrParagraph basePara)
+    /// <summary>True when <paramref name="op"/> is a paragraph FormatOnly edit (text-equal, format differs vs
+    /// base) — its FULL boundary-normalized <see cref="IrModeledFormat.BlockSignature"/> (per-token run format
+    /// + pPr key) differs from the base. Deliberately the FULL signature, not the pPr digest alone: a
+    /// FormatOnly op can carry BOTH a pPr change and a run/mark-rPr change, and composing on pPr alone would
+    /// silently drop a competitor's run edit. Consolidate B1.</summary>
+    private static bool IsParagraphFormatEdit(IrEditOp op, IrDocument reviewerIr, IrParagraph basePara, IrDiffSettings settings)
     {
         if (op.Kind != IrEditOpKind.FormatOnlyBlock || op.RightAnchor is not { } rightAnchor)
             return false;
         return reviewerIr.AnchorIndex.TryGetValue(rightAnchor, out var rb) && rb is IrParagraph rp
-            && !rp.PPrDigest.Equals(basePara.PPrDigest);
+            && IrModeledFormat.BlockSignature(rp, settings) != IrModeledFormat.BlockSignature(basePara, settings);
     }
 
     /// <summary>
-    /// Compose N reviewers' PARAGRAPH-property (`w:pPr`) edits over one base paragraph (Consolidate B1),
-    /// mirroring <see cref="ComposeCellShell"/>: collect reviewers whose right paragraph's
-    /// <see cref="IrParagraph.PPrDigest"/> differs from the base; 0 changers → base wins (<c>-1</c>); all
-    /// agree → the first reviewer (consensus); ≥2 distinct → a recorded <see cref="IrConflict"/> resolved by
-    /// policy (BaseWins → base wins; else the first changer). Returns the winning reviewer index, or <c>-1</c>
-    /// to keep the base pPr. A pPr, like a cell shell, cannot STACK (one paragraph has one pPr).
+    /// Compose N reviewers' paragraph FORMAT-only edits over one base paragraph (Consolidate B1), mirroring
+    /// <see cref="ComposeCellShell"/>: collect reviewers whose right paragraph's FULL
+    /// <see cref="IrModeledFormat.BlockSignature"/> (run formats + pPr, boundary-normalized) differs from the
+    /// base; 0 changers → base wins (<c>-1</c>); all agree → the first reviewer (consensus); ≥2 distinct → a
+    /// recorded <see cref="IrConflict"/> resolved by policy (BaseWins → base wins; else the first changer).
+    /// Returns the winning reviewer index (or <c>-1</c> to keep the base) and, when a conflict was recorded,
+    /// its id. A paragraph format, like a cell shell, cannot STACK — one paragraph has one pPr/run set — but a
+    /// competitor is NEVER silently dropped: every disagreeing reviewer is listed in the conflict.
     /// </summary>
-    private static int ComposePPr(
+    private static (int Winner, int? ConflictId) ComposeParagraphFormat(
         IrParagraph basePara, string baseAnchor,
         List<(int Reviewer, IrEditOp Op)> touched,
         IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
         Docxodus.ConflictResolution policy, IrDiffSettings settings,
         ref int nextConflictId, List<IrConflict> conflicts)
     {
-        var changers = new List<(int Reviewer, string Author, IrEditOp Op, IrHash Digest)>();
+        var baseSig = IrModeledFormat.BlockSignature(basePara, settings);
+        var changers = new List<(int Reviewer, string Author, IrEditOp Op, string Sig)>();
         foreach (var (reviewer, op) in touched)
         {
             if (op.RightAnchor is not { } rightAnchor
                 || !reviewers[reviewer].Ir.AnchorIndex.TryGetValue(rightAnchor, out var rb) || rb is not IrParagraph rp)
                 continue;
-            if (!rp.PPrDigest.Equals(basePara.PPrDigest))
-                changers.Add((reviewer, reviewers[reviewer].Author, op, rp.PPrDigest));
+            var sig = IrModeledFormat.BlockSignature(rp, settings);
+            if (sig != baseSig)
+                changers.Add((reviewer, reviewers[reviewer].Author, op, sig));
         }
         if (changers.Count == 0)
-            return -1;
+            return (-1, null);
         changers.Sort((a, b) => a.Reviewer.CompareTo(b.Reviewer));
 
-        bool allAgree = changers.All(c => c.Digest.Equals(changers[0].Digest));
+        bool allAgree = changers.All(c => c.Sig == changers[0].Sig);
         if (!allAgree)
         {
             // Competitors name the contested paragraph by its (unchanged) text; the disagreement — differing
-            // pPr — is structural, recorded by the conflict's existence (mirrors ComposeCellShell).
-            conflicts.Add(new IrConflict(nextConflictId++, baseAnchor, 0, 0, policy,
+            // paragraph/run format — is structural, recorded by the conflict's existence (mirrors ComposeCellShell).
+            int cid = nextConflictId++;
+            conflicts.Add(new IrConflict(cid, baseAnchor, 0, 0, policy,
                 IrNodeList.From(changers.Select(c =>
                     new IrConflictCompetitor(c.Author, BlockResultText(c.Op, reviewers[c.Reviewer].Ir, settings))))));
             if (policy == Docxodus.ConflictResolution.BaseWins)
-                return -1;
+                return (-1, cid);
+            return (changers[0].Reviewer, cid);
         }
-        return changers[0].Reviewer;
+        return (changers[0].Reviewer, null);
     }
 
     private static (int ShellReviewer, string? ShellAnchor) ComposeCellShell(
