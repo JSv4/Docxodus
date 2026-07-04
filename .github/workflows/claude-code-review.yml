@@ -12,11 +12,12 @@ on:
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # Dependabot PRs never get repository secrets (including
+    # CLAUDE_CODE_OAUTH_TOKEN) on pull_request-triggered runs — that's a
+    # GitHub security restriction, not something this workflow can work
+    # around. Skip the job there instead of showing a permanently-red,
+    # unfixable check on every dependency-bump PR.
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
 
     runs-on: ubuntu-latest
     permissions:
