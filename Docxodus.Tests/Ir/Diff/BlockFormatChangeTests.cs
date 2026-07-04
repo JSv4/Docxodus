@@ -223,6 +223,23 @@ public class BlockFormatChangeTests
         Assert.Single(BodyOf(result).Descendants(W + "shd"));
     }
 
+    // ------------------------------------------------------------------ tblPrEx (follow-up A2)
+
+    [Fact]
+    public void TblPrEx_change_flips_TrPrExDigest_only()
+    {
+        var left = IrReader.Read(IrTestDocuments.FromBodyXml(Table(
+            "<w:tblPrEx><w:tblBorders><w:top w:val=\"single\" w:sz=\"4\"/></w:tblBorders></w:tblPrEx>",
+            "<w:tcW w:w=\"4000\" w:type=\"dxa\"/>")), new IrReaderOptions { RetainSources = false });
+        var right = IrReader.Read(IrTestDocuments.FromBodyXml(Table(
+            "<w:tblPrEx><w:tblBorders><w:top w:val=\"double\" w:sz=\"8\"/></w:tblBorders></w:tblPrEx>",
+            "<w:tcW w:w=\"4000\" w:type=\"dxa\"/>")), new IrReaderOptions { RetainSources = false });
+        var lr = ((IrTable)left.Body.Blocks[0]).Rows[0];
+        var rr = ((IrTable)right.Body.Blocks[0]).Rows[0];
+        Assert.NotEqual(lr.TrPrExDigest, rr.TrPrExDigest);          // tblPrEx delta visible on its own digest
+        Assert.Equal(lr.TrPrShellDigest, rr.TrPrShellDigest);       // trPr-only digest unchanged
+    }
+
     // ------------------------------------------------------------------ table family (Phase 2)
 
     private static string Table(string trPr, string tcPr, string tblPr = "<w:tblW w:w=\"0\" w:type=\"auto\"/>",

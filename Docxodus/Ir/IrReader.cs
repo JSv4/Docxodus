@@ -1924,12 +1924,15 @@ internal static class IrReader
         // The trackable subset the markup + revision surfaces agree on: w:trPr children ONLY (no tblPrEx).
         var trPr = tr.Element(W + "trPr");
         var trPrShellDigest = ShellChildrenDigest(trPr != null ? new[] { trPr } : System.Array.Empty<XElement>());
+        // Row-level table property exceptions (w:tblPrEx), tracked independently of w:trPr.
+        var trPrExDigest = ShellChildrenDigest(tr.Elements(W + "tblPrEx"));
 
         var row = new IrRow(AnchorFor(IrAnchorKind.Tr, tr, ctx), IrNodeList.From(cells), rowBuilder.Build())
         {
             Source = ctx.Provenance(tr),
             TrPrDigest = trPrDigest,
             TrPrShellDigest = trPrShellDigest,
+            TrPrExDigest = trPrExDigest,
         };
         return (row, cellFingerprints);
     }

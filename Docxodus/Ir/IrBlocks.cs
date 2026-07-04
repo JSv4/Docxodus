@@ -140,6 +140,14 @@ internal sealed record IrRow(IrAnchor Anchor, IrNodeList<IrCell> Cells, IrHash C
     public IrHash TrPrShellDigest { get; init; }
 
     /// <summary>
+    /// Canonical hash of the row's `w:tblPrEx` FLATTENED children (empty ≡ absent) — the row-level table
+    /// property exceptions, tracked independently of `w:trPr` (`w:tblPrExChange` markup). NOT in the
+    /// fingerprint (<see cref="TrPrDigest"/> already carries tblPrEx there); a parallel projection so the
+    /// markup + revision surfaces attribute a tblPrEx change without disturbing the trPr digests.
+    /// </summary>
+    public IrHash TrPrExDigest { get; init; }
+
+    /// <summary>
     /// True when this row was delivered by a table-level <c>w:sdt</c> wrapping a <c>w:tr</c> (e.g. a
     /// repeating-section content control), rather than being a direct <c>w:tr</c> child of the
     /// <c>w:tbl</c>. Equality-participating (the same table read twice yields the same flag; a row
