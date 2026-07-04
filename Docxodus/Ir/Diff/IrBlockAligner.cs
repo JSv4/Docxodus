@@ -74,6 +74,17 @@ internal static class IrBlockAligner
         candidates.Sort((a, b) => a.LeftIndex.CompareTo(b.LeftIndex));
         var onSpine = LongestIncreasingSubsequence(candidates);
 
+        // A reorder can have SEVERAL longest spines (e.g. [A, table, B] → [A, B, table]: keeping {A, table}
+        // or {A, B} both cost one relocation). When the arbitrary patience-sort pick relocates a heavy,
+        // STRUCTURAL block (a table / section break / opaque block) that an equal-length spine could instead
+        // anchor, re-pick the spine that keeps the most structural blocks anchored — so the lighter PARAGRAPH
+        // is the one relocated. Beyond producing cleaner 2-way markup, this is what lets a paragraph move that
+        // crosses a table boundary compose in the N-way consolidate (a spuriously-moved table contests the
+        // whole block, blocking per-cell composition of another reviewer's disjoint table edit — issue #229).
+        // The guard keeps the common path byte-identical: it fires ONLY when a structural block is off-spine.
+        if (AnyOffSpineStructuralBlock(candidates, onSpine, leftBlocks))
+            onSpine = LongestIncreasingSubsequencePreferringStructuralAnchors(candidates, leftBlocks, nRight);
+
         for (int c = 0; c < candidates.Count; c++)
         {
             var cand = candidates[c];
@@ -261,6 +272,102 @@ internal static class IrBlockAligner
         // Reconstruct from the last tail back through prev.
         for (int i = tails[tails.Count - 1]; i != -1; i = prev[i])
             result.Add(i);
+        return result;
+    }
+
+    /// <summary>True iff any OFF-spine candidate anchors a non-paragraph (structural) block — a table,
+    /// section break or opaque block — that the arbitrary longest-spine pick chose to relocate. This is the
+    /// cheap guard that keeps the structural-anchor rebalance off the common path: it walks the candidate list
+    /// once and only reports true for the rare reorder where a heavy block was picked as the mover.</summary>
+    private static bool AnyOffSpineStructuralBlock(
+        List<Candidate> candidates, HashSet<int> onSpine, IrNodeList<IrBlock> leftBlocks)
+    {
+        for (int c = 0; c < candidates.Count; c++)
+            if (!onSpine.Contains(c) && leftBlocks[candidates[c].LeftIndex] is not IrParagraph)
+                return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Re-pick the spine as a maximum-WEIGHT strictly-increasing subsequence (by <see cref="Candidate.RightIndex"/>)
+    /// where each candidate weighs <c>BIG + (structural ? 1 : 0)</c> and <c>BIG = candidates.Count + 1</c>
+    /// dominates any achievable structural-bonus total. Because BIG dominates, the result is still a LONGEST
+    /// increasing subsequence — the number of relocated blocks is unchanged — and the bonus is a pure tie-break
+    /// that, among all longest spines, keeps the MOST structural (non-paragraph) blocks anchored. So an
+    /// ambiguous reorder relocates a light paragraph rather than a heavy table / section break.
+    /// </summary>
+    /// <remarks>
+    /// <para>Runs only when <see cref="AnyOffSpineStructuralBlock"/> flags a relocated structural block, so the
+    /// paragraph-only common case never pays for it. O(k log k) via a Fenwick prefix-max over the right-index
+    /// domain (right indices are a permutation — each used once). Deterministic: <c>&gt;</c> comparisons keep
+    /// the earliest-processed (smallest left index) candidate on every tie, in both the tree updates and the
+    /// endpoint pick, so two <see cref="Align"/> calls on the same inputs return sequence-equal spines.</para>
+    /// </remarks>
+    private static HashSet<int> LongestIncreasingSubsequencePreferringStructuralAnchors(
+        List<Candidate> candidates, IrNodeList<IrBlock> leftBlocks, int nRight)
+    {
+        int n = candidates.Count;
+        var result = new HashSet<int>();
+        if (n == 0)
+            return result;
+
+        long big = n + 1; // > any structural-bonus total (at most n), so cardinality stays the primary key.
+
+        // Fenwick prefix-MAX over right-index positions 1..nRight (right value r → position r+1). Each cell
+        // holds the best (weight, endingCandidateIndex) of any subsequence ending at a right value ≤ its range.
+        var treeWeight = new long[nRight + 1];
+        var treeIndex = new int[nRight + 1];
+        Array.Fill(treeIndex, -1);
+
+        void Update(int pos, long weight, int candIndex)
+        {
+            for (; pos <= nRight; pos += pos & -pos)
+                if (weight > treeWeight[pos]) // strict → keep the earliest-processed candidate on ties
+                {
+                    treeWeight[pos] = weight;
+                    treeIndex[pos] = candIndex;
+                }
+        }
+
+        (long Weight, int Index) Query(int pos)
+        {
+            long bestWeight = 0;
+            int bestIndex = -1;
+            for (; pos > 0; pos -= pos & -pos)
+                if (treeWeight[pos] > bestWeight) // strict → keep the earliest-processed candidate on ties
+                {
+                    bestWeight = treeWeight[pos];
+                    bestIndex = treeIndex[pos];
+                }
+            return (bestWeight, bestIndex);
+        }
+
+        var dp = new long[n];
+        var parent = new int[n];
+
+        // Candidates are already sorted ascending by left index (strictly increasing), so a left-order walk
+        // with a "right value strictly smaller" predecessor query yields strictly-increasing subsequences.
+        for (int c = 0; c < n; c++)
+        {
+            int r = candidates[c].RightIndex; // 0-based
+            long weight = big + (leftBlocks[candidates[c].LeftIndex] is IrParagraph ? 0 : 1);
+            var (predWeight, predIndex) = Query(r); // positions 1..r cover right values 0..r-1 (strictly smaller)
+            dp[c] = weight + predWeight;
+            parent[c] = predIndex;
+            Update(r + 1, dp[c], c);
+        }
+
+        long globalBest = long.MinValue;
+        int globalEnd = -1;
+        for (int c = 0; c < n; c++)
+            if (dp[c] > globalBest) // strict → smallest candidate index on ties
+            {
+                globalBest = dp[c];
+                globalEnd = c;
+            }
+
+        for (int c = globalEnd; c != -1; c = parent[c])
+            result.Add(c);
         return result;
     }
 
