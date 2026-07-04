@@ -295,4 +295,26 @@ public class ConsolidateBlockFormatB2Tests
         Assert.Equal(Docs.PlainText(baseDoc), Docs.PlainText(Reject(merged)));
         Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(Reject(merged)));
     }
+
+    /// <summary>
+    /// The positive case: a SINGLE reviewer editing a paragraph's text AND its pPr tracks BOTH — the text as
+    /// w:ins/w:del and the pPr as w:pPrChange (no conflict, nothing dropped). Only a CROSS-reviewer text+pPr
+    /// collision conflict-routes (v1 decision; true inline text+format compose is deferred to B3).
+    /// </summary>
+    [Fact]
+    public void Single_reviewer_text_and_pPr_edit_tracks_both_no_conflict()
+    {
+        var baseDoc = IrTestDocuments.FromBodyXml(
+            "<w:p><w:pPr><w:jc w:val=\"left\"/></w:pPr><w:r><w:t xml:space=\"preserve\">The cat sat.</w:t></w:r></w:p>");
+        var alice = IrTestDocuments.FromBodyXml(
+            "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t xml:space=\"preserve\">The CAT sat.</w:t></w:r></w:p>");
+
+        Assert.Empty(Conflicts(baseDoc, ConflictResolution.BaseWins, ("Alice", alice)));
+        var merged = Consolidate(baseDoc, ConflictResolution.BaseWins, ("Alice", alice));
+        Assert.Contains("w:pPrChange", Xml(merged));
+        Assert.Equal(Docs.PlainText(alice), Docs.PlainText(Accept(merged)));       // text edit lands
+        Assert.Equal(Docs.ShellSection(alice), Docs.ShellSection(Accept(merged))); // pPr change lands
+        Assert.Equal(Docs.PlainText(baseDoc), Docs.PlainText(Reject(merged)));     // reject ≡ base text
+        Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(Reject(merged)));// reject ≡ base pPr
+    }
 }
