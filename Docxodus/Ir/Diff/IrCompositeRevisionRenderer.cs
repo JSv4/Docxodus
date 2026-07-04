@@ -52,6 +52,10 @@ internal static class IrCompositeRevisionRenderer
         IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
         IrDiffSettings settings)
     {
+        // Mirror IrCompositeMerger's forcing. B1 turns the PARAGRAPH slice ON so a single-source pPr op reports
+        // a Paragraph-scope FormatChanged authored to its reviewer; table-shell/section slices stay OFF (B2).
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true };
+
         // Move-source pre-pass over the WHOLE composite script. Single-source ops are each rendered in
         // their own one-op mini-script (so IrRevisionRenderer honours per-op granularity/author), but a
         // MoveModifyBlock destination's token diff Delete spans index its SOURCE block's tokens — and the

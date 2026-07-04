@@ -254,6 +254,43 @@ internal sealed record IrDiffSettings
     public int SplitMaxRunLength { get; init; } = 8;
 
     /// <summary>
+    /// DIFF-TIME setting (header/footer campaign, 2026-07-03). When true (the DEFAULT — Word's own
+    /// Compare "Headers and footers" granularity default), <see cref="IrEditScriptBuilder"/> diffs the
+    /// header/footer stories (paired per section ordinal × occurrence kind, with Word's
+    /// previous-section inheritance rule) into <see cref="IrEditScript.HeaderFooterOps"/>, the markup
+    /// renderer rebuilds changed stories with native tracked-changes markup, and Fine-granularity
+    /// revisions include hdr/ftr-anchored entries. When false, header/footer scopes are ignored
+    /// entirely — the pre-campaign behavior: the output carries the LEFT package's header/footer parts
+    /// verbatim and no header change is reported anywhere.
+    /// </summary>
+    public bool CompareHeadersFooters { get; init; } = true;
+
+    /// <summary>
+    /// DIFF-TIME setting (block-format-change family, 2026-07-03). When true (the DEFAULT), paragraph-and-above
+    /// property changes are DETECTED and TRACKED: the aligner's modeled-only block signature includes the
+    /// paragraph's modeled <see cref="IrParaFormat"/> key (so a pPr-only change classifies FormatOnly instead of
+    /// Unchanged), and the markup renderer emits native property-revision markup (<c>w:pPrChange</c>, and — as
+    /// later phases land — the table-shell and section variants) at the sites that clone right-side properties.
+    /// When false, the pre-campaign behavior is restored exactly: block-property deltas are invisible to
+    /// classification and applied untracked. Forced off by <see cref="IrCompositeMerger"/> for its per-reviewer
+    /// diffs — the Consolidate v1 ceiling, pinned by
+    /// <c>BlockFormatChangeTests.Consolidate_ignores_block_format_changes_v1_ceiling</c> (the
+    /// <see cref="CompareHeadersFooters"/> precedent).
+    /// </summary>
+    public bool TrackBlockFormatChanges { get; init; } = true;
+
+    /// <summary>
+    /// DIFF-TIME setting (Consolidate sub-project B). The PARAGRAPH-scope slice of
+    /// <see cref="TrackBlockFormatChanges"/>: gates ONLY the <c>w:pPrChange</c> (paragraph properties + mark
+    /// rPr) detection/emission, NOT the table-shell or section variants. Defaults equal to
+    /// <see cref="TrackBlockFormatChanges"/> (so every two-way call behaves byte-identically — the split is
+    /// invisible outside the composite). The composite merger sets this TRUE while forcing
+    /// <see cref="TrackBlockFormatChanges"/> FALSE, so <c>Consolidate</c> merges reviewers' pPr changes
+    /// (B1) while table-shell/section composite merge stays a v1 ceiling (B2).
+    /// </summary>
+    public bool TrackParagraphFormatChanges { get; init; } = true;
+
+    /// <summary>
     /// REVISIONS-SURFACE setting (M2.3 Task 1). Author name stamped on every <see cref="IrRevision"/>'s
     /// <see cref="IrRevision.Author"/>. Default <c>"Open-Xml-PowerTools"</c> — copied verbatim from
     /// <c>WmlComparerSettings.AuthorForRevisions</c> (Docxodus/WmlComparer.cs ~line 54) so an IR-rendered

@@ -31,12 +31,14 @@
                   "anchor": "tbl:body:5d99c3b0aa2e37a3afaf2c38bbf47e7c",
                   "type": "table",
                   "contentHash": "99589aa4b25ce0868224964a793943007c1bcd55e076cce5dc545b52ed73f01c",
-                  "formatFingerprint": "c58707cbc2b8d20471d35eddbf2792139e5970826ce2cb9f5f4a0303e32bd000",
-                  "unmodeledTablePropsDigest": "bb89f6010930f9284059a5066c818b7e47947c65fb3d5fdc8de6c52d540ee3fc",
+                  "formatFingerprint": "ca7215b2ebb169b23e156c3f0f37e5528d1afb0c3b36dbf6884088be8124ccec",
+                  "tblPrDigest": "beaee02e330e8a29947deeb7f335d408db14a2c16902dea893b9e0ec4a5d4d3e",
+                  "tblGridDigest": "f133ee679c1eb8a13dcef08f53ad951e0d1a0c4beb6f420a93724ecbaeaf824f",
                   "rows": [
                     {
                       "anchor": "tr:body:2f13025b6984bbd3ee7e99093ee475e1",
                       "contentHash": "2a832d20fb519e0a83eb5a0a2663a9c6ed211be3c8a996de4db3e79f385254e7",
+                      "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
                       "cells": [
                         {
                           "anchor": "tc:body:b5d37e87c119b22dcddb8831a7b1c6c8",
@@ -87,6 +89,7 @@
                     {
                       "anchor": "tr:body:abf7ccc9007925d0169e31512c156aa6",
                       "contentHash": "f2bc7ab2d23232f83be8253e04bfa895a631f2ceec5465862d8ad55ebf965428",
+                      "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
                       "cells": [
                         {
                           "anchor": "tc:body:8569175d45ee76ee0288e863a0cf1527",
@@ -137,6 +140,7 @@
                     {
                       "anchor": "tr:body:6f43780244c364b83717b60908b8f8d3",
                       "contentHash": "ed356a058649ef6a3ffedc4703503729bf7a12e92a547f831521b8a241c5dbd6",
+                      "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
                       "cells": [
                         {
                           "anchor": "tc:body:8196e9e7109a4b2399b0968f6ac6fc19",
@@ -187,6 +191,7 @@
                     {
                       "anchor": "tr:body:5154d8d425298dd6d026ddc6b2b16560",
                       "contentHash": "87b86943ffd4e2db15491458acd000e213771f259fd18cbeede61d6be29d5613",
+                      "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
                       "cells": [
                         {
                           "anchor": "tc:body:9cb75275bec4129cbabf30a6c2de325d",
@@ -237,6 +242,7 @@
                     {
                       "anchor": "tr:body:6bda8d3169209926995f2bc82e9962aa",
                       "contentHash": "84781b410952fbec0179a77e4b337c56dbc87558e6bcf123202719fc23041d9e",
+                      "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
                       "cells": [
                         {
                           "anchor": "tc:body:63e4a8a9279a22ebc39b7fe3dacaeb62",
@@ -297,12 +303,14 @@
                   "anchor": "tbl:body:63e6f2f37c960ac00fe5679daba6c794",
                   "type": "table",
                   "contentHash": "99589aa4b25ce0868224964a793943007c1bcd55e076cce5dc545b52ed73f01c",
-                  "formatFingerprint": "c58707cbc2b8d20471d35eddbf2792139e5970826ce2cb9f5f4a0303e32bd000",
-                  "unmodeledTablePropsDigest": "bb89f6010930f9284059a5066c818b7e47947c65fb3d5fdc8de6c52d540ee3fc",
+                  "formatFingerprint": "ca7215b2ebb169b23e156c3f0f37e5528d1afb0c3b36dbf6884088be8124ccec",
+                  "tblPrDigest": "beaee02e330e8a29947deeb7f335d408db14a2c16902dea893b9e0ec4a5d4d3e",
+                  "tblGridDigest": "f133ee679c1eb8a13dcef08f53ad951e0d1a0c4beb6f420a93724ecbaeaf824f",
                   "rows": [
                     {
                       "anchor": "tr:body:0b4d1bad7f7fae877776d9b1b98ca2d5",
                       "contentHash": "2a832d20fb519e0a83eb5a0a2663a9c6ed211be3c8a996de4db3e79f385254e7",
+                      "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
                       "cells": [
                         {
                           "anchor": "tc:body:7ef199b258a6ff284a40a284a90c79fd",
@@ -353,6 +361,7 @@
                     {
                       "anchor": "tr:body:62e22a1ec4daea88bf3eecebfb0ced1d",
                       "contentHash": "f2bc7ab2d23232f83be8253e04bfa895a631f2ceec5465862d8ad55ebf965428",
+                      "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
                       "cells": [
                         {
                           "anchor": "tc:body:98c07980b92b27e609a6beb39e73fe7c",
@@ -403,6 +412,7 @@
                     {
                       "anchor": "tr:body:2885b2f856c92016d4623a0e858fd0c1",
                       "contentHash": "ed356a058649ef6a3ffedc4703503729bf7a12e92a547f831521b8a241c5dbd6",
+                      "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
                       "cells": [
                         {
                           "anchor": "tc:body:20aace3332b928017243e21ded740f18",
@@ -453,6 +463,7 @@
                     {
                       "anchor": "tr:body:45cff27259ffb0d5d974852b78c21a27",
                       "contentHash": "87b86943ffd4e2db15491458acd000e213771f259fd18cbeede61d6be29d5613",
+                      "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
                       "cells": [
                         {
                           "anchor": "tc:body:c4c7770a32242b28f8315956ae154efb",
@@ -503,6 +514,7 @@
                     {
                       "anchor": "tr:body:3c50e121d12d53f300e149825fa7b55d",
                       "contentHash": "84781b410952fbec0179a77e4b337c56dbc87558e6bcf123202719fc23041d9e",
+                      "trPrDigest": "563f8c757cc0ceab27c1cb7f8146f6edb5b4e654eddbe92258e091a52d5a020b",
                       "cells": [
                         {
                           "anchor": "tc:body:dcb2982bc439689f058c7f9622139ae3",

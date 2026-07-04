@@ -58,6 +58,34 @@ internal static class IrModeledFormat
     }
 
     /// <summary>
+    /// Modeled-only equality key for a PARAGRAPH format (block-format-change family, 2026-07-03):
+    /// every modeled <see cref="IrParaFormat"/> field, framed like <see cref="RunKey"/>; the unmodeled
+    /// digest is deliberately omitted. A null format maps to the empty key (a paragraph with no pPr).
+    /// </summary>
+    public static string ParaKey(IrParaFormat? f)
+    {
+        if (f is null)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        Append(sb, "PStyleId", f.StyleId);
+        Append(sb, "Jc", f.Justification?.ToString());
+        Append(sb, "IndL", f.IndentLeftTwips);
+        Append(sb, "IndR", f.IndentRightTwips);
+        Append(sb, "IndFL", f.IndentFirstLineTwips);
+        Append(sb, "SpB", f.SpacingBeforeTwips);
+        Append(sb, "SpA", f.SpacingAfterTwips);
+        Append(sb, "Line", RenderLineSpacing(f.LineSpacing));
+        Append(sb, "Outline", f.OutlineLevel);
+        Append(sb, "KeepNext", f.KeepNext);
+        Append(sb, "KeepLines", f.KeepLines);
+        Append(sb, "PBB", f.PageBreakBefore);
+        Append(sb, "NumId", f.NumId);
+        Append(sb, "Ilvl", f.Ilvl);
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// True iff two run formats are equal for diff purposes under <paramref name="comparison"/>:
     /// modeled-field equality (ignoring the unmodeled digest) for
     /// <see cref="IrFormatComparison.ModeledOnly"/>, full record equality for
@@ -86,6 +114,42 @@ internal static class IrModeledFormat
             sb.Append(RunKey(t.Format));
             sb.Append('␞'); // record separator glyph
         }
+
+        // Block-format-change family (2026-07-03): the paragraph's own modeled format participates in
+        // the signature, so a pPr-only change (jc/indent/spacing/style/numbering) classifies FormatOnly
+        // instead of Unchanged. Gated on the PARAGRAPH slice so the composite can turn pPr merge ON (B1)
+        // while keeping section OFF (B2) — in two-way the two flags are equal, so behavior is identical.
+        if (settings.TrackParagraphFormatChanges)
+        {
+            sb.Append('¶');
+            sb.Append(ParaKey(paragraph.Format));
+        }
+        // A3: an inline (in-pPr) sectPr's modeled page setup participates too, so a mid-document
+        // sectPr-only change classifies FormatOnly instead of Unchanged under ModeledOnly. Section slice.
+        if (settings.TrackBlockFormatChanges)
+        {
+            sb.Append('§');
+            sb.Append(SectionKey(paragraph.InlineSectionFormat));
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>Modeled-only equality key for a SECTION format (block-format follow-up A3): the modeled
+    /// <see cref="IrSectionFormat"/> fields, framed like <see cref="ParaKey"/>; null maps to the empty key.</summary>
+    public static string SectionKey(IrSectionFormat? f)
+    {
+        if (f is null)
+            return string.Empty;
+        var sb = new StringBuilder();
+        Append(sb, "PgW", f.PageWidthTwips);
+        Append(sb, "PgH", f.PageHeightTwips);
+        Append(sb, "Land", f.Landscape);
+        Append(sb, "MT", f.MarginTopTwips);
+        Append(sb, "MB", f.MarginBottomTwips);
+        Append(sb, "ML", f.MarginLeftTwips);
+        Append(sb, "MR", f.MarginRightTwips);
+        Append(sb, "SType", f.SectionType);
         return sb.ToString();
     }
 
@@ -151,6 +215,111 @@ internal static class IrModeledFormat
         "verticalAlign", "font", "fontSize", "color", "highlight", "allCaps", "smallCaps", "hidden",
     };
 
+    /// <summary>
+    /// Project a PARAGRAPH format's modeled fields to a property dictionary (block-format-change family):
+    /// name → display value, omitting null fields — the paragraph analogue of
+    /// <see cref="ModeledProperties"/>. The unmodeled digest is never projected (undescribable).
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ModeledParaProperties(IrParaFormat? f)
+    {
+        var dict = new Dictionary<string, string>();
+        if (f is null)
+            return dict;
+
+        AddProp(dict, "style", f.StyleId);
+        AddProp(dict, "justification", f.Justification?.ToString());
+        AddInt(dict, "indentLeft", f.IndentLeftTwips);
+        AddInt(dict, "indentRight", f.IndentRightTwips);
+        AddInt(dict, "indentFirstLine", f.IndentFirstLineTwips);
+        AddInt(dict, "spacingBefore", f.SpacingBeforeTwips);
+        AddInt(dict, "spacingAfter", f.SpacingAfterTwips);
+        AddProp(dict, "lineSpacing", RenderLineSpacing(f.LineSpacing));
+        AddInt(dict, "outlineLevel", f.OutlineLevel);
+        AddBool(dict, "keepNext", f.KeepNext);
+        AddBool(dict, "keepLines", f.KeepLines);
+        AddBool(dict, "pageBreakBefore", f.PageBreakBefore);
+        AddInt(dict, "numId", f.NumId);
+        AddInt(dict, "numLevel", f.Ilvl);
+        return dict;
+    }
+
+    /// <summary>
+    /// Build the Paragraph-scope <see cref="IrFormatChangeDetails"/> for a (left, right) paragraph-format
+    /// pair: modeled property dictionaries + changed names in the fixed field order — the same
+    /// present-on-one-side-or-differing rule as <see cref="FormatChangeDetails"/>. An unmodeled-only delta
+    /// (detected under Full) yields empty changed names, mirroring the run-level empty-details convention.
+    /// </summary>
+    public static IrFormatChangeDetails ParaFormatChangeDetails(IrParaFormat? left, IrParaFormat? right)
+    {
+        var oldProps = ModeledParaProperties(left);
+        var newProps = ModeledParaProperties(right);
+
+        var changed = new List<string>();
+        foreach (var name in ModeledParaFieldOrder)
+        {
+            bool hasOld = oldProps.TryGetValue(name, out var oldVal);
+            bool hasNew = newProps.TryGetValue(name, out var newVal);
+            if (hasOld != hasNew || (hasOld && hasNew && oldVal != newVal))
+                changed.Add(name);
+        }
+
+        return new IrFormatChangeDetails(oldProps, newProps, changed, IrFormatChangeScope.Paragraph);
+    }
+
+    /// <summary>The fixed modeled paragraph-field property-name order (matches <see cref="ModeledParaProperties"/>).</summary>
+    private static readonly string[] ModeledParaFieldOrder =
+    {
+        "style", "justification", "indentLeft", "indentRight", "indentFirstLine",
+        "spacingBefore", "spacingAfter", "lineSpacing", "outlineLevel",
+        "keepNext", "keepLines", "pageBreakBefore", "numId", "numLevel",
+    };
+
+    /// <summary>Project a SECTION format's modeled fields to a property dictionary (block-format-change family,
+    /// Phase 3): the section analogue of <see cref="ModeledParaProperties"/>; null fields omitted.</summary>
+    public static IReadOnlyDictionary<string, string> ModeledSectionProperties(IrSectionFormat? f)
+    {
+        var dict = new Dictionary<string, string>();
+        if (f is null)
+            return dict;
+
+        AddInt(dict, "pageWidth", f.PageWidthTwips);
+        AddInt(dict, "pageHeight", f.PageHeightTwips);
+        AddBool(dict, "landscape", f.Landscape);
+        AddInt(dict, "marginTop", f.MarginTopTwips);
+        AddInt(dict, "marginBottom", f.MarginBottomTwips);
+        AddInt(dict, "marginLeft", f.MarginLeftTwips);
+        AddInt(dict, "marginRight", f.MarginRightTwips);
+        AddProp(dict, "sectionType", f.SectionType);
+        return dict;
+    }
+
+    /// <summary>Build the Section-scope <see cref="IrFormatChangeDetails"/> for a (left, right) section-format
+    /// pair — modeled fields only (page setup/margins/orientation/type). An unmodeled-only section change
+    /// (e.g. <c>w:cols</c>) yields empty changed names: it is tracked by the markup (canonical) but not
+    /// described here — the modeled-only-revision limitation, consistent with the run/paragraph scopes.</summary>
+    public static IrFormatChangeDetails SectionFormatChangeDetails(IrSectionFormat? left, IrSectionFormat? right)
+    {
+        var oldProps = ModeledSectionProperties(left);
+        var newProps = ModeledSectionProperties(right);
+
+        var changed = new List<string>();
+        foreach (var name in ModeledSectionFieldOrder)
+        {
+            bool hasOld = oldProps.TryGetValue(name, out var oldVal);
+            bool hasNew = newProps.TryGetValue(name, out var newVal);
+            if (hasOld != hasNew || (hasOld && hasNew && oldVal != newVal))
+                changed.Add(name);
+        }
+
+        return new IrFormatChangeDetails(oldProps, newProps, changed, IrFormatChangeScope.Section);
+    }
+
+    private static readonly string[] ModeledSectionFieldOrder =
+    {
+        "pageWidth", "pageHeight", "landscape", "marginTop", "marginBottom",
+        "marginLeft", "marginRight", "sectionType",
+    };
+
     private static void AddProp(Dictionary<string, string> dict, string name, string? value)
     {
         if (value is not null)
@@ -197,5 +366,12 @@ internal static class IrModeledFormat
         if (u is null)
             return null;
         return u.ColorHex is null ? u.Kind.ToString() : $"{u.Kind}|{u.ColorHex}";
+    }
+
+    private static string? RenderLineSpacing(IrLineSpacing? ls)
+    {
+        if (ls is null)
+            return null;
+        return $"{ls.ValueTwips.ToString(CultureInfo.InvariantCulture)}|{ls.Rule}";
     }
 }

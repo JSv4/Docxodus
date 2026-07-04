@@ -137,6 +137,10 @@ internal static class DocxDiffOps
             settings.FormatComparison = fmt.GetInt32() == 1
                 ? DocxDiffFormatComparison.Full
                 : DocxDiffFormatComparison.ModeledOnly;
+        if (TryGetBool(root, "compareHeadersFooters", out var compareHf))
+            settings.CompareHeadersFooters = compareHf;
+        if (TryGetBool(root, "trackBlockFormatChanges", out var trackBlockFmt))
+            settings.TrackBlockFormatChanges = trackBlockFmt;
 
         return settings;
     }
@@ -210,8 +214,23 @@ internal static class DocxDiffOps
             if (i > 0) sb.Append(',');
             sb.Append(DocxSessionJson.JsonString(fc.ChangedPropertyNames[i]));
         }
-        sb.Append("]}");
+        sb.Append(']');
+        // Additive (block-format-change family, 2026-07-03): which property container the change describes.
+        // Always emitted; "run" (the default and the historical behavior) for every pre-campaign revision.
+        sb.Append(",\"scope\":").Append(DocxSessionJson.JsonString(FormatChangeScopeWire(fc.Scope)));
+        sb.Append('}');
     }
+
+    private static string FormatChangeScopeWire(DocxDiffFormatChangeScope scope) => scope switch
+    {
+        DocxDiffFormatChangeScope.Run => "run",
+        DocxDiffFormatChangeScope.Paragraph => "paragraph",
+        DocxDiffFormatChangeScope.TableCell => "tableCell",
+        DocxDiffFormatChangeScope.TableRow => "tableRow",
+        DocxDiffFormatChangeScope.Table => "table",
+        DocxDiffFormatChangeScope.Section => "section",
+        _ => "run",
+    };
 
     private static void AppendStringMap(StringBuilder sb, IReadOnlyDictionary<string, string> map)
     {

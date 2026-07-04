@@ -672,6 +672,34 @@ public sealed class DocxDiffSettings
     /// </summary>
     public bool PreAcceptInputRevisions { get; set; }
 
+    /// <summary>
+    /// When true (the DEFAULT — matching Word Compare's "Headers and footers" comparison setting, which
+    /// is also on by default), header/footer stories are compared: each section's effective
+    /// default/first/even header and footer stories pair across the two documents (Word's
+    /// previous-section inheritance rule applies), a changed story is rebuilt in the output with native
+    /// <c>w:ins</c>/<c>w:del</c> markup inside its header/footer part, a right-only story is added (its
+    /// content inserted), a left-only story's content is marked deleted — so the round-trip contract
+    /// (<c>accept ≡ right</c>, <c>reject ≡ left</c> at the per-block text level) extends to header/footer
+    /// scopes. <see cref="DocxDiff.GetRevisions"/> reports hdr/ftr-anchored revisions in
+    /// <see cref="DocxDiffRevisionGranularity.Fine"/> mode (the compatible mode excludes them — the
+    /// legacy comparer's revision set has none), and <see cref="DocxDiff.GetEditScriptJson"/> carries a
+    /// <c>headerFooterOps</c> array. When false, header/footer scopes are ignored — the pre-campaign
+    /// behavior: the output carries the left document's headers/footers verbatim and a header/footer
+    /// change is silently invisible.
+    /// </summary>
+    public bool CompareHeadersFooters { get; set; } = true;
+
+    /// <summary>
+    /// Track paragraph-and-above property changes (block-format-change family) as native Word markup —
+    /// <c>w:pPrChange</c>/<c>w:tcPrChange</c>/<c>w:trPrChange</c>/<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/
+    /// <c>w:tblPrExChange</c>/<c>w:sectPrChange</c>. Default <c>true</c>. Set <c>false</c> to restore the
+    /// pre-2026-07-03 behavior: a paragraph/table/section property change is applied untracked (the right
+    /// properties win with no revision). Run-level <c>w:rPrChange</c> is unaffected (always tracked).
+    /// <c>Consolidate</c> forces this off internally (the N-way merge does not track block-format changes in
+    /// v1), regardless of this value.
+    /// </summary>
+    public bool TrackBlockFormatChanges { get; set; } = true;
+
     /// <summary>Map this public settings object onto the internal <c>IrDiffSettings</c>.</summary>
     internal IrDiffSettings ToIrDiffSettings()
     {
@@ -717,6 +745,11 @@ public sealed class DocxDiffSettings
             FormatComparison = FormatComparison == DocxDiffFormatComparison.Full
                 ? IrFormatComparison.Full
                 : IrFormatComparison.ModeledOnly,
+            CompareHeadersFooters = CompareHeadersFooters,
+            TrackBlockFormatChanges = TrackBlockFormatChanges,
+            // The paragraph slice defaults equal to the block flag (two-way behaves identically); only the
+            // composite diverges them (pPr on, table/section off) — see IrCompositeMerger.
+            TrackParagraphFormatChanges = TrackBlockFormatChanges,
         };
     }
 }
@@ -769,12 +802,52 @@ public sealed class DocxDiffFormatChange
     /// <summary>The friendly names of the properties that differ between the two sides.</summary>
     public IReadOnlyList<string> ChangedPropertyNames { get; }
 
+    /// <summary>
+    /// Which property container this format change describes (block-format-change family, 2026-07-03).
+    /// <see cref="DocxDiffFormatChangeScope.Run"/> (the default and the pre-existing behavior) is an
+    /// rPr-grade report whose dictionaries carry run fields (bold, italic, fontSize, …);
+    /// <see cref="DocxDiffFormatChangeScope.Paragraph"/> is a <c>w:pPrChange</c>-grade report whose
+    /// dictionaries carry paragraph fields (style, justification, indentLeft, …, numId, numLevel).
+    /// Non-Run scopes appear only under <see cref="DocxDiffRevisionGranularity.Fine"/> —
+    /// <see cref="DocxDiffRevisionGranularity.WmlComparerCompatible"/> excludes them by construction
+    /// (the legacy comparer cannot produce them).
+    /// </summary>
+    public DocxDiffFormatChangeScope Scope { get; }
+
     internal DocxDiffFormatChange(IrFormatChangeDetails details)
     {
         OldProperties = details.OldProperties;
         NewProperties = details.NewProperties;
         ChangedPropertyNames = details.ChangedPropertyNames;
+        Scope = (DocxDiffFormatChangeScope)details.Scope;
     }
+}
+
+/// <summary>
+/// The property container a <see cref="DocxDiffFormatChange"/> describes. Members mirror the internal
+/// <c>IrFormatChangeScope</c> one-for-one (the cast in <see cref="DocxDiffFormatChange"/> relies on it).
+/// <see cref="TableCell"/>/<see cref="TableRow"/>/<see cref="Table"/> and <see cref="Section"/> are
+/// produced by the table-family and section phases of the block-format-change campaign.
+/// </summary>
+public enum DocxDiffFormatChangeScope
+{
+    /// <summary>Run properties (<c>w:rPr</c> / <c>w:rPrChange</c>-grade) — the pre-existing report.</summary>
+    Run,
+
+    /// <summary>Paragraph properties (<c>w:pPr</c> / <c>w:pPrChange</c>-grade).</summary>
+    Paragraph,
+
+    /// <summary>Table-cell shell properties (<c>w:tcPr</c> / <c>w:tcPrChange</c>-grade).</summary>
+    TableCell,
+
+    /// <summary>Table-row properties (<c>w:trPr</c> / <c>w:trPrChange</c>-grade).</summary>
+    TableRow,
+
+    /// <summary>Table-level properties (<c>w:tblPr</c>+<c>w:tblGrid</c> / <c>w:tblPrChange</c>-grade).</summary>
+    Table,
+
+    /// <summary>Section properties (<c>w:sectPr</c> / <c>w:sectPrChange</c>-grade).</summary>
+    Section,
 }
 
 /// <summary>

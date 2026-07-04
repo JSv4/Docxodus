@@ -491,6 +491,14 @@ public class DocxDiffTests
     }
 
     [Fact]
+    public void Settings_TrackBlockFormatChanges_default_true_and_maps_through()
+    {
+        Assert.True(new DocxDiffSettings().TrackBlockFormatChanges);
+        Assert.True(new DocxDiffSettings().ToIrDiffSettings().TrackBlockFormatChanges);
+        Assert.False(new DocxDiffSettings { TrackBlockFormatChanges = false }.ToIrDiffSettings().TrackBlockFormatChanges);
+    }
+
+    [Fact]
     public void Settings_ExplicitEmptyWordSeparators_IsHonoredNotRevertedToDefault()
     {
         // Regression (engine audit): an explicitly EMPTY WordSeparators array was silently swapped for the

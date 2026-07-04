@@ -231,13 +231,15 @@ internal static class IrDiagnosticJson
 
     private static void WriteTableBody(Utf8JsonWriter writer, IrTable t)
     {
-        writer.WriteString("unmodeledTablePropsDigest", t.UnmodeledTablePropsDigest.ToHex());
+        writer.WriteString("tblPrDigest", t.TblPrDigest.ToHex());
+        writer.WriteString("tblGridDigest", t.TblGridDigest.ToHex());
         writer.WriteStartArray("rows");
         foreach (var row in t.Rows)
         {
             writer.WriteStartObject();
             writer.WriteString("anchor", row.Anchor.ToString());
             writer.WriteString("contentHash", row.ContentHash.ToHex());
+            writer.WriteString("trPrDigest", row.TrPrDigest.ToHex());
             writer.WriteStartArray("cells");
             foreach (var cell in row.Cells)
             {

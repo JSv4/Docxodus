@@ -364,7 +364,16 @@ public class IrVsWmlComparerTests
             irRight = WcCorpus.ReadWc(rightName);
             script = IrEditScriptBuilder.Build(irLeft, irRight, NewDiff);
             var revs = IrRevisionRenderer.Render(script, irLeft, irRight, NewDiff);
-            newBags = RevisionBags.FromIr(revs);
+            // Header/footer-scope revisions are filtered from the DIFFERENTIAL comparison (2026-07-03
+            // campaign): WmlComparer structurally cannot report them (it never diffs header/footer
+            // scopes), so a Fine-mode hdr/ftr revision is capability the oracle lacks, not disagreement
+            // with it — exactly the rationale of the OldError bucket. Without the filter the
+            // WC004-Large↔-Mod pair (the corpus' one differing footer) leaves Match in both directions
+            // for reporting a REAL footer change the oracle silently drops. Compat mode already excludes
+            // them by definition (its contract is "the oracle's revision set"). The hdr/ftr surface is
+            // gated positively elsewhere: the renderer battery's story round-trip (AssertRoundTrip) and
+            // IrHeaderFooterDiffTests.
+            newBags = RevisionBags.FromIr(revs.Where(r => !IsHeaderFooterScoped(r)));
         }
         catch (Exception ex)
         {
@@ -390,6 +399,22 @@ public class IrVsWmlComparerTests
         var (compatCls, compatCause) = Classify(oldBags, compatBags, script, irLeft);
         compatResults.Add(new PairResult(label, compatCls, compatCls == Classification.Divergent ? compatCause : null,
             oldBags.Total, compatBags.Total));
+    }
+
+    /// <summary>True when a revision anchors in a header/footer scope (<c>kind:hdrN:unid</c> /
+    /// <c>kind:ftrN:unid</c>) — capability the legacy oracle lacks; see the filter above.</summary>
+    private static bool IsHeaderFooterScoped(IrRevision r)
+    {
+        static bool Scoped(string? anchor)
+        {
+            if (anchor is null) return false;
+            int colon = anchor.IndexOf(':');
+            if (colon < 0) return false;
+            var scope = anchor.AsSpan(colon + 1);
+            return scope.StartsWith("hdr", StringComparison.Ordinal) ||
+                   scope.StartsWith("ftr", StringComparison.Ordinal);
+        }
+        return Scoped(r.LeftAnchor) || Scoped(r.RightAnchor);
     }
 
     private static RevisionBags RunOldEngine(string leftName, string rightName)

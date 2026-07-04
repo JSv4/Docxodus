@@ -175,7 +175,8 @@ public class IrDiagnosticJsonTests
             ContentHash = ZeroHash,
             FormatFingerprint = ZeroHash,
             Rows = IrNodeList.Empty<IrRow>(),
-            UnmodeledTablePropsDigest = ZeroHash,
+            TblPrDigest = ZeroHash,
+            TblGridDigest = ZeroHash,
         },
         _ when t == typeof(IrSectionBreak) => new IrSectionBreak
         {

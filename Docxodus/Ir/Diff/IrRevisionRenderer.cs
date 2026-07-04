@@ -89,6 +89,18 @@ internal static class IrRevisionRenderer
                 foreach (var op in noteDiff.Ops)
                     RenderBlockOp(op, ctx, revisions);
 
+        // Header/footer scopes (2026-07-03 campaign): appended AFTER note revisions (strictly additive
+        // ordering — existing consumers' body/note indices never shift), one revision per op like notes
+        // (a story is its own grouping unit; no cross-block coalescing). EXCLUDED in WmlComparerCompatible
+        // mode: that granularity is defined as "match the legacy comparer's revision set", and WmlComparer
+        // does not diff header/footer scopes at all — so the compatible projection reports none, keeping
+        // count parity with the oracle by construction. Fine mode (the default) reports them.
+        if (settings.RevisionGranularity == RevisionGranularity.Fine &&
+            script.HeaderFooterOps is { } headerFooterOps)
+            foreach (var hfDiff in headerFooterOps)
+                foreach (var op in hfDiff.Ops)
+                    RenderBlockOp(op, ctx, revisions);
+
         // Section-break zero-width prune (M2.4 Task 2, prelim a). A whole-block Inserted/Deleted over a
         // SECTION-BREAK block (a `sec:` anchor) carries no surface text and is a structural-only change that
         // WmlComparer does not report as a revision. Suppress it in compatible mode so it never inflates the
@@ -101,8 +113,31 @@ internal static class IrRevisionRenderer
         // BOTH modes: a placeholder token carries no surface text, so reporting it as an empty Inserted/Deleted
         // is a spurious revision regardless of granularity (the real textbox change is reported through the
         // nested TextboxDiffs). See the two-textbox test.
+        // Trailing section-property change (block-format-change family, Phase 3): compare the two documents'
+        // trailing section formats and, when the MODELED fields differ, append one Section-scope FormatChanged
+        // (mirrors the markup renderer's w:sectPrChange on the trailing sectPr). Appended after all body/note/
+        // header-footer ops (additive ordering). Excluded from WmlComparerCompatible by the scope filter below.
+        if (settings.TrackBlockFormatChanges
+            && ctx.Left.Body.Blocks.Count > 0 && ctx.Left.Body.Blocks[^1] is IrSectionBreak lsec
+            && ctx.Right.Body.Blocks.Count > 0 && ctx.Right.Body.Blocks[^1] is IrSectionBreak rsec)
+        {
+            var details = IrModeledFormat.SectionFormatChangeDetails(lsec.Format, rsec.Format);
+            if (details.ChangedPropertyNames.Count > 0)
+                revisions.Add(new IrRevision(IrRevisionType.FormatChanged, string.Empty, ctx.Author, ctx.Date,
+                    FormatChange: details,
+                    LeftAnchor: lsec.Anchor.ToString(), RightAnchor: rsec.Anchor.ToString()));
+        }
+
         if (settings.RevisionGranularity == RevisionGranularity.WmlComparerCompatible)
+        {
             revisions.RemoveAll(IsSectionBreakZeroWidth);
+
+            // Block-scope FormatChanged exclusion (block-format-change family, 2026-07-03): the compatible
+            // granularity is defined as the ORACLE's revision set, and WmlComparer cannot produce
+            // paragraph/table/section-scope format revisions — so the compatible projection reports none,
+            // keeping count parity by construction (the hdr/ftr precedent). Fine mode reports them.
+            revisions.RemoveAll(r => r.FormatChange is { } fc && fc.Scope != IrFormatChangeScope.Run);
+        }
 
         return IrNodeList.From(revisions);
     }
@@ -521,11 +556,24 @@ internal static class IrRevisionRenderer
                 return;
             }
             RenderTableDiff(tableDiff, ctx, sink);
+            // Block-format-change family (2026-07-03): report table/row/cell SHELL changes (tblPr/tblGrid/
+            // trPr/tcPr) as digest-grade FormatChanged revisions, after the cell text revisions. Gated on
+            // TrackBlockFormatChanges so the Consolidate ceiling holds on the REVISIONS surface too — the
+            // composite renderers force the flag off, and the markup emits no *PrChange there.
+            if (ctx.Settings.TrackBlockFormatChanges
+                && ResolveTable(op.LeftAnchor, ctx.Left) is { } lt && ResolveTable(op.RightAnchor, ctx.Right) is { } rt)
+                EmitTableModifiedShellRevisions(lt, rt, tableDiff, ctx, sink);
             return;
         }
 
         if (op.TokenDiff is { } tokenDiff)
         {
+            // Block-format-change family (2026-07-03): a Modified paragraph whose pPr ALSO changed reports
+            // the Paragraph-scope FormatChanged first, then its token-level revisions (mirrors the markup
+            // renderer stamping w:pPrChange on the modified paragraph).
+            EmitParagraphScopeFormatChanged(op, ctx, sink);
+            EmitInlineSectionFormatChanged(op, ctx, sink);
+
             var leftTokens = ParagraphTokens(op.LeftAnchor, ctx.Left, ctx.Settings);
             var rightTokens = ParagraphTokens(op.RightAnchor, ctx.Right, ctx.Settings);
             RenderTokenOps(tokenDiff, leftTokens, rightTokens, op.LeftAnchor, op.RightAnchor, ctx, sink);
@@ -1204,9 +1252,24 @@ internal static class IrRevisionRenderer
         var leftTokens = ParagraphTokens(op.LeftAnchor, ctx.Left, ctx.Settings);
         var rightTokens = ParagraphTokens(op.RightAnchor, ctx.Right, ctx.Settings);
 
-        // Non-paragraph FormatOnly (no tokens on either side): nothing describable at token grain.
+        // Block-format-change family (2026-07-03): a pPr delta reports as ONE Paragraph-scope
+        // FormatChanged revision (w:pPrChange-grade), emitted BEFORE the run-level pairs and even for an
+        // empty paragraph (a blank line whose alignment changed still reports). Excluded in
+        // WmlComparerCompatible mode by the scope filter in Render.
+        bool paraEmitted = EmitParagraphScopeFormatChanged(op, ctx, sink);
+        EmitInlineSectionFormatChanged(op, ctx, sink);   // A3: mid-doc inline sectPr change
+
+        // Non-paragraph FormatOnly (no tokens on either side): a TABLE reports its shell changes
+        // (tblPr/tblGrid/trPr — content-equal, so rows/cells pair positionally); anything else is
+        // nothing describable at token grain.
         if (leftTokens.Count == 0 && rightTokens.Count == 0)
+        {
+            if (!paraEmitted && ctx.Settings.TrackBlockFormatChanges
+                && ResolveTable(op.LeftAnchor, ctx.Left) is { } lt
+                && ResolveTable(op.RightAnchor, ctx.Right) is { } rt)
+                EmitTableFormatOnlyShellRevisions(lt, rt, ctx, sink);
             return;
+        }
 
         if (leftTokens.Count == rightTokens.Count)
         {
@@ -1242,8 +1305,9 @@ internal static class IrRevisionRenderer
             // Equal token counts but every paired position is modeled-format-equal: the block-level
             // FormatOnly delta lives in UNMODELED rPr the token surface cannot describe (e.g. w:shd under
             // ModeledOnly). Still report the change as one whole-block FormatChanged with empty details, so
-            // a FormatOnly op never silently vanishes from the revisions surface.
-            if (!emittedAny)
+            // a FormatOnly op never silently vanishes from the revisions surface — unless the Paragraph-scope
+            // revision above already represents this op.
+            if (!emittedAny && !paraEmitted)
                 EmitWholeBlockFormatChanged(op, leftTokens, rightTokens, ctx, sink);
 
             return;
@@ -1252,6 +1316,73 @@ internal static class IrRevisionRenderer
         // Fallback: counts differ (run-boundary word-split). One whole-block FormatChanged with details
         // from the first divergent position under positional scan of the shorter length.
         EmitWholeBlockFormatChanged(op, leftTokens, rightTokens, ctx, sink);
+    }
+
+    /// <summary>
+    /// True when a paired paragraph op's PARAGRAPH formats differ under the settings' policy: ModeledOnly
+    /// compares the modeled <see cref="IrModeledFormat.ParaKey"/>s (the delta a consumer-grade report can
+    /// describe); Full compares the full <see cref="IrParaFormat"/> record including the unmodeled digest
+    /// (mirroring the stored-fingerprint grade). False when block-format tracking is off (the Consolidate
+    /// pipeline pin).
+    /// </summary>
+    private static bool ParaFormatDiffers(IrParagraph left, IrParagraph right, IrDiffSettings settings)
+    {
+        if (!settings.TrackParagraphFormatChanges)   // paragraph slice (B1); composite keeps this on
+            return false;
+        return settings.FormatComparison == IrFormatComparison.ModeledOnly
+            ? IrModeledFormat.ParaKey(left.Format) != IrModeledFormat.ParaKey(right.Format)
+            : !EqualityComparer<IrParaFormat?>.Default.Equals(left.Format, right.Format);
+    }
+
+    /// <summary>
+    /// Emit ONE Paragraph-scope FormatChanged revision for a paired-paragraph op whose pPr differs under
+    /// the policy (block-format-change family). Text = the right paragraph's full raw text (the
+    /// whole-block convention); details = the modeled paragraph property delta; both anchors carried.
+    /// Returns false (emitting nothing) for non-paragraph pairs, one-sided ops, or a format-equal pair.
+    /// </summary>
+    private static bool EmitParagraphScopeFormatChanged(IrEditOp op, in Context ctx, List<IrRevision> sink)
+    {
+        if (op.LeftAnchor is null || op.RightAnchor is null)
+            return false;
+        if (!ctx.Left.AnchorIndex.TryGetValue(op.LeftAnchor, out var lb) || lb is not IrParagraph lp)
+            return false;
+        if (!ctx.Right.AnchorIndex.TryGetValue(op.RightAnchor, out var rb) || rb is not IrParagraph rp)
+            return false;
+        if (!ParaFormatDiffers(lp, rp, ctx.Settings))
+            return false;
+
+        var rightTokens = ParagraphTokens(op.RightAnchor, ctx.Right, ctx.Settings);
+        sink.Add(new IrRevision(IrRevisionType.FormatChanged,
+            RawText(rightTokens, 0, rightTokens.Count), ctx.Author, ctx.Date,
+            FormatChange: IrModeledFormat.ParaFormatChangeDetails(lp.Format, rp.Format),
+            LeftAnchor: op.LeftAnchor, RightAnchor: op.RightAnchor));
+        return true;
+    }
+
+    /// <summary>
+    /// Emit a Section-scope FormatChanged revision for a paired paragraph whose inline (in-<c>pPr</c>)
+    /// <c>w:sectPr</c> properties differ (block-format follow-up A3). Anchored on the paragraphs' inline
+    /// section-break anchors. Gated on <c>TrackBlockFormatChanges</c>; excluded from compatible mode by the
+    /// non-Run scope filter, like the trailing Section revision.
+    /// </summary>
+    private static void EmitInlineSectionFormatChanged(IrEditOp op, in Context ctx, List<IrRevision> sink)
+    {
+        if (!ctx.Settings.TrackBlockFormatChanges || op.LeftAnchor is null || op.RightAnchor is null)
+            return;
+        if (!ctx.Left.AnchorIndex.TryGetValue(op.LeftAnchor, out var lb) || lb is not IrParagraph lp)
+            return;
+        if (!ctx.Right.AnchorIndex.TryGetValue(op.RightAnchor, out var rb) || rb is not IrParagraph rp)
+            return;
+        if (lp.InlineSectionFormat is not { } lsf || rp.InlineSectionFormat is not { } rsf)
+            return;
+
+        var details = IrModeledFormat.SectionFormatChangeDetails(lsf, rsf);
+        if (details.ChangedPropertyNames.Count == 0)
+            return;
+        sink.Add(new IrRevision(IrRevisionType.FormatChanged, string.Empty, ctx.Author, ctx.Date,
+            FormatChange: details,
+            LeftAnchor: lp.InlineSectionBreakAnchor?.ToString() ?? op.LeftAnchor,
+            RightAnchor: rp.InlineSectionBreakAnchor?.ToString() ?? op.RightAnchor));
     }
 
     /// <summary>
@@ -1356,6 +1487,88 @@ internal static class IrRevisionRenderer
         }
     }
 
+    // ------------------------------------------------ table-shell format revisions (block-format family)
+
+    /// <summary>Resolve a table by anchor; null for a missing/non-table anchor.</summary>
+    private static IrTable? ResolveTable(string? anchor, IrDocument doc)
+        => anchor is not null && doc.AnchorIndex.TryGetValue(anchor, out var b) ? b as IrTable : null;
+
+    /// <summary>One digest-grade table-family FormatChanged revision (empty property dictionaries; a single
+    /// changed-name token — "shell" or "grid"). Text is empty (a shell change carries no surface text).</summary>
+    private static IrRevision TableShellRevision(
+        IrFormatChangeScope scope, string changed, string leftAnchor, string rightAnchor, in Context ctx)
+        => new IrRevision(IrRevisionType.FormatChanged, string.Empty, ctx.Author, ctx.Date,
+            FormatChange: new IrFormatChangeDetails(
+                EmptyProps, EmptyProps, new[] { changed }, scope),
+            LeftAnchor: leftAnchor, RightAnchor: rightAnchor);
+
+    private static readonly IReadOnlyDictionary<string, string> EmptyProps =
+        new Dictionary<string, string>();
+
+    /// <summary>Report shell changes for a content-equal (FormatOnly) table pair: tblPr/tblGrid at the table,
+    /// then trPr/tcPr walking rows and cells positionally (content-equality guarantees the alignment).</summary>
+    private static void EmitTableFormatOnlyShellRevisions(IrTable left, IrTable right, in Context ctx, List<IrRevision> sink)
+    {
+        EmitTableLevelShellRevisions(left, right, ctx, sink);
+
+        int rn = System.Math.Min(left.Rows.Count, right.Rows.Count);
+        for (int i = 0; i < rn; i++)
+            EmitRowAndCellShellRevisions(left.Rows[i], right.Rows[i], ctx, sink);
+    }
+
+    /// <summary>Report shell changes for a Modified table pair: tblPr/tblGrid at the table, then trPr/tcPr for
+    /// each Equal/Modify row op (paired by base/right row anchor — inserted/deleted rows have no old/new pair).</summary>
+    private static void EmitTableModifiedShellRevisions(
+        IrTable left, IrTable right, IrTableDiff diff, in Context ctx, List<IrRevision> sink)
+    {
+        EmitTableLevelShellRevisions(left, right, ctx, sink);
+
+        var leftRows = new Dictionary<string, IrRow>(System.StringComparer.Ordinal);
+        foreach (var r in left.Rows) leftRows[r.Anchor.ToString()] = r;
+        var rightRows = new Dictionary<string, IrRow>(System.StringComparer.Ordinal);
+        foreach (var r in right.Rows) rightRows[r.Anchor.ToString()] = r;
+
+        foreach (var rowOp in diff.RowOps)
+        {
+            if (rowOp.Kind is not (IrRowOpKind.EqualRow or IrRowOpKind.ModifyRow))
+                continue;
+            if (rowOp.LeftRowAnchor is { } la && rowOp.RightRowAnchor is { } ra
+                && leftRows.TryGetValue(la, out var lr) && rightRows.TryGetValue(ra, out var rr))
+                EmitRowAndCellShellRevisions(lr, rr, ctx, sink);
+        }
+    }
+
+    private static void EmitTableLevelShellRevisions(IrTable left, IrTable right, in Context ctx, List<IrRevision> sink)
+    {
+        if (!left.TblPrDigest.Equals(right.TblPrDigest))
+            sink.Add(TableShellRevision(IrFormatChangeScope.Table, "shell",
+                left.Anchor.ToString(), right.Anchor.ToString(), ctx));
+        if (!left.TblGridDigest.Equals(right.TblGridDigest))
+            sink.Add(TableShellRevision(IrFormatChangeScope.Table, "grid",
+                left.Anchor.ToString(), right.Anchor.ToString(), ctx));
+    }
+
+    private static void EmitRowAndCellShellRevisions(IrRow left, IrRow right, in Context ctx, List<IrRevision> sink)
+    {
+        // Compare the flattened trackable projections (w:trPr children only, empty ≡ absent) — the exact
+        // subset the markup's w:trPrChange/w:tcPrChange attribution uses — so GetRevisions and Compare agree
+        // (an empty-vs-absent-shell change is untracked in BOTH, never reported by one alone).
+        if (!left.TrPrShellDigest.Equals(right.TrPrShellDigest))
+            sink.Add(TableShellRevision(IrFormatChangeScope.TableRow, "shell",
+                left.Anchor.ToString(), right.Anchor.ToString(), ctx));
+        // w:tblPrEx (row-level table property exceptions) — its own TableRow revision with a distinct
+        // changed-name so it never double-fires with the trPr "shell" revision.
+        if (!left.TrPrExDigest.Equals(right.TrPrExDigest))
+            sink.Add(TableShellRevision(IrFormatChangeScope.TableRow, "tblPrEx",
+                left.Anchor.ToString(), right.Anchor.ToString(), ctx));
+
+        int cn = System.Math.Min(left.Cells.Count, right.Cells.Count);
+        for (int c = 0; c < cn; c++)
+            if (!left.Cells[c].TcPrShellDigest.Equals(right.Cells[c].TcPrShellDigest))
+                sink.Add(TableShellRevision(IrFormatChangeScope.TableCell, "shell",
+                    left.Cells[c].Anchor.ToString(), right.Cells[c].Anchor.ToString(), ctx));
+    }
+
     // ------------------------------------------------------------------ text + token helpers
 
     /// <summary>Tokens of a paragraph resolved by anchor; empty list for a missing/non-paragraph anchor.</summary>
@@ -1420,6 +1633,10 @@ internal static class IrRevisionRenderer
                 return t;
         foreach (var scope in doc.Endnotes.Notes.Values)
             if (RowTextInBlocks(anchor, scope.Blocks, settings) is { } t)
+                return t;
+        // Header/footer scopes (2026-07-03 campaign): a story may contain a table too.
+        foreach (var hf in doc.Headers.Concat(doc.Footers))
+            if (RowTextInBlocks(anchor, hf.Scope.Blocks, settings) is { } t)
                 return t;
         return string.Empty;
     }
