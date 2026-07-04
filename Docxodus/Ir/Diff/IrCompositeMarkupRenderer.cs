@@ -55,7 +55,7 @@ internal static class IrCompositeMarkupRenderer
         // markup on a composite render — e.g. on a conflict-path winner op. B1 (sub-project B) turns the
         // PARAGRAPH slice ON so a single-source pPr FormatOnly op stamps w:pPrChange authored to its reviewer;
         // the table-shell/section slices stay OFF (B2). Mirrors IrCompositeMerger's forcing.
-        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true };
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true };
 
         // Re-read base + each reviewer WITH provenance (RetainSources=true) + Accept view — the SAME options the
         // two-way renderer uses — so block anchors in the script resolve to source w:p/w:tbl elements to clone.

@@ -560,7 +560,7 @@ internal static class IrRevisionRenderer
             // trPr/tcPr) as digest-grade FormatChanged revisions, after the cell text revisions. Gated on
             // TrackBlockFormatChanges so the Consolidate ceiling holds on the REVISIONS surface too — the
             // composite renderers force the flag off, and the markup emits no *PrChange there.
-            if (ctx.Settings.TrackBlockFormatChanges
+            if (ctx.Settings.TrackTableFormatChanges
                 && ResolveTable(op.LeftAnchor, ctx.Left) is { } lt && ResolveTable(op.RightAnchor, ctx.Right) is { } rt)
                 EmitTableModifiedShellRevisions(lt, rt, tableDiff, ctx, sink);
             return;
@@ -1264,7 +1264,7 @@ internal static class IrRevisionRenderer
         // nothing describable at token grain.
         if (leftTokens.Count == 0 && rightTokens.Count == 0)
         {
-            if (!paraEmitted && ctx.Settings.TrackBlockFormatChanges
+            if (!paraEmitted && ctx.Settings.TrackTableFormatChanges
                 && ResolveTable(op.LeftAnchor, ctx.Left) is { } lt
                 && ResolveTable(op.RightAnchor, ctx.Right) is { } rt)
                 EmitTableFormatOnlyShellRevisions(lt, rt, ctx, sink);

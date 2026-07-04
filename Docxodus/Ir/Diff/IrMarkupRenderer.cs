@@ -832,6 +832,10 @@ internal static class IrMarkupRenderer
         foreach (var pre in baseTbl.Elements().Where(e => e.Name != W.tr))
             newTbl.Add(StripUnids(new XElement(pre)));
 
+        // B2: the table-level shells (tblPr/tblGrid) were base-cloned above; swap in the composed winner's and
+        // stamp native w:tblPrChange/w:tblGridChange (inner = base) so a table-shell edit round-trips.
+        ApplyComposedTableShell(newTbl, baseTbl, op.TableShell, reviewerIrs, state);
+
         foreach (var rowOp in authoredRows)
         {
             switch (rowOp.Kind)
@@ -839,7 +843,13 @@ internal static class IrMarkupRenderer
                 case IrRowOpKind.EqualRow:
                 {
                     if (rowOp.BaseRowAnchor is { } ra && baseRowsByAnchor.TryGetValue(ra, out var src))
-                        newTbl.Add(StripUnids(new XElement(src)));
+                    {
+                        // A content-Equal row may still carry a composed trPr/tblPrEx shell edit (B2): build it
+                        // and stamp the row-level marker; otherwise it is the base row verbatim.
+                        var newRow = StripUnids(new XElement(src));
+                        ApplyComposedRowShell(newRow, src, rowOp, reviewerIrs, state);
+                        newTbl.Add(newRow);
+                    }
                     break;
                 }
                 case IrRowOpKind.InsertRow:
@@ -973,6 +983,10 @@ internal static class IrMarkupRenderer
         foreach (var pre in baseRowSrc.Elements().Where(e => e.Name != W.tc))
             newRow.Add(StripUnids(new XElement(pre)));
 
+        // B2: swap in the composed winner's trPr/tblPrEx and stamp the row-level marker (inner = base), so a
+        // row-shell edit that rides alongside cell edits round-trips.
+        ApplyComposedRowShell(newRow, baseRowSrc, rowOp, reviewerIrs, state);
+
         if (rowOp.ComposedCells is not { } cells)
         {
             // No per-cell view: keep the base row verbatim (defensive).
@@ -1023,6 +1037,19 @@ internal static class IrMarkupRenderer
             var newCell = new XElement(W.tc);
             foreach (var pre in shellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
                 newCell.Add(StripUnids(new XElement(pre)));
+
+            // The winner's shell was swapped in above; stamp a native w:tcPrChange (inner = BASE tcPr)
+            // attributed to the shell winner, so accept keeps the winner's shell and reject restores the base
+            // shell BYTES (not just the text). No-op when the reviewer shell is canonically equal to base
+            // (ShellDiffers short-circuits) or when the base shell was kept (shellSrc == baseCellSrc). B2.
+            if (!ReferenceEquals(shellSrc, baseCellSrc) && state.Settings.TrackTableFormatChanges)
+            {
+                var savedShellAuthor = state.AuthorOverride;
+                state.AuthorOverride = cellOp.ShellAuthor;
+                ApplyShellChange(newCell, W.tcPr, W.tcPrChange, baseCellSrc.Element(W.tcPr), state,
+                    idOnly: false, TcPrInnerExclude);
+                state.AuthorOverride = savedShellAuthor;
+            }
 
             if (cellOp.ComposedBlockOps is { } blockOps)
             {
@@ -3482,7 +3509,7 @@ internal static class IrMarkupRenderer
     /// </summary>
     private static void ApplyTableLevelShellChanges(XElement newTbl, XElement leftTbl, RenderState state)
     {
-        if (!state.Settings.TrackBlockFormatChanges)
+        if (!state.Settings.TrackTableFormatChanges)
             return;
 
         ApplyShellChange(newTbl, W.tblPr, W.tblPrChange, leftTbl.Element(W.tblPr), state, idOnly: false, TblPrInnerExclude);
@@ -3494,7 +3521,7 @@ internal static class IrMarkupRenderer
     /// block-format tracking is off.</summary>
     private static void ApplyRowAndCellShellChanges(XElement newRow, XElement leftRow, RenderState state)
     {
-        if (!state.Settings.TrackBlockFormatChanges)
+        if (!state.Settings.TrackTableFormatChanges)
             return;
 
         ApplyShellChange(newRow, W.trPr, W.trPrChange, leftRow.Element(W.trPr), state, idOnly: false, TrPrInnerExclude);
@@ -3505,6 +3532,61 @@ internal static class IrMarkupRenderer
         for (int c = 0; c < newCells.Count && c < leftCells.Count; c++)
             ApplyShellChange(newCells[c], W.tcPr, W.tcPrChange, leftCells[c].Element(W.tcPr), state, idOnly: false, TcPrInnerExclude);
     }
+
+    /// <summary>Apply ONE composed block-format shell across reviewers (Consolidate B2): swap the winning
+    /// reviewer's shell into <paramref name="host"/> (accept ≡ winner) and stamp the change marker with
+    /// inner = BASE shell (reject ≡ base), attributed to the winner's author. No-op when
+    /// <paramref name="shellRef"/> is null (base shell kept — already present in host from its base clone) or
+    /// the table slice is off.</summary>
+    private static void ApplyComposedShell(
+        XElement host, XElement baseHost, IrComposedShellRef? shellRef,
+        XName shellName, XName changeName, XName[] innerExclude, bool idOnly,
+        IReadOnlyList<IrDocument> reviewerIrs, RenderState state,
+        Func<IrDocument, string, XElement?> findWinnerHost)
+    {
+        if (!state.Settings.TrackTableFormatChanges || shellRef == null
+            || shellRef.Reviewer < 0 || shellRef.Reviewer >= reviewerIrs.Count)
+            return;
+        var winnerHost = findWinnerHost(reviewerIrs[shellRef.Reviewer], shellRef.RightAnchor);
+        if (winnerHost == null)
+            return;
+
+        // Swap in the winner's shell (accept ≡ winner): drop host's base-cloned shell, insert the winner's in
+        // schema order; ApplyShellChange then captures the BASE shell into the marker inner (reject ≡ base).
+        host.Elements(shellName).Remove();
+        if (winnerHost.Element(shellName) is { } winnerShell)
+            InsertShellInSchemaOrder(host, StripUnids(new XElement(winnerShell)), shellName);
+
+        var saved = state.AuthorOverride;
+        state.AuthorOverride = shellRef.Author;
+        ApplyShellChange(host, shellName, changeName, baseHost.Element(shellName), state, idOnly, innerExclude);
+        state.AuthorOverride = saved;
+    }
+
+    /// <summary>Apply the composed TABLE-level shells (tblPr/tblGrid) to a composed table's output element (B2).</summary>
+    private static void ApplyComposedTableShell(
+        XElement newTbl, XElement baseTbl, IrComposedTableShell? shell,
+        IReadOnlyList<IrDocument> reviewerIrs, RenderState state)
+    {
+        if (shell == null)
+            return;
+        ApplyComposedShell(newTbl, baseTbl, shell.TblPr, W.tblPr, W.tblPrChange, TblPrInnerExclude, idOnly: false, reviewerIrs, state, FindTableSource);
+        ApplyComposedShell(newTbl, baseTbl, shell.TblGrid, W.tblGrid, W.tblGridChange, TblGridInnerExclude, idOnly: true, reviewerIrs, state, FindTableSource);
+    }
+
+    /// <summary>Apply the composed ROW-level shells (trPr/tblPrEx) to a composed row's output element (B2).</summary>
+    private static void ApplyComposedRowShell(
+        XElement newRow, XElement baseRow, IrAuthoredRowOp rowOp,
+        IReadOnlyList<IrDocument> reviewerIrs, RenderState state)
+    {
+        ApplyComposedShell(newRow, baseRow, rowOp.TrPr, W.trPr, W.trPrChange, TrPrInnerExclude, idOnly: false, reviewerIrs, state, FindRowSource);
+        ApplyComposedShell(newRow, baseRow, rowOp.TblPrEx, W.tblPrEx, W.tblPrExChange, TblPrExInnerExclude, idOnly: false, reviewerIrs, state, FindRowSource);
+    }
+
+    /// <summary>The source <c>w:tbl</c> a table anchor resolves to in <paramref name="ir"/> (tables ARE in the
+    /// AnchorIndex, unlike rows/cells).</summary>
+    private static XElement? FindTableSource(IrDocument ir, string tableAnchor) =>
+        ir.AnchorIndex.TryGetValue(tableAnchor, out var b) && b is IrTable t ? t.Source.Element : null;
 
     /// <summary>
     /// Core table-shell stamper. <paramref name="host"/> already carries the RIGHT shell (from a verbatim

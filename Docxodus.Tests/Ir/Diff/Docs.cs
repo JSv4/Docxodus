@@ -122,6 +122,105 @@ internal static class Docs
     public static string AcceptStructuralBody(WmlDocument merged) =>
         PlainTextWithTables(RevisionAccepter.AcceptRevisions(merged));
 
+    // ------------------------------------------------------------------ block-format (shell/section) projection
+
+    private static readonly XNamespace WNs = IrTestDocuments.W;
+
+    /// <summary>
+    /// A canonical, document-order projection of every body block-format SHELL and the section properties —
+    /// the byte-level oracle the format-blind text projections (<see cref="PlainText"/>/<see cref="StructuralBody"/>)
+    /// lack. Emits, per body table, its <c>w:tblPr</c> and <c>w:tblGrid</c>; per row, its <c>w:trPr</c> and
+    /// <c>w:tblPrEx</c>; per cell, its <c>w:tcPr</c>; per paragraph with an inline <c>w:pPr/w:sectPr</c>, that
+    /// section's properties; and the trailing body <c>w:sectPr</c>'s properties. Each shell is normalized by
+    /// <see cref="NormShell"/> (rsid/unid stripped, <c>w:*Change</c> markers removed, attributes sorted) so that
+    /// two documents with the same block formatting project to the same string regardless of revision markup or
+    /// non-semantic id noise. A dropped, retained-but-should-be-reverted, or corrupted shell/section therefore
+    /// changes the projection — which the text projections cannot see. Used for byte-level
+    /// <c>reject ≡ base</c> / <c>accept ≡ winner</c> assertions in the consolidate block-format tests.
+    /// </summary>
+    public static string ShellSection(WmlDocument d)
+    {
+        var body = XDocument.Parse(MainPartXml(d)).Root?.Element(WNs + "body");
+        if (body is null)
+            return string.Empty;
+
+        var sb = new StringBuilder();
+        foreach (var block in body.Elements())
+        {
+            if (block.Name == WNs + "p")
+            {
+                var inlineSect = block.Element(WNs + "pPr")?.Element(WNs + "sectPr");
+                if (inlineSect != null)
+                    sb.Append("PSECT{").Append(NormSectProps(inlineSect)).Append("}\n");
+            }
+            else if (block.Name == WNs + "tbl")
+            {
+                sb.Append("TBL{tblPr:").Append(NormShell(block.Element(WNs + "tblPr")))
+                  .Append(";grid:").Append(NormShell(block.Element(WNs + "tblGrid"))).Append("}\n");
+                foreach (var tr in block.Elements(WNs + "tr"))
+                {
+                    var trPr = tr.Element(WNs + "trPr");
+                    sb.Append("TR{trPr:").Append(NormShell(trPr))
+                      .Append(";ex:").Append(NormShell(trPr?.Element(WNs + "tblPrEx") ?? tr.Element(WNs + "tblPrEx")))
+                      .Append("}\n");
+                    foreach (var tc in tr.Elements(WNs + "tc"))
+                        sb.Append("TC{").Append(NormShell(tc.Element(WNs + "tcPr"))).Append("}\n");
+                }
+            }
+            else if (block.Name == WNs + "sectPr")
+            {
+                sb.Append("SECT{").Append(NormSectProps(block)).Append("}\n");
+            }
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>Canonicalize a block-format shell element for byte-level comparison: null/empty → <c>"∅"</c>;
+    /// otherwise a recursively rsid/unid-stripped, <c>w:*Change</c>-free, attribute-sorted rendering. Empty ≡
+    /// absent (mirrors the reader's shell-children digest), so a render→reject cycle's empty <c>&lt;w:trPr/&gt;</c>
+    /// equals base's absent one.</summary>
+    private static string NormShell(XElement? shell)
+    {
+        if (shell is null)
+            return "∅";
+        var norm = Canonicalize(shell);
+        return norm is null || !norm.HasElements && !norm.HasAttributes ? "∅" : norm.ToString(SaveOptions.DisableFormatting);
+    }
+
+    /// <summary>Canonicalize the SECTION properties (a <c>w:sectPr</c>) excluding header/footer references and
+    /// the change marker — matching the two-way engine's <c>IsSectPrProp</c> contract, since those references are
+    /// owned by the header/footer machinery and are outside the tracked <c>w:sectPrChange</c>.</summary>
+    private static string NormSectProps(XElement sectPr)
+    {
+        var props = new XElement(WNs + "sectPr",
+            sectPr.Elements().Where(e =>
+                e.Name != WNs + "headerReference" &&
+                e.Name != WNs + "footerReference" &&
+                e.Name != WNs + "sectPrChange"));
+        var norm = Canonicalize(props);
+        return norm is null ? "∅" : norm.ToString(SaveOptions.DisableFormatting);
+    }
+
+    /// <summary>Recursively strip <c>w:rsid*</c> / <c>pt:*</c>(unid) attributes and <c>w:*Change</c> child
+    /// elements, and sort each element's attributes by name — the minimal canonical form for comparing two
+    /// shells for property-byte equality.</summary>
+    private static XElement Canonicalize(XElement el)
+    {
+        var keptAttrs = el.Attributes()
+            .Where(a => !a.IsNamespaceDeclaration
+                && !(a.Name.Namespace == WNs && a.Name.LocalName.StartsWith("rsid", System.StringComparison.Ordinal))
+                && a.Name.NamespaceName != "http://powertools.codeplex.com/2011")
+            .OrderBy(a => a.Name.NamespaceName, System.StringComparer.Ordinal)
+            .ThenBy(a => a.Name.LocalName, System.StringComparer.Ordinal)
+            .Select(a => new XAttribute(a.Name, a.Value));
+
+        var keptChildren = el.Elements()
+            .Where(c => !c.Name.LocalName.EndsWith("Change", System.StringComparison.Ordinal))
+            .Select(Canonicalize);
+
+        return new XElement(el.Name, keptAttrs, keptChildren);
+    }
+
     /// <summary>The main document part XML as a string.</summary>
     public static string MainPartXml(WmlDocument d)
     {

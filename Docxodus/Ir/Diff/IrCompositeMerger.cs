@@ -42,7 +42,7 @@ internal static class IrCompositeMerger
         // reviewer's shell/section-only edit is still ignored by Consolidate. text+pPr edits keep routing to
         // the block-level conflict path (only pPr-ONLY edits compose in B1). Pinned by
         // BlockFormatChangeTests.Consolidate_merges_pPr_but_not_shell_section_v1.
-        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true };
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true };
 
         // 1. Raw pairwise scripts, NOT yet lowered — so PlanMoves can inspect every reviewer's move groups
         //    against the shared base anchor space before any move is collapsed to del/ins.
@@ -1100,11 +1100,15 @@ internal static class IrCompositeMerger
         // row moves are uncontested — otherwise we FALL BACK to the block-level conflict (no silent loss; the
         // base table is kept under BaseWins and the disagreement is recorded under every policy). An
         // UNCONTESTED reviewer MovedRow composes (lowered to del+ins rows, the two-way shape).
-        if (touched.All(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TableDiff != null)
-            && baseIr.AnchorIndex.TryGetValue(anchor, out var baseBlk) && baseBlk is IrTable baseTable
+        if (baseIr.AnchorIndex.TryGetValue(anchor, out var baseBlk) && baseBlk is IrTable baseTable
+            && touched.All(e => IsTableContentOrShellEdit(e.Op, reviewers[e.Reviewer].Ir))
             && MovedRowsComposable(touched))
         {
+            // Content composition over the CONTENT (ModifyBlock w/TableDiff) touchers — a pure shell
+            // (FormatOnlyBlock) toucher contributes no row ops, so with only shell touchers ComposeTableDiffs
+            // yields an all-EqualRow authored table onto which the shell attribution below layers the markup.
             var reviewerTableDiffs = touched
+                .Where(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TableDiff != null)
                 .Select(e => (e.Reviewer, reviewers[e.Reviewer].Author, e.Op.TableDiff!))
                 .ToList();
             var merged = ComposeTableDiffs(
@@ -1112,15 +1116,29 @@ internal static class IrCompositeMerger
                 ref nextConflictId, out var tableConflicts, out var authoredRows);
             conflicts.AddRange(tableConflicts);
 
+            // B2: per-element table + row shell composition across ALL touchers (tblPr/tblGrid at table level;
+            // trPr/tblPrEx per row) — mirrors ComposeCellShell (0→base / agree→consensus / ≥2→conflict per
+            // policy / non-stackable). Mutates authoredRows in place (attaches row-shell refs) and returns the
+            // table-level shell attribution. Cell tcPr is already composed inside ComposeTableDiffs.
+            var tableShell = ComposeTableAndRowShells(
+                anchor, baseTable, touched, reviewers, policy, settings, ref nextConflictId, conflicts, authoredRows);
+
             Invariant(AssertTilesBaseTable(authoredRows, baseTable),
                 "ComposeTableDiffs: authored rows/cells must tile the base table's rows/cells exactly once.");
 
-            var structOp = touched[0].Op with { TableDiff = merged };
+            // Representative op: prefer a real content ModifyBlock (its TableDiff carries content truth); else a
+            // pure-shell toucher, coerced to ModifyBlock so the emitted/serialized op kind is consistent (the
+            // render dispatches on AuthoredRows, not op kind, and resolves the base table via LeftAnchor).
+            var repOp = touched.Where(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TableDiff != null)
+                               .Select(e => e.Op).FirstOrDefault() ?? touched[0].Op;
+            var structOp = (repOp.Kind == IrEditOpKind.ModifyBlock ? repOp : repOp with { Kind = IrEditOpKind.ModifyBlock })
+                with { TableDiff = merged };
             ops.Add(new IrCompositeOp(structOp, "", touched[0].Reviewer,
                 AuthoredTokens: null,
                 ConflictId: tableConflicts.Count > 0 ? tableConflicts[0].Id : (int?)null,
                 SourceRightAnchors: null,
-                AuthoredRows: IrNodeList.From(authoredRows)));
+                AuthoredRows: IrNodeList.From(authoredRows),
+                TableShell: tableShell));
             return;
         }
         // BLOCK-LEVEL CONFLICT
@@ -1593,6 +1611,123 @@ internal static class IrCompositeMerger
         return new IrTableDiff(IrNodeList.From(mergedRowOps));
     }
 
+    /// <summary>True when <paramref name="op"/> is a table CONTENT edit (a ModifyBlock carrying a TableDiff) or
+    /// a table SHELL-only edit (a FormatOnlyBlock whose right block is a table) — the two op shapes the B2
+    /// unified table composition handles. Anything else on a table base (whole-table delete/insert/move) is not
+    /// a shell/content edit and falls through to the block-level path.</summary>
+    private static bool IsTableContentOrShellEdit(IrEditOp op, IrDocument reviewerIr)
+    {
+        if (op.Kind == IrEditOpKind.ModifyBlock && op.TableDiff != null)
+            return true;
+        return op.Kind == IrEditOpKind.FormatOnlyBlock && op.RightAnchor is { } ra
+            && reviewerIr.AnchorIndex.TryGetValue(ra, out var rb) && rb is IrTable;
+    }
+
+    /// <summary>
+    /// Compose the table-level (<c>w:tblPr</c>/<c>w:tblGrid</c>) and per-row (<c>w:trPr</c>/<c>w:tblPrEx</c>)
+    /// SHELLS of a base table across ALL touching reviewers (B2), each element independently by its digest —
+    /// mirroring <see cref="ComposeCellShell"/> (0 changers → base; all agree → the first; ≥2 distinct → a
+    /// recorded conflict resolved by policy; shells cannot stack). Row shells pair POSITIONALLY (only touchers
+    /// whose right table has the same row count contribute — a structural row add/remove is composed by
+    /// <see cref="ComposeTableDiffs"/>, and its shell falls back to base, so reject ≡ base holds). Attaches the
+    /// per-row attribution onto <paramref name="authoredRows"/> in place and returns the table-level attribution.
+    /// </summary>
+    private static IrComposedTableShell? ComposeTableAndRowShells(
+        string tableAnchor, IrTable baseTable,
+        List<(int Reviewer, IrEditOp Op)> touched,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
+        Docxodus.ConflictResolution policy, IrDiffSettings settings,
+        ref int nextConflictId, List<IrConflict> conflicts,
+        List<IrAuthoredRowOp> authoredRows)
+    {
+        // Resolve each toucher's RIGHT table (by right anchor). Unresolvable → skipped (base shell kept).
+        var rights = new List<(int Reviewer, string Author, IrTable Right)>();
+        foreach (var (reviewer, op) in touched)
+            if (op.RightAnchor is { } ra
+                && reviewers[reviewer].Ir.AnchorIndex.TryGetValue(ra, out var rb) && rb is IrTable rt)
+                rights.Add((reviewer, reviewers[reviewer].Author, rt));
+
+        string tableText = string.Join(" ", baseTable.Rows.Select(r => RowResultText(r, settings)));
+
+        var tblPr = ComposeShellElement(tableAnchor,
+            rights.Where(r => !r.Right.TblPrDigest.Equals(baseTable.TblPrDigest))
+                  .Select(r => (r.Reviewer, r.Author, r.Right.TblPrDigest, r.Right.Anchor.ToString())).ToList(),
+            policy, ref nextConflictId, conflicts, tableText);
+        var tblGrid = ComposeShellElement(tableAnchor,
+            rights.Where(r => !r.Right.TblGridDigest.Equals(baseTable.TblGridDigest))
+                  .Select(r => (r.Reviewer, r.Author, r.Right.TblGridDigest, r.Right.Anchor.ToString())).ToList(),
+            policy, ref nextConflictId, conflicts, tableText);
+
+        int rowCount = baseTable.Rows.Count;
+        for (int i = 0; i < rowCount; i++)
+        {
+            var baseRow = baseTable.Rows[i];
+            string rowAnchor = baseRow.Anchor.ToString();
+            string rowText = RowResultText(baseRow, settings);
+            // Only touchers whose right table row-count matches base contribute a positionally-paired right row.
+            var alignedRows = rights.Where(r => r.Right.Rows.Count == rowCount)
+                .Select(r => (r.Reviewer, r.Author, Row: r.Right.Rows[i])).ToList();
+
+            var trPr = ComposeShellElement(rowAnchor,
+                alignedRows.Where(r => !r.Row.TrPrShellDigest.Equals(baseRow.TrPrShellDigest))
+                           .Select(r => (r.Reviewer, r.Author, r.Row.TrPrShellDigest, r.Row.Anchor.ToString())).ToList(),
+                policy, ref nextConflictId, conflicts, rowText);
+            var tblPrEx = ComposeShellElement(rowAnchor,
+                alignedRows.Where(r => !r.Row.TrPrExDigest.Equals(baseRow.TrPrExDigest))
+                           .Select(r => (r.Reviewer, r.Author, r.Row.TrPrExDigest, r.Row.Anchor.ToString())).ToList(),
+                policy, ref nextConflictId, conflicts, rowText);
+
+            var trRef = ToShellRef(trPr);
+            var exRef = ToShellRef(tblPrEx);
+            if (trRef != null || exRef != null)
+                ReplaceRowShellAttribution(authoredRows, rowAnchor, trRef, exRef);
+        }
+
+        var tblPrRef = ToShellRef(tblPr);
+        var tblGridRef = ToShellRef(tblGrid);
+        return tblPrRef != null || tblGridRef != null ? new IrComposedTableShell(tblPrRef, tblGridRef) : null;
+    }
+
+    /// <summary>Compose ONE shell element across its changers (already filtered to digest ≠ base): 0 → base
+    /// (-1); all agree → the first (lowest-index) changer; ≥2 distinct digests → a recorded conflict resolved
+    /// by policy (BaseWins → base; else the first changer). Shells cannot stack.</summary>
+    private static (int Reviewer, string? Anchor, string Author) ComposeShellElement(
+        string baseAnchor,
+        List<(int Reviewer, string Author, IrHash Digest, string RightAnchor)> changers,
+        Docxodus.ConflictResolution policy, ref int nextConflictId, List<IrConflict> conflicts,
+        string competitorText)
+    {
+        if (changers.Count == 0)
+            return (-1, null, "");
+        changers.Sort((a, b) => a.Reviewer.CompareTo(b.Reviewer));
+        bool allAgree = changers.All(c => c.Digest.Equals(changers[0].Digest));
+        if (!allAgree)
+        {
+            conflicts.Add(new IrConflict(nextConflictId++, baseAnchor, 0, 0, policy,
+                IrNodeList.From(changers.Select(c => new IrConflictCompetitor(c.Author, competitorText)))));
+            if (policy == Docxodus.ConflictResolution.BaseWins)
+                return (-1, null, "");
+        }
+        return (changers[0].Reviewer, changers[0].RightAnchor, changers[0].Author);
+    }
+
+    private static IrComposedShellRef? ToShellRef((int Reviewer, string? Anchor, string Author) w) =>
+        w.Reviewer >= 0 && w.Anchor is { } a ? new IrComposedShellRef(w.Reviewer, a, w.Author) : null;
+
+    /// <summary>Attach the composed trPr/tblPrEx shell attribution onto the authored row op for
+    /// <paramref name="rowAnchor"/>.</summary>
+    private static void ReplaceRowShellAttribution(
+        List<IrAuthoredRowOp> authoredRows, string rowAnchor,
+        IrComposedShellRef? trPr, IrComposedShellRef? tblPrEx)
+    {
+        for (int i = 0; i < authoredRows.Count; i++)
+            if (authoredRows[i].BaseRowAnchor == rowAnchor)
+            {
+                authoredRows[i] = authoredRows[i] with { TrPr = trPr, TblPrEx = tblPrEx };
+                return;
+            }
+    }
+
     /// <summary>Emit every reviewer's InsertRows slotted after <paramref name="anchor"/> (reviewer order):
     /// both the merged row op and its authored view. Disjoint inserted rows from different reviewers all
     /// appear — no insert-vs-insert row conflict (block-insert convention).</summary>
@@ -1755,7 +1890,8 @@ internal static class IrCompositeMerger
                     var composed = blockOps.Select(b => EmitOp(b, author, reviewer)).ToList();
                     result.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(composed),
                         ShellSourceReviewer: reviewer,
-                        ShellRightCellAnchor: cellOp.RightCellAnchor));
+                        ShellRightCellAnchor: cellOp.RightCellAnchor,
+                        ShellAuthor: author));
                 }
                 else
                 {
@@ -1932,7 +2068,8 @@ internal static class IrCompositeMerger
         mergedCellOps.Add(new IrCellOp(baseCellAnchor, baseCellAnchor,
             IrNodeList.From(cellOps.Select(c => c.Op))));
         composedCells.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(cellOps),
-            shellReviewer, shellAnchor));
+            shellReviewer, shellAnchor,
+            ShellAuthor: shellReviewer >= 0 ? reviewers[shellReviewer].Author : ""));
     }
 
     /// <summary>Emit one reviewer's single-editor cell (merged op verbatim + authored Content view with the
@@ -1945,7 +2082,8 @@ internal static class IrCompositeMerger
         var composed = editor.CellOp.BlockOps!.Select(b => EmitOp(b, editor.Author, editor.Reviewer)).ToList();
         composedCells.Add(new IrAuthoredCellOp(baseCellAnchor, IrNodeList.From(composed),
             ShellSourceReviewer: editor.CellOp.RightCellAnchor != null ? editor.Reviewer : -1,
-            ShellRightCellAnchor: editor.CellOp.RightCellAnchor));
+            ShellRightCellAnchor: editor.CellOp.RightCellAnchor,
+            ShellAuthor: editor.CellOp.RightCellAnchor != null ? editor.Author : ""));
     }
 
     /// <summary>Emit one reviewer's deleted base cell (merged left-only op + authored
