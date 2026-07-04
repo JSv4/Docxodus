@@ -1660,8 +1660,14 @@ internal static class IrCompositeMerger
             rights.Where(r => !r.Right.TblPrDigest.Equals(baseTable.TblPrDigest))
                   .Select(r => (r.Reviewer, r.Author, r.Right.TblPrDigest, r.Right.Anchor.ToString())).ToList(),
             policy, ref nextConflictId, conflicts, tableText);
+        // tblGrid is composed as a grid-PROPERTY change ONLY for a reviewer whose COLUMN COUNT matches base
+        // (a pure gridCol-width edit). A column ADD/REMOVE also changes TblGridDigest, but that is STRUCTURAL —
+        // owned by ComposeTableDiffs (native w:cellIns/w:cellDel); composing the grid there too would stamp a
+        // spurious w:tblGridChange and leave the accepted grid's gridCol count disagreeing with the tc count.
+        int baseCols = baseTable.Rows.Count > 0 ? baseTable.Rows[0].Cells.Count : 0;
         var tblGrid = ComposeShellElement(tableAnchor,
-            rights.Where(r => !r.Right.TblGridDigest.Equals(baseTable.TblGridDigest))
+            rights.Where(r => !r.Right.TblGridDigest.Equals(baseTable.TblGridDigest)
+                           && (r.Right.Rows.Count > 0 ? r.Right.Rows[0].Cells.Count : 0) == baseCols)
                   .Select(r => (r.Reviewer, r.Author, r.Right.TblGridDigest, r.Right.Anchor.ToString())).ToList(),
             policy, ref nextConflictId, conflicts, tableText);
 

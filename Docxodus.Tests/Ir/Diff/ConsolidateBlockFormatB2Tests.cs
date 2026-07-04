@@ -309,6 +309,42 @@ public class ConsolidateBlockFormatB2Tests
         Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(Reject(merged)));
     }
 
+    // ------------------------------------------------------------------ tblGrid vs structural column change (review round-trip finding)
+
+    private static string GridTbl(string grid, params string[] cells) =>
+        "<w:p><w:r><w:t>lead</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblW w:w=\"5000\" w:type=\"dxa\"/></w:tblPr>" +
+        $"<w:tblGrid>{grid}</w:tblGrid><w:tr>" +
+        string.Concat(cells.Select(c => $"<w:tc><w:tcPr><w:tcW w:w=\"2500\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t xml:space=\"preserve\">{c}</w:t></w:r></w:p></w:tc>")) +
+        "</w:tr></w:tbl>";
+
+    /// <summary>
+    /// Review round-trip finding: a structural column ADD changes TblGridDigest, but it is NOT a grid-property
+    /// change — it is owned by the column composition (native w:cellIns). B2 must NOT compose it as a
+    /// w:tblGridChange (which would leave the accepted grid's gridCol count disagreeing with the tc count).
+    /// </summary>
+    [Fact]
+    public void Column_add_does_not_compose_tblGrid_as_a_property_change()
+    {
+        var baseDoc = IrTestDocuments.FromBodyXml(GridTbl("<w:gridCol w:w=\"2500\"/><w:gridCol w:w=\"2500\"/>", "a", "b"));
+        var v = IrTestDocuments.FromBodyXml(GridTbl("<w:gridCol w:w=\"2500\"/><w:gridCol w:w=\"2500\"/><w:gridCol w:w=\"2500\"/>", "a", "b", "c"));
+        var merged = Consolidate(baseDoc, ConflictResolution.BaseWins, ("Alice", v), ("Bob", v));
+        Assert.DoesNotContain("w:tblGridChange", Xml(merged));
+        Assert.Equal(Docs.StructuralBody(baseDoc), Docs.StructuralBody(Reject(merged)));
+    }
+
+    /// <summary>A PURE gridCol-width change (same column count) still composes as a w:tblGridChange (B2).</summary>
+    [Fact]
+    public void Multireviewer_gridcol_width_change_composes_tblGridChange()
+    {
+        var baseDoc = IrTestDocuments.FromBodyXml(GridTbl("<w:gridCol w:w=\"2500\"/><w:gridCol w:w=\"2500\"/>", "a", "b"));
+        var v = IrTestDocuments.FromBodyXml(GridTbl("<w:gridCol w:w=\"3000\"/><w:gridCol w:w=\"2000\"/>", "a", "b"));
+        Assert.Empty(Conflicts(baseDoc, ConflictResolution.BaseWins, ("Alice", v), ("Bob", v)));
+        var merged = Consolidate(baseDoc, ConflictResolution.BaseWins, ("Alice", v), ("Bob", v));
+        Assert.Contains("w:tblGridChange", Xml(merged));
+        Assert.Equal(Docs.ShellSection(v), Docs.ShellSection(Accept(merged)));
+        Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(Reject(merged)));
+    }
+
     // ------------------------------------------------------------------ row-restructure + shell interaction (review findings A/B)
 
     private static string Tr(string trH, string txt) =>
