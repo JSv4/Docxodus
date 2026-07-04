@@ -70,7 +70,100 @@ public sealed record FormatOp
     public bool? Code { get; init; }
     public string? Color { get; init; }
     public string? RunStyle { get; init; }
+
+    /// <summary>
+    /// Vertical alignment (w:vertAlign): null = leave unchanged, "" / "none" / "baseline"
+    /// = clear, "superscript" / "subscript" (or "super" / "sub") = set. Single-valued, so
+    /// a string rather than a bool toggle.
+    /// </summary>
+    public string? VertAlign { get; init; }
+
+    /// <summary>
+    /// Font size in points (maps to <c>w:sz</c>/<c>w:szCs</c>, which store half-points).
+    /// null = leave unchanged; a value &lt;= 0 clears the explicit size (falls back to the
+    /// style/default). Fractional points are allowed (e.g. 7.5) and round to the nearest
+    /// half-point. Needed for the S-1 cover page's large "FORM S-1" and company-name lines.
+    /// </summary>
+    public double? FontSizePts { get; init; }
+
+    /// <summary>
+    /// Run font family (maps to <c>w:rFonts</c> — sets <c>w:ascii</c>/<c>w:hAnsi</c>/<c>w:cs</c>
+    /// to the name). null = leave unchanged; <c>""</c> clears the explicit font so the run
+    /// inherits the style/default. Needed to match serif filings (e.g. an S-1 in Times New Roman).
+    /// </summary>
+    public string? FontFamily { get; init; }
 }
+
+/// <summary>
+/// One edge of a paragraph border (a <c>w:pBdr</c> child — <c>w:top</c>/<c>w:bottom</c>).
+/// Drives the horizontal rules and section separators on an S-1-style cover page. When an
+/// edge is set, null fields fall back to sensible defaults; use
+/// <see cref="ParagraphFormatOp.ClearBorders"/> to remove all paragraph borders.
+/// </summary>
+public sealed record ParagraphBorderEdge
+{
+    /// <summary>Border line style (<c>w:val</c>): single, double, thick, dotted, dashed, … Default "single".</summary>
+    public string? Style { get; init; }
+
+    /// <summary>Border weight in eighths of a point (<c>w:sz</c>). Default 6 (≈0.75pt); a heavy rule ≈ 18–24.</summary>
+    public int? Size { get; init; }
+
+    /// <summary>Border color as a hex triplet without '#', or "auto" (<c>w:color</c>). Default "auto".</summary>
+    public string? Color { get; init; }
+
+    /// <summary>Padding between the border and the text in points (<c>w:space</c>). Default 1.</summary>
+    public int? Space { get; init; }
+}
+
+/// <summary>Paragraph alignment (maps to w:jc): Justify → w:val "both".</summary>
+public enum ParagraphAlignment { Left, Center, Right, Justify }
+
+/// <summary>
+/// Paragraph-level formatting for <see cref="DocxSession.SetParagraphFormat"/>. Each field
+/// is tri-state: null leaves it unchanged. Alignment sets w:jc; PageBreakBefore toggles
+/// w:pageBreakBefore (false removes); IndentDelta adjusts w:ind/@w:left by a twips delta
+/// (clamped at 0), preserving any firstLine/hanging/right indents.
+/// </summary>
+public sealed record ParagraphFormatOp
+{
+    public ParagraphAlignment? Alignment { get; init; }
+    public int? IndentDelta { get; init; }
+    public bool? PageBreakBefore { get; init; }
+
+    /// <summary>Top paragraph border (<c>w:pBdr/w:top</c>). null = leave unchanged.</summary>
+    public ParagraphBorderEdge? TopBorder { get; init; }
+
+    /// <summary>Bottom paragraph border (<c>w:pBdr/w:bottom</c>). null = leave unchanged.
+    /// This is what an S-1 horizontal rule is: an (often empty) paragraph with a bottom border.</summary>
+    public ParagraphBorderEdge? BottomBorder { get; init; }
+
+    /// <summary>When true, remove the entire <c>w:pBdr</c> (all paragraph borders) before applying
+    /// any <see cref="TopBorder"/>/<see cref="BottomBorder"/> in this same op.</summary>
+    public bool? ClearBorders { get; init; }
+}
+
+/// <summary>Options for <see cref="DocxSession.InsertTable"/>.</summary>
+public sealed record TableInsertOptions
+{
+    /// <summary>When true, emit explicit "none" table + inside borders (an invisible layout table —
+    /// the S-1 multi-column blocks). When false, a thin single border on every edge.</summary>
+    public bool Borderless { get; init; }
+
+    /// <summary>Row-major (row 0 left→right, then row 1, …) markdown for each cell. A null/short list
+    /// leaves the remaining cells empty; each entry may parse to more than one paragraph.</summary>
+    public IReadOnlyList<string>? CellContents { get; init; }
+
+    /// <summary>Alignment applied to every cell paragraph (the S-1 columns are centered). null = leave default.</summary>
+    public ParagraphAlignment? CellAlignment { get; init; }
+
+    /// <summary>Per-column widths in twips (one per column, left→right). null = equal columns.
+    /// A non-null list whose length != the column count is a caller error (rejected). Drives
+    /// unequal layouts like the S-1's wide-left / narrow-right filing-header row.</summary>
+    public IReadOnlyList<int>? ColumnWidths { get; init; }
+}
+
+/// <summary>List membership for <see cref="DocxSession.ApplyListFormat"/>.</summary>
+public enum ListFormat { None, Bullet, Decimal }
 
 /// <summary>
 /// Per-fragment visible formatting reported by <see cref="DocxSession.Grep"/>.
@@ -3315,7 +3408,12 @@ public sealed class DocxSession : IDisposable
         {
             var pPr = element.Element(W.pPr);
             var second = new XElement(W.p);
-            if (pPr is not null) second.Add(new XElement(pPr));
+            XElement? newPPr = null;
+            if (pPr is not null)
+            {
+                newPPr = new XElement(pPr);
+                second.Add(newPPr);
+            }
 
             // Split any run that straddles the offset (descends into hyperlinks/sdts),
             // then split any container (hyperlink) that still straddles, then move all
@@ -3324,15 +3422,61 @@ public sealed class DocxSession : IDisposable
             SplitInlineContainersAtOffset(element, characterOffset);
             MoveInlineChildrenAfter(element, characterOffset, second);
 
+            if (newPPr is not null)
+            {
+                // pageBreakBefore is a once-only property: the original paragraph keeps it; the new
+                // paragraph must not inherit a second page break (matches Word clearing it on Enter).
+                newPPr.Elements(W.pageBreakBefore).Remove();
+
+                // An empty bordered paragraph is a horizontal rule; splitting it (Enter) must not
+                // propagate the rule's border onto the fresh paragraph below — otherwise every Enter
+                // stacks another rule and borders the body text (S-1 smoke-test finding 1a). A bordered
+                // paragraph that HAS text keeps its border on both halves (boxed-block behavior).
+                if (totalText.Length == 0)
+                    newPPr.Elements(W.pBdr).Remove();
+
+                // An empty Enter-at-end split starts a fresh paragraph. For a non-list paragraph whose
+                // style declares a distinct next-paragraph style (e.g. Title/Heading -> Normal), rebase
+                // the new paragraph onto that next style instead of cloning the heading: a clean pStyle,
+                // dropping the heading-only direct props and the inherited paragraph-mark rPr that would
+                // otherwise bake the heading's bold into freshly-typed text. List items are exempt so the
+                // editor's Enter-continuation keeps the list going.
+                bool emptySplit = characterOffset >= totalText.Length;
+                bool isListItem = newPPr.Element(W.numPr) is not null;
+                if (emptySplit && !isListItem)
+                {
+                    var curStyle = (string?)newPPr.Element(W.pStyle)?.Attribute(W.val);
+                    var nextStyle = ResolveNextParagraphStyle(curStyle);
+                    if (nextStyle is not null && !string.Equals(nextStyle, curStyle, StringComparison.Ordinal))
+                    {
+                        var rebuilt = new XElement(W.pPr,
+                            new XElement(W.pStyle, new XAttribute(W.val, nextStyle)));
+                        newPPr.ReplaceWith(rebuilt);
+                        newPPr = rebuilt;
+                    }
+                }
+
+                // Re-mint Unids on the new paragraph's property subtree so cloned property elements
+                // (jc, ind, numPr, ...) don't carry the original's Unid onto a second element.
+                foreach (var el in newPPr.DescendantsAndSelf())
+                    el.Attributes(PtOpenXml.Unid).Remove();
+            }
+
             UnidHelper.AssignToSelfAndDescendants(second);
             element.AddAfterSelf(second);
 
             var secondUnid = (string)second.Attribute(PtOpenXml.Unid)!;
-            var secondAnchor = new Anchor(
-                $"{target.Anchor.Kind}:{target.Anchor.Scope}:{secondUnid}",
-                target.Anchor.Kind, target.Anchor.Scope, secondUnid);
-
             InvalidateProjectionCache();
+
+            // The new paragraph's kind can differ from the original (Heading -> Normal via the
+            // next-paragraph style), so resolve its anchor from the fresh projection rather than
+            // assuming the original kind.
+            var secondAnchor =
+                Project().AnchorIndex.Values.FirstOrDefault(t => t.Unid == secondUnid)?.Anchor
+                ?? new Anchor(
+                    $"{target.Anchor.Kind}:{target.Anchor.Scope}:{secondUnid}",
+                    target.Anchor.Kind, target.Anchor.Scope, secondUnid);
+
             return new EditResult
             {
                 Success = true,
@@ -3347,6 +3491,23 @@ public sealed class DocxSession : IDisposable
             _ = _history.PopForUndo();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
         }
+    }
+
+    /// <summary>
+    /// The linked next-paragraph style (<c>w:style/w:next/@w:val</c>) for the given paragraph style
+    /// id, read from the styles part; null when the id is empty/unknown or declares no next style.
+    /// Read via <c>GetXDocument</c> (the same view <see cref="Internal.StyleFactory"/> writes through)
+    /// so styles synthesized earlier in the session are visible.
+    /// </summary>
+    private string? ResolveNextParagraphStyle(string? styleId)
+    {
+        if (string.IsNullOrEmpty(styleId)) return null;
+        var part = _doc?.MainDocumentPart?.StyleDefinitionsPart;
+        var root = part?.GetXDocument().Root;
+        if (root is null) return null;
+        var style = root.Elements(W.style)
+            .FirstOrDefault(st => (string?)st.Attribute(W.styleId) == styleId);
+        return (string?)style?.Element(W.next)?.Attribute(W.val);
     }
 
     public EditResult MergeParagraphs(string firstAnchorId, string secondAnchorId)
@@ -3435,6 +3596,32 @@ public sealed class DocxSession : IDisposable
         var element = target.Resolve(_doc!);
         return element?.ToString() ?? "";
     }
+
+    /// <summary>
+    /// The live, in-memory document backing this session. Exposed for read-only,
+    /// in-assembly consumers (e.g. session-attached single-block HTML rendering) that
+    /// must read the current tree/parts without the round-trip cost of <see cref="Save"/>.
+    /// Do not mutate it outside the session's own edit methods.
+    /// </summary>
+    internal WordprocessingDocument LiveDocument
+    {
+        get
+        {
+            ThrowIfDisposed();
+            return _doc!;
+        }
+    }
+
+    // Cached formatting "shell" for session-attached single-block rendering (see
+    // Internal.HtmlConversionOps.RenderBlockHtml). A serialized throwaway .docx holding the
+    // formatting parts (styles/numbering/theme/fontTable/settings) + an empty body, built ONCE and
+    // reused across renders so a keystroke commit doesn't re-clone the (potentially huge) style
+    // gallery every time. HtmlConversionOps owns these; it rebuilds the shell when
+    // <see cref="RenderShellSignature"/> (a cheap content signature of the formatting parts) changes
+    // — i.e. when a format op adds a style / numbering level. Text edits never touch those parts, so
+    // the shell survives normal typing. Disposed implicitly with the session (plain GC).
+    internal byte[]? RenderShellBytes;
+    internal long RenderShellSignature;
 
     internal EditResult RawInsertXmlInternal(string anchorId, Position pos, string xml)
     {
@@ -3736,6 +3923,10 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
+            // Inline code references a "Code" character style by id; ensure it actually
+            // exists so the run renders monospace instead of pointing at a phantom style.
+            if (op.Code is true) Internal.StyleFactory.EnsureCodeCharacterStyle(_doc);
+
             SplitRunsAtOffset(element, actualSpan.Start);
             SplitRunsAtOffset(element, actualSpan.Start + actualSpan.Length);
 
@@ -3775,11 +3966,10 @@ public sealed class DocxSession : IDisposable
         if (target.Anchor.Kind is not ("p" or "h" or "li"))
             return EditResult.Fail(EditErrorCode.AnchorWrongKind, "SetParagraphStyle requires a paragraph anchor", anchorId);
 
-        var stylesPart = _doc!.MainDocumentPart!.StyleDefinitionsPart;
-        var stylesXml = stylesPart?.GetXDocument().Root;
-        bool exists = stylesXml?.Elements(W.style)
-            .Any(st => (string?)st.Attribute(W.styleId) == styleId) ?? false;
-        if (!exists)
+        // Find-or-create well-known built-in styles (Title, Subtitle, Heading1-9) the document
+        // hasn't defined yet, so applying one works instead of silently failing. Mirrors the inline
+        // "Code" character style. A truly unknown custom id is left untouched and still rejected.
+        if (!Internal.StyleFactory.EnsureParagraphStyle(_doc!, styleId))
             return EditResult.Fail(EditErrorCode.UnknownStyle, $"style id not found: {styleId}", anchorId);
 
         var element = target.Resolve(_doc);
@@ -3813,6 +4003,595 @@ public sealed class DocxSession : IDisposable
         }
     }
 
+    // CT_PPr child schema order (subset covering what we insert). w:pPr children must
+    // appear in this sequence or Word treats the file as needing repair.
+    private static readonly string[] PPrChildOrder =
+    {
+        "pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl",
+        "numPr", "suppressLineNumbers", "pBdr", "shd", "tabs", "suppressAutoHyphens",
+        "kinsoku", "wordWrap", "overflowPunct", "topLinePunct", "autoSpaceDE", "autoSpaceDN",
+        "bidi", "adjustRightInd", "snapToGrid", "spacing", "ind", "contextualSpacing",
+        "mirrorIndents", "suppressOverlap", "jc", "textDirection", "textAlignment",
+        "textboxTightWrap", "outlineLvl", "divId", "cnfStyle", "rPr", "sectPr", "pPrChange",
+    };
+
+    /// <summary>Insert (replacing any existing) a w:pPr child at its correct CT_PPr position.</summary>
+    private static void SetPPrChildInOrder(XElement pPr, XElement child)
+    {
+        pPr.Elements(child.Name).Remove();
+        int idx = Array.IndexOf(PPrChildOrder, child.Name.LocalName);
+        XElement? after = null;
+        foreach (var e in pPr.Elements())
+        {
+            int ei = Array.IndexOf(PPrChildOrder, e.Name.LocalName);
+            if (ei >= 0 && ei < idx) after = e;
+            else if (ei >= idx) break;
+        }
+        if (after is null) pPr.AddFirst(child);
+        else after.AddAfterSelf(child);
+    }
+
+    // CT_PBdr child schema order. w:pBdr edges must appear in this sequence.
+    private static readonly string[] PBdrEdgeOrder = { "top", "left", "bottom", "right", "between", "bar" };
+
+    private static XElement BorderEdgeElement(XName edgeName, ParagraphBorderEdge edge) =>
+        new XElement(edgeName,
+            new XAttribute(W.val, string.IsNullOrEmpty(edge.Style) ? "single" : edge.Style),
+            new XAttribute(W.sz, edge.Size ?? 6),
+            new XAttribute(W.space, edge.Space ?? 1),
+            new XAttribute(W.color, string.IsNullOrEmpty(edge.Color) ? "auto" : edge.Color));
+
+    /// <summary>Insert/replace a single <c>w:pBdr</c> edge, keeping CT_PBdr child order.</summary>
+    private static void SetBorderEdgeInOrder(XElement pBdr, XName edgeName, XElement edge)
+    {
+        pBdr.Elements(edgeName).Remove();
+        int idx = Array.IndexOf(PBdrEdgeOrder, edgeName.LocalName);
+        XElement? after = null;
+        foreach (var e in pBdr.Elements())
+        {
+            int ei = Array.IndexOf(PBdrEdgeOrder, e.Name.LocalName);
+            if (ei >= 0 && ei < idx) after = e;
+            else if (ei >= idx) break;
+        }
+        if (after is null) pBdr.AddFirst(edge);
+        else after.AddAfterSelf(edge);
+    }
+
+    /// <summary>Apply top/bottom border edges (and an optional clear) to a paragraph's pPr, in place.</summary>
+    private static void ApplyParagraphBorders(XElement pPr, ParagraphBorderEdge? top, ParagraphBorderEdge? bottom, bool clear)
+    {
+        if (clear) pPr.Element(W.pBdr)?.Remove();
+        if (top is null && bottom is null) return;
+        var pBdr = pPr.Element(W.pBdr);
+        bool isNew = pBdr is null;
+        pBdr ??= new XElement(W.pBdr);
+        if (top is not null) SetBorderEdgeInOrder(pBdr, W.top, BorderEdgeElement(W.top, top));
+        if (bottom is not null) SetBorderEdgeInOrder(pBdr, W.bottom, BorderEdgeElement(W.bottom, bottom));
+        if (isNew) SetPPrChildInOrder(pPr, pBdr);
+    }
+
+    /// <summary>
+    /// Set paragraph-level formatting (alignment, indent delta, page-break-before) on the
+    /// paragraph the anchor names. Only the non-null fields of <paramref name="op"/> change.
+    /// </summary>
+    public EditResult SetParagraphFormat(string anchorId, ParagraphFormatOp op)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "SetParagraphFormat requires a paragraph anchor", anchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var pPr = element.Element(W.pPr);
+            if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+
+            if (op.Alignment is { } align)
+            {
+                var val = align switch
+                {
+                    ParagraphAlignment.Left => "left",
+                    ParagraphAlignment.Center => "center",
+                    ParagraphAlignment.Right => "right",
+                    ParagraphAlignment.Justify => "both",
+                    _ => "left",
+                };
+                SetPPrChildInOrder(pPr, new XElement(W.jc, new XAttribute(W.val, val)));
+            }
+
+            if (op.PageBreakBefore is { } pbb)
+            {
+                pPr.Element(W.pageBreakBefore)?.Remove();
+                if (pbb) SetPPrChildInOrder(pPr, new XElement(W.pageBreakBefore));
+            }
+
+            if (op.IndentDelta is { } delta && delta != 0)
+            {
+                var ind = pPr.Element(W.ind);
+                // Parse the current left indent tolerantly: documents exported by Google Docs (and
+                // others) emit non-integer twips like w:left="12.996749877929688", which a bare
+                // (int?) cast rejects with a FormatException. AttributeToTwips is the same helper the
+                // HTML converter uses (decimal → truncate), so we read what the doc renders and write
+                // back a clean integer.
+                int cur = ind is null ? 0 : WordprocessingMLUtil.AttributeToTwips(ind.Attribute(W.left)) ?? 0;
+                int next = Math.Max(0, cur + delta);
+                if (ind is null)
+                {
+                    ind = new XElement(W.ind);
+                    SetPPrChildInOrder(pPr, ind);
+                }
+                ind.SetAttributeValue(W.left, next);
+            }
+
+            if (op.ClearBorders is true || op.TopBorder is not null || op.BottomBorder is not null)
+                ApplyParagraphBorders(pPr, op.TopBorder, op.BottomBorder, op.ClearBorders is true);
+
+            InvalidateProjectionCache();
+            var freshIndex = Project().AnchorIndex;
+            var updated = freshIndex.Values.FirstOrDefault(t => t.Unid == target.Unid)?.Anchor ?? target.Anchor;
+
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { updated },
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>
+    /// Insert an empty paragraph carrying a bottom border — an S-1-style horizontal rule —
+    /// before/after the block named by <paramref name="anchorId"/>. <paramref name="rule"/>
+    /// styles the line (default: a single 12-eighths ≈1.5pt black rule).
+    /// </summary>
+    /// <summary>
+    /// Mint a complete, blank single-paragraph DOCX (Normal style, doc defaults, settings, and a
+    /// US-Letter portrait section) as bytes — a "New document" seed for editors that draft from
+    /// scratch. The result opens cleanly in Word and as a <see cref="DocxSession"/>.
+    /// </summary>
+    public static byte[] CreateBlankDocxBytes() => Internal.BlankDocumentFactory.CreateBytes();
+
+    /// <summary>
+    /// Insert an empty paragraph carrying a bottom border — an S-1-style horizontal rule —
+    /// before/after the block named by <paramref name="anchorId"/>. <paramref name="rule"/>
+    /// styles the line (default: a single 12-eighths ≈1.5pt black rule).
+    /// </summary>
+    public EditResult InsertHorizontalRule(string anchorId, Position pos, ParagraphBorderEdge? rule = null)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var edge = rule ?? new ParagraphBorderEdge { Style = "single", Size = 12, Color = "auto" };
+            var pPr = new XElement(W.pPr);
+            ApplyParagraphBorders(pPr, top: null, bottom: edge, clear: false);
+            var p = new XElement(W.p, pPr);
+            UnidHelper.AssignToSelfAndDescendants(p);
+
+            if (pos == Position.Before) element.AddBeforeSelf(p);
+            else element.AddAfterSelf(p);
+
+            var unid = (string)p.Attribute(PtOpenXml.Unid)!;
+            InvalidateProjectionCache();
+            var created = Project().AnchorIndex.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor
+                ?? new Anchor($"p:{target.Anchor.Scope}:{unid}", "p", target.Anchor.Scope, unid);
+
+            return new EditResult
+            {
+                Success = true,
+                Created = new[] { created },
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>
+    /// Insert a <paramref name="rows"/>×<paramref name="cols"/> table before/after the block named
+    /// by <paramref name="anchorId"/>. <paramref name="options"/> controls borders, per-cell markdown
+    /// (row-major), and cell alignment. Returns the created cell-paragraph anchors (row-major), so the
+    /// caller can address and fill/format each cell.
+    /// </summary>
+    public EditResult InsertTable(string anchorId, Position pos, int rows, int cols, TableInsertOptions? options = null)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (rows < 1 || cols < 1)
+            return EditResult.Fail(EditErrorCode.MalformedMarkdown, "table needs >= 1 row and >= 1 column", anchorId);
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+
+        var opts = options ?? new TableInsertOptions();
+        var contents = opts.CellContents;
+
+        // Explicit per-column widths: one per column, all positive. A mismatched count is a
+        // caller error — reject rather than silently equalize (no silent caps).
+        var colWidths = opts.ColumnWidths;
+        if (colWidths is not null && (colWidths.Count != cols || colWidths.Any(w => w <= 0)))
+            return EditResult.Fail(EditErrorCode.MalformedMarkdown,
+                $"ColumnWidths must have one positive width per column ({cols}); got {colWidths.Count}", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            const int contentTwips = 9576;           // ~6.65", a US-Letter content width
+            int colTwips = contentTwips / cols;
+            int Width(int c) => colWidths is not null ? colWidths[c] : colTwips;
+
+            // With explicit widths the table is sized to their sum (dxa); otherwise it fills
+            // the content area (100% pct) and splits equally.
+            var tblW = colWidths is not null
+                ? new XElement(W.tblW, new XAttribute(W._w, colWidths.Sum()), new XAttribute(W.type, "dxa"))
+                : new XElement(W.tblW, new XAttribute(W._w, 5000), new XAttribute(W.type, "pct"));
+
+            var tblPr = new XElement(W.tblPr,
+                tblW,
+                BuildTableBorders(opts.Borderless),
+                new XElement(W.tblLayout, new XAttribute(W.type, "fixed")));
+
+            var tblGrid = new XElement(W.tblGrid);
+            for (int c = 0; c < cols; c++)
+                tblGrid.Add(new XElement(W.gridCol, new XAttribute(W._w, Width(c))));
+
+            var tbl = new XElement(W.tbl, tblPr, tblGrid);
+            var cellParagraphs = new List<XElement>();
+
+            for (int r = 0; r < rows; r++)
+            {
+                var tr = new XElement(W.tr);
+                for (int c = 0; c < cols; c++)
+                {
+                    var tc = new XElement(W.tc,
+                        new XElement(W.tcPr, new XElement(W.tcW, new XAttribute(W._w, Width(c)), new XAttribute(W.type, "dxa"))));
+
+                    int idx = r * cols + c;
+                    string? md = contents is not null && idx < contents.Count ? contents[idx] : null;
+                    var paras = BuildCellParagraphs(md, opts.CellAlignment);
+                    foreach (var p in paras) tc.Add(p);
+                    cellParagraphs.AddRange(paras);
+                    tr.Add(tc);
+                }
+                tbl.Add(tr);
+            }
+
+            UnidHelper.AssignToSelfAndDescendants(tbl);
+
+            if (pos == Position.Before) element.AddBeforeSelf(tbl);
+            else element.AddAfterSelf(tbl);
+
+            // A table must be followed by a paragraph: Word's convention is to keep a w:p after
+            // every table, and an end-of-body table with no trailing paragraph leaves no editable
+            // block below it (S-1 smoke-test finding 2). If nothing — or only a sectPr / another
+            // table — follows, append an empty trailing paragraph.
+            var afterTbl = tbl.ElementsAfterSelf().FirstOrDefault();
+            if (afterTbl is null || afterTbl.Name == W.sectPr || afterTbl.Name == W.tbl)
+            {
+                var trailing = new XElement(W.p);
+                UnidHelper.AssignToSelfAndDescendants(trailing);
+                tbl.AddAfterSelf(trailing);
+            }
+
+            foreach (var p in cellParagraphs) PromoteHyperlinkRelationships(p);
+
+            InvalidateProjectionCache();
+            var index = Project().AnchorIndex;
+            var created = new List<Anchor>();
+            foreach (var p in cellParagraphs)
+            {
+                var unid = (string)p.Attribute(PtOpenXml.Unid)!;
+                if (index.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor is { } a)
+                    created.Add(a);
+            }
+
+            return new EditResult
+            {
+                Success = true,
+                Created = created,
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>Build the cell's paragraph(s) from optional markdown + alignment. Always >= 1 paragraph.</summary>
+    private static List<XElement> BuildCellParagraphs(string? markdown, ParagraphAlignment? align)
+    {
+        var result = new List<XElement>();
+        if (!string.IsNullOrEmpty(markdown))
+        {
+            var parsed = Internal.MarkdownPayloadParser.Parse(markdown);
+            if (parsed.Success)
+                foreach (var block in parsed.Blocks)
+                    result.Add(BuildParagraphFromParsedBlock(block));
+        }
+        if (result.Count == 0) result.Add(new XElement(W.p));
+
+        if (align is { } a)
+        {
+            var val = a switch
+            {
+                ParagraphAlignment.Center => "center",
+                ParagraphAlignment.Right => "right",
+                ParagraphAlignment.Justify => "both",
+                _ => "left",
+            };
+            foreach (var p in result)
+            {
+                var pPr = p.Element(W.pPr);
+                if (pPr is null) { pPr = new XElement(W.pPr); p.AddFirst(pPr); }
+                SetPPrChildInOrder(pPr, new XElement(W.jc, new XAttribute(W.val, val)));
+            }
+        }
+        return result;
+    }
+
+    private static XElement BuildTableBorders(bool borderless)
+    {
+        var edges = new[] { W.top, W.left, W.bottom, W.right, W.insideH, W.insideV };
+        var bdr = new XElement(W.tblBorders);
+        foreach (var e in edges)
+            bdr.Add(borderless
+                ? new XElement(e, new XAttribute(W.val, "none"), new XAttribute(W.sz, 0),
+                    new XAttribute(W.space, 0), new XAttribute(W.color, "auto"))
+                : new XElement(e, new XAttribute(W.val, "single"), new XAttribute(W.sz, 4),
+                    new XAttribute(W.space, 0), new XAttribute(W.color, "auto")));
+        return bdr;
+    }
+
+    // ─── Table editing (row / column CRUD), addressed by a cell-paragraph anchor ──────────
+    //
+    // v1 assumes a rectangular grid with no horizontal cell merges (w:gridSpan) — the shape
+    // InsertTable produces and the common case for layout tables (the S-1 columns).
+
+    /// <summary>Resolve a cell-paragraph anchor to its (paragraph, cell, row, table, column index,
+    /// anchor target). Returns a failure EditResult via <paramref name="error"/> on any miss.</summary>
+    private EditResult? ResolveCell(string cellAnchorId, out XElement? p, out XElement? tc,
+        out XElement? tr, out XElement? tbl, out int colIndex, out AnchorTarget? target)
+    {
+        p = tc = tr = tbl = null; colIndex = -1; target = null;
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        target = FindAnchor(cellAnchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {cellAnchorId}", cellAnchorId);
+        p = target.Resolve(_doc!);
+        if (p is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", cellAnchorId);
+        tc = p.Ancestors(W.tc).FirstOrDefault();
+        if (tc is null)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "table row/column ops require an anchor inside a table cell", cellAnchorId);
+        tr = tc.Ancestors(W.tr).FirstOrDefault();
+        tbl = tr?.Ancestors(W.tbl).FirstOrDefault();
+        if (tr is null || tbl is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "malformed table (cell has no row/table)", cellAnchorId);
+        colIndex = tr.Elements(W.tc).ToList().IndexOf(tc);
+        return null;
+    }
+
+    /// <summary>After a structural edit, resolve the freshly-projected anchors for the given paragraphs.</summary>
+    private List<Anchor> ResolveAnchorsForParagraphs(IEnumerable<XElement> paras)
+    {
+        var index = Project().AnchorIndex;
+        var result = new List<Anchor>();
+        foreach (var para in paras)
+        {
+            var unid = (string?)para.Attribute(PtOpenXml.Unid);
+            if (unid is not null && index.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor is { } a)
+                result.Add(a);
+        }
+        return result;
+    }
+
+    private static XElement NewEmptyCellLike(XElement referenceCell)
+    {
+        var tcPr = referenceCell.Element(W.tcPr);
+        var tc = new XElement(W.tc);
+        if (tcPr is not null) tc.Add(new XElement(tcPr)); // clone width/borders/valign
+        var p = new XElement(W.p);
+        tc.Add(p);
+        return tc;
+    }
+
+    /// <summary>Insert a row before/after the row containing <paramref name="cellAnchorId"/>. The new
+    /// row clones each column's cell width and starts empty. Returns the new cell-paragraph anchors.</summary>
+    public EditResult InsertTableRow(string cellAnchorId, Position pos)
+    {
+        if (ResolveCell(cellAnchorId, out _, out _, out var tr, out _, out _, out var target) is { } err)
+            return err;
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var newTr = new XElement(W.tr);
+            var newParas = new List<XElement>();
+            foreach (var tc in tr!.Elements(W.tc))
+            {
+                var newTc = NewEmptyCellLike(tc);
+                newParas.Add(newTc.Element(W.p)!);
+                newTr.Add(newTc);
+            }
+            UnidHelper.AssignToSelfAndDescendants(newTr);
+            if (pos == Position.Before) tr.AddBeforeSelf(newTr);
+            else tr.AddAfterSelf(newTr);
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Created = ResolveAnchorsForParagraphs(newParas),
+                Patch = ProjectScope(target!),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
+        }
+    }
+
+    /// <summary>Insert a column before/after the column containing <paramref name="cellAnchorId"/>: a new
+    /// cell in every row (cloning that column's width) plus a matching w:gridCol. Returns the new
+    /// cell-paragraph anchors (top→bottom).</summary>
+    public EditResult InsertTableColumn(string cellAnchorId, Position pos)
+    {
+        if (ResolveCell(cellAnchorId, out _, out _, out _, out var tbl, out var colIndex, out var target) is { } err)
+            return err;
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var newParas = new List<XElement>();
+            foreach (var tr in tbl!.Elements(W.tr))
+            {
+                var cells = tr.Elements(W.tc).ToList();
+                var refTc = colIndex < cells.Count ? cells[colIndex] : cells[^1];
+                var newTc = NewEmptyCellLike(refTc);
+                UnidHelper.AssignToSelfAndDescendants(newTc);
+                newParas.Add(newTc.Element(W.p)!);
+                if (pos == Position.Before) refTc.AddBeforeSelf(newTc);
+                else refTc.AddAfterSelf(newTc);
+            }
+
+            // Mirror the structural change in w:tblGrid so column count stays consistent.
+            var grid = tbl.Element(W.tblGrid);
+            if (grid is not null)
+            {
+                var cols = grid.Elements(W.gridCol).ToList();
+                if (colIndex < cols.Count)
+                {
+                    var clone = new XElement(cols[colIndex]);
+                    if (pos == Position.Before) cols[colIndex].AddBeforeSelf(clone);
+                    else cols[colIndex].AddAfterSelf(clone);
+                }
+            }
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Created = ResolveAnchorsForParagraphs(newParas),
+                Patch = ProjectScope(target!),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
+        }
+    }
+
+    /// <summary>Delete the row containing <paramref name="cellAnchorId"/>. Deleting the last row removes
+    /// the whole table.</summary>
+    public EditResult DeleteTableRow(string cellAnchorId)
+    {
+        if (ResolveCell(cellAnchorId, out _, out _, out var tr, out var tbl, out _, out var target) is { } err)
+            return err;
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var index = Project().AnchorIndex;
+            var removed = CellParagraphAnchorsIn(tr!, index);
+            if (tbl!.Elements(W.tr).Count() <= 1) { foreach (var a in CellParagraphAnchorsIn(tbl, index)) if (!removed.Contains(a)) removed.Add(a); tbl.Remove(); }
+            else tr!.Remove();
+
+            InvalidateProjectionCache();
+            return new EditResult { Success = true, Removed = removed, Patch = ProjectScope(target!) };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
+        }
+    }
+
+    /// <summary>Delete the column containing <paramref name="cellAnchorId"/> from every row (and its
+    /// w:gridCol). Deleting the last column removes the whole table.</summary>
+    public EditResult DeleteTableColumn(string cellAnchorId)
+    {
+        if (ResolveCell(cellAnchorId, out _, out _, out _, out var tbl, out var colIndex, out var target) is { } err)
+            return err;
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var index = Project().AnchorIndex;
+            var grid = tbl!.Element(W.tblGrid);
+            int colCount = grid?.Elements(W.gridCol).Count() ?? tbl.Elements(W.tr).First().Elements(W.tc).Count();
+
+            var removed = new List<Anchor>();
+            if (colCount <= 1) { foreach (var a in CellParagraphAnchorsIn(tbl, index)) removed.Add(a); tbl.Remove(); }
+            else
+            {
+                foreach (var tr in tbl.Elements(W.tr).ToList())
+                {
+                    var cells = tr.Elements(W.tc).ToList();
+                    if (colIndex >= cells.Count) continue;
+                    foreach (var a in CellParagraphAnchorsIn(cells[colIndex], index)) removed.Add(a);
+                    cells[colIndex].Remove();
+                }
+                var cols = grid?.Elements(W.gridCol).ToList();
+                if (cols is not null && colIndex < cols.Count) cols[colIndex].Remove();
+            }
+
+            InvalidateProjectionCache();
+            return new EditResult { Success = true, Removed = removed, Patch = ProjectScope(target!) };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
+        }
+    }
+
+    /// <summary>The cell-paragraph anchors under <paramref name="scope"/> (a tc/tr/tbl), in document order.</summary>
+    private static List<Anchor> CellParagraphAnchorsIn(XElement scope, IReadOnlyDictionary<string, AnchorTarget> index)
+    {
+        var result = new List<Anchor>();
+        foreach (var para in scope.Descendants(W.p))
+        {
+            var unid = (string?)para.Attribute(PtOpenXml.Unid);
+            if (unid is not null && index.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor is { } a)
+                result.Add(a);
+        }
+        return result;
+    }
+
     public EditResult SetListLevel(string anchorId, int levelDelta)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
@@ -3824,20 +4603,59 @@ public sealed class DocxSession : IDisposable
 
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
-        var numPr = element.Element(W.pPr)?.Element(W.numPr);
-        if (numPr is null)
-            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "no numPr on this paragraph", anchorId);
 
-        var ilvl = numPr.Element(W.ilvl);
-        int current = ilvl is null ? 0 : int.Parse((string?)ilvl.Attribute(W.val) ?? "0");
+        var pPr = element.Element(W.pPr);
+        var numPr = pPr?.Element(W.numPr);
+
+        // Resolve the effective (numId, current ilvl). A direct w:numPr wins; otherwise the
+        // paragraph is a list item only via its pStyle chain (e.g. python-docx "List Bullet",
+        // which carries numPr on the STYLE, not the paragraph). In that case read the effective
+        // values from the style and materialize a direct w:numPr below — exactly what Word does
+        // when you Tab a styled list item, and the only way to control ilvl per paragraph.
+        int current;
+        int? effectiveNumId;
+        if (numPr is not null)
+        {
+            current = (int?)numPr.Element(W.ilvl)?.Attribute(W.val) ?? 0;
+            effectiveNumId = (int?)numPr.Element(W.numId)?.Attribute(W.val);
+        }
+        else
+        {
+            (effectiveNumId, current) = ResolveStyleNumbering(element);
+            if (effectiveNumId is null)
+                return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                    "no numPr on this paragraph or its style", anchorId);
+        }
+
         int next = current + levelDelta;
         if (next < 0 || next > 8)
             return EditResult.Fail(EditErrorCode.InvalidListLevel,
                 $"resulting list level {next} out of [0,8]", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
-        ilvl?.Remove();
-        numPr.Add(new XElement(W.ilvl, new XAttribute(W.val, next)));
+        // Nesting only renders if the abstractNum actually DEFINES the target level — many docs
+        // define just level 0, so synthesize any missing levels before bumping ilvl.
+        if (effectiveNumId.HasValue)
+            Internal.NumberingFactory.EnsureLevelDefined(_doc!, effectiveNumId.Value, next);
+
+        if (numPr is not null)
+        {
+            numPr.Element(W.ilvl)?.Remove();
+            numPr.AddFirst(new XElement(W.ilvl, new XAttribute(W.val, next))); // ilvl precedes numId
+        }
+        else
+        {
+            if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+            SetPPrChildInOrder(pPr, new XElement(W.numPr,
+                new XElement(W.ilvl, new XAttribute(W.val, next)),
+                new XElement(W.numId, new XAttribute(W.val, effectiveNumId!.Value))));
+        }
+        // Flush the body mutation to the part stream immediately — same as NumberingFactory does for
+        // the numbering part. Without this the materialized w:numPr lives only in the in-memory
+        // XDocument; under WASM the typed-DOM/XDocument divergence means a later Save() serializes
+        // the un-flushed state and the nest silently vanishes on save and re-render. (Body lists are
+        // body-scoped; flushing the main part covers them.)
+        _doc!.MainDocumentPart!.PutXDocument();
         InvalidateProjectionCache();
         return new EditResult
         {
@@ -3845,6 +4663,35 @@ public sealed class DocxSession : IDisposable
             Modified = new[] { target.Anchor },
             Patch = ProjectScope(target),
         };
+    }
+
+    /// <summary>
+    /// Resolve the effective <c>(numId, ilvl)</c> a paragraph inherits from its pStyle chain, for
+    /// a list item whose numbering comes from a style rather than a direct <c>w:numPr</c>. Walks
+    /// <c>basedOn</c> (cycle-guarded). Returns <c>(null, 0)</c> when no style contributes a numId.
+    /// </summary>
+    private (int? numId, int ilvl) ResolveStyleNumbering(XElement paragraph)
+    {
+        var styleId = (string?)paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val);
+        if (string.IsNullOrEmpty(styleId)) return (null, 0);
+        var stylesRoot = _doc!.MainDocumentPart?.StyleDefinitionsPart?.GetXDocument().Root;
+        if (stylesRoot is null) return (null, 0);
+
+        var visited = new HashSet<string>(StringComparer.Ordinal);
+        var current = styleId;
+        for (int i = 0; i < 16 && current is not null; i++)
+        {
+            if (!visited.Add(current)) break; // cycle
+            var style = stylesRoot.Elements(W.style)
+                .FirstOrDefault(s => (string?)s.Attribute(W.styleId) == current);
+            if (style is null) break;
+            var styleNumPr = style.Element(W.pPr)?.Element(W.numPr);
+            var numId = (int?)styleNumPr?.Element(W.numId)?.Attribute(W.val);
+            if (numId is not null)
+                return (numId, (int?)styleNumPr!.Element(W.ilvl)?.Attribute(W.val) ?? 0);
+            current = (string?)style.Element(W.basedOn)?.Attribute(W.val);
+        }
+        return (null, 0);
     }
 
     public EditResult RemoveListMembership(string anchorId)
@@ -3869,6 +4716,62 @@ public sealed class DocxSession : IDisposable
             Modified = new[] { updated },
             Patch = ProjectScope(target),
         };
+    }
+
+    /// <summary>
+    /// Make the paragraph a bullet or numbered list item, or remove list membership.
+    /// Unlike <see cref="SetListLevel"/>/<see cref="RemoveListMembership"/> (which require an
+    /// existing list item), this PROMOTES a plain paragraph: it ensures a reusable numbering
+    /// definition exists (synthesizing one in the numbering part if needed) and sets the
+    /// paragraph's <c>w:numPr</c>. <see cref="ListFormat.None"/> strips inline list membership.
+    /// </summary>
+    public EditResult ApplyListFormat(string anchorId, ListFormat kind)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "ApplyListFormat requires a paragraph anchor", anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var pPr = element.Element(W.pPr);
+            if (kind == ListFormat.None)
+            {
+                pPr?.Element(W.numPr)?.Remove();
+            }
+            else
+            {
+                if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+                var fmt = kind == ListFormat.Bullet ? NumberFormat.Bullet : NumberFormat.Decimal;
+                int numId = Internal.NumberingFactory.EnsureNumbering(_doc!, fmt);
+                int ilvl = (int?)pPr.Element(W.numPr)?.Element(W.ilvl)?.Attribute(W.val) ?? 0;
+                pPr.Element(W.numPr)?.Remove();
+                SetPPrChildInOrder(pPr, new XElement(W.numPr,
+                    new XElement(W.ilvl, new XAttribute(W.val, ilvl)),
+                    new XElement(W.numId, new XAttribute(W.val, numId))));
+            }
+
+            InvalidateProjectionCache();
+            var freshIndex = Project().AnchorIndex;
+            var updated = freshIndex.Values.FirstOrDefault(t => t.Unid == target.Unid)?.Anchor ?? target.Anchor;
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { updated },
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
     }
 
     // ─── Tier E: annotations ────────────────────────────────────────────
@@ -4201,19 +5104,47 @@ public sealed class DocxSession : IDisposable
         W.proofErr,
     };
 
+    // Inline references that point into another document part (the footnotes/endnotes
+    // part). Like comment references, they are zero-width but semantically significant:
+    // dropping the body-side <w:footnoteReference w:id="N"/> orphans the note definition
+    // and silently loses content on a text edit (issue B3). Unlike the bare-child markers
+    // above, these live inside a <w:r>, so they are detected via IsNoteRefOnlyRun.
+    private static readonly HashSet<XName> NoteReferenceNames = new()
+    {
+        W.footnoteReference, W.endnoteReference,
+    };
+
+    // True for a run whose only meaningful (non-rPr) content is a footnote/endnote
+    // reference — i.e. it carries no visible text. Such a run is a preserved marker;
+    // a run that mixes a note ref with text is ordinary content and is replaced.
+    private static bool IsNoteRefOnlyRun(XElement e)
+    {
+        if (e.Name != W.r) return false;
+        bool sawNoteRef = false;
+        foreach (var child in e.Elements())
+        {
+            if (child.Name == W.rPr) continue;
+            if (NoteReferenceNames.Contains(child.Name)) { sawNoteRef = true; continue; }
+            return false; // any other content (w:t, w:tab, w:br, …) ⇒ ordinary run
+        }
+        return sawNoteRef;
+    }
+
     private static (List<XElement> pre, List<XElement> post) ExtractWrappingMarkers(XElement paragraph)
     {
         var children = paragraph.Elements().Where(e => e.Name != W.pPr).ToList();
-        int firstRunIdx = children.FindIndex(IsInlineChild);
-        int lastRunIdx = children.FindLastIndex(IsInlineChild);
+        // Position note-ref-only runs relative to the runs that actually carry text, so a
+        // leading reference sorts before the replacement and a trailing one after it.
+        int firstTextIdx = children.FindIndex(c => IsInlineChild(c) && !IsNoteRefOnlyRun(c));
+        int lastTextIdx = children.FindLastIndex(c => IsInlineChild(c) && !IsNoteRefOnlyRun(c));
         var pre = new List<XElement>();
         var post = new List<XElement>();
         for (int i = 0; i < children.Count; i++)
         {
             var c = children[i];
-            if (!PreservedMarkerNames.Contains(c.Name)) continue;
-            if (firstRunIdx < 0 || i < firstRunIdx) pre.Add(c);
-            else if (i > lastRunIdx) post.Add(c);
+            if (!PreservedMarkerNames.Contains(c.Name) && !IsNoteRefOnlyRun(c)) continue;
+            if (firstTextIdx < 0 || i < firstTextIdx) pre.Add(c);
+            else if (i > lastTextIdx) post.Add(c);
             else pre.Add(c); // interleaved → wrap from the start (best-effort)
         }
         return (pre, post);
@@ -4259,11 +5190,25 @@ public sealed class DocxSession : IDisposable
         var author = _settings.RevisionAuthor ?? "docxodus";
         var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
 
-        // Wrap existing runs in w:del (converting w:t to w:delText).
+        // Note references (footnote/endnote) are zero-width, semantically-significant
+        // markers that must survive the edit on BOTH accept and reject — they must not
+        // be swept into the w:del (issue B3). Pull the note-ref-only runs out (recording
+        // whether each sat before or after the visible text) so we can replace them
+        // around the del/ins. Bare-child markers (bookmark/comment ranges) are left in
+        // place, exactly as before. ExtractWrappingMarkers gives us the leading/trailing
+        // split relative to the text runs.
+        var (preMarkers, postMarkers) = ExtractWrappingMarkers(paragraph);
+        var preNoteRefs = preMarkers.Where(IsNoteRefOnlyRun).ToList();
+        var postNoteRefs = postMarkers.Where(IsNoteRefOnlyRun).ToList();
+        foreach (var m in preNoteRefs) m.Remove();
+        foreach (var m in postNoteRefs) m.Remove();
+
+        // Wrap remaining existing runs (the visible text) in w:del (converting w:t to w:delText).
         var existingRuns = paragraph.Elements(W.r).ToList();
+        XElement? del = null;
         if (existingRuns.Count > 0)
         {
-            var del = new XElement(W.del,
+            del = new XElement(W.del,
                 new XAttribute(W.id, NextRevisionId()),
                 new XAttribute(W.author, author),
                 new XAttribute(W.date, date));
@@ -4279,19 +5224,23 @@ public sealed class DocxSession : IDisposable
                 }
                 del.Add(run);
             }
-            paragraph.Add(del);
         }
 
+        XElement? ins = null;
         if (blocks.Count > 0 && blocks[0].RunElements.Count > 0)
         {
-            var ins = new XElement(W.ins,
+            ins = new XElement(W.ins,
                 new XAttribute(W.id, NextRevisionId()),
                 new XAttribute(W.author, author),
                 new XAttribute(W.date, date));
             foreach (var run in blocks[0].RunElements)
                 ins.Add(new XElement(run));
-            paragraph.Add(ins);
         }
+
+        foreach (var m in preNoteRefs) paragraph.Add(m);
+        if (del is not null) paragraph.Add(del);
+        if (ins is not null) paragraph.Add(ins);
+        foreach (var m in postNoteRefs) paragraph.Add(m);
     }
 
     private void WrapRunsInDel(XElement element)
@@ -4426,8 +5375,17 @@ public sealed class DocxSession : IDisposable
         {
             if (set is null) return;
             var existing = rPr.Element(name);
-            if (set.Value && existing is null) rPr.Add(new XElement(name));
-            else if (!set.Value) existing?.Remove();
+            if (set.Value)
+            {
+                // Turn the property ON. A run may already carry an explicit OFF element
+                // (e.g. Google Docs stamps <w:b w:val="0"/> on every run); just adding a new
+                // element when one is "missing" would leave that w:val="0" in place and the
+                // toggle would silently do nothing. Normalize: drop the w:val so the bare
+                // element (<w:b/>) means on; add one only when truly absent.
+                if (existing is null) rPr.Add(new XElement(name));
+                else existing.Attribute(W.val)?.Remove();
+            }
+            else existing?.Remove();
         }
 
         Toggle(rPr, W.b, op.Bold);
@@ -4460,6 +5418,57 @@ public sealed class DocxSession : IDisposable
             rPr.Element(W.rStyle)?.Remove();
             if (op.RunStyle.Length > 0)
                 rPr.Add(new XElement(W.rStyle, new XAttribute(W.val, op.RunStyle)));
+        }
+
+        if (op.VertAlign is not null)
+        {
+            rPr.Element(W.vertAlign)?.Remove();
+            var v = op.VertAlign switch
+            {
+                "super" => "superscript",
+                "sub" => "subscript",
+                "none" or "baseline" => "",
+                _ => op.VertAlign,
+            };
+            if (v.Length > 0)
+            {
+                if (v is not ("superscript" or "subscript"))
+                    throw new ArgumentException($"invalid vertAlign: {op.VertAlign}");
+                rPr.Add(new XElement(W.vertAlign, new XAttribute(W.val, v)));
+            }
+        }
+
+        if (op.FontSizePts is { } pts)
+        {
+            // w:sz / w:szCs are half-points. Clearing (<= 0) drops the explicit size so the run
+            // inherits the style/default size again.
+            rPr.Element(W.sz)?.Remove();
+            rPr.Element(W.szCs)?.Remove();
+            if (pts > 0)
+            {
+                var halfPts = ((int)System.Math.Round(pts * 2, System.MidpointRounding.AwayFromZero))
+                    .ToString(System.Globalization.CultureInfo.InvariantCulture);
+                rPr.Add(new XElement(W.sz, new XAttribute(W.val, halfPts)));
+                rPr.Add(new XElement(W.szCs, new XAttribute(W.val, halfPts)));
+            }
+        }
+
+        if (op.FontFamily is not null)
+        {
+            // w:rFonts is the first EG_RPrBase child after an optional w:rStyle, so it must be
+            // placed there (a bare rPr.Add would append after w:sz/w:vertAlign → out of schema
+            // order). "" clears the explicit font so the run inherits the style/default.
+            rPr.Element(W.rFonts)?.Remove();
+            if (op.FontFamily.Length > 0)
+            {
+                var rFonts = new XElement(W.rFonts,
+                    new XAttribute(W.ascii, op.FontFamily),
+                    new XAttribute(W.hAnsi, op.FontFamily),
+                    new XAttribute(W.cs, op.FontFamily));
+                var rStyle = rPr.Element(W.rStyle);
+                if (rStyle is not null) rStyle.AddAfterSelf(rFonts);
+                else rPr.AddFirst(rFonts);
+            }
         }
     }
 

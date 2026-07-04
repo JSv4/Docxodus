@@ -2,6 +2,8 @@
 
 This document catalogs known gaps, limitations, and areas for improvement in the WmlComparer (document comparison engine).
 
+> **Update (v6.x / M2.5):** Several gaps below were closed in the v6.x line and are no longer accurate — the corrections are inline. Most are also addressed structurally by the new **IR diff engine** (`DocxDiff`), which is anchor-addressed and emits the edit script as data; see [`ir_diff_engine.md`](./ir_diff_engine.md). `WmlComparer` remains the default/blessed comparison API.
+
 ## 1. Limited Revision Types Exposed
 
 **Location:** `WmlComparer.cs` lines 3317-3321
@@ -57,13 +59,13 @@ Move detection has been implemented in `GetRevisions()` using post-processing wi
 
 The implementation uses word-level Jaccard similarity to match deletions with insertions. When similarity exceeds the threshold and the text meets minimum word count, the pair is marked as a move.
 
-**Note:** This implementation does NOT generate Word-native `w:moveFrom`/`w:moveTo` markup in the document. It only affects the `GetRevisions()` API. Generating native move markup would require deeper integration into the comparison algorithm and is a potential future enhancement.
+**Note (corrected, v6.x):** Earlier revisions of this doc claimed native `w:moveFrom`/`w:moveTo` markup is NOT generated. **That is stale.** `WmlComparer.Compare` produces native Word move markup (`w:moveFromRangeStart`/`w:moveFromRangeEnd`/`w:moveToRangeStart`/`w:moveToRangeEnd` + `w:moveFrom`/`w:moveTo` keyed by `w:name`) when `DetectMoves` is enabled, and `GetRevisions()` recognizes it (see CLAUDE.md "WmlComparer.cs"). The new `DocxDiff` IR engine likewise emits native move markup ([`ir_diff_engine.md`](./ir_diff_engine.md)).
 
-## 3. Format Change Detection Not Exposed
+## 3. Format Change Detection ✅ IMPLEMENTED
 
-**Status:** Gap
+**Status (corrected, v6.x):** Implemented. Earlier revisions called this a gap; **that is stale.** `WmlComparer` exposes a `FormatChanged` revision type with `DetectFormatChanges` (default true): when text is identical but modeled run formatting differs, it produces native `w:rPrChange` markup and `GetRevisions()` returns a `FormatChanged` revision whose `FormatChange` carries old/new properties and changed names (see CLAUDE.md "WmlComparer.cs" and `docs/architecture/format_change_detection.md`). The new `DocxDiff` IR engine surfaces the same via `DocxDiffRevisionType.FormatChanged` + `DocxDiffFormatChange`, with a `FormatComparison` (ModeledOnly | Full) policy ([`ir_diff_engine.md`](./ir_diff_engine.md)).
 
-When formatting changes occur without text changes, the comparison engine may not surface these as distinct revisions. Word documents can track formatting changes via:
+The original (now-closed) description follows for history. Word documents can track formatting changes via:
 - `w:rPrChange` - Run property changes (font, size, bold, etc.)
 - `w:pPrChange` - Paragraph property changes (alignment, spacing, etc.)
 - `w:sectPrChange` - Section property changes
@@ -125,17 +127,11 @@ When the .NET comparison engine is enhanced, the TypeScript types should be upda
 
 1. ~~**Add move detection**~~ - ✅ Implemented: `Moved` revision type with `MoveGroupId` and `IsMoveSource` properties
 2. ~~**Link related revisions**~~ - ✅ Move pairs are now linked via `MoveGroupId`
+3. ~~**Expose format changes**~~ - ✅ Implemented: `FormatChanged` revision type + `FormatChange` details (`DetectFormatChanges`, native `w:rPrChange`)
+4. ~~**Generate native move markup**~~ - ✅ Implemented: `Compare` emits native `w:moveFrom`/`w:moveTo` markup when `DetectMoves` is on
+5. ~~**Granular format change details**~~ - ✅ Implemented: `FormatChange.ChangedPropertyNames` + old/new property dictionaries
 
-### High Priority
+### Addressed structurally by the IR diff engine (`DocxDiff`)
 
-1. **Expose format changes** - Add `FormatChange` revision type for formatting-only modifications
-
-### Medium Priority
-
-2. **Add revision context** - Include paragraph number or surrounding text for better UX
-3. **Generate native move markup** - Produce `w:moveFrom`/`w:moveTo` elements in comparison output
-
-### Low Priority
-
-4. **Position information** - Add character/word offsets for precise location
-5. **Granular format change details** - Specify exactly which properties changed
+- **Add revision context / position information** — `DocxDiffRevision` carries `LeftAnchor`/`RightAnchor` (`kind:scope:unid`), locating each revision in the document model and interoperating with `DocxSession`. See [`ir_diff_engine.md`](./ir_diff_engine.md).
+- **Diff-as-data** — `DocxDiff.GetEditScriptJson` serializes the edit script for storage/transport/audit.

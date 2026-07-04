@@ -8,6 +8,15 @@ import type {
   DocxodusWasmExports,
   GetRevisionsOptions,
   FormatChangeDetails,
+  // DocxDiff (IR diff engine)
+  DocxDiffSettings,
+  DocxDiffRevision,
+  // DocxDiff consolidate (composite N-way)
+  DocxDiffReviewer,
+  DocxDiffConsolidateSettings,
+  DocxDiffConflict,
+  DocxDiffConflictCompetitor,
+  DocxDiffConsolidatedRevision,
   Annotation,
   AddAnnotationRequest,
   AddAnnotationResponse,
@@ -91,11 +100,22 @@ export function openDocxSession(
   return openDocxSessionImpl(bytes, wasm, settings);
 }
 
+/**
+ * Mint a complete, blank single-paragraph DOCX (Normal style, US-Letter section) as bytes —
+ * a "New document" seed for editors that draft from scratch. Requires {@link initialize}.
+ */
+export function createBlankDocx(): Uint8Array {
+  return ensureInitialized().DocxSessionBridge.CreateBlankDocx();
+}
+
 import {
   CommentRenderMode,
   PaginationMode,
   AnnotationLabelMode,
   RevisionType,
+  DocxDiffRevisionGranularity,
+  DocxDiffFormatComparison,
+  ConflictResolution,
   ProjectionScopes,
   AnchorRenderMode,
   TableRenderMode,
@@ -140,6 +160,9 @@ export type {
 } from "./pagination.js";
 
 export { PaginationEngine, paginateHtml } from "./pagination.js";
+
+export { DocxEditor } from "./editor.js";
+export type { DocxEditorOptions, DocxEditorExports } from "./editor.js";
 
 export type {
   ConversionOptions,
@@ -188,6 +211,15 @@ export type {
   MarkdownProjectionSettings,
   MarkdownAnchorTarget,
   MarkdownProjection,
+  // DocxDiff (IR diff engine)
+  DocxDiffSettings,
+  DocxDiffRevision,
+  // DocxDiff consolidate (composite N-way)
+  DocxDiffReviewer,
+  DocxDiffConsolidateSettings,
+  DocxDiffConflict,
+  DocxDiffConflictCompetitor,
+  DocxDiffConsolidatedRevision,
 };
 
 export {
@@ -195,6 +227,9 @@ export {
   PaginationMode,
   AnnotationLabelMode,
   RevisionType,
+  DocxDiffRevisionGranularity,
+  DocxDiffFormatComparison,
+  ConflictResolution,
   ProjectionScopes,
   AnchorRenderMode,
   TableRenderMode,
@@ -344,6 +379,7 @@ async function tryLoadFromPath(basePath: string): Promise<boolean> {
     wasmExports = {
       DocumentConverter: exports.DocxodusWasm.DocumentConverter,
       DocumentComparer: exports.DocxodusWasm.DocumentComparer,
+      DocxDiffBridge: exports.DocxodusWasm.DocxDiffBridge,
       DocxSessionBridge: exports.DocxodusWasm.DocxSessionBridge,
     };
     return true;
@@ -462,6 +498,37 @@ async function toBytes(input: File | Uint8Array): Promise<Uint8Array> {
  * });
  * ```
  */
+/**
+ * Render a single document block to faithful HTML, addressed by its anchor.
+ *
+ * The anchor is the `data-anchor` value stamped on a block during a full
+ * conversion (a bare 32-hex Unid), or a full `kind:scope:unid` anchor — either
+ * form works. Powers the editor's incremental per-block re-render: apply an edit
+ * to a DocxSession, then re-render only the changed block instead of the whole
+ * document. Returns the block's HTML element (no `<html>`/`<head>` wrapper).
+ */
+export async function renderBlockHtml(
+  document: File | Uint8Array,
+  anchorId: string,
+  options?: { cssPrefix?: string; fabricateClasses?: boolean }
+): Promise<string> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(document);
+  await yieldToMain();
+
+  const result = exports.DocumentConverter.RenderBlockHtml(
+    bytes,
+    anchorId,
+    options?.cssPrefix ?? "docx-",
+    options?.fabricateClasses ?? false
+  );
+
+  if (isErrorResponse(result)) {
+    throw new Error(`Block rendering failed: ${parseError(result).error}`);
+  }
+  return result;
+}
+
 export async function convertDocxToHtml(
   document: File | Uint8Array,
   options?: ConversionOptions
@@ -481,7 +548,8 @@ export async function convertDocxToHtml(
     options?.showDeletedContent !== undefined ||
     options?.renderMoveOperations !== undefined ||
     options?.renderUnsupportedContentPlaceholders !== undefined ||
-    options?.documentLanguage !== undefined;
+    options?.documentLanguage !== undefined ||
+    options?.stampAnchors !== undefined;
 
   // Use complete method when any new options are specified (most comprehensive)
   if (needsCompleteMethod || options?.renderAnnotations) {
@@ -505,7 +573,8 @@ export async function convertDocxToHtml(
       options?.showDeletedContent ?? true,
       options?.renderMoveOperations ?? true,
       options?.renderUnsupportedContentPlaceholders ?? false,
-      options?.documentLanguage ?? null
+      options?.documentLanguage ?? null,
+      options?.stampAnchors ?? false
     );
   }
   // Use pagination-aware method when pagination is requested
@@ -843,6 +912,411 @@ export async function getRevisions(
       changedPropertyNames: r.FormatChange?.ChangedPropertyNames || r.formatChange?.changedPropertyNames,
     } : undefined,
   }));
+}
+
+// ─── DocxDiff (IR diff engine) ──────────────────────────────────────────────
+//
+// The NEW structure-aware comparison engine, exposed alongside the default
+// WmlComparer-backed compareDocuments/getRevisions. Differentiators:
+// anchor-addressed revisions and the diff-as-data edit script. Settings flow as
+// a JSON object; an empty `{}` (or omitted options) uses the engine defaults.
+
+/** Serialize DocxDiffSettings to the wire JSON the bridge parses (empty string when undefined). */
+function docxDiffSettingsJson(settings?: DocxDiffSettings): string {
+  return settings ? JSON.stringify(settings) : "";
+}
+
+/**
+ * Compare two DOCX documents with the IR diff engine and return the redlined
+ * result as a DOCX (native w:ins/w:del/w:moveFrom/w:moveTo/w:rPrChange markup).
+ *
+ * @param left - The earlier/original document.
+ * @param right - The later/revised document.
+ * @param settings - Optional {@link DocxDiffSettings}; omit for engine defaults.
+ * @returns Redlined DOCX as Uint8Array.
+ * @throws Error if comparison fails.
+ */
+export async function docxDiffCompare(
+  left: File | Uint8Array,
+  right: File | Uint8Array,
+  settings?: DocxDiffSettings
+): Promise<Uint8Array> {
+  const exports = ensureInitialized();
+  const leftBytes = await toBytes(left);
+  const rightBytes = await toBytes(right);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.Compare(
+    leftBytes,
+    rightBytes,
+    docxDiffSettingsJson(settings)
+  );
+
+  if (result.length === 0) {
+    throw new Error("DocxDiff comparison failed - empty result");
+  }
+
+  return result;
+}
+
+/**
+ * Compare two DOCX documents with the IR diff engine and return the
+ * anchor-addressed revision list.
+ *
+ * @param left - The earlier/original document.
+ * @param right - The later/revised document.
+ * @param settings - Optional {@link DocxDiffSettings}; omit for engine defaults.
+ * @returns Array of {@link DocxDiffRevision} (each carrying its left/right block anchors).
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffGetRevisions(
+  left: File | Uint8Array,
+  right: File | Uint8Array,
+  settings?: DocxDiffSettings
+): Promise<DocxDiffRevision[]> {
+  const exports = ensureInitialized();
+  const leftBytes = await toBytes(left);
+  const rightBytes = await toBytes(right);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.GetRevisionsJson(
+    leftBytes,
+    rightBytes,
+    docxDiffSettingsJson(settings)
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get DocxDiff revisions: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return (parsed.revisions || parsed.Revisions || []).map((r: any) => ({
+    revisionType: r.revisionType ?? r.RevisionType,
+    text: r.text ?? r.Text,
+    author: r.author ?? r.Author,
+    date: r.date ?? r.Date,
+    moveGroupId: r.moveGroupId ?? r.MoveGroupId ?? undefined,
+    isMoveSource: r.isMoveSource ?? r.IsMoveSource ?? undefined,
+    formatChange: (r.formatChange || r.FormatChange) ? {
+      oldProperties: r.formatChange?.oldProperties ?? r.FormatChange?.OldProperties,
+      newProperties: r.formatChange?.newProperties ?? r.FormatChange?.NewProperties,
+      changedPropertyNames: r.formatChange?.changedPropertyNames ?? r.FormatChange?.ChangedPropertyNames,
+    } : undefined,
+    leftAnchor: r.leftAnchor ?? r.LeftAnchor ?? undefined,
+    rightAnchor: r.rightAnchor ?? r.RightAnchor ?? undefined,
+  }));
+}
+
+/**
+ * Compare two DOCX documents with the IR diff engine and return the edit script
+ * as a JSON string — the diff-as-data differentiator. The script is the
+ * anchor-addressed list of block operations the markup and revision renderers
+ * both consume: stable and machine-readable for storage, transport, and audit.
+ *
+ * @param left - The earlier/original document.
+ * @param right - The later/revised document.
+ * @param settings - Optional {@link DocxDiffSettings}; omit for engine defaults.
+ * @returns The edit script serialized as indented JSON.
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffGetEditScript(
+  left: File | Uint8Array,
+  right: File | Uint8Array,
+  settings?: DocxDiffSettings
+): Promise<string> {
+  const exports = ensureInitialized();
+  const leftBytes = await toBytes(left);
+  const rightBytes = await toBytes(right);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.GetEditScriptJson(
+    leftBytes,
+    rightBytes,
+    docxDiffSettingsJson(settings)
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get DocxDiff edit script: ${error.error}`);
+  }
+
+  return result;
+}
+
+/**
+ * Accept every tracked revision in a redlined DOCX and return the resulting bytes
+ * (materializes the "right"/revised side). The byte-in, byte-out counterpart of
+ * {@link docxDiffCompare}: `docxDiffAcceptRevisions(await docxDiffCompare(left, right))`
+ * equals `right` at the per-block text level — so callers can verify the round-trip
+ * contract of a redline, not just inspect its shape.
+ *
+ * @param redline - A DOCX carrying tracked-changes markup (e.g. {@link docxDiffCompare} output).
+ * @returns The DOCX bytes with all revisions accepted.
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffAcceptRevisions(
+  redline: File | Uint8Array
+): Promise<Uint8Array> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(redline);
+  await yieldToMain();
+  const result = exports.DocxDiffBridge.AcceptRevisions(bytes);
+  if (result.length === 0) {
+    throw new Error("DocxDiff accept-revisions failed - empty result");
+  }
+  return result;
+}
+
+/**
+ * Reject every tracked revision in a redlined DOCX and return the resulting bytes
+ * (materializes the "left"/original side): `docxDiffRejectRevisions(await
+ * docxDiffCompare(left, right))` equals `left` at the per-block text level.
+ *
+ * @param redline - A DOCX carrying tracked-changes markup (e.g. {@link docxDiffCompare} output).
+ * @returns The DOCX bytes with all revisions rejected.
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffRejectRevisions(
+  redline: File | Uint8Array
+): Promise<Uint8Array> {
+  const exports = ensureInitialized();
+  const bytes = await toBytes(redline);
+  await yieldToMain();
+  const result = exports.DocxDiffBridge.RejectRevisions(bytes);
+  if (result.length === 0) {
+    throw new Error("DocxDiff reject-revisions failed - empty result");
+  }
+  return result;
+}
+
+// ─── DocxDiff consolidate (composite N-way) ─────────────────────────────────
+//
+// Merge several reviewers' edits against one shared base DOCX. Each reviewer is
+// base64-encoded into the `[{author,docB64}]` wire shape the host base64-DECODES
+// (standard base64, not url-safe). Settings flow as the diff-settings JSON object
+// extended with an optional integer `conflictResolution`.
+
+/**
+ * Encode a Uint8Array to a standard (non-url-safe) base64 string. Uses a chunked
+ * binary string so large documents don't blow the call-stack limit of
+ * `String.fromCharCode(...bytes)`, and works in both browser (`btoa`) and Node
+ * (`Buffer`) hosts.
+ */
+function bytesToBase64(bytes: Uint8Array): string {
+  if (typeof btoa === "function") {
+    let binary = "";
+    const chunkSize = 0x8000; // 32 KB per chunk keeps the spread small
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+    }
+    return btoa(binary);
+  }
+  // Node fallback (e.g. unit tests outside a browser).
+  return Buffer.from(bytes).toString("base64");
+}
+
+/** Serialize reviewers to the `[{author,docB64}]` wire JSON the host expects. */
+async function reviewersJson(reviewers: DocxDiffReviewer[]): Promise<string> {
+  const arr = await Promise.all(
+    reviewers.map(async (r) => ({
+      author: r.author,
+      docB64: bytesToBase64(await toBytes(r.document)),
+    }))
+  );
+  return JSON.stringify(arr);
+}
+
+/**
+ * Serialize DocxDiffConsolidateSettings to the wire JSON the bridge parses. Same
+ * shape as {@link docxDiffSettingsJson} plus the integer `conflictResolution`
+ * when present (empty string when undefined).
+ */
+function docxDiffConsolidateSettingsJson(
+  settings?: DocxDiffConsolidateSettings
+): string {
+  return settings ? JSON.stringify(settings) : "";
+}
+
+/** Map a single revision wire object (camelCase or PascalCase) to {@link DocxDiffRevision}. */
+function mapDocxDiffRevision(r: any): DocxDiffRevision {
+  return {
+    revisionType: r.revisionType ?? r.RevisionType,
+    text: r.text ?? r.Text,
+    author: r.author ?? r.Author,
+    date: r.date ?? r.Date,
+    moveGroupId: r.moveGroupId ?? r.MoveGroupId ?? undefined,
+    isMoveSource: r.isMoveSource ?? r.IsMoveSource ?? undefined,
+    formatChange: (r.formatChange || r.FormatChange) ? {
+      oldProperties: r.formatChange?.oldProperties ?? r.FormatChange?.OldProperties,
+      newProperties: r.formatChange?.newProperties ?? r.FormatChange?.NewProperties,
+      changedPropertyNames: r.formatChange?.changedPropertyNames ?? r.FormatChange?.ChangedPropertyNames,
+    } : undefined,
+    leftAnchor: r.leftAnchor ?? r.LeftAnchor ?? undefined,
+    rightAnchor: r.rightAnchor ?? r.RightAnchor ?? undefined,
+  };
+}
+
+/**
+ * Consolidate several reviewers' edits against a shared base DOCX and return the
+ * merged redlined result as a DOCX (native multi-author tracked-changes markup).
+ *
+ * @param base - The shared base document all reviewers edited from.
+ * @param reviewers - The reviewers' edited copies + author names.
+ * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for engine defaults.
+ * @returns Consolidated redlined DOCX as Uint8Array.
+ * @throws Error if consolidation fails.
+ */
+export async function docxDiffConsolidate(
+  base: File | Uint8Array,
+  reviewers: DocxDiffReviewer[],
+  settings?: DocxDiffConsolidateSettings
+): Promise<Uint8Array> {
+  const exports = ensureInitialized();
+  const baseBytes = await toBytes(base);
+  const reviewersJsonStr = await reviewersJson(reviewers);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.Consolidate(
+    baseBytes,
+    reviewersJsonStr,
+    docxDiffConsolidateSettingsJson(settings)
+  );
+
+  if (result.length === 0) {
+    throw new Error("DocxDiff consolidation failed - empty result");
+  }
+
+  return result;
+}
+
+/**
+ * Consolidate several reviewers' edits against a shared base DOCX and return the
+ * per-token conflict report — every base span two or more reviewers edited
+ * incompatibly, with each reviewer's competing variant.
+ *
+ * @param base - The shared base document all reviewers edited from.
+ * @param reviewers - The reviewers' edited copies + author names.
+ * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for engine defaults.
+ * @returns Array of {@link DocxDiffConflict}.
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffGetConflicts(
+  base: File | Uint8Array,
+  reviewers: DocxDiffReviewer[],
+  settings?: DocxDiffConsolidateSettings
+): Promise<DocxDiffConflict[]> {
+  const exports = ensureInitialized();
+  const baseBytes = await toBytes(base);
+  const reviewersJsonStr = await reviewersJson(reviewers);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.GetConflictsJson(
+    baseBytes,
+    reviewersJsonStr,
+    docxDiffConsolidateSettingsJson(settings)
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get DocxDiff conflicts: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return (parsed.conflicts || parsed.Conflicts || []).map((c: any) => ({
+    id: c.id ?? c.Id,
+    baseAnchor: c.baseAnchor ?? c.BaseAnchor,
+    tokenStart: c.tokenStart ?? c.TokenStart,
+    tokenEnd: c.tokenEnd ?? c.TokenEnd,
+    policy: c.policy ?? c.Policy,
+    competitors: (c.competitors || c.Competitors || []).map((comp: any) => ({
+      author: comp.author ?? comp.Author,
+      resultText: comp.resultText ?? comp.ResultText,
+    })),
+  }));
+}
+
+/**
+ * Consolidate several reviewers' edits against a shared base DOCX and return the
+ * merged revision list — each revision carrying its author, block anchors, and
+ * (when contested) the {@link DocxDiffConsolidatedRevision.conflictId} linking it
+ * to a {@link DocxDiffConflict}.
+ *
+ * @param base - The shared base document all reviewers edited from.
+ * @param reviewers - The reviewers' edited copies + author names.
+ * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for engine defaults.
+ * @returns Array of {@link DocxDiffConsolidatedRevision}.
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffGetConsolidatedRevisions(
+  base: File | Uint8Array,
+  reviewers: DocxDiffReviewer[],
+  settings?: DocxDiffConsolidateSettings
+): Promise<DocxDiffConsolidatedRevision[]> {
+  const exports = ensureInitialized();
+  const baseBytes = await toBytes(base);
+  const reviewersJsonStr = await reviewersJson(reviewers);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.GetConsolidatedRevisionsJson(
+    baseBytes,
+    reviewersJsonStr,
+    docxDiffConsolidateSettingsJson(settings)
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get DocxDiff consolidated revisions: ${error.error}`);
+  }
+
+  const parsed = JSON.parse(result);
+  return (parsed.revisions || parsed.Revisions || []).map((r: any) => ({
+    ...mapDocxDiffRevision(r),
+    conflictId: r.conflictId ?? r.ConflictId ?? undefined,
+  }));
+}
+
+/**
+ * Consolidate several reviewers' edits against a shared base DOCX and return the
+ * merged edit script as a JSON string — the diff-as-data view of the
+ * consolidation (the anchor-addressed list of composite block operations).
+ *
+ * @param base - The shared base document all reviewers edited from.
+ * @param reviewers - The reviewers' edited copies + author names.
+ * @param settings - Optional {@link DocxDiffConsolidateSettings}; omit for engine defaults.
+ * @returns The consolidated edit script serialized as indented JSON.
+ * @throws Error if the operation fails.
+ */
+export async function docxDiffGetConsolidatedEditScript(
+  base: File | Uint8Array,
+  reviewers: DocxDiffReviewer[],
+  settings?: DocxDiffConsolidateSettings
+): Promise<string> {
+  const exports = ensureInitialized();
+  const baseBytes = await toBytes(base);
+  const reviewersJsonStr = await reviewersJson(reviewers);
+
+  await yieldToMain();
+
+  const result = exports.DocxDiffBridge.GetConsolidatedEditScriptJson(
+    baseBytes,
+    reviewersJsonStr,
+    docxDiffConsolidateSettingsJson(settings)
+  );
+
+  if (isErrorResponse(result)) {
+    const error = parseError(result);
+    throw new Error(`Failed to get DocxDiff consolidated edit script: ${error.error}`);
+  }
+
+  return result;
 }
 
 /**

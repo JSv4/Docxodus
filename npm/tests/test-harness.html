@@ -13,6 +13,9 @@
          window.DocxodusSession so specs can exercise the typed API, not just the
          raw [JSExport] bridge. Built by `npm run build:session-bundle`. -->
     <script src="./session.bundle.js"></script>
+    <!-- Framework-agnostic DocxEditor (Option B block editor), IIFE-bundled to
+         window.DocxodusEditor. Built by `npm run build:editor-bundle`. -->
+    <script src="./editor.bundle.js"></script>
 
     <script type="module">
         import { dotnet } from './_framework/dotnet.js';
@@ -28,6 +31,7 @@
         window.Docxodus = {
             DocumentConverter: exports.DocxodusWasm.DocumentConverter,
             DocumentComparer: exports.DocxodusWasm.DocumentComparer,
+            DocxDiffBridge: exports.DocxodusWasm.DocxDiffBridge,
             DocxSessionBridge: exports.DocxodusWasm.DocxSessionBridge,
             // Typed wrapper class from the IIFE bundle above; constructor takes
             // (handle, bridge). openTypedSession opens + wraps in one call.
@@ -35,7 +39,9 @@
             openTypedSession: (bytes, settingsJson) => new window.DocxodusSession.DocxSession(
                 exports.DocxodusWasm.DocxSessionBridge.OpenSession(bytes, settingsJson || ''),
                 exports.DocxodusWasm.DocxSessionBridge
-            )
+            ),
+            // Framework-agnostic block editor (Option B). open(container, bytes, exports, opts).
+            DocxEditor: window.DocxodusEditor.DocxEditor
         };
 
         // Test helper functions
@@ -107,6 +113,129 @@
                     }
                     const parsed = JSON.parse(result);
                     return { revisions: parsed.Revisions || [] };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // DocxDiff (IR diff engine): compare + revisions + edit script
+            docxDiffCompare: function(leftBytes, rightBytes, settingsJson = '') {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.Compare(leftBytes, rightBytes, settingsJson);
+                    if (result.length === 0) {
+                        return { error: { message: 'DocxDiff.Compare returned empty result' } };
+                    }
+                    return { docxBytes: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+            docxDiffGetRevisions: function(leftBytes, rightBytes, settingsJson = '') {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.GetRevisionsJson(leftBytes, rightBytes, settingsJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { revisions: JSON.parse(result).revisions || [] };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+            docxDiffGetEditScript: function(leftBytes, rightBytes, settingsJson = '') {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.GetEditScriptJson(leftBytes, rightBytes, settingsJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { editScript: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+            // Accept / reject all tracked revisions in a redlined DOCX → bytes.
+            docxDiffAcceptRevisions: function(redlineBytes) {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.AcceptRevisions(redlineBytes);
+                    if (result.length === 0) {
+                        return { error: { message: 'DocxDiff.AcceptRevisions returned empty result' } };
+                    }
+                    return { docxBytes: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+            docxDiffRejectRevisions: function(redlineBytes) {
+                try {
+                    const result = window.Docxodus.DocxDiffBridge.RejectRevisions(redlineBytes);
+                    if (result.length === 0) {
+                        return { error: { message: 'DocxDiff.RejectRevisions returned empty result' } };
+                    }
+                    return { docxBytes: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+
+            // DocxDiff consolidate (composite N-way): base64-encode each reviewer
+            // doc into the [{author,docB64}] wire shape the bridge base64-decodes.
+            _reviewersJson: function(reviewers) {
+                const toB64 = function(bytes) {
+                    let binary = '';
+                    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+                    const chunk = 0x8000;
+                    for (let i = 0; i < u8.length; i += chunk) {
+                        binary += String.fromCharCode.apply(null, u8.subarray(i, i + chunk));
+                    }
+                    return btoa(binary);
+                };
+                return JSON.stringify(reviewers.map(function(r) {
+                    return { author: r.author, docB64: toB64(r.document) };
+                }));
+            },
+            docxDiffConsolidate: function(baseBytes, reviewers, settingsJson = '') {
+                try {
+                    const rj = window.DocxodusTests._reviewersJson(reviewers);
+                    const result = window.Docxodus.DocxDiffBridge.Consolidate(baseBytes, rj, settingsJson);
+                    if (result.length === 0) {
+                        return { error: { message: 'DocxDiff.Consolidate returned empty result' } };
+                    }
+                    return { docxBytes: result };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+            docxDiffGetConflicts: function(baseBytes, reviewers, settingsJson = '') {
+                try {
+                    const rj = window.DocxodusTests._reviewersJson(reviewers);
+                    const result = window.Docxodus.DocxDiffBridge.GetConflictsJson(baseBytes, rj, settingsJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { conflicts: JSON.parse(result).conflicts || [] };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+            docxDiffGetConsolidatedRevisions: function(baseBytes, reviewers, settingsJson = '') {
+                try {
+                    const rj = window.DocxodusTests._reviewersJson(reviewers);
+                    const result = window.Docxodus.DocxDiffBridge.GetConsolidatedRevisionsJson(baseBytes, rj, settingsJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { revisions: JSON.parse(result).revisions || [] };
+                } catch (e) {
+                    return { error: { message: e.message } };
+                }
+            },
+            docxDiffGetConsolidatedEditScript: function(baseBytes, reviewers, settingsJson = '') {
+                try {
+                    const rj = window.DocxodusTests._reviewersJson(reviewers);
+                    const result = window.Docxodus.DocxDiffBridge.GetConsolidatedEditScriptJson(baseBytes, rj, settingsJson);
+                    if (result.startsWith('{') && result.includes('"Error"')) {
+                        return { error: JSON.parse(result) };
+                    }
+                    return { editScript: result };
                 } catch (e) {
                     return { error: { message: e.message } };
                 }

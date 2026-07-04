@@ -23,6 +23,13 @@ namespace Docxodus
     {
         public bool AcceptRevisions;
         public bool NormalizeXml;
+        /// <summary>
+        /// Skip simplifying the style-definition parts (styles + stylesWithEffects). Their pass only
+        /// strips rendering-irrelevant rsids (styles have no body runs/bookmarks/proof to remove or
+        /// merge), so skipping it never changes resolved formatting — but it is the dominant cost on
+        /// a large style gallery. Used by the single-block render path. Default: false.
+        /// </summary>
+        internal bool SkipFormattingPartsSimplification;
         public bool RemoveBookmarks;
         public bool RemoveComments;
         public bool RemoveContentControls;
@@ -68,10 +75,18 @@ namespace Docxodus
             foreach (OpenXmlPart part in doc.ContentParts())
                 SimplifyMarkupForPart(part, settings);
 
-            if (doc.MainDocumentPart.StyleDefinitionsPart != null)
-                SimplifyMarkupForPart(doc.MainDocumentPart.StyleDefinitionsPart, settings);
-            if (doc.MainDocumentPart.StylesWithEffectsPart != null)
-                SimplifyMarkupForPart(doc.MainDocumentPart.StylesWithEffectsPart, settings);
+            // The style-definition parts only carry formatting definitions (no body runs, bookmarks,
+            // proof errors, etc.), so SimplifyMarkupForPart over them only strips rendering-irrelevant
+            // rsids — yet on a large style gallery that recursive rebuild dominates a single-block
+            // render. SkipFormattingPartsSimplification lets the incremental per-block render avoid it
+            // without changing the emitted HTML.
+            if (!settings.SkipFormattingPartsSimplification)
+            {
+                if (doc.MainDocumentPart.StyleDefinitionsPart != null)
+                    SimplifyMarkupForPart(doc.MainDocumentPart.StyleDefinitionsPart, settings);
+                if (doc.MainDocumentPart.StylesWithEffectsPart != null)
+                    SimplifyMarkupForPart(doc.MainDocumentPart.StylesWithEffectsPart, settings);
+            }
 
             if (settings.RemoveComments)
             {

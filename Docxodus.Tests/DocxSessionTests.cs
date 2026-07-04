@@ -55,6 +55,24 @@ public class DocxSessionTests
         return ms.ToArray();
     }
 
+    /// <summary>Single paragraph; styles part defines ONLY Normal (no "Code" style).</summary>
+    internal static byte[] BuildDocWithoutCodeStyle()
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.Document = new Document(new Body(
+                new Paragraph(new Run(new Text("First paragraph.")))));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles(
+                new Style(new StyleName { Val = "Normal" })
+                { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true });
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
     /// <summary>
     /// 2×2 table with simple text in each cell.
     /// </summary>
@@ -158,6 +176,61 @@ public class DocxSessionTests
             // Paragraph carries only the pStyle — no inline numPr.
             var pPr = new ParagraphProperties(new ParagraphStyleId { Val = "MyListStyle" });
             body.Append(new Paragraph(pPr, new Run(new Text("Style-inherited list item"))));
+
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>
+    /// Style-inherited bullet list — the numPr lives on the "ListBullet" STYLE (not the
+    /// paragraph) and the numbering defines ONLY level 0. Mirrors python-docx's default
+    /// "List Bullet" output, the real-world case where nesting was a silent no-op: SetListLevel
+    /// found no direct numPr, and even with one the abstractNum lacked the nested level.
+    /// </summary>
+    internal static byte[] BuildStyleListSingleLevel()
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.Document = new Document();
+            var body = new Body();
+            main.Document.Body = body;
+
+            var styles = BuildHeadingStyles();
+            styles.Append(new Style(
+                new StyleName { Val = "List Bullet" },
+                new ParagraphProperties(new NumberingProperties(new NumberingId { Val = 1 })))
+            {
+                Type = StyleValues.Paragraph,
+                StyleId = "ListBullet",
+            });
+            main.AddNewPart<StyleDefinitionsPart>().Styles = styles;
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            // Single-level (ilvl 0 only) bullet numbering, marked singleLevel — exactly what
+            // python-docx's default "List Bullet" emits, and the case where WmlToHtmlConverter
+            // forces ilvl=0 unless the nest upgrades multiLevelType.
+            var num = new DocumentFormat.OpenXml.Wordprocessing.Numbering();
+            var abs = new AbstractNum(
+                new MultiLevelType { Val = MultiLevelValues.SingleLevel })
+            { AbstractNumberId = 0 };
+            abs.Append(new Level(
+                new NumberingFormat { Val = NumberFormatValues.Bullet },
+                new LevelText { Val = "·" })
+            { LevelIndex = 0 });
+            num.Append(abs);
+            num.Append(new NumberingInstance(new AbstractNumId { Val = 0 }) { NumberID = 1 });
+            main.AddNewPart<NumberingDefinitionsPart>().Numbering = num;
+
+            // Paragraphs carry only the pStyle — list membership comes from the style.
+            body.Append(new Paragraph(
+                new ParagraphProperties(new ParagraphStyleId { Val = "ListBullet" }),
+                new Run(new Text("First bullet"))));
+            body.Append(new Paragraph(
+                new ParagraphProperties(new ParagraphStyleId { Val = "ListBullet" }),
+                new Run(new Text("Second bullet"))));
 
             main.Document.Save();
         }
@@ -1251,6 +1324,93 @@ public class DocxSessionTests
     }
 
     [Fact]
+    public void DS046_SplitAfterStyledParagraph_AppliesNextStyle()
+    {
+        // Pressing Enter at the END of a Title/Heading should start a Normal body paragraph (the
+        // style's linked w:next), not another Title — matching Word. Regression for the editor
+        // "draft from scratch" flow where every block below the letterhead inherited the Title.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var titleId = s.SetParagraphStyle(anchor, "Title").Modified[0].Id;
+
+        // "First paragraph." is 16 chars; split at the end → empty new paragraph.
+        var r = s.SplitParagraph(titleId, 16);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal("Title", s.GetBlockMetadata(r.Modified[0].Id)?.StyleId);   // original keeps Title
+        Assert.Equal("Normal", s.GetBlockMetadata(r.Created[0].Id)?.StyleId);   // new para = next style
+    }
+
+    [Fact]
+    public void DS046b_SplitStyledParagraphMidText_KeepsStyle()
+    {
+        // A mid-text split is a continuation of the SAME paragraph, so both halves keep the style
+        // (the next-style rebase only applies to an empty Enter-at-end split).
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var hId = s.SetParagraphStyle(anchor, "Heading2").Modified[0].Id;
+
+        var r = s.SplitParagraph(hId, 5); // "First" | " paragraph."
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal("Heading2", s.GetBlockMetadata(r.Modified[0].Id)?.StyleId);
+        Assert.Equal("Heading2", s.GetBlockMetadata(r.Created[0].Id)?.StyleId);
+    }
+
+    [Fact]
+    public void DS047_SplitDoesNotPropagatePageBreakBefore()
+    {
+        // pageBreakBefore is a once-only property: the original paragraph keeps it, the new
+        // paragraph created by Enter must not inherit a second page break. Regression for the
+        // editor flow where a page-broken "Enclosures" heading pushed every list item onto its own page.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        s.SetParagraphFormat(anchor, new ParagraphFormatOp { PageBreakBefore = true });
+
+        var r = s.SplitParagraph(anchor, 16);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains("pageBreakBefore", s.Raw.GetXml(r.Modified[0].Id));      // original keeps it
+        Assert.DoesNotContain("pageBreakBefore", s.Raw.GetXml(r.Created[0].Id)); // new para does not
+    }
+
+    [Fact]
+    public void DS048_SplitListItemContinuesList()
+    {
+        // Splitting a list item at its end must produce a continuing list item (same numbering),
+        // not a plain Normal paragraph — the next-style rebase must skip list items so the editor's
+        // Enter-continuation keeps working.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var p = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("p:"));
+        var li = s.ApplyListFormat(p, ListFormat.Decimal).Modified[0].Id;
+
+        var r = s.SplitParagraph(li, 16);
+        Assert.True(r.Success, r.Error?.Message);
+        var lm = s.GetListMembership(r.Created[0].Id);
+        Assert.NotNull(lm);
+        Assert.Equal(NumberFormat.Decimal, lm!.Format);
+    }
+
+    [Fact]
+    public void DS049_SplitReMintsClonedPropertyUnids()
+    {
+        // The new paragraph clones the source pPr (to carry indent/list membership). Each cloned
+        // property must get a FRESH Unid — otherwise the same Unid lands on two elements. Regression
+        // for duplicate property Unids observed across split-created paragraphs.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        s.SetParagraphFormat(anchor, new ParagraphFormatOp { IndentDelta = 720 });
+
+        var r = s.SplitParagraph(anchor, 5); // mid-split clones the w:ind into the new paragraph
+        Assert.True(r.Success, r.Error?.Message);
+        var firstUnids = System.Text.RegularExpressions.Regex
+            .Matches(s.Raw.GetXml(r.Modified[0].Id), "Unid=\"([0-9a-fA-F]+)\"")
+            .Select(m => m.Groups[1].Value).ToHashSet();
+        var secondUnids = System.Text.RegularExpressions.Regex
+            .Matches(s.Raw.GetXml(r.Created[0].Id), "Unid=\"([0-9a-fA-F]+)\"")
+            .Select(m => m.Groups[1].Value).ToHashSet();
+        Assert.NotEmpty(secondUnids);
+        Assert.Empty(firstUnids.Intersect(secondUnids)); // no Unid shared between the two subtrees
+    }
+
+    [Fact]
     public void DS043_MergeParagraphs()
     {
         using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
@@ -1305,6 +1465,35 @@ public class DocxSessionTests
     }
 
     [Fact]
+    public void DS053_SetParagraphStyle_CreatesMissingBuiltInStyle()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        // "Title" is a well-known built-in but BuildHeadingStyles defines only Heading1-6/Code/
+        // Quote/MyListStyle, so it is absent. Applying a built-in the document hasn't defined used
+        // to fail with UnknownStyle (a silent no-op in the editor); now the style is find-or-created
+        // (like the inline "Code" character style) and applied.
+        var r = s.SetParagraphStyle(anchor, "Title");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal("Title", s.GetBlockMetadata(r.Modified[0].Id)?.StyleId);
+    }
+
+    [Fact]
+    public void DS054_SetParagraphStyle_CreatesMissingHeadingAsHeading()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        // Heading8 is absent (BuildHeadingStyles stops at 6). The synthesized heading carries an
+        // outlineLvl, so the anchor flips p -> h and it projects as a markdown heading.
+        var r = s.SetParagraphStyle(anchor, "Heading8");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal("h", r.Modified[0].Kind);
+        Assert.Equal("Heading8", s.GetBlockMetadata(r.Modified[0].Id)?.StyleId);
+    }
+
+    [Fact]
     public void DS052_ApplyFormat_WholeParagraphBold()
     {
         using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
@@ -1326,12 +1515,292 @@ public class DocxSessionTests
     }
 
     [Fact]
+    public void DS200_ApplyFormat_Superscript_EmitsVertAlign()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.ApplyFormat(anchor, new CharSpan(0, 5), new FormatOp { VertAlign = "superscript" });
+        Assert.True(r.Success, r.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("vertAlign", xml);
+        Assert.Contains("superscript", xml);
+        // Clear it back to baseline.
+        var r2 = s.ApplyFormat(anchor, new CharSpan(0, 5), new FormatOp { VertAlign = "" });
+        Assert.True(r2.Success, r2.Error?.Message);
+        Assert.DoesNotContain("vertAlign", s.Raw.GetXml(anchor));
+    }
+
+    [Fact]
+    public void DS201_SetParagraphFormat_Alignment_Center()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.SetParagraphFormat(anchor, new ParagraphFormatOp { Alignment = ParagraphAlignment.Center });
+        Assert.True(r.Success, r.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("jc", xml);
+        Assert.Contains("center", xml);
+    }
+
+    [Fact]
+    public void DS202_SetParagraphFormat_PageBreakBefore_And_Indent()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.SetParagraphFormat(anchor, new ParagraphFormatOp { PageBreakBefore = true, IndentDelta = 720 });
+        Assert.True(r.Success, r.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("pageBreakBefore", xml);
+        Assert.Contains("720", xml);
+        // Indent again accumulates; removing the page break leaves the indent.
+        var r2 = s.SetParagraphFormat(anchor, new ParagraphFormatOp { PageBreakBefore = false, IndentDelta = 720 });
+        Assert.True(r2.Success, r2.Error?.Message);
+        var xml2 = s.Raw.GetXml(anchor);
+        Assert.DoesNotContain("pageBreakBefore", xml2);
+        Assert.Contains("1440", xml2); // 720 + 720
+    }
+
+    [Fact]
+    public void DS215_SetParagraphFormat_Indent_ToleratesNonIntegerExistingValue()
+    {
+        // Google-Docs-exported documents emit non-integer twips like w:left="12.996749877929688".
+        // SetParagraphFormat's indent delta must read that tolerantly (matching the HTML converter's
+        // AttributeToTwips: decimal → truncate) instead of throwing a FormatException, and write back
+        // a clean integer. Regression for indent being silently dead on every paragraph of such docs.
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        {
+            using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+            {
+                var main = wDoc.AddMainDocumentPart();
+                main.Document = new Document(new Body());
+                main.AddNewPart<StyleDefinitionsPart>().Styles = BuildHeadingStyles();
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                main.Document.Body!.Append(new Paragraph(
+                    new ParagraphProperties(new Indentation { Left = "12.996749877929688" }),
+                    new Run(new Text("Indented paragraph."))));
+                main.Document.Save();
+            }
+            bytes = ms.ToArray();
+        }
+
+        using var s = new DocxSession(bytes);
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.SetParagraphFormat(anchor, new ParagraphFormatOp { IndentDelta = 720 });
+        Assert.True(r.Success, r.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("732", xml);          // 12 (truncated from 12.996…) + 720
+        Assert.DoesNotContain("12.99", xml);  // the non-integer value is normalized away
+    }
+
+    [Fact]
+    public void DS216_ApplyFormat_Bold_TurnsOnExplicitlyOffRun()
+    {
+        // Google Docs stamps an explicit <w:b w:val="0"/> (bold OFF) on every run. Toggling bold ON
+        // must normalize that to ON (bare <w:b/>), not no-op because "a w:b element already exists".
+        // Regression for bold/italic/strike silently doing nothing on such documents.
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        {
+            using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+            {
+                var main = wDoc.AddMainDocumentPart();
+                main.Document = new Document(new Body());
+                main.AddNewPart<StyleDefinitionsPart>().Styles = BuildHeadingStyles();
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                main.Document.Body!.Append(new Paragraph(new Run(
+                    new RunProperties(new Bold { Val = OnOffValue.FromBoolean(false) }),
+                    new Text("Hello world"))));
+                main.Document.Save();
+            }
+            bytes = ms.ToArray();
+        }
+
+        using var s = new DocxSession(bytes);
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.ApplyFormat(anchor, new CharSpan(0, 5), new FormatOp { Bold = true });
+        Assert.True(r.Success, r.Error?.Message);
+        var html = Docxodus.Internal.HtmlConversionOps.RenderBlockHtml(s,
+            r.Modified is { Count: > 0 } ? r.Modified[0].Id : anchor,
+            new Docxodus.Internal.HtmlConversionOptions { FabricateCssClasses = false });
+        Assert.Contains("font-weight: bold", html); // the bolded span actually renders bold
+    }
+
+    [Fact]
+    public void DS217_RenderBlock_InvisiblePBdr_DoesNotEatIndent()
+    {
+        // An all-"nil" w:pBdr (Google Docs stamps one on every paragraph) is NOT a visible border.
+        // CreateBorderDivs must not wrap such a paragraph in a border <div> and relocate its left
+        // indent onto the div — that forces the paragraph's own margin-left to 0, so the editor's
+        // single-block re-render silently loses indentation. Regression for indent never showing.
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        {
+            using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+            {
+                var main = wDoc.AddMainDocumentPart();
+                main.Document = new Document(new Body());
+                main.AddNewPart<StyleDefinitionsPart>().Styles = BuildHeadingStyles();
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                main.Document.Body!.Append(new Paragraph(
+                    new ParagraphProperties(
+                        new ParagraphBorders(
+                            new TopBorder { Val = BorderValues.Nil, Size = 0U, Space = 0U },
+                            new LeftBorder { Val = BorderValues.Nil, Size = 0U, Space = 0U },
+                            new BottomBorder { Val = BorderValues.Nil, Size = 0U, Space = 0U },
+                            new RightBorder { Val = BorderValues.Nil, Size = 0U, Space = 0U }),
+                        new Indentation { Left = "1440" }),
+                    new Run(new Text("Indented under an invisible border."))));
+                main.Document.Save();
+            }
+            bytes = ms.ToArray();
+        }
+
+        using var s = new DocxSession(bytes);
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var html = Docxodus.Internal.HtmlConversionOps.RenderBlockHtml(s, anchor,
+            new Docxodus.Internal.HtmlConversionOptions { FabricateCssClasses = false });
+        // The <p> itself carries the 1-inch indent; it is not eaten by a wrapping border div.
+        Assert.Contains("margin-left: 1.00in", html);
+    }
+
+    [Fact]
+    public void DS213_ApplyListFormat_Bullet_RendersMarker()
+    {
+        // The single-block render (the editor's incremental path) must show the bullet marker
+        // and the list's hanging indent. The Symbol-font glyph U+F0B7 is mapped to Unicode (•).
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var p = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("p:"));
+        var li = s.ApplyListFormat(p, ListFormat.Bullet).Modified[0].Id;
+        var html = Docxodus.Internal.HtmlConversionOps.RenderBlockHtml(s, li,
+            new Docxodus.Internal.HtmlConversionOptions { FabricateCssClasses = false });
+        Assert.Contains("•", html);            // Unicode bullet marker rendered (mapped from Symbol U+F0B7)
+        Assert.Contains("text-indent", html); // hanging indent applied
+    }
+
+    [Fact]
+    public void DS214_ApplyFormat_Code_CreatesMissingCodeCharacterStyle()
+    {
+        // On a document that does NOT define a "Code" style, inline code (FormatOp.Code)
+        // referenced a phantom style → Word silently ignored it (no monospace). The op must
+        // find-or-create a real *character* style so the run actually renders as code.
+        using var s = new DocxSession(BuildDocWithoutCodeStyle());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        var r = s.ApplyFormat(anchor, new CharSpan(0, 5), new FormatOp { Code = true });
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains("Code", s.Raw.GetXml(anchor)); // run references the style
+
+        // Save + reopen: the Code character style is defined and persisted with a monospace font.
+        using var ms = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var codeStyle = doc.MainDocumentPart!.StyleDefinitionsPart!.Styles!
+            .Elements<Style>().FirstOrDefault(st => st.StyleId == "Code");
+        Assert.NotNull(codeStyle);
+        Assert.Equal(StyleValues.Character, codeStyle!.Type!.Value);
+        Assert.Equal("Consolas", codeStyle.StyleRunProperties?.RunFonts?.Ascii?.Value);
+    }
+
+    [Fact]
+    public void DS210_ApplyListFormat_Bullet_PromotesAndReuses()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var ps = s.Project().AnchorIndex.Keys.Where(k => k.StartsWith("p:")).ToList();
+        var r1 = s.ApplyListFormat(ps[0], ListFormat.Bullet);
+        Assert.True(r1.Success, r1.Error?.Message);
+        var li1 = r1.Modified[0].Id;
+        Assert.StartsWith("li:", li1); // promoted plain paragraph → list item
+        var lm1 = s.GetListMembership(li1);
+        Assert.NotNull(lm1);
+        Assert.Equal(NumberFormat.Bullet, lm1!.Format);
+
+        // A second bullet paragraph reuses the same synthesized numbering definition.
+        var r2 = s.ApplyListFormat(ps[1], ListFormat.Bullet);
+        Assert.True(r2.Success, r2.Error?.Message);
+        var lm2 = s.GetListMembership(r2.Modified[0].Id);
+        Assert.Equal(lm1.NumId, lm2!.NumId);
+    }
+
+    [Fact]
+    public void DS211_ApplyListFormat_Decimal_ThenNone()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var p = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("p:"));
+        var r = s.ApplyListFormat(p, ListFormat.Decimal);
+        Assert.True(r.Success, r.Error?.Message);
+        var li = r.Modified[0].Id;
+        Assert.Equal(NumberFormat.Decimal, s.GetListMembership(li)!.Format);
+
+        var r2 = s.ApplyListFormat(li, ListFormat.None);
+        Assert.True(r2.Success, r2.Error?.Message);
+        Assert.StartsWith("p:", r2.Modified[0].Id); // back to a plain paragraph
+        Assert.Null(s.GetListMembership(r2.Modified[0].Id));
+    }
+
+    [Fact]
+    public void DS212_ApplyListFormat_RoundTrips()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var p = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("p:"));
+        s.ApplyListFormat(p, ListFormat.Bullet);
+        var saved = s.Save();
+
+        using var s2 = new DocxSession(saved);
+        var li = s2.Project().AnchorIndex.Keys.FirstOrDefault(k => k.StartsWith("li:"));
+        Assert.NotNull(li);
+        Assert.Equal(NumberFormat.Bullet, s2.GetListMembership(li!)!.Format);
+    }
+
+    [Fact]
     public void DS054_SetListLevelIndent()
     {
         using var s = new DocxSession(BuildDS002_BulletedList());
         var firstLi = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("li:"));
         var r = s.SetListLevel(firstLi, +1);
         Assert.True(r.Success, r.Error?.Message);
+    }
+
+    [Fact]
+    public void DS054b_SetListLevel_StyleInheritedSingleLevel_MaterializesNumPrAndSynthesizesLevel()
+    {
+        // Real-world regression: a style-inherited bullet (numPr on the style, abstractNum with
+        // only level 0) used to be a silent no-op on nest. After the fix SetListLevel materializes
+        // a direct numPr at the new level AND synthesizes the missing abstractNum level.
+        using var s = new DocxSession(BuildStyleListSingleLevel());
+        var firstLi = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("li:"));
+        var r = s.SetListLevel(firstLi, +1);
+        Assert.True(r.Success, r.Error?.Message);
+
+        var bytes = s.Save();
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+        // The styled paragraph now carries a DIRECT numPr at ilvl=1 (materialized from the style).
+        var firstP = doc.MainDocumentPart!.GetXDocument().Root!.Descendants(w + "p").First();
+        var directNumPr = firstP.Element(w + "pPr")?.Element(w + "numPr");
+        Assert.NotNull(directNumPr);
+        Assert.Equal("1", (string?)directNumPr!.Element(w + "ilvl")?.Attribute(w + "val"));
+        Assert.Equal("1", (string?)directNumPr.Element(w + "numId")?.Attribute(w + "val"));
+
+        // The abstractNum now DEFINES level 1 (synthesized — only level 0 existed before)...
+        var abstractNum = doc.MainDocumentPart!.NumberingDefinitionsPart!.GetXDocument().Root!
+            .Elements(w + "abstractNum").First();
+        var levels = abstractNum.Elements(w + "lvl").Select(l => (string?)l.Attribute(w + "ilvl")).ToList();
+        Assert.Contains("0", levels);
+        Assert.Contains("1", levels);
+        // ...and multiLevelType is upgraded off singleLevel, else the converter would force ilvl=0.
+        Assert.NotEqual("singleLevel", (string?)abstractNum.Element(w + "multiLevelType")?.Attribute(w + "val"));
+
+        // End-to-end: the converter must render the nested item with LEVEL 1's bullet glyph
+        // ("o"), not collapse it to level 0's "·". This guards BOTH the singleLevel→ilvl=0 force
+        // AND the bullet-continuation collapse — either bug renders the nested item as "· First…".
+        var html = WmlToHtmlConverter.ConvertToHtml(new WmlDocument("x.docx", bytes),
+            new WmlToHtmlConverterSettings { StampAnchors = true }).ToString(SaveOptions.DisableFormatting);
+        var text = System.Text.RegularExpressions.Regex.Replace(html, "<[^>]+>", string.Empty)
+            .Replace("&#x00a0;", " ");
+        Assert.Contains("o First bullet", text, StringComparison.Ordinal);   // nested → level 1 glyph
+        Assert.Contains("· Second bullet", text, StringComparison.Ordinal);  // sibling stays level 0
     }
 
     [Fact]
@@ -4037,5 +4506,93 @@ public class DocxSessionTests
 
         Assert.Equal(s1A, s2A);    // A unchanged → same id
         Assert.NotEqual(s1B, s2B); // B's text changed → new id
+    }
+
+    // ─── DS314/DS315/DS316: note references survive ReplaceText (issue B3) ──────
+    //
+    // ReplaceText replaces a whole block's visible text. A footnote/endnote
+    // reference is a zero-width, semantically-significant marker that points into
+    // the FootnotesPart/EndnotesPart — dropping it on a text edit silently orphans
+    // the note definition (the destructive-accept symptom seen in the consolidate
+    // footnotes-survive battery). These assert the body-side <w:footnoteReference>
+    // (and endnote) survive the edit, on both the default (accept) and tracked paths.
+
+    private static int BodyNoteRefCount<T>(byte[] bytes)
+        where T : OpenXmlElement
+    {
+        using var s = new MemoryStream(bytes);
+        using var d = WordprocessingDocument.Open(s, false);
+        return d.MainDocumentPart!.Document.Body!.Descendants<T>().Count();
+    }
+
+    [Fact]
+    public void DS314_ReplaceText_PreservesFootnoteReference_AcceptMode()
+    {
+        var baseBytes = BuildDS140_FootnoteFixture(); // "Main text"[fnRef]" continued."
+        Assert.Equal(1, BodyNoteRefCount<FootnoteReference>(baseBytes));
+
+        using var s = new DocxSession(baseBytes);
+        var para = s.Project().AnchorIndex.Values.Single(t => t.Anchor.Kind == "p" && t.Anchor.Scope == "body");
+        var r = s.ReplaceText(para.Anchor.Id, "Main text EDITED continued.");
+        Assert.True(r.Success, r.Error?.Message);
+
+        var saved = s.Save();
+        Assert.Equal("Main text EDITED continued.", string.Join("\n",
+            BodyParagraphTexts(saved)));
+        // The body-side footnote reference survives the whole-block replace.
+        Assert.Equal(1, BodyNoteRefCount<FootnoteReference>(saved));
+    }
+
+    [Fact]
+    public void DS315_ReplaceText_PreservesFootnoteReference_TrackedMode()
+    {
+        var baseBytes = BuildDS140_FootnoteFixture();
+
+        var settings = new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "Tester",
+        };
+        using var s = new DocxSession(baseBytes, settings);
+        var para = s.Project().AnchorIndex.Values.Single(t => t.Anchor.Kind == "p" && t.Anchor.Scope == "body");
+        var r = s.ReplaceText(para.Anchor.Id, "Main text EDITED continued.");
+        Assert.True(r.Success, r.Error?.Message);
+
+        var saved = s.Save();
+        // The note ref must NOT be swept into the w:del: it survives on both sides.
+        Assert.Equal(1, BodyNoteRefCount<FootnoteReference>(saved));
+
+        var accepted = RevisionProcessor.AcceptRevisions(new WmlDocument("a.docx", saved));
+        var rejected = RevisionProcessor.RejectRevisions(new WmlDocument("r.docx", saved));
+        Assert.Equal("Main text EDITED continued.", string.Join("\n",
+            BodyParagraphTexts(accepted.DocumentByteArray)));
+        Assert.Equal("Main text continued.", string.Join("\n",
+            BodyParagraphTexts(rejected.DocumentByteArray)));
+        Assert.Equal(1, BodyNoteRefCount<FootnoteReference>(accepted.DocumentByteArray));
+        Assert.Equal(1, BodyNoteRefCount<FootnoteReference>(rejected.DocumentByteArray));
+    }
+
+    [Fact]
+    public void DS316_ReplaceText_PreservesEndnoteReference_AcceptMode()
+    {
+        var baseBytes = BuildDS141_EndnoteFixture(); // "Body text"[enRef]
+        Assert.Equal(1, BodyNoteRefCount<EndnoteReference>(baseBytes));
+
+        using var s = new DocxSession(baseBytes);
+        var para = s.Project().AnchorIndex.Values.Single(t => t.Anchor.Kind == "p" && t.Anchor.Scope == "body");
+        var r = s.ReplaceText(para.Anchor.Id, "Body text EDITED");
+        Assert.True(r.Success, r.Error?.Message);
+
+        var saved = s.Save();
+        Assert.Equal("Body text EDITED", string.Join("\n", BodyParagraphTexts(saved)));
+        Assert.Equal(1, BodyNoteRefCount<EndnoteReference>(saved));
+    }
+
+    private static System.Collections.Generic.List<string> BodyParagraphTexts(byte[] bytes)
+    {
+        using var s = new MemoryStream(bytes);
+        using var d = WordprocessingDocument.Open(s, false);
+        return d.MainDocumentPart!.Document.Body!.Descendants<Paragraph>()
+            .Select(p => p.InnerText).ToList();
     }
 }

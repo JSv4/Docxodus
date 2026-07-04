@@ -1,10 +1,12 @@
 # Format Change Detection Architecture
 
 > **Status: IMPLEMENTED** (November 2025)
+>
+> **Scope note.** This document describes format-change detection in the **`WmlComparer`** engine, where it is run-level only (`w:rPrChange`). The IR diff engine (`DocxDiff`) tracks the full **block-format-change family** — `w:pPrChange`/`w:tcPrChange`/`w:trPrChange`/`w:tblPrChange`/`w:tblGridChange`/`w:sectPrChange` in addition to `w:rPrChange` — see the "Paragraph-and-above formatting changes" section of [`ir_diff_engine.md`](ir_diff_engine.md). The paragraph/section/table extension sketched at the end of this document was NOT implemented in `WmlComparer`; it was implemented in `DocxDiff` instead.
 
 ## Overview
 
-This document describes the architecture for detecting and emitting native Word format change markup (`w:rPrChange`/`w:pPrChange`) in `WmlComparer.Compare()`. When enabled, formatting-only changes (bold, italic, font size, etc.) are tracked as distinct revisions, separate from text insertions and deletions.
+This document describes the architecture for detecting and emitting native Word format change markup (`w:rPrChange`) in `WmlComparer.Compare()`. When enabled, formatting-only changes (bold, italic, font size, etc.) are tracked as distinct revisions, separate from text insertions and deletions.
 
 ## Problem Statement
 

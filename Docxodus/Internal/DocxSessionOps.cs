@@ -18,6 +18,9 @@ internal static class DocxSessionOps
     public static int OpenSession(byte[] bytes, DocxSessionSettings? settings) =>
         SessionRegistry.OpenSession(bytes, settings);
 
+    /// <summary>Mint a complete blank DOCX (a "New document" seed) as bytes.</summary>
+    public static byte[] CreateBlankDocx() => DocxSession.CreateBlankDocxBytes();
+
     public static void CloseSession(int handle) => SessionRegistry.CloseSession(handle);
 
     public static byte[] Save(int handle) => SessionRegistry.Get(handle).Save();
@@ -29,6 +32,15 @@ internal static class DocxSessionOps
 
     public static string ProjectAnchor(int handle, string anchorId, ProjectionDepth depth) =>
         DocxSessionJson.SerializeProjection(SessionRegistry.Get(handle).ProjectAnchor(anchorId, depth));
+
+    /// <summary>
+    /// Render a single block from the live session to faithful HTML — the editor's
+    /// incremental per-block re-render. Resolves against the live document (no Save /
+    /// byte round-trip). Returns the block's HTML element (no html/head wrapper).
+    /// </summary>
+    public static string RenderBlockHtml(int handle, string anchorId, string cssPrefix, bool fabricateClasses) =>
+        HtmlConversionOps.RenderBlockHtml(SessionRegistry.Get(handle), anchorId,
+            new HtmlConversionOptions { CssClassPrefix = cssPrefix ?? "docx-", FabricateCssClasses = fabricateClasses });
 
     public static string Grep(int handle, string pattern, RegexOptions regexOpts,
         ProjectionScopes scope, int contextChars, WhitespaceMode whitespace, ContextBoundary boundary) =>
@@ -162,6 +174,19 @@ internal static class DocxSessionOps
     public static string MergeParagraphs(int handle, string firstAnchorId, string secondAnchorId) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).MergeParagraphs(firstAnchorId, secondAnchorId));
 
+    public static string InsertHorizontalRule(int handle, string anchorId, Position position, string ruleJson) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertHorizontalRule(
+            anchorId, position,
+            string.IsNullOrEmpty(ruleJson) ? null : ParseRuleEdge(ruleJson)));
+
+    private static ParagraphBorderEdge? ParseRuleEdge(string json)
+    {
+        // The rule JSON is itself a border-edge object; reuse the named-property parser by
+        // wrapping it under a known key.
+        using var d = System.Text.Json.JsonDocument.Parse($"{{\"e\":{json}}}");
+        return DocxSessionJson.ParseBorderEdge(d.RootElement, "e");
+    }
+
     // ─── Tier C: formatting ─────────────────────────────────────────────
 
     public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp op) =>
@@ -173,16 +198,38 @@ internal static class DocxSessionOps
     public static string SetParagraphStyle(int handle, string anchorId, string styleId) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetParagraphStyle(anchorId, styleId));
 
+    public static string SetParagraphFormat(int handle, string anchorId, ParagraphFormatOp op) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetParagraphFormat(anchorId, op));
+
     public static string SetListLevel(int handle, string anchorId, int levelDelta) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetListLevel(anchorId, levelDelta));
 
     public static string RemoveListMembership(int handle, string anchorId) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveListMembership(anchorId));
 
+    public static string ApplyListFormat(int handle, string anchorId, ListFormat kind) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ApplyListFormat(anchorId, kind));
+
     // ─── Tier D: tables ─────────────────────────────────────────────────
 
     public static string ReplaceCellContent(int handle, string cellAnchorId, string markdown) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).ReplaceCellContent(cellAnchorId, markdown));
+
+    public static string InsertTable(int handle, string anchorId, Position position, int rows, int cols, string optionsJson) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertTable(
+            anchorId, position, rows, cols, DocxSessionJson.ParseTableInsertOptions(optionsJson)));
+
+    public static string InsertTableRow(int handle, string cellAnchorId, Position position) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertTableRow(cellAnchorId, position));
+
+    public static string InsertTableColumn(int handle, string cellAnchorId, Position position) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertTableColumn(cellAnchorId, position));
+
+    public static string DeleteTableRow(int handle, string cellAnchorId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteTableRow(cellAnchorId));
+
+    public static string DeleteTableColumn(int handle, string cellAnchorId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteTableColumn(cellAnchorId));
 
     // ─── Raw escape hatch ───────────────────────────────────────────────
 
