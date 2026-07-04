@@ -210,7 +210,7 @@ jobs:
           unset DOCXODUS_HOST
           "$bin/pytest" python/tests/test_lifecycle.py -v
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.rid }}
           path: python/dist/*.whl
@@ -247,7 +247,7 @@ jobs:
           python -m build --sdist
           ls -la dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-sdist
           path: python/dist/*.tar.gz
