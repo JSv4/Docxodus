@@ -3368,7 +3368,11 @@ internal static class IrMarkupRenderer
     /// </summary>
     private static void ApplyBlockFormatChanges(XElement newPara, XElement leftPara, XElement rightPara, RenderState state)
     {
-        if (!state.Settings.TrackBlockFormatChanges)
+        // Two independent slices: pPr (+ mark rPr) gated on the PARAGRAPH flag, the inline sectPr gated on
+        // the block flag (so the composite can stamp pPrChange but not sectPrChange — B1 vs B2).
+        bool trackPPr = state.Settings.TrackParagraphFormatChanges;
+        bool trackSect = state.Settings.TrackBlockFormatChanges;
+        if (!trackPPr && !trackSect)
             return;
 
         var leftPPr = leftPara.Element(W.pPr);
@@ -3377,14 +3381,14 @@ internal static class IrMarkupRenderer
         // Policy-gated pPr delta: ModeledOnly compares the modeled ParaKey (the delta a consumer-grade
         // report can describe; unmodeled-only deltas stay untracked — the documented rPr-parallel blind
         // spot); Full compares canonically (unid/rsid-stripped, rPr/sectPr/pPrChange excluded).
-        bool pPrDiffers = state.Settings.FormatComparison == IrFormatComparison.ModeledOnly
+        bool pPrDiffers = trackPPr && (state.Settings.FormatComparison == IrFormatComparison.ModeledOnly
             ? IrModeledFormat.ParaKey(IrReader.MapParaFormat(leftPPr)) !=
               IrModeledFormat.ParaKey(IrReader.MapParaFormat(rightPPr))
-            : !IrHasher.CanonicalHash(PPrForCompare(leftPPr)).Equals(IrHasher.CanonicalHash(PPrForCompare(rightPPr)));
+            : !IrHasher.CanonicalHash(PPrForCompare(leftPPr)).Equals(IrHasher.CanonicalHash(PPrForCompare(rightPPr))));
 
         // The paragraph-MARK rPr is outside pPrChange by schema; Word tracks it as w:pPr/w:rPr/w:rPrChange.
         // Compared canonically under both policies (the mark has no token to carry a run-level rPrChange).
-        bool markDiffers = !IrHasher.CanonicalHash(MarkRPrForCompare(leftPPr))
+        bool markDiffers = trackPPr && !IrHasher.CanonicalHash(MarkRPrForCompare(leftPPr))
             .Equals(IrHasher.CanonicalHash(MarkRPrForCompare(rightPPr)));
 
         // Mid-document section-property change (A3): the emitted right pPr already carries the right inline
@@ -3394,7 +3398,7 @@ internal static class IrMarkupRenderer
         var leftInlineSect = leftPPr?.Element(W.sectPr);
         var newPPrForSect = newPara.Element(W.pPr);
         var rightInlineSect = newPPrForSect?.Element(W.sectPr);
-        bool sectDiffers = leftInlineSect != null && rightInlineSect != null
+        bool sectDiffers = trackSect && leftInlineSect != null && rightInlineSect != null
             && SectPrPropsDiffer(leftInlineSect, rightInlineSect);
 
         if (!pPrDiffers && !markDiffers && !sectDiffers)

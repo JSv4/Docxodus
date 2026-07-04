@@ -52,9 +52,9 @@ internal static class IrCompositeRevisionRenderer
         IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
         IrDiffSettings settings)
     {
-        // Consolidate v1 ceiling (block-format-change family, 2026-07-03): mirror IrCompositeMerger's
-        // forcing so per-op mini-script revision rendering never emits block-scope FormatChanged entries.
-        settings = settings with { TrackBlockFormatChanges = false };
+        // Mirror IrCompositeMerger's forcing. B1 turns the PARAGRAPH slice ON so a single-source pPr op reports
+        // a Paragraph-scope FormatChanged authored to its reviewer; table-shell/section slices stay OFF (B2).
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true };
 
         // Move-source pre-pass over the WHOLE composite script. Single-source ops are each rendered in
         // their own one-op mini-script (so IrRevisionRenderer honours per-op granularity/author), but a

@@ -35,12 +35,14 @@ internal static class IrCompositeMerger
         // MergeNoteScopes (simpler — story pairing is by scope, no id-map machinery needed).
         settings = settings with { CompareHeadersFooters = false };
 
-        // v1 ceiling (block-format-change family, 2026-07-03): block-property changes are NOT consolidated.
-        // The compose path clones the BASE paragraph's pPr and the by-base grouping has no handling for
-        // FormatOnly-with-block-delta ops, so detection is forced OFF here — a reviewer's pPr/shell-only edit
-        // is ignored by Consolidate, exactly the pre-campaign behavior (text+pPr edits keep routing to the
-        // conflict path). Pinned by BlockFormatChangeTests.Consolidate_ignores_block_format_changes_v1_ceiling.
-        settings = settings with { TrackBlockFormatChanges = false };
+        // Consolidate block-format merge (sub-project B). B1 merges reviewers' PARAGRAPH-property (w:pPr)
+        // changes: the paragraph slice is turned ON so per-reviewer diffs surface pPr changes as FormatOnly
+        // ops (composed by ComposePPr — consensus / conflict) and the composite renderer stamps pPrChange
+        // authored to the winning reviewer. The TABLE-shell and SECTION slices stay OFF (B2 ceiling) — a
+        // reviewer's shell/section-only edit is still ignored by Consolidate. text+pPr edits keep routing to
+        // the block-level conflict path (only pPr-ONLY edits compose in B1). Pinned by
+        // BlockFormatChangeTests.Consolidate_merges_pPr_but_not_shell_section_v1.
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true };
 
         // 1. Raw pairwise scripts, NOT yet lowered — so PlanMoves can inspect every reviewer's move groups
         //    against the shared base anchor space before any move is collapsed to del/ins.
@@ -1027,6 +1029,29 @@ internal static class IrCompositeMerger
             return;
         }
 
+        // CONSOLIDATE B1: multi-reviewer PARAGRAPH-PROPERTY (pPr-only) changes. A pPr change is a FormatOnly
+        // op (text equal, format differs); the text-based consensus/conflict below cannot SEE a pPr
+        // disagreement (it would silently drop a competitor, or wrongly keep base when reviewers actually
+        // agree). Route them through ComposePPr: all-agree → consensus (one op, authored to the first
+        // reviewer); ≥2 distinct → a recorded conflict resolved by policy. Fires only when EVERY toucher is a
+        // pPr-changing paragraph FormatOnly edit — a mixed set (text edits, run-format-only, tables) falls
+        // through to the existing paths. Table-shell/section changes are NOT paragraphs, so they never reach
+        // here (B2 ceiling). text+pPr edits are ModifyBlock (not FormatOnly) → also fall through (B2).
+        if (settings.TrackParagraphFormatChanges
+            && baseIr.AnchorIndex.TryGetValue(anchor, out var pBlk) && pBlk is IrParagraph basePara
+            && touched.All(e => IsParagraphPPrOnlyEdit(e.Op, reviewers[e.Reviewer].Ir, basePara)))
+        {
+            int winner = ComposePPr(basePara, anchor, touched, reviewers, policy, settings, ref nextConflictId, conflicts);
+            if (winner < 0)
+                ops.Add(EqualOp(anchor));                                          // base pPr wins
+            else
+            {
+                var (rev, op) = touched.First(e => e.Reviewer == winner);
+                ops.Add(EmitOp(op, reviewers[rev].Author, rev));                   // winner's pPr, authored
+            }
+            return;
+        }
+
         if (AllOpsIdentical(touched, reviewers, settings))            // CONSENSUS
         {
             // Tripwire: a multi-reviewer UNCOMPARABLE edit (table, or section-break/opaque modify — anything
@@ -1945,6 +1970,58 @@ internal static class IrCompositeMerger
     /// StackAll take the first changer's shell (shells cannot stack — the disagreement is recorded either
     /// way, so no reviewer's shell edit is ever silently dropped without a conflict).
     /// </summary>
+    /// <summary>True when <paramref name="op"/> is a paragraph FormatOnly edit whose PARAGRAPH properties
+    /// (`w:pPr`) actually changed vs the base (not a run-format-only FormatOnly). Consolidate B1.</summary>
+    private static bool IsParagraphPPrOnlyEdit(IrEditOp op, IrDocument reviewerIr, IrParagraph basePara)
+    {
+        if (op.Kind != IrEditOpKind.FormatOnlyBlock || op.RightAnchor is not { } rightAnchor)
+            return false;
+        return reviewerIr.AnchorIndex.TryGetValue(rightAnchor, out var rb) && rb is IrParagraph rp
+            && !rp.PPrDigest.Equals(basePara.PPrDigest);
+    }
+
+    /// <summary>
+    /// Compose N reviewers' PARAGRAPH-property (`w:pPr`) edits over one base paragraph (Consolidate B1),
+    /// mirroring <see cref="ComposeCellShell"/>: collect reviewers whose right paragraph's
+    /// <see cref="IrParagraph.PPrDigest"/> differs from the base; 0 changers → base wins (<c>-1</c>); all
+    /// agree → the first reviewer (consensus); ≥2 distinct → a recorded <see cref="IrConflict"/> resolved by
+    /// policy (BaseWins → base wins; else the first changer). Returns the winning reviewer index, or <c>-1</c>
+    /// to keep the base pPr. A pPr, like a cell shell, cannot STACK (one paragraph has one pPr).
+    /// </summary>
+    private static int ComposePPr(
+        IrParagraph basePara, string baseAnchor,
+        List<(int Reviewer, IrEditOp Op)> touched,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
+        Docxodus.ConflictResolution policy, IrDiffSettings settings,
+        ref int nextConflictId, List<IrConflict> conflicts)
+    {
+        var changers = new List<(int Reviewer, string Author, IrEditOp Op, IrHash Digest)>();
+        foreach (var (reviewer, op) in touched)
+        {
+            if (op.RightAnchor is not { } rightAnchor
+                || !reviewers[reviewer].Ir.AnchorIndex.TryGetValue(rightAnchor, out var rb) || rb is not IrParagraph rp)
+                continue;
+            if (!rp.PPrDigest.Equals(basePara.PPrDigest))
+                changers.Add((reviewer, reviewers[reviewer].Author, op, rp.PPrDigest));
+        }
+        if (changers.Count == 0)
+            return -1;
+        changers.Sort((a, b) => a.Reviewer.CompareTo(b.Reviewer));
+
+        bool allAgree = changers.All(c => c.Digest.Equals(changers[0].Digest));
+        if (!allAgree)
+        {
+            // Competitors name the contested paragraph by its (unchanged) text; the disagreement — differing
+            // pPr — is structural, recorded by the conflict's existence (mirrors ComposeCellShell).
+            conflicts.Add(new IrConflict(nextConflictId++, baseAnchor, 0, 0, policy,
+                IrNodeList.From(changers.Select(c =>
+                    new IrConflictCompetitor(c.Author, BlockResultText(c.Op, reviewers[c.Reviewer].Ir, settings))))));
+            if (policy == Docxodus.ConflictResolution.BaseWins)
+                return -1;
+        }
+        return changers[0].Reviewer;
+    }
+
     private static (int ShellReviewer, string? ShellAnchor) ComposeCellShell(
         IrCell baseCell, string baseCellAnchor,
         List<(int Reviewer, string Author, IrCellOp CellOp)> cellEditors,

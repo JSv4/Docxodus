@@ -1327,7 +1327,7 @@ internal static class IrRevisionRenderer
     /// </summary>
     private static bool ParaFormatDiffers(IrParagraph left, IrParagraph right, IrDiffSettings settings)
     {
-        if (!settings.TrackBlockFormatChanges)
+        if (!settings.TrackParagraphFormatChanges)   // paragraph slice (B1); composite keeps this on
             return false;
         return settings.FormatComparison == IrFormatComparison.ModeledOnly
             ? IrModeledFormat.ParaKey(left.Format) != IrModeledFormat.ParaKey(right.Format)

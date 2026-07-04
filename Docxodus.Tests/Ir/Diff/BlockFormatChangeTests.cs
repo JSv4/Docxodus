@@ -299,6 +299,98 @@ public class BlockFormatChangeTests
 
     // ------------------------------------------------------------------ Consolidate pPr merge (sub-project B)
 
+    private static readonly WmlDocument PPrRightAligned = IrTestDocuments.FromBodyXml(
+        "<w:p><w:pPr><w:jc w:val=\"right\"/></w:pPr><w:r><w:t>Same text here.</w:t></w:r></w:p>");
+
+    [Fact]
+    public void Consolidate_two_reviewers_agree_on_pPr_is_consensus()
+    {
+        // Both reviewers center the same paragraph → consensus (one pPrChange, authored to the first), no conflict.
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Document = PPrRight, Author = "Alice" },
+            new DocxDiffReviewer { Document = PPrRight, Author = "Bob" },
+        };
+        var merged = DocxDiff.Consolidate(PPrLeft, reviewers);
+        Assert.Single(BodyOf(merged).Descendants(W + "pPrChange"));
+        Assert.Equal("center", (string?)BodyOf(merged).Descendants(W + "jc").Single().Attribute(W + "val"));
+        Assert.Empty(DocxDiff.GetConflicts(PPrLeft, reviewers));
+        Assert.Empty(BodyOf(RevisionProcessor.RejectRevisions(merged)).Descendants(W + "jc"));   // reject ≡ base
+    }
+
+    [Fact]
+    public void Consolidate_two_reviewers_disagree_on_pPr_is_a_conflict()
+    {
+        // Alice centers, Bob right-aligns the same paragraph → a recorded conflict; NEITHER edit is silently
+        // dropped. Under BaseWins the base pPr is kept; under FirstReviewerWins Alice's centering wins.
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Document = PPrRight, Author = "Alice" },
+            new DocxDiffReviewer { Document = PPrRightAligned, Author = "Bob" },
+        };
+        var conflict = Assert.Single(DocxDiff.GetConflicts(PPrLeft, reviewers));
+        Assert.Equal(2, conflict.Competitors.Count);
+
+        var baseWins = DocxDiff.Consolidate(PPrLeft, reviewers);   // default BaseWins
+        Assert.Empty(BodyOf(baseWins).Descendants(W + "jc"));                                    // base kept
+        Assert.Empty(BodyOf(baseWins).Descendants(W + "pPrChange"));
+
+        var firstWins = DocxDiff.Consolidate(PPrLeft, reviewers,
+            new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.FirstReviewerWins });
+        Assert.Equal("center", (string?)BodyOf(firstWins).Descendants(W + "jc").Single().Attribute(W + "val")); // Alice
+        Assert.Empty(BodyOf(RevisionProcessor.RejectRevisions(firstWins)).Descendants(W + "jc"));  // reject ≡ base
+    }
+
+    // Per-paragraph PPrDigest sequence over a document body — the byte-level pPr round-trip fingerprint.
+    private static string[] BodyPPrDigests(WmlDocument doc) =>
+        IrReader.Read(doc, new IrReaderOptions { RetainSources = false }).Body.Blocks
+            .OfType<IrParagraph>().Select(p => p.PPrDigest.ToHex()).ToArray();
+
+    [Fact]
+    public void Consolidate_pPr_merge_round_trips_at_the_byte_level_across_reviewers()
+    {
+        // Three body paragraphs; three reviewers touch different paragraphs' pPr — P0 changed by one reviewer,
+        // P1 by two who AGREE, P2 by two who DISAGREE. Assert the byte-level contract: reject ≡ base pPr for
+        // EVERY paragraph; accept ≡ the policy-winner's pPr; a conflict is recorded only for the disagreement.
+        var baseDoc = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>Para zero.</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>Para one.</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>Para two.</w:t></w:r></w:p>");
+        WmlDocument Doc(string p0, string p1, string p2) => IrTestDocuments.FromBodyXml(
+            $"<w:p>{p0}<w:r><w:t>Para zero.</w:t></w:r></w:p>" +
+            $"<w:p>{p1}<w:r><w:t>Para one.</w:t></w:r></w:p>" +
+            $"<w:p>{p2}<w:r><w:t>Para two.</w:t></w:r></w:p>");
+        const string center = "<w:pPr><w:jc w:val=\"center\"/></w:pPr>";
+        const string right = "<w:pPr><w:jc w:val=\"right\"/></w:pPr>";
+        const string indent = "<w:pPr><w:ind w:left=\"720\"/></w:pPr>";
+
+        var reviewers = new[]
+        {
+            new DocxDiffReviewer { Document = Doc(center, center, center), Author = "Alice" }, // P0 center, P1 center, P2 center
+            new DocxDiffReviewer { Document = Doc("", center, right),      Author = "Bob" },   // P1 center (agree), P2 right (conflict)
+            new DocxDiffReviewer { Document = Doc("", "", indent),         Author = "Carol" }, // P2 indent (3-way conflict on P2)
+        };
+
+        var baseDigests = BodyPPrDigests(baseDoc);
+
+        // FirstReviewerWins: P0→Alice(center), P1→consensus(center), P2→conflict, first changer (Alice) wins.
+        var merged = DocxDiff.Consolidate(baseDoc, reviewers,
+            new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.FirstReviewerWins });
+        Assert.Equal(baseDigests, BodyPPrDigests(RevisionProcessor.RejectRevisions(merged)));      // reject ≡ base pPr (all 3)
+        var acc = BodyPPrDigests(RevisionProcessor.AcceptRevisions(merged));
+        Assert.Equal(BodyPPrDigests(Doc(center, center, center)), acc);                             // accept ≡ policy-winner pPr
+
+        // Exactly one conflict — the P2 disagreement (center vs right vs indent).
+        var conflict = Assert.Single(DocxDiff.GetConflicts(baseDoc, reviewers));
+        Assert.Equal(3, conflict.Competitors.Count);
+
+        // BaseWins: the conflicted P2 keeps base; P0/P1 still merge.
+        var baseWins = DocxDiff.Consolidate(baseDoc, reviewers);
+        Assert.Equal(baseDigests, BodyPPrDigests(RevisionProcessor.RejectRevisions(baseWins)));
+        var bw = BodyPPrDigests(RevisionProcessor.AcceptRevisions(baseWins));
+        Assert.Equal(BodyPPrDigests(Doc(center, center, "")), bw);                                  // P2 base kept
+    }
+
     [Fact]
     public void PPrDigest_distinguishes_paragraph_properties_but_ignores_mark_sect_markers()
     {
@@ -845,8 +937,9 @@ public class BlockFormatChangeTests
     [Fact]
     public void TrackBlockFormatChanges_off_restores_Unchanged_classification()
     {
+        // Both slices off (the public opt-out sets both; TrackParagraphFormatChanges is the pPr slice).
         var a = IrBlockAligner.Align(Ir(PPrLeft), Ir(PPrRight),
-            new IrDiffSettings { TrackBlockFormatChanges = false });
+            new IrDiffSettings { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = false });
         Assert.Equal(IrAlignmentKind.Unchanged, a.Entries.Single().Kind);
     }
 
@@ -867,19 +960,27 @@ public class BlockFormatChangeTests
     }
 
     [Fact]
-    public void Consolidate_ignores_block_format_changes_v1_ceiling()
+    public void Consolidate_merges_pPr_but_not_shell_section_v1()
     {
-        // Pinned v1 ceiling (the CompareHeadersFooters precedent): the composite merger forces
-        // TrackBlockFormatChanges off for its per-reviewer diffs, so a reviewer's pPr-only edit is
-        // ignored by Consolidate — no pPrChange, base pPr preserved, no conflict recorded.
-        var baseDoc = PPrLeft;
+        // Sub-project B1 (flips the former ceiling pin): a reviewer's PARAGRAPH-property (pPr) change now
+        // MERGES into the consolidated document with native w:pPrChange authored to that reviewer, round-trips
+        // (accept ≡ reviewer, reject ≡ base). A TABLE-shell reviewer change stays IGNORED (the B2 ceiling).
         var reviewer = new DocxDiffReviewer { Document = PPrRight, Author = "Reviewer A" };
-
-        var merged = DocxDiff.Consolidate(baseDoc, new[] { reviewer });
+        var merged = DocxDiff.Consolidate(PPrLeft, new[] { reviewer });
         var body = BodyOf(merged);
-        Assert.Empty(body.Descendants(W + "pPrChange"));
-        Assert.Empty(body.Descendants(W + "jc"));            // base (no jc) wins; reviewer's centering ignored
-        Assert.Empty(DocxDiff.GetConflicts(baseDoc, new[] { reviewer }));
+
+        var pPrChange = body.Descendants(W + "pPrChange").Single();          // pPr change tracked
+        Assert.Equal("Reviewer A", (string?)pPrChange.Attribute(W + "author"));
+        Assert.Equal("center", (string?)body.Descendants(W + "jc").Single().Attribute(W + "val")); // reviewer applied
+        Assert.Empty(BodyOf(RevisionProcessor.RejectRevisions(merged)).Descendants(W + "jc"));      // reject ≡ base
+        Assert.Equal("center", (string?)BodyOf(RevisionProcessor.AcceptRevisions(merged)).Descendants(W + "jc").Single().Attribute(W + "val"));
+        Assert.Empty(DocxDiff.GetConflicts(PPrLeft, new[] { reviewer }));    // one reviewer → no conflict
+
+        // B2 ceiling: a table-shell-only reviewer edit is still ignored by Consolidate.
+        var tblBase = IrTestDocuments.FromBodyXml(Table("", "<w:tcW w:w=\"4000\" w:type=\"dxa\"/>"));
+        var tblRev = IrTestDocuments.FromBodyXml(Table("", "<w:tcW w:w=\"4000\" w:type=\"dxa\"/>", grid: "<w:gridCol w:w=\"6000\"/>"));
+        var tblMerged = DocxDiff.Consolidate(tblBase, new[] { new DocxDiffReviewer { Document = tblRev, Author = "R" } });
+        Assert.Empty(BodyOf(tblMerged).Descendants(W + "tblGridChange"));
     }
 
     // ------------------------------------------------------------------ the WmlComparer oracle
