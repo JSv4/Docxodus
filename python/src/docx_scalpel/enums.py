@@ -26,6 +26,7 @@ __all__ = [
     "EmptyParagraphMode",
     "AnchorIdRendering",
     "RegexOptions",
+    "ConflictResolution",
 ]
 
 
@@ -134,6 +135,47 @@ class WhitespaceMode(IntEnum):
     NORMALIZE = 1
 
 
+class DocxDiffRevisionType(str, Enum):
+    """Kind of a :class:`DocxDiffRevision` from ``docx_diff_get_revisions``.
+
+    String-valued so the wire JSON (the .NET ``DocxDiffRevisionType`` name)
+    round-trips transparently.
+    """
+
+    INSERTED = "Inserted"
+    DELETED = "Deleted"
+    MOVED = "Moved"
+    FORMAT_CHANGED = "FormatChanged"
+
+    @classmethod
+    def _from_wire(cls, raw: str) -> "DocxDiffRevisionType":
+        return cls(raw)
+
+
+class DocxDiffRevisionGranularity(IntEnum):
+    """How ``docx_diff_get_revisions`` projects the edit script to revisions.
+
+    ``FINE`` (the default) is the engine's native one-revision-per-token-span
+    grain; ``WML_COMPARER_COMPATIBLE`` coalesces to counts/texts comparable to
+    the shipped ``WmlComparer``. Integer-coded to match the .NET enum positions.
+    """
+
+    FINE = 0
+    WML_COMPARER_COMPATIBLE = 1
+
+
+class DocxDiffFormatComparison(IntEnum):
+    """How ``docx_diff`` compares run formatting.
+
+    ``MODELED_ONLY`` (the default) compares only the modeled rPr fields;
+    ``FULL`` includes the unmodeled rPr digest. Integer-coded to match the
+    .NET enum positions.
+    """
+
+    MODELED_ONLY = 0
+    FULL = 1
+
+
 class TrackedChangeMode(str, Enum):
     """How mutations land in the underlying OOXML."""
 
@@ -164,6 +206,17 @@ class AnchorIdRendering(IntEnum):
     FULL_UNID = 0
     ABBREVIATED = 1
     SEQUENTIAL = 2
+
+
+class ConflictResolution(IntEnum):
+    """How ``docx_diff_consolidate`` resolves competing edits at the same base span.
+
+    Integer-coded to match the .NET ``ConflictResolution`` enum positions.
+    """
+
+    BASE_WINS = 0
+    FIRST_REVIEWER_WINS = 1
+    STACK_ALL = 2
 
 
 class RegexOptions(IntFlag):

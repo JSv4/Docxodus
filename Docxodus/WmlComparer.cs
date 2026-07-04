@@ -2106,7 +2106,9 @@ namespace Docxodus
             return node;
         }
 
-        private static void CopyMissingStylesFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
+        // internal (was private): reused by Docxodus.Ir.Diff.IrMarkupRenderer for styles continuity when
+        // assembling a tracked-revisions document from the LEFT package + RIGHT-side inserted content.
+        internal static void CopyMissingStylesFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
         {
             var revisionsStylesXDoc = wDocTo.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
             var afterStylesXDoc = wDocFrom.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
@@ -2135,7 +2137,10 @@ namespace Docxodus
         /// the numbering definitions from the revised document are preserved in the comparison result.
         /// Fixes GitHub issue: https://github.com/dotnet/Open-XML-SDK/issues/1634
         /// </summary>
-        private static void CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
+        // internal (was private): reused by Docxodus.Ir.Diff.IrMarkupRenderer for numbering continuity
+        // (esp. legal-numbering preservation, GitHub #1634) when right-only content carries numbering the
+        // LEFT package lacks.
+        internal static void CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
         {
             var fromNumberingPart = wDocFrom.MainDocumentPart.NumberingDefinitionsPart;
             if (fromNumberingPart == null)
@@ -2225,12 +2230,7 @@ namespace Docxodus
                 cloned.SetAttributeValue(W.abstractNumId, targetId);
                 abstractNumIdMap[fromAbstractNumId.Value] = targetId;
 
-                // Add in correct position (before w:num elements per schema order)
-                var firstNum = toNumberingXDoc.Root.Elements(W.num).FirstOrDefault();
-                if (firstNum != null)
-                    firstNum.AddBeforeSelf(cloned);
-                else
-                    toNumberingXDoc.Root.Add(cloned);
+                AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
             }
 
             // Copy num elements that don't exist in destination
@@ -2267,7 +2267,7 @@ namespace Docxodus
                     var abstractNumIdElement = cloned.Element(W.abstractNumId);
                     if (abstractNumIdElement != null)
                         abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
-                    toNumberingXDoc.Root.Add(cloned);
+                    AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
                 }
                 else
                 {
@@ -2279,11 +2279,34 @@ namespace Docxodus
                         if (abstractNumIdElement != null)
                             abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
                     }
-                    toNumberingXDoc.Root.Add(cloned);
+                    AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
                 }
             }
 
             toNumberingPart.PutXDocument(toNumberingXDoc);
+        }
+
+        /// <summary>
+        /// Insert a child into <c>w:numbering</c> respecting the schema order
+        /// <c>w:numPicBullet* w:abstractNum* w:num* w:numIdMacAtCleanup?</c>: place it BEFORE the first existing
+        /// child of a higher rank (so a copied <c>w:num</c> lands before a trailing <c>w:numIdMacAtCleanup</c>
+        /// rather than after it — appending blindly produced a Sch_UnexpectedElementContentExpectingComplex).
+        /// </summary>
+        private static void AddNumberingChildInSchemaOrder(XElement numbering, XElement child)
+        {
+            static int Rank(XElement e) => e.Name.LocalName switch
+            {
+                "numPicBullet" => 0,
+                "abstractNum" => 1,
+                "num" => 2,
+                _ => 3,             // numIdMacAtCleanup (and any trailing element) sorts last
+            };
+            int rank = Rank(child);
+            var firstLater = numbering.Elements().FirstOrDefault(e => Rank(e) > rank);
+            if (firstLater != null)
+                firstLater.AddBeforeSelf(child);
+            else
+                numbering.Add(child);
         }
 
         /// <summary>
@@ -6198,13 +6221,32 @@ namespace Docxodus
             return elementList;
         }
 
-        private static XElement MoveRelatedPartsToDestination(PackagePart partOfDeletedContent, PackagePart partInNewDocument,
-            XElement contentElement)
+        // internal (was private): reused by Docxodus.Ir.Diff.IrMarkupRenderer to import right-side media
+        // (image embeds on inserted/equal content) into the left-based output package, rewriting the cloned
+        // element's relationship ids in place. Self-contained part-copy + fresh-rId mint + recursive xml fixup.
+        //
+        // <paramref name="skipDanglingRelationships"/> scopes a behavior change to the IR caller ONLY. For the
+        // old engine (the WmlComparer.Compare pipeline, default false) a content element that references an rId
+        // resolving to NO relationship in its source part is a corrupt/incoherent document, and the historic
+        // contract is a LOUD failure — that path is restored here. The IR renderer (true) assembles its output
+        // on the LEFT package and pre-imports hyperlink/external relationships separately
+        // (ImportHyperlinkAndExternalRelationships), so by the time it calls in, a remaining unresolvable rId is
+        // a benign dangling reference on cloned right-side content whose TEXT is unchanged — it must be skipped,
+        // not thrown, because the ContentHash round-trip still holds (precise rId remap is tracked separately).
+        internal static XElement MoveRelatedPartsToDestination(PackagePart partOfDeletedContent, PackagePart partInNewDocument,
+            XElement contentElement, bool skipDanglingRelationships = false, bool skipHeaderFooterReferences = false)
         {
             var elementsToUpdate = contentElement
                 .Descendants()
                 .Where(d => d.Attributes().Any(a => ComparisonUnitWord.s_RelationshipAttributeNames.Contains(a.Name)))
                 .Where(d => d.Name != C.externalData)
+                // The IR renderer clones whole blocks (paragraphs), which can carry a w:sectPr with
+                // w:headerReference/w:footerReference. Header/footer scopes are NOT diffed, so the LEFT
+                // package's parts (already present, same r:ids — both sides derive from one base) are
+                // authoritative; importing the RIGHT's would duplicate them as P<guid> parts. The legacy
+                // WmlComparer callers only ever pass a w:drawing, so they never opt in (default false).
+                .Where(d => !skipHeaderFooterReferences
+                            || (d.Name != W.headerReference && d.Name != W.footerReference))
                 .ToList();
             foreach (var element in elementsToUpdate)
             {
@@ -6215,6 +6257,19 @@ namespace Docxodus
                 foreach (var att in attributesToUpdate)
                 {
                     var rId = (string)att;
+
+                    // A DANGLING rId — one that names no relationship at all in this source part — is the trigger.
+                    // (Hyperlink/external rels are recreated by the caller BEFORE this runs, so a surviving
+                    // unresolvable rId here is genuinely dangling, NOT an external-hyperlink rel.) The old engine
+                    // treats that as a corrupt document and fails loudly; only the IR caller, which tolerates a
+                    // dangling reference on unchanged-text content, opts into skipping it.
+                    if (!partOfDeletedContent.RelationshipExists(rId))
+                    {
+                        if (skipDanglingRelationships)
+                            continue;
+                        throw new FileFormatException(
+                            $"Content references relationship id '{rId}' that does not exist in the source part.");
+                    }
 
                     var relationshipForDeletedPart = partOfDeletedContent.GetRelationship(rId);
                     if (relationshipForDeletedPart == null)
@@ -6273,7 +6328,7 @@ namespace Docxodus
                             using (var stream = newPart.GetStream())
                             {
                                 newPartXDoc = XDocument.Load(stream);
-                                MoveRelatedPartsToDestination(relatedPackagePart, newPart, newPartXDoc.Root);
+                                MoveRelatedPartsToDestination(relatedPackagePart, newPart, newPartXDoc.Root, skipDanglingRelationships);
                             }
                             using (var stream = newPart.GetStream())
                                 newPartXDoc.Save(stream);

@@ -30,6 +30,10 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static void CloseSession(int handle) => DocxSessionOps.CloseSession(handle);
 
+    /// <summary>Mint a complete blank DOCX (a "New document" seed) as bytes.</summary>
+    [JSExport]
+    public static byte[] CreateBlankDocx() => DocxSessionOps.CreateBlankDocx();
+
     [JSExport]
     public static string Project(int handle) => DocxSessionOps.Project(handle);
 
@@ -42,6 +46,22 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string ProjectAnchor(int h, string anchorId, int depth) =>
         DocxSessionOps.ProjectAnchor(h, anchorId, (ProjectionDepth)depth);
+
+    /// <summary>
+    /// Render a single block from the live session to faithful HTML — the editor's
+    /// incremental per-block re-render. Returns the block's HTML element, or a JSON
+    /// <c>{"error": "..."}</c> object on failure (rendered HTML always begins with
+    /// '&lt;', so the leading character disambiguates success from error).
+    /// </summary>
+    [JSExport]
+    public static string RenderBlockHtml(int h, string anchorId, string cssPrefix, bool fabricateClasses)
+    {
+        try { return DocxSessionOps.RenderBlockHtml(h, anchorId, cssPrefix, fabricateClasses); }
+        // Reflection-free error JSON: the trimmed WASM build disables reflection-based
+        // JsonSerializer, so serializing an anonymous type here would itself throw
+        // (JsonSerializerIsReflectionDisabled) and mask the real failure as an uncaught crash.
+        catch (System.Exception ex) { return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}"; }
+    }
 
     [JSExport]
     public static string ReplaceText(int h, string anchor, string md) =>
@@ -83,6 +103,40 @@ public static partial class DocxSessionBridge
     public static string MergeParagraphs(int h, string first, string second) =>
         DocxSessionOps.MergeParagraphs(h, first, second);
 
+    /// <summary>
+    /// Insert an empty paragraph carrying a bottom border (an S-1-style horizontal rule)
+    /// before/after the anchor. <paramref name="ruleJson"/> is an optional border-edge object
+    /// ({ style?, size?, color?, space? }); empty string uses the default rule.
+    /// </summary>
+    [JSExport]
+    public static string InsertHorizontalRule(int h, string anchor, string posStr, string ruleJson) =>
+        DocxSessionOps.InsertHorizontalRule(h, anchor, DocxSessionJson.ParsePos(posStr), ruleJson);
+
+    /// <summary>
+    /// Insert a rows×cols table before/after the anchor. <paramref name="optionsJson"/> is a
+    /// TableInsertOptions object ({ borderless?, cellContents?: string[], cellAlignment? }).
+    /// Returns an EditResult whose <c>created</c> lists the cell-paragraph anchors (row-major).
+    /// </summary>
+    [JSExport]
+    public static string InsertTable(int h, string anchor, string posStr, int rows, int cols, string optionsJson) =>
+        DocxSessionOps.InsertTable(h, anchor, DocxSessionJson.ParsePos(posStr), rows, cols, optionsJson);
+
+    [JSExport]
+    public static string InsertTableRow(int h, string cellAnchor, string posStr) =>
+        DocxSessionOps.InsertTableRow(h, cellAnchor, DocxSessionJson.ParsePos(posStr));
+
+    [JSExport]
+    public static string InsertTableColumn(int h, string cellAnchor, string posStr) =>
+        DocxSessionOps.InsertTableColumn(h, cellAnchor, DocxSessionJson.ParsePos(posStr));
+
+    [JSExport]
+    public static string DeleteTableRow(int h, string cellAnchor) =>
+        DocxSessionOps.DeleteTableRow(h, cellAnchor);
+
+    [JSExport]
+    public static string DeleteTableColumn(int h, string cellAnchor) =>
+        DocxSessionOps.DeleteTableColumn(h, cellAnchor);
+
     [JSExport]
     public static string ApplyFormat(int h, string anchor, string spanJson, string opJson) =>
         DocxSessionOps.ApplyFormat(h, anchor, ParseSpan(spanJson), DocxSessionJson.ParseFormatOp(opJson));
@@ -100,6 +154,15 @@ public static partial class DocxSessionBridge
     public static string SetParagraphStyle(int h, string anchor, string styleId) =>
         DocxSessionOps.SetParagraphStyle(h, anchor, styleId);
 
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.SetParagraphFormat"/>. <paramref name="opJson"/> is
+    /// { alignment?: "left"|"center"|"right"|"justify", indentDelta?: int (twips),
+    /// pageBreakBefore?: bool }; omitted fields are left unchanged.
+    /// </summary>
+    [JSExport]
+    public static string SetParagraphFormat(int h, string anchor, string opJson) =>
+        DocxSessionOps.SetParagraphFormat(h, anchor, DocxSessionJson.ParseParagraphFormatOp(opJson));
+
     [JSExport]
     public static string SetListLevel(int h, string anchor, int delta) =>
         DocxSessionOps.SetListLevel(h, anchor, delta);
@@ -107,6 +170,15 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string RemoveListMembership(int h, string anchor) =>
         DocxSessionOps.RemoveListMembership(h, anchor);
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ApplyListFormat"/>. Promotes a plain paragraph to a
+    /// bullet/numbered list item (synthesizing a numbering definition if needed) or removes
+    /// list membership. <paramref name="kind"/> is "bullet" | "decimal" | "none".
+    /// </summary>
+    [JSExport]
+    public static string ApplyListFormat(int h, string anchor, string kind) =>
+        DocxSessionOps.ApplyListFormat(h, anchor, DocxSessionJson.ParseListFormat(kind));
 
     [JSExport]
     public static string ReplaceCellContent(int h, string anchor, string md) =>

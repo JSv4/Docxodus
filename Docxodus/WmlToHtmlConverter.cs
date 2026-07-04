@@ -265,6 +265,26 @@ namespace Docxodus
         /// </summary>
         public bool GeneratePageCss;
 
+        /// <summary>
+        /// When true, stamp block-level HTML elements (p, h1-h6, li, table) with a
+        /// <c>data-anchor</c> attribute carrying the source element's PtOpenXml:Unid.
+        /// Enables client-side addressing of blocks (editor incremental re-render).
+        /// Source elements must already carry Unids. Default: false.
+        /// </summary>
+        public bool StampAnchors;
+
+        /// <summary>
+        /// Skip MarkupSimplifier's pass over the style-definition parts (styles + stylesWithEffects).
+        /// That pass only strips rendering-irrelevant metadata (rsids; styles carry no body runs /
+        /// bookmarks / proof errors to remove or merge), so it cannot change the resolved formatting
+        /// or the emitted HTML — but on a large style gallery (e.g. python-docx's ~160-style template)
+        /// it is the dominant cost of a single-block render (~70ms of ~73ms). The incremental
+        /// per-block render (<see cref="Internal.HtmlConversionOps.RenderBlockHtml"/>) sets this so a
+        /// keystroke commit doesn't re-walk the whole 400KB+ styles part every time. Internal-only;
+        /// the full-document render leaves it false, so its output is unchanged. Default: false.
+        /// </summary>
+        internal bool SkipFormattingPartsSimplification;
+
         public WmlToHtmlConverterSettings()
         {
             PageTitle = "";
@@ -299,6 +319,7 @@ namespace Docxodus
             DocumentLanguage = null;
             ResolveThemeColors = true;
             GeneratePageCss = false;
+            StampAnchors = false;
         }
 
         public WmlToHtmlConverterSettings(HtmlConverterSettings htmlConverterSettings)
@@ -856,6 +877,7 @@ namespace Docxodus
                 RemoveSoftHyphens = true,
                 RemoveGoBackBookmark = true,
                 ReplaceTabsWithSpaces = false,
+                SkipFormattingPartsSimplification = htmlConverterSettings.SkipFormattingPartsSimplification,
             };
             MarkupSimplifier.SimplifyMarkup(wordDoc, simplifyMarkupSettings);
 
@@ -4213,22 +4235,31 @@ namespace Docxodus
             // Check for page break (w:br with w:type="page")
             var breakType = (string)element.Attribute(W.type);
 
-            // In pagination mode, emit a page break marker div for page breaks
+            // In pagination mode, emit a page break marker div for page breaks.
+            // NOTE: the empty XText child is load-bearing. Without a child node an empty
+            // XElement serializes as a self-closing <div .../>, which a browser's HTML parser
+            // treats as an UNCLOSED div (the slash is ignored for non-void elements). Every
+            // following sibling — including the visible #pagination-container — then nests inside
+            // the display:none staging and the paginated view renders blank. The empty text node
+            // forces an explicit </div> so staging and container stay siblings. (HC008d)
             if (settings.RenderPagination == PaginationMode.Paginated && breakType == "page")
             {
                 var prefix = settings.PaginationCssClassPrefix ?? "page-";
                 return new XElement(Xhtml.div,
                     new XAttribute("class", prefix + "break"),
-                    new XAttribute("data-page-break", "true"));
+                    new XAttribute("data-page-break", "true"),
+                    new XText(string.Empty));
             }
 
-            // Column breaks - also mark for pagination but render as line break normally
+            // Column breaks - also mark for pagination but render as line break normally.
+            // Same self-closing-div hazard as page breaks above — force an explicit close tag.
             if (settings.RenderPagination == PaginationMode.Paginated && breakType == "column")
             {
                 var prefix = settings.PaginationCssClassPrefix ?? "page-";
                 return new XElement(Xhtml.div,
                     new XAttribute("class", prefix + "column-break"),
-                    new XAttribute("data-column-break", "true"));
+                    new XAttribute("data-column-break", "true"),
+                    new XText(string.Empty));
             }
 
             XElement span = null;
@@ -4547,6 +4578,9 @@ namespace Docxodus
                 // new XAttribute("cellpadding", 0),
                 tableDirection,
                 isBorderless ? new XAttribute("data-borderless", "true") : null,
+                settings.StampAnchors && (string)element.Attribute(PtOpenXml.Unid) != null
+                    ? new XAttribute("data-anchor", (string)element.Attribute(PtOpenXml.Unid))
+                    : null,
                 element.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, currentMarginLeft)));
             table.AddAnnotation(style);
             var jc = (string)element.Elements(W.tblPr).Elements(W.jc).Attributes(W.val).FirstOrDefault() ?? "left";
@@ -5019,6 +5053,9 @@ namespace Docxodus
             var style = DefineParagraphStyle(paragraph, elementName, suppressTrailingWhiteSpace, currentMarginLeft, isBidi, suppressLeadingWhiteSpace);
             var rtl = isBidi ? new XAttribute("dir", "rtl") : new XAttribute("dir", "ltr");
             var firstMark = isBidi ? new XEntity("#x200f") : null;
+            var anchorAttr = settings.StampAnchors && (string)paragraph.Attribute(PtOpenXml.Unid) != null
+                ? new XAttribute("data-anchor", (string)paragraph.Attribute(PtOpenXml.Unid))
+                : null;
 
             // Analyze initial runs to see whether we have a tab, in which case we will render
             // a span with a defined width and ignore the tab rather than rendering the text
@@ -5043,6 +5080,7 @@ namespace Docxodus
                 var paraElement1 = new XElement(elementName,
                     rtl,
                     firstMark,
+                    anchorAttr,
                     ConvertContentThatCanContainFields(wordDoc, settings, paragraph.Elements()));
                 paraElement1.AddAnnotation(style);
                 return paraElement1;
@@ -5055,6 +5093,7 @@ namespace Docxodus
             var paraElement = new XElement(elementName,
                 rtl,
                 firstMark,
+                anchorAttr,
                 txElementsPrecedingTab,
                 ConvertContentThatCanContainFields(wordDoc, settings, elementsSucceedingTab));
             paraElement.AddAnnotation(style);
@@ -5069,6 +5108,13 @@ namespace Docxodus
             var tabWidth = tabElement != null
                 ? (decimal?) tabElement.Attribute(PtOpenXml.TabWidth) ?? 0m
                 : 0m;
+            // When the tab is the suffix tab of a list-item marker, tag the wrapper span so the
+            // whole marker (number/bullet glyph AND this tab) is excluded from editor offset math.
+            // The number run is tagged in ConvertRun, but the tab span renders via ProcessTab and
+            // would otherwise contribute a stray character to caret offsets (breaks Enter at EOL).
+            var listMarkerAttr = firstTabRun?.Attribute(PtOpenXml.ListItemRun) != null
+                ? new XAttribute("data-list-marker", "true")
+                : null;
             var precedingElementsWidth = elementsPrecedingTab
                 .Elements()
                 .Where(c => c.Attributes(PtOpenXml.TabWidth).Any())
@@ -5093,7 +5139,7 @@ namespace Docxodus
                 if (tabSpan != null)
                     contentList.Add(tabSpan);
 
-                var span = new XElement(Xhtml.span, contentList);
+                var span = new XElement(Xhtml.span, listMarkerAttr, contentList);
                 // Use min-width instead of width so the container expands to fit content
                 // when text is wider than the calculated tab position. This fixes issues
                 // where list numbers (e.g., "2.3") overlap with heading text because the
@@ -5121,7 +5167,7 @@ namespace Docxodus
                 // If we have a tab span with leaders, add it after the element
                 if (tabSpan != null)
                 {
-                    var wrapperSpan = new XElement(Xhtml.span, element, tabSpan);
+                    var wrapperSpan = new XElement(Xhtml.span, listMarkerAttr, element, tabSpan);
                     var wrapperStyle = new Dictionary<string, string>
                     {
                         { "display", "inline-block" },
@@ -5135,7 +5181,7 @@ namespace Docxodus
             else if (tabSpan != null)
             {
                 // Only the tab, no preceding content
-                var wrapperSpan = new XElement(Xhtml.span, tabSpan);
+                var wrapperSpan = new XElement(Xhtml.span, listMarkerAttr, tabSpan);
                 var wrapperStyle = new Dictionary<string, string>
                 {
                     { "display", "inline-block" },
@@ -5370,6 +5416,12 @@ namespace Docxodus
         {
             var rPr = run.Element(W.rPr);
 
+            // List-marker runs (the generated number/bullet + its suffix tab, both tagged by
+            // FormattingAssembler with PtOpenXml.ListItemRun) are not part of the paragraph's
+            // editable content. Stamp data-list-marker so an editor can make them
+            // non-editable and exclude them from caret/offset math.
+            var isListMarker = run.Attribute(PtOpenXml.ListItemRun) != null;
+
             // Skip runs that only contain w:footnoteRef or w:endnoteRef.
             // These are placeholder elements in footnote/endnote text that Word uses to display
             // the note number. Since we add the note number separately (via footnote-number span
@@ -5399,7 +5451,30 @@ namespace Docxodus
                 return null;
 
             var style = DefineRunStyle(run);
-            object content = run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
+
+            // List-marker glyphs in a symbol font (e.g. Word's default bullet U+F0B7 in Symbol, or
+            // U+F0A7 in Wingdings) render as a blank box without the proprietary font installed. Map
+            // them to their Unicode equivalents and drop the symbol font so they render in the page's
+            // normal font. Scoped to markers (FormattingAssembler's ListItemRun) so body-text symbol
+            // runs are untouched; if nothing maps, the original text + font are left as-is.
+            object content;
+            if (isListMarker && style.TryGetValue("font-family", out var markerFont) &&
+                Internal.SymbolFontMapper.IsSymbolFont(markerFont))
+            {
+                var mappedAny = false;
+                content = run.Elements().Select(e =>
+                {
+                    if (e.Name != W.t) return ConvertToHtmlTransform(wordDoc, settings, e, false, 0m);
+                    var mapped = Internal.SymbolFontMapper.MapText(e.Value, markerFont);
+                    if (mapped != e.Value) mappedAny = true;
+                    return (object)new XText(mapped);
+                }).ToList();
+                if (mappedAny) style.Remove("font-family");
+            }
+            else
+            {
+                content = run.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m));
+            }
 
             // Wrap content in h:sup or h:sub elements as necessary.
             if (rPr.Element(W.vertAlign) != null)
@@ -5425,11 +5500,12 @@ namespace Docxodus
             XEntity runEndMark;
             DetermineRunMarks(run, rPr, style, out runStartMark, out runEndMark);
 
-            if (style.Any() || langAttribute != null || runStartMark != null)
+            if (style.Any() || langAttribute != null || runStartMark != null || isListMarker)
             {
                 style.AddIfMissing("margin", "0");
                 style.AddIfMissing("padding", "0");
                 var xe = new XElement(Xhtml.span,
+                    isListMarker ? new XAttribute("data-list-marker", "true") : null,
                     langAttribute,
                     runStartMark,
                     content,
@@ -6309,13 +6385,17 @@ namespace Docxodus
                     BorderOverride(border1, border2);
             }
 
-            if ((decimal)border1.Attribute(W.sz) > (decimal)border2.Attribute(W.sz))
+            // w:sz is OPTIONAL on a border and absent on w:val="none" borders (e.g. a borderless
+            // layout table). Only "nil" is guarded above, so a "none" border reaches here; read sz
+            // null-safe (missing = 0 width) rather than (decimal)Attribute(...), which throws
+            // ArgumentNullException on the missing attribute and aborts the whole conversion.
+            if (((decimal?)border1.Attribute(W.sz) ?? 0) > ((decimal?)border2.Attribute(W.sz) ?? 0))
             {
                 BorderOverride(border1, border2);
                 return;
             }
 
-            if ((decimal)border1.Attribute(W.sz) < (decimal)border2.Attribute(W.sz))
+            if (((decimal?)border1.Attribute(W.sz) ?? 0) < ((decimal?)border2.Attribute(W.sz) ?? 0))
             {
                 BorderOverride(border2, border1);
                 return;
@@ -7145,12 +7225,31 @@ namespace Docxodus
             return currentSection;
         }
 
+        /// <summary>
+        /// True when a <c>w:pBdr</c> declares at least one visible border side. A side is invisible
+        /// when its <c>w:val</c> is absent, <c>"nil"</c>, or <c>"none"</c>. Word renders no border for
+        /// an all-nil pBdr, so for grouping purposes it must be treated as "no border".
+        /// </summary>
+        private static bool HasVisibleBorder(XElement pBdr)
+        {
+            return pBdr.Elements().Any(side =>
+            {
+                var val = (string)side.Attribute(W.val);
+                return val != null && val != "nil" && val != "none";
+            });
+        }
+
         private static object CreateBorderDivs(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings settings, IEnumerable<XElement> elements)
         {
             return elements.GroupAdjacent(e =>
                 {
                     var pBdr = e.Elements(W.pPr).Elements(W.pBdr).FirstOrDefault();
-                    if (pBdr != null)
+                    // Only an actually-visible border groups paragraphs into a border <div>. A pBdr
+                    // whose sides are all "nil"/"none" (e.g. the empty pBdr Google Docs stamps on every
+                    // paragraph) is no border at all — wrapping such a paragraph in a div would relocate
+                    // its left indent onto the div and force the paragraph's own margin-left to 0, so a
+                    // single-block re-render (the editor's incremental path) silently loses indentation.
+                    if (pBdr != null && HasVisibleBorder(pBdr))
                     {
                         var indStr = string.Empty;
                         var ind = e.Elements(W.pPr).Elements(W.ind).FirstOrDefault();

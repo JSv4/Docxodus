@@ -133,6 +133,10 @@ namespace Docxodus
                         pPr = new XElement(W.pPr);
                     var new_pPr = new XElement(pPr); // clone it
                     new_pPr.Add(RejectRevisionsForPartTransform(element.Element(W.rPr)));
+                    // An inline w:sectPr is OUTSIDE pPrChange scope (the inner pPr is CT_PPrBase, which
+                    // excludes it) — Word keeps the section break when the property change is rejected.
+                    // Carry it over (after rPr: schema order is props < rPr < sectPr < pPrChange).
+                    new_pPr.Add(RejectRevisionsForPartTransform(element.Element(W.sectPr)));
                     return RejectRevisionsForPartTransform(new_pPr);
                 }
 
@@ -215,8 +219,22 @@ namespace Docxodus
                 if (element.Name == W.sectPr &&
                     element.Element(W.sectPrChange) != null)
                 {
-                    var newSectPr = element.Element(W.sectPrChange).Element(W.sectPr);
-                    return RejectRevisionsForPartTransform(newSectPr);
+                    // The sectPrChange inner is CT_SectPrBase — the OLD section PROPERTIES only; it
+                    // excludes the header/footer references (EG_HdrFtrReferences) and the change marker,
+                    // which are OUTSIDE the tracked property change. Rebuild the rejected sectPr by keeping
+                    // the CURRENT references and restoring the old properties (Word's own behavior), rather
+                    // than replacing the whole element with the reference-less inner — otherwise rejecting a
+                    // sectPrChange would silently drop the section's headers/footers.
+                    var oldSectPr = element.Element(W.sectPrChange).Element(W.sectPr);
+                    var rebuilt = new XElement(W.sectPr,
+                        oldSectPr?.Attributes() ?? element.Attributes());
+                    foreach (var refEl in element.Elements()
+                                 .Where(e => e.Name == W.headerReference || e.Name == W.footerReference))
+                        rebuilt.Add(new XElement(refEl));
+                    if (oldSectPr != null)
+                        foreach (var propEl in oldSectPr.Elements())
+                            rebuilt.Add(new XElement(propEl));
+                    return RejectRevisionsForPartTransform(rebuilt);
                 }
 
                 ////////////////////////////////////////////////////////////////////////////////////
@@ -628,8 +646,13 @@ namespace Docxodus
       </w:r>
     </w:p>
 #endif
+                // A deleted run directly under a w:p OR under a w:hyperlink (a deleted hyperlink-text run; the
+                // schema nests the revision marker INSIDE the link, so its parent is w:hyperlink, not w:p). Reject
+                // restores it by reversing w:del → w:ins. The hyperlink case is what the IR produces for a
+                // changed/removed hyperlink (WmlComparer never hits it — it strips hyperlinks pre-compare via
+                // RemoveHyperlinks — so this only ADDS handling for a previously-unhandled valid shape).
                 if (element.Name == W.del &&
-                    parent.Name == W.p)
+                    (parent.Name == W.p || parent.Name == W.hyperlink))
                 {
                     return new XElement(W.ins,
                         element.Nodes().Select(n => ReverseRevisionsTransform(n, rri)));
@@ -707,8 +730,11 @@ namespace Docxodus
       </w:r>
     </w:p>
 #endif
+                // An inserted run directly under a w:p OR under a w:hyperlink (an inserted hyperlink-text run).
+                // Reject removes the insertion by reversing w:ins → w:del. The hyperlink case is the symmetric
+                // partner of the deleted-hyperlink-run rule above (see its note) — additive, valid-shape only.
                 if (element.Name == W.ins &&
-                    parent.Name == W.p)
+                    (parent.Name == W.p || parent.Name == W.hyperlink))
                 {
                     var newRri = new ReverseRevisionsInfo() { InInsert = true };
                     return new XElement(W.del,
@@ -1669,6 +1695,16 @@ namespace Docxodus
             return node;
         }
 
+        /// <summary>True iff a (transformed) element still carries a run or other inline content child — used to
+        /// decide whether an emptied <c>w:hyperlink</c> shell (all its runs deleted/inserted-then-collapsed)
+        /// should survive. A hyperlink with only bookmark/proofErr/other zero-content markers, or nothing, is
+        /// dropped. Conservative: any <c>w:r</c>, <c>w:smartTag</c>, <c>w:ins</c>, <c>w:del</c>, or nested
+        /// <c>w:hyperlink</c> child counts as content.</summary>
+        private static bool HasRunContent(XElement element) =>
+            element.Elements().Any(e =>
+                e.Name == W.r || e.Name == W.smartTag || e.Name == W.ins || e.Name == W.del ||
+                e.Name == W.hyperlink || e.Name == W.fldSimple || e.Name == W.sdt);
+
         private static object AcceptAllOtherRevisionsTransform(XNode node)
         {
             XElement element = node as XElement;
@@ -1744,6 +1780,20 @@ namespace Docxodus
                     element.Elements(W.trPr).Elements(W.del).Any())
                     return null;
 
+                // Accept revisions for a wholly-deleted table: a w:tbl that HAS w:tr children but EVERY one of
+                // them is row-deleted (w:trPr/w:del) would otherwise collapse to an empty <w:tbl> shell (an
+                // invalid table — a table requires ≥1 row). Drop the whole table so a fully-deleted (or, under
+                // reject, a fully-inserted) table leaves nothing behind, not a remnant shell. This is the
+                // table-level analogue of the per-row rule above and is required for the accept/reject content
+                // round-trip of a whole inserted/deleted table.
+
+                if (element.Name == W.tbl)
+                {
+                    var rows = element.Elements(W.tr).ToList();
+                    if (rows.Count > 0 && rows.All(tr => tr.Elements(W.trPr).Elements(W.del).Any()))
+                        return null;
+                }
+
                 // Accept deleted text in paragraphs.
 
                 if (element.Name == W.del)
@@ -1765,6 +1815,18 @@ namespace Docxodus
                     (string)element.Attribute(W.vMerge) == "cont")
                     return new XElement(W.vMerge,
                         new XAttribute(W.val, "continue"));
+
+                // A w:hyperlink whose entire content was an inserted (now deleted-on-accept) or deleted run
+                // collapses to an EMPTY shell. Drop it — an empty hyperlink is invisible and an artifact of a
+                // hyperlink-text revision (the IR's del-old-link/ins-new-link shape; WmlComparer never produces
+                // one because it strips hyperlinks pre-compare). Checked AFTER transforming children so it only
+                // fires when the link genuinely has no surviving run/content.
+                if (element.Name == W.hyperlink)
+                {
+                    var transformed = new XElement(element.Name, element.Attributes(),
+                        element.Nodes().Select(n => AcceptAllOtherRevisionsTransform(n)));
+                    return HasRunContent(transformed) ? transformed : null;
+                }
 
                 // Otherwise do identity clone.
                 return new XElement(element.Name,
@@ -2681,11 +2743,15 @@ namespace Docxodus
                                 1;
                             int newGridSpan = gridSpan + g.Count() - 1;
                             XElement currentTcPr = g.First().Elements(W.tcPr).FirstOrDefault();
+                            // The absorbing cell may have NO tcPr at all (minimal cells) — synthesize one
+                            // carrying just the widened gridSpan instead of dereferencing null.
                             XElement newTcPr = new XElement(W.tcPr,
                                 currentTcPr != null ? currentTcPr.Attributes() : null,
                                 new XElement(W.gridSpan,
                                     new XAttribute(W.val, newGridSpan)),
-                                currentTcPr.Elements().Where(e => e.Name != W.gridSpan));
+                                currentTcPr != null
+                                    ? currentTcPr.Elements().Where(e => e.Name != W.gridSpan)
+                                    : null);
                             var orderedTcPr = new XElement(W.tcPr,
                                 newTcPr.Elements().OrderBy(e =>
                                 {

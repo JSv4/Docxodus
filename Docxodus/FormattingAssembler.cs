@@ -1723,10 +1723,14 @@ namespace Docxodus
                     return inside1;
             }
 
-            if ((int)inside1.Attribute(W.sz) > (int)sideToReplace.Attribute(W.sz))
+            // w:sz is OPTIONAL on a border (Word omits it for w:val="none" borders, as on a
+            // borderless layout table — the standard S-1 cover pattern). Only "nil" is special-cased
+            // above, so a "none" border falls through to here; read sz null-safe (missing = 0 width)
+            // instead of (int)Attribute(...) which throws ArgumentNullException on the missing attr.
+            if (((int?)inside1.Attribute(W.sz) ?? 0) > ((int?)sideToReplace.Attribute(W.sz) ?? 0))
                 return inside1;
 
-            if ((int)sideToReplace.Attribute(W.sz) > (int)inside1.Attribute(W.sz))
+            if (((int?)sideToReplace.Attribute(W.sz) ?? 0) > ((int?)inside1.Attribute(W.sz) ?? 0))
                 return sideToReplace;
 
             if (BorderTypePriority.ContainsKey(inside1Val) &&
@@ -1740,10 +1744,10 @@ namespace Docxodus
                     return sideToReplace;
             }
 
-            if ((int)inside1.Attribute(W.sz) > (int)sideToReplace.Attribute(W.sz))
+            if (((int?)inside1.Attribute(W.sz) ?? 0) > ((int?)sideToReplace.Attribute(W.sz) ?? 0))
                 return inside1;
 
-            if ((int)sideToReplace.Attribute(W.sz) > (int)inside1.Attribute(W.sz))
+            if (((int?)sideToReplace.Attribute(W.sz) ?? 0) > ((int?)inside1.Attribute(W.sz) ?? 0))
                 return sideToReplace;
 
             var color1str = (string)inside1.Attribute(W.color);
