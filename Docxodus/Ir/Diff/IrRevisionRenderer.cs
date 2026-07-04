@@ -117,7 +117,7 @@ internal static class IrRevisionRenderer
         // trailing section formats and, when the MODELED fields differ, append one Section-scope FormatChanged
         // (mirrors the markup renderer's w:sectPrChange on the trailing sectPr). Appended after all body/note/
         // header-footer ops (additive ordering). Excluded from WmlComparerCompatible by the scope filter below.
-        if (settings.TrackSectionFormatChanges
+        if (settings.TrackSectionFormatChanges && settings.EmitTrailingSectionRevision
             && ctx.Left.Body.Blocks.Count > 0 && ctx.Left.Body.Blocks[^1] is IrSectionBreak lsec
             && ctx.Right.Body.Blocks.Count > 0 && ctx.Right.Body.Blocks[^1] is IrSectionBreak rsec)
         {

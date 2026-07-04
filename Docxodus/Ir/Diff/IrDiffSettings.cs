@@ -312,6 +312,16 @@ internal sealed record IrDiffSettings
     public bool TrackSectionFormatChanges { get; init; } = true;
 
     /// <summary>
+    /// DIFF-TIME setting (Consolidate B2). Whether the two-way revision renderer appends the DOCUMENT-LEVEL
+    /// trailing-<c>w:sectPr</c> FormatChanged revision (it compares the two documents' final section blocks, so
+    /// it is not a per-op revision). Default true (every two-way call reports it). The composite revision
+    /// renderer sets this FALSE for its PER-OP mini-scripts — otherwise a section-changing reviewer with N ops
+    /// would emit the same trailing-section revision N times — and instead emits it exactly once from
+    /// <c>IrCompositeScript.TrailingSectPr</c>, attributed to the section winner.
+    /// </summary>
+    public bool EmitTrailingSectionRevision { get; init; } = true;
+
+    /// <summary>
     /// REVISIONS-SURFACE setting (M2.3 Task 1). Author name stamped on every <see cref="IrRevision"/>'s
     /// <see cref="IrRevision.Author"/>. Default <c>"Open-Xml-PowerTools"</c> — copied verbatim from
     /// <c>WmlComparerSettings.AuthorForRevisions</c> (Docxodus/WmlComparer.cs ~line 54) so an IR-rendered

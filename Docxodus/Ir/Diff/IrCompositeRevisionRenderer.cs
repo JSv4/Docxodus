@@ -54,7 +54,10 @@ internal static class IrCompositeRevisionRenderer
     {
         // Mirror IrCompositeMerger's forcing. B1 turns the PARAGRAPH slice ON so a single-source pPr op reports
         // a Paragraph-scope FormatChanged authored to its reviewer; table-shell/section slices stay OFF (B2).
-        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true };
+        // EmitTrailingSectionRevision OFF: the per-op mini-scripts must NOT each append the document-level
+        // trailing-sectPr revision (a section-changing reviewer with N ops would emit it N times). It is
+        // emitted ONCE below from script.TrailingSectPr, attributed to the section winner.
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true, EmitTrailingSectionRevision = false };
 
         // Move-source pre-pass over the WHOLE composite script. Single-source ops are each rendered in
         // their own one-op mini-script (so IrRevisionRenderer honours per-op granularity/author), but a
@@ -95,6 +98,27 @@ internal static class IrCompositeRevisionRenderer
                 }
             }
         }
+
+        // TRAILING SECTION (B2): emit the document-level trailing-sectPr FormatChanged revision EXACTLY ONCE,
+        // attributed to the section winner (script.TrailingSectPr). The per-op mini-scripts have it suppressed
+        // (EmitTrailingSectionRevision=false), so this is the single authoritative section revision.
+        if (script.TrailingSectPr is { } sectWinner
+            && sectWinner.Reviewer >= 0 && sectWinner.Reviewer < reviewers.Count
+            && baseIr.Body.Blocks.Count > 0 && baseIr.Body.Blocks[^1] is IrSectionBreak baseSec)
+        {
+            var winnerBlocks = reviewers[sectWinner.Reviewer].Ir.Body.Blocks;
+            if (winnerBlocks.Count > 0 && winnerBlocks[^1] is IrSectionBreak winnerSec)
+            {
+                var details = IrModeledFormat.SectionFormatChangeDetails(baseSec.Format, winnerSec.Format);
+                if (details.ChangedPropertyNames.Count > 0)
+                    result.Add((
+                        new IrRevision(IrRevisionType.FormatChanged, string.Empty, sectWinner.Author,
+                            settings.DateTimeForRevisions, FormatChange: details,
+                            LeftAnchor: baseSec.Anchor.ToString(), RightAnchor: winnerSec.Anchor.ToString()),
+                        sectWinner.Author, null));
+            }
+        }
+
         return result;
     }
 

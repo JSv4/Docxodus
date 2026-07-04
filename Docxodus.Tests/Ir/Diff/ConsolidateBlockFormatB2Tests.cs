@@ -114,6 +114,27 @@ public class ConsolidateBlockFormatB2Tests
         Assert.Contains(revs, r => r.FormatChange is { } fc && fc.Scope == DocxDiffFormatChangeScope.Section && r.Author == "Alice");
     }
 
+    /// <summary>
+    /// The document-level trailing-section revision is emitted EXACTLY ONCE (attributed to the section winner),
+    /// not once per composite op — a reviewer editing several paragraphs AND the section must not multiply the
+    /// section revision. Pins the fix for the per-op duplication the two-way renderer would otherwise cause.
+    /// </summary>
+    [Fact]
+    public void Trailing_sectPr_change_reports_exactly_one_section_revision_across_many_ops()
+    {
+        static string ManyOps(string t1, string t2, string top) =>
+            $"<w:p><w:r><w:t>{t1}</w:t></w:r></w:p><w:p><w:r><w:t>{t2}</w:t></w:r></w:p>" +
+            $"<w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/><w:pgMar w:top=\"{top}\" w:bottom=\"1440\" w:left=\"1440\" w:right=\"1440\"/></w:sectPr>";
+        var baseDoc = IrTestDocuments.FromBodyXml(ManyOps("one", "two", "1440"));
+        var alice = IrTestDocuments.FromBodyXml(ManyOps("ONE", "TWO", "2880"));
+
+        var revs = DocxDiff.GetConsolidatedRevisions(baseDoc,
+            new[] { new DocxDiffReviewer { Author = "Alice", Document = alice } });
+        var sectionRevs = revs.Where(r => r.FormatChange is { } fc && fc.Scope == DocxDiffFormatChangeScope.Section).ToList();
+        Assert.Single(sectionRevs);
+        Assert.Equal("Alice", sectionRevs[0].Author);
+    }
+
     [Fact]
     public void Inline_sectPr_change_merges_with_marker_and_round_trips()
     {
