@@ -226,6 +226,26 @@ public class ConsolidateBlockFormatB2Tests
         Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(Reject(merged)));
     }
 
+    /// <summary>
+    /// Review finding C: multi-reviewer table-shell changes (which route through the composed-table AuthoredRows
+    /// path, not single-source) must ALSO surface on the consolidated REVISIONS surface — Table/TableRow/TableCell
+    /// scope revisions attributed to each winner — matching two-way GetRevisions.
+    /// </summary>
+    [Fact]
+    public void Multireviewer_table_shell_changes_report_consolidated_revisions()
+    {
+        var baseDoc = Base();
+        var revs = DocxDiff.GetConsolidatedRevisions(baseDoc, new[]
+        {
+            new DocxDiffReviewer { Author = "Alice", Document = IrTestDocuments.FromBodyXml(Body(tblW: "6000")) },   // tblPr
+            new DocxDiffReviewer { Author = "Bob", Document = IrTestDocuments.FromBodyXml(Body(trHeight: "500")) },  // trPr
+            new DocxDiffReviewer { Author = "Carol", Document = IrTestDocuments.FromBodyXml(Body(tcW00: "3000")) },  // tcPr
+        });
+        Assert.Contains(revs, r => r.FormatChange?.Scope == DocxDiffFormatChangeScope.Table && r.Author == "Alice");
+        Assert.Contains(revs, r => r.FormatChange?.Scope == DocxDiffFormatChangeScope.TableRow && r.Author == "Bob");
+        Assert.Contains(revs, r => r.FormatChange?.Scope == DocxDiffFormatChangeScope.TableCell && r.Author == "Carol");
+    }
+
     // ------------------------------------------------------------------ Phase 1c: multi-reviewer row/table-level shells
 
     [Theory]
@@ -287,6 +307,54 @@ public class ConsolidateBlockFormatB2Tests
         var expected = IrTestDocuments.FromBodyXml(Body(tcW00: "3000", trHeight: "500"));
         Assert.Equal(Docs.ShellSection(expected), Docs.ShellSection(Accept(merged)));
         Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(Reject(merged)));
+    }
+
+    // ------------------------------------------------------------------ row-restructure + shell interaction (review findings A/B)
+
+    private static string Tr(string trH, string txt) =>
+        $"<w:tr><w:trPr><w:trHeight w:val=\"{trH}\"/></w:trPr><w:tc><w:tcPr><w:tcW w:w=\"5000\" w:type=\"dxa\"/></w:tcPr>" +
+        $"<w:p><w:r><w:t xml:space=\"preserve\">{txt}</w:t></w:r></w:p></w:tc></w:tr>";
+    private static string Tbl(params string[] rows) =>
+        "<w:p><w:r><w:t>lead</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblW w:w=\"5000\" w:type=\"dxa\"/></w:tblPr>" +
+        "<w:tblGrid><w:gridCol w:w=\"5000\"/></w:tblGrid>" + string.Concat(rows) +
+        "</w:tbl><w:p><w:r><w:t>tail</w:t></w:r></w:p>";
+
+    /// <summary>
+    /// Review finding A: a reviewer's ROW-shell change must survive a CO-reviewer's row DELETE (which shifts
+    /// positional alignment). Anchor-aware row pairing attributes row0's trPr change even though Alice also
+    /// deleted row2 (count 3→2) — the old count-guard silently dropped it. No phantom trPr on the surviving rows.
+    /// </summary>
+    [Fact]
+    public void Row_shell_change_survives_a_cotoucher_row_delete_no_drop()
+    {
+        var baseDoc = IrTestDocuments.FromBodyXml(Tbl(Tr("300", "a"), Tr("300", "b"), Tr("300", "c")));
+        var alice = IrTestDocuments.FromBodyXml(Tbl(Tr("500", "a"), Tr("300", "b")));           // row0 trPr + delete row2
+        var bob = IrTestDocuments.FromBodyXml(Tbl(Tr("300", "a"), Tr("300", "B2"), Tr("300", "c"))); // row1 text
+
+        var merged = Consolidate(baseDoc, ConflictResolution.BaseWins, ("Alice", alice), ("Bob", bob));
+        Assert.Contains("w:trPrChange", Xml(merged));                                  // row0 trPr attributed, not dropped
+        Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(Reject(merged)));   // reject ≡ base (all rows/shells)
+        Assert.Equal(Docs.StructuralBody(baseDoc), Docs.StructuralBody(Reject(merged)));
+        // accept: row0 trPr=500 (Alice), row2 removed, no phantom trPr on the surviving rows.
+        var expected = IrTestDocuments.FromBodyXml(Tbl(Tr("500", "a"), Tr("300", "B2")));
+        Assert.Equal(Docs.ShellSection(expected), Docs.ShellSection(Accept(merged)));
+    }
+
+    /// <summary>
+    /// Review finding B: a reviewer reformatting a row's shell that ANOTHER reviewer deletes is a recorded
+    /// conflict (delete-vs-reformat), never a silent drop. The delete wins; reject restores base.
+    /// </summary>
+    [Fact]
+    public void Row_delete_vs_shell_reformat_records_conflict_never_silent()
+    {
+        var baseDoc = IrTestDocuments.FromBodyXml(Tbl(Tr("300", "a"), Tr("300", "b"), Tr("300", "c")));
+        var alice = IrTestDocuments.FromBodyXml(Tbl(Tr("300", "b"), Tr("300", "c")));           // deletes row0
+        var bob = IrTestDocuments.FromBodyXml(Tbl(Tr("500", "a"), Tr("300", "b"), Tr("300", "c"))); // row0 trPr
+
+        Assert.NotEmpty(Conflicts(baseDoc, ConflictResolution.BaseWins, ("Alice", alice), ("Bob", bob)));
+        var merged = Consolidate(baseDoc, ConflictResolution.BaseWins, ("Alice", alice), ("Bob", bob));
+        Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(Reject(merged)));
+        Assert.Equal(Docs.StructuralBody(baseDoc), Docs.StructuralBody(Reject(merged)));
     }
 
     // ------------------------------------------------------------------ Phase 3: text+format is never silently dropped

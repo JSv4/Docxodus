@@ -1646,12 +1646,13 @@ internal static class IrCompositeMerger
         ref int nextConflictId, List<IrConflict> conflicts,
         List<IrAuthoredRowOp> authoredRows)
     {
-        // Resolve each toucher's RIGHT table (by right anchor). Unresolvable → skipped (base shell kept).
-        var rights = new List<(int Reviewer, string Author, IrTable Right)>();
+        // Resolve each toucher's RIGHT table (by right anchor), keeping the op for anchor-aware row pairing.
+        // Unresolvable → skipped (base shell kept).
+        var rights = new List<(int Reviewer, string Author, IrTable Right, IrEditOp Op)>();
         foreach (var (reviewer, op) in touched)
             if (op.RightAnchor is { } ra
                 && reviewers[reviewer].Ir.AnchorIndex.TryGetValue(ra, out var rb) && rb is IrTable rt)
-                rights.Add((reviewer, reviewers[reviewer].Author, rt));
+                rights.Add((reviewer, reviewers[reviewer].Author, rt, op));
 
         string tableText = string.Join(" ", baseTable.Rows.Select(r => RowResultText(r, settings)));
 
@@ -1664,23 +1665,41 @@ internal static class IrCompositeMerger
                   .Select(r => (r.Reviewer, r.Author, r.Right.TblGridDigest, r.Right.Anchor.ToString())).ToList(),
             policy, ref nextConflictId, conflicts, tableText);
 
-        int rowCount = baseTable.Rows.Count;
-        for (int i = 0; i < rowCount; i++)
+        for (int i = 0; i < baseTable.Rows.Count; i++)
         {
             var baseRow = baseTable.Rows[i];
             string rowAnchor = baseRow.Anchor.ToString();
             string rowText = RowResultText(baseRow, settings);
-            // Only touchers whose right table row-count matches base contribute a positionally-paired right row.
-            var alignedRows = rights.Where(r => r.Right.Rows.Count == rowCount)
-                .Select(r => (r.Reviewer, r.Author, Row: r.Right.Rows[i])).ToList();
+
+            // ANCHOR-AWARE right-row resolution (NOT positional-by-index): a content toucher maps THIS base row
+            // to its right row via its TableDiff row op (so a co-toucher's row insert/delete/move never shifts
+            // the pairing → no wrong-row corruption); a pure-shell FormatOnly toucher is content-equal, so its
+            // rows are positionally aligned. A toucher that DELETED this base row contributes no right row.
+            var alignedRows = new List<(int Reviewer, string Author, IrRow Row)>();
+            foreach (var (reviewer, author, right, op) in rights)
+                if (ResolveRightRowForBaseRow(op, right, rowAnchor, i) is { } rr)
+                    alignedRows.Add((reviewer, author, rr));
+
+            var trChangers = alignedRows.Where(r => !r.Row.TrPrShellDigest.Equals(baseRow.TrPrShellDigest)).ToList();
+            var exChangers = alignedRows.Where(r => !r.Row.TrPrExDigest.Equals(baseRow.TrPrExDigest)).ToList();
+
+            // DELETE-vs-SHELL: if the authored row is a DeleteRow (a reviewer removed it) while another reviewer
+            // reformatted its shell, that is a conflict — record it (never a silent drop). The delete wins
+            // (accept removes the row, reject restores base), so no shell attribution is attached to the delete.
+            if (authoredRows.Any(a => a.BaseRowAnchor == rowAnchor && a.Kind == IrRowOpKind.DeleteRow))
+            {
+                var shellRevs = trChangers.Concat(exChangers).Select(c => c.Reviewer).Distinct().ToList();
+                if (shellRevs.Count > 0)
+                    conflicts.Add(new IrConflict(nextConflictId++, rowAnchor, 0, 0, policy,
+                        IrNodeList.From(shellRevs.Select(rev => new IrConflictCompetitor(reviewers[rev].Author, rowText)))));
+                continue;
+            }
 
             var trPr = ComposeShellElement(rowAnchor,
-                alignedRows.Where(r => !r.Row.TrPrShellDigest.Equals(baseRow.TrPrShellDigest))
-                           .Select(r => (r.Reviewer, r.Author, r.Row.TrPrShellDigest, r.Row.Anchor.ToString())).ToList(),
+                trChangers.Select(r => (r.Reviewer, r.Author, r.Row.TrPrShellDigest, r.Row.Anchor.ToString())).ToList(),
                 policy, ref nextConflictId, conflicts, rowText);
             var tblPrEx = ComposeShellElement(rowAnchor,
-                alignedRows.Where(r => !r.Row.TrPrExDigest.Equals(baseRow.TrPrExDigest))
-                           .Select(r => (r.Reviewer, r.Author, r.Row.TrPrExDigest, r.Row.Anchor.ToString())).ToList(),
+                exChangers.Select(r => (r.Reviewer, r.Author, r.Row.TrPrExDigest, r.Row.Anchor.ToString())).ToList(),
                 policy, ref nextConflictId, conflicts, rowText);
 
             var trRef = ToShellRef(trPr);
@@ -1719,6 +1738,25 @@ internal static class IrCompositeMerger
 
     private static IrComposedShellRef? ToShellRef((int Reviewer, string? Anchor, string Author) w) =>
         w.Reviewer >= 0 && w.Anchor is { } a ? new IrComposedShellRef(w.Reviewer, a, w.Author) : null;
+
+    /// <summary>Resolve the RIGHT row a toucher's edit pairs with base row <paramref name="baseRowAnchor"/>
+    /// (index <paramref name="i"/>) for shell comparison — anchor-aware, so a co-toucher's row restructure
+    /// never shifts the pairing. A pure-shell <see cref="IrEditOpKind.FormatOnlyBlock"/> toucher is
+    /// content-equal, so its rows align positionally; a content <see cref="IrEditOpKind.ModifyBlock"/> toucher
+    /// maps via its TableDiff row op (the op whose LeftRowAnchor is this base row) — returning null when that
+    /// toucher DELETED the row (no right-row correspondence) so its (moot) shell is not mis-paired.</summary>
+    private static IrRow? ResolveRightRowForBaseRow(IrEditOp op, IrTable rightTable, string baseRowAnchor, int i)
+    {
+        if (op.Kind == IrEditOpKind.FormatOnlyBlock)
+            return i < rightTable.Rows.Count ? rightTable.Rows[i] : null;
+        if (op.TableDiff is { } td)
+            foreach (var ro in td.RowOps)
+                if (ro.LeftRowAnchor == baseRowAnchor)
+                    return ro.RightRowAnchor is { } rra
+                        ? rightTable.Rows.FirstOrDefault(r => r.Anchor.ToString() == rra)
+                        : null;
+        return null;
+    }
 
     /// <summary>
     /// Compose the document-final (trailing) <c>w:sectPr</c> across reviewers (Consolidate B2). The trailing
