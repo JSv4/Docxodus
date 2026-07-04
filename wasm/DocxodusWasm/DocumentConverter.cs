@@ -246,7 +246,8 @@ public partial class DocumentConverter
         bool showDeletedContent,
         bool renderMoveOperations,
         bool renderUnsupportedContentPlaceholders = false,
-        string? documentLanguage = null)
+        string? documentLanguage = null,
+        bool stampAnchors = false)
     {
         if (docxBytes == null || docxBytes.Length == 0)
         {
@@ -257,6 +258,7 @@ public partial class DocumentConverter
         {
             var options = new Docxodus.Internal.HtmlConversionOptions
             {
+                StampAnchors = stampAnchors,
                 PageTitle = pageTitle ?? "Document",
                 CssClassPrefix = cssPrefix ?? "docx-",
                 FabricateCssClasses = fabricateClasses,
@@ -278,6 +280,33 @@ public partial class DocumentConverter
                 DocumentLanguage = documentLanguage,
             };
             return Docxodus.Internal.HtmlConversionOps.ConvertToHtml(docxBytes, options);
+        }
+        catch (Exception ex)
+        {
+            return SerializeError(ex.Message, ex.GetType().Name, ex.StackTrace);
+        }
+    }
+
+    /// <summary>
+    /// Render a single block (addressed by a kind:scope:unid anchor, or a bare unid)
+    /// to faithful HTML. Powers the editor's incremental per-block re-render.
+    /// </summary>
+    [JSExport]
+    public static string RenderBlockHtml(byte[] docxBytes, string anchorId,
+        string cssPrefix, bool fabricateClasses)
+    {
+        if (docxBytes == null || docxBytes.Length == 0)
+            return SerializeError("No document data provided");
+        if (string.IsNullOrWhiteSpace(anchorId))
+            return SerializeError("No anchor id provided");
+        try
+        {
+            var options = new Docxodus.Internal.HtmlConversionOptions
+            {
+                CssClassPrefix = cssPrefix ?? "docx-",
+                FabricateCssClasses = fabricateClasses,
+            };
+            return Docxodus.Internal.HtmlConversionOps.RenderBlockHtml(docxBytes, anchorId, options);
         }
         catch (Exception ex)
         {

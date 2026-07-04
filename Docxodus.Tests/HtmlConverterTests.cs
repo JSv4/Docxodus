@@ -757,6 +757,47 @@ namespace OxPt
         }
 
         [Fact]
+        public void HC008d_PageBreakMarker_PaginatedMode_NotSelfClosing()
+        {
+            // A hard page break (w:br w:type="page") is emitted in paginated mode as an EMPTY
+            // <div class="page-break" data-page-break="true">. An empty XElement serializes as a
+            // self-closing <div .../>, which a browser's HTML parser treats as an UNCLOSED div
+            // (the slash is ignored for non-void elements), so every following sibling — including
+            // the visible #pagination-container — nests inside the display:none staging and the
+            // whole paginated view renders 0x0 (blank). The marker must serialize with an explicit
+            // </div> so the browser keeps the staging/container as siblings.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "HC031-Complicated-Document.docx"));
+
+            byte[] byteArray = File.ReadAllBytes(doc.FullName);
+            using (MemoryStream ms = new MemoryStream())
+            {
+                ms.Write(byteArray, 0, byteArray.Length);
+                using (WordprocessingDocument wDoc = WordprocessingDocument.Open(ms, true))
+                {
+                    WmlToHtmlConverterSettings settings = new WmlToHtmlConverterSettings()
+                    {
+                        PageTitle = "Page Break Marker Test",
+                        FabricateCssClasses = true,
+                        RenderPagination = PaginationMode.Paginated,
+                    };
+
+                    XElement html = WmlToHtmlConverter.ConvertToHtml(wDoc, settings);
+                    // Serialize exactly as the production WASM path does (HtmlConversionOps).
+                    string htmlString = html.ToString(SaveOptions.DisableFormatting);
+
+                    // Sanity: the marker is present at all.
+                    Assert.Contains("data-page-break=\"true\"", htmlString);
+
+                    // The marker MUST NOT be self-closing (that is the browser-nesting bug).
+                    Assert.DoesNotContain("data-page-break=\"true\" />", htmlString);
+                    // It must carry an explicit close tag instead.
+                    Assert.Contains("data-page-break=\"true\"></div>", htmlString);
+                }
+            }
+        }
+
+        [Fact]
         public void HC009_HeadersAndFooters_CssEnabled()
         {
             // Test that header/footer CSS is generated when RenderHeadersAndFooters is true

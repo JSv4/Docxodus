@@ -224,6 +224,111 @@ The ECMA-376 specification clarifies how footnote numbering works:
 
 ---
 
+### `continuationNotice` Reserved Footnote Rides at a POSITIVE `w:id` (NVCA contract)
+
+**Status:** Fixed (2026-06)
+**Discovered:** 2026-06-23
+**Test:** `DocxDiffFootnoteRobustnessTests.ReservedContinuationNoticeAtPositiveId_DoesNotCollideWithRenumberedRealFootnote`
+
+#### The corner case
+
+The reserved boilerplate footnotes are commonly assumed to occupy non-positive ids (`separator` = -1, `continuationSeparator` = 0), with content footnotes starting at id 2. But Word emits a **third** reserved note — `continuationNotice` — and the real NVCA model contract carries it at a **positive** id:
+
+```xml
+<w:footnote w:type="separator" w:id="-1">…</w:footnote>
+<w:footnote w:type="continuationSeparator" w:id="0">…</w:footnote>
+<w:footnote w:type="continuationNotice" w:id="1"><w:p/></w:footnote>   <!-- positive id! -->
+<w:footnote w:id="2">…first content footnote…</w:footnote>
+```
+
+Any code that (a) treats a typed note as reserved/kept-verbatim and (b) renumbers *content* notes from 1 will re-mint id 1 for the first content note → a **duplicate `w:id`** colliding with `continuationNotice`. In `DocxDiff` this corrupted **every** edit of the contract (even body/format-only edits that never touch a footnote), because the post-render renumber pass (`IrMarkupRenderer.RenumberNoteIds`) walks body references and re-sequences ids in reference order.
+
+#### Renderer comparison
+
+| | Renders the duplicate? |
+|---|---|
+| Word | N/A (Word never produces the collision; it keeps content ids ≥ 2 disjoint from reserved) |
+| LibreOffice | Silently drops/repairs the colliding definition on load (loss) |
+| Docxodus (before fix) | Emitted two `<w:footnote w:id="1">` — schema-invalid (`Sem_UniqueAttributeValue`) |
+
+#### The fix
+
+`RenumberNoteIds` now starts the content-note counter **above the highest positive reserved id** (so `{-1, 0}`-only documents are unchanged, but a `continuationNotice` at 1 pushes content notes to start at 2). The renumbered range stays disjoint from the kept boilerplate ids. Relevant code: `Docxodus/Ir/Diff/IrMarkupRenderer.cs` (`RenumberNoteIds`, the `int next = …` seed).
+
+### LibreOffice Re-Associates Footnote References to Definitions POSITIONALLY (orphaned-definition fidelity)
+
+**Status:** Documented behavior (not a Docxodus defect)
+**Discovered:** 2026-06-23 (headless-LibreOffice footnote backstop, `tools/diffharness/lo/lo_footnote_check.py`)
+
+#### The corner case
+
+When a document contains an **orphaned footnote definition** (a `w:footnote` whose `w:id` is no longer named by any body `w:footnoteReference` — e.g. after a paragraph carrying the reference is deleted/rewritten, leaving the definition behind), LibreOffice on import does **not** resolve the surviving reference to its definition by `w:id`. It re-associates references to definitions **positionally** (the *n*-th reference → the *n*-th definition), so it displays the *first* definition's text for the surviving reference and drops the trailing one.
+
+This means a body that references footnote id `2` ("See Section 1.2…") with an orphaned id `1` ("Include this provision…") still present renders in LibreOffice as "Include this provision…" — the orphaned definition's text. The OOXML is fully schema-valid (unique ids, the surviving reference resolves to exactly one definition by id); Word honors the id. It is purely a LibreOffice import behavior.
+
+#### Why this is NOT a `DocxDiff` corruption
+
+`DocxDiff.Compare` faithfully reproduces the **right** document's footnote structure on `accept` (and the left's on `reject`). The orphaned definition is a property of the user's edited (right) document itself — the fixture/edit removed only the body *reference*, not the *definition*. Loading the `right` document and the `accept(Compare(left,right))` document in LibreOffice yields **identical** footnote rendering (same count, same text, same positional association), confirming `accept ≡ right` cross-renderer. The "wrong" text is LibreOffice's handling of that valid OOXML shape, applied equally to the target and to the diff's accept output. No loss, no repair, no divergence introduced by the engine.
+
+#### Relevant code / verification
+
+- `tools/diffharness/lo/lo_footnote_check.py` — headless-LibreOffice load + footnote-count/text report (the independent validity backstop).
+- `DocxDiffScenarioTests.Scenario_PreservesFootnoteStructure` — the in-process id↔reference↔text round-trip oracle (asserts at the OOXML id level, immune to LibreOffice's positional quirk).
+
+### `OpenXmlValidator` Does NOT Resolve Note-Body (note-in-note) References — a validation blind spot
+
+**Status:** Documented gotcha
+**Discovered:** 2026-06-23 (non-body scope fidelity audit)
+
+#### The corner case
+
+A footnote/endnote definition body may itself contain a `w:footnoteReference`/`w:endnoteReference` (a note that cites another note — "note-in-note"). The SDK `OpenXmlValidator` validates references in the **document body** against the notes part, but does **not** resolve references that live **inside a note definition body**. So a *dangling* nested reference (one pointing to a note id that no longer exists after renumbering) produces **zero** schema errors — the validator simply does not check it.
+
+This is a trap for any pipeline that uses "no new `OpenXmlValidator` errors" as its footnote-integrity oracle: it will pass a document whose note-in-note references dangle. In Docxodus this masked a real `DocxDiff` bug where `RenumberNoteIds` renumbered a body-referenced note's definition (e.g. id 5 → 2) but left a nested reference to it (inside another note's body) at the stale id 5.
+
+#### How to actually catch it
+
+Resolve **every** `footnoteReference`/`endnoteReference` in the document — body **and** inside every note definition body — against the note part's definition ids yourself; do not rely on the validator. See `DocxDiffFootnoteRobustnessTests.AllUnresolvedFootnoteRefs` (counts unresolved references across both scopes) and the fix in `IrMarkupRenderer.RenumberNoteIds` (records each definition's old→new id and remaps nested references).
+
+#### Wrinkle (2026-06-24): it also FALSE-POSITIVES, and the value it names follows a renumber
+
+The blind spot is worse than "ignores them": `OpenXmlValidator` (Office2019) emits a `Sem_MissingReferenceElement` for a note-in-note reference **even when the target definition is present** (a false positive — observed on `TestFiles/DD/DD001-DenseBookmarkXrefFootnote.docx`, whose footnote 2 cites footnote 5, where 5 exists). The error's `Description` embeds the *reference value* (`…The reference value is '5'.`). So when `DocxDiff` **correctly** compacts a gapped note id (5 → 4), the validator's false positive simply re-emits with the new value (`'4'`), at the same part/path.
+
+This is a trap for a schema-error oracle that diffs validator output across input↔output keyed on the description: the input copy (`'5'`) and output copy (`'4'`) look like *different* errors, so the legitimate renumber is mis-counted as a NEW defect. `DocxDiffBookmarkRealDocTests.SchemaErrors` defends against this by keying on `{Id}@{Part.Uri}` + a *value-normalized* description (`'\d+'` → `'#'`); genuine new dangling references in a different part are still surfaced, and real note-in-note resolution is checked structurally by the `UnresolvedNoteRefs` oracle (which does not consult the validator at all).
+
+---
+
+## Comments
+
+### Comment threading is keyed on `w14:paraId`, NOT the comment `w:id` (and a dedup clone must carry its own paraId)
+
+**Status:** Documented behavior + design note (comment fidelity campaign)
+**Discovered:** 2026-06-24 (`DocxDiffCommentStructureTests`, headless-LibreOffice comment oracle `tools/diffharness/lo/lo_comment_check.py`)
+
+#### The corner case
+
+A threaded comment reply is linked to its parent **not** by the comment's `w:id`, but by the `w14:paraId` of the comment-definition paragraph: `commentsExtended.xml` carries `<w15:commentEx w15:paraId="…" w15:paraIdParent="…">` where both values are `w14:paraId`s of `<w:comment>/<w:p>` elements in `comments.xml`. Both Word and LibreOffice resolve "which comment is a reply to which" purely through this paraId graph. So renumbering a comment's `w:id` (as the `DocxDiff` dedup does for the del/ins copies of a rewritten commented paragraph — the comment analogue of the bookmark renumber-collision) does **not** by itself break threading.
+
+The trap is in the **reverse** direction. When `DocxDiff` clones a comment definition to give the deleted (reject-side) copy a fresh `w:id`, a naive clone either (a) **duplicates** the original's `w14:paraId` — two comments now claim the same threading key — or (b) **strips** the paraId to avoid that duplicate, which silently severs the clone from `commentsExtended` so a **reject-side threaded reply dangles** (its `paraIdParent` no longer names a comment with that paraId). Both are wrong: (a) is ambiguous, (b) loses the reply→parent link on reject.
+
+#### The fix
+
+`IrMarkupRenderer.NormalizeComments` (phase B) gives each dedup clone a **fresh** `w14:paraId` (allocated above the max existing paraId) *and* clones the matching `commentsExtended`/`commentsIds` entry under the fresh paraId (`CloneThreadingEntryForParaId`), preserving `paraIdParent`. So the reject-side clone keeps its own threading link, exactly as the accept-side original keeps the unchanged one. Verified independently: `lo_comment_check.py` enumerates LibreOffice `Annotation` fields and asserts every reply's `ParentName` names a loaded comment — the dense fixture's Compare output reports 2 threaded replies (original + clone), both resolving.
+
+#### `OpenXmlValidator` does NOT flag a duplicate `w14:paraId` (a second comment-threading blind spot)
+
+Like the note-in-note blind spot above, the SDK `OpenXmlValidator` (Office2019) does **not** validate `w14:paraId` uniqueness across comment definitions — a document with two `<w:comment>/<w:p>` sharing one paraId is "schema-valid" to the validator but ambiguous to Word's/LibreOffice's threading resolver. So "no new validator errors" is **not** sufficient to prove comment-threading integrity; assert paraId/threading structurally (`DocxDiffCommentStructureTests.AnchorProjection` resolves each reply's parent through the paraId graph and checks `accept ≡ right` / `reject ≡ left` on the resolved-parent text).
+
+#### v1 limitation: cross-document comment id / paraId collision (independent documents only)
+
+The comment merge (`MergeRightCommentDefinitions`) and collapse assume a comment present in both sides carries the SAME `w:id` — true when the two inputs are two versions of ONE document (Word never reassigns a comment's id, so an edited doc's comment ids are stable). Two **independent** documents that each happened to assign `w:id="0"` to a DIFFERENT comment anchored on the same text, or a right-added comment whose `w14:paraId` GUID collides with a left comment's, are out of v1 scope: the cross-document case can leave `accept` showing the left comment's text (the right definition is not re-id'd and merged) or duplicate a `w14:paraId`. The output stays schema-valid and every reference resolves to exactly ONE comment (the `(C)` backstop guarantees that) — it is a content/threading-attribution gap, not a structural corruption, and it does not arise from the diff/review workflow the engine targets (before/after of one document). Re-id'ing right-sourced markers for a genuinely independent-document merge is a follow-on.
+
+#### Unchanged comment ⇒ single BARE range (mirrors bookmarks)
+
+A comment present in both sources whose anchored text is **un**edited collapses (phase A) to a single bare `commentRangeStart`/`End`/`commentReference` (no `w:ins`/`w:del` wrapper) so it survives **both** accept and reject — the same identity-aware collapse `NormalizeBookmarks` does. A right-**added** comment's bare markers (which landed in equal content) are instead wrapped in `w:ins` (phase A2) so the comment toggles with its side and does not leak into the reject (`reject ≡ left`); a left-**deleted** comment's are wrapped in `w:del`. LibreOffice drops a `commentReference` whose `w:comment` definition is missing (its own dangling-comment signal), so the oracle's clean load + refresh-stable comment count is the cross-renderer confirmation that every reference resolves.
+
+---
+
 ## Table/Cell Width as Percent-Suffixed String (`w:tblW` / `w:tcW` with `w:type="pct"`)
 
 **Status:** Fixed (2026-05) — Issue #210
@@ -288,6 +393,199 @@ Non-numeric values return `null` and are skipped instead of throwing.
 
 `Docxodus.Tests/HtmlConverterTablePercentageWidthTests.cs`
 (`HcTablePercentageWidthTests`).
+
+---
+
+## DocxDiff: zero-width markers that are NOT diff tokens (bookmarks, field plumbing, soft hyphens)
+
+### Symptom
+
+Diffing two DOCX with `DocxDiff` and editing a paragraph that carries a bookmark, a `REF`/`PAGEREF` field,
+or a `w:noBreakHyphen`/`w:softHyphen`/`w:sym` produced output where, after accept or reject:
+
+- a `w:bookmarkStart`/`w:bookmarkEnd` was **dropped** (orphaning the bookmark, dangling every
+  `w:hyperlink @w:anchor` and `REF`/`PAGEREF`/`NOTEREF`/`HYPERLINK \l` reference that targets it),
+- the same bookmark **id was duplicated** across the `w:del` and `w:ins` copy (`Sem_UniqueAttributeValue`),
+- a whole `REF` **field vanished** when the text *before* it was edited, and
+- a body character was **dropped** next to a non-breaking/soft hyphen (the reject of a
+  "Company‑Controlled Intellectual" run lost the "I").
+
+The SDK `OpenXmlValidator` caught only the duplicate id; the dropped marker / dropped field / dropped char are
+schema-valid (the validator does not resolve cross-references), so they require a STRUCTURAL round-trip oracle
+(bookmark id↔name↔reference integrity + body-text `reject ≡ left` / `accept ≡ right`).
+
+### The corner case
+
+The IR diff engine reconstructs an edited paragraph by **slicing the SOURCE run-level XML** at character
+offsets the **token diff** decided. A run-level element is one of three kinds with respect to that offset
+math:
+
+| element | IR / tokenizer treats it as | source slicer must treat it as |
+|---|---|---|
+| `w:t` text | N chars | N chars (splittable) |
+| `w:bookmarkStart`/`End`, `w:fldChar`, `w:instrText` | **dropped / 0 chars, NOT a token** | **0 chars but ALWAYS emitted** |
+| `w:noBreakHyphen`/`w:softHyphen`/`w:sym` | **1 char of text** (e.g. U+2011) | **1 char** |
+
+Two distinct bugs followed from violating that table:
+
+1. **Boundary drop.** Because a bookmark/field marker is *not a diff token*, the token-driven
+   boundary-ownership flags (`includeStart/EndZeroWidth`) were blind to it, so a marker sitting exactly at an
+   edit boundary was claimed by neither adjacent op and disappeared. Fix: flag these markers `AlwaysKeep` in the
+   slicer (taken anywhere in `[start,end]`), then reconcile context in post-render passes (`NormalizeBookmarks`,
+   `NormalizeFields`).
+2. **Off-by-one.** `w:noBreakHyphen`/`w:softHyphen`/`w:sym` ARE one character in the IR (the reader emits an
+   `IrTextRun`), so the tokenizer counts them — but the slicer counted them as zero-width. Every such element
+   shifted the slice by one and dropped an adjacent character. Fix: the slicer advances the char counter by one
+   for them, matching the IR.
+
+A bookmark/field present in BOTH documents is *unchanged by the edit* (only the surrounding text moved), so its
+correct representation is a single **bare** (untracked) pair that survives both accept and reject — NOT a
+tracked `w:ins`/`w:del` copy. `NormalizeBookmarks`/`NormalizeFields` collapse to that; a wholly inserted/deleted
+bookmark or field keeps its revision context. Bookmarks nested in opaque content (`m:oMath`, `w:drawing`) are
+deliberately left untouched — they are part of that element's canonical content hash, so renumbering them would
+break `reject ≡ left`.
+
+### Word vs LibreOffice
+
+No genuine Word-vs-LibreOffice *divergence* was found for bookmark/cross-reference handling: with the fixes,
+both the bookmark structural round-trip and (per the `lo_bookmark_check.py` oracle design) LibreOffice's own
+`GetReference` field resolution agree that every reference resolves. The one non-divergent quirk worth noting:
+the strict ECMA-376 schema rejects `<w:w w:val="0">` (character scale 0), which the real NVCA COI source carries
+65× and which Word writes and tolerates — the diff merely relocates those runs, so it is a *source* quirk, not a
+diff defect (it appears identically when validating the input).
+
+### Relevant code
+
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `SourceRunModel` (`AlwaysKeep`/`FieldPlumbingKeep`, the 1-char
+  hyphen/sym segment), `NormalizeBookmarks`, `NormalizeFields`, `ExpandFieldForRevision`.
+- `Docxodus/Ir/IrReader.cs` — `EmitRunChild` (N7/N8: `noBreakHyphen`/`softHyphen`/`sym` → 1-char `IrTextRun`).
+- `Docxodus/WmlComparer.cs` — `AddNumberingChildInSchemaOrder` (numbering-merge child order).
+
+### Tests
+
+`Docxodus.Tests/DocxDiffBookmarkStructureTests.cs` + `DocxDiffBookmarkFixtures.cs` (synthetic corpus),
+`DocxDiffBookmarkRealDocTests.cs` (real NVCA COI/SPA), and the `bkmk-struct` column + `lo/lo_bookmark_check.py`
+oracle in `tools/diffharness`.
+
+---
+
+## DocxDiff: `PreAcceptInputRevisions` accept-all flattens prior authorship
+
+**Status:** Documented (2026-06) — the `revisionsInInput` campaign.
+
+### The corner case
+
+This is not a Word-vs-spec divergence but a **lossy-by-design transformation** worth pinning, because "just
+accept-all both sides, then diff" looks innocent and is not. When an input is itself a redline (carries
+un-accepted `w:ins`/`w:del`/`w:moveFrom`), DocxDiff's default already diffs the **accepted view** (rule N13 —
+`IrReader` runs `RevisionView.Accept` before building the IR), so the produced *body* carries only the new
+diff's revisions. But the output package is cloned on the LEFT input and only the body (+ changed notes) is
+rebuilt, so pre-existing revision markup in **carried-over parts** (headers/footers, unchanged
+footnotes/endnotes, styles, comments) is passed through verbatim. The opt-in
+`DocxDiffSettings.PreAcceptInputRevisions` eliminates that by accepting BOTH whole inputs first (cleaning the
+body, headers/footers, notes, and styles — the parts `RevisionProcessor.AcceptRevisions` processes; a tracked
+change inside a comment *definition* or a glossary/building-blocks entry is NOT touched, since
+`RevisionProcessor.AcceptRevisions` does not process the comments part or the `GlossaryDocumentPart`) — but
+accept-all itself has two honest costs that a caller must understand before enabling it.
+
+### Minimal XML reproducer
+
+An input whose header carries a prior reviewer's tracked insertion (identical on both diff sides, so a pure
+carry-over, not a diff):
+
+```xml
+<!-- left.docx and right.docx both contain this header part -->
+<w:hdr>
+  <w:p>
+    <w:r><w:t xml:space="preserve">Header </w:t></w:r>
+    <w:ins w:id="99" w:author="OldReviewer" w:date="2020-01-01T00:00:00Z">
+      <w:r><w:t>CONFIDENTIAL</w:t></w:r>
+    </w:ins>
+  </w:p>
+</w:hdr>
+```
+
+### Behavior table
+
+| Setting | Output header | `accept(result)` header | `reject(result)` header | Round-trip in header? |
+|---|---|---|---|---|
+| default (`PreAcceptInputRevisions = false`) | `<w:ins author="OldReviewer">CONFIDENTIAL</w:ins>` **(leaked verbatim)** | `Header CONFIDENTIAL` | `Header ` (**leaked ins rejected → text dropped**) | **No** — `reject ≠ accept-view(left)` |
+| `PreAcceptInputRevisions = true` | `Header CONFIDENTIAL` (plain, accepted) | `Header CONFIDENTIAL` | `Header CONFIDENTIAL` | **Yes** |
+
+Word and LibreOffice behave the same on the *outputs* — there is no renderer divergence here. The divergence is
+between the default's leaked, non-round-tripping header and the flag's clean one.
+
+### Analysis — the two honest costs of accept-all
+
+Even with the flag fixing the leak/round-trip, accept-all is opinionated and lossy and must not be enabled
+silently:
+
+1. **It flattens pre-existing authorship and change boundaries.** Accepting collapses each input's own tracked
+   changes into final text. `OldReviewer` (and *where* their edit began/ended) is gone from the result; the
+   output's authorship reflects only the new diff. You cannot recover "who edited what" afterward.
+2. **"Accept all" is itself a policy.** Leaving a change in tracked form is how a reviewer defers or rejects it;
+   accept-all overrides that, materializing every insertion and dropping every deletion regardless of the prior
+   reviewer's intent. If the inputs' in-flight revisions must be preserved or re-adjudicated, resolve them by an
+   explicit policy first, then diff — do not reach for `PreAcceptInputRevisions`.
+
+### Relevant code
+
+- `Docxodus/DocxDiff.cs` — `DocxDiffSettings.PreAcceptInputRevisions` + the `PreAccept(...)` pre-pass wired into
+  all seven entry points; `IrMarkupRenderer.Render` clones the output on the LEFT package (the carry-over source).
+- `Docxodus/Ir/IrReader.cs` — `ApplyRevisionView` (rule N13: `RevisionView.Accept` before IR build).
+- `Docxodus/DocxDiffCompatibility.cs` — the `revisionsInInput` catalog entry (now `Covered`).
+
+### Tests
+
+`Docxodus.Tests/Ir/Diff/RevisionsInInputDefaultTests.cs` (pins the default: clean body + leaking carry-over +
+the broken header round-trip) and `PreAcceptInputRevisionsTests.cs` (the flag is the wrapper, no stale
+authorship, every-scope round-trip, schema validity, multi-author redline-of-a-redline).
+
+---
+
+## `*PrChange` inners are CT_*Base: rejecting a property change must NOT drop what lives outside it
+
+**Discovered:** 2026-07-03, block-format-change family.
+
+Word's block-level property-revision markers store the OLD properties in an inner element whose type is the `…Base` variant of the container — which **excludes** the sibling content that is not part of the tracked property change:
+
+- `w:pPrChange`'s inner `w:pPr` is `CT_PPrBase` — no paragraph-mark `w:rPr`, and **no inline `w:sectPr`**.
+- `w:sectPrChange`'s inner `w:sectPr` is `CT_SectPrBase` — **no `w:headerReference`/`w:footerReference`**.
+
+### The trap
+
+A naive reject implementation replaces the whole container with the inner:
+
+```
+// WRONG — drops the references / inline sectPr that were never part of the change
+if (element.Name == W.sectPr && element.Element(W.sectPrChange) != null)
+    return element.Element(W.sectPrChange).Element(W.sectPr);
+```
+
+Because the inner is reference-less, rejecting a `w:sectPrChange` deletes the section's headers and footers; rejecting a `w:pPrChange` on a section-final paragraph deletes the section break. This is a **silent** structural loss — the document still validates.
+
+### Word's behavior
+
+Word rejects the tracked *property* change (restores the old page setup / paragraph properties) while **keeping** the references and the inline `w:sectPr` intact — they were never revised.
+
+| Reject a `w:sectPrChange` (section had a `w:headerReference`) | Header reference after reject |
+|---|---|
+| Word | preserved |
+| Docxodus (before fix) | **dropped** |
+| Docxodus (after fix) | preserved |
+
+### The fix
+
+`RevisionProcessor.RejectRevisionsForPartTransform` rebuilds the container: keep the CURRENT out-of-scope children (references for sectPr; the mark `w:rPr` + inline `w:sectPr` for pPr), restore the inner's in-scope properties.
+
+### Relevant code
+
+- `Docxodus/RevisionProcessor.cs` — the `w:sectPr`/`w:sectPrChange` and `w:pPr`/`w:pPrChange` reject branches.
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `ApplySectPrChange`/`ApplyBlockFormatChanges` produce the markers with reference-less CT_*Base inners (so they round-trip only *with* the fix).
+
+### Tests
+
+`Docxodus.Tests/Ir/Diff/BlockFormatChangeTests.cs` — `RejectRevisions_preserves_inline_sectPr_when_rejecting_a_pPrChange` and `SectPrChange_reject_preserves_header_footer_references`.
 
 ---
 
