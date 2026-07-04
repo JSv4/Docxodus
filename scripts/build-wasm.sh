@@ -16,17 +16,17 @@ cd "$WASM_PROJECT"
 dotnet publish -c Release
 
 # Source AppBundle location (publish output differs from build)
-APPBUNDLE="$WASM_PROJECT/bin/Release/net8.0/browser-wasm/AppBundle"
+APPBUNDLE="$WASM_PROJECT/bin/Release/net10.0/browser-wasm/AppBundle"
 
 if [ ! -d "$APPBUNDLE" ]; then
     echo "Error: AppBundle not found at $APPBUNDLE"
     echo "Checking publish output location..."
-    APPBUNDLE="$WASM_PROJECT/bin/Release/net8.0/browser-wasm/publish/wwwroot"
+    APPBUNDLE="$WASM_PROJECT/bin/Release/net10.0/browser-wasm/publish/wwwroot"
 fi
 
 if [ ! -d "$APPBUNDLE" ]; then
     echo "Trying alternative publish location..."
-    APPBUNDLE="$WASM_PROJECT/bin/Release/net8.0/browser-wasm/native"
+    APPBUNDLE="$WASM_PROJECT/bin/Release/net10.0/browser-wasm/native"
 fi
 
 if [ ! -d "$APPBUNDLE" ]; then

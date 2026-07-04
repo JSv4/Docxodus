@@ -62,7 +62,7 @@ The `with` block is the documented lifecycle path — it calls `session.close()`
 Architecture:
 
 ```
-Python process                 docxodus-pyhost (.NET 8)
+Python process                 docxodus-pyhost (.NET 10)
 ─────────────                  ──────────────────────────
 DocxSession  ──NDJSON──>       Dispatcher
                                │
@@ -87,7 +87,7 @@ Delta-spec for the `docx-scalpel` rebrand: [`docs/superpowers/specs/2026-05-26-d
 dotnet build tools/python-host/pyhost.csproj -c Release
 ```
 
-This produces `tools/python-host/bin/Release/net8.0/docxodus-pyhost`. `_host_locator.py` discovers it automatically when you `pip install -e .` from a monorepo clone.
+This produces `tools/python-host/bin/Release/net10.0/docxodus-pyhost`. `_host_locator.py` discovers it automatically when you `pip install -e .` from a monorepo clone.
 
 For non-monorepo development, set `DOCXODUS_HOST=/path/to/docxodus-pyhost` to override the discovery path.
 

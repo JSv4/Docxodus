@@ -289,6 +289,13 @@ export interface ConversionOptions {
    * Examples: "en-US", "fr-FR", "de-DE", "ja-JP"
    */
   documentLanguage?: string;
+  /**
+   * Stamp block-level elements (p, h1-h6, li, table) with a `data-anchor`
+   * attribute carrying the block's stable Unid. Required for the editor to
+   * address blocks in the DOM and drive incremental per-block re-render via
+   * `renderBlockHtml`. Default: false.
+   */
+  stampAnchors?: boolean;
 }
 
 /**
@@ -368,6 +375,21 @@ export interface Revision {
 }
 
 /**
+ * Which property container a FormatChanged revision describes.
+ * `run` (the default) is an rPr-grade report (bold/italic/fontSize/…); the others are the
+ * block-and-above scopes tracked by the block-format-change family: `paragraph` (pPr),
+ * `tableCell`/`tableRow`/`table` (tcPr/trPr/tblPr+tblGrid), and `section` (sectPr).
+ * Non-`run` scopes are only reported under Fine revision granularity.
+ */
+export type FormatChangeScope =
+  | "run"
+  | "paragraph"
+  | "tableCell"
+  | "tableRow"
+  | "table"
+  | "section";
+
+/**
  * Details about formatting changes for FormatChanged revisions.
  */
 export interface FormatChangeDetails {
@@ -382,8 +404,201 @@ export interface FormatChangeDetails {
   newProperties?: Record<string, string>;
   /**
    * List of property names that changed (e.g., "bold", "italic", "fontSize").
+   * For the table/section scopes this is a digest-grade marker (`["shell"]`, `["grid"]`).
    */
   changedPropertyNames?: string[];
+  /**
+   * Which property container this change describes (default `"run"`).
+   */
+  scope?: FormatChangeScope;
+}
+
+// ─── DocxDiff (IR diff engine) ──────────────────────────────────────────────
+//
+// The NEW structure-aware comparison engine, exposed alongside the default
+// WmlComparer-backed `compareDocuments`/`getRevisions`. Its differentiators:
+// anchor-addressed revisions (`leftAnchor`/`rightAnchor`) and the diff-as-data
+// edit script (`docxDiffGetEditScript`). WmlComparer remains the default for
+// production redlines until the swap is ratified.
+
+/**
+ * How `docxDiffGetRevisions` projects the edit script to revisions. Integer
+ * values match the .NET `DocxDiffRevisionGranularity` enum positions.
+ */
+export enum DocxDiffRevisionGranularity {
+  /** The engine's native one-revision-per-token-span grain (the default). */
+  Fine = 0,
+  /** Coalesced to counts/texts comparable to the shipped WmlComparer's. */
+  WmlComparerCompatible = 1,
+}
+
+/**
+ * How DocxDiff compares run formatting. Integer values match the .NET
+ * `DocxDiffFormatComparison` enum positions.
+ */
+export enum DocxDiffFormatComparison {
+  /** Compare only the modeled rPr fields (the default). */
+  ModeledOnly = 0,
+  /** Compare the full run format including the unmodeled rPr digest. */
+  Full = 1,
+}
+
+/**
+ * Settings for the `docxDiff*` functions. Mirrors the .NET `DocxDiffSettings`;
+ * every field is optional and an omitted field uses the engine default.
+ */
+export interface DocxDiffSettings {
+  /** Author stamped on revisions and markup (default "Open-Xml-PowerTools"). */
+  authorForRevisions?: string;
+  /** Pin revision dates to a fixed epoch for byte-identical output (default true). */
+  deterministic?: boolean;
+  /** Explicit ISO-8601 revision date; overrides `deterministic` when set. */
+  dateTimeForRevisions?: string;
+  /** Case-fold word match keys (default false). */
+  caseInsensitive?: boolean;
+  /** Culture name (e.g. "tr-TR") for case folding when `caseInsensitive` is true; default invariant/ordinal. */
+  culture?: string;
+  /** Fold NBSP (U+00A0) to ordinary space in match keys (default true). */
+  conflateBreakingAndNonbreakingSpaces?: boolean;
+  /** Override the word/separator split characters (default: engine's set). */
+  wordSeparators?: string;
+  /** Report relocations as native move pairs (default true). */
+  detectMoves?: boolean;
+  /** Jaccard similarity threshold for a fuzzy move 0.0-1.0 (default 0.8). */
+  moveSimilarityThreshold?: number;
+  /** Minimum word tokens for a fuzzy move (default 3). */
+  moveMinimumWordCount?: number;
+  /** Revision projection grain (default Fine). */
+  revisionGranularity?: DocxDiffRevisionGranularity;
+  /** Run-format comparison policy (default ModeledOnly). */
+  formatComparison?: DocxDiffFormatComparison;
+  /**
+   * Compare header/footer stories (default true — Word Compare's own default).
+   * Changed stories get native tracked-changes markup inside their parts;
+   * Fine-mode revisions carry `hdr`/`ftr`-scoped anchors; the edit script
+   * carries `headerFooterOps`. Set false to ignore header/footer scopes (the
+   * pre-campaign behavior: left's headers/footers carried verbatim).
+   */
+  compareHeadersFooters?: boolean;
+
+  /**
+   * Track paragraph-and-above property changes (pPr/tcPr/trPr/tblPr/tblGrid/tblPrEx/sectPr) as native
+   * Word markup. Default true. Set false to restore the pre-campaign untracked-right-apply behavior.
+   * (Consolidate ignores block-format changes regardless.)
+   */
+  trackBlockFormatChanges?: boolean;
+}
+
+/**
+ * One revision from `docxDiffGetRevisions`. Mirrors the consumer shape of
+ * {@link Revision} and ADDS the block anchors the revision derives from — the
+ * IR engine's differentiator.
+ *
+ * Anchor presence by `revisionType` — each type's PRIMARY anchor is ALWAYS
+ * present; the opposite anchor MAY also be present for a token-level revision.
+ * Inserted → `rightAnchor` always (plus `leftAnchor` when it is a token-level
+ * insert inside a modified block); Deleted → `leftAnchor` always (plus
+ * `rightAnchor` when token-level); FormatChanged → both; Moved is EXCLUSIVE:
+ * source → `leftAnchor` only, destination → `rightAnchor` only. A token-level
+ * revision (an insert/delete WITHIN a modified paragraph that exists on both
+ * sides) carries both enclosing-block anchors; a whole-block insert/delete
+ * carries only its primary anchor.
+ */
+export interface DocxDiffRevision {
+  /** "Inserted" | "Deleted" | "Moved" | "FormatChanged". */
+  revisionType: RevisionType | string;
+  /** The affected text. */
+  text: string;
+  /** Author stamped on the revision. */
+  author: string;
+  /** ISO-8601 revision date. */
+  date: string;
+  /** For Moved revisions, links source and destination. */
+  moveGroupId?: number;
+  /** For Moved revisions: true = source, false = destination. */
+  isMoveSource?: boolean;
+  /** For FormatChanged revisions: what formatting changed. */
+  formatChange?: FormatChangeDetails;
+  /** The LEFT-document block anchor (`kind:scope:unid`). Always set for Deleted/FormatChanged/Moved-source;
+   *  also set for a token-level insert inside a modified block; undefined for a whole-block insertion. */
+  leftAnchor?: string;
+  /** The RIGHT-document block anchor (`kind:scope:unid`). Always set for Inserted/FormatChanged/Moved-dest;
+   *  also set for a token-level delete inside a modified block; undefined for a whole-block deletion. */
+  rightAnchor?: string;
+}
+
+// ─── DocxDiff consolidate (composite N-way) ─────────────────────────────────
+//
+// The composite layer over the IR diff engine: merge several reviewers' edits
+// against one shared base DOCX. Mirrors the .NET consolidate surface
+// (`DocxDiff.Consolidate` / `GetConflicts` / `GetConsolidatedRevisions` /
+// `GetConsolidatedEditScriptJson`) — see `docs/architecture/ir_diff_engine.md`.
+
+/**
+ * How overlapping reviewer edits at the same base token span are resolved.
+ * Integer values match the .NET `ConflictResolution` enum positions.
+ */
+export enum ConflictResolution {
+  /** Keep the base text where reviewers disagree (the default). */
+  BaseWins = 0,
+  /** The first reviewer (by input order) wins each contested span. */
+  FirstReviewerWins = 1,
+  /** Stack every reviewer's variant so a human can pick. */
+  StackAll = 2,
+}
+
+/** One reviewer's edited copy of the shared base document, plus their name. */
+export interface DocxDiffReviewer {
+  /** The reviewer's edited DOCX bytes. */
+  document: Uint8Array;
+  /** Author name stamped on this reviewer's revisions in the consolidated output. */
+  author: string;
+}
+
+/**
+ * Settings for the `docxDiffConsolidate*` functions. Extends {@link DocxDiffSettings}
+ * with the conflict-resolution policy; mirrors the .NET `DocxDiffConsolidateSettings`.
+ */
+export interface DocxDiffConsolidateSettings extends DocxDiffSettings {
+  /** Policy for overlapping reviewer edits (default {@link ConflictResolution.BaseWins}). */
+  conflictResolution?: ConflictResolution;
+}
+
+/** One reviewer's contested variant at a conflict span. */
+export interface DocxDiffConflictCompetitor {
+  /** The reviewer whose variant this is. */
+  author: string;
+  /** The text this reviewer would produce for the contested span. */
+  resultText: string;
+}
+
+/**
+ * A single conflict: two or more reviewers edited the same base token span
+ * incompatibly. Returned by {@link docxDiffGetConflicts}.
+ */
+export interface DocxDiffConflict {
+  /** Stable id for this conflict within the consolidation. */
+  id: number;
+  /** The base-document block anchor (`kind:scope:unid`) the conflict sits in. */
+  baseAnchor: string;
+  /** First contested base token index (inclusive). */
+  tokenStart: number;
+  /** Last contested base token index (exclusive). */
+  tokenEnd: number;
+  /** The {@link ConflictResolution} policy that was applied to this conflict. */
+  policy: ConflictResolution | number;
+  /** The competing reviewer variants. */
+  competitors: DocxDiffConflictCompetitor[];
+}
+
+/**
+ * One revision from {@link docxDiffGetConsolidatedRevisions}. A
+ * {@link DocxDiffRevision} plus the id of the conflict it participates in
+ * (when it sits in a contested span).
+ */
+export interface DocxDiffConsolidatedRevision extends DocxDiffRevision {
+  /** The {@link DocxDiffConflict.id} this revision belongs to, if any. */
+  conflictId?: number;
 }
 
 /**
@@ -542,6 +757,12 @@ export interface CompareResult {
 export interface DocxodusWasmExports {
   DocumentConverter: {
     ConvertDocxToHtml: (bytes: Uint8Array) => string;
+    RenderBlockHtml: (
+      bytes: Uint8Array,
+      anchorId: string,
+      cssPrefix: string,
+      fabricateClasses: boolean
+    ) => string;
     ConvertDocxToHtmlWithOptions: (
       bytes: Uint8Array,
       pageTitle: string,
@@ -598,7 +819,8 @@ export interface DocxodusWasmExports {
       showDeletedContent: boolean,
       renderMoveOperations: boolean,
       renderUnsupportedContentPlaceholders: boolean,
-      documentLanguage: string | null
+      documentLanguage: string | null,
+      stampAnchors: boolean
     ) => string;
     GetAnnotations: (bytes: Uint8Array) => string;
     AddAnnotation: (bytes: Uint8Array, requestJson: string) => string;
@@ -729,11 +951,66 @@ export interface DocxodusWasmExports {
       renderTrackedChanges: boolean
     ) => string;
   };
+  DocxDiffBridge: {
+    /** Redlined DOCX bytes (native markup), or empty array on error. */
+    Compare: (
+      leftBytes: Uint8Array,
+      rightBytes: Uint8Array,
+      settingsJson: string
+    ) => Uint8Array;
+    /** `{"revisions":[…]}` JSON, or a JSON error object. */
+    GetRevisionsJson: (
+      leftBytes: Uint8Array,
+      rightBytes: Uint8Array,
+      settingsJson: string
+    ) => string;
+    /** Edit-script JSON (diff-as-data), or a JSON error object. */
+    GetEditScriptJson: (
+      leftBytes: Uint8Array,
+      rightBytes: Uint8Array,
+      settingsJson: string
+    ) => string;
+    /** Accept all tracked revisions in a redlined DOCX → "right"-side bytes, or empty array on error. */
+    AcceptRevisions: (bytes: Uint8Array) => Uint8Array;
+    /** Reject all tracked revisions in a redlined DOCX → "left"-side bytes, or empty array on error. */
+    RejectRevisions: (bytes: Uint8Array) => Uint8Array;
+    /** Consolidated redlined DOCX bytes (native markup), or empty array on error. */
+    Consolidate: (
+      baseBytes: Uint8Array,
+      reviewersJson: string,
+      settingsJson: string
+    ) => Uint8Array;
+    /** `{"revisions":[…]}` JSON for the consolidation, or a JSON error object. */
+    GetConsolidatedRevisionsJson: (
+      baseBytes: Uint8Array,
+      reviewersJson: string,
+      settingsJson: string
+    ) => string;
+    /** Consolidated edit-script JSON (diff-as-data), or a JSON error object. */
+    GetConsolidatedEditScriptJson: (
+      baseBytes: Uint8Array,
+      reviewersJson: string,
+      settingsJson: string
+    ) => string;
+    /** `{"conflicts":[…]}` JSON for the consolidation, or a JSON error object. */
+    GetConflictsJson: (
+      baseBytes: Uint8Array,
+      reviewersJson: string,
+      settingsJson: string
+    ) => string;
+  };
   DocxSessionBridge: {
     OpenSession: (bytes: Uint8Array, settingsJson: string) => number;
     CloseSession: (handle: number) => void;
+    CreateBlankDocx: () => Uint8Array;
     Project: (handle: number) => string;
     ProjectAnchor: (handle: number, anchorId: string, depth: number) => string;
+    RenderBlockHtml: (
+      handle: number,
+      anchorId: string,
+      cssPrefix: string,
+      fabricateClasses: boolean
+    ) => string;
     ReplaceText: (handle: number, anchor: string, md: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
     DeleteRange: (handle: number, fromAnchorId: string, toAnchorIdExclusive: string) => string;
@@ -741,11 +1018,19 @@ export interface DocxodusWasmExports {
     InsertParagraph: (handle: number, anchor: string, pos: string, md: string) => string;
     SplitParagraph: (handle: number, anchor: string, offset: number) => string;
     MergeParagraphs: (handle: number, first: string, second: string) => string;
+    InsertHorizontalRule: (handle: number, anchor: string, pos: string, ruleJson: string) => string;
+    InsertTable: (handle: number, anchor: string, pos: string, rows: number, cols: number, optionsJson: string) => string;
+    InsertTableRow: (handle: number, cellAnchor: string, pos: string) => string;
+    InsertTableColumn: (handle: number, cellAnchor: string, pos: string) => string;
+    DeleteTableRow: (handle: number, cellAnchor: string) => string;
+    DeleteTableColumn: (handle: number, cellAnchor: string) => string;
     ApplyFormat: (handle: number, anchor: string, spanJson: string, opJson: string) => string;
     ApplyFormatBySubstring: (handle: number, anchor: string, substring: string, opJson: string) => string;
     SetParagraphStyle: (handle: number, anchor: string, styleId: string) => string;
+    SetParagraphFormat: (handle: number, anchor: string, opJson: string) => string;
     SetListLevel: (handle: number, anchor: string, delta: number) => string;
     RemoveListMembership: (handle: number, anchor: string) => string;
+    ApplyListFormat: (handle: number, anchor: string, kind: string) => string;
     ReplaceCellContent: (handle: number, anchor: string, md: string) => string;
     RawGetXml: (handle: number, anchor: string) => string;
     RawInsertXml: (handle: number, anchor: string, pos: string, xml: string) => string;
@@ -872,6 +1157,63 @@ export interface FormatOp {
   code?: boolean;
   color?: string;
   runStyle?: string;
+  /** Vertical alignment: "superscript" | "subscript" | "" (clear). Omit to leave unchanged. */
+  vertAlign?: string;
+  /**
+   * Font size in **points** (maps to `w:sz`/`w:szCs`, stored as half-points). Omit to leave
+   * unchanged; a value &lt;= 0 clears the explicit size. Fractional points round to a half-point.
+   */
+  fontSizePts?: number;
+  /**
+   * Run font family (maps to `w:rFonts` ascii/hAnsi/cs). Omit to leave unchanged; `""` clears
+   * the explicit font so the run inherits the style/default. Lets a run match a serif filing.
+   */
+  fontFamily?: string;
+}
+
+/** One edge of a paragraph border (`w:pBdr` top/bottom) — drives S-1 horizontal rules. */
+export interface ParagraphBorderEdge {
+  /** Border line style (`w:val`): "single","double","thick","dotted","dashed",… Default "single". */
+  style?: string;
+  /** Weight in eighths of a point (`w:sz`). Default 6 (≈0.75pt); a heavy rule ≈ 18–24. */
+  size?: number;
+  /** Hex color without '#', or "auto". Default "auto". */
+  color?: string;
+  /** Padding between border and text, in points (`w:space`). Default 1. */
+  space?: number;
+}
+
+/** List membership for `DocxSession.applyListFormat`. */
+export type ListFormat = "none" | "bullet" | "decimal";
+
+/** Paragraph-level formatting for `DocxSession.setParagraphFormat`. Omit a field to leave it unchanged. */
+export interface ParagraphFormatOp {
+  /** Paragraph alignment. */
+  alignment?: "left" | "center" | "right" | "justify";
+  /** Adjust the left indent by this many twips (1440 = 1 inch); clamped at 0. */
+  indentDelta?: number;
+  /** Page-break-before: true to add, false to remove. */
+  pageBreakBefore?: boolean;
+  /** Top paragraph border (`w:pBdr/w:top`). Omit to leave unchanged. */
+  topBorder?: ParagraphBorderEdge;
+  /** Bottom paragraph border (`w:pBdr/w:bottom`) — what an S-1 horizontal rule is. Omit to leave unchanged. */
+  bottomBorder?: ParagraphBorderEdge;
+  /** Remove all paragraph borders before applying any top/bottom border in this op. */
+  clearBorders?: boolean;
+}
+
+/** Options for `DocxSession.insertTable`. */
+export interface TableInsertOptions {
+  /** Emit an invisible layout table (explicit "none" borders) — the S-1 multi-column blocks. */
+  borderless?: boolean;
+  /** Row-major markdown for each cell (row 0 left→right, then row 1, …). Short/omitted ⇒ empty cells. */
+  cellContents?: string[];
+  /** Alignment applied to every cell paragraph (S-1 columns are centered). */
+  cellAlignment?: "left" | "center" | "right" | "justify";
+  /** Per-column widths in twips (one per column, left→right). Omit for equal columns; a list
+   *  whose length != the column count is rejected. Drives unequal layouts like the S-1's
+   *  wide-left / narrow-right filing-header row. */
+  columnWidths?: number[];
 }
 
 export interface DocxSessionSettings {

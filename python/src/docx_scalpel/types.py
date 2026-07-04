@@ -21,7 +21,11 @@ from typing import Any, Mapping, Sequence
 from .enums import (
     AnchorIdRendering,
     AnchorRenderMode,
+    ConflictResolution,
     ContextBoundary,
+    DocxDiffFormatComparison,
+    DocxDiffRevisionGranularity,
+    DocxDiffRevisionType,
     EditErrorCode,
     EmptyParagraphMode,
     PlaceholderKind,
@@ -62,6 +66,14 @@ __all__ = [
     "AnnotationUpdate",
     "EditSummary",
     "ReplaceOptions",
+    "DocxDiffSettings",
+    "DocxDiffRevision",
+    "DocxDiffFormatChange",
+    "DocxDiffReviewer",
+    "DocxDiffConsolidateSettings",
+    "DocxDiffConflictCompetitor",
+    "DocxDiffConflict",
+    "DocxDiffConsolidatedRevision",
 ]
 
 
@@ -757,6 +769,277 @@ class HtmlOptions:
         if self.document_language is not None:
             wire["documentLanguage"] = self.document_language
         return wire
+
+
+# ---------------------------------------------------------------------------
+# DocxDiff — IR diff engine (stateless two-document compare)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffSettings:
+    """Settings for the ``docx_diff_*`` module functions. Mirrors the .NET
+    ``DocxDiffSettings``; defaults match it field-for-field, so an unset
+    ``DocxDiffSettings()`` reproduces the engine's out-of-the-box behavior.
+
+    Every field is sent only when it differs from the default, so the wire
+    object stays minimal and the host applies its own defaults for omitted keys.
+    """
+
+    author_for_revisions: str = "Open-Xml-PowerTools"
+    deterministic: bool = True
+    date_time_for_revisions: str | None = None
+    case_insensitive: bool = False
+    culture: str | None = None
+    conflate_breaking_and_nonbreaking_spaces: bool = True
+    word_separators: str | None = None
+    detect_moves: bool = True
+    move_similarity_threshold: float = 0.8
+    move_minimum_word_count: int = 3
+    revision_granularity: DocxDiffRevisionGranularity = DocxDiffRevisionGranularity.FINE
+    format_comparison: DocxDiffFormatComparison = DocxDiffFormatComparison.MODELED_ONLY
+    #: Compare header/footer stories (default True — Word Compare's own default).
+    #: Changed stories get native tracked-changes markup inside their parts; FINE
+    #: revisions carry hdr/ftr-scoped anchors; the edit script carries
+    #: ``headerFooterOps``. False ignores header/footer scopes entirely.
+    compare_headers_footers: bool = True
+    #: Track paragraph-and-above property changes (pPr/tcPr/trPr/tblPr/tblGrid/tblPrEx/sectPr) as native
+    #: Word markup. Default True; False restores the untracked-right-apply behavior. Consolidate ignores
+    #: block-format changes regardless.
+    track_block_format_changes: bool = True
+
+    def to_wire(self) -> dict[str, Any]:
+        """camelCase keys the host's ``DocxDiffOps.ParseSettings`` reads. Only
+        non-default fields are emitted."""
+        wire: dict[str, Any] = {}
+        if self.author_for_revisions != "Open-Xml-PowerTools":
+            wire["authorForRevisions"] = self.author_for_revisions
+        if not self.deterministic:
+            wire["deterministic"] = False
+        if self.date_time_for_revisions is not None:
+            wire["dateTimeForRevisions"] = self.date_time_for_revisions
+        if self.case_insensitive:
+            wire["caseInsensitive"] = True
+        if self.culture is not None:
+            wire["culture"] = self.culture
+        if not self.conflate_breaking_and_nonbreaking_spaces:
+            wire["conflateBreakingAndNonbreakingSpaces"] = False
+        if self.word_separators is not None:
+            wire["wordSeparators"] = self.word_separators
+        if not self.detect_moves:
+            wire["detectMoves"] = False
+        if self.move_similarity_threshold != 0.8:
+            wire["moveSimilarityThreshold"] = self.move_similarity_threshold
+        if self.move_minimum_word_count != 3:
+            wire["moveMinimumWordCount"] = self.move_minimum_word_count
+        if self.revision_granularity != DocxDiffRevisionGranularity.FINE:
+            wire["revisionGranularity"] = int(self.revision_granularity)
+        if self.format_comparison != DocxDiffFormatComparison.MODELED_ONLY:
+            wire["formatComparison"] = int(self.format_comparison)
+        if not self.compare_headers_footers:
+            wire["compareHeadersFooters"] = False
+        if not self.track_block_format_changes:
+            wire["trackBlockFormatChanges"] = False
+        return wire
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffFormatChange:
+    """Details of a ``FORMAT_CHANGED`` revision — the modeled format fields
+    before/after plus the names that differ. Mirrors .NET ``DocxDiffFormatChange``.
+
+    ``scope`` names the property container the change describes: ``"run"`` (the default,
+    an rPr-grade report) or one of the block-format-change family scopes ``"paragraph"``
+    (pPr), ``"tableCell"``/``"tableRow"``/``"table"`` (tcPr/trPr/tblPr+tblGrid), ``"section"``
+    (sectPr). Non-run scopes are reported only under Fine revision granularity."""
+
+    old_properties: Mapping[str, str]
+    new_properties: Mapping[str, str]
+    changed_property_names: Sequence[str]
+    scope: str = "run"
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DocxDiffFormatChange":
+        return cls(
+            old_properties=dict(d.get("oldProperties") or {}),
+            new_properties=dict(d.get("newProperties") or {}),
+            changed_property_names=tuple(d.get("changedPropertyNames") or ()),
+            scope=str(d.get("scope") or "run"),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffRevision:
+    """One consumer revision from ``docx_diff_get_revisions``. Mirrors .NET
+    ``DocxDiffRevision`` and carries the IR engine's differentiator: the
+    left/right block anchors the revision derives from.
+
+    Anchor presence by ``type`` — each type's PRIMARY anchor is ALWAYS
+    present; the opposite anchor MAY also be present for a token-level
+    revision. ``INSERTED`` → ``right_anchor`` always (plus ``left_anchor``
+    when it is a token-level insert inside a modified block); ``DELETED`` →
+    ``left_anchor`` always (plus ``right_anchor`` when token-level);
+    ``FORMAT_CHANGED`` → both; ``MOVED`` is EXCLUSIVE: source → ``left_anchor``
+    only, destination → ``right_anchor`` only. A token-level revision (an
+    insert/delete WITHIN a modified paragraph that exists on both sides)
+    carries both enclosing-block anchors; a whole-block insert/delete carries
+    only its primary anchor.
+    """
+
+    type: DocxDiffRevisionType
+    text: str
+    author: str
+    date: str
+    move_group_id: int | None = None
+    is_move_source: bool | None = None
+    format_change: DocxDiffFormatChange | None = None
+    left_anchor: str | None = None
+    right_anchor: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DocxDiffRevision":
+        fc = d.get("formatChange")
+        return cls(
+            type=DocxDiffRevisionType._from_wire(d["revisionType"]),
+            text=d.get("text", ""),
+            author=d.get("author", ""),
+            date=d.get("date", ""),
+            move_group_id=d.get("moveGroupId"),
+            is_move_source=d.get("isMoveSource"),
+            format_change=DocxDiffFormatChange._from_wire(fc) if fc else None,
+            left_anchor=d.get("leftAnchor"),
+            right_anchor=d.get("rightAnchor"),
+        )
+
+
+# ---------------------------------------------------------------------------
+# DocxDiff consolidate — multi-reviewer composite diff
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffReviewer:
+    """One reviewer's document for ``docx_diff_consolidate`` and friends.
+
+    ``document`` is the reviewer's DOCX bytes (their redlined or edited version
+    of the base); ``author`` is the display name used for their revisions.
+    """
+
+    document: bytes
+    author: str
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffConsolidateSettings:
+    """Settings for the ``docx_diff_consolidate_*`` module functions.
+
+    Wraps a :class:`DocxDiffSettings` for the per-reviewer diffs plus
+    ``conflict_resolution`` for how to handle competing edits.
+
+    ``to_wire()`` starts from the embedded diff settings wire dict and adds
+    ``conflictResolution`` only when it is non-default (i.e. not ``BASE_WINS``),
+    matching the sparse-emit convention used by :meth:`DocxDiffSettings.to_wire`.
+    """
+
+    diff: DocxDiffSettings = field(default_factory=DocxDiffSettings)
+    conflict_resolution: ConflictResolution = ConflictResolution.BASE_WINS
+
+    def to_wire(self) -> dict[str, Any]:
+        wire = self.diff.to_wire()
+        if self.conflict_resolution != ConflictResolution.BASE_WINS:
+            wire["conflictResolution"] = int(self.conflict_resolution)
+        return wire
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffConflictCompetitor:
+    """One reviewer's competing edit within a :class:`DocxDiffConflict`.
+
+    ``author`` is the reviewer's display name; ``result_text`` is the text
+    their edit produces at the conflicting span.
+    """
+
+    author: str
+    result_text: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DocxDiffConflictCompetitor":
+        return cls(
+            author=d.get("author", ""),
+            result_text=d.get("resultText", ""),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffConflict:
+    """A conflict produced by ``docx_diff_get_conflicts`` — a base span where two
+    or more reviewers made incompatible edits.
+
+    ``id`` is a stable integer index for the conflict within this consolidation.
+    ``base_anchor`` is the anchor id in the base document. ``token_start`` /
+    ``token_end`` delimit the conflicting token range within that block.
+    ``policy`` is the :class:`ConflictResolution` that would be applied by
+    ``docx_diff_consolidate`` under the current settings. ``competitors`` lists
+    each reviewer's competing edit.
+    """
+
+    id: int
+    base_anchor: str
+    token_start: int
+    token_end: int
+    policy: ConflictResolution
+    competitors: tuple[DocxDiffConflictCompetitor, ...]
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DocxDiffConflict":
+        return cls(
+            id=int(d["id"]),
+            base_anchor=d.get("baseAnchor", ""),
+            token_start=int(d.get("tokenStart", 0)),
+            token_end=int(d.get("tokenEnd", 0)),
+            policy=ConflictResolution(int(d.get("policy", 0))),
+            competitors=tuple(
+                DocxDiffConflictCompetitor._from_wire(c)
+                for c in d.get("competitors", ())
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DocxDiffConsolidatedRevision:
+    """One consumer revision from ``docx_diff_get_consolidated_revisions``.
+
+    Mirrors :class:`DocxDiffRevision` with all of its fields plus an optional
+    ``conflict_id`` that links this revision to a :class:`DocxDiffConflict`
+    when the revision arose from a conflict resolution decision.
+    """
+
+    type: DocxDiffRevisionType
+    text: str
+    author: str
+    date: str
+    move_group_id: int | None = None
+    is_move_source: bool | None = None
+    format_change: DocxDiffFormatChange | None = None
+    left_anchor: str | None = None
+    right_anchor: str | None = None
+    conflict_id: int | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "DocxDiffConsolidatedRevision":
+        fc = d.get("formatChange")
+        return cls(
+            type=DocxDiffRevisionType._from_wire(d["revisionType"]),
+            text=d.get("text", ""),
+            author=d.get("author", ""),
+            date=d.get("date", ""),
+            move_group_id=d.get("moveGroupId"),
+            is_move_source=d.get("isMoveSource"),
+            format_change=DocxDiffFormatChange._from_wire(fc) if fc else None,
+            left_anchor=d.get("leftAnchor"),
+            right_anchor=d.get("rightAnchor"),
+            conflict_id=d.get("conflictId"),
+        )
 
 
 # ---------------------------------------------------------------------------

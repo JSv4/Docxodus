@@ -34,11 +34,14 @@
     "build:ts": "tsc",
     "build:pagination-bundle": "esbuild src/pagination.ts --bundle --format=iife --global-name=DocxodusPagination --outfile=dist/pagination.bundle.js",
     "build:session-bundle": "esbuild src/session.ts --bundle --format=iife --global-name=DocxodusSession --outfile=dist/session.bundle.js",
+    "build:editor-bundle": "esbuild src/editor.ts --bundle --format=iife --global-name=DocxodusEditor --outfile=dist/editor.bundle.js",
     "build:worker-bundle": "esbuild src/docxodus.worker.ts --bundle --format=esm --outfile=dist/docxodus.worker.js && esbuild src/worker-proxy.ts --bundle --format=esm --outfile=dist/worker-proxy.bundle.js",
-    "build": "npm run build:wasm && npm run build:ts && npm run build:pagination-bundle && npm run build:session-bundle && npm run build:worker-bundle",
-    "pretest": "cp tests/test-harness.html dist/wasm/ && cp tests/worker-test-harness.html dist/wasm/ && cp tests/profiling-harness.html dist/wasm/ && cp dist/pagination.bundle.js dist/wasm/ && cp dist/session.bundle.js dist/wasm/ && cp dist/docxodus.worker.js dist/wasm/ && cp dist/worker-proxy.bundle.js dist/wasm/worker-proxy.js",
+    "build": "npm run build:wasm && npm run build:ts && npm run build:pagination-bundle && npm run build:session-bundle && npm run build:editor-bundle && npm run build:worker-bundle",
+    "pretest": "cp tests/test-harness.html dist/wasm/ && cp tests/worker-test-harness.html dist/wasm/ && cp tests/profiling-harness.html dist/wasm/ && cp examples/editor.html dist/wasm/ && cp dist/pagination.bundle.js dist/wasm/ && cp dist/session.bundle.js dist/wasm/ && cp dist/editor.bundle.js dist/wasm/ && cp dist/docxodus.worker.js dist/wasm/ && cp dist/worker-proxy.bundle.js dist/wasm/worker-proxy.js",
     "test": "playwright test",
     "test:ui": "playwright test --ui",
+    "demo": "npm run build && npm run demo:serve",
+    "demo:serve": "cp dist/editor.bundle.js examples/editor.html dist/wasm/ && cp ../TestFiles/HC031-Complicated-Document.docx dist/wasm/sample.docx && echo '\\n>>> Open http://localhost:8088/editor.html\\n' && python3 -m http.server 8088 --directory dist/wasm",
     "prepublishOnly": "npm run build"
   },
   "repository": {
@@ -75,7 +78,7 @@
     "@playwright/test": "^1.57.0",
     "@types/node": "^20.10.0",
     "@types/react": "^19.2.7",
-    "esbuild": "^0.27.0",
+    "esbuild": "^0.28.1",
     "typescript": "^5.3.0"
   }
 }
