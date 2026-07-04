@@ -27,13 +27,6 @@ namespace Docxodus
 
     public class MetricsGetter
     {
-#if !WASM_BUILD
-        private static readonly Lazy<SKPaint> MeasurePaint = new Lazy<SKPaint>(() => new SKPaint
-        {
-            IsAntialias = true,
-        });
-#endif
-
         public static XElement GetMetrics(string fileName, MetricsGetterSettings settings)
         {
             FileInfo fi = new FileInfo(fileName);
@@ -127,12 +120,9 @@ namespace Docxodus
                 var weight = bold ? SKFontStyleWeight.Bold : SKFontStyleWeight.Normal;
                 var slant = italic ? SKFontStyleSlant.Italic : SKFontStyleSlant.Upright;
                 using var typeface = SKTypeface.FromFamilyName(fontName, weight, SKFontStyleWidth.Normal, slant);
+                using var font = new SKFont(typeface, (float)sz / 2f);
 
-                var paint = MeasurePaint.Value;
-                paint.Typeface = typeface;
-                paint.TextSize = (float)sz / 2f;
-
-                var result = (int)paint.MeasureText(text);
+                var result = (int)font.MeasureText(text);
 
                 // If measurement returns 0 (font unavailable), use estimation
                 if (result == 0 && !string.IsNullOrEmpty(text))
