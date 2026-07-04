@@ -1,0 +1,83 @@
+#nullable enable
+
+using System;
+using System.Collections.Generic;
+using System.Xml.Linq;
+
+namespace Docxodus.Ir;
+
+/// <summary>
+/// A named sequence of block-level content (e.g. "body", a header/footer, or a note body). Scope
+/// names follow the IR vocabulary: "body", "hdr1"/"ftr1"…, "fn", "en", "cmt".
+/// </summary>
+/// <remarks>
+/// <para><b><see cref="PartUri"/>.</b> The URI of the OOXML part this scope was read from, populated
+/// in BOTH retention modes (it is a scope-level fact, independent of whether per-node provenance
+/// elements are pinned — see <see cref="IrReaderOptions.RetainSources"/>). Consumers that only need
+/// the originating part at scope/block granularity (e.g. the markdown emitter's
+/// <c>AnchorTarget.PartUri</c>) MUST prefer this over per-node <see cref="IrProvenance.PartUri"/>,
+/// because that per-node fact is null when <c>RetainSources=false</c>.</para>
+/// <para>Equality-neutral by intent for the same reason provenance is: two reads of the same bytes
+/// from the same part carry the same URI, and the determinism guarantee is defined over content. It
+/// is nonetheless part of the record's generated equality (records include every member); that is
+/// harmless for the determinism tests, which compare scopes from the same source bytes, and the
+/// document-level <c>Equals</c> is already not relied upon (see <see cref="IrDocument"/> remarks).</para>
+/// </remarks>
+internal sealed record IrScope(string Name, IrNodeList<IrBlock> Blocks, Uri? PartUri = null);
+
+/// <summary>Which header/footer occurrence a part is bound to (`w:headerReference/@w:type`).</summary>
+internal enum IrHeaderFooterKind { Default, First, Even }
+
+/// <summary>
+/// One body <c>w:sectPr</c> reference to a header/footer part: the referencing section's document-order
+/// ordinal (the index of its <c>sectPr</c> among <c>body.Descendants(w:sectPr)</c>) and the reference's
+/// <c>@w:type</c> kind. A part referenced by several sections carries one entry per reference, in
+/// section document order — the story-pairing axis for the header/footer scope diff.
+/// </summary>
+internal readonly record struct IrHeaderFooterRef(int SectionIndex, IrHeaderFooterKind Kind);
+
+/// <summary>A header or footer: its scope name, occurrence kind (the FIRST body reference's kind —
+/// back-compat for consumers that need one label), the scope holding its blocks, and every body section
+/// reference to the part (<see cref="References"/>, empty for an unreferenced part).</summary>
+internal sealed record IrHeaderFooter(string ScopeName, IrHeaderFooterKind Kind, IrScope Scope)
+{
+    public IrNodeList<IrHeaderFooterRef> References { get; init; } = IrNodeList.Empty<IrHeaderFooterRef>();
+}
+
+/// <summary>
+/// The immutable root of a Document IR snapshot.
+/// </summary>
+/// <remarks>
+/// This is a record, so the compiler-generated <c>Equals</c>/<c>GetHashCode</c> include EVERY member
+/// — the content scopes/stores AND the registries (<see cref="Styles"/>, <see cref="Numbering"/>,
+/// <see cref="ThemeFonts"/>), plus <see cref="AnchorIndex"/> and <see cref="Sources"/>. The
+/// determinism guarantee (and the tests that assert it) is defined over the <em>content scopes</em>
+/// — <see cref="Body"/>, <see cref="Headers"/>, <see cref="Footers"/>, <see cref="Footnotes"/>,
+/// <see cref="Endnotes"/>, <see cref="Comments"/> — which compose value equality via
+/// <see cref="IrNodeList{T}"/>: two reads of the same bytes produce equal scopes/stores (§8).
+/// Document-level <c>Equals</c> over two separate reads is NOT expected to hold, because
+/// <see cref="AnchorIndex"/>, <see cref="Sources"/>, and the registries are reference-typed
+/// (dictionary reference equality) — compare the content scopes, not whole <see cref="IrDocument"/>s.
+/// </remarks>
+internal sealed record IrDocument
+{
+    public required IrScope Body { get; init; }
+    public IrNodeList<IrHeaderFooter> Headers { get; init; } = IrNodeList.Empty<IrHeaderFooter>();
+    public IrNodeList<IrHeaderFooter> Footers { get; init; } = IrNodeList.Empty<IrHeaderFooter>();
+    public required IrNoteStore Footnotes { get; init; }
+    public required IrNoteStore Endnotes { get; init; }
+    public required IrCommentStore Comments { get; init; }
+    public required IrStyleRegistry Styles { get; init; }
+    public required IrNumberingRegistry Numbering { get; init; }
+    public required IrThemeFonts ThemeFonts { get; init; }
+
+    /// <summary>Derived index from <see cref="IrAnchor.ToString"/> to its block; reference-equal (not part of value equality).</summary>
+    public required IReadOnlyDictionary<string, IrBlock> AnchorIndex { get; init; }
+
+    /// <summary>Provenance pin from part URI to its source document; reference-equal (not part of value equality).</summary>
+    public required IReadOnlyDictionary<Uri, XDocument> Sources { get; init; }
+
+    /// <summary>Look up a block by anchor; returns null if no block carries that anchor.</summary>
+    public IrBlock? FindByAnchor(IrAnchor anchor) =>
+        AnchorIndex.TryGetValue(anchor.ToString(), out var b) ? b : null;
+}

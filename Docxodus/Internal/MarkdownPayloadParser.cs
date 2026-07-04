@@ -227,6 +227,20 @@ internal static class MarkdownPayloadParser
                 continue;
             }
 
+            // Hard line break: a newline WITHIN a paragraph becomes a real w:br (Word's
+            // intra-paragraph line break), not a literal '\n' in w:t (which Word renders
+            // as a space). GFM's trailing-two-spaces hard-break marker is consumed. This
+            // is the write-side mirror of WmlToHtmlConverter's read-side "w:br -> '  \n'".
+            if (c == '\n')
+            {
+                while (sb.Length > 0 && sb[sb.Length - 1] == ' ') sb.Length--;
+                FlushText();
+                // w:br must live inside a w:r to be valid OOXML and to be seen by the
+                // projector's run-scoped AppendRunText.
+                list.Add(new XElement(W.r, new XElement(W.br)));
+                continue;
+            }
+
             // Code span
             if (c == '`')
             {

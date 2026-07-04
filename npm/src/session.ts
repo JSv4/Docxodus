@@ -21,6 +21,10 @@ import type {
   FillOptions,
   FindOptions,
   FormatOp,
+  ParagraphBorderEdge,
+  ParagraphFormatOp,
+  TableInsertOptions,
+  ListFormat,
   GrepOptions,
   ListMembership,
   ReplaceOptions,
@@ -79,6 +83,31 @@ export class DocxSession {
     ) as DocxSessionProjection;
   }
 
+  /**
+   * Render a single block to faithful HTML from the live session — the editor's
+   * incremental per-block re-render after an edit. Resolves against the in-memory
+   * document (no Save round-trip). `anchorId` is a block anchor (`kind:scope:unid`)
+   * or the bare unid carried by a `data-anchor` attribute. Returns the block's HTML
+   * element (no `<html>`/`<head>` wrapper).
+   */
+  renderBlock(
+    anchorId: string,
+    options?: { cssPrefix?: string; fabricateClasses?: boolean },
+  ): string {
+    const html = this.wasm.RenderBlockHtml(
+      this.handle,
+      anchorId,
+      options?.cssPrefix ?? "docx-",
+      options?.fabricateClasses ?? false,
+    );
+    // Rendered HTML always begins with '<'; a leading '{' signals an error object.
+    if (html.charCodeAt(0) === 0x7b /* '{' */) {
+      const err = JSON.parse(html) as { error?: string };
+      throw new Error(`renderBlock failed: ${err.error ?? "unknown error"}`);
+    }
+    return html;
+  }
+
   // ─── Tier A: text CRUD ───────────────────────────────────────────────
 
   replaceText(anchorId: string, markdown: string): EditResult {
@@ -130,6 +159,61 @@ export class DocxSession {
     return JSON.parse(this.wasm.MergeParagraphs(this.handle, firstAnchorId, secondAnchorId)) as EditResult;
   }
 
+  /**
+   * Insert an empty paragraph carrying a bottom border — an S-1-style horizontal rule —
+   * before/after the block. `rule` styles the line (default: a single ≈1.5pt black rule).
+   */
+  insertHorizontalRule(
+    anchorId: string,
+    position: "before" | "after",
+    rule?: ParagraphBorderEdge,
+  ): EditResult {
+    const ruleJson = rule ? JSON.stringify(rule) : "";
+    return JSON.parse(
+      this.wasm.InsertHorizontalRule(this.handle, anchorId, position, ruleJson),
+    ) as EditResult;
+  }
+
+  /**
+   * Insert a `rows`×`cols` table before/after the block. `options` controls borders, row-major
+   * cell markdown, and cell alignment. The returned `EditResult.created` lists the cell-paragraph
+   * anchors (row-major), so each cell can then be addressed to fill/format.
+   */
+  insertTable(
+    anchorId: string,
+    position: "before" | "after",
+    rows: number,
+    cols: number,
+    options?: TableInsertOptions,
+  ): EditResult {
+    const optionsJson = options ? JSON.stringify(options) : "";
+    return JSON.parse(
+      this.wasm.InsertTable(this.handle, anchorId, position, rows, cols, optionsJson),
+    ) as EditResult;
+  }
+
+  /**
+   * Table row/column editing, addressed by a cell-paragraph anchor (e.g. one returned from
+   * {@link insertTable}'s `created`). Insert clones the reference row/column's widths and starts
+   * empty (`created` lists the new cell-paragraph anchors); delete of the last row/column removes
+   * the whole table. v1 assumes a rectangular grid (no horizontal cell merges).
+   */
+  insertTableRow(cellAnchorId: string, position: "before" | "after"): EditResult {
+    return JSON.parse(this.wasm.InsertTableRow(this.handle, cellAnchorId, position)) as EditResult;
+  }
+
+  insertTableColumn(cellAnchorId: string, position: "before" | "after"): EditResult {
+    return JSON.parse(this.wasm.InsertTableColumn(this.handle, cellAnchorId, position)) as EditResult;
+  }
+
+  deleteTableRow(cellAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.DeleteTableRow(this.handle, cellAnchorId)) as EditResult;
+  }
+
+  deleteTableColumn(cellAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.DeleteTableColumn(this.handle, cellAnchorId)) as EditResult;
+  }
+
   // ─── Tier C: formatting ──────────────────────────────────────────────
 
   applyFormat(anchorId: string, span: CharSpan | null, op: FormatOp): EditResult {
@@ -162,12 +246,22 @@ export class DocxSession {
     return JSON.parse(this.wasm.SetParagraphStyle(this.handle, anchorId, styleId)) as EditResult;
   }
 
+  /** Set paragraph alignment / indent / page-break-before (omitted fields are left unchanged). */
+  setParagraphFormat(anchorId: string, op: ParagraphFormatOp): EditResult {
+    return JSON.parse(this.wasm.SetParagraphFormat(this.handle, anchorId, JSON.stringify(op))) as EditResult;
+  }
+
   setListLevel(anchorId: string, levelDelta: number): EditResult {
     return JSON.parse(this.wasm.SetListLevel(this.handle, anchorId, levelDelta)) as EditResult;
   }
 
   removeListMembership(anchorId: string): EditResult {
     return JSON.parse(this.wasm.RemoveListMembership(this.handle, anchorId)) as EditResult;
+  }
+
+  /** Make the paragraph a bullet/numbered list item, or remove list membership ("none"). */
+  applyListFormat(anchorId: string, kind: ListFormat): EditResult {
+    return JSON.parse(this.wasm.ApplyListFormat(this.handle, anchorId, kind)) as EditResult;
   }
 
   // ─── Tier D: cell content ────────────────────────────────────────────

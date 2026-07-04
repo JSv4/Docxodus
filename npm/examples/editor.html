@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Docxodus — minimal block editor demo</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, Segoe UI, Roboto, sans-serif; background: #eceef1; color: #1c1e21; }
+    header { position: sticky; top: 0; z-index: 10; display: flex; gap: 12px; align-items: center;
+      flex-wrap: wrap; padding: 10px 16px; background: #fff; border-bottom: 1px solid #d7dade; }
+    header h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+    header .spacer { flex: 1; }
+    button, label.btn { font: inherit; padding: 6px 12px; border: 1px solid #c3c7cc; border-radius: 6px;
+      background: #f6f7f8; cursor: pointer; }
+    button:hover, label.btn:hover { background: #eceef1; }
+    button:disabled { opacity: .5; cursor: default; }
+    #status { font-size: 12px; color: #65676b; }
+    label.toggle { font-size: 13px; display: inline-flex; gap: 5px; align-items: center; cursor: pointer; }
+    #editor { max-width: 920px; margin: 24px auto; padding: 0 16px 80px; }
+    /* Continuous mode: give blocks a page-like sheet. Paginated mode brings its own page boxes. */
+    #editor.continuous > * { background: #fff; }
+    #editor.continuous { background: #fff; padding: 56px 72px; border-radius: 4px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+    [contenteditable="true"]:focus { outline: 2px solid #4c8bf5; outline-offset: 2px; border-radius: 2px; }
+    [contenteditable="true"]:hover { background: #f3f8ff; }
+    .hint { max-width: 920px; margin: 0 auto; padding: 8px 16px; font-size: 12px; color: #65676b; }
+    .sep { width: 1px; align-self: stretch; background: #d7dade; margin: 2px 4px; }
+    .ribbon { display: inline-flex; gap: 4px; align-items: center; }
+    .ribbon[aria-disabled="true"] { opacity: .4; pointer-events: none; }
+    .ribbon button { min-width: 30px; padding: 5px 8px; }
+    .ribbon button.active { background: #d9e7ff; border-color: #4c8bf5; }
+    .ribbon select { font: inherit; padding: 5px 6px; border: 1px solid #c3c7cc; border-radius: 6px; background: #f6f7f8; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Docxodus editor</h1>
+    <button id="new" title="New blank document">New</button>
+    <label class="btn">Open<input id="file" type="file" accept=".docx" hidden /></label>
+    <button id="save" disabled>Save</button>
+    <span class="sep"></span>
+    <div class="ribbon" id="ribbon" aria-disabled="true">
+      <button data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+      <button data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+      <button data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+      <button data-cmd="strike" title="Strikethrough"><s>S</s></button>
+      <button data-cmd="code" title="Inline code">&lt;/&gt;</button>
+      <button data-cmd="superscript" title="Superscript">x&#178;</button>
+      <button data-cmd="subscript" title="Subscript">x&#8322;</button>
+      <input id="fontsize" type="number" min="1" max="1638" step="0.5" list="fontsizes"
+             placeholder="Size" title="Font size (points) — type any value or pick a preset"
+             style="width:70px; font: inherit; padding:5px 6px; border:1px solid #c3c7cc; border-radius:6px; background:#f6f7f8;" />
+      <datalist id="fontsizes">
+        <option>8</option><option>9</option><option>10</option><option>11</option>
+        <option>12</option><option>14</option><option>16</option><option>18</option>
+        <option>20</option><option>24</option><option>28</option><option>36</option>
+        <option>48</option><option>72</option><option>96</option>
+      </datalist>
+      <select id="fontfamily" title="Font family — applies to the selection"
+              style="font: inherit; padding:5px 6px; border:1px solid #c3c7cc; border-radius:6px; background:#f6f7f8; max-width:140px;">
+        <option value="">Font…</option>
+        <option>Calibri</option>
+        <option>Times New Roman</option>
+        <option>Arial</option>
+        <option>Georgia</option>
+        <option>Cambria</option>
+        <option>Courier New</option>
+        <option>Verdana</option>
+        <option>Garamond</option>
+      </select>
+      <span class="sep"></span>
+      <button data-align="left" title="Align left">L</button>
+      <button data-align="center" title="Align center">C</button>
+      <button data-align="right" title="Align right">R</button>
+      <button data-align="justify" title="Justify">J</button>
+      <span class="sep"></span>
+      <button data-indent="-720" title="Decrease indent">&#8676;</button>
+      <button data-indent="720" title="Increase indent">&#8677;</button>
+      <button data-pagebreak title="Insert page break before">&#10515;</button>
+      <span class="sep"></span>
+      <button data-list="bullet" title="Bullet list">&#8226;</button>
+      <button data-list="decimal" title="Numbered list">1.</button>
+      <span class="sep"></span>
+      <select id="rulepos" title="Insert rules above or below the active block"
+              style="font: inherit; padding:5px 6px; border:1px solid #c3c7cc; border-radius:6px; background:#f6f7f8;">
+        <option value="below">Below</option>
+        <option value="above">Above</option>
+      </select>
+      <button id="hr" title="Insert horizontal rule">&#9473;&#9473;</button>
+      <button id="hrThick" title="Insert thick rule">&#9608;&#9608;</button>
+      <button id="hrDouble" title="Insert double rule">&#9552;&#9552;</button>
+      <button id="hrClear" title="Clear rule / paragraph border">&#9472;&#10007;</button>
+      <button id="table" title="Insert table">&#8862;</button>
+      <button id="delblock" title="Delete this block">&#128465;</button>
+      <span class="sep"></span>
+      <select id="style" title="Paragraph style">
+        <option value="">Style…</option>
+        <option value="Normal">Normal</option>
+        <option value="Heading1">Heading 1</option>
+        <option value="Heading2">Heading 2</option>
+        <option value="Heading3">Heading 3</option>
+        <option value="Title">Title</option>
+      </select>
+      <span class="sep"></span>
+      <button id="undo" title="Undo (Ctrl+Z)">&#8634;</button>
+      <button id="redo" title="Redo (Ctrl+Shift+Z)">&#8635;</button>
+    </div>
+    <label class="toggle"><input id="paginated" type="checkbox" /> Paginated</label>
+    <span class="spacer"></span>
+    <span id="status">Booting WASM…</span>
+  </header>
+  <p class="hint">
+    Click a paragraph or heading to edit it. Select text and use the ribbon (or <b>Ctrl+B/I/U</b>) to format.
+    <b>Enter</b> splits a block, <b>Backspace</b> at the start merges with the previous one; <b>Ctrl+Z</b> undoes.
+    Edits re-render only the affected block. Table <b>cell text is editable</b> (structure is fixed —
+    Enter/Tab inside a cell are inert). <b>Save</b> downloads a lossless .docx.
+  </p>
+  <div id="editor" class="continuous"></div>
+
+  <!-- Floating table toolbar — appears when the caret is inside a table cell. -->
+  <div id="tabletools" style="display:none; position:absolute; z-index:20; gap:4px;
+       background:#fff; border:1px solid #c3c7cc; border-radius:6px; padding:4px; box-shadow:0 1px 4px rgba(0,0,0,.18);">
+    <button data-tt="rowAbove" title="Insert row above">&#8593;Row</button>
+    <button data-tt="rowBelow" title="Insert row below">&#8595;Row</button>
+    <button data-tt="colLeft" title="Insert column left">&#8592;Col</button>
+    <button data-tt="colRight" title="Insert column right">&#8594;Col</button>
+    <button data-tt="delRow" title="Delete row">&#10005;Row</button>
+    <button data-tt="delCol" title="Delete column">&#10005;Col</button>
+  </div>
+
+  <!-- Visual table grid picker (replaces the freetext prompt). -->
+  <div id="gridpicker" style="display:none; position:absolute; z-index:30; background:#fff;
+       border:1px solid #c3c7cc; border-radius:8px; padding:8px; box-shadow:0 2px 8px rgba(0,0,0,.2);">
+    <div id="gridcells" style="display:grid; grid-template-columns: repeat(10, 16px); gap:2px;"></div>
+    <div style="margin-top:6px; font-size:12px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
+      <span id="gridlabel">0 × 0</span>
+      <span style="display:inline-flex; align-items:center; gap:8px;">
+        <label style="display:inline-flex; align-items:center; gap:4px;">Align
+          <select id="gridalign" style="font: inherit; padding:2px 4px; border:1px solid #c3c7cc; border-radius:4px;">
+            <option value="left">L</option>
+            <option value="center">C</option>
+            <option value="right">R</option>
+          </select>
+        </label>
+        <label class="toggle"><input id="gridborderless" type="checkbox" checked /> Borderless</label>
+      </span>
+    </div>
+  </div>
+
+  <script>document.write('<script src="./editor.bundle.js?t=' + Date.now() + '"><\/script>');</script>
+  <script type="module">
+    import { dotnet } from './_framework/dotnet.js';
+
+    const statusEl = document.getElementById('status');
+    const fileEl = document.getElementById('file');
+    const saveEl = document.getElementById('save');
+    const paginatedEl = document.getElementById('paginated');
+    const editorEl = document.getElementById('editor');
+    const ribbonEl = document.getElementById('ribbon');
+    const styleEl = document.getElementById('style');
+
+    const setStatus = (s) => { statusEl.textContent = s; };
+
+    // Ribbon wiring. Format buttons preventDefault on mousedown so the editor keeps its
+    // text selection (clicking a button must not blur the contenteditable block).
+    ribbonEl.querySelectorAll('button[data-cmd]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => editor && editor.format(btn.dataset.cmd));
+    });
+    for (const id of ['undo', 'redo']) {
+      const b = document.getElementById(id);
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      b.addEventListener('click', () => editor && editor[id]());
+    }
+    // Paragraph alignment / indent / page break.
+    ribbonEl.querySelectorAll('button[data-align]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => editor && editor.setAlignment(btn.dataset.align));
+    });
+    ribbonEl.querySelectorAll('button[data-indent]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => editor && editor.indent(parseInt(btn.dataset.indent, 10)));
+    });
+    const pbBtn = ribbonEl.querySelector('button[data-pagebreak]');
+    pbBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    pbBtn.addEventListener('click', () => editor && editor.pageBreakBefore(true));
+    ribbonEl.querySelectorAll('button[data-list]').forEach((btn) => {
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => editor && editor.toggleList(btn.dataset.list));
+    });
+    // Font size.
+    const fontsizeEl = document.getElementById('fontsize');
+    const applyFontSize = () => {
+      const pts = parseFloat(fontsizeEl.value);
+      if (editor && pts > 0) editor.setFontSize(pts);
+    };
+    // Apply on `change` only (fires on Enter and on blur). Enter just commits via blur — binding
+    // applyFontSize to BOTH `change` and keydown fired it twice, stacking two undo snapshots so one
+    // size change took two Ctrl+Z to revert (and the second call re-selected a swapped-out block).
+    fontsizeEl.addEventListener('change', applyFontSize);
+    fontsizeEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); fontsizeEl.blur(); } });
+    // Font family — applies the picked font to the selection, then resets to the "Font…" label
+    // (the editor caches the last real selection, like the size combobox, so the dropdown stealing
+    // focus doesn't lose the sub-range).
+    const fontFamilyEl = document.getElementById('fontfamily');
+    fontFamilyEl.addEventListener('change', () => {
+      if (editor && fontFamilyEl.value) editor.setFontFamily(fontFamilyEl.value);
+      fontFamilyEl.value = '';
+    });
+    // Reflect the current selection's size in the input (unless the user is editing the field).
+    document.addEventListener('selectionchange', () => {
+      if (!editor || document.activeElement === fontsizeEl) return;
+      const sel = document.getSelection();
+      const node = sel && sel.anchorNode;
+      const el = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+      if (el && el.closest && el.closest('#editor')) {
+        const px = parseFloat(getComputedStyle(el).fontSize);
+        if (px) fontsizeEl.value = String(Math.round(px * 0.75 * 2) / 2); // px → pt, nearest 0.5
+      }
+    });
+    // Horizontal rules + table insertion. The Above/Below select decides where the rule lands.
+    const rulePos = () => document.getElementById('rulepos').value; // "above" | "below"
+    for (const [id, fn] of [
+      ['hr', () => editor && editor.insertHorizontalRule(12, 'single', rulePos())],
+      ['hrThick', () => editor && editor.insertHorizontalRule(24, 'single', rulePos())],
+      ['hrDouble', () => editor && editor.insertHorizontalRule(12, 'double', rulePos())],
+      ['hrClear', () => editor && editor.clearParagraphBorders()],
+      ['delblock', () => editor && editor.deleteBlock()],
+    ]) {
+      const b = document.getElementById(id);
+      b.addEventListener('mousedown', (e) => e.preventDefault());
+      b.addEventListener('click', fn);
+    }
+    // Visual table grid picker: hover to choose rows×cols, click to insert.
+    const tableBtn = document.getElementById('table');
+    const gridPicker = document.getElementById('gridpicker');
+    const gridCells = document.getElementById('gridcells');
+    const gridLabel = document.getElementById('gridlabel');
+    const gridBorderless = document.getElementById('gridborderless');
+    const GRID_ROWS = 8, GRID_COLS = 10;
+    const cellEls = [];
+    for (let r = 0; r < GRID_ROWS; r++) {
+      for (let c = 0; c < GRID_COLS; c++) {
+        const cell = document.createElement('div');
+        cell.dataset.r = r; cell.dataset.c = c;
+        cell.style.cssText = 'width:16px;height:16px;border:1px solid #c3c7cc;border-radius:2px;background:#f6f7f8;cursor:pointer;';
+        gridCells.appendChild(cell);
+        cellEls.push(cell);
+      }
+    }
+    const hi = (rows, cols) => {
+      for (const cell of cellEls) {
+        const on = (+cell.dataset.r) < rows && (+cell.dataset.c) < cols;
+        cell.style.background = on ? '#d9e7ff' : '#f6f7f8';
+        cell.style.borderColor = on ? '#4c8bf5' : '#c3c7cc';
+      }
+      gridLabel.textContent = `${rows} × ${cols}`;
+    };
+    const closePicker = () => { gridPicker.style.display = 'none'; };
+    gridCells.addEventListener('mouseover', (e) => {
+      const cell = e.target.closest('[data-r]');
+      if (cell) hi((+cell.dataset.r) + 1, (+cell.dataset.c) + 1);
+    });
+    gridCells.addEventListener('mousedown', (e) => {
+      const cell = e.target.closest('[data-r]');
+      if (!cell || !editor) return;
+      e.preventDefault();
+      editor.insertTable((+cell.dataset.r) + 1, (+cell.dataset.c) + 1,
+        { borderless: gridBorderless.checked, cellAlignment: document.getElementById('gridalign').value });
+      closePicker();
+    });
+    tableBtn.addEventListener('mousedown', (e) => e.preventDefault());
+    tableBtn.addEventListener('click', () => {
+      if (!editor) return;
+      if (gridPicker.style.display === 'block') { closePicker(); return; }
+      hi(0, 0);
+      const r = tableBtn.getBoundingClientRect();
+      gridPicker.style.display = 'block';
+      gridPicker.style.left = (window.scrollX + r.left) + 'px';
+      gridPicker.style.top = (window.scrollY + r.bottom + 4) + 'px';
+    });
+    // Dismiss the picker when clicking elsewhere.
+    document.addEventListener('mousedown', (e) => {
+      if (gridPicker.style.display === 'block' && !gridPicker.contains(e.target) && e.target !== tableBtn) {
+        closePicker();
+      }
+    });
+    styleEl.addEventListener('change', () => {
+      if (editor && styleEl.value) { editor.setParagraphStyle(styleEl.value); }
+      styleEl.value = '';
+    });
+    // Highlight active formats for the current selection.
+    document.addEventListener('selectionchange', () => {
+      if (!editor) return;
+      const st = editor.queryFormatState();
+      ribbonEl.querySelectorAll('button[data-cmd]').forEach((b) => {
+        b.classList.toggle('active', !!st[b.dataset.cmd]);
+      });
+    });
+
+    // Floating table toolbar: row/column CRUD, shown when the caret is in a table cell.
+    const tableTools = document.getElementById('tabletools');
+    const ttOps = {
+      rowAbove: () => editor.insertTableRow('above'),
+      rowBelow: () => editor.insertTableRow('below'),
+      colLeft: () => editor.insertTableColumn('left'),
+      colRight: () => editor.insertTableColumn('right'),
+      delRow: () => editor.deleteTableRow(),
+      delCol: () => editor.deleteTableColumn(),
+    };
+    tableTools.querySelectorAll('button[data-tt]').forEach((b) => {
+      b.addEventListener('mousedown', (e) => e.preventDefault()); // keep the cell selection
+      b.addEventListener('click', () => { if (editor) ttOps[b.dataset.tt]?.(); });
+    });
+    document.addEventListener('selectionchange', () => {
+      const sel = document.getSelection();
+      const node = sel && sel.anchorNode;
+      const el = node ? (node.nodeType === 1 ? node : node.parentElement) : null;
+      const table = el && el.closest ? el.closest('#editor table') : null;
+      if (table) {
+        const r = table.getBoundingClientRect();
+        tableTools.style.display = 'inline-flex';
+        tableTools.style.left = (window.scrollX + r.left) + 'px';
+        // Prefer just above the table; if that would tuck under the sticky header (or off-screen
+        // for a table near the page top), drop it just below the table's top edge instead so it
+        // never overlaps the first row.
+        const headerBottom = document.querySelector('header').getBoundingClientRect().bottom;
+        const aboveTop = r.top - tableTools.offsetHeight - 6;
+        const top = aboveTop > headerBottom + 4 ? aboveTop : r.bottom + 6;
+        tableTools.style.top = (window.scrollY + top) + 'px';
+      } else {
+        tableTools.style.display = 'none';
+      }
+    });
+
+    setStatus('Booting WASM…');
+    const { getAssemblyExports, getConfig } = await dotnet.withDiagnosticTracing(false).create();
+    const config = getConfig();
+    const wasm = await getAssemblyExports(config.mainAssemblyName);
+    const exports = {
+      DocxSessionBridge: wasm.DocxodusWasm.DocxSessionBridge,
+      DocumentConverter: wasm.DocxodusWasm.DocumentConverter,
+    };
+
+    let editor = null;
+    let currentBytes = null;
+
+    // Test hook: expose the WASM exports + open helper so automated smoke tests can drive
+    // the editing surface (the same bridge ops the toolbar buttons call) and re-render.
+    window.__demo = {
+      exports,
+      openDoc: (b) => openDoc(b),
+      getEditor: () => editor,
+    };
+
+    function openDoc(bytes) {
+      currentBytes = bytes;
+      if (editor) { try { editor.close(); } catch {} editor = null; }
+      const paginated = paginatedEl.checked;
+      editorEl.className = paginated ? 'paginated' : 'continuous';
+      editorEl.innerHTML = '';
+      const t0 = performance.now();
+      editor = window.DocxodusEditor.DocxEditor.open(editorEl, bytes, exports, { paginated });
+      saveEl.disabled = false;
+      ribbonEl.setAttribute('aria-disabled', 'false');
+      setStatus(`Rendered in ${Math.round(performance.now() - t0)} ms — edit away.`);
+    }
+
+    fileEl.addEventListener('change', async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      setStatus(`Loading ${f.name}…`);
+      openDoc(new Uint8Array(await f.arrayBuffer()));
+    });
+
+    // New blank document — mint a fresh single-paragraph DOCX and open it.
+    document.getElementById('new').addEventListener('click', () => {
+      setStatus('New blank document…');
+      openDoc(exports.DocxSessionBridge.CreateBlankDocx());
+    });
+
+    // Toggle pagination WITHOUT discarding edits: re-render the live session in the new mode
+    // (DocxEditor.setPaginated) instead of re-opening the original bytes. Falls back to a fresh
+    // open only when no editor exists yet.
+    paginatedEl.addEventListener('change', () => {
+      if (!editor) { if (currentBytes) openDoc(currentBytes); return; }
+      editorEl.className = paginatedEl.checked ? 'paginated' : 'continuous';
+      editor.setPaginated(paginatedEl.checked);
+      setStatus(paginatedEl.checked ? 'Paginated — edits preserved.' : 'Continuous — edits preserved.');
+    });
+
+    saveEl.addEventListener('click', () => {
+      if (!editor) return;
+      const out = editor.save();
+      const blob = new Blob([out], {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'edited.docx';
+      a.click();
+      URL.revokeObjectURL(a.href);
+      setStatus('Saved edited.docx');
+    });
+
+    // Auto-load the bundled sample so there's something to edit immediately.
+    try {
+      const res = await fetch('./sample.docx');
+      if (res.ok) {
+        openDoc(new Uint8Array(await res.arrayBuffer()));
+      } else {
+        setStatus('Ready — open a .docx to start.');
+      }
+    } catch {
+      setStatus('Ready — open a .docx to start.');
+    }
+  </script>
+</body>
+</html>

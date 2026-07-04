@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>diffharness</AssemblyName>
+    <RootNamespace>DiffHarness</RootNamespace>
+    <!-- Internal test/verification tool: not packed, not in the solution. StyleCop file-header
+         rules don't apply to a throwaway harness; never let warnings block a build of it. -->
+    <IsPackable>false</IsPackable>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../Docxodus/Docxodus.csproj" />
+  </ItemGroup>
+</Project>

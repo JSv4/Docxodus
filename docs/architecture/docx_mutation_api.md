@@ -66,12 +66,12 @@ An anchor id looks like `{#h:body:7b9f61007f9341c8aa5878ee63ffc874}`. The parts:
 
 ## What the markdown payload subset is, and why
 
-When you pass markdown into `ReplaceText`, `InsertParagraph`, or `ReplaceCellContent`, the session runs it through `MarkdownPayloadParser`, a hand-rolled parser that accepts **only** what the projector emits. Block-level: paragraphs, ATX headings (`#`–`######`), bulleted lists, ordered lists (with indent-based nesting), blockquotes, fenced code blocks. Inline: `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[text](url)` links, soft breaks, backslash escapes.
+When you pass markdown into `ReplaceText`, `InsertParagraph`, or `ReplaceCellContent`, the session runs it through `MarkdownPayloadParser`, a hand-rolled parser that accepts **only** what the projector emits. Block-level: paragraphs, ATX headings (`#`–`######`), bulleted lists, ordered lists (with indent-based nesting), blockquotes, fenced code blocks. Inline: `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`, `[text](url)` links, the GFM hard break (`"  \n"`, two trailing spaces → a real `w:br`), backslash escapes. (A *blank* line still separates paragraphs; a single in-paragraph newline becomes a `w:br`, symmetric with the projector's `w:br → "  \n"`.)
 
 This is symmetric by design: anything the projector can emit, the parser can accept, so an agent can read markdown out and write markdown in. Anything outside the subset is rejected with a typed error that names either the v1 op to use instead or the v2 op planned to address it. The full table of accepted and rejected syntax is in the spec — the practical shorthand:
 
 - If you can see it in the projection output, you can write it in a payload.
-- If you need a pipe table → use `ReplaceCellContent` on each cell (`InsertTable` is v2).
+- If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`), then edit cells with `ReplaceCellContent` or address each cell-paragraph anchor; reshape with `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` (by a cell-paragraph anchor; v1 assumes a rectangular grid, no `w:gridSpan`).
 - If you need a footnote, comment, or image → those are v2 ops, currently rejected with a clear error.
 - For everything OOXML can do that markdown can't (complex tables, math, content controls, drawings) → `session.Raw.*`.
 
@@ -133,9 +133,10 @@ What am I editing?
 ├── Joining two adjacent paragraphs?
 │       → MergeParagraphs(firstAnchor, secondAnchor)
 │
-├── Just the bold/italic/underline/code/color of some characters?
+├── Just the bold/italic/underline/code/color/size/font of some characters?
 │       → ApplyFormat(anchor, CharSpan(start, length), FormatOp{...})
 │       → ApplyFormat(anchor, null, FormatOp{...})  # null span = whole paragraph
+│         # FormatOp.FontSizePts → w:sz/w:szCs; FontFamily → w:rFonts ("" clears)
 │
 ├── Changing a paragraph's style (e.g., Normal → Heading2)?
 │       → SetParagraphStyle(anchor, styleId)

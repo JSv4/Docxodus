@@ -13,7 +13,7 @@
 
 ---
 
-Docxodus is a fork of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools) upgraded to .NET 8.0. It provides tools for comparing Word documents, converting between DOCX and HTML, projecting DOCX to anchor-addressed markdown for LLM pipelines, programmatically editing DOCX content via a stateful session API, merging documents, and more.
+Docxodus is a fork of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools) upgraded to .NET 10.0. It provides tools for comparing Word documents, converting between DOCX and HTML, projecting DOCX to anchor-addressed markdown for LLM pipelines, programmatically editing DOCX content via a stateful session API, merging documents, and more.
 
 ## Quick Start
 
@@ -274,7 +274,7 @@ See the [npm package documentation](docs/npm-package.md) for full API reference,
 
 ## Requirements
 
-- .NET 8.0 or later
+- .NET 10.0 or later
 
 ## License
 
