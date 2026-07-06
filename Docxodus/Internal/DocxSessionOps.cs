@@ -42,6 +42,25 @@ internal static class DocxSessionOps
         HtmlConversionOps.RenderBlockHtml(SessionRegistry.Get(handle), anchorId,
             new HtmlConversionOptions { CssClassPrefix = cssPrefix ?? "docx-", FabricateCssClasses = fabricateClasses });
 
+    /// <summary>
+    /// Render the live session's current state to a complete anchor-stamped HTML document —
+    /// the editor's full re-render (remount) without round-tripping the saved bytes through
+    /// the transport. The option profile matches the editor's ConvertDocxToHtmlComplete call
+    /// (comments/footnotes/annotations off, headers-and-footers tied to pagination), so a
+    /// remount through this path renders byte-identically to the bytes path.
+    /// </summary>
+    public static string RenderHtml(int handle, string cssPrefix, bool fabricateClasses,
+        bool paginated, double scale) =>
+        HtmlConversionOps.ConvertToHtml(SessionRegistry.Get(handle), new HtmlConversionOptions
+        {
+            CssClassPrefix = cssPrefix ?? "docx-",
+            FabricateCssClasses = fabricateClasses,
+            PaginationMode = paginated ? 1 : 0,
+            PaginationScale = scale,
+            RenderHeadersAndFooters = paginated,
+            StampAnchors = true,
+        });
+
     public static string Grep(int handle, string pattern, RegexOptions regexOpts,
         ProjectionScopes scope, int contextChars, WhitespaceMode whitespace, ContextBoundary boundary) =>
         DocxSessionJson.SerializeMatches(

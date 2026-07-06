@@ -1011,6 +1011,13 @@ export interface DocxodusWasmExports {
       cssPrefix: string,
       fabricateClasses: boolean
     ) => string;
+    RenderHtml: (
+      handle: number,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      paginated: boolean,
+      scale: number
+    ) => string;
     ReplaceText: (handle: number, anchor: string, md: string) => string;
     DeleteBlock: (handle: number, anchor: string) => string;
     DeleteRange: (handle: number, fromAnchorId: string, toAnchorIdExclusive: string) => string;

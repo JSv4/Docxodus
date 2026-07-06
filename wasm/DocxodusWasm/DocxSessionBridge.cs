@@ -63,6 +63,19 @@ public static partial class DocxSessionBridge
         catch (System.Exception ex) { return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}"; }
     }
 
+    /// <summary>
+    /// Render the live session's current state to a complete anchor-stamped HTML document —
+    /// the editor's full re-render (remount) without marshaling the saved bytes out to JS
+    /// and back in. Same error convention as <see cref="RenderBlockHtml"/>: HTML starts
+    /// with '&lt;', an error object starts with '{'.
+    /// </summary>
+    [JSExport]
+    public static string RenderHtml(int h, string cssPrefix, bool fabricateClasses, bool paginated, double scale)
+    {
+        try { return DocxSessionOps.RenderHtml(h, cssPrefix, fabricateClasses, paginated, scale); }
+        catch (System.Exception ex) { return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}"; }
+    }
+
     [JSExport]
     public static string ReplaceText(int h, string anchor, string md) =>
         DocxSessionOps.ReplaceText(h, anchor, md);

@@ -59,6 +59,22 @@ block(s), insert/remove nodes, update the `unid → fullId` map, place the caret
 restored exactly), and round-trips through save. Insert-at-doc-start and block delete/reorder
 remain follow-ups (Enter-split + Backspace-merge cover the core authoring loop).
 
+### M2.5 — Incremental multi-block ops + session-attached remount  · effort S · ✅ **DONE**
+**Problem:** every multi-block ribbon action (`format`/`setAlignment`/`setFontSize`/… over a
+multi-paragraph selection) fell back to `remount()` — a full-document convert (~1–2.5 s) per
+click — while the single-block path swapped one block in ~10 ms; and `remount()` itself
+marshaled the saved bytes WASM→JS→WASM (two multi-MB copies) before converting.
+**Shipped:** the multi-block paths now apply each block's op and swap each edited block via
+the session-attached `RenderBlockHtml` (exactly N single-block swaps — fidelity-identical to
+the single-block path by construction), restoring the cross-block selection so consecutive
+ribbon actions keep working. Full remount is kept only where whole-document context is real:
+list-touching results (numbering), `clearBorders` (border-div regrouping), paginated mode
+(reflow, until M4). `remount()` now renders through a new session-attached
+`DocxSessionBridge.RenderHtml` (same option profile, byte-identical output, old-bundle
+fallback to Save+Convert). Pinned by `npm/tests/editor-perf-incremental.spec.ts`:
+node-identity proof that untouched blocks survive (no remount), selection restore,
+save/reopen fidelity, and RenderHtml ≡ bytes-path parity.
+
 ### M3 — Worker offload  · effort M–L
 **Problem:** the initial full convert (~0.7–2.4 s) and session ops run on the main thread →
 the UI freezes on open and on big docs. (Per-edit is already ~10 ms.)

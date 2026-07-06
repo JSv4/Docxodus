@@ -62,6 +62,14 @@ export interface DocxEditorExports {
       cssPrefix: string,
       fabricateClasses: boolean,
     ) => string;
+    /** Session-attached full-document render (optional: older WASM bundles lack it). */
+    RenderHtml?: (
+      handle: number,
+      cssPrefix: string,
+      fabricateClasses: boolean,
+      paginated: boolean,
+      scale: number,
+    ) => string;
     Save: (handle: number) => Uint8Array;
     Undo: (handle: number) => boolean;
     Redo: (handle: number) => boolean;
@@ -324,6 +332,38 @@ function trimmedSplitOffset(block: HTMLElement, domOffset: number): number {
   const leading = content.length - content.replace(/^\s+/, "").length;
   const trimmedLen = content.trim().length;
   return Math.max(0, Math.min(domOffset - Math.min(domOffset, leading), trimmedLen));
+}
+
+/**
+ * DOM (node, offset) for content offset `offset` within `el` — the same content-offset
+ * space as contentOffsetOf (marker text and injected bidi marks excluded). Clamps past-end
+ * offsets to the end of the last text node (or the element itself when it has none), so a
+ * caller can always build a Range from the result.
+ */
+function contentPositionIn(el: HTMLElement, offset: number): { node: Node; offset: number } {
+  let remaining = offset;
+  let result: { node: Node; offset: number } | null = null;
+  let lastText: Node | null = null;
+  const walk = (node: Node): void => {
+    if (result) return;
+    if (node.nodeType === 3 /* TEXT_NODE */) {
+      if (isInMarker(node)) return;
+      const raw = node.textContent ?? "";
+      const len = stripBidi(raw).length;
+      lastText = node;
+      if (remaining <= len) {
+        result = { node, offset: domOffsetForContentOffset(raw, remaining) };
+        return;
+      }
+      remaining -= len;
+    } else {
+      node.childNodes.forEach(walk);
+    }
+  };
+  walk(el);
+  if (result) return result;
+  if (lastText) return { node: lastText, offset: ((lastText as Node).textContent ?? "").length };
+  return { node: el, offset: el.childNodes.length };
 }
 
 /** Place the caret at content offset `offset` within `el`, skipping marker text. */
@@ -1056,40 +1096,118 @@ export class DocxEditor {
     return { start: 0, length: contentLen }; // fully-spanned middle block
   }
 
-  /** Apply an inline ApplyFormat op to each block's slice of the selection, then re-render.
+  /** Apply an inline ApplyFormat op to each block's slice of the selection, then reconcile
+   *  the DOM incrementally (see {@link finishMultiBlockOp} — a full remount costs a whole-
+   *  document convert, seconds on a large doc, where per-block swaps are ~10 ms each).
    *  Returns false (caller falls back to the single-block path) for a 1-block selection. */
   private applyInlineOpAcrossBlocks(blocks: HTMLElement[], op: object): boolean {
     if (blocks.length <= 1) return false;
-    const targets = blocks.map((b) => {
-      const unid = b.getAttribute("data-anchor");
-      return { block: b, fullId: unid ? this.unidToFullId.get(unid) : undefined, span: this.blockSpanForSelection(b) };
-    });
+    const targets = this.multiBlockTargets(blocks);
     for (const t of targets) {
       if (!t.fullId || (t.span && t.span.length === 0)) continue;
       const synced = this.syncBlock(t.block, t.fullId);
-      this.exports.DocxSessionBridge.ApplyFormat(
+      const res = this.parseEdit(this.exports.DocxSessionBridge.ApplyFormat(
         this.handle, synced, t.span ? JSON.stringify(t.span) : "", JSON.stringify(op),
-      );
+      ));
+      if (res.success) t.res = res;
     }
-    this.remount();
+    this.finishMultiBlockOp(targets, false);
     return true;
   }
 
-  /** Apply a whole-block (paragraph-level) op to each selected block, then re-render.
-   *  Returns false for a 1-block selection (caller uses the single-block path). */
-  private applyParagraphOpAcrossBlocks(blocks: HTMLElement[], run: (fullId: string) => string): boolean {
+  /** Apply a whole-block (paragraph-level) op to each selected block, then reconcile the DOM
+   *  incrementally ({@link finishMultiBlockOp}). `forceRemount` is for ops whose rendering
+   *  needs whole-document context (e.g. border-div regrouping after clearBorders). Returns
+   *  false for a 1-block selection (caller uses the single-block path). */
+  private applyParagraphOpAcrossBlocks(
+    blocks: HTMLElement[],
+    run: (fullId: string) => string,
+    forceRemount = false,
+  ): boolean {
     if (blocks.length <= 1) return false;
-    const targets = blocks.map((b) => {
-      const unid = b.getAttribute("data-anchor");
-      return { block: b, fullId: unid ? this.unidToFullId.get(unid) : undefined };
-    });
+    const targets = this.multiBlockTargets(blocks);
     for (const t of targets) {
       if (!t.fullId) continue;
       const synced = this.syncBlock(t.block, t.fullId);
-      run(synced);
+      const res = this.parseEdit(run(synced));
+      if (res.success) t.res = res;
     }
-    this.remount();
+    this.finishMultiBlockOp(targets, forceRemount);
     return true;
+  }
+
+  /** Snapshot each selected block's identity + selection slice BEFORE any session op runs
+   *  (ops never mutate the DOM, so spans captured here stay valid until the swap phase). */
+  private multiBlockTargets(blocks: HTMLElement[]): Array<{
+    block: HTMLElement;
+    unid: string | null;
+    fullId: string | undefined;
+    span: { start: number; length: number } | null;
+    res: EditResultLite | null;
+  }> {
+    return blocks.map((b) => {
+      const unid = b.getAttribute("data-anchor");
+      return {
+        block: b,
+        unid,
+        fullId: unid ? this.unidToFullId.get(unid) : undefined,
+        span: this.blockSpanForSelection(b),
+        res: null,
+      };
+    });
+  }
+
+  /**
+   * Reconcile the DOM after a multi-block op. Fidelity-identical to the single-block path by
+   * construction: each edited block is swapped for its own session-attached single-block
+   * render — exactly what format()/setFontSize()/applyParagraphFormat() do for one block —
+   * so a multi-block apply is N single-block applies, not one whole-document re-render
+   * (which froze the UI for the full-document convert time on every ribbon action). Falls
+   * back to ONE full remount when the op touched a list item (numbering continuation needs
+   * whole-document context) or the caller forced it. Restores the cross-block selection so
+   * consecutive ribbon actions (center, then bold) keep targeting the same range.
+   */
+  private finishMultiBlockOp(
+    targets: Array<{
+      block: HTMLElement;
+      unid: string | null;
+      span: { start: number; length: number } | null;
+      res: EditResultLite | null;
+    }>,
+    forceRemount: boolean,
+  ): void {
+    const edited = targets.filter((t) => t.res && t.unid);
+    if (edited.length === 0) return;
+    // Paginated mode: a multi-block format change can alter block heights, and page boxes
+    // need a reflow — keep the (pre-existing) full remount there until M4 lands a scoped
+    // re-paginate. Continuous mode reconciles incrementally.
+    if (forceRemount || this.options.paginated || edited.some((t) => this.affectsList(t.res!))) {
+      this.remount();
+      return;
+    }
+    const swapped: Array<{ el: HTMLElement; span: { start: number; length: number } | null }> = [];
+    for (const t of edited) {
+      const fresh = this.swapBlock(t.block, t.unid!, t.res!.modified?.[0]);
+      swapped.push({ el: fresh ?? t.block, span: t.span });
+    }
+    const first = swapped[0];
+    const last = swapped[swapped.length - 1];
+    if (!first.el.isConnected || !last.el.isConnected) return;
+    const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    if (!sel) return;
+    const startOff = first.span?.start ?? 0;
+    const endOff = last.span ? last.span.start + last.span.length : blockContentText(last.el).length;
+    const startPos = contentPositionIn(first.el, startOff);
+    const endPos = contentPositionIn(last.el, endOff);
+    try {
+      const range = document.createRange();
+      range.setStart(startPos.node, startPos.offset);
+      range.setEnd(endPos.node, endPos.offset);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch {
+      /* selection restore is best-effort — the edits themselves are already committed */
+    }
   }
 
   /**
@@ -1429,8 +1547,11 @@ export class DocxEditor {
     const blocks = this.selectedBlocks();
     if (
       blocks.length > 1 &&
-      this.applyParagraphOpAcrossBlocks(blocks, (id) =>
-        this.exports.DocxSessionBridge.SetParagraphFormat(this.handle, id, JSON.stringify(op)),
+      this.applyParagraphOpAcrossBlocks(
+        blocks,
+        (id) => this.exports.DocxSessionBridge.SetParagraphFormat(this.handle, id, JSON.stringify(op)),
+        // A border change regroups the wrapping border <div>s — whole-document context.
+        !!op.clearBorders,
       )
     )
       return;
@@ -1516,6 +1637,31 @@ export class DocxEditor {
     return fresh;
   }
 
+  /**
+   * Full-document HTML from the live session. Prefers the session-attached
+   * `RenderHtml` bridge — the saved bytes never cross the JS/WASM boundary
+   * (two multi-MB copies per remount on a large doc) — and falls back to
+   * Save + ConvertDocxToHtmlComplete for older WASM bundles. Both paths use
+   * the same option profile, so the rendered HTML is identical.
+   */
+  private renderFullHtml(): string {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.RenderHtml === "function") {
+      const html = bridge.RenderHtml(
+        this.handle,
+        this.options.cssPrefix,
+        this.options.fabricateClasses,
+        this.options.paginated,
+        this.options.scale,
+      );
+      if (html.charCodeAt(0) !== 0x7b /* not an error object */) return html;
+    }
+    const bytes = bridge.Save(this.handle);
+    return this.exports.DocumentConverter.ConvertDocxToHtmlComplete(
+      ...completeArgs(bytes, this.options.cssPrefix, this.options.fabricateClasses, this.options.paginated, this.options.scale),
+    );
+  }
+
   /** Editable blocks in document order. */
   private editableList(): HTMLElement[] {
     return Array.from(this.editRoot.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'));
@@ -1542,10 +1688,7 @@ export class DocxEditor {
    */
   private remount(focusIndex = -1, caretAtEnd = false): void {
     this.refreshAnchorMap();
-    const bytes = this.exports.DocxSessionBridge.Save(this.handle);
-    const fullHtml = this.exports.DocumentConverter.ConvertDocxToHtmlComplete(
-      ...completeArgs(bytes, this.options.cssPrefix, this.options.fabricateClasses, this.options.paginated, this.options.scale),
-    );
+    const fullHtml = this.renderFullHtml();
     this.activeBlock = null;
     if (this.options.paginated) this.mountPaginated(fullHtml);
     else this.mountHtml(fullHtml);
