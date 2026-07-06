@@ -9,6 +9,7 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
+using Docxodus.Tests.Ir;
 using Xunit;
 
 namespace Docxodus.Tests;
@@ -157,6 +158,29 @@ public class WmlComparerBodyLevelElementsTests
 
         Assert.NotNull(result);
         Assert.NotNull(result.DocumentByteArray);
+    }
+
+    [Fact]
+    public void WC_FinalSectionHeaderFooterReferences_BothSidesPreservedInRedline()
+    {
+        var before = IrTestDocuments.WithHeaderAndFooter(
+            "Header logo placeholder",
+            "Footer placeholder",
+            "Body before.");
+        var after = IrTestDocuments.WithHeaderAndFooter(
+            "Header logo placeholder",
+            "Footer placeholder",
+            "Body after.");
+
+        var settings = new WmlComparerSettings();
+        var result = WmlComparer.Compare(before, after, settings);
+
+        using var ms = new MemoryStream(result.DocumentByteArray);
+        using var wDoc = WordprocessingDocument.Open(ms, false);
+        var sectPr = wDoc.MainDocumentPart!.GetXDocument().Root!.Element(W + "body")!.Element(W + "sectPr")!;
+
+        Assert.NotEmpty(sectPr.Elements(W + "headerReference"));
+        Assert.NotEmpty(sectPr.Elements(W + "footerReference"));
     }
 
     /// <summary>

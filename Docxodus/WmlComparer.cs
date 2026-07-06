@@ -1901,9 +1901,11 @@ namespace Docxodus
                     if (savedSectPr != null)
                     {
                         var xd = wDocWithRevisions.MainDocumentPart.GetXDocument();
-                        // add everything but headers/footers
+                        // Header/footer parts stay in the source package; keep the section references so Word renders them.
                         var clonedSectPr = new XElement(W.sectPr,
                             savedSectPr.Attributes(),
+                            savedSectPr.Elements(W.headerReference),
+                            savedSectPr.Elements(W.footerReference),
                             savedSectPr.Element(W.type),
                             savedSectPr.Element(W.pgSz),
                             savedSectPr.Element(W.pgMar),
