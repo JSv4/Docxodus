@@ -104,12 +104,14 @@ public partial class DocumentComparer
     /// <param name="originalBytes">The original DOCX file as a byte array</param>
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
     /// <param name="authorName">Author name for tracked changes</param>
+    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer default, 1 = DocxDiff)</param>
     /// <returns>Redlined DOCX as byte array, or empty array on error</returns>
     [JSExport]
     public static byte[] CompareDocuments(
         byte[] originalBytes,
         byte[] modifiedBytes,
-        string authorName)
+        string authorName,
+        int engine)
     {
         if (originalBytes == null || originalBytes.Length == 0 ||
             modifiedBytes == null || modifiedBytes.Length == 0)
@@ -130,7 +132,7 @@ public partial class DocumentComparer
                 DetailThreshold = 0.15
             };
 
-            var result = WmlComparer.Compare(original, modified, settings);
+            var result = DocxCompare.Compare(original, modified, (ComparisonEngine)engine, settings);
             return result.DocumentByteArray;
         }
         catch (Exception ex)
@@ -155,8 +157,8 @@ public partial class DocumentComparer
         byte[] modifiedBytes,
         string authorName)
     {
-        // Default: show tracked changes visually
-        return CompareDocumentsToHtmlWithOptions(originalBytes, modifiedBytes, authorName, renderTrackedChanges: true);
+        // Default: show tracked changes visually, WmlComparer engine (0).
+        return CompareDocumentsToHtmlWithOptions(originalBytes, modifiedBytes, authorName, renderTrackedChanges: true, engine: 0);
     }
 
     /// <summary>
@@ -166,13 +168,15 @@ public partial class DocumentComparer
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
     /// <param name="authorName">Author name for tracked changes</param>
     /// <param name="renderTrackedChanges">If true, show insertions/deletions visually. If false, accept all changes (clean output).</param>
+    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer default, 1 = DocxDiff)</param>
     /// <returns>HTML string, or JSON error object</returns>
     [JSExport]
     public static string CompareDocumentsToHtmlWithOptions(
         byte[] originalBytes,
         byte[] modifiedBytes,
         string authorName,
-        bool renderTrackedChanges)
+        bool renderTrackedChanges,
+        int engine)
     {
         if (originalBytes == null || originalBytes.Length == 0 ||
             modifiedBytes == null || modifiedBytes.Length == 0)
@@ -192,7 +196,7 @@ public partial class DocumentComparer
                 DetailThreshold = 0.15
             };
 
-            var result = WmlComparer.Compare(original, modified, comparerSettings);
+            var result = DocxCompare.Compare(original, modified, (ComparisonEngine)engine, comparerSettings);
 
             // Convert the redlined document to HTML
             // Must use writable stream - WmlToHtmlConverter may call RevisionAccepter internally
@@ -313,6 +317,7 @@ public partial class DocumentComparer
     /// <param name="detailThreshold">Detail threshold (0.0 to 1.0, default 0.15)</param>
     /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
     /// <param name="renderTrackedChanges">If true, show insertions/deletions visually. If false, accept all changes (clean output).</param>
+    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer default, 1 = DocxDiff)</param>
     /// <returns>HTML string, or JSON error object</returns>
     [JSExport]
     public static string CompareDocumentsToHtmlFull(
@@ -321,7 +326,8 @@ public partial class DocumentComparer
         string authorName,
         double detailThreshold,
         bool caseInsensitive,
-        bool renderTrackedChanges)
+        bool renderTrackedChanges,
+        int engine)
     {
         if (originalBytes == null || originalBytes.Length == 0 ||
             modifiedBytes == null || modifiedBytes.Length == 0)
@@ -342,7 +348,7 @@ public partial class DocumentComparer
                 CaseInsensitive = caseInsensitive
             };
 
-            var result = WmlComparer.Compare(original, modified, comparerSettings);
+            var result = DocxCompare.Compare(original, modified, (ComparisonEngine)engine, comparerSettings);
 
             // Convert the redlined document to HTML
             // Must use writable stream - WmlToHtmlConverter may call RevisionAccepter internally
@@ -568,6 +574,7 @@ public partial class DocumentComparer
     /// <param name="authorName">Author name for tracked changes</param>
     /// <param name="detailThreshold">Detail threshold (0.0 to 1.0, default 0.15)</param>
     /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
+    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer default, 1 = DocxDiff)</param>
     /// <returns>Redlined DOCX as byte array</returns>
     [JSExport]
     public static byte[] CompareDocumentsWithOptions(
@@ -575,7 +582,8 @@ public partial class DocumentComparer
         byte[] modifiedBytes,
         string authorName,
         double detailThreshold,
-        bool caseInsensitive)
+        bool caseInsensitive,
+        int engine)
     {
         if (originalBytes == null || originalBytes.Length == 0 ||
             modifiedBytes == null || modifiedBytes.Length == 0)
@@ -596,7 +604,7 @@ public partial class DocumentComparer
                 CaseInsensitive = caseInsensitive
             };
 
-            var result = WmlComparer.Compare(original, modified, settings);
+            var result = DocxCompare.Compare(original, modified, (ComparisonEngine)engine, settings);
             return result.DocumentByteArray;
         }
         catch (Exception ex)

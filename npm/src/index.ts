@@ -113,6 +113,7 @@ import {
   PaginationMode,
   AnnotationLabelMode,
   RevisionType,
+  ComparisonEngine,
   DocxDiffRevisionGranularity,
   DocxDiffFormatComparison,
   ConflictResolution,
@@ -227,6 +228,7 @@ export {
   PaginationMode,
   AnnotationLabelMode,
   RevisionType,
+  ComparisonEngine,
   DocxDiffRevisionGranularity,
   DocxDiffFormatComparison,
   ConflictResolution,
@@ -635,6 +637,7 @@ export async function compareDocuments(
   await yieldToMain();
 
   let result: Uint8Array;
+  const engine = options?.engine ?? ComparisonEngine.WmlComparer;
 
   if (options?.detailThreshold !== undefined || options?.caseInsensitive) {
     result = exports.DocumentComparer.CompareDocumentsWithOptions(
@@ -642,13 +645,15 @@ export async function compareDocuments(
       modifiedBytes,
       options?.authorName ?? "Docxodus",
       options?.detailThreshold ?? 0.15,
-      options?.caseInsensitive ?? false
+      options?.caseInsensitive ?? false,
+      engine
     );
   } else {
     result = exports.DocumentComparer.CompareDocuments(
       originalBytes,
       modifiedBytes,
-      options?.authorName ?? "Docxodus"
+      options?.authorName ?? "Docxodus",
+      engine
     );
   }
 
@@ -681,6 +686,7 @@ export async function compareDocumentsToHtml(
   await yieldToMain();
 
   const renderTrackedChanges = options?.renderTrackedChanges ?? true;
+  const engine = options?.engine ?? ComparisonEngine.WmlComparer;
 
   let result: string;
 
@@ -692,14 +698,16 @@ export async function compareDocumentsToHtml(
       options?.authorName ?? "Docxodus",
       options?.detailThreshold ?? 0.15,
       options?.caseInsensitive ?? false,
-      renderTrackedChanges
+      renderTrackedChanges,
+      engine
     );
   } else {
     result = exports.DocumentComparer.CompareDocumentsToHtmlWithOptions(
       originalBytes,
       modifiedBytes,
       options?.authorName ?? "Docxodus",
-      renderTrackedChanges
+      renderTrackedChanges,
+      engine
     );
   }
 
