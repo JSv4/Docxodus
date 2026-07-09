@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [7.0.0] - 2026-07-09
+
 ### Added
 - **Shared comparison-engine selector across the CLI / WASM / npm surfaces (M-B) — seeded to `WmlComparer`, default NOT flipped.** Introduces one selector so a caller can choose which engine redlines two documents, wired identically everywhere, as the seam the eventual D4 cutover flips in one line:
   - **One selector type + one dispatch owner.** New public `ComparisonEngine` enum (`WmlComparer = 0` default, `DocxDiff = 1`) and `DocxCompare.Compare(left, right, engine, settings)` — the single `WmlComparer`-vs-`DocxDiff` branch in the codebase (mirroring the `DocxDiffOps`/`HtmlConversionOps` single-owner pattern). It takes the incumbent `WmlComparerSettings` (the shape all surfaces already build) and, on the `DocxDiff` branch, maps the common option set to `DocxDiffSettings` via `DocxCompare.ToDocxDiffSettings` (author/date/case-insensitive/conflate-spaces/detect-moves/move-thresholds carry; the WmlComparer-only knobs `DetailThreshold`/`SimplifyMoveMarkup`/`DetectFormatChanges` are dropped). Both engines emit native tracked-changes markup, so revision counting stays uniform on the output document.
