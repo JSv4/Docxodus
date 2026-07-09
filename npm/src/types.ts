@@ -173,6 +173,25 @@ export enum RevisionType {
 }
 
 /**
+ * Which comparison engine {@link compareDocuments} / {@link compareDocumentsToHtml}
+ * use to redline two documents.
+ *
+ * The numeric values are the contract shared with the .NET `ComparisonEngine` enum
+ * and the WASM boundary (marshalled as an int); `0` (the default) MUST be
+ * {@link ComparisonEngine.WmlComparer} so that omitting the selector reproduces
+ * today's behavior exactly.
+ *
+ * `WmlComparer` is the blessed default. `DocxDiff` is the newer IR diff engine — a
+ * production-candidate that is opt-in until it becomes the default (decision D4).
+ */
+export enum ComparisonEngine {
+  /** The default, blessed WmlComparer engine. */
+  WmlComparer = 0,
+  /** The DocxDiff IR diff engine (production-candidate; opt-in). */
+  DocxDiff = 1,
+}
+
+/**
  * Comment render mode
  * Use -1 (Disabled) to not render comments, or a positive value to enable with that mode
  */
@@ -314,6 +333,12 @@ export interface CompareOptions {
    * If false: changes are accepted, output shows final "clean" document
    */
   renderTrackedChanges?: boolean;
+  /**
+   * Which comparison engine to use (default: {@link ComparisonEngine.WmlComparer}).
+   * Omit for the blessed WmlComparer engine; pass {@link ComparisonEngine.DocxDiff}
+   * to opt into the newer IR diff engine.
+   */
+  engine?: ComparisonEngine;
 }
 
 /**
@@ -899,7 +924,8 @@ export interface DocxodusWasmExports {
     CompareDocuments: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
-      authorName: string
+      authorName: string,
+      engine: number
     ) => Uint8Array;
     CompareDocumentsToHtml: (
       originalBytes: Uint8Array,
@@ -910,7 +936,8 @@ export interface DocxodusWasmExports {
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
       authorName: string,
-      renderTrackedChanges: boolean
+      renderTrackedChanges: boolean,
+      engine: number
     ) => string;
     CompareDocumentsToHtmlFull: (
       originalBytes: Uint8Array,
@@ -918,14 +945,16 @@ export interface DocxodusWasmExports {
       authorName: string,
       detailThreshold: number,
       caseInsensitive: boolean,
-      renderTrackedChanges: boolean
+      renderTrackedChanges: boolean,
+      engine: number
     ) => string;
     CompareDocumentsWithOptions: (
       originalBytes: Uint8Array,
       modifiedBytes: Uint8Array,
       authorName: string,
       detailThreshold: number,
-      caseInsensitive: boolean
+      caseInsensitive: boolean,
+      engine: number
     ) => Uint8Array;
     GetRevisionsJson: (comparedDocBytes: Uint8Array) => string;
     GetRevisionsJsonWithOptions: (

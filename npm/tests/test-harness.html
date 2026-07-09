@@ -59,11 +59,11 @@
                 }
             },
 
-            // Compare two documents
-            compareDocuments: function(originalBytes, modifiedBytes, authorName = 'Test') {
+            // Compare two documents. engine: 0 = WmlComparer (default), 1 = DocxDiff.
+            compareDocuments: function(originalBytes, modifiedBytes, authorName = 'Test', engine = 0) {
                 try {
                     const result = window.Docxodus.DocumentComparer.CompareDocuments(
-                        originalBytes, modifiedBytes, authorName
+                        originalBytes, modifiedBytes, authorName, engine
                     );
                     if (result.length === 0) {
                         return { error: { message: 'Comparison returned empty result' } };
@@ -89,11 +89,11 @@
                 }
             },
 
-            // Compare and get HTML with options
-            compareToHtmlWithOptions: function(originalBytes, modifiedBytes, authorName = 'Test', renderTrackedChanges = true) {
+            // Compare and get HTML with options. engine: 0 = WmlComparer (default), 1 = DocxDiff.
+            compareToHtmlWithOptions: function(originalBytes, modifiedBytes, authorName = 'Test', renderTrackedChanges = true, engine = 0) {
                 try {
                     const result = window.Docxodus.DocumentComparer.CompareDocumentsToHtmlWithOptions(
-                        originalBytes, modifiedBytes, authorName, renderTrackedChanges
+                        originalBytes, modifiedBytes, authorName, renderTrackedChanges, engine
                     );
                     if (result.startsWith('{') && result.includes('"Error"')) {
                         return { error: JSON.parse(result) };

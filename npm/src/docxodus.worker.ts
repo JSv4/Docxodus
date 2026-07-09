@@ -34,6 +34,7 @@ import type {
   CommentRenderMode,
   EditResult,
 } from "./types.js";
+import { ComparisonEngine } from "./types.js";
 
 // Worker-local state
 let wasmExports: DocxodusWasmExports | null = null;
@@ -219,6 +220,7 @@ function handleCompare(
 
   try {
     let result: Uint8Array;
+    const engine = options?.engine ?? ComparisonEngine.WmlComparer;
 
     if (options?.detailThreshold !== undefined || options?.caseInsensitive) {
       result = exports.DocumentComparer.CompareDocumentsWithOptions(
@@ -226,13 +228,15 @@ function handleCompare(
         request.modifiedBytes,
         options?.authorName ?? "Docxodus",
         options?.detailThreshold ?? 0.15,
-        options?.caseInsensitive ?? false
+        options?.caseInsensitive ?? false,
+        engine
       );
     } else {
       result = exports.DocumentComparer.CompareDocuments(
         request.originalBytes,
         request.modifiedBytes,
-        options?.authorName ?? "Docxodus"
+        options?.authorName ?? "Docxodus",
+        engine
       );
     }
 
@@ -257,12 +261,14 @@ function handleCompareToHtml(
 
   try {
     const renderTrackedChanges = options?.renderTrackedChanges ?? true;
+    const engine = options?.engine ?? ComparisonEngine.WmlComparer;
 
     const result = exports.DocumentComparer.CompareDocumentsToHtmlWithOptions(
       request.originalBytes,
       request.modifiedBytes,
       options?.authorName ?? "Docxodus",
-      renderTrackedChanges
+      renderTrackedChanges,
+      engine
     );
 
     if (isErrorResponse(result)) {
