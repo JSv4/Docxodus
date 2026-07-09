@@ -117,7 +117,7 @@ internal static class IrRevisionRenderer
         // trailing section formats and, when the MODELED fields differ, append one Section-scope FormatChanged
         // (mirrors the markup renderer's w:sectPrChange on the trailing sectPr). Appended after all body/note/
         // header-footer ops (additive ordering). Excluded from WmlComparerCompatible by the scope filter below.
-        if (settings.TrackBlockFormatChanges
+        if (settings.TrackSectionFormatChanges && settings.EmitTrailingSectionRevision
             && ctx.Left.Body.Blocks.Count > 0 && ctx.Left.Body.Blocks[^1] is IrSectionBreak lsec
             && ctx.Right.Body.Blocks.Count > 0 && ctx.Right.Body.Blocks[^1] is IrSectionBreak rsec)
         {
@@ -560,7 +560,7 @@ internal static class IrRevisionRenderer
             // trPr/tcPr) as digest-grade FormatChanged revisions, after the cell text revisions. Gated on
             // TrackBlockFormatChanges so the Consolidate ceiling holds on the REVISIONS surface too — the
             // composite renderers force the flag off, and the markup emits no *PrChange there.
-            if (ctx.Settings.TrackBlockFormatChanges
+            if (ctx.Settings.TrackTableFormatChanges
                 && ResolveTable(op.LeftAnchor, ctx.Left) is { } lt && ResolveTable(op.RightAnchor, ctx.Right) is { } rt)
                 EmitTableModifiedShellRevisions(lt, rt, tableDiff, ctx, sink);
             return;
@@ -1264,7 +1264,7 @@ internal static class IrRevisionRenderer
         // nothing describable at token grain.
         if (leftTokens.Count == 0 && rightTokens.Count == 0)
         {
-            if (!paraEmitted && ctx.Settings.TrackBlockFormatChanges
+            if (!paraEmitted && ctx.Settings.TrackTableFormatChanges
                 && ResolveTable(op.LeftAnchor, ctx.Left) is { } lt
                 && ResolveTable(op.RightAnchor, ctx.Right) is { } rt)
                 EmitTableFormatOnlyShellRevisions(lt, rt, ctx, sink);
@@ -1367,7 +1367,7 @@ internal static class IrRevisionRenderer
     /// </summary>
     private static void EmitInlineSectionFormatChanged(IrEditOp op, in Context ctx, List<IrRevision> sink)
     {
-        if (!ctx.Settings.TrackBlockFormatChanges || op.LeftAnchor is null || op.RightAnchor is null)
+        if (!ctx.Settings.TrackSectionFormatChanges || op.LeftAnchor is null || op.RightAnchor is null)
             return;
         if (!ctx.Left.AnchorIndex.TryGetValue(op.LeftAnchor, out var lb) || lb is not IrParagraph lp)
             return;

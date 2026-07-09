@@ -61,7 +61,8 @@ internal enum IrAuthoredCellKind
 /// </summary>
 internal sealed record IrAuthoredCellOp(string? BaseCellAnchor, IrNodeList<IrCompositeOp>? ComposedBlockOps,
     int ShellSourceReviewer = -1, string? ShellRightCellAnchor = null,
-    IrAuthoredCellKind Kind = IrAuthoredCellKind.Content, string Author = "");
+    IrAuthoredCellKind Kind = IrAuthoredCellKind.Content, string Author = "",
+    string ShellAuthor = "");
 
 /// <summary>
 /// One ROW in a composed multi-reviewer table (FOLLOW-ON B). <see cref="Kind"/> mirrors
@@ -79,7 +80,26 @@ internal sealed record IrAuthoredRowOp(
     int SourceReviewer,
     string Author,
     IrNodeList<IrAuthoredCellOp>? ComposedCells,
-    string? RightRowAnchor = null);
+    string? RightRowAnchor = null,
+    IrComposedShellRef? TrPr = null,
+    IrComposedShellRef? TblPrEx = null);
+
+/// <summary>
+/// The per-element ATTRIBUTION of ONE composed block-format shell (Consolidate B2): which reviewer's
+/// right-side element supplies the winning shell (<see cref="Reviewer"/> indexes the caller's reviewers
+/// list; <see cref="RightAnchor"/> is that reviewer's <c>tbl:</c>/<c>tr:</c> anchor to re-resolve the shell
+/// element), and the <see cref="Author"/> to stamp on the emitted <c>w:*Change</c> marker. The renderer
+/// swaps in the winner's shell (accept ≡ winner) and stamps the change with inner = BASE shell
+/// (reject ≡ base). A shell cannot stack, so a competing edit is a recorded conflict, not two shells.
+/// Used for a row's <c>w:trPr</c>/<c>w:tblPrEx</c> (<see cref="IrAuthoredRowOp"/>) and a table's
+/// <c>w:tblPr</c>/<c>w:tblGrid</c> (<see cref="IrComposedTableShell"/>).
+/// </summary>
+internal sealed record IrComposedShellRef(int Reviewer, string RightAnchor, string Author);
+
+/// <summary>The table-level shell attribution of a composed table (Consolidate B2): the winning reviewer for
+/// the table's <c>w:tblPr</c> and, independently, its <c>w:tblGrid</c> (each null when the base shell wins).
+/// Carried on <see cref="IrCompositeOp.TableShell"/>.</summary>
+internal sealed record IrComposedTableShell(IrComposedShellRef? TblPr = null, IrComposedShellRef? TblGrid = null);
 
 /// <summary>
 /// An edit op tagged with its contributing reviewer. For a composed multi-reviewer Modify,
@@ -109,7 +129,8 @@ internal sealed record IrCompositeOp(
     IrNodeList<IrAuthoredTokenOp>? AuthoredTokens = null,
     int? ConflictId = null,
     IrNodeList<IrSourceRightAnchor>? SourceRightAnchors = null,
-    IrNodeList<IrAuthoredRowOp>? AuthoredRows = null);
+    IrNodeList<IrAuthoredRowOp>? AuthoredRows = null,
+    IrComposedTableShell? TableShell = null);
 
 /// <summary>
 /// One reviewer's competing result for a conflicted span. <see cref="Author"/> is the reviewer
@@ -174,4 +195,5 @@ internal sealed record IrCompositeScript(
     IrNodeList<IrCompositeOp> Operations,
     IrNodeList<IrConflict> Conflicts,
     IrNodeList<IrCompositeNoteDiff>? NoteOps = null,
-    IrNodeList<IrReviewerNoteIdMap>? NoteIdMaps = null);
+    IrNodeList<IrReviewerNoteIdMap>? NoteIdMaps = null,
+    IrComposedShellRef? TrailingSectPr = null);

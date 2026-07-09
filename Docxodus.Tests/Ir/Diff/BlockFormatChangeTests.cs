@@ -783,10 +783,12 @@ public class BlockFormatChangeTests
     }
 
     [Fact]
-    public void Consolidate_ignores_table_shell_changes_v1_ceiling()
+    public void Consolidate_merges_table_shell_changes_b2()
     {
-        // Review finding 1: the table-shell REVISION emitters must respect the Consolidate ceiling too — a
-        // reviewer's tcPr/trPr/tblPr-only edit produces neither markup nor a consolidated revision.
+        // Sub-project B2 (flips the former ceiling pin): a reviewer's table-shell (tblPr/tblGrid) change now
+        // MERGES into the consolidated document with native w:tblPrChange/w:tblGridChange authored to that
+        // reviewer, a non-Run consolidated revision, and a property-byte round-trip (accept ≡ reviewer,
+        // reject ≡ base).
         var baseDoc = IrTestDocuments.FromBodyXml(Table("", "<w:tcW w:w=\"4000\" w:type=\"dxa\"/>"));
         var reviewerDoc = IrTestDocuments.FromBodyXml(Table("", "<w:tcW w:w=\"4000\" w:type=\"dxa\"/>",
             grid: "<w:gridCol w:w=\"6000\"/>", tblPr: "<w:tblW w:w=\"0\" w:type=\"auto\"/><w:tblBorders><w:top w:val=\"single\" w:sz=\"4\"/></w:tblBorders>"));
@@ -794,11 +796,17 @@ public class BlockFormatChangeTests
 
         var merged = DocxDiff.Consolidate(baseDoc, new[] { reviewer });
         var body = BodyOf(merged);
-        Assert.Empty(body.Descendants(W + "tblPrChange"));
-        Assert.Empty(body.Descendants(W + "tblGridChange"));
+        Assert.NotEmpty(body.Descendants(W + "tblPrChange"));
+        Assert.NotEmpty(body.Descendants(W + "tblGridChange"));
+        Assert.Equal("Reviewer A", (string?)body.Descendants(W + "tblPrChange").First().Attribute(W + "author"));
+
+        // accept ≡ reviewer (grid 6000), reject ≡ base (grid restored).
+        Assert.Equal("6000", (string?)BodyOf(RevisionProcessor.AcceptRevisions(merged))
+            .Descendants(W + "gridCol").First().Attribute(W + "w"));
+        Assert.Empty(BodyOf(RevisionProcessor.RejectRevisions(merged)).Descendants(W + "tblGridChange"));
 
         var revs = DocxDiff.GetConsolidatedRevisions(baseDoc, new[] { reviewer });
-        Assert.DoesNotContain(revs, r => r.FormatChange is { } fc && fc.Scope != DocxDiffFormatChangeScope.Run);
+        Assert.Contains(revs, r => r.FormatChange is { } fc && fc.Scope == DocxDiffFormatChangeScope.Table);
     }
 
     [Fact]
@@ -1074,11 +1082,12 @@ public class BlockFormatChangeTests
     }
 
     [Fact]
-    public void Consolidate_merges_pPr_but_not_shell_section_v1()
+    public void Consolidate_merges_pPr_and_table_shell_but_not_section_v1()
     {
-        // Sub-project B1 (flips the former ceiling pin): a reviewer's PARAGRAPH-property (pPr) change now
-        // MERGES into the consolidated document with native w:pPrChange authored to that reviewer, round-trips
-        // (accept ≡ reviewer, reject ≡ base). A TABLE-shell reviewer change stays IGNORED (the B2 ceiling).
+        // Sub-project B1/B2 (flips the former ceiling pin): a reviewer's PARAGRAPH-property (pPr) change (B1)
+        // and TABLE-shell change (B2) now MERGE into the consolidated document with native markup authored to
+        // that reviewer. A SECTION-only reviewer change stays the remaining B2 ceiling flipped in Phase 2 —
+        // see the section tests for its merge.
         var reviewer = new DocxDiffReviewer { Document = PPrRight, Author = "Reviewer A" };
         var merged = DocxDiff.Consolidate(PPrLeft, new[] { reviewer });
         var body = BodyOf(merged);
@@ -1090,11 +1099,11 @@ public class BlockFormatChangeTests
         Assert.Equal("center", (string?)BodyOf(RevisionProcessor.AcceptRevisions(merged)).Descendants(W + "jc").Single().Attribute(W + "val"));
         Assert.Empty(DocxDiff.GetConflicts(PPrLeft, new[] { reviewer }));    // one reviewer → no conflict
 
-        // B2 ceiling: a table-shell-only reviewer edit is still ignored by Consolidate.
+        // B2: a table-shell-only reviewer edit now MERGES (native w:tblGridChange authored to the reviewer).
         var tblBase = IrTestDocuments.FromBodyXml(Table("", "<w:tcW w:w=\"4000\" w:type=\"dxa\"/>"));
         var tblRev = IrTestDocuments.FromBodyXml(Table("", "<w:tcW w:w=\"4000\" w:type=\"dxa\"/>", grid: "<w:gridCol w:w=\"6000\"/>"));
         var tblMerged = DocxDiff.Consolidate(tblBase, new[] { new DocxDiffReviewer { Document = tblRev, Author = "R" } });
-        Assert.Empty(BodyOf(tblMerged).Descendants(W + "tblGridChange"));
+        Assert.NotEmpty(BodyOf(tblMerged).Descendants(W + "tblGridChange"));
     }
 
     // ------------------------------------------------------------------ the WmlComparer oracle

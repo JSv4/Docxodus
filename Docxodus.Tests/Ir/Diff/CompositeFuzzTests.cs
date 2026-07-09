@@ -17,7 +17,11 @@ public class CompositeFuzzTests
                 .Select(r => new DocxDiffReviewer { Document = new WmlDocument("r.docx", r.Doc), Author = r.Author })
                 .ToList();
             var merged = DocxDiff.Consolidate(baseDoc, reviewers);
-            Assert.Equal(Docs.PlainText(baseDoc), Docs.PlainText(RevisionProcessor.RejectRevisions(merged)));
+            var rejected = RevisionProcessor.RejectRevisions(merged);
+            Assert.Equal(Docs.PlainText(baseDoc), Docs.PlainText(rejected));
+            // Byte-level: rejecting all revisions restores every block-format shell/section too (B2). The
+            // fuzzer mutates no shells, so this is a regression guard — a future shell-drop turns it red.
+            Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(rejected));
         }
     }
 
@@ -38,6 +42,7 @@ public class CompositeFuzzTests
             // not just the body paragraph text. Docs.StructuralBody walks body w:p AND w:tbl (descending
             // into rows/cells), so a consolidate that corrupts or drops a table on the reject path differs.
             Assert.Equal(Docs.StructuralBody(baseDoc), Docs.StructuralBody(rejected));
+            Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(rejected));
         }
     }
 
@@ -124,10 +129,10 @@ public class CompositeFuzzTests
             var merged = DocxDiff.Consolidate(
                 baseDoc, dd, new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.BaseWins });
 
-            // (a) reject ≡ base, table-aware (StructuralBody descends rows/cells).
-            Assert.Equal(
-                Docs.StructuralBody(baseDoc),
-                Docs.StructuralBody(RevisionProcessor.RejectRevisions(merged)));
+            // (a) reject ≡ base, table-aware (StructuralBody descends rows/cells) AND byte-level shell/section.
+            var rejected = RevisionProcessor.RejectRevisions(merged);
+            Assert.Equal(Docs.StructuralBody(baseDoc), Docs.StructuralBody(rejected));
+            Assert.Equal(Docs.ShellSection(baseDoc), Docs.ShellSection(rejected));
 
             // (b) table-aware apply-verifier: the composed table's cell ops reconstruct the rendered accept.
             IrCompositeVerifier.Verify(baseDoc, revs, ConflictResolution.BaseWins, Docs.AcceptStructuralBody(merged));

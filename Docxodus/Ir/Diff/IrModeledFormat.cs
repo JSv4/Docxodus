@@ -125,8 +125,9 @@ internal static class IrModeledFormat
             sb.Append(ParaKey(paragraph.Format));
         }
         // A3: an inline (in-pPr) sectPr's modeled page setup participates too, so a mid-document
-        // sectPr-only change classifies FormatOnly instead of Unchanged under ModeledOnly. Section slice.
-        if (settings.TrackBlockFormatChanges)
+        // sectPr-only change classifies FormatOnly instead of Unchanged under ModeledOnly. Gated on the
+        // SECTION slice so the composite can turn inline-section merge ON (B2) independently of paragraph/table.
+        if (settings.TrackSectionFormatChanges)
         {
             sb.Append('§');
             sb.Append(SectionKey(paragraph.InlineSectionFormat));

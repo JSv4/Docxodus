@@ -54,7 +54,10 @@ internal static class IrCompositeRevisionRenderer
     {
         // Mirror IrCompositeMerger's forcing. B1 turns the PARAGRAPH slice ON so a single-source pPr op reports
         // a Paragraph-scope FormatChanged authored to its reviewer; table-shell/section slices stay OFF (B2).
-        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true };
+        // EmitTrailingSectionRevision OFF: the per-op mini-scripts must NOT each append the document-level
+        // trailing-sectPr revision (a section-changing reviewer with N ops would emit it N times). It is
+        // emitted ONCE below from script.TrailingSectPr, attributed to the section winner.
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true, EmitTrailingSectionRevision = false };
 
         // Move-source pre-pass over the WHOLE composite script. Single-source ops are each rendered in
         // their own one-op mini-script (so IrRevisionRenderer honours per-op granularity/author), but a
@@ -95,6 +98,27 @@ internal static class IrCompositeRevisionRenderer
                 }
             }
         }
+
+        // TRAILING SECTION (B2): emit the document-level trailing-sectPr FormatChanged revision EXACTLY ONCE,
+        // attributed to the section winner (script.TrailingSectPr). The per-op mini-scripts have it suppressed
+        // (EmitTrailingSectionRevision=false), so this is the single authoritative section revision.
+        if (script.TrailingSectPr is { } sectWinner
+            && sectWinner.Reviewer >= 0 && sectWinner.Reviewer < reviewers.Count
+            && baseIr.Body.Blocks.Count > 0 && baseIr.Body.Blocks[^1] is IrSectionBreak baseSec)
+        {
+            var winnerBlocks = reviewers[sectWinner.Reviewer].Ir.Body.Blocks;
+            if (winnerBlocks.Count > 0 && winnerBlocks[^1] is IrSectionBreak winnerSec)
+            {
+                var details = IrModeledFormat.SectionFormatChangeDetails(baseSec.Format, winnerSec.Format);
+                if (details.ChangedPropertyNames.Count > 0)
+                    result.Add((
+                        new IrRevision(IrRevisionType.FormatChanged, string.Empty, sectWinner.Author,
+                            settings.DateTimeForRevisions, FormatChange: details,
+                            LeftAnchor: baseSec.Anchor.ToString(), RightAnchor: winnerSec.Anchor.ToString()),
+                        sectWinner.Author, null));
+            }
+        }
+
         return result;
     }
 
@@ -117,12 +141,30 @@ internal static class IrCompositeRevisionRenderer
         IReadOnlyDictionary<int, IrEditOp> moveSourceOp,
         List<(IrRevision, string, int?)> sink)
     {
+        // B2: table-level shell revisions (tblPr/tblGrid), attributed to their winners (the markup stamps the
+        // markers; report them on the revisions surface too, matching two-way GetRevisions).
+        if (op.TableShell is { } ts)
+        {
+            string baseTblAnchor = op.Op.LeftAnchor ?? string.Empty;
+            if (ts.TblPr is { } tp)
+                AddShellRev(sink, IrFormatChangeScope.Table, "shell", baseTblAnchor, tp.RightAnchor, tp.Author, settings, op.ConflictId);
+            if (ts.TblGrid is { } tg)
+                AddShellRev(sink, IrFormatChangeScope.Table, "grid", baseTblAnchor, tg.RightAnchor, tg.Author, settings, op.ConflictId);
+        }
+
         foreach (var rowOp in op.AuthoredRows!)
         {
+            // B2: per-row shell revisions (trPr/tblPrEx) — a shell change can ride an EqualRow (content-equal
+            // row), so this is emitted for every row op kind, before the content switch.
+            if (rowOp.TrPr is { } rp)
+                AddShellRev(sink, IrFormatChangeScope.TableRow, "shell", rowOp.BaseRowAnchor ?? string.Empty, rp.RightAnchor, rp.Author, settings, op.ConflictId);
+            if (rowOp.TblPrEx is { } ep)
+                AddShellRev(sink, IrFormatChangeScope.TableRow, "tblPrEx", rowOp.BaseRowAnchor ?? string.Empty, ep.RightAnchor, ep.Author, settings, op.ConflictId);
+
             switch (rowOp.Kind)
             {
                 case IrRowOpKind.EqualRow:
-                    break; // unchanged base row → no revision
+                    break; // unchanged base row → no CONTENT revision (a row-shell change was emitted above)
 
                 case IrRowOpKind.InsertRow:
                 {
@@ -194,8 +236,18 @@ internal static class IrCompositeRevisionRenderer
                             }
                             continue;
                         }
+                        // B2: cell-shell (tcPr) revision when the winner's shell canonically differs from base
+                        // (a width/merge/shading-only cell edit) — the digest check avoids a spurious revision
+                        // for a content-only edit that also set ShellSourceReviewer.
+                        if (cellOp.ShellSourceReviewer >= 0 && cellOp.ShellSourceReviewer < reviewers.Count
+                            && cellOp.ShellRightCellAnchor is { } sca && cellOp.BaseCellAnchor is { } bca
+                            && FindCell(baseIr, bca) is { } baseCell
+                            && FindCell(reviewers[cellOp.ShellSourceReviewer].Ir, sca) is { } winnerCell
+                            && !baseCell.TcPrShellDigest.Equals(winnerCell.TcPrShellDigest))
+                            AddShellRev(sink, IrFormatChangeScope.TableCell, "shell", bca, sca, cellOp.ShellAuthor, settings, op.ConflictId);
+
                         if (cellOp.ComposedBlockOps is not { } blockOps)
-                            continue; // base passthrough → no revision
+                            continue; // base passthrough → no content revision
                         foreach (var cellBlock in blockOps)
                         {
                             if (cellBlock.AuthoredTokens != null)
@@ -208,6 +260,43 @@ internal static class IrCompositeRevisionRenderer
                 }
             }
         }
+    }
+
+    private static readonly IReadOnlyDictionary<string, string> NoProps = new Dictionary<string, string>();
+
+    /// <summary>Append one digest-grade shell FormatChanged revision (Consolidate B2 — the composite analogue
+    /// of the two-way <c>TableShellRevision</c>), attributed to the shell winner.</summary>
+    private static void AddShellRev(
+        List<(IrRevision, string, int?)> sink, IrFormatChangeScope scope, string changed,
+        string leftAnchor, string rightAnchor, string author, IrDiffSettings settings, int? conflictId)
+        => sink.Add((
+            new IrRevision(IrRevisionType.FormatChanged, string.Empty, author, settings.DateTimeForRevisions,
+                FormatChange: new IrFormatChangeDetails(NoProps, NoProps, new[] { changed }, scope),
+                LeftAnchor: leftAnchor, RightAnchor: rightAnchor),
+            author, conflictId));
+
+    /// <summary>The <see cref="IrCell"/> a cell anchor resolves to in <paramref name="ir"/> (cells are not in
+    /// the AnchorIndex — walk indexed tables' rows/cells, recursing into nested tables). Null if unknown.</summary>
+    private static IrCell? FindCell(IrDocument ir, string cellAnchor)
+    {
+        foreach (var block in ir.AnchorIndex.Values)
+            if (block is IrTable tbl && FindCellInTable(tbl, cellAnchor) is { } c)
+                return c;
+        return null;
+    }
+
+    private static IrCell? FindCellInTable(IrTable tbl, string cellAnchor)
+    {
+        foreach (var row in tbl.Rows)
+            foreach (var cell in row.Cells)
+            {
+                if (cell.Anchor.ToString() == cellAnchor)
+                    return cell;
+                foreach (var b in cell.Blocks)
+                    if (b is IrTable nested && FindCellInTable(nested, cellAnchor) is { } found)
+                        return found;
+            }
+        return null;
     }
 
     /// <summary>The concatenated paragraph text of ONE cell resolved by anchor (cells are not in

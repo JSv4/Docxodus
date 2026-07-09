@@ -55,7 +55,7 @@ internal static class IrCompositeMarkupRenderer
         // markup on a composite render — e.g. on a conflict-path winner op. B1 (sub-project B) turns the
         // PARAGRAPH slice ON so a single-source pPr FormatOnly op stamps w:pPrChange authored to its reviewer;
         // the table-shell/section slices stay OFF (B2). Mirrors IrCompositeMerger's forcing.
-        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true };
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true };
 
         // Re-read base + each reviewer WITH provenance (RetainSources=true) + Accept view — the SAME options the
         // two-way renderer uses — so block anchors in the script resolve to source w:p/w:tbl elements to clone.
@@ -91,6 +91,10 @@ internal static class IrCompositeMarkupRenderer
                     ?? throw new DocxodusException("Base document has no w:body.");
 
                 var trailingSectPr = bodyEl.Elements(W.sectPr).LastOrDefault();
+                // B2: stamp w:sectPrChange on the trailing sectPr for a composed section change (winner's
+                // properties applied, base captured into the marker) — the document-level section merge.
+                if (trailingSectPr != null)
+                    IrMarkupRenderer.ApplyComposedTrailingSectPr(trailingSectPr, script.TrailingSectPr, reviewerIrs, state);
                 bodyEl.Elements().Where(e => e.Name != W.sectPr).Remove();
                 if (trailingSectPr != null)
                 {
@@ -278,10 +282,10 @@ internal static class IrCompositeMarkupRenderer
         {
             ApplyCompositeNoteDiffs(
                 noteOps.Where(n => n.Kind == IrNoteKind.Footnote).ToList(), isFootnote: true,
-                main, baseIr, reviewerIrs, state, freshIdByInserted, settings);
+                main, baseIr, reviewerIrs, state, freshIdByInserted, outputId, settings);
             ApplyCompositeNoteDiffs(
                 noteOps.Where(n => n.Kind == IrNoteKind.Endnote).ToList(), isFootnote: false,
-                main, baseIr, reviewerIrs, state, freshIdByInserted, settings);
+                main, baseIr, reviewerIrs, state, freshIdByInserted, outputId, settings);
         }
 
         // ---- 4. Body-order renumber + cross-kind nested-reference sweep (the two-way pipeline). ----
@@ -323,6 +327,7 @@ internal static class IrCompositeMarkupRenderer
         MainDocumentPart main, IrDocument baseIr, IReadOnlyList<IrDocument> reviewerIrs,
         IrMarkupRenderer.RenderState state,
         IReadOnlyDictionary<(IrNoteKind Kind, int Reviewer, string ReviewerId), string> freshIdByInserted,
+        IReadOnlyDictionary<(int Reviewer, IrNoteKind Kind, string ReviewerId), string> outputId,
         IrDiffSettings settings)
     {
         if (diffs.Count == 0)
@@ -372,6 +377,27 @@ internal static class IrCompositeMarkupRenderer
 
             noteEl.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).Remove();
             noteEl.Add(noteBlocks);
+
+            // A reviewer-INSERTED note is entirely reviewer-sourced (all-ins content, no base/del side), so every
+            // nested note reference in its body carries THAT reviewer's id space. Rewrite each to the output id
+            // space (matched -> base id, inserted -> fresh id) so the body-order renumber sweep below then carries
+            // it to the final id. Without this, a nested reference to ANOTHER note the same reviewer inserted keeps
+            // the reviewer id and dangles: step 2's reference rewrite only visits body clones, not inserted-note
+            // definition bodies, and step 4's remap is keyed on the output-old id, which the reviewer id is not.
+            if (diff.BaseNoteId == null)
+            {
+                foreach (var refEl in noteEl.Descendants()
+                             .Where(e => e.Name == W.footnoteReference || e.Name == W.endnoteReference))
+                {
+                    var refKind = refEl.Name == W.footnoteReference ? IrNoteKind.Footnote : IrNoteKind.Endnote;
+                    var refId = (string?)refEl.Attribute(W.id);
+                    if (refId != null
+                        && outputId.TryGetValue((diff.SourceReviewer, refKind, refId), out var mapped)
+                        && mapped != refId)
+                        refEl.SetAttributeValue(W.id, mapped);
+                }
+            }
+
             changed = true;
         }
 

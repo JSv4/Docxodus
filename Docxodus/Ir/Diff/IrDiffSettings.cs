@@ -291,6 +291,37 @@ internal sealed record IrDiffSettings
     public bool TrackParagraphFormatChanges { get; init; } = true;
 
     /// <summary>
+    /// DIFF-TIME setting (Consolidate sub-project B2). The TABLE-SHELL slice of
+    /// <see cref="TrackBlockFormatChanges"/>: gates ONLY the table-shell property-revision markup
+    /// (<c>w:tcPrChange</c>/<c>w:trPrChange</c>/<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/<c>w:tblPrExChange</c>),
+    /// NOT the paragraph or section variants. Defaults equal to <see cref="TrackBlockFormatChanges"/> (so every
+    /// two-way call behaves byte-identically — the split is invisible outside the composite). The composite
+    /// merger + renderers set this TRUE while forcing <see cref="TrackBlockFormatChanges"/> FALSE, so
+    /// <c>Consolidate</c> merges reviewers' table-shell changes (B2) with per-element attribution.
+    /// </summary>
+    public bool TrackTableFormatChanges { get; init; } = true;
+
+    /// <summary>
+    /// DIFF-TIME setting (Consolidate sub-project B2). The SECTION slice of
+    /// <see cref="TrackBlockFormatChanges"/>: gates ONLY the section property-revision markup
+    /// (<c>w:sectPrChange</c> on the trailing body section AND on an inline in-<c>w:pPr</c> section), NOT the
+    /// paragraph or table-shell variants. Defaults equal to <see cref="TrackBlockFormatChanges"/> (two-way is
+    /// byte-identical). The composite merger + renderers set this TRUE while forcing
+    /// <see cref="TrackBlockFormatChanges"/> FALSE, so <c>Consolidate</c> merges reviewers' section changes (B2).
+    /// </summary>
+    public bool TrackSectionFormatChanges { get; init; } = true;
+
+    /// <summary>
+    /// DIFF-TIME setting (Consolidate B2). Whether the two-way revision renderer appends the DOCUMENT-LEVEL
+    /// trailing-<c>w:sectPr</c> FormatChanged revision (it compares the two documents' final section blocks, so
+    /// it is not a per-op revision). Default true (every two-way call reports it). The composite revision
+    /// renderer sets this FALSE for its PER-OP mini-scripts — otherwise a section-changing reviewer with N ops
+    /// would emit the same trailing-section revision N times — and instead emits it exactly once from
+    /// <c>IrCompositeScript.TrailingSectPr</c>, attributed to the section winner.
+    /// </summary>
+    public bool EmitTrailingSectionRevision { get; init; } = true;
+
+    /// <summary>
     /// REVISIONS-SURFACE setting (M2.3 Task 1). Author name stamped on every <see cref="IrRevision"/>'s
     /// <see cref="IrRevision.Author"/>. Default <c>"Open-Xml-PowerTools"</c> — copied verbatim from
     /// <c>WmlComparerSettings.AuthorForRevisions</c> (Docxodus/WmlComparer.cs ~line 54) so an IR-rendered
