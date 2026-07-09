@@ -61,4 +61,26 @@ public static class DocxCompare
         MoveSimilarityThreshold = settings.MoveSimilarityThreshold,
         MoveMinimumWordCount = settings.MoveMinimumWordCount,
     };
+
+    /// <summary>
+    /// Parse a case-insensitive engine name — <c>wmlcomparer</c> or <c>docxdiff</c> — as accepted by the
+    /// redline CLI's <c>--engine=</c> flag. Surrounding whitespace is trimmed. Returns <c>false</c> for an
+    /// unrecognized value, in which case <paramref name="engine"/> is set to the default
+    /// <see cref="ComparisonEngine.WmlComparer"/>.
+    /// </summary>
+    public static bool TryParseEngine(string? value, out ComparisonEngine engine)
+    {
+        switch (value?.Trim().ToLowerInvariant())
+        {
+            case "wmlcomparer":
+                engine = ComparisonEngine.WmlComparer;
+                return true;
+            case "docxdiff":
+                engine = ComparisonEngine.DocxDiff;
+                return true;
+            default:
+                engine = ComparisonEngine.WmlComparer;
+                return false;
+        }
+    }
 }

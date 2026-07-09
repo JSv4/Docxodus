@@ -87,6 +87,11 @@ class Program
             DetailThreshold = 0
         };
 
+        // Which comparison engine to use. Default WmlComparer (the blessed engine);
+        // --engine=docxdiff opts into the newer IR diff engine. The default is NOT
+        // flipped — this is the shared selector seam (see DocxCompare / ComparisonEngine).
+        var engine = ComparisonEngine.WmlComparer;
+
         foreach (var flag in flags)
         {
             if (flag.StartsWith("--author="))
@@ -144,6 +149,15 @@ class Program
             {
                 settings.DateTimeForRevisions = flag["--date-time=".Length..];
             }
+            else if (flag.StartsWith("--engine="))
+            {
+                var engineName = flag["--engine=".Length..];
+                if (!DocxCompare.TryParseEngine(engineName, out engine))
+                {
+                    Console.Error.WriteLine($"Error: Unknown engine: {engineName} (expected 'wmlcomparer' or 'docxdiff')");
+                    return 1;
+                }
+            }
             else
             {
                 Console.Error.WriteLine($"Error: Unknown flag: {flag}");
@@ -166,7 +180,7 @@ class Program
             Console.WriteLine($"  Original: {originalFilePath}");
             Console.WriteLine($"  Modified: {modifiedFilePath}");
 
-            var result = WmlComparer.Compare(originalDocument, modifiedDocument, settings);
+            var result = DocxCompare.Compare(originalDocument, modifiedDocument, engine, settings);
             var revisions = WmlComparer.GetRevisions(result, settings);
 
             File.WriteAllBytes(outputFilePath, result.DocumentByteArray);
@@ -203,8 +217,9 @@ class Program
         Console.WriteLine("  output.docx      Path for the output redline document");
         Console.WriteLine();
         Console.WriteLine("Options:");
+        Console.WriteLine("  --engine=<wmlcomparer|docxdiff>   Comparison engine (default: wmlcomparer)");
         Console.WriteLine("  --author=<name>                   Author name for tracked changes (default: Redline)");
-        Console.WriteLine("  --detail-threshold=<0.0-1.0>      Comparison granularity (lower = more detailed, default: 0)");
+        Console.WriteLine("  --detail-threshold=<0.0-1.0>      Comparison granularity (lower = more detailed, default: 0; wmlcomparer only)");
         Console.WriteLine("  --case-insensitive                 Ignore case differences");
         Console.WriteLine("  --detect-moves                     Enable move detection");
         Console.WriteLine("  --simplify-move-markup             Convert moves to del/ins for Word compatibility");
@@ -221,6 +236,7 @@ class Program
         Console.WriteLine("  redline draft.docx final.docx changes.docx --author=\"Legal Review\"");
         Console.WriteLine("  redline old.docx new.docx diff.docx --detect-moves --simplify-move-markup");
         Console.WriteLine("  redline old.docx new.docx diff.docx --detail-threshold=0.5 --case-insensitive");
+        Console.WriteLine("  redline old.docx new.docx diff.docx --engine=docxdiff");
         Console.WriteLine();
         Console.WriteLine("Environment Variables:");
         Console.WriteLine("  REDLINE_DEBUG=1  Show detailed error information");

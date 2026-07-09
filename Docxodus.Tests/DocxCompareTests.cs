@@ -109,6 +109,27 @@ public class DocxCompareTests
         Assert.Equal(9, mapped.MoveMinimumWordCount);
     }
 
+    [Theory]
+    [InlineData("wmlcomparer", ComparisonEngine.WmlComparer)]
+    [InlineData("docxdiff", ComparisonEngine.DocxDiff)]
+    [InlineData("DocxDiff", ComparisonEngine.DocxDiff)]     // case-insensitive
+    [InlineData("  docxdiff  ", ComparisonEngine.DocxDiff)] // trims surrounding whitespace
+    public void TryParseEngine_RecognizesKnownNames(string value, ComparisonEngine expected)
+    {
+        Assert.True(DocxCompare.TryParseEngine(value, out var engine));
+        Assert.Equal(expected, engine);
+    }
+
+    [Theory]
+    [InlineData("bogus")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void TryParseEngine_RejectsUnknown_DefaultsToWmlComparer(string? value)
+    {
+        Assert.False(DocxCompare.TryParseEngine(value, out var engine));
+        Assert.Equal(ComparisonEngine.WmlComparer, engine);
+    }
+
     [Fact]
     public void DocxDiffBranch_OutputIsRevisionCountableViaWmlComparer()
     {
