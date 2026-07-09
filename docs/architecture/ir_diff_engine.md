@@ -1,6 +1,8 @@
 # IR Diff Engine
 
 > **Status:** Public surface shipped (M2.5). The engine ships as `DocxDiff` (`Docxodus/DocxDiff.cs`) — a **production-candidate**, NOT yet the blessed default. `WmlComparer` remains the default comparison API. The IR engine becomes the default only after the Word manual-verification checklist clears and a burn-in period (decision **D4**, still open). See the decision log in `docs/superpowers/specs/2026-06-11-ir-diff-layout-program-plan.md`.
+>
+> **Engine selector (M-B):** a shared `ComparisonEngine` selector (`WmlComparer = 0` default, `DocxDiff = 1`) now lets a caller pick the engine on the CLI (`redline --engine=`), WASM, and npm surfaces, routed through the single `DocxCompare.Compare` dispatch owner (`Docxodus/DocxCompare.cs`). It is **seeded to `WmlComparer`** — the default is deliberately NOT flipped; the selector is the seam D4 flips in one line.
 
 The IR diff engine is a structure-aware DOCX comparison engine built on Docxodus' intermediate document representation (IR). It is the write-side analogue of the read-only IR pipeline that backs the markdown projection: it reads two documents into anchor-addressed IR snapshots, computes an **edit script** between them, and renders that script three ways — native tracked-changes markup, a consumer revision list, or the script itself as JSON (diff-as-data).
 
