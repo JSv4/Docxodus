@@ -280,11 +280,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Update npm to latest (required for trusted publishers)
-        run: npm install -g npm@latest
+      # Pin npm to 11.x — NOT @latest. npm >= 11.5.1 is required for OIDC trusted
+      # publishing (see the publish step below), and 11.x supports both Node 20 and
+      # Node 22 (engines.node ^20.17.0 || >=22.9.0). Using @latest is what broke this
+      # job: it silently rolled onto npm 12, which dropped Node 20 support.
+      - name: Pin npm (required for trusted publishers)
+        run: npm install -g npm@11
 
       - name: Determine version
         id: version
