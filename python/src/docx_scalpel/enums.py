@@ -70,7 +70,7 @@ class EditErrorCode(str, Enum):
     INTERNAL_ERROR = "internal_error"
 
     @classmethod
-    def _missing_(cls, value: object):  # type: ignore[override]
+    def _missing_(cls, value: object) -> "EditErrorCode":  # type: ignore[override]
         # Forward-compatibility: a new C# code we don't yet know about
         # decodes to INTERNAL_ERROR rather than raising. The original wire
         # string is still available on EditError.message.
