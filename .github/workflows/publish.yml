@@ -75,7 +75,11 @@ jobs:
   publish-nuget:
     needs: build-test-publish
     runs-on: ubuntu-latest
-    environment: Publisher
+    # The url keeps the deployment non-transient so the Publisher environment
+    # shows as active on the repo sidebar instead of auto-inactivating.
+    environment:
+      name: Publisher
+      url: https://www.nuget.org/packages/Docxodus
     permissions:
       contents: read
       id-token: write
@@ -258,7 +262,9 @@ jobs:
   build-npm:
     needs: build-test-publish
     runs-on: ubuntu-latest
-    environment: Publisher
+    environment:
+      name: Publisher
+      url: https://www.npmjs.com/package/docxodus
     permissions:
       contents: read
       id-token: write
