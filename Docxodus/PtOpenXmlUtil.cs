@@ -1146,9 +1146,10 @@ namespace Docxodus
             { W.useXSLTWhenSaving, 730}, 
             { W.saveThroughXslt, 740}, 
             { W.showXMLTags, 750}, 
-            { W.alwaysMergeEmptyNamespace, 760}, 
-            { W.updateFields, 770}, 
-            { W.footnotePr, 780}, 
+            { W.alwaysMergeEmptyNamespace, 760},
+            { W.updateFields, 770},
+            { W.hdrShapeDefaults, 775},
+            { W.footnotePr, 780},
             { W.endnotePr, 790}, 
             { W.compat, 800}, 
             { W.docVars, 810}, 
@@ -1162,9 +1163,10 @@ namespace Docxodus
             { W.forceUpgrade, 890}, 
             //{W.captions, 900}, 
             { W.readModeInkLockDown, 910}, 
-            { W.smartTagType, 920}, 
-            //{W.sl:schemaLibrary, 930}, 
-            { W.doNotEmbedSmartTags, 940}, 
+            { W.smartTagType, 920},
+            //{W.sl:schemaLibrary, 930},
+            { W.shapeDefaults, 935},
+            { W.doNotEmbedSmartTags, 940},
             { W.decimalSymbol, 950}, 
             { W.listSeparator, 960}, 
         };
@@ -1542,6 +1544,38 @@ listSeparator
                     element.Nodes().Select(n => WmlOrderElementsPerStandard(n)));
             }
             return node;
+        }
+
+        /// <summary>
+        /// Ensure the settings part carries <c>w:evenAndOddHeaders</c> (required for an Even
+        /// header/footer story to render). The element is inserted at its CT_Settings schema
+        /// slot — before the first sibling Order_settings knows to come later — and every other
+        /// child stays exactly where it was. Settings children the table does not know (extension
+        /// content, elements Word writes that the table never listed) must never be moved: a
+        /// whole-part reorder sorts them to the end, out of their schema slots.
+        /// </summary>
+        internal static void EnsureEvenAndOddHeaders(MainDocumentPart main)
+        {
+            var settingsPart = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
+            var xDoc = settingsPart.GetXDocument();
+            var root = xDoc.Root;
+            if (root == null)
+            {
+                root = new XElement(W.settings, new XAttribute(XNamespace.Xmlns + "w", W.w));
+                xDoc.Add(root);
+            }
+            if (root.Element(W.evenAndOddHeaders) == null)
+            {
+                var rank = Order_settings[W.evenAndOddHeaders];
+                var firstLater = root.Elements().FirstOrDefault(e =>
+                    Order_settings.TryGetValue(e.Name, out var laterRank) && laterRank > rank);
+                var element = new XElement(W.evenAndOddHeaders);
+                if (firstLater == null)
+                    root.Add(element);
+                else
+                    firstLater.AddBeforeSelf(element);
+            }
+            settingsPart.PutXDocument();
         }
 
         public static WmlDocument BreakLinkToTemplate(WmlDocument source)

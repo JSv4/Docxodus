@@ -276,6 +276,20 @@ first/even story. Calling the same kind twice **reuses** the existing part and
 replaces its content (so `SetFooterText` is an idempotent "set the footer to this");
 a different kind creates a second part/reference.
 
+Two `Even` sharp edges worth knowing:
+
+- `w:evenAndOddHeaders` is **document-global and governs footers too**. Once set,
+  even pages stop inheriting the Default stories entirely — a section with only a
+  Default footer shows *no footer at all* on even pages (spec-correct Word behavior,
+  observed identically in LibreOffice). If you set an Even header and want footers to
+  keep appearing on every page, set an Even footer too.
+- The flag is inserted at its CT_Settings schema slot via
+  `WordprocessingMLUtil.EnsureEvenAndOddHeaders` (shared with the DocxDiff
+  header/footer renderer); every other settings child — including ones the ordering
+  table doesn't know, like `w:hdrShapeDefaults`/`w:shapeDefaults` that real Word
+  documents carry — stays exactly where it was. (An earlier whole-part reorder
+  corrupted such documents; `DS263`/`DS264` pin the fix.)
+
 **Content & styling.** The `markdown` uses the same subset as `InsertParagraph`
 (bold/italic/links/etc.). Each paragraph with no explicit style gets the built-in
 `Header`/`Footer` paragraph style, so it inherits Word's centre-of-page and

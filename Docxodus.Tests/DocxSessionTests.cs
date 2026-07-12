@@ -4856,4 +4856,79 @@ public class DocxSessionTests
         Assert.Single(r.Created);
         Assert.Equal(1, FooterPartCount(s.Save()));
     }
+
+    /// <summary>Word 2007+ writes settings children (hdrShapeDefaults, shapeDefaults) that the
+    /// Order_settings reorder table did not know, so the Even-kind whole-part reorder pushed them
+    /// out of their schema slots. The fix inserts evenAndOddHeaders at its own slot and leaves
+    /// every other child untouched.</summary>
+    [Fact]
+    public void DS263_SetHeaderText_Even_PreservesUnknownSettingsChildren()
+    {
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        {
+            var seed = BuildDocWithTrailingSection();
+            ms.Write(seed, 0, seed.Length);
+            using (var d = WordprocessingDocument.Open(ms, true))
+            {
+                // Children in Word's real transitional-schema order, including the two the
+                // ordering table lacked: ... updateFields?, hdrShapeDefaults, footnotePr ... and
+                // ... shapeDefaults, decimalSymbol, listSeparator.
+                d.MainDocumentPart!.DocumentSettingsPart!.Settings = new Settings(
+                    new DefaultTabStop { Val = 708 },
+                    new CharacterSpacingControl { Val = CharacterSpacingValues.DoNotCompress },
+                    new HeaderShapeDefaults(),
+                    new ShapeDefaults(),
+                    new DecimalSymbol { Val = "." },
+                    new ListSeparator { Val = "," });
+            }
+            bytes = ms.ToArray();
+        }
+
+        using var s = new DocxSession(bytes);
+        Assert.True(s.SetHeaderText(FirstBodyPara(s), HeaderFooterKind.Even, "Even page header").Success);
+
+        using var saved = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(saved, false);
+        var settings = doc.MainDocumentPart!.DocumentSettingsPart!.Settings;
+        var names = settings.ChildElements.Select(e => e.LocalName).ToList();
+
+        // evenAndOddHeaders lands in its schema slot (after defaultTabStop, before
+        // characterSpacingControl); the children the table didn't know keep theirs.
+        Assert.True(names.IndexOf("evenAndOddHeaders") > names.IndexOf("defaultTabStop"),
+            $"evenAndOddHeaders out of slot: [{string.Join(", ", names)}]");
+        Assert.True(names.IndexOf("evenAndOddHeaders") < names.IndexOf("characterSpacingControl"),
+            $"evenAndOddHeaders out of slot: [{string.Join(", ", names)}]");
+        Assert.True(names.IndexOf("hdrShapeDefaults") < names.IndexOf("shapeDefaults"),
+            $"unknown children reordered: [{string.Join(", ", names)}]");
+
+        var schemaErrors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(FileFormatVersions.Office2019)
+            .Validate(doc.MainDocumentPart.DocumentSettingsPart)
+            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
+            .Select(e => e.Description)
+            .ToList();
+        Assert.True(schemaErrors.Count == 0, string.Join("; ", schemaErrors));
+    }
+
+    /// <summary>Same corruption, proven on a real Word-authored fixture whose settings part
+    /// carries hdrShapeDefaults/shapeDefaults (the smoke-test document that caught the bug).</summary>
+    [Fact]
+    public void DS264_SetHeaderText_Even_RealWordDoc_SettingsRemainSchemaValid()
+    {
+        var path = Path.Combine("../../../../TestFiles/", "DB006-Source2.docx");
+        using var s = new DocxSession(File.ReadAllBytes(path));
+        var body = s.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h").Anchor.Id;
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.Even, "Even page header").Success);
+
+        using var saved = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(saved, false);
+        Assert.NotNull(doc.MainDocumentPart!.DocumentSettingsPart!.Settings.Elements<EvenAndOddHeaders>().SingleOrDefault());
+        var schemaErrors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(FileFormatVersions.Office2019)
+            .Validate(doc.MainDocumentPart.DocumentSettingsPart)
+            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
+            .Select(e => e.Description)
+            .ToList();
+        Assert.True(schemaErrors.Count == 0, string.Join("; ", schemaErrors));
+    }
 }

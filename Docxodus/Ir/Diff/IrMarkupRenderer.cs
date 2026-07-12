@@ -1372,7 +1372,7 @@ internal static class IrMarkupRenderer
         if (diff.Kind == IrHeaderFooterKind.First && sectPr.Element(W.titlePg) is null)
             InsertIntoSectPr(sectPr, new XElement(W.titlePg));
         if (diff.Kind == IrHeaderFooterKind.Even)
-            EnsureEvenAndOddHeaders(main);
+            WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
         main.PutXDocument();
     }
 
@@ -1388,27 +1388,6 @@ internal static class IrMarkupRenderer
             sectPr.Add(element);
         else
             firstTail.AddBeforeSelf(element);
-    }
-
-    /// <summary>Ensure the settings part carries <c>w:evenAndOddHeaders</c> (required for an Even story
-    /// to be effective), reordering the settings children per the standard afterwards.</summary>
-    private static void EnsureEvenAndOddHeaders(MainDocumentPart main)
-    {
-        var settingsPart = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
-        var xDoc = settingsPart.GetXDocument();
-        var root = xDoc.Root;
-        if (root is null)
-        {
-            root = new XElement(W.settings, new XAttribute(XNamespace.Xmlns + "w", W.w));
-            xDoc.Add(root);
-        }
-        if (root.Element(W.evenAndOddHeaders) is null)
-        {
-            root.Add(new XElement(W.evenAndOddHeaders));
-            var ordered = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(root);
-            root.ReplaceWith(ordered);
-        }
-        settingsPart.PutXDocument();
     }
 
     /// <summary>The output package's header (or footer) part with the given URI, or null.</summary>

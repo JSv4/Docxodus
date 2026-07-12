@@ -127,6 +127,10 @@ public enum ParagraphAlignment { Left, Center, Right, Justify }
 ///   <item><description><see cref="First"/> — the first-page-only story (<c>w:type="first"</c>); the section's <c>w:titlePg</c> flag is set so Word honors it.</description></item>
 ///   <item><description><see cref="Even"/> — the even-page story (<c>w:type="even"</c>); <c>w:evenAndOddHeaders</c> is set in the settings part so Word honors it.</description></item>
 /// </list>
+/// Note that <c>w:evenAndOddHeaders</c> is document-global and governs footers too: once set,
+/// even pages stop inheriting the Default footer, so a section with only a Default footer shows
+/// no footer at all on even pages. Set an <see cref="Even"/> footer alongside an Even header if
+/// footers should keep appearing on every page.
 /// </summary>
 public enum HeaderFooterKind { Default, First, Even }
 
@@ -4348,7 +4352,7 @@ public sealed class DocxSession : IDisposable
             if (kind == HeaderFooterKind.First && sectPr.Element(W.titlePg) is null)
                 InsertSectPrTitlePg(sectPr);
             else if (kind == HeaderFooterKind.Even)
-                EnsureEvenAndOddHeaders(main);
+                WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
 
             InvalidateProjectionCache();
             var index = Project().AnchorIndex;
@@ -4471,27 +4475,6 @@ public sealed class DocxSession : IDisposable
         var firstTail = sectPr.Elements().FirstOrDefault(e => SectPrAfterTitlePg.Contains(e.Name));
         if (firstTail is null) sectPr.Add(titlePg);
         else firstTail.AddBeforeSelf(titlePg);
-    }
-
-    /// <summary>Ensure the settings part carries <c>w:evenAndOddHeaders</c> (required for an Even story
-    /// to render), reordering the settings children per the standard afterwards.</summary>
-    private static void EnsureEvenAndOddHeaders(MainDocumentPart main)
-    {
-        var settingsPart = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
-        var xDoc = settingsPart.GetXDocument();
-        var root = xDoc.Root;
-        if (root is null)
-        {
-            root = new XElement(W.settings, new XAttribute(XNamespace.Xmlns + "w", W.w));
-            xDoc.Add(root);
-        }
-        if (root.Element(W.evenAndOddHeaders) is null)
-        {
-            root.Add(new XElement(W.evenAndOddHeaders));
-            var ordered = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(root);
-            root.ReplaceWith(ordered);
-        }
-        settingsPart.PutXDocument();
     }
 
     /// <summary>
