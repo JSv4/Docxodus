@@ -313,6 +313,144 @@ namespace OxPt
             }
         }
 
+        [Fact]
+        public void DM022_GetDocumentMetadata_DetectsSectionBreakInsideTableCell()
+        {
+            // Arrange - a section break (sectPr in pPr) carried by a paragraph INSIDE a table cell.
+            // Before issue #51 this was missed because only top-level body children were scanned, so
+            // the document reported a single section instead of two.
+            using (var ms = new MemoryStream())
+            {
+                using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+                    mainPart.Document = new Document(
+                        new Body(
+                            // Body-level table whose cell paragraph ends section 1 (US Letter portrait).
+                            new DocumentFormat.OpenXml.Wordprocessing.Table(
+                                new DocumentFormat.OpenXml.Wordprocessing.TableRow(
+                                    new DocumentFormat.OpenXml.Wordprocessing.TableCell(
+                                        new Paragraph(
+                                            new ParagraphProperties(
+                                                new SectionProperties(
+                                                    new PageSize() { Width = 12240, Height = 15840 } // US Letter (612x792pt)
+                                                )
+                                            ),
+                                            new Run(new Text("Section break inside a table cell"))
+                                        )
+                                    )
+                                )
+                            ),
+                            // Section 2 content.
+                            new Paragraph(new Run(new Text("Section 2 content"))),
+                            // Document-level sectPr for the final section (landscape).
+                            new SectionProperties(
+                                new PageSize() { Width = 15840, Height = 12240 } // Landscape (792x612pt)
+                            )
+                        )
+                    );
+                    mainPart.Document.Save();
+                }
+
+                ms.Position = 0;
+                var wmlDoc = new WmlDocument("test.docx", ms);
+
+                // Act
+                var metadata = WmlToHtmlConverter.GetDocumentMetadata(wmlDoc);
+
+                // Assert - two sections are now detected.
+                Assert.Equal(2, metadata.Sections.Count);
+
+                // Section 1 came from the in-cell sectPr (US Letter, ~612pt wide) and owns the table.
+                Assert.True(Math.Abs(metadata.Sections[0].PageWidthPt - 612) < 1,
+                    $"First section width should be ~612pt (US Letter), got {metadata.Sections[0].PageWidthPt}");
+                Assert.Equal(1, metadata.Sections[0].TableCount);
+
+                // Section 2 came from the body-level sectPr (landscape, ~792pt wide).
+                Assert.True(Math.Abs(metadata.Sections[1].PageWidthPt - 792) < 1,
+                    $"Second section width should be ~792pt (landscape), got {metadata.Sections[1].PageWidthPt}");
+
+                Assert.Equal(1, metadata.TotalTables);
+
+                // Section indices stay sequential and paragraph indices contiguous.
+                Assert.Equal(0, metadata.Sections[0].SectionIndex);
+                Assert.Equal(1, metadata.Sections[1].SectionIndex);
+                Assert.Equal(0, metadata.Sections[0].StartParagraphIndex);
+                Assert.Equal(metadata.Sections[0].EndParagraphIndex, metadata.Sections[1].StartParagraphIndex);
+                Assert.Equal(metadata.TotalParagraphs, metadata.Sections[metadata.Sections.Count - 1].EndParagraphIndex);
+            }
+        }
+
+        [Fact]
+        public void DM023_GetDocumentMetadata_IgnoresSectionPropertiesInsideTextBox()
+        {
+            // Arrange - a text box whose inner paragraph carries a sectPr. A text box is a SEPARATE
+            // story: its section properties must not create a main-document section (issue #51). The
+            // main story here has exactly one section, governed by the body-level sectPr. The raw XML
+            // is written straight to the part so the VML text box round-trips verbatim.
+            const string wNs = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            const string vNs = "urn:schemas-microsoft-com:vml";
+            string documentXml =
+                $@"<?xml version=""1.0"" encoding=""UTF-8"" standalone=""yes""?>
+<w:document xmlns:w=""{wNs}"" xmlns:v=""{vNs}"">
+  <w:body>
+    <w:p>
+      <w:r>
+        <w:pict>
+          <v:shape>
+            <v:textbox>
+              <w:txbxContent>
+                <w:p>
+                  <w:pPr>
+                    <w:sectPr>
+                      <w:pgSz w:w=""11906"" w:h=""16838""/>
+                    </w:sectPr>
+                  </w:pPr>
+                  <w:r><w:t>Inside a text box (A4 sectPr - must be ignored)</w:t></w:r>
+                </w:p>
+              </w:txbxContent>
+            </v:textbox>
+          </v:shape>
+        </w:pict>
+      </w:r>
+      <w:r><w:t>Paragraph that anchors the text box</w:t></w:r>
+    </w:p>
+    <w:p><w:r><w:t>Body content</w:t></w:r></w:p>
+    <w:sectPr>
+      <w:pgSz w:w=""12240"" w:h=""15840""/>
+    </w:sectPr>
+  </w:body>
+</w:document>";
+
+            using (var ms = new MemoryStream())
+            {
+                using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+                {
+                    var mainPart = wDoc.AddMainDocumentPart();
+                    using (var partStream = mainPart.GetStream(FileMode.Create, FileAccess.Write))
+                    using (var writer = new StreamWriter(partStream, new System.Text.UTF8Encoding(false)))
+                    {
+                        writer.Write(documentXml);
+                    }
+                }
+
+                ms.Position = 0;
+                var wmlDoc = new WmlDocument("test.docx", ms);
+
+                // Act
+                var metadata = WmlToHtmlConverter.GetDocumentMetadata(wmlDoc);
+
+                // Assert - exactly one section, taken from the body-level (US Letter) sectPr, NOT the
+                // A4 sectPr buried in the text box.
+                Assert.Single(metadata.Sections);
+                Assert.True(Math.Abs(metadata.Sections[0].PageWidthPt - 612) < 1,
+                    $"Section width should be ~612pt (US Letter body sectPr), got {metadata.Sections[0].PageWidthPt}");
+
+                // Only the two main-story paragraphs are counted; the text box's paragraph is excluded.
+                Assert.Equal(2, metadata.TotalParagraphs);
+            }
+        }
+
         #endregion
 
         #region Edge Cases

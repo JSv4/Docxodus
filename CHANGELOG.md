@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **`GetDocumentMetadata` now detects section breaks nested inside tables, and correctly ignores section properties inside text boxes (issue #51).** `CollectSectionData` previously scanned only the body's direct children (`body.Elements()`), so a `w:sectPr` carried by a paragraph inside a table cell was invisible — the document reported one section instead of two, and the per-section page dimensions and paragraph/table index ranges used for lazy-loading pagination were wrong. It now walks the body as a single **main story** in document order, descending into tables (`w:tbl → w:tr → w:tc`) so an in-cell section break is counted and attributed to the section it starts in. Each `w:p` is treated as a leaf (only its direct `w:pPr/w:sectPr` is inspected, never its runs), so a `w:sectPr` inside a **text box** — a separate story that does not paginate the main document — is excluded automatically (as are text-box paragraphs); counting it would have invented a phantom section. Only body-level tables count toward the table total, preserving the previous counts for the common case. Regression coverage: `DM022` (in-cell break detected) and `DM023` (text-box section properties ignored) in `DocumentMetadataTests.cs`; the separate-story rule is documented in `docs/ooxml_corner_cases.md`.
+
 ## [7.0.1] - 2026-07-11
 
 ### Changed
