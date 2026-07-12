@@ -468,4 +468,73 @@ public class HtmlConversionOpsTests
 
         Assert.Contains("HCO061 block text", block);
     }
+
+    // Builds a document-only package (word/document.xml only — no styles, no settings) and
+    // proves the repro shape: StyleDefinitionsPart really is absent after reopen.
+    private static byte[] DocumentOnlyDocxBytes(string text)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.Run(new Wp.Text(text)))));
+            main.Document.Save();
+        }
+
+        using (var reopen = WordprocessingDocument.Open(ms, false))
+        {
+            Assert.Null(reopen.MainDocumentPart!.StyleDefinitionsPart);
+        }
+        return ms.ToArray();
+    }
+
+    // Issue #265 — sibling of the missing-settings crash fixed in #264. word/styles.xml
+    // (StyleDefinitionsPart) is also optional in OOXML: Word opens a document-only package
+    // without repair, but FormattingAssembler.AssembleFormatting dereferenced
+    // StyleDefinitionsPart unconditionally (many sites), throwing ArgumentNullException("part")
+    // at WmlToHtmlConverter.cs's AssembleFormatting call — before any HTML was produced.
+    [Fact]
+    public void HCO062_MissingStyleDefinitionsPart_DoesNotCrashConverter()
+    {
+        byte[] bytes = DocumentOnlyDocxBytes("Hello no-styles package");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions());
+
+        Assert.Contains("Hello no-styles package", html);
+    }
+
+    // Same crash, real-world shape: the RPR fixtures contain ONLY [Content_Types].xml,
+    // _rels/.rels, and word/document.xml (no styles, no settings) and crashed on conversion.
+    [Fact]
+    public void HCO063_DocumentOnlyPackage_RprFixture_ConvertsToHtml()
+    {
+        byte[] bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "RPR-FivePageTestDoc.docx"));
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions());
+
+        Assert.Contains("Page 1 paragraph 1", html);
+        Assert.Contains("Page 5 paragraph 1", html);
+    }
+
+    // RenderBlockHtml's throwaway doc copies the source's formatting parts; with no styles
+    // part to copy, the single-block path must survive a styles-less source end to end.
+    [Fact]
+    public void HCO064_RenderBlockHtml_SourceMissingStyleDefinitionsPart_DoesNotCrash()
+    {
+        byte[] bytes = DocumentOnlyDocxBytes("HCO064 block text");
+
+        var opts = new HtmlConversionOptions { StampAnchors = true, FabricateCssClasses = false };
+        string full = HtmlConversionOps.ConvertToHtml(bytes, opts);
+        var anchorEl = System.Xml.Linq.XElement.Parse(full).Descendants()
+            .First(e => (string?)e.Attribute("data-anchor") != null);
+        string anchorId = (string)anchorEl.Attribute("data-anchor")!;
+
+        string block = HtmlConversionOps.RenderBlockHtml(bytes, anchorId, opts);
+
+        Assert.Contains("HCO064 block text", block);
+    }
 }

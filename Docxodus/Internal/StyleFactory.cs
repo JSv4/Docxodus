@@ -23,6 +23,26 @@ internal static class StyleFactory
     public const string CodeStyleId = "Code";
 
     /// <summary>
+    /// Find-or-create the document's <see cref="StyleDefinitionsPart"/>. word/styles.xml is
+    /// optional in OOXML (Word opens a document-only package without repair), so callers that
+    /// read or write style definitions unconditionally must ensure the part exists first. A
+    /// missing part is synthesized with an empty <c>w:styles</c> root — every lookup then falls
+    /// through to built-in defaults. Note the part is added to <paramref name="main"/>: a
+    /// caller-visible mutation that persists in saved output.
+    /// </summary>
+    public static StyleDefinitionsPart EnsureStylesPart(MainDocumentPart main)
+    {
+        var part = main.StyleDefinitionsPart;
+        if (part is null)
+        {
+            part = main.AddNewPart<StyleDefinitionsPart>();
+            part.PutXDocument(new XDocument(
+                new XElement(W + "styles", new XAttribute(XNamespace.Xmlns + "w", W.NamespaceName))));
+        }
+        return part;
+    }
+
+    /// <summary>
     /// Ensure a character style with id <see cref="CodeStyleId"/> exists. If <em>any</em> style with
     /// that id is already defined it is left untouched (respect the document's own definition); only a
     /// missing style is synthesized, as a monospace character style.
@@ -32,13 +52,7 @@ internal static class StyleFactory
         var main = doc.MainDocumentPart;
         if (main is null) return;
 
-        var part = main.StyleDefinitionsPart;
-        if (part is null)
-        {
-            part = main.AddNewPart<StyleDefinitionsPart>();
-            part.PutXDocument(new XDocument(
-                new XElement(W + "styles", new XAttribute(XNamespace.Xmlns + "w", W.NamespaceName))));
-        }
+        var part = EnsureStylesPart(main);
 
         var root = part.GetXDocument().Root!;
         bool exists = root.Elements(W + "style")
@@ -76,13 +90,7 @@ internal static class StyleFactory
         var main = doc.MainDocumentPart;
         if (main is null) return false;
 
-        var part = main.StyleDefinitionsPart;
-        if (part is null)
-        {
-            part = main.AddNewPart<StyleDefinitionsPart>();
-            part.PutXDocument(new XDocument(
-                new XElement(W + "styles", new XAttribute(XNamespace.Xmlns + "w", W.NamespaceName))));
-        }
+        var part = EnsureStylesPart(main);
 
         var root = part.GetXDocument().Root!;
         bool exists = root.Elements(W + "style")
