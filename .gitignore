@@ -55,3 +55,6 @@ Docxodus.Tests/Ir/Diff/DifferentialArtifacts/
 
 # IR diff generative-fuzzer triage artifacts (regenerated per test run)
 Docxodus.Tests/Ir/Diff/FuzzArtifacts/
+
+# macOS
+.DS_Store

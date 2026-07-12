@@ -19,22 +19,24 @@ import os
 import subprocess
 import sys
 import time
+from typing import Any
+
 import uno
 from com.sun.star.beans import PropertyValue
 
 
-def p(name, value):
+def p(name: str, value: Any) -> PropertyValue:
     pv = PropertyValue()
     pv.Name = name
     pv.Value = value
     return pv
 
 
-def url(path):
+def url(path: str) -> str:
     return "file://" + os.path.abspath(path)
 
 
-def main():
+def main() -> int:
     doc_path = sys.argv[1]
     port = sys.argv[2] if len(sys.argv) > 2 else "2009"
     profile = "file:///tmp/lo_profile_bk_%s" % port

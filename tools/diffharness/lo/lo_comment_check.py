@@ -23,24 +23,26 @@ import os
 import subprocess
 import sys
 import time
+from typing import Any
+
 import uno
 from com.sun.star.beans import PropertyValue
 
 
-def p(name, value):
+def p(name: str, value: Any) -> PropertyValue:
     pv = PropertyValue()
     pv.Name = name
     pv.Value = value
     return pv
 
 
-def url(path):
+def url(path: str) -> str:
     return "file://" + os.path.abspath(path)
 
 
-def collect_comments(doc):
+def collect_comments(doc: Any) -> list[dict[str, Any]]:
     """Return list of dicts {name, author, content, parent, anchored} for every Annotation field."""
-    out = []
+    out: list[dict[str, Any]] = []
     enum = doc.getTextFields().createEnumeration()
     while enum.hasMoreElements():
         f = enum.nextElement()
@@ -61,7 +63,7 @@ def collect_comments(doc):
     return out
 
 
-def main():
+def main() -> int:
     doc_path = sys.argv[1]
     port = sys.argv[2] if len(sys.argv) > 2 else "2011"
     profile = "file:///tmp/lo_profile_cmt_%s" % port

@@ -14,22 +14,24 @@ import os
 import subprocess
 import sys
 import time
+from typing import Any
+
 import uno
 from com.sun.star.beans import PropertyValue
 
 
-def p(name, value):
+def p(name: str, value: Any) -> PropertyValue:
     pv = PropertyValue()
     pv.Name = name
     pv.Value = value
     return pv
 
 
-def url(path):
+def url(path: str) -> str:
     return "file://" + os.path.abspath(path)
 
 
-def main():
+def main() -> None:
     base, variant, out = sys.argv[1], sys.argv[2], sys.argv[3]
     port = sys.argv[4] if len(sys.argv) > 4 else "2002"
     profile = "file:///tmp/lo_profile_diff_%s" % port

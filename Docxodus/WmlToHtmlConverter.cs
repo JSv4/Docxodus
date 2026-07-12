@@ -6155,6 +6155,16 @@ namespace Docxodus
             return root.Annotation<ThemeColorScheme>();
         }
 
+        /// <summary>Word's built-in default tab stop (in twips) used when no explicit
+        /// w:defaultTabStop value is available, e.g. settings.xml is absent or lacks the element.</summary>
+        private const int DefaultTabStopTwips = 720;
+
+        /// <summary>Gets the DocumentSettingsPart's XDocument, or null if the part is absent.
+        /// DocumentSettingsPart is optional in OOXML — Word opens packages without
+        /// word/settings.xml fine, so callers must not assume it is present.</summary>
+        private static XDocument GetSettingsXDocumentOrDefault(WordprocessingDocument wordDoc) =>
+            wordDoc.MainDocumentPart?.DocumentSettingsPart?.GetXDocument();
+
         /// <summary>
         /// Extracts the document's default language from settings.
         /// Priority: 1) themeFontLang, 2) default paragraph style lang, 3) "en-US"
@@ -6164,10 +6174,9 @@ namespace Docxodus
             const string fallbackLanguage = "en-US";
 
             // Try 1: themeFontLang in DocumentSettingsPart
-            var settingsPart = wordDoc.MainDocumentPart?.DocumentSettingsPart;
-            if (settingsPart != null)
+            var settingsXDoc = GetSettingsXDocumentOrDefault(wordDoc);
+            if (settingsXDoc != null)
             {
-                var settingsXDoc = settingsPart.GetXDocument();
                 var themeFontLang = settingsXDoc.Descendants(W.themeFontLang).FirstOrDefault();
                 if (themeFontLang != null)
                 {
@@ -6468,10 +6477,20 @@ namespace Docxodus
             // Note: when implementing a paging version of the HTML transform, this needs to be done
             // for all content parts, not just the main document part.
 
-            // w:defaultTabStop in settings
-            var sxd = wordDoc.MainDocumentPart.DocumentSettingsPart.GetXDocument();
-            var defaultTabStopValue = (string)sxd.Descendants(W.defaultTabStop).Attributes(W.val).FirstOrDefault();
-            var defaultTabStop = defaultTabStopValue != null ? WordprocessingMLUtil.StringToTwips(defaultTabStopValue) : 720;
+            // w:defaultTabStop in settings. Settings is optional in OOXML — Word opens
+            // packages without word/settings.xml fine. Missing DocumentSettingsPart used
+            // to throw ArgumentNullException("part") via GetXDocument and abort conversion
+            // for the bulk of minimal fixtures (id_paraid_overflow / style demos).
+            // MainDocumentPart is non-null by this point in ConvertToHtml (used directly below).
+            var defaultTabStop = DefaultTabStopTwips;
+            var sxd = GetSettingsXDocumentOrDefault(wordDoc);
+            if (sxd != null)
+            {
+                // w:defaultTabStop is a direct child of w:settings (not nested).
+                var defaultTabStopValue = (string)sxd.Root?.Element(W.defaultTabStop)?.Attribute(W.val);
+                if (defaultTabStopValue != null)
+                    defaultTabStop = WordprocessingMLUtil.StringToTwips(defaultTabStopValue);
+            }
 
             var pxd = wordDoc.MainDocumentPart.GetXDocument();
             var root = pxd.Root;
@@ -6859,7 +6878,7 @@ namespace Docxodus
             if (lastTabElement != null)
             {
                 if (defaultTabStop == 0)
-                    defaultTabStop = 720;
+                    defaultTabStop = DefaultTabStopTwips;
                 var rangeStart = WordprocessingMLUtil.StringToTwips((string)lastTabElement.Attribute(W.pos)) / defaultTabStop + 1;
                 var tempTabs = new XElement(W.tabs,
                     tabs.Elements().Where(t => (string)t.Attribute(W.val) != "clear" && (string)t.Attribute(W.val) != "bar"),

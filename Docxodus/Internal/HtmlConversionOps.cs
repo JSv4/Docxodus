@@ -319,8 +319,7 @@ internal static class HtmlConversionOps
     }
 
     /// <summary>Copy the formatting parts (styles/numbering/theme/font/settings) from src into the
-    /// throwaway doc, ensuring a DocumentSettingsPart exists (the converter reads w:defaultTabStop
-    /// with no null check).</summary>
+    /// throwaway doc. Settings may be absent; ConvertToHtml defaults tab stop to 720 twips.</summary>
     private static void AddFormattingParts(WordprocessingDocument blockDoc, WordprocessingDocument sourceDoc)
     {
         CopyPartXml(sourceDoc, blockDoc, p => p.StyleDefinitionsPart);
@@ -329,12 +328,6 @@ internal static class HtmlConversionOps
         CopyPartXml(sourceDoc, blockDoc, p => p.ThemePart);
         CopyPartXml(sourceDoc, blockDoc, p => p.FontTablePart);
         CopyPartXml(sourceDoc, blockDoc, p => p.DocumentSettingsPart);
-        if (blockDoc.MainDocumentPart!.DocumentSettingsPart is null)
-        {
-            blockDoc.MainDocumentPart.AddNewPart<DocumentSettingsPart>()
-                .PutXDocument(new XDocument(
-                    new XElement(W.settings, new XAttribute(XNamespace.Xmlns + "w", W.w))));
-        }
     }
 
     /// <summary>A minimal <c>w:document</c> wrapping <paramref name="bodyContent"/> (or an empty body).</summary>

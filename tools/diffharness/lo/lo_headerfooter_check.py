@@ -20,24 +20,26 @@ import os
 import subprocess
 import sys
 import time
+from typing import Any
+
 import uno
 from com.sun.star.beans import PropertyValue
 
 
-def p(name, value):
+def p(name: str, value: Any) -> PropertyValue:
     pv = PropertyValue()
     pv.Name = name
     pv.Value = value
     return pv
 
 
-def url(path):
+def url(path: str) -> str:
     return "file://" + os.path.abspath(path)
 
 
-def harvest_stories(doc):
+def harvest_stories(doc: Any) -> dict[str, str]:
     """Concatenated text of every header/footer story of every page style."""
-    stories = {}
+    stories: dict[str, str] = {}
     styles = doc.getStyleFamilies().getByName("PageStyles")
     for i in range(styles.getCount()):
         style = styles.getByIndex(i)
@@ -59,10 +61,12 @@ def harvest_stories(doc):
     return stories
 
 
-def main():
+def main() -> int:
     doc_path = sys.argv[1]
     rest = sys.argv[2:]
-    expects, absents, port = [], [], "2013"
+    expects: list[str] = []
+    absents: list[str] = []
+    port = "2013"
     mode = "expect"
     i = 0
     while i < len(rest):

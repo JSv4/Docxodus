@@ -21,23 +21,25 @@ import os
 import subprocess
 import sys
 import time
+from typing import Any
+
 import uno
 from com.sun.star.beans import PropertyValue
 
 
-def p(name, value):
+def p(name: str, value: Any) -> PropertyValue:
     pv = PropertyValue()
     pv.Name = name
     pv.Value = value
     return pv
 
 
-def url(path):
+def url(path: str) -> str:
     return "file://" + os.path.abspath(path)
 
 
-def note_text(notes):
-    parts = []
+def note_text(notes: Any) -> str:
+    parts: list[str] = []
     for i in range(notes.Count):
         try:
             parts.append(notes.getByIndex(i).getString())
@@ -46,7 +48,7 @@ def note_text(notes):
     return " | ".join(t.strip() for t in parts if t.strip())
 
 
-def main():
+def main() -> None:
     port = "2008"
     raw = sys.argv[1:]
     args = []

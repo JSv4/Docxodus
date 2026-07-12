@@ -18,25 +18,27 @@ import os
 import subprocess
 import sys
 import time
+from typing import Any
+
 import uno
 from com.sun.star.beans import PropertyValue
 
 
-def p(n, v):
+def p(n: str, v: Any) -> PropertyValue:
     pv = PropertyValue(); pv.Name = n; pv.Value = v; return pv
 
 
-def url(path):
+def url(path: str) -> str:
     return "file://" + os.path.abspath(path)
 
 
-def redline_summary(doc):
+def redline_summary(doc: Any) -> tuple[int, list[dict[str, Any]]]:
     """Return (count, [{type, author, text}]) for a document's tracked changes.
 
     Each redline element is an XPropertySet (also XText); read its RedlineType/Author
     via properties and the affected text via getString().
     """
-    out = []
+    out: list[dict[str, Any]] = []
     try:
         rl = doc.Redlines
         n = rl.Count
@@ -52,7 +54,7 @@ def redline_summary(doc):
         return -1, [{"error": str(e)}]
 
 
-def main():
+def main() -> None:
     corpus = sys.argv[1]
     port = sys.argv[2] if len(sys.argv) > 2 else "2010"
     profile = "file:///tmp/lo_profile_batch_%s" % port
@@ -137,8 +139,8 @@ def main():
             sof.kill()
 
 
-def _types(lst):
-    out = {}
+def _types(lst: list[dict[str, Any]]) -> dict[Any, int]:
+    out: dict[Any, int] = {}
     for x in lst:
         t = x.get("type", "?")
         out[t] = out.get(t, 0) + 1

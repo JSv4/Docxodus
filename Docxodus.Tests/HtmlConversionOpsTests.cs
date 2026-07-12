@@ -312,4 +312,229 @@ public class HtmlConversionOpsTests
         Assert.Contains("LeftCellText", html);
         Assert.Contains("RightCellText", html);
     }
+
+    // Minimal OOXML packages (document.xml + styles.xml only — no word/settings.xml) are legal:
+    // ECMA-376 does not require DocumentSettingsPart, and Word opens them without repair.
+    // CalculateSpanWidthForTabs used to call DocumentSettingsPart.GetXDocument() unconditionally,
+    // which threw ArgumentNullException("part") and aborted conversion. Default tab stop is 720 twips.
+    [Fact]
+    public void HCO057_MissingDocumentSettingsPart_DoesNotCrashConverter()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.Run(
+                            new Wp.Text("Hello no-settings package")))));
+            // Styles are required by FormattingAssembler; settings intentionally omitted.
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles(
+                new Wp.DocDefaults(
+                    new Wp.RunPropertiesDefault(
+                        new Wp.RunPropertiesBaseStyle(
+                            new Wp.RunFonts { Ascii = "Calibri", HighAnsi = "Calibri" },
+                            new Wp.FontSize { Val = "24" }))));
+            main.Document.Save();
+        }
+
+        // Prove the part is absent (not just that we forgot to assert the repro shape).
+        using (var reopen = WordprocessingDocument.Open(ms, false))
+        {
+            Assert.Null(reopen.MainDocumentPart!.DocumentSettingsPart);
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
+        Assert.Contains("Hello no-settings package", html);
+    }
+
+    // CalculateSpanWidthForTabs (WmlToHtmlConverter.cs) computes a tab's rendered width from
+    // w:defaultTabStop. This pins the actual numeric fallback (720 twips == 0.5in) that
+    // HCO057 only proved didn't crash — i.e. the missing-settings path doesn't just avoid
+    // throwing, it produces the SAME width Word itself defaults to for an unset tab stop.
+    [Fact]
+    public void HCO058_MissingDocumentSettingsPart_TabWidthDefaultsTo720Twips()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.Run(new Wp.TabChar()),
+                        new Wp.Run(new Wp.Text("AfterTab")))));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            // DocumentSettingsPart intentionally omitted.
+            main.Document.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
+
+        Assert.Contains("AfterTab", html);
+        // 720 twips (Word's implicit default tab stop) == 0.5in from position 0.
+        Assert.Contains("margin: 0 0 0 0.50in", html);
+    }
+
+    // Same computation, but with an explicit DocumentSettingsPart that overrides
+    // w:defaultTabStop — proves the "settingsPart != null" branch introduced by the same
+    // refactor still reads the configured value correctly (not just the null-guard path).
+    [Fact]
+    public void HCO059_DocumentSettingsPartWithCustomDefaultTabStop_TabWidthUsesConfiguredValue()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.Run(new Wp.TabChar()),
+                        new Wp.Run(new Wp.Text("AfterTab")))));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings =
+                new Wp.Settings(new Wp.DefaultTabStop { Val = 1440 }); // 1 inch
+            main.Document.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
+
+        Assert.Contains("AfterTab", html);
+        Assert.Contains("margin: 0 0 0 1.00in", html);
+        Assert.DoesNotContain("margin: 0 0 0 0.50in", html);
+    }
+
+    // DocumentSettingsPart present but with no w:defaultTabStop element at all (legal — the
+    // element is optional within w:settings). Must fall back to the same 720-twip default as
+    // when the whole part is absent, not throw and not silently use 0.
+    [Fact]
+    public void HCO060_DocumentSettingsPartWithoutDefaultTabStopElement_FallsBackTo720Twips()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.Run(new Wp.TabChar()),
+                        new Wp.Run(new Wp.Text("AfterTab")))));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings(); // no DefaultTabStop child
+            main.Document.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
+
+        Assert.Contains("AfterTab", html);
+        Assert.Contains("margin: 0 0 0 0.50in", html);
+    }
+
+    // AddFormattingParts copies formatting parts into the RenderBlockHtml throwaway doc but no
+    // longer invents a dummy DocumentSettingsPart. Regression: a source with no settings part
+    // must still round-trip through RenderBlockHtml without crashing (converter defaults tab stop).
+    [Fact]
+    public void HCO061_RenderBlockHtml_SourceMissingDocumentSettingsPart_DoesNotCrash()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.Run(new Wp.Text("HCO061 block text")))));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            // DocumentSettingsPart intentionally omitted from the source document.
+            main.Document.Save();
+        }
+        byte[] bytes = ms.ToArray();
+
+        using (var reopenStream = new MemoryStream(bytes))
+        using (var reopen = WordprocessingDocument.Open(reopenStream, false))
+        {
+            Assert.Null(reopen.MainDocumentPart!.DocumentSettingsPart);
+        }
+
+        var opts = new HtmlConversionOptions { FabricateCssClasses = false };
+        string full = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { StampAnchors = true, FabricateCssClasses = false });
+        var anchorEl = System.Xml.Linq.XElement.Parse(full).Descendants()
+            .First(e => (string?)e.Attribute("data-anchor") != null);
+        string anchorId = (string)anchorEl.Attribute("data-anchor")!;
+
+        string block = HtmlConversionOps.RenderBlockHtml(bytes, anchorId, opts);
+
+        Assert.Contains("HCO061 block text", block);
+    }
+
+    // Builds a document-only package (word/document.xml only — no styles, no settings) and
+    // proves the repro shape: StyleDefinitionsPart really is absent after reopen.
+    private static byte[] DocumentOnlyDocxBytes(string text)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.Run(new Wp.Text(text)))));
+            main.Document.Save();
+        }
+
+        using (var reopen = WordprocessingDocument.Open(ms, false))
+        {
+            Assert.Null(reopen.MainDocumentPart!.StyleDefinitionsPart);
+        }
+        return ms.ToArray();
+    }
+
+    // Issue #265 — sibling of the missing-settings crash fixed in #264. word/styles.xml
+    // (StyleDefinitionsPart) is also optional in OOXML: Word opens a document-only package
+    // without repair, but FormattingAssembler.AssembleFormatting dereferenced
+    // StyleDefinitionsPart unconditionally (many sites), throwing ArgumentNullException("part")
+    // at WmlToHtmlConverter.cs's AssembleFormatting call — before any HTML was produced.
+    [Fact]
+    public void HCO062_MissingStyleDefinitionsPart_DoesNotCrashConverter()
+    {
+        byte[] bytes = DocumentOnlyDocxBytes("Hello no-styles package");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions());
+
+        Assert.Contains("Hello no-styles package", html);
+    }
+
+    // Same crash, real-world shape: the RPR fixtures contain ONLY [Content_Types].xml,
+    // _rels/.rels, and word/document.xml (no styles, no settings) and crashed on conversion.
+    [Fact]
+    public void HCO063_DocumentOnlyPackage_RprFixture_ConvertsToHtml()
+    {
+        byte[] bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "RPR-FivePageTestDoc.docx"));
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes, new HtmlConversionOptions());
+
+        Assert.Contains("Page 1 paragraph 1", html);
+        Assert.Contains("Page 5 paragraph 1", html);
+    }
+
+    // RenderBlockHtml's throwaway doc copies the source's formatting parts; with no styles
+    // part to copy, the single-block path must survive a styles-less source end to end.
+    [Fact]
+    public void HCO064_RenderBlockHtml_SourceMissingStyleDefinitionsPart_DoesNotCrash()
+    {
+        byte[] bytes = DocumentOnlyDocxBytes("HCO064 block text");
+
+        var opts = new HtmlConversionOptions { StampAnchors = true, FabricateCssClasses = false };
+        string full = HtmlConversionOps.ConvertToHtml(bytes, opts);
+        var anchorEl = System.Xml.Linq.XElement.Parse(full).Descendants()
+            .First(e => (string?)e.Attribute("data-anchor") != null);
+        string anchorId = (string)anchorEl.Attribute("data-anchor")!;
+
+        string block = HtmlConversionOps.RenderBlockHtml(bytes, anchorId, opts);
+
+        Assert.Contains("HCO064 block text", block);
+    }
 }

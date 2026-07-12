@@ -74,6 +74,19 @@ if grep -q 'credentials:"same-origin"' "$WASM_DIST/_framework/dotnet.native.js" 
     echo "WARNING: dotnet.native.js still contains credentials:same-origin"
 fi
 
+# Some .NET WASM SDK builds emit per-asset "integrity" in dotnet.boot.js, but the
+# published loader (dotnet.js) only applies SRI when the field is named "hash".
+# Normalize so asset fetches get integrity checks (matches published npm packages).
+BOOT_JS="$WASM_DIST/_framework/dotnet.boot.js"
+if [[ -f "$BOOT_JS" ]] && grep -q '"integrity"' "$BOOT_JS"; then
+    echo "Normalizing dotnet.boot.js asset integrity fields to hash..."
+    if [[ "$OSTYPE" == "darwin"* ]]; then
+        sed -i '' 's/"integrity"\([[:space:]]*:[[:space:]]*"sha256-\)/"hash"\1/g' "$BOOT_JS"
+    else
+        sed -i 's/"integrity"\([[:space:]]*:[[:space:]]*"sha256-\)/"hash"\1/g' "$BOOT_JS"
+    fi
+fi
+
 # Report sizes
 echo ""
 echo "Build complete! File sizes:"

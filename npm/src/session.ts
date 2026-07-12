@@ -370,10 +370,11 @@ export class DocxSession {
     const l = fold(match.contextBefore.length > 0 ? match.contextBefore[match.contextBefore.length - 1] : undefined);
     const r = fold(match.contextAfter.length > 0 ? match.contextAfter[0] : undefined);
 
-    const isSpace = (c: string | undefined) => c === " " || c === "\t";
-    const isClauseTerm = (c: string | undefined) => c === "." || c === "," || c === ";" || c === ":" || c === "!" || c === "?";
-    const isOpen = (c: string | undefined) => c === "(" || c === "[" || c === "{";
-    const isClose = (c: string | undefined) => c === ")" || c === "]" || c === "}";
+    const isSpace = (c: string | undefined): boolean => c === " " || c === "\t";
+    const isClauseTerm = (c: string | undefined): boolean =>
+      c === "." || c === "," || c === ";" || c === ":" || c === "!" || c === "?";
+    const isOpen = (c: string | undefined): boolean => c === "(" || c === "[" || c === "{";
+    const isClose = (c: string | undefined): boolean => c === ")" || c === "]" || c === "}";
 
     let extendLeft = 0;
     let extendRight = 0;
