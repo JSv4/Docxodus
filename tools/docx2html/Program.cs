@@ -13,7 +13,7 @@ namespace Docx2Html;
 
 class Program
 {
-    const string Version = "1.0.0";
+    const string Version = "1.1.0";
 
     static int Main(string[] args)
     {
@@ -36,6 +36,11 @@ class Program
         string cssPrefix = "pt-";
         bool embedImages = true;
         bool inlineStyles = false;
+        bool trackChanges = false;
+        bool renderMoves = true;
+        bool renderComments = false;
+        bool renderFootnotes = false;
+        bool renderHeadersFooters = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -56,6 +61,26 @@ class Program
                 else if (args[i] == "--extract-images")
                 {
                     embedImages = false;
+                }
+                else if (args[i] == "--track-changes")
+                {
+                    trackChanges = true;
+                }
+                else if (args[i] == "--no-render-moves")
+                {
+                    renderMoves = false;
+                }
+                else if (args[i] == "--render-comments")
+                {
+                    renderComments = true;
+                }
+                else if (args[i] == "--render-footnotes")
+                {
+                    renderFootnotes = true;
+                }
+                else if (args[i] == "--render-headers-footers")
+                {
+                    renderHeadersFooters = true;
                 }
                 else if (args[i].StartsWith("-"))
                 {
@@ -138,6 +163,11 @@ class Program
                 CssClassPrefix = cssPrefix,
                 RestrictToSupportedLanguages = false,
                 RestrictToSupportedNumberingFormats = false,
+                RenderTrackedChanges = trackChanges,
+                RenderMoveOperations = renderMoves,
+                RenderComments = renderComments,
+                RenderFootnotesAndEndnotes = renderFootnotes,
+                RenderHeadersAndFooters = renderHeadersFooters,
                 ImageHandler = imageInfo =>
                 {
                     if (imageInfo.ContentType == null)
@@ -293,6 +323,11 @@ class Program
         Console.WriteLine("  --css-prefix=<text>  CSS class prefix (default: pt-)");
         Console.WriteLine("  --inline-styles      Use inline styles instead of CSS classes");
         Console.WriteLine("  --extract-images     Save images to separate files instead of embedding");
+        Console.WriteLine("  --track-changes      Render tracked changes as ins/del markup instead of accepting them");
+        Console.WriteLine("  --no-render-moves    Render moves as plain ins/del (only with --track-changes)");
+        Console.WriteLine("  --render-comments    Render document comments");
+        Console.WriteLine("  --render-footnotes   Render footnotes and endnotes");
+        Console.WriteLine("  --render-headers-footers  Render document headers and footers");
         Console.WriteLine("  -h, --help           Show this help message");
         Console.WriteLine("  -v, --version        Show version information");
         Console.WriteLine();
@@ -301,6 +336,7 @@ class Program
         Console.WriteLine("  docx2html document.docx output.html");
         Console.WriteLine("  docx2html document.docx --title=\"My Document\"");
         Console.WriteLine("  docx2html document.docx --extract-images --inline-styles");
+        Console.WriteLine("  docx2html redline.docx --track-changes --render-footnotes");
         Console.WriteLine();
         Console.WriteLine("Environment Variables:");
         Console.WriteLine("  DOCX2HTML_DEBUG=1    Show detailed error information");
