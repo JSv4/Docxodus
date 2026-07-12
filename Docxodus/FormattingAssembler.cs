@@ -48,6 +48,12 @@ namespace Docxodus
 
         public static void AssembleFormatting(WordprocessingDocument wDoc, FormattingAssemblerSettings settings)
         {
+            // word/styles.xml is optional in OOXML, but the assembler reads StyleDefinitionsPart
+            // throughout (and ClearStyles writes it), so ensure it exists up front — a styles-less
+            // package then resolves everything to built-in defaults instead of throwing. The
+            // synthesized part stays in wDoc, consistent with this method's in-place mutation.
+            Internal.StyleFactory.EnsureStylesPart(wDoc.MainDocumentPart);
+
             FormattingAssemblerInfo fai = new FormattingAssemblerInfo();
             XDocument sXDoc = wDoc.MainDocumentPart.StyleDefinitionsPart.GetXDocument();
 
