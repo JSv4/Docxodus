@@ -849,10 +849,11 @@ public class IrMarkupRendererTests
     }
 
     /// <summary>
-    /// Edge pin: a single-token hyperlink anchor with NO separator ("aaaa" → "zzzz") FULLY replaced — there is
-    /// no Equal (plain) run inside the link, so the emitted fragment is a pure del-link followed by a pure
-    /// ins-link. Reject ≡ left, accept ≡ right; pins that the no-Equal-run intra-link replace still round-trips
-    /// after the coalescer drops reliance on the plain-run gate.
+    /// Edge pin: a single-token hyperlink anchor with NO separator ("aaaa" → "zzzz") FULLY replaced — there is no
+    /// Equal (plain) run inside the link, so the walk emits a pure del-link then a pure ins-link. Because both
+    /// resolve to the SAME target (the anchor text is rewritten, the href is unchanged), issue #232's target-gate
+    /// coalesces them back into ONE <c>w:hyperlink</c> (one element, original r:id) — byte-faithful to the
+    /// source's single link. Reject ≡ left, accept ≡ right still hold.
     /// </summary>
     [Fact]
     public void Hyperlink_single_token_anchor_no_equal_run_replaced_round_trips()
@@ -864,7 +865,80 @@ public class IrMarkupRendererTests
 
         Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(rl)));   // reject ≡ left
         Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionAccepter.AcceptRevisions(rl)));   // accept ≡ right
+        // #232: a single fully-replaced same-target link renders as ONE w:hyperlink, not per-token fragments.
+        Assert.Equal(new[] { "rIdLink" }, HyperlinkRelIds(rl));
         AssertRoundTrip(left, right, label: "hyperlink-single-token-no-equal-run");
+    }
+
+    /// <summary>Count-and-id helper: the <c>@r:id</c> of every <c>w:hyperlink</c> in a document's main part, in
+    /// document order (an internal link with only <c>@w:anchor</c> reads as null). #232 asserts a single source
+    /// link renders as a single output hyperlink.</summary>
+    private static string?[] HyperlinkRelIds(WmlDocument doc)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var wDoc = WordprocessingDocument.Open(ms, false);
+        return wDoc.MainDocumentPart!.GetXDocument().Descendants(W.hyperlink)
+            .Select(h => (string?)h.Attribute(R.id))
+            .ToArray();
+    }
+
+    /// <summary>Build a one-paragraph hyperlink body like <see cref="HyperlinkPara"/> but with an explicit target
+    /// URI, so a test can make the SAME <c>r:id</c> resolve to DIFFERENT targets on the two sides (the WC019
+    /// retarget shape) or the SAME target (the #232 rewrite shape).</summary>
+    private static WmlDocument HyperlinkParaTo(string anchorRunsXml, string uri)
+    {
+        const string preserve = " xml:space=\"preserve\"";
+        var body =
+            "<w:p>" +
+            $"<w:r><w:t{preserve}>Visit </w:t></w:r>" +
+            $"<w:hyperlink r:id=\"rIdLink\" xmlns:r=\"{RelsNs}\">{anchorRunsXml}</w:hyperlink>" +
+            $"<w:r><w:t{preserve}> for details.</w:t></w:r>" +
+            "</w:p>";
+        return Docxodus.Tests.Ir.IrTestDocuments.FromBodyXmlWithHyperlinks(body, ("rIdLink", uri));
+    }
+
+    /// <summary>
+    /// #232 (multi-word): a single-target hyperlink whose ENTIRE multi-word anchor is replaced with no shared
+    /// token ("catdog" → "fish bird whale", href unchanged) must render as ONE <c>w:hyperlink</c> carrying the
+    /// original r:id — not per-token del/ins link fragments. Before the target-gate the pure-del + pure-ins run
+    /// had no plain piece, so the coalescer left two link elements (accept/reject round-tripped at the text level
+    /// but the raw markup fragmented, 1 → N).
+    /// </summary>
+    [Fact]
+    public void Hyperlink_fully_replaced_same_target_renders_as_one_hyperlink()
+    {
+        var left = HyperlinkPara("<w:r><w:t>catdog</w:t></w:r>");
+        var right = HyperlinkPara("<w:r><w:t xml:space=\"preserve\">fish bird whale</w:t></w:r>");
+
+        var rl = DocxDiff.Compare(left, right);
+
+        Assert.Equal(new[] { "rIdLink" }, HyperlinkRelIds(rl));                                       // ONE link
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(rl)));   // reject ≡ left
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionAccepter.AcceptRevisions(rl)));   // accept ≡ right
+        AssertRoundTrip(left, right, label: "hyperlink-fully-replaced-same-target");
+    }
+
+    /// <summary>
+    /// #232 discriminator: a whole-anchor RETARGET — the SAME <c>r:id</c> resolves to a DIFFERENT href on each
+    /// side ("aaaa"→example.com vs "zzzz"→example.org) — must NOT be coalesced. A single hyperlink carries ONE
+    /// r:id, and the target genuinely differs, so the del-link (old target) and ins-link (new target) stay TWO
+    /// elements for the post-assembly rId remap (the synthetic analogue of the WC019 corpus case). This pins that
+    /// the fix keys on the RESOLVED target, not the r:id string (identical here), so it never folds a retarget.
+    /// </summary>
+    [Fact]
+    public void Hyperlink_whole_anchor_retarget_stays_two_links()
+    {
+        var left = HyperlinkParaTo("<w:r><w:t>aaaa</w:t></w:r>", "https://example.com/");
+        var right = HyperlinkParaTo("<w:r><w:t>zzzz</w:t></w:r>", "https://example.org/");
+
+        var rl = DocxDiff.Compare(left, right);
+
+        // TWO hyperlink elements survive (old-target del-link + new-target ins-link, the ins remapped to a fresh
+        // id post-assembly so it no longer reads the same string).
+        Assert.Equal(2, HyperlinkRelIds(rl).Length);
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(rl)));   // reject ≡ left
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionAccepter.AcceptRevisions(rl)));   // accept ≡ right
+        AssertRoundTrip(left, right, label: "hyperlink-whole-anchor-retarget");
     }
 
     [Fact]

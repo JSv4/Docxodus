@@ -90,6 +90,17 @@ internal static class IrMarkupRenderer
     /// stray, but the coalescer removes it explicitly before output regardless.</summary>
     private static readonly XName SourceLinkId = PtOpenXml.pt + "SourceLinkId";
 
+    /// <summary>TRANSIENT marker attribute carrying a source <c>w:hyperlink</c>'s RESOLVED target (external URI,
+    /// or <c>"#" + anchor</c> for an internal link) onto each emitted wrapper clone. It lets
+    /// <see cref="CoalesceAdjacentHyperlinks"/> merge a fully-replaced single link's pure <c>w:del</c>+<c>w:ins</c>
+    /// fragments (same target on both sides — #232) while keeping the WC019 whole-anchor RETARGET separate (the
+    /// del/ins fragments carry the SAME <c>r:id</c> STRING at coalesce time but DIFFERENT resolved targets, so a
+    /// string compare cannot tell them apart — the resolved URI can). Del fragments come from the LEFT model and
+    /// carry the LEFT target; ins/plain fragments come from the RIGHT model and carry the RIGHT target; a run
+    /// merges only when every fragment's target agrees. In the <c>pt:</c> namespace (blanket-stripped), and
+    /// removed explicitly before output regardless.</summary>
+    private static readonly XName SourceLinkTarget = PtOpenXml.pt + "SourceLinkTarget";
+
     /// <summary>
     /// Render <paramref name="script"/> into a tracked-revisions <see cref="WmlDocument"/> on the LEFT
     /// document's package. <paramref name="left"/>/<paramref name="right"/> are the original documents the
@@ -3148,11 +3159,19 @@ internal static class IrMarkupRenderer
                 j++;
 
             int runLen = j - i;
-            // Coalesce the run into ONE w:hyperlink IFF it carries at least one plain (Equal/unchanged) run — the
-            // signal that some anchor text matched on both sides (so the link's target is the SAME on both sides).
-            // A run with NO plain piece is a pure del→ins retarget (WC019: text AND href both change → del-link of
-            // the OLD target, ins-link of the NEW target, the new id remapped post-assembly) — those MUST stay
-            // separate so the remap + empty-shell-drop restore the right/left link on each side.
+            // Coalesce the run into ONE w:hyperlink when EITHER signal says the link's target is the SAME on both
+            // sides:
+            //   (1) it carries at least one plain (Equal/unchanged) run — some anchor text matched on both sides,
+            //       so the link is the same link with an intra-anchor edit; OR
+            //   (2) every fragment resolves to the SAME hyperlink TARGET (#232) — a single link whose ENTIRE
+            //       anchor was replaced (pure del+ins, no shared token) still has one, unchanged target, so it
+            //       must render as ONE w:hyperlink to be byte-faithful to the source's link structure.
+            // A run with NO plain piece AND DIFFERING targets is a pure del→ins RETARGET (WC019: text AND href both
+            // change → del-link of the OLD target, ins-link of the NEW target, the new id remapped post-assembly) —
+            // those MUST stay separate so the remap + empty-shell-drop restore the right/left link on each side.
+            // The target gate (not r:id-string equality) is essential: at coalesce time WC019's del/ins fragments
+            // carry the SAME r:id STRING (the collision the remap later resolves), so only the RESOLVED target tells
+            // a same-target text-rewrite apart from a genuine retarget.
             bool anyPlainRun = false;
             for (int k = i; k < j; k++)
                 if (!IsRevisionPureHyperlink(content[k]))
@@ -3161,7 +3180,7 @@ internal static class IrMarkupRenderer
                     break;
                 }
 
-            if (runLen > 1 && anyPlainRun)
+            if (runLen > 1 && (anyPlainRun || AllFragmentsShareResolvedTarget(content, i, j)))
             {
                 var combined = new XElement(el);                 // clone the first (carries the shell attributes)
                 for (int k = i + 1; k < j; k++)
@@ -3176,13 +3195,36 @@ internal static class IrMarkupRenderer
             i = j;
         }
 
-        // Strip the transient source-link ordinal marker from every emitted wrapper so it never reaches output.
-        // (The body-wide pt: sweep in Render would also catch it, but stripping here keeps the marker an internal
-        // detail of the coalescer and protects callers that inspect the returned content before that sweep.)
+        // Strip the transient source-link markers (ordinal + resolved target) from every emitted wrapper so they
+        // never reach output. (The body-wide pt: sweep in Render would also catch them, but stripping here keeps
+        // the markers an internal detail of the coalescer and protects callers that inspect the returned content
+        // before that sweep.)
         foreach (var el in merged)
             if (el.Name == W.hyperlink)
+            {
                 el.Attribute(SourceLinkId)?.Remove();
+                el.Attribute(SourceLinkTarget)?.Remove();
+            }
         return merged;
+    }
+
+    /// <summary>True iff every wrapper in the half-open run <c>[start,end)</c> carries the SAME non-empty resolved
+    /// hyperlink target (<see cref="SourceLinkTarget"/>). This is the #232 signal that a single source link whose
+    /// entire anchor was replaced (pure <c>w:del</c>+<c>w:ins</c>, no shared token) is nonetheless ONE link with an
+    /// unchanged target, so its fragments may be rejoined. A missing/empty target on any fragment (dangling or
+    /// unresolvable id) fails conservatively — the run is not merged on the target basis. Because a del fragment
+    /// carries the LEFT target and an ins/plain fragment the RIGHT target, agreement across the run means the
+    /// target is identical on both sides — precisely what distinguishes a same-target text rewrite from a WC019
+    /// retarget (whose del/ins targets differ).</summary>
+    private static bool AllFragmentsShareResolvedTarget(List<XElement> content, int start, int end)
+    {
+        var target = content[start].Attribute(SourceLinkTarget)?.Value;
+        if (string.IsNullOrEmpty(target))
+            return false;
+        for (int k = start + 1; k < end; k++)
+            if (content[k].Attribute(SourceLinkTarget)?.Value != target)
+                return false;
+        return true;
     }
 
     /// <summary>True iff two emitted <c>w:hyperlink</c> wrappers came from the SAME source link — i.e. they carry
@@ -4003,6 +4045,12 @@ internal static class IrMarkupRenderer
         private readonly Dictionary<XElement, int> _hyperlinkOrdinal = new(ReferenceEqualityComparer.Instance);
         private int _nextHyperlinkOrdinal;
 
+        /// <summary>Resolved target (external URI, or <c>"#" + anchor</c> for an internal link; null when a
+        /// dangling/unresolvable <c>r:id</c>) of each top-level source <c>w:hyperlink</c>, keyed by reference
+        /// identity. Stamped onto emitted fragments as <see cref="SourceLinkTarget"/> so the coalescer can merge a
+        /// fully-replaced single link (same target both sides) while keeping a genuine retarget (WC019) split.</summary>
+        private readonly Dictionary<XElement, string?> _hyperlinkTarget = new(ReferenceEqualityComparer.Instance);
+
         public SourceRunModel(XElement para)
         {
             int charOffset = 0;
@@ -4032,6 +4080,7 @@ internal static class IrMarkupRenderer
                 // top-level hyperlinks are numbered). Slice stamps the ordinal onto each emitted wrapper clone so
                 // the coalescer can rejoin only fragments of the SAME source link.
                 _hyperlinkOrdinal[runLevel] = _nextHyperlinkOrdinal++;
+                _hyperlinkTarget[runLevel] = ResolveLinkTarget(runLevel);
                 var childChain = chain.Append(runLevel);
                 bool anyChild = false;
                 foreach (var child in runLevel.Elements())
@@ -4139,6 +4188,29 @@ internal static class IrMarkupRenderer
         private static bool IsContainer(XName n) =>
             n == W.hyperlink || n == W.ins || n == W.del || n == W.sdt || n == W.smartTag;
 
+        /// <summary>Resolve a source <c>w:hyperlink</c>'s target, mirroring <c>IrReader.BuildHyperlink</c>: an
+        /// <c>@r:id</c> resolves against the owning part's hyperlink relationships to the external URI (the part is
+        /// stashed as an annotation on the source tree root by <c>IrReader.Read</c>; a dangling/unresolvable id
+        /// yields null); otherwise an <c>@w:anchor</c> internal link uses the convention <c>"#" + anchor</c>.
+        /// Returns null when neither is present or an <c>r:id</c> cannot be resolved — the coalescer then declines
+        /// to merge on the target basis (conservative), so a fully-replaced link only rejoins when its target is
+        /// known and identical on both sides.</summary>
+        private static string? ResolveLinkTarget(XElement hyperlink)
+        {
+            var relId = (string?)hyperlink.Attribute(R.id);
+            if (relId != null)
+            {
+                var part = hyperlink.AncestorsAndSelf().Last().Annotation<OpenXmlPart>();
+                if (part != null)
+                    foreach (var rel in part.HyperlinkRelationships)
+                        if (rel.Id == relId)
+                            return rel.Uri?.ToString();
+                return null;   // dangling/unresolvable r:id → unknown target.
+            }
+            var anchor = (string?)hyperlink.Attribute(W.anchor);
+            return anchor != null ? "#" + anchor : null;
+        }
+
         /// <summary>Produce run-level XElements covering the half-open char span [start,end). Run children that
         /// fall (partly) inside the span are grouped back into per-source-run <c>w:r</c> clones carrying the
         /// original <c>w:rPr</c>; a straddling <c>w:t</c> is split.
@@ -4193,7 +4265,15 @@ internal static class IrMarkupRenderer
                         // coalescer reads and then strips) so adjacent emitted fragments are rejoined ONLY when
                         // they came from the SAME source w:hyperlink — never two distinct links sharing a target.
                         if (shell.Name == W.hyperlink && _hyperlinkOrdinal.TryGetValue(shell, out int ord))
+                        {
                             wrapper.SetAttributeValue(SourceLinkId, ord);
+                            // Also stamp the resolved target so the coalescer can merge a fully-replaced link
+                            // (same target both sides) yet keep a genuine retarget split. A null target sets
+                            // nothing (SetAttributeValue(_, null) is a no-op), leaving the run un-mergeable on the
+                            // target basis — the conservative default.
+                            if (_hyperlinkTarget.TryGetValue(shell, out var tgt) && tgt != null)
+                                wrapper.SetAttributeValue(SourceLinkTarget, tgt);
+                        }
                         content = wrapper;
                     }
                     if (content is XElement single)

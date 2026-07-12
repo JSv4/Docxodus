@@ -57,8 +57,12 @@ public class IrCompositeJsonTests
     public void Consolidated_json_delete_insert_ops_carry_no_move_fields()
     {
         // Two reviewers move the SAME ≥4-word paragraph to different places → a CONTESTED relocation: both
-        // movers' sources lower to a marked DeleteBlock that co-anchors, so the move is NOT native and the
-        // emitted delete/insert ops must be contract-clean (no leaked move fields). A 5-paragraph base with a
+        // movers' sources lower to a marked DeleteBlock that co-anchors, so the move is NOT native, and each
+        // mover's destination lowers to a marked InsertBlock. The emitted delete/insert ops must be
+        // contract-clean (no leaked move fields — the markers are stripped by EmitOp → StripRelocationMarker).
+        // Uses StackAll so BOTH the consensus removal (DeleteBlock) AND every relocating destination
+        // (InsertBlock) are emitted — under the default BaseWins the block now stays at its base position
+        // (issue #233), so neither op would appear and the check would be vacuous. A 5-paragraph base with a
         // clear MIDDLE mover (P3) so the aligner anchors BOTH move sources at P3 (co-anchored → contested).
         const string p1 = "First paragraph alpha bravo charlie";
         const string p2 = "Second paragraph delta echo foxtrot";
@@ -71,7 +75,8 @@ public class IrCompositeJsonTests
 
         var json = DocxDiff.GetConsolidatedEditScriptJson(
             b, new[] { new DocxDiffReviewer { Document = alice, Author = "Alice" },
-                       new DocxDiffReviewer { Document = bob, Author = "Bob" } });
+                       new DocxDiffReviewer { Document = bob, Author = "Bob" } },
+            new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.StackAll });
 
         using var doc = System.Text.Json.JsonDocument.Parse(json);
         foreach (var op in doc.RootElement.GetProperty("operations").EnumerateArray())
@@ -86,10 +91,13 @@ public class IrCompositeJsonTests
             }
         }
 
-        // Sanity: the contested move WAS lowered (a DeleteBlock for the move source is present), so the
-        // assertion above is not vacuously true.
-        Assert.Contains(doc.RootElement.GetProperty("operations").EnumerateArray(),
-            op => op.GetProperty("kind").GetString() == "DeleteBlock");
+        // Sanity: the contested move WAS lowered — both a DeleteBlock (the consensus removal of the move
+        // source) AND an InsertBlock (a relocating destination) are present — so the assertion above is not
+        // vacuously true and exercises BOTH strip paths.
+        var kinds = doc.RootElement.GetProperty("operations").EnumerateArray()
+            .Select(op => op.GetProperty("kind").GetString()).ToList();
+        Assert.Contains("DeleteBlock", kinds);
+        Assert.Contains("InsertBlock", kinds);
     }
 
     /// <summary>
