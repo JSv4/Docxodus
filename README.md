@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docxodus-mono-final.svg" alt="Docxodus" width="400">
+  <img src="docxodus-logo.png" alt="Docxodus" width="400">
 </p>
 
 <p align="center">
