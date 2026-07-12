@@ -202,6 +202,84 @@ public class IrCompositeMoveTests
         AssertRejectEqualsBaseAllPolicies(b, ("Alice", alice), ("Bob", bob));
     }
 
+    // ---- 4a. Contested relocation honors the conflict policy on the PLACEMENT (issue #233) ----
+    //
+    // Two reviewers relocate the SAME base block (P3) to DIFFERENT destinations. Both agree the block
+    // leaves its origin, but disagree on where it lands. The placement is resolved by policy:
+    //   BaseWins          → block stays at its base position (neither move applied)
+    //   FirstReviewerWins → the first reviewer's (list order) destination only
+    //   StackAll          → both destinations (block appears twice)
+    // In every case a conflict is recorded, no content is lost, and reject ≡ base.
+
+    private const string P5 = "Fifth paragraph mike november oscar";
+
+    // Base P1 P2 P3 P4 P5; Alice moves P3 → end; Bob moves P3 → front. P3's distinctive word is "golf".
+    private static (WmlDocument Base, WmlDocument Alice, WmlDocument Bob) ContestedRelocationDocs()
+        => (Docs.Para(P1, P2, P3, P4, P5),
+            Docs.Para(P1, P2, P4, P5, P3),
+            Docs.Para(P3, P1, P2, P4, P5));
+
+    [Fact]
+    public void Contested_relocation_BaseWins_keeps_block_at_base()
+    {
+        var (b, alice, bob) = ContestedRelocationDocs();
+        var merged = ConsolidateContested(b, alice, bob, ConflictResolution.BaseWins);
+
+        // A placement conflict is recorded.
+        Assert.NotEmpty(DocxDiff.GetConflicts(b, Reviewers(alice, bob),
+            new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.BaseWins }));
+
+        // reject ≡ base; accept keeps the block at its BASE position (accept ≡ base — neither move applied).
+        Assert.Equal(Docs.PlainText(b), Docs.PlainText(RevisionProcessor.RejectRevisions(merged)));
+        Assert.Equal(Docs.PlainText(b), Docs.PlainText(RevisionAccepter.AcceptRevisions(merged)));
+
+        // P3 present exactly once (no loss, no duplication).
+        Assert.Equal(1, CountOccurrences(Docs.PlainText(RevisionAccepter.AcceptRevisions(merged)), "golf"));
+    }
+
+    [Fact]
+    public void Contested_relocation_FirstReviewerWins_applies_first_reviewers_destination_only()
+    {
+        var (b, alice, bob) = ContestedRelocationDocs();
+        var merged = ConsolidateContested(b, alice, bob, ConflictResolution.FirstReviewerWins);
+
+        Assert.NotEmpty(DocxDiff.GetConflicts(b, Reviewers(alice, bob),
+            new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.FirstReviewerWins }));
+
+        // reject ≡ base; accept applies ONLY the first reviewer's (Alice, index 0) placement → Alice's body.
+        Assert.Equal(Docs.PlainText(b), Docs.PlainText(RevisionProcessor.RejectRevisions(merged)));
+        Assert.Equal(Docs.PlainText(alice), Docs.PlainText(RevisionAccepter.AcceptRevisions(merged)));
+
+        // P3 relocated exactly once (Bob's competing front placement is suppressed).
+        Assert.Equal(1, CountOccurrences(Docs.PlainText(RevisionAccepter.AcceptRevisions(merged)), "golf"));
+    }
+
+    [Fact]
+    public void Contested_relocation_StackAll_lands_both_placements()
+    {
+        var (b, alice, bob) = ContestedRelocationDocs();
+        var merged = ConsolidateContested(b, alice, bob, ConflictResolution.StackAll);
+
+        Assert.NotEmpty(DocxDiff.GetConflicts(b, Reviewers(alice, bob),
+            new DocxDiffConsolidateSettings { ConflictResolution = ConflictResolution.StackAll }));
+
+        // reject ≡ base; accept lands BOTH destinations → the block appears twice.
+        Assert.Equal(Docs.PlainText(b), Docs.PlainText(RevisionProcessor.RejectRevisions(merged)));
+        var accepted = Docs.PlainText(RevisionAccepter.AcceptRevisions(merged));
+        Assert.Equal(2, CountOccurrences(accepted, "golf"));
+    }
+
+    private static WmlDocument ConsolidateContested(
+        WmlDocument b, WmlDocument alice, WmlDocument bob, ConflictResolution policy)
+        => DocxDiff.Consolidate(b, Reviewers(alice, bob),
+            new DocxDiffConsolidateSettings { ConflictResolution = policy });
+
+    private static DocxDiffReviewer[] Reviewers(WmlDocument alice, WmlDocument bob) => new[]
+    {
+        new DocxDiffReviewer { Document = alice, Author = "Alice" },
+        new DocxDiffReviewer { Document = bob, Author = "Bob" },
+    };
+
     // ---- 4b. Merge collides with a move of a CONSUMED paragraph → no orphaned native move ----
 
     [Fact]

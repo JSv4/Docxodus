@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **DocxDiff.Consolidate: a contested relocation now honors the conflict policy on the PLACEMENT (issue #233).** When two (or more) reviewers move the SAME base block to DIFFERENT destinations, the reviewers agree the block leaves its origin but disagree on where it lands. Previously the merger recorded a placement conflict but let **every** reviewer's relocating insert land on accept regardless of policy — so the moved block appeared at **both** destinations under `BaseWins`, `FirstReviewerWins`, and `StackAll` alike. The placement is now resolved by the `ConflictResolution` policy: `BaseWins` keeps the block at its **base position** (neither move applied → `accept ≡ base`); `FirstReviewerWins` applies **only the first reviewer's** (list-order) destination; `StackAll` keeps the both-placements behavior. In every case there is **no content loss**, `reject ≡ base` holds, and the conflict is still recorded for human resolution. Implemented in `IrCompositeMerger`: the lowered move DESTINATION now retains its `(reviewer, MoveGroupId)` marker (symmetric to the source-delete, stripped before emission) so `PlanContestedRelocationSuppression` can suppress the losing destination(s) in lockstep with `MergeOneBaseBlock`'s base-keep-vs-consensus-removal choice (both keyed off the single `IsContestedRelocation` predicate). The consensus removal is emitted at most once, so a delete both reviewers made is never duplicated. Confined to the IR-based DiffDocx engine — WmlComparer is unchanged. `StackAll` output is byte-identical to before. Proof: `IrCompositeMoveTests.Contested_relocation_{BaseWins,FirstReviewerWins,StackAll}_*` plus the unchanged composite fuzzer, the 84/84 consolidate parity scoreboard, and the 179/179 two-way parity floor.
+
 ## [7.0.1] - 2026-07-11
 
 ### Changed
