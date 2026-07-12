@@ -287,7 +287,14 @@ internal static class IrCompositeMerger
         List<IrConflict> conflicts,
         ref int nextConflictId)
     {
-        EmitInsertsAt(insertsAfter, "", reviewers, ops);
+        // Issue #233: decide, per CONTESTED relocation in THIS stream, which relocating dest inserts survive
+        // on accept — BaseWins suppresses all (block stays at base), FirstReviewerWins keeps only the first
+        // mover's, StackAll keeps all. Computed once from this stream's grouped ops so the body AND each note
+        // scope (which reuse this loop) resolve their own contested relocations consistently with the
+        // EqualBlock/removal choice MergeOneBaseBlock makes from the same policy.
+        var suppressedRelocations = PlanContestedRelocationSuppression(baseOrder, byBase, policy);
+
+        EmitInsertsAt(insertsAfter, "", reviewers, ops, suppressedRelocations);
         foreach (var anchor in baseOrder)
         {
             if (nativeMerges.ByFirstAnchor.TryGetValue(anchor, out var merge))
@@ -302,7 +309,7 @@ internal static class IrCompositeMerger
                 MergeOneBaseBlock(anchor, byBase, reviewers, baseIr, policy, settings, ops, conflicts, ref nextConflictId);
             }
             // A merge-consumed anchor emits no block op, but its pending inserts still slot here.
-            EmitInsertsAt(insertsAfter, anchor, reviewers, ops);
+            EmitInsertsAt(insertsAfter, anchor, reviewers, ops, suppressedRelocations);
         }
     }
 
@@ -508,8 +515,11 @@ internal static class IrCompositeMerger
     /// existing Equal/Modify/FormatOnly/Insert/Delete composition handle them with no loss.</para>
     /// <para><b>Lowering rules</b> (each preserves accept ≡ that reviewer's right body and reject ≡ base):
     /// <list type="bullet">
-    /// <item>Move/MoveModify SOURCE (IsMoveSource=true, LeftAnchor=X) → <c>DeleteBlock(X)</c>.</item>
-    /// <item>Move/MoveModify DEST (IsMoveSource=false, RightAnchor=Y) → <c>InsertBlock(Y)</c>. A MoveModify
+    /// <item>Move/MoveModify SOURCE (IsMoveSource=true, LeftAnchor=X) → <c>DeleteBlock(X)</c> — retaining
+    /// <c>MoveGroupId</c>/<c>IsMoveSource=true</c> as a relocation marker (see the per-op method below).</item>
+    /// <item>Move/MoveModify DEST (IsMoveSource=false, RightAnchor=Y) → <c>InsertBlock(Y)</c> — retaining
+    /// <c>MoveGroupId</c>/<c>IsMoveSource=false</c> so <c>(reviewer, MoveGroupId)</c> links it to its source
+    /// (issue #233 contested-relocation placement). A MoveModify
     /// dest's in-move TokenDiff is discarded — inserting the whole edited destination block is correct
     /// (accept shows the moved+edited text; the paired source delete removes the original → net
     /// move-with-edit).</item>
@@ -567,7 +577,16 @@ internal static class IrCompositeMerger
                     sink.Add(new IrEditOp(IrEditOpKind.DeleteBlock, op.LeftAnchor, null, null,
                         op.MoveGroupId, IsMoveSource: true));
                 else
-                    sink.Add(new IrEditOp(IrEditOpKind.InsertBlock, null, op.RightAnchor, null, null, null));
+                    // Lower the move DESTINATION to an InsertBlock, RETAINING MoveGroupId/IsMoveSource=false
+                    // as a relocation marker SYMMETRIC to the source above. Both halves of the original move
+                    // share the same MoveGroupId, so (reviewer, MoveGroupId) links this destination back to
+                    // its source — which the contested-relocation placement policy (issue #233) uses to
+                    // suppress the losing destination(s) per policy (PlanContestedRelocationSuppression /
+                    // EmitInsertsAt). Like the source marker, it is inert to the renderer/verifier/json
+                    // (they dispatch on Kind, InsertBlock) and is stripped before the op lands in the emitted
+                    // script (EmitOp → StripRelocationMarker), so StackAll output is byte-unchanged.
+                    sink.Add(new IrEditOp(IrEditOpKind.InsertBlock, null, op.RightAnchor, null,
+                        op.MoveGroupId, IsMoveSource: false));
                 break;
 
             case IrEditOpKind.SplitBlock:
@@ -1017,22 +1036,30 @@ internal static class IrCompositeMerger
             return;
         }
 
-        // CONTESTED RELOCATION: 2+ reviewers each RELOCATED this same base block (their move-source ops,
-        // lowered to DeleteBlock with IsMoveSource retained, all anchor here) to DIFFERENT places — the
-        // reviewers AGREE the block leaves its origin but DISAGREE on its destination. Emit the consensus
-        // removal ONCE (so reject ≡ base and the origin is not duplicated) and RECORD a conflict for the
-        // placement disagreement; each reviewer's relocating INSERT is routed independently by preceding
-        // anchor (EmitInsertsAt), so every destination survives accept — no content loss under any policy.
-        // The recorded conflict is deliberately NOT policy-resolved into the op stream (unlike a block
-        // EDIT conflict): a BaseWins flip-to-keep would WRONGLY restore a block both reviewers removed.
-        if (touched.All(e => e.Op.Kind == IrEditOpKind.DeleteBlock)
-            && touched.Count(e => e.Op.IsMoveSource == true) >= 2)
+        // CONTESTED RELOCATION (issue #233): 2+ reviewers each RELOCATED this same base block (their
+        // move-source ops, lowered to DeleteBlock with IsMoveSource retained, all anchor here) to DIFFERENT
+        // places — the reviewers AGREE the block leaves its origin but DISAGREE on its destination. RECORD a
+        // placement conflict, then honor the policy on the PLACEMENT (the relocating dest inserts, routed by
+        // EmitInsertsAt, are suppressed in lockstep by PlanContestedRelocationSuppression):
+        //   BaseWins          → keep the block at its BASE position: emit EqualBlock (NOT a removal) and ALL
+        //                       relocating dests are suppressed → accept ≡ base (neither move applied).
+        //   FirstReviewerWins → the block leaves its origin: emit the consensus removal ONCE (so the origin
+        //                       is not duplicated) and only the FIRST mover's dest survives (rest suppressed).
+        //   StackAll          → consensus removal once; every mover's dest survives (both/all placements).
+        // reject ≡ base holds under all three (an EqualBlock keeps base; a removal is base-restoring; every
+        // dest insert vanishes on reject). The consensus removal is emitted ONCE — never policy-flipped per
+        // competitor — so a delete BOTH reviewers made is never wrongly duplicated (or, under BaseWins,
+        // wrongly forced when the placement, not the removal, is what they actually contest).
+        if (IsContestedRelocation(touched))
         {
             conflicts.Add(new IrConflict(nextConflictId++, anchor, 0, 0, policy,
                 IrNodeList.From(touched.Select(e =>
                     new IrConflictCompetitor(reviewers[e.Reviewer].Author,
                         ContestedBlockText(e.Op, baseIr, settings))))));
-            ops.Add(EmitOp(touched[0].Op, reviewers[touched[0].Reviewer].Author, touched[0].Reviewer));
+            if (policy == Docxodus.ConflictResolution.BaseWins)
+                ops.Add(EqualOp(anchor));                    // keep the block at its base position
+            else
+                ops.Add(EmitOp(touched[0].Op, reviewers[touched[0].Reviewer].Author, touched[0].Reviewer));
             return;
         }
 
@@ -1166,6 +1193,21 @@ internal static class IrCompositeMerger
     }
 
     /// <summary>
+    /// True when the ops touching one base block are a CONTESTED RELOCATION (issue #233): 2+ reviewers each
+    /// relocated the SAME base block to DIFFERENT destinations. After lowering, each such move SOURCE is a
+    /// <see cref="IrEditOpKind.DeleteBlock"/> that retains <see cref="IrEditOp.IsMoveSource"/>=true, so the
+    /// predicate fires only when EVERY toucher is a DeleteBlock (nobody EDITED the block in place — that is a
+    /// delete-vs-edit BLOCK conflict, handled downstream) AND at least two are relocation sources. Shared by
+    /// <see cref="MergeOneBaseBlock"/> (emits the base-keep/consensus-removal + records the conflict) and
+    /// <see cref="PlanContestedRelocationSuppression"/> (decides which relocating dests survive), so the
+    /// source-side emit and the destination-side suppression never disagree.
+    /// </summary>
+    private static bool IsContestedRelocation(List<(int Reviewer, IrEditOp Op)> touched) =>
+        touched.Count > 1
+        && touched.All(e => e.Op.Kind == IrEditOpKind.DeleteBlock)
+        && touched.Count(e => e.Op.IsMoveSource == true) >= 2;
+
+    /// <summary>
     /// Emit the StackAll resolution of a BLOCK-LEVEL conflict so that AT MOST ONE op is anchored to (and
     /// thus consumes/restores on reject) the contested base block <paramref name="anchor"/>.
     /// <para><b>Why not stack every touched op.</b> A delete-vs-edit conflict has <c>touched</c> = a
@@ -1296,11 +1338,72 @@ internal static class IrCompositeMerger
         IReadOnlyDictionary<string, List<(int Reviewer, IrEditOp Op)>> insertsAfter,
         string anchor,
         IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
-        List<IrCompositeOp> ops)
+        List<IrCompositeOp> ops,
+        IReadOnlySet<(int Reviewer, int MoveGroupId)>? suppressedRelocations = null)
     {
         if (!insertsAfter.TryGetValue(anchor, out var list)) return;
         foreach (var (rev, op) in list)
+        {
+            // Issue #233: a CONTESTED relocation's LOSING destination(s) must NOT land on accept — under
+            // BaseWins none of them do (block stays at base), under FirstReviewerWins all but the first
+            // mover's. A relocating dest is a lowered move DESTINATION (an InsertBlock retaining
+            // IsMoveSource==false + its MoveGroupId), linked to its source by (reviewer, MoveGroupId); a
+            // plain content insert has null move fields and is never suppressed.
+            if (suppressedRelocations is { Count: > 0 }
+                && op.Kind == IrEditOpKind.InsertBlock && op.IsMoveSource == false
+                && op.MoveGroupId is { } gid && suppressedRelocations.Contains((rev, gid)))
+                continue;
             ops.Add(EmitOp(op, reviewers[rev].Author, rev));
+        }
+    }
+
+    /// <summary>
+    /// Decide, for every CONTESTED relocation in a block stream (issue #233), which relocating DESTINATION
+    /// inserts are SUPPRESSED from the accepted op stream so the placement honors the conflict policy — the
+    /// destination-side counterpart to <see cref="MergeOneBaseBlock"/>'s per-source base-keep-vs-removal
+    /// choice. Returns the set of <c>(reviewer, MoveGroupId)</c> whose lowered move DESTINATION must NOT be
+    /// emitted:
+    /// <list type="bullet">
+    /// <item><b>StackAll</b> → empty (every destination lands — the legacy both-placements behavior).</item>
+    /// <item><b>FirstReviewerWins</b> → every mover's destination EXCEPT the first (lowest reviewer index).</item>
+    /// <item><b>BaseWins</b> → every mover's destination (the block stays at its base position).</item>
+    /// </list>
+    /// A relocation source and its destination share <c>(reviewer, MoveGroupId)</c> — both halves of the
+    /// original move carry the same local move-group id, retained through lowering — so the id links them.
+    /// The contested-relocation predicate is the SAME <see cref="IsContestedRelocation"/> the merger uses, so
+    /// the suppressed destinations and the source-side emit never disagree.
+    /// </summary>
+    private static HashSet<(int Reviewer, int MoveGroupId)> PlanContestedRelocationSuppression(
+        IReadOnlyList<string> baseOrder,
+        IReadOnlyDictionary<string, List<(int Reviewer, IrEditOp Op)>> byBase,
+        Docxodus.ConflictResolution policy)
+    {
+        var suppressed = new HashSet<(int, int)>();
+        if (policy == Docxodus.ConflictResolution.StackAll)
+            return suppressed;   // every relocating destination lands — nothing to suppress
+
+        foreach (var anchor in baseOrder)
+        {
+            if (!byBase.TryGetValue(anchor, out var entries))
+                continue;
+            var touched = entries.Where(e => e.Op.Kind != IrEditOpKind.EqualBlock).ToList();
+            if (!IsContestedRelocation(touched))
+                continue;
+
+            // The relocation SOURCES at this base block, in reviewer order (touched is reviewer-ordered).
+            // Every move op carries a non-null MoveGroupId (IrEditScriptBuilder assigns it ascending from 1),
+            // so this selects exactly the same set IsContestedRelocation counted.
+            var movers = touched
+                .Where(e => e.Op.IsMoveSource == true && e.Op.MoveGroupId is not null)
+                .ToList();
+
+            // BaseWins suppresses EVERY destination (block stays at base); FirstReviewerWins keeps the first
+            // mover's destination and suppresses the rest.
+            var losers = policy == Docxodus.ConflictResolution.BaseWins ? movers : movers.Skip(1);
+            foreach (var e in losers)
+                suppressed.Add((e.Reviewer, e.Op.MoveGroupId!.Value));
+        }
+        return suppressed;
     }
 
     // ---- Task 1.4: result-equivalence + tokenization helpers ----
