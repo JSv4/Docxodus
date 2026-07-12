@@ -21,6 +21,8 @@ import type {
   FillOptions,
   FindOptions,
   FormatOp,
+  HeaderFooterKind,
+  PageNumberField,
   ParagraphBorderEdge,
   ParagraphFormatOp,
   TableInsertOptions,
@@ -212,6 +214,36 @@ export class DocxSession {
 
   deleteTableColumn(cellAnchorId: string): EditResult {
     return JSON.parse(this.wasm.DeleteTableColumn(this.handle, cellAnchorId)) as EditResult;
+  }
+
+  // ─── Headers / footers / page numbers ────────────────────────────────
+
+  /**
+   * Set the running header story for the section that owns `anchorId` (any body block in that
+   * section) to `markdown`. Creates the header part + `w:headerReference` if the story of `kind`
+   * doesn't exist yet, else replaces its content. The created header-paragraph anchors (scope
+   * `hdr{N}`) come back in `EditResult.created` — insert a page number into one with
+   * {@link insertPageNumberField}. `"first"` sets the section's title-page flag; `"even"` sets the
+   * document's even/odd-headers flag.
+   */
+  setHeaderText(anchorId: string, kind: HeaderFooterKind, markdown: string): EditResult {
+    return JSON.parse(this.wasm.SetHeaderText(this.handle, anchorId, kind, markdown)) as EditResult;
+  }
+
+  /** Set the running footer story for the section that owns `anchorId` — see {@link setHeaderText};
+   * the created footer-paragraph anchors (scope `ftr{N}`) come back in `EditResult.created`. */
+  setFooterText(anchorId: string, kind: HeaderFooterKind, markdown: string): EditResult {
+    return JSON.parse(this.wasm.SetFooterText(this.handle, anchorId, kind, markdown)) as EditResult;
+  }
+
+  /**
+   * Append a page-number field to the paragraph `anchorId` — typically a header/footer paragraph
+   * returned by {@link setFooterText}/{@link setHeaderText}. `"currentPage"` emits a PAGE field,
+   * `"totalPages"` a NUMPAGES field (native complex field with a cached "1"). Center it by setting
+   * the paragraph alignment ({@link setParagraphFormat}). Returns the paragraph anchor in `modified`.
+   */
+  insertPageNumberField(anchorId: string, field: PageNumberField = "currentPage"): EditResult {
+    return JSON.parse(this.wasm.InsertPageNumberField(this.handle, anchorId, field)) as EditResult;
   }
 
   // ─── Tier C: formatting ──────────────────────────────────────────────

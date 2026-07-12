@@ -12,6 +12,8 @@ from enum import Enum, IntEnum, IntFlag
 
 __all__ = [
     "Position",
+    "HeaderFooterKind",
+    "PageNumberField",
     "EditErrorCode",
     "PlaceholderKind",
     "PlaceholderKinds",
@@ -38,6 +40,25 @@ class Position(str, Enum):
 
     BEFORE = "before"
     AFTER = "after"
+
+
+class HeaderFooterKind(str, Enum):
+    """Which header/footer story ``set_header_text``/``set_footer_text`` targets.
+
+    Maps to the OOXML ``w:type``: ``DEFAULT`` (all pages), ``FIRST`` (first-page-only;
+    sets ``w:titlePg``), ``EVEN`` (even pages; sets ``w:evenAndOddHeaders``).
+    """
+
+    DEFAULT = "default"
+    FIRST = "first"
+    EVEN = "even"
+
+
+class PageNumberField(str, Enum):
+    """Which page-number field ``insert_page_number_field`` emits."""
+
+    CURRENT_PAGE = "currentPage"
+    TOTAL_PAGES = "totalPages"
 
 
 class EditErrorCode(str, Enum):

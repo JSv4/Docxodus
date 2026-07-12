@@ -20,6 +20,21 @@ internal static class DocxSessionJson
     public static Position ParsePos(string s) =>
         string.Equals(s, "before", System.StringComparison.OrdinalIgnoreCase) ? Position.Before : Position.After;
 
+    public static HeaderFooterKind ParseHeaderFooterKind(string? s) =>
+        (s?.ToLowerInvariant()) switch
+        {
+            "first" => HeaderFooterKind.First,
+            "even" => HeaderFooterKind.Even,
+            _ => HeaderFooterKind.Default,
+        };
+
+    public static PageNumberField ParsePageNumberField(string? s) =>
+        (s?.ToLowerInvariant()) switch
+        {
+            "totalpages" or "numpages" => PageNumberField.TotalPages,
+            _ => PageNumberField.CurrentPage,
+        };
+
     public static DocxSessionSettings ParseSettings(string settingsJson)
     {
         if (string.IsNullOrEmpty(settingsJson)) return new DocxSessionSettings();

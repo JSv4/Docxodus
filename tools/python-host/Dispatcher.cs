@@ -66,6 +66,16 @@ internal static class Dispatcher
         "merge_paragraphs" => DocxSessionOps.MergeParagraphs(
             Handle(args), Str(args, "firstAnchorId"), Str(args, "secondAnchorId")),
 
+        "set_header_text" => DocxSessionOps.SetHeaderText(
+            Handle(args), Str(args, "anchorId"),
+            DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
+        "set_footer_text" => DocxSessionOps.SetFooterText(
+            Handle(args), Str(args, "anchorId"),
+            DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
+        "insert_page_number_field" => DocxSessionOps.InsertPageNumberField(
+            Handle(args), Str(args, "anchorId"),
+            DocxSessionJson.ParsePageNumberField(Str(args, "field"))),
+
         "apply_format" => DocxSessionOps.ApplyFormat(
             Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"), ParseFormatOp(args, "op")),
         "apply_format_by_substring" => DocxSessionOps.ApplyFormatBySubstring(

@@ -4595,4 +4595,265 @@ public class DocxSessionTests
         return d.MainDocumentPart!.Document.Body!.Descendants<Paragraph>()
             .Select(p => p.InnerText).ToList();
     }
+
+    // ─── Header / footer / page-number authoring (issue #236) ─────────────────
+
+    /// <summary>Two body paragraphs + a real trailing US-Letter sectPr, no header/footer parts —
+    /// the realistic "add a running footer here" starting point.</summary>
+    internal static byte[] BuildDocWithTrailingSection()
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.Document = new Document();
+            var body = new Body();
+            main.Document.Body = body;
+            main.AddNewPart<StyleDefinitionsPart>().Styles = BuildHeadingStyles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            body.Append(new Paragraph(new Run(new Text("Body paragraph one."))));
+            body.Append(new Paragraph(new Run(new Text("Body paragraph two."))));
+            body.Append(new SectionProperties(
+                new PageSize { Width = 12240u, Height = 15840u },
+                new PageMargin { Top = 1440, Bottom = 1440, Left = 1440, Right = 1440,
+                    Header = 720, Footer = 720, Gutter = 0 }));
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
+    private static string FirstBodyPara(DocxSession s) =>
+        s.Project().AnchorIndex.Values.First(t => t.Anchor.Kind == "p" && t.Anchor.Scope == "body").Anchor.Id;
+
+    private static int HeaderPartCount(byte[] bytes)
+    {
+        using var ms = new MemoryStream(bytes);
+        using var d = WordprocessingDocument.Open(ms, false);
+        return d.MainDocumentPart!.HeaderParts.Count();
+    }
+
+    private static int FooterPartCount(byte[] bytes)
+    {
+        using var ms = new MemoryStream(bytes);
+        using var d = WordprocessingDocument.Open(ms, false);
+        return d.MainDocumentPart!.FooterParts.Count();
+    }
+
+    private static string FirstFooterXml(byte[] bytes)
+    {
+        using var ms = new MemoryStream(bytes);
+        using var d = WordprocessingDocument.Open(ms, false);
+        return d.MainDocumentPart!.FooterParts.First().Footer!.OuterXml;
+    }
+
+    private static string FirstHeaderText(byte[] bytes)
+    {
+        using var ms = new MemoryStream(bytes);
+        using var d = WordprocessingDocument.Open(ms, false);
+        return d.MainDocumentPart!.HeaderParts.First().Header!.InnerText;
+    }
+
+    private static SectionProperties LastSectPr(WordprocessingDocument d) =>
+        d.MainDocumentPart!.Document.Body!.Elements<SectionProperties>().Last();
+
+    [Fact]
+    public void DS250_SetFooterText_CreatesFooterPartAndProjects()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        Assert.Empty(s.GetSectionInfo(body)!.FooterPartUris);
+
+        var r = s.SetFooterText(body, HeaderFooterKind.Default, "Last Updated October 2025");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Single(r.Created);
+        Assert.StartsWith("p:ftr", r.Created[0].Id);
+
+        Assert.Contains("Last Updated October 2025", s.Project().Markdown);
+        Assert.NotEmpty(s.GetSectionInfo(body)!.FooterPartUris);
+
+        var saved = s.Save();
+        Assert.Equal(1, FooterPartCount(saved));
+        Assert.Contains("Last Updated October 2025", FirstFooterXml(saved));
+    }
+
+    [Fact]
+    public void DS251_SetHeaderText_DefaultKind_HeaderScopeAnchor()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        var r = s.SetHeaderText(body, HeaderFooterKind.Default, "CONFIDENTIAL");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Single(r.Created);
+        Assert.StartsWith("p:hdr", r.Created[0].Id);
+        Assert.Equal("hdr1", r.Created[0].Scope);
+
+        var saved = s.Save();
+        Assert.Equal(1, HeaderPartCount(saved));
+        Assert.Contains("CONFIDENTIAL", FirstHeaderText(saved));
+    }
+
+    [Fact]
+    public void DS252_SetHeaderText_SameKindTwice_ReusesPartReplacesContent()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.Default, "First header").Success);
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.Default, "Replaced header").Success);
+
+        var saved = s.Save();
+        // Reuse — not a second part — and the content is the replacement, not the original.
+        Assert.Equal(1, HeaderPartCount(saved));
+        Assert.Contains("Replaced header", FirstHeaderText(saved));
+        Assert.DoesNotContain("First header", FirstHeaderText(saved));
+    }
+
+    [Fact]
+    public void DS253_SetFooterText_ThenInsertPageNumber_ComposesInFooter()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        var r1 = s.SetFooterText(body, HeaderFooterKind.Default, "Page ");
+        Assert.True(r1.Success, r1.Error?.Message);
+        var footerAnchor = r1.Created[0].Id;
+
+        var r2 = s.InsertPageNumberField(footerAnchor, PageNumberField.CurrentPage);
+        Assert.True(r2.Success, r2.Error?.Message);
+        Assert.Single(r2.Modified);
+
+        var fx = FirstFooterXml(s.Save());
+        Assert.Contains("Page ", fx);
+        Assert.Contains("PAGE", fx);
+        Assert.Contains("fldChar", fx);
+    }
+
+    [Fact]
+    public void DS254_SetHeaderText_FirstKind_SetsTitlePgAndRefType()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.First, "First page header").Success);
+
+        using var ms = new MemoryStream(s.Save());
+        using var d = WordprocessingDocument.Open(ms, false);
+        var sect = LastSectPr(d);
+        Assert.True(sect.Elements<TitlePage>().Any());
+        var href = sect.Elements<HeaderReference>().Single();
+        Assert.Equal(HeaderFooterValues.First, href.Type!.Value);
+    }
+
+    [Fact]
+    public void DS255_SetHeaderText_EvenKind_SetsEvenAndOddHeadersSetting()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.Even, "Even page header").Success);
+
+        using var ms = new MemoryStream(s.Save());
+        using var d = WordprocessingDocument.Open(ms, false);
+        Assert.True(d.MainDocumentPart!.DocumentSettingsPart!.Settings.Elements<EvenAndOddHeaders>().Any());
+        var href = LastSectPr(d).Elements<HeaderReference>().Single();
+        Assert.Equal(HeaderFooterValues.Even, href.Type!.Value);
+    }
+
+    [Fact]
+    public void DS256_SetFooterText_UndoRedo_RoundTripsPartCreation()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        Assert.True(s.SetFooterText(body, HeaderFooterKind.Default, "Draft footer").Success);
+        Assert.Contains("Draft footer", s.Project().Markdown);
+
+        // Undo removes the footer part + its reference entirely.
+        Assert.True(s.Undo());
+        Assert.DoesNotContain("Draft footer", s.Project().Markdown);
+        Assert.Empty(s.GetSectionInfo(FirstBodyPara(s))!.FooterPartUris);
+        Assert.Equal(0, FooterPartCount(s.Save()));
+
+        // Redo re-creates the part + reference (and the content resolves).
+        Assert.True(s.Redo());
+        Assert.Contains("Draft footer", s.Project().Markdown);
+        Assert.Equal(1, FooterPartCount(s.Save()));
+        Assert.Contains("Draft footer", FirstFooterXml(s.Save()));
+    }
+
+    [Fact]
+    public void DS257_SetHeaderText_NoSectPr_SynthesizesTrailingSection()
+    {
+        // BuildDS001 has no trailing sectPr at all.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var body = FirstBodyPara(s);
+
+        var r = s.SetHeaderText(body, HeaderFooterKind.Default, "Synthesized-section header");
+        Assert.True(r.Success, r.Error?.Message);
+
+        using var ms = new MemoryStream(s.Save());
+        using var d = WordprocessingDocument.Open(ms, false);
+        Assert.True(d.MainDocumentPart!.Document.Body!.Elements<SectionProperties>().Any());
+        Assert.Single(d.MainDocumentPart.HeaderParts);
+    }
+
+    [Fact]
+    public void DS258_InsertPageNumberField_NonParagraphAnchor_Fails()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        Assert.True(s.InsertTable(body, Position.After, 1, 1).Success);
+        var tbl = s.Project().AnchorIndex.Values.First(t => t.Anchor.Kind == "tbl").Anchor.Id;
+
+        var r = s.InsertPageNumberField(tbl, PageNumberField.CurrentPage);
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.AnchorWrongKind, r.Error!.Code);
+    }
+
+    [Fact]
+    public void DS259_SetHeaderText_NonBodyAnchor_Fails()
+    {
+        using var s = new DocxSession(BuildDocWithHeaderAndFooter());
+        var hdr = s.Project().AnchorIndex.Values.First(t => t.Anchor.Scope.StartsWith("hdr")).Anchor.Id;
+
+        var r = s.SetHeaderText(hdr, HeaderFooterKind.Default, "nope");
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.AnchorWrongKind, r.Error!.Code);
+    }
+
+    [Fact]
+    public void DS260_InsertPageNumberField_TotalPages_EmitsNumPages()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        var footer = s.SetFooterText(body, HeaderFooterKind.Default, "").Created[0].Id;
+
+        Assert.True(s.InsertPageNumberField(footer, PageNumberField.TotalPages).Success);
+        Assert.Contains("NUMPAGES", FirstFooterXml(s.Save()));
+    }
+
+    [Fact]
+    public void DS261_SetFooterText_SavedBytesReopenInFreshSession()
+    {
+        byte[] saved;
+        using (var s = new DocxSession(BuildDocWithTrailingSection()))
+        {
+            var body = FirstBodyPara(s);
+            Assert.True(s.SetFooterText(body, HeaderFooterKind.Default, "Roundtrip footer").Success);
+            saved = s.Save();
+        }
+        using var s2 = new DocxSession(saved);
+        Assert.Contains("Roundtrip footer", s2.Project().Markdown);
+    }
+
+    [Fact]
+    public void DS262_SetFooterText_EmptyPayload_YieldsEmptyFooterParagraph()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        var r = s.SetFooterText(body, HeaderFooterKind.Default, "");
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Single(r.Created);
+        Assert.Equal(1, FooterPartCount(s.Save()));
+    }
 }

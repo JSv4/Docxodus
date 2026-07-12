@@ -30,6 +30,8 @@ from ._transport import call as _call
 from .enums import (
     ContextBoundary,
     DiffFormat,
+    HeaderFooterKind,
+    PageNumberField,
     PlaceholderKinds,
     Position,
     ProjectionDepth,
@@ -887,6 +889,50 @@ class DocxSession:
             self._call(
                 "merge_paragraphs",
                 {"firstAnchorId": first_anchor_id, "secondAnchorId": second_anchor_id},
+            )
+        )
+
+    # -- Headers / footers / page numbers ---------------------------------
+
+    def set_header_text(
+        self, anchor_id: str, kind: HeaderFooterKind, markdown: str
+    ) -> EditResult:
+        """Set the running header story for the section that owns ``anchor_id``.
+
+        ``anchor_id`` is any body block in the target section. Creates the header part +
+        ``w:headerReference`` if the story of ``kind`` doesn't exist yet, else replaces its
+        content. The created header-paragraph anchors (scope ``hdr{N}``) come back in
+        ``EditResult.created`` — pass one to :meth:`insert_page_number_field`.
+        """
+        return EditResult._from_wire(
+            self._call(
+                "set_header_text",
+                {"anchorId": anchor_id, "kind": kind.value, "markdown": markdown},
+            )
+        )
+
+    def set_footer_text(
+        self, anchor_id: str, kind: HeaderFooterKind, markdown: str
+    ) -> EditResult:
+        """Set the running footer story for the section that owns ``anchor_id`` — see
+        :meth:`set_header_text`. Created footer-paragraph anchors have scope ``ftr{N}``."""
+        return EditResult._from_wire(
+            self._call(
+                "set_footer_text",
+                {"anchorId": anchor_id, "kind": kind.value, "markdown": markdown},
+            )
+        )
+
+    def insert_page_number_field(
+        self, anchor_id: str, field: PageNumberField = PageNumberField.CURRENT_PAGE
+    ) -> EditResult:
+        """Append a page-number field to the paragraph ``anchor_id`` (typically a header/footer
+        paragraph). ``CURRENT_PAGE`` emits a ``PAGE`` field, ``TOTAL_PAGES`` a ``NUMPAGES`` field.
+        Returns the affected paragraph anchor in ``EditResult.modified``."""
+        return EditResult._from_wire(
+            self._call(
+                "insert_page_number_field",
+                {"anchorId": anchor_id, "field": field.value},
             )
         )
 

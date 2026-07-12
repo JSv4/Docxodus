@@ -150,6 +150,29 @@ public static partial class DocxSessionBridge
     public static string DeleteTableColumn(int h, string cellAnchor) =>
         DocxSessionOps.DeleteTableColumn(h, cellAnchor);
 
+    /// <summary>
+    /// Set the section's running header story (<paramref name="anchor"/> = any body block in the
+    /// section) to <paramref name="markdown"/>. <paramref name="kind"/> is "default" | "first" |
+    /// "even". Creates the header part + reference if absent; returns the created header-paragraph
+    /// anchors (scope <c>hdr{N}</c>) in <c>created</c>.
+    /// </summary>
+    [JSExport]
+    public static string SetHeaderText(int h, string anchor, string kind, string markdown) =>
+        DocxSessionOps.SetHeaderText(h, anchor, DocxSessionJson.ParseHeaderFooterKind(kind), markdown);
+
+    /// <summary>Set the section's running footer story — see <see cref="SetHeaderText"/>; the created
+    /// footer-paragraph anchors (scope <c>ftr{N}</c>) come back in <c>created</c>.</summary>
+    [JSExport]
+    public static string SetFooterText(int h, string anchor, string kind, string markdown) =>
+        DocxSessionOps.SetFooterText(h, anchor, DocxSessionJson.ParseHeaderFooterKind(kind), markdown);
+
+    /// <summary>Append a page-number field to the paragraph <paramref name="anchor"/> (typically a
+    /// header/footer paragraph). <paramref name="field"/> is "currentPage" (PAGE) | "totalPages"
+    /// (NUMPAGES). Returns the affected paragraph anchor in <c>modified</c>.</summary>
+    [JSExport]
+    public static string InsertPageNumberField(int h, string anchor, string field) =>
+        DocxSessionOps.InsertPageNumberField(h, anchor, DocxSessionJson.ParsePageNumberField(field));
+
     [JSExport]
     public static string ApplyFormat(int h, string anchor, string spanJson, string opJson) =>
         DocxSessionOps.ApplyFormat(h, anchor, ParseSpan(spanJson), DocxSessionJson.ParseFormatOp(opJson));

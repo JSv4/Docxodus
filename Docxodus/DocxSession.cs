@@ -119,6 +119,25 @@ public sealed record ParagraphBorderEdge
 public enum ParagraphAlignment { Left, Center, Right, Justify }
 
 /// <summary>
+/// Which header/footer story a <see cref="DocxSession.SetHeaderText"/> /
+/// <see cref="DocxSession.SetFooterText"/> call targets. Maps to the
+/// <c>w:headerReference</c>/<c>w:footerReference</c> <c>w:type</c> attribute:
+/// <list type="bullet">
+///   <item><description><see cref="Default"/> — the story shown on every page that has no more specific override (<c>w:type="default"</c>).</description></item>
+///   <item><description><see cref="First"/> — the first-page-only story (<c>w:type="first"</c>); the section's <c>w:titlePg</c> flag is set so Word honors it.</description></item>
+///   <item><description><see cref="Even"/> — the even-page story (<c>w:type="even"</c>); <c>w:evenAndOddHeaders</c> is set in the settings part so Word honors it.</description></item>
+/// </list>
+/// </summary>
+public enum HeaderFooterKind { Default, First, Even }
+
+/// <summary>
+/// Which page-number field <see cref="DocxSession.InsertPageNumberField"/> emits:
+/// <see cref="CurrentPage"/> → a <c>PAGE</c> field (the current page number),
+/// <see cref="TotalPages"/> → a <c>NUMPAGES</c> field (the total page count).
+/// </summary>
+public enum PageNumberField { CurrentPage, TotalPages }
+
+/// <summary>
 /// Paragraph-level formatting for <see cref="DocxSession.SetParagraphFormat"/>. Each field
 /// is tri-state: null leaves it unchanged. Alignment sets w:jc; PageBreakBefore toggles
 /// w:pageBreakBefore (false removes); IndentDelta adjusts w:ind/@w:left by a twips delta
@@ -4210,6 +4229,271 @@ public sealed class DocxSession : IDisposable
         }
     }
 
+    // ─── Headers / footers / page-number fields ───────────────────────────────
+    //
+    // Author the per-section running header/footer stories (which live in their own OOXML
+    // parts, outside the body) and page-number fields. SetHeaderText/SetFooterText are
+    // addressed by ANY body block in the target section — the governing w:sectPr is resolved
+    // the same way GetSectionInfo resolves it (a mid-document section break, else the body's
+    // trailing sectPr, creating one if the body has none). The created header/footer paragraph
+    // anchors come back in EditResult.Created with a hdr{N}/ftr{N} scope, so a page-number field
+    // can then be inserted into them with InsertPageNumberField. Undo/redo of the part creation
+    // is handled by the header/footer reconcile in RestoreSnapshot.
+
+    /// <summary>
+    /// Set the running <b>header</b> story for the section that owns <paramref name="anchorId"/>
+    /// (any body block in that section) to <paramref name="markdownPayload"/>. Creates the header
+    /// part, its relationship, and the <c>w:headerReference</c> on the section if the story of the
+    /// requested <paramref name="kind"/> does not exist yet; otherwise replaces that story's content.
+    /// An empty payload yields a single empty header paragraph. <see cref="HeaderFooterKind.First"/>
+    /// sets the section's <c>w:titlePg</c>; <see cref="HeaderFooterKind.Even"/> sets
+    /// <c>w:evenAndOddHeaders</c> in the settings part. Returns the created header-paragraph anchors
+    /// (scope <c>hdr{N}</c>) in <see cref="EditResult.Created"/>.
+    /// </summary>
+    public EditResult SetHeaderText(string anchorId, HeaderFooterKind kind, string markdownPayload)
+        => SetHeaderFooterText(isHeader: true, anchorId, kind, markdownPayload);
+
+    /// <summary>
+    /// Set the running <b>footer</b> story for the section that owns <paramref name="anchorId"/>.
+    /// Behaves exactly like <see cref="SetHeaderText"/> but for the footer part / <c>w:footerReference</c>;
+    /// the created footer-paragraph anchors (scope <c>ftr{N}</c>) come back in
+    /// <see cref="EditResult.Created"/> — insert a page number into one with
+    /// <see cref="InsertPageNumberField"/>.
+    /// </summary>
+    public EditResult SetFooterText(string anchorId, HeaderFooterKind kind, string markdownPayload)
+        => SetHeaderFooterText(isHeader: false, anchorId, kind, markdownPayload);
+
+    private EditResult SetHeaderFooterText(bool isHeader, string anchorId, HeaderFooterKind kind, string markdownPayload)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Scope != "body")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "SetHeaderText/SetFooterText require a body block anchor (the section the header/footer belongs to)", anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        var body = element.AncestorsAndSelf(W.body).FirstOrDefault();
+        if (body is null)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "anchor is not in the document body", anchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no main document part", anchorId);
+
+        // Parse the payload into paragraphs (empty payload ⇒ one empty paragraph), then apply the
+        // built-in Header/Footer style so the paragraphs inherit Word's centre/right tab stops.
+        var paras = new List<XElement>();
+        if (!string.IsNullOrEmpty(markdownPayload))
+        {
+            var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
+            if (!parsed.Success)
+                return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
+            foreach (var block in parsed.Blocks)
+                paras.Add(BuildParagraphFromParsedBlock(block));
+        }
+        if (paras.Count == 0) paras.Add(new XElement(W.p));
+        ApplyHeaderFooterStyle(paras, isHeader);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var sectPr = Internal.BlockMetadataOps.FindGoverningSectPr(element);
+            if (sectPr is null)
+            {
+                // A body with no section properties at all — synthesize the document-final section.
+                sectPr = new XElement(W.sectPr);
+                body.Add(sectPr);
+            }
+
+            var refName = isHeader ? W.headerReference : W.footerReference;
+            var typeVal = HeaderFooterTypeValue(kind);
+
+            // Reuse the same-kind reference's part if it resolves to the right part type; otherwise
+            // add a fresh part and reference (dropping any stale/mismatched same-kind reference).
+            var existingRef = sectPr.Elements(refName)
+                .FirstOrDefault(r => (string?)r.Attribute(W.type) == typeVal);
+            OpenXmlPart? reuse = null;
+            if (existingRef is not null && (string?)existingRef.Attribute(R.id) is { } rid)
+                foreach (var pp in main.Parts)
+                    if (pp.RelationshipId == rid) { reuse = pp.OpenXmlPart; break; }
+            bool typeMatches = isHeader ? reuse is HeaderPart : reuse is FooterPart;
+
+            OpenXmlPart part;
+            if (reuse is not null && typeMatches)
+            {
+                part = reuse;
+            }
+            else
+            {
+                part = isHeader ? main.AddNewPart<HeaderPart>() : main.AddNewPart<FooterPart>();
+                existingRef?.Remove();
+                // Header/footer references lead the CT_SectPr sequence, so AddFirst is schema-ordered.
+                sectPr.AddFirst(new XElement(refName,
+                    new XAttribute(W.type, typeVal),
+                    new XAttribute(R.id, main.GetIdOfPart(part))));
+            }
+
+            // Stamp Unids so the new paragraphs can be reported as anchors after re-projection.
+            foreach (var p in paras) UnidHelper.AssignToSelfAndDescendants(p);
+
+            var newRoot = new XElement(isHeader ? W.hdr : W.ftr,
+                new XAttribute(XNamespace.Xmlns + "w", W.w),
+                new XAttribute(XNamespace.Xmlns + "r", R.r),
+                paras);
+            part.PutXDocument(new XDocument(newRoot));
+
+            // Visibility flags so Word actually shows the First/Even stories.
+            if (kind == HeaderFooterKind.First && sectPr.Element(W.titlePg) is null)
+                InsertSectPrTitlePg(sectPr);
+            else if (kind == HeaderFooterKind.Even)
+                EnsureEvenAndOddHeaders(main);
+
+            InvalidateProjectionCache();
+            var index = Project().AnchorIndex;
+            var created = new List<Anchor>();
+            foreach (var p in paras)
+            {
+                var unid = (string?)p.Attribute(PtOpenXml.Unid);
+                if (unid is null) continue;
+                var t = index.Values.FirstOrDefault(v => v.Unid == unid);
+                if (t is not null) created.Add(t.Anchor);
+            }
+
+            return new EditResult
+            {
+                Success = true,
+                Created = created,
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RestoreSnapshot(_history.PopForUndo().snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>
+    /// Append a page-number field to the paragraph named by <paramref name="anchorId"/> — typically a
+    /// header/footer paragraph (e.g. one returned by <see cref="SetFooterText"/>), though any paragraph
+    /// is accepted. <see cref="PageNumberField.CurrentPage"/> emits a <c>PAGE</c> field,
+    /// <see cref="PageNumberField.TotalPages"/> a <c>NUMPAGES</c> field, both as a native Word complex
+    /// field (<c>fldChar</c>/<c>instrText</c>) with a cached "1" result. Center the number by setting the
+    /// paragraph alignment (<see cref="SetParagraphFormat"/>) or by relying on the Header/Footer style's
+    /// centre tab. Returns the affected paragraph anchor in <see cref="EditResult.Modified"/>.
+    /// </summary>
+    public EditResult InsertPageNumberField(string anchorId, PageNumberField field = PageNumberField.CurrentPage)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        if (element.Name != W.p)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "InsertPageNumberField requires a paragraph anchor", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            foreach (var r in BuildPageNumberFieldRuns(field))
+            {
+                UnidHelper.AssignToSelfAndDescendants(r);
+                element.Add(r);
+            }
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { target.Anchor },
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>Map <see cref="HeaderFooterKind"/> to the OOXML <c>w:type</c> token.</summary>
+    private static string HeaderFooterTypeValue(HeaderFooterKind kind) => kind switch
+    {
+        HeaderFooterKind.First => "first",
+        HeaderFooterKind.Even => "even",
+        _ => "default",
+    };
+
+    /// <summary>Give every header/footer paragraph that carries no explicit <c>w:pStyle</c> the
+    /// built-in Header/Footer style, so it inherits Word's centre-of-page and right-margin tab stops.</summary>
+    private static void ApplyHeaderFooterStyle(List<XElement> paras, bool isHeader)
+    {
+        var styleId = isHeader ? "Header" : "Footer";
+        foreach (var p in paras)
+        {
+            var pPr = p.Element(W.pPr);
+            if (pPr is null) { pPr = new XElement(W.pPr); p.AddFirst(pPr); }
+            if (pPr.Element(W.pStyle) is null)
+                pPr.AddFirst(new XElement(W.pStyle, new XAttribute(W.val, styleId)));
+        }
+    }
+
+    /// <summary>The runs of a native complex page-number field (PAGE / NUMPAGES) with a cached "1"
+    /// result — the form Word emits, so it renders and updates like a hand-authored field.</summary>
+    private static XElement[] BuildPageNumberFieldRuns(PageNumberField field)
+    {
+        var instr = field == PageNumberField.TotalPages ? " NUMPAGES " : " PAGE ";
+        return new[]
+        {
+            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"))),
+            new XElement(W.r, new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), instr)),
+            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate"))),
+            new XElement(W.r, new XElement(W.t, "1")),
+            new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))),
+        };
+    }
+
+    // Elements that FOLLOW w:titlePg in the CT_SectPr sequence; an insertion lands before the first
+    // of these (or at the end), keeping the sectPr schema-ordered (mirrors IrMarkupRenderer).
+    private static readonly XName[] SectPrAfterTitlePg =
+        { W.textDirection, W.bidi, W.rtlGutter, W.docGrid, W.printerSettings, W.sectPrChange };
+
+    private static void InsertSectPrTitlePg(XElement sectPr)
+    {
+        var titlePg = new XElement(W.titlePg);
+        var firstTail = sectPr.Elements().FirstOrDefault(e => SectPrAfterTitlePg.Contains(e.Name));
+        if (firstTail is null) sectPr.Add(titlePg);
+        else firstTail.AddBeforeSelf(titlePg);
+    }
+
+    /// <summary>Ensure the settings part carries <c>w:evenAndOddHeaders</c> (required for an Even story
+    /// to render), reordering the settings children per the standard afterwards.</summary>
+    private static void EnsureEvenAndOddHeaders(MainDocumentPart main)
+    {
+        var settingsPart = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
+        var xDoc = settingsPart.GetXDocument();
+        var root = xDoc.Root;
+        if (root is null)
+        {
+            root = new XElement(W.settings, new XAttribute(XNamespace.Xmlns + "w", W.w));
+            xDoc.Add(root);
+        }
+        if (root.Element(W.evenAndOddHeaders) is null)
+        {
+            root.Add(new XElement(W.evenAndOddHeaders));
+            var ordered = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(root);
+            root.ReplaceWith(ordered);
+        }
+        settingsPart.PutXDocument();
+    }
+
     /// <summary>
     /// Insert a <paramref name="rows"/>×<paramref name="cols"/> table before/after the block named
     /// by <paramref name="anchorId"/>. <paramref name="options"/> controls borders, per-cell markdown
@@ -5011,14 +5295,29 @@ public sealed class DocxSession : IDisposable
     /// stripping, Save's Unid-strip pass) needs to round-trip all parts — otherwise
     /// undo or the Save restore would leak structural changes into peer parts.
     /// </summary>
-    internal sealed record DocumentSnapshot(System.Collections.Generic.IReadOnlyList<(string PartUri, XDocument Xml)> Parts);
+    /// <param name="Parts">Per-URI XML content of every snapshot-scoped part (content restore).</param>
+    /// <param name="HeaderFooterParts">Relationship id + kind + URI of each header/footer part that
+    /// existed at snapshot time. Drives create/delete reconciliation in <see cref="RestoreSnapshot"/>
+    /// so ops that add a header/footer part (SetHeaderText/SetFooterText) undo/redo cleanly; the
+    /// content is read back from <see cref="Parts"/> by URI when a part must be re-created.</param>
+    internal sealed record DocumentSnapshot(
+        System.Collections.Generic.IReadOnlyList<(string PartUri, XDocument Xml)> Parts,
+        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsHeader, string PartUri)> HeaderFooterParts);
 
     internal DocumentSnapshot TakeSnapshot()
     {
         var parts = new System.Collections.Generic.List<(string, XDocument)>();
         foreach (var part in EnumerateProjectedPartsForSnapshot())
             parts.Add((part.Uri.ToString(), new XDocument(part.GetXDocument())));
-        return new DocumentSnapshot(parts);
+
+        var hfParts = new System.Collections.Generic.List<(string, bool, string)>();
+        var main = _doc!.MainDocumentPart;
+        if (main is not null)
+        {
+            foreach (var h in main.HeaderParts) hfParts.Add((main.GetIdOfPart(h), true, h.Uri.ToString()));
+            foreach (var f in main.FooterParts) hfParts.Add((main.GetIdOfPart(f), false, f.Uri.ToString()));
+        }
+        return new DocumentSnapshot(parts, hfParts);
     }
 
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
@@ -5036,16 +5335,19 @@ public sealed class DocxSession : IDisposable
             part.PutXDocument(new XDocument(xml));
         }
 
-        // TODO: Asymmetric scope, intentional. The undo-time create/delete logic
-        // below only handles the annotations CustomXmlPart — see
-        // EnumerateProjectedPartsForSnapshot for why AddCustomXmlPart(CustomXml)
-        // is unsafe for non-annotation custom-xml parts (wrong content type, no
-        // CustomXmlPropertiesPart partner). The same hazard would exist for
-        // HeaderParts / FooterParts / FootnotesPart / etc. — but no session op
-        // creates or deletes those today, so they're not yet snapshot-scoped here.
-        // If a future op starts adding/removing those parts, expand this block
-        // (and the snapshot enumeration) to cover them with the correct factory.
         var main = _doc!.MainDocumentPart;
+
+        // Header/footer part create/delete reconcile: SetHeaderText/SetFooterText can add a
+        // HeaderPart/FooterPart, so undo/redo must delete the parts the snapshot doesn't have and
+        // re-create (with the snapshot's relationship id, so the restored sectPr reference resolves)
+        // the ones it does. Content restore above already handled parts present in both by URI.
+        if (main is not null)
+            ReconcileHeaderFooterParts(main, snapshot, byUri);
+
+        // The annotations CustomXmlPart is reconciled the same way (its own factory) — see
+        // EnumerateProjectedPartsForSnapshot for why AddCustomXmlPart(CustomXml) is unsafe for
+        // non-annotation custom-xml parts (wrong content type, no CustomXmlPropertiesPart partner).
+        // FootnotesPart / EndnotesPart / CommentsPart are still content-only (no op adds/removes them).
         if (main is not null)
         {
             var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
@@ -5073,6 +5375,44 @@ public sealed class DocxSession : IDisposable
         }
 
         InvalidateProjectionCache();
+    }
+
+    /// <summary>
+    /// Reconcile the live document's header/footer parts against <paramref name="snapshot"/>:
+    /// delete parts created since the snapshot (relationship id present live, absent in snapshot)
+    /// and re-create parts removed since it (present in snapshot, absent live) with their original
+    /// relationship id + content, so the just-restored sectPr <c>headerReference</c>/<c>footerReference</c>
+    /// resolves. Parts present in both keep their content (restored by URI in <see cref="RestoreSnapshot"/>).
+    /// </summary>
+    private static void ReconcileHeaderFooterParts(
+        MainDocumentPart main, DocumentSnapshot snapshot,
+        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+    {
+        var snapByRel = new System.Collections.Generic.Dictionary<string, (bool IsHeader, string PartUri)>(StringComparer.Ordinal);
+        foreach (var (relId, isHeader, partUri) in snapshot.HeaderFooterParts)
+            snapByRel[relId] = (isHeader, partUri);
+
+        // Live header/footer parts keyed by relationship id (materialized so we can DeletePart
+        // without mutating a collection we're iterating).
+        var live = new System.Collections.Generic.Dictionary<string, OpenXmlPart>(StringComparer.Ordinal);
+        foreach (var h in main.HeaderParts) live[main.GetIdOfPart(h)] = h;
+        foreach (var f in main.FooterParts) live[main.GetIdOfPart(f)] = f;
+
+        // Delete parts the snapshot doesn't know about (undo of a create).
+        foreach (var kv in live)
+            if (!snapByRel.ContainsKey(kv.Key))
+                main.DeletePart(kv.Value);
+
+        // Re-create parts the snapshot has but the live doc lost (redo of a create / undo of a delete).
+        foreach (var kv in snapByRel)
+        {
+            if (live.ContainsKey(kv.Key)) continue;
+            if (!byUri.TryGetValue(kv.Value.PartUri, out var xml)) continue;
+            OpenXmlPart np = kv.Value.IsHeader
+                ? main.AddNewPart<HeaderPart>(kv.Key)
+                : main.AddNewPart<FooterPart>(kv.Key);
+            np.PutXDocument(new XDocument(xml));
+        }
     }
 
     internal int NextRevisionId() => System.Threading.Interlocked.Increment(ref _revisionCounter);

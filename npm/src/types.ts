@@ -1060,6 +1060,9 @@ export interface DocxodusWasmExports {
     InsertTableColumn: (handle: number, cellAnchor: string, pos: string) => string;
     DeleteTableRow: (handle: number, cellAnchor: string) => string;
     DeleteTableColumn: (handle: number, cellAnchor: string) => string;
+    SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
+    SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
+    InsertPageNumberField: (handle: number, anchor: string, field: string) => string;
     ApplyFormat: (handle: number, anchor: string, spanJson: string, opJson: string) => string;
     ApplyFormatBySubstring: (handle: number, anchor: string, substring: string, opJson: string) => string;
     SetParagraphStyle: (handle: number, anchor: string, styleId: string) => string;
@@ -1237,6 +1240,17 @@ export interface ParagraphFormatOp {
   /** Remove all paragraph borders before applying any top/bottom border in this op. */
   clearBorders?: boolean;
 }
+
+/**
+ * Which header/footer story `DocxSession.setHeaderText`/`setFooterText` targets, mapping to the
+ * OOXML `w:type`: `"default"` (all pages), `"first"` (first-page-only; sets `w:titlePg`),
+ * `"even"` (even pages; sets `w:evenAndOddHeaders`).
+ */
+export type HeaderFooterKind = "default" | "first" | "even";
+
+/** Which page-number field `DocxSession.insertPageNumberField` emits: `"currentPage"` → PAGE,
+ * `"totalPages"` → NUMPAGES. */
+export type PageNumberField = "currentPage" | "totalPages";
 
 /** Options for `DocxSession.insertTable`. */
 export interface TableInsertOptions {

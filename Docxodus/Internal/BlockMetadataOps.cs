@@ -107,7 +107,14 @@ internal static class BlockMetadataOps
         };
     }
 
-    private static XElement? FindGoverningSectPr(XElement element)
+    /// <summary>
+    /// The <c>w:sectPr</c> that governs <paramref name="element"/> (a body block): the next
+    /// forward paragraph's <c>pPr/sectPr</c> (a mid-document section break), else the element's
+    /// own <c>pPr/sectPr</c>, else the body's trailing <c>sectPr</c> (the document-final section).
+    /// Returns <c>null</c> when the body has no section properties at all. Shared with
+    /// <see cref="DocxSession.SetHeaderText"/>/<see cref="DocxSession.SetFooterText"/>.
+    /// </summary>
+    internal static XElement? FindGoverningSectPr(XElement element)
     {
         // The sectPr that governs a paragraph is either:
         // (a) the next sectPr-bearing paragraph's pPr/sectPr after this one (mid-doc section break), or

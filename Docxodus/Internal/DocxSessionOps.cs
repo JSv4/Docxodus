@@ -206,6 +206,17 @@ internal static class DocxSessionOps
         return DocxSessionJson.ParseBorderEdge(d.RootElement, "e");
     }
 
+    // ─── Headers / footers / page numbers ───────────────────────────────
+
+    public static string SetHeaderText(int handle, string anchorId, HeaderFooterKind kind, string markdown) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetHeaderText(anchorId, kind, markdown));
+
+    public static string SetFooterText(int handle, string anchorId, HeaderFooterKind kind, string markdown) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetFooterText(anchorId, kind, markdown));
+
+    public static string InsertPageNumberField(int handle, string anchorId, PageNumberField field) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertPageNumberField(anchorId, field));
+
     // ─── Tier C: formatting ─────────────────────────────────────────────
 
     public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp op) =>
