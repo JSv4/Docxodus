@@ -589,6 +589,85 @@ Word rejects the tracked *property* change (restores the old page setup / paragr
 
 ---
 
+## Document metadata: `w:sectPr` in tables is a section break; `w:sectPr` in a text box is NOT
+
+**Status:** Fixed (issue #51)
+
+### Symptom
+
+`WmlToHtmlConverter.GetDocumentMetadata()` reported the wrong number of sections
+for documents whose section break lived inside a table cell — it only scanned the
+body's direct children, so an in-cell `w:sectPr` was invisible and the section
+count (and the per-section page dimensions / paragraph & table index ranges used
+for lazy-loading pagination) were off.
+
+### The corner case
+
+A section break is expressed as a `w:sectPr` in the `w:pPr` of the paragraph that
+*ends* the section (or the trailing `w:body/w:sectPr` for the final section).
+While Word's UI does not let you place one inside a table, the OOXML is free to
+carry a `w:sectPr` on a paragraph nested in a table cell, and a faithful metadata
+scan must find it:
+
+```xml
+<w:body>
+  <w:tbl>
+    <w:tr><w:tc>
+      <w:p><w:pPr>
+        <w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>   <!-- ends section 1 -->
+      </w:pPr></w:p>
+    </w:tc></w:tr>
+  </w:tbl>
+  <w:p><w:r><w:t>section 2</w:t></w:r></w:p>
+  <w:sectPr><w:pgSz w:w="15840" w:h="12240"/></w:sectPr>          <!-- final section -->
+</w:body>
+```
+
+The subtlety is what to do with a `w:sectPr` inside a **text box**. A text box
+(`w:txbxContent`, reached through `w:r/w:pict/v:textbox` or the DrawingML
+`wps:txbx`) is a **separate story**: it is floating content that does not
+paginate the main document. A `w:sectPr` there is meaningless to main-document
+pagination, and counting it would invent a phantom section and corrupt the page
+dimensions reported for the surrounding content. The same is true of any story
+reached only *through a run* — it must be excluded.
+
+| Placement | Counts as a main-document section? |
+|-----------|-----------------------------------|
+| `w:body/w:p/w:pPr/w:sectPr` (body paragraph) | ✅ yes |
+| `w:body/w:sectPr` (trailing) | ✅ yes |
+| `w:tbl/w:tr/w:tc/w:p/w:pPr/w:sectPr` (table cell) | ✅ yes (this fix) |
+| `…/w:txbxContent/w:p/w:pPr/w:sectPr` (text box) | ❌ no — separate story |
+| header / footer / footnote / endnote / comment part | ❌ no — separate part, not in the body tree |
+
+### The fix
+
+`CollectSectionData` walks the body as a single **main story** in document order,
+descending into tables (`w:tbl → w:tr → w:tc`) because a table cell's content is
+part of that story, but treating every `w:p` as a **leaf** — only its direct
+`w:pPr/w:sectPr` is inspected, never its runs. Because a text box is always nested
+inside a run, this one rule excludes text-box section properties (and text-box
+paragraphs) automatically, with no special-casing of `w:txbxContent`. Only
+body-level tables count toward the table total (a nested table is part of its
+containing cell's content), preserving the pre-fix counts for the common case.
+
+Headers, footers, footnotes, endnotes and comments live in their own parts and
+are never in the body tree, so they are out of scope by construction.
+
+### Relevant code
+
+`Docxodus/WmlToHtmlConverter.cs` — `CollectSectionData` (the recursive
+`WalkMainStory` local function).
+
+### Tests
+
+`Docxodus.Tests/DocumentMetadataTests.cs` —
+`DM022_GetDocumentMetadata_DetectsSectionBreakInsideTableCell` (in-cell break is
+counted, table attributed to the section it starts in) and
+`DM023_GetDocumentMetadata_IgnoresSectionPropertiesInsideTextBox` (a text-box
+`w:sectPr` does not create a section, and text-box paragraphs are not counted).
+
+---
+
 ## Contributing
 
 When adding new corner cases to this document:

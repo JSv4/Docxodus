@@ -548,8 +548,9 @@ internal static class IrCompositeMerger
                 or IrEditOpKind.SplitBlock or IrEditOpKind.MergeBlock)),
             "LowerStructuralOps must leave no Move/Split/Merge op before composite grouping.");
 
-        // Note scopes (footnotes/endnotes) are not part of body grouping; the composite path does not yet
-        // compose them across reviewers, so they pass through unchanged (parity with the pre-lowering shape).
+        // Note scopes (footnotes/endnotes) are not part of body grouping, so they pass through this body-op
+        // lowering unchanged; cross-reviewer note composition happens later in MergeNoteScopes, which reads
+        // these passed-through NoteOps off each reviewer's raw script.
         return new IrEditScript(IrNodeList.From(lowered), script.NoteOps);
     }
 

@@ -1115,16 +1115,25 @@ namespace Docxodus
         /// </summary>
         /// <remarks>
         /// <para>
-        /// This method handles the following sectPr placements:
+        /// The document body is walked in document order as a single "main story", descending into
+        /// tables (which are part of that story), so this method detects <c>w:sectPr</c> in all of
+        /// the following placements:
         /// <list type="bullet">
-        ///   <item><description>sectPr inside paragraph properties (w:p/w:pPr/w:sectPr) - mid-document section breaks</description></item>
+        ///   <item><description>sectPr inside a body-level paragraph's properties (w:body/w:p/w:pPr/w:sectPr) - mid-document section breaks</description></item>
+        ///   <item><description>sectPr inside a paragraph nested in a table cell (w:tbl/w:tr/w:tc/w:p/w:pPr/w:sectPr) - section breaks inside tables (GitHub issue #51)</description></item>
         ///   <item><description>Document-level sectPr at end of body (w:body/w:sectPr) - final section</description></item>
         /// </list>
         /// </para>
         /// <para>
-        /// LIMITATION: sectPr elements inside tables or text boxes are NOT detected.
-        /// This is an edge case - most documents don't have section breaks inside tables.
-        /// See GitHub issue #51 for tracking this enhancement.
+        /// Section properties that live inside a <em>separate story</em> - most notably a text box
+        /// (<c>w:txbxContent</c>) - are intentionally NOT treated as main-document section breaks.
+        /// Text-box content is floating content that does not paginate the main document, so counting
+        /// it would create phantom sections and corrupt the pagination metadata. Because a text box is
+        /// always nested inside a run inside a paragraph, and this walk treats each <c>w:p</c> as a leaf
+        /// (only its direct <c>w:pPr/w:sectPr</c> is inspected, never its runs), text-box section
+        /// properties - and text-box paragraphs - are excluded automatically. Headers, footers,
+        /// footnotes, endnotes and comments live in their own parts, so they are out of scope by
+        /// construction. See docs/ooxml_corner_cases.md.
         /// </para>
         /// </remarks>
         private static List<(XElement sectPr, List<XElement> paragraphs, List<XElement> tables)> CollectSectionData(XElement body)
@@ -1133,53 +1142,63 @@ namespace Docxodus
             var currentParagraphs = new List<XElement>();
             var currentTables = new List<XElement>();
 
-            // Get all top-level block elements
-            var blockElements = body.Elements()
-                .Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sectPr)
-                .ToList();
-
-            foreach (var element in blockElements)
+            void CloseSection(XElement sectPr)
             {
-                if (element.Name == W.p)
-                {
-                    currentParagraphs.Add(element);
+                result.Add((sectPr, new List<XElement>(currentParagraphs), new List<XElement>(currentTables)));
+                currentParagraphs.Clear();
+                currentTables.Clear();
+            }
 
-                    // Check for section break in paragraph properties
-                    var pPr = element.Element(W.pPr);
-                    var sectPr = pPr?.Element(W.sectPr);
-                    if (sectPr != null)
+            // Walk one container's block-level children in document order. Tables belong to the main
+            // story, so we descend into their rows/cells; a paragraph is treated as a leaf (we never
+            // descend into its runs), which keeps separate stories such as text boxes out of scope.
+            void WalkMainStory(XElement container, bool atBodyLevel)
+            {
+                foreach (var element in container.Elements())
+                {
+                    if (element.Name == W.p)
                     {
-                        // End of section
-                        result.Add((sectPr, new List<XElement>(currentParagraphs), new List<XElement>(currentTables)));
-                        currentParagraphs.Clear();
-                        currentTables.Clear();
+                        currentParagraphs.Add(element);
+
+                        // A section break may be carried by any main-story paragraph, whether at the
+                        // body level or nested inside a table cell.
+                        var sectPr = element.Element(W.pPr)?.Element(W.sectPr);
+                        if (sectPr != null)
+                            CloseSection(sectPr);
                     }
-                }
-                else if (element.Name == W.tbl)
-                {
-                    currentTables.Add(element);
-                    // Also count paragraphs inside tables
-                    var tableParagraphs = element.Descendants(W.p).ToList();
-                    currentParagraphs.AddRange(tableParagraphs);
-                }
-                else if (element.Name == W.sectPr)
-                {
-                    // Document-level sectPr (at end of body)
-                    result.Add((element, new List<XElement>(currentParagraphs), new List<XElement>(currentTables)));
-                    currentParagraphs.Clear();
-                    currentTables.Clear();
+                    else if (element.Name == W.tbl)
+                    {
+                        // Only body-level tables count toward the table total; a nested table is part
+                        // of its containing cell's content (matches the pre-issue-51 behavior).
+                        if (atBodyLevel)
+                            currentTables.Add(element);
+
+                        // Descend into the table's cells so section breaks and paragraphs inside them
+                        // are attributed in document order.
+                        foreach (var row in element.Elements(W.tr))
+                            foreach (var cell in row.Elements(W.tc))
+                                WalkMainStory(cell, atBodyLevel: false);
+                    }
+                    else if (element.Name == W.sectPr && atBodyLevel)
+                    {
+                        // Document-level sectPr (final section) at the end of the body.
+                        CloseSection(element);
+                    }
                 }
             }
 
-            // If there's remaining content without a sectPr, use default dimensions
+            WalkMainStory(body, atBodyLevel: true);
+
+            // If there's remaining content without a trailing sectPr, use default dimensions.
             if (currentParagraphs.Count > 0 || currentTables.Count > 0)
             {
-                // Try to find a trailing sectPr
+                // A body-level sectPr would already have closed the section above, so this is null
+                // whenever it is reached; kept for symmetry with the (null => defaults) contract.
                 var trailingSectPr = body.Element(W.sectPr);
                 result.Add((trailingSectPr, new List<XElement>(currentParagraphs), new List<XElement>(currentTables)));
             }
 
-            // Ensure at least one section exists
+            // Ensure at least one section exists.
             if (result.Count == 0)
             {
                 var defaultSectPr = body.Element(W.sectPr);
