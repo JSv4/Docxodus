@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **`docx2html` CLI: tracked-changes and story rendering flags.** The `docx2html` tool previously always accepted revisions before converting, so a redline document rendered as if every change had been applied — there was no way to preview a redline in a browser. New flags map straight onto the existing `WmlToHtmlConverterSettings`: `--track-changes` (render revisions as `ins`/`del`/move markup instead of accepting them — `RenderTrackedChanges`), `--no-render-moves` (lower move markup to plain ins/del — `RenderMoveOperations`), `--render-comments`, `--render-footnotes`, and `--render-headers-footers`. Defaults are unchanged (all off, moves on), so existing invocations behave identically. This is the preview half of the docx-redlines GitHub Action (JSv4/Python-Redlines#12): the action redlines changed `.docx` files with the `redline` CLI and uses `docx2html --track-changes` to publish browser-viewable previews.
+
 ## [7.0.1] - 2026-07-11
 
 ### Changed
