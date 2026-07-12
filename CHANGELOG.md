@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [7.0.1] - 2026-07-11
+
+### Changed
+- **New project logo.** The README banner now uses the new Docxodus hero artwork (`docxodus-logo.png` — the scene + wordmark + tagline cut), replacing the old `docxodus-mono-final.svg` lockup, which has been removed.
+
 ## [7.0.0] - 2026-07-09
 
 ### Added
