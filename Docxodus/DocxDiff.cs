@@ -443,18 +443,21 @@ public static class DocxDiff
     /// the output-package clone are revision-free; when not set, return <paramref name="doc"/> unchanged so the
     /// default path is byte-for-byte what it was before the flag existed.
     /// </summary>
-    private static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc) =>
-        settings.PreAcceptInputRevisions ? RevisionProcessor.AcceptRevisions(doc) : doc;
+    private static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc)
+    {
+        // Strict-conformance packages (ISO 29500 purl.oclc.org namespaces) are normalized to
+        // transitional before ANY read — Word does the same on open. No-op for transitional docs.
+        doc = StrictOoxmlNormalizer.NormalizeToTransitional(doc);
+        return settings.PreAcceptInputRevisions ? RevisionProcessor.AcceptRevisions(doc) : doc;
+    }
 
-    /// <summary>Per-reviewer <see cref="PreAccept(DocxDiffSettings, WmlDocument)"/> for the N-way entry points;
-    /// returns the original list unchanged when the flag is off.</summary>
+    /// <summary>Per-reviewer <see cref="PreAccept(DocxDiffSettings, WmlDocument)"/> for the N-way entry points
+    /// (strict normalization always applies; the accept-flatten only when the flag is set).</summary>
     private static IReadOnlyList<DocxDiffReviewer> PreAccept(
         DocxDiffSettings settings, IReadOnlyList<DocxDiffReviewer> reviewers)
     {
-        if (!settings.PreAcceptInputRevisions)
-            return reviewers;
         return reviewers
-            .Select(r => new DocxDiffReviewer { Author = r.Author, Document = RevisionProcessor.AcceptRevisions(r.Document) })
+            .Select(r => new DocxDiffReviewer { Author = r.Author, Document = PreAccept(settings, r.Document) })
             .ToList();
     }
 }
