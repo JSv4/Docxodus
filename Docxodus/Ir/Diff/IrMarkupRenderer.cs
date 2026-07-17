@@ -3763,6 +3763,11 @@ internal static class IrMarkupRenderer
     {
         var leftHyper = leftMain.HyperlinkRelationships.ToDictionary(r => r.Id, StringComparer.Ordinal);
         var leftExternalIds = new HashSet<string>(leftMain.ExternalRelationships.Select(r => r.Id), StringComparer.Ordinal);
+        // ALL ids in use on the left part, any relationship kind. An id "free" among left hyperlinks
+        // may still be TAKEN by a part relationship (comments.xml, an image, ...) — recreating the right
+        // relationship under it makes System.IO.Packaging throw XmlException ("ID conflicts with the ID
+        // of an existing relationship"), so those must take the remap path, not the same-id path.
+        var leftUsedIds = UsedRelationshipIds(leftMain);
         var rightHyper = rightMain.HyperlinkRelationships.ToDictionary(r => r.Id, StringComparer.Ordinal);
         var rightExternal = rightMain.ExternalRelationships.ToDictionary(r => r.Id, StringComparer.Ordinal);
 
@@ -3780,12 +3785,24 @@ internal static class IrMarkupRenderer
         {
             if (rightHyper.TryGetValue(id, out var hr))
             {
-                if (!leftHyper.ContainsKey(id))
+                if (!leftUsedIds.Contains(id))
                 {
                     // The id is FREE in the left part — recreate the relationship under the SAME id so the
                     // cloned w:hyperlink/@r:id keeps resolving (the common, no-collision case).
                     try { leftMain.AddHyperlinkRelationship(hr.Uri, hr.IsExternal, id); }
                     catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { }
+                }
+                else if (!leftHyper.ContainsKey(id))
+                {
+                    // The id is taken by a left relationship of a DIFFERENT KIND (a part relationship —
+                    // comments.xml, an image, ...): recreating under the same id is impossible, and the
+                    // cloned r:id would resolve to the wrong object. Remap to a fresh id.
+                    if (hr.Uri is { } takenUri)
+                    {
+                        string fresh = FreshRelationshipId(leftMain);
+                        leftMain.AddHyperlinkRelationship(takenUri, hr.IsExternal, fresh);
+                        RewriteReferenceId(rightClones, id, fresh);
+                    }
                 }
                 else if (hr.Uri is { } hrUri &&
                          !string.Equals(leftHyper[id].Uri?.ToString(), hrUri.ToString(), StringComparison.Ordinal))
@@ -3802,10 +3819,20 @@ internal static class IrMarkupRenderer
             }
             else if (rightExternal.TryGetValue(id, out var er))
             {
-                if (!leftExternalIds.Contains(id))
+                if (!leftUsedIds.Contains(id))
                 {
                     try { leftMain.AddExternalRelationship(er.RelationshipType, er.Uri, id); }
                     catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { }
+                }
+                else if (!leftExternalIds.Contains(id))
+                {
+                    // Taken by a non-external left relationship (part/hyperlink/data) — remap, as above.
+                    if (er.Uri is { } takenUri)
+                    {
+                        string fresh = FreshRelationshipId(leftMain);
+                        leftMain.AddExternalRelationship(er.RelationshipType, takenUri, fresh);
+                        RewriteReferenceId(rightClones, id, fresh);
+                    }
                 }
                 else
                 {
@@ -3827,13 +3854,21 @@ internal static class IrMarkupRenderer
     /// hyperlinks, external links, and data-part references alike). Deterministic: the first free
     /// <c>rIdRemap{n}</c> (n ascending from 1). The dedicated <c>rIdRemap</c> prefix avoids colliding with the
     /// document's own <c>rId{n}</c> numbering — the very collision this remap exists to resolve.</summary>
-    private static string FreshRelationshipId(OpenXmlPart leftMain)
+    /// <summary>Every relationship id currently in use on <paramref name="part"/>, all kinds
+    /// (part, hyperlink, external, data-part reference).</summary>
+    private static HashSet<string> UsedRelationshipIds(OpenXmlPart part)
     {
         var used = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var rel in leftMain.Parts) used.Add(rel.RelationshipId);
-        foreach (var rel in leftMain.HyperlinkRelationships) used.Add(rel.Id);
-        foreach (var rel in leftMain.ExternalRelationships) used.Add(rel.Id);
-        foreach (var rel in leftMain.DataPartReferenceRelationships) used.Add(rel.Id);
+        foreach (var rel in part.Parts) used.Add(rel.RelationshipId);
+        foreach (var rel in part.HyperlinkRelationships) used.Add(rel.Id);
+        foreach (var rel in part.ExternalRelationships) used.Add(rel.Id);
+        foreach (var rel in part.DataPartReferenceRelationships) used.Add(rel.Id);
+        return used;
+    }
+
+    private static string FreshRelationshipId(OpenXmlPart leftMain)
+    {
+        var used = UsedRelationshipIds(leftMain);
         int n = 1;
         string candidate;
         do { candidate = "rIdRemap" + n++; } while (used.Contains(candidate));

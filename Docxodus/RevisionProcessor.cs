@@ -1794,6 +1794,26 @@ namespace Docxodus
                         return null;
                 }
 
+                // Accept revisions for a wholly-deleted hyperlink: a w:hyperlink whose content children all
+                // sit inside w:del/w:moveFrom would otherwise collapse to an empty <w:hyperlink> shell that
+                // keeps its paragraph alive (visible when rejecting an inserted hyperlink — the reversed
+                // w:ins→w:del removes every run but the shell survived). Drop the shell; bookmark markers
+                // inside it are preserved (the hyperlink-shell analogue of the wholly-deleted-table rule).
+
+                if (element.Name == W.hyperlink &&
+                    element.Elements().Any(e => e.Name == W.del || e.Name == W.moveFrom))
+                {
+                    var transformed = new XElement(W.hyperlink,
+                        element.Attributes(),
+                        element.Nodes().Select(n => AcceptAllOtherRevisionsTransform(n)));
+                    var hasContent = transformed.Elements().Any(e =>
+                        e.Name != W.bookmarkStart && e.Name != W.bookmarkEnd && e.Name != W.proofErr);
+                    if (!hasContent)
+                        return transformed.Elements()
+                            .Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd);
+                    return transformed;
+                }
+
                 // Accept deleted text in paragraphs.
 
                 if (element.Name == W.del)
@@ -2355,7 +2375,12 @@ namespace Docxodus
                     element.Name == W.bdr ||
                     element.Name == W.ins ||
                     element.Name == W.moveTo ||
-                    element.Name == W.smartTag)
+                    element.Name == W.smartTag ||
+                    // Collapse hyperlinks too so AllParaContentIsDeleted sees THROUGH the shell:
+                    // a w:hyperlink holding only w:del content is not surviving content (IsRunContent
+                    // would otherwise count the shell itself as content and keep an empty paragraph
+                    // alive — visible when rejecting an inserted trailing hyperlink paragraph).
+                    element.Name == W.hyperlink)
                     return element.Elements();
 
                 if (element.Name == W.sdt)
