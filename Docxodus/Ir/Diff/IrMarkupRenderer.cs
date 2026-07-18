@@ -271,6 +271,11 @@ internal static class IrMarkupRenderer
                 // missing-copy treatment (numId collisions are remapped there, not overwritten).
                 TrackStyleDefinitionChanges(wDoc, wDocRight, state);
                 WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRight, wDoc);
+                // Word-parity repair: a body numPr referencing a numId with NO definition (tool-made
+                // corpus inputs ship this) renders as a plain paragraph in LibreOffice, while Word
+                // synthesizes a decimal multilevel definition on open — its compare oracle carries
+                // exactly that. Mirror the repair so numbered lists survive into the redline.
+                RepairDanglingNumberingReferences(main);
             }
             return streamDoc.GetModifiedWmlDocument();
         }
@@ -4131,6 +4136,76 @@ internal static class IrMarkupRenderer
             }
         }
         leftStyles.PutXDocument();
+    }
+
+    /// <summary>
+    /// Synthesize numbering definitions for body <c>w:numId</c> references that resolve to nothing —
+    /// Microsoft Word's own dangling-numId repair (verified against its compare oracle output): a
+    /// decimal multilevel abstract (lvlText "%N.", 720-twip-per-level hanging indents) plus a
+    /// <c>w:num</c> mapping the dangling id onto it. No-op when every referenced id is defined.
+    /// </summary>
+    private static void RepairDanglingNumberingReferences(MainDocumentPart main)
+    {
+        var body = main.GetXDocument().Root?.Element(W.body);
+        if (body is null)
+            return;
+        var referenced = body.Descendants(W.numId)
+            .Select(e => (string?)e.Attribute(W.val))
+            .Where(v => !string.IsNullOrEmpty(v) && v != "0")
+            .Select(v => v!)
+            .ToHashSet(StringComparer.Ordinal);
+        if (referenced.Count == 0)
+            return;
+
+        var numberingPart = main.NumberingDefinitionsPart;
+        var defined = numberingPart?.GetXDocument().Root?.Elements(W.num)
+            .Select(n => (string?)n.Attribute(W.numId))
+            .Where(v => v is not null)
+            .Select(v => v!)
+            .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+        var dangling = referenced.Except(defined).OrderBy(v => v, StringComparer.Ordinal).ToList();
+        if (dangling.Count == 0)
+            return;
+
+        numberingPart ??= main.AddNewPart<NumberingDefinitionsPart>();
+        var numXDoc = numberingPart.GetXDocument();
+        if (numXDoc.Root is null)
+            numXDoc.Add(new XElement(W.numbering,
+                new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName)));
+        var root = numXDoc.Root!;
+
+        int nextAbstract = root.Elements(W.abstractNum)
+            .Select(a => int.TryParse((string?)a.Attribute(W.abstractNumId), out var id) ? id : -1)
+            .DefaultIfEmpty(-1)
+            .Max() + 1;
+        // Schema order inside w:numbering: numPicBullet*, abstractNum*, num* — new abstracts go
+        // before the first existing w:num; the num mappings append at the end.
+        var firstNum = root.Elements(W.num).FirstOrDefault();
+        foreach (var id in dangling)
+        {
+            var abstractNum = new XElement(W.abstractNum,
+                new XAttribute(W.abstractNumId, nextAbstract),
+                new XElement(W.multiLevelType, new XAttribute(W.val, "multilevel")),
+                Enumerable.Range(0, 9).Select(i => new XElement(W.lvl,
+                    new XAttribute(W.ilvl, i),
+                    new XElement(W.start, new XAttribute(W.val, 1)),
+                    new XElement(W.numFmt, new XAttribute(W.val, "decimal")),
+                    new XElement(W.lvlText, new XAttribute(W.val, $"%{i + 1}.")),
+                    new XElement(W.lvlJc, new XAttribute(W.val, "left")),
+                    new XElement(W.pPr,
+                        new XElement(W.ind,
+                            new XAttribute(W.left, 720 * (i + 1)),
+                            new XAttribute(W.hanging, 720))))));
+            if (firstNum is null)
+                root.Add(abstractNum);
+            else
+                firstNum.AddBeforeSelf(abstractNum);
+            root.Add(new XElement(W.num,
+                new XAttribute(W.numId, id),
+                new XElement(W.abstractNumId, new XAttribute(W.val, nextAbstract))));
+            nextAbstract++;
+        }
+        numberingPart.PutXDocument();
     }
 
     /// <summary>The RAW formatting payload of a style definition: its direct <c>pPr</c>/<c>rPr</c>
