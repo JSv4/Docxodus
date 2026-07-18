@@ -478,10 +478,15 @@ internal static class IrBlockAligner
         foreach (int rj in leftoverRight)
             if (rightBlocks[rj] is IrTable)
                 tableRight.Add(rj);
-        if (tableLeft.Count == 1 && tableRight.Count == 1)
+        // Positional extension (Word-parity): Word merges the k-th old table into the k-th new table
+        // of a replace gap with per-cell del+ins interleave even when the counts differ — surplus
+        // tables on either side insert/delete whole. Zip the leftover tables in document order; each
+        // zipped pair is "the same table edited" and feeds IrTableDiffer's row/cell diff.
+        int tablePairs = Math.Min(tableLeft.Count, tableRight.Count);
+        for (int t = 0; t < tablePairs; t++)
         {
-            int li = tableLeft[0];
-            int rj = tableRight[0];
+            int li = tableLeft[t];
+            int rj = tableRight[t];
             leftKind[li] = IrAlignmentKind.Modified;
             rightKind[rj] = IrAlignmentKind.Modified;
             leftMatch[li] = rj;

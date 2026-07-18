@@ -399,6 +399,36 @@ public class IrBlockAlignerTests
     }
 
     [Fact]
+    public void In_gap_leftover_tables_pair_positionally()
+    {
+        // Word merges an old table into the replacing new table (per-cell del+ins interleave) even
+        // when the gap holds MORE tables on one side — the k-th leftover table pairs with the k-th,
+        // the surplus inserts/deletes. The old rule required exactly one free table on EACH side and
+        // lowered everything else to whole-table delete+insert stacks.
+        var l = FromXml(
+            "<w:p><w:r><w:t>alpha</w:t></w:r></w:p>" +
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid>" +
+            "<w:tr><w:tc><w:p><w:r><w:t>old cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
+            "<w:p><w:r><w:t>omega</w:t></w:r></w:p>");
+        var r = FromXml(
+            "<w:p><w:r><w:t>alpha</w:t></w:r></w:p>" +
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid>" +
+            "<w:tr><w:tc><w:p><w:r><w:t>brand new cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol/></w:tblGrid>" +
+            "<w:tr><w:tc><w:p><w:r><w:t>second fresh table</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
+            "<w:p><w:r><w:t>omega</w:t></w:r></w:p>");
+        var a = Align(l, r);
+
+        // The left table pairs with the FIRST right table as Modified; the second right table inserts.
+        Assert.Equal(1, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Inserted));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Deleted));
+        var modified = a.Entries.Single(e => e.Kind == IrAlignmentKind.Modified);
+        Assert.True(modified.Left is Docxodus.Ir.IrTable && modified.Right is Docxodus.Ir.IrTable);
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
     public void In_gap_cross_positioned_edit_pairs_as_modified()
     {
         // Two paragraphs are edited AND swapped WITHIN a single spine gap (between alpha and omega). M2.1's
