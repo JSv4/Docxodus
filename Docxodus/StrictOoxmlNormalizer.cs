@@ -163,9 +163,17 @@ internal static class StrictOoxmlNormalizer
         }
         if (!changed)
             return xml;
-        using var sw = new StringWriter();
+        // StringWriter reports UTF-16, which XDocument.Save stamps into the XML declaration — but
+        // the entry is written as UTF-8, making the SDK's reader refuse the part ("There is no
+        // Unicode byte order mark"). Declare UTF-8 explicitly.
+        using var sw = new Utf8StringWriter();
         doc.Save(sw, SaveOptions.DisableFormatting);
         return sw.ToString();
+    }
+
+    private sealed class Utf8StringWriter : StringWriter
+    {
+        public override Encoding Encoding => Encoding.UTF8;
     }
 
     /// <summary>
