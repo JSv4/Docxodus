@@ -150,6 +150,57 @@ public class DocxDiffWordShapeTests
     }
 
     [Fact]
+    public void IntraParagraphReplace_CoalescesToOneInsThenOneDel()
+    {
+        // Word renders a contiguous changed region inside a paragraph as ONE inserted block followed
+        // by ONE deleted block ("Heading 2 Center1 Style Demo"), consuming the interior whitespace
+        // into both sides — not per-word alternating del/ins pairs. The engine's edit script keeps
+        // its token grain; this is a rendering-projection concern.
+        var left = Doc("Heading 1 Style Demo");
+        var right = Doc("Heading 2 Center Demo");
+
+        var result = DocxDiff.Compare(left, right);
+
+        using (var stream = new MemoryStream(result.DocumentByteArray))
+        using (var wdoc = WordprocessingDocument.Open(stream, false))
+        {
+            var para = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>().Single();
+            // Walk direct children: expect plain-run(s), then ins-region, then del-region, then plain.
+            var regions = new List<(string Kind, string Text)>();
+            foreach (var child in para.ChildElements)
+            {
+                var (kind, text) = child switch
+                {
+                    InsertedRun ins => ("ins", ins.InnerText),
+                    DeletedRun del => ("del", del.InnerText),
+                    Run r => ("plain", r.InnerText),
+                    _ => ("", ""),
+                };
+                if (kind == "")
+                    continue;
+                if (regions.Count > 0 && regions[^1].Kind == kind)
+                    regions[^1] = (kind, regions[^1].Text + text);
+                else
+                    regions.Add((kind, text));
+            }
+            Assert.Equal(
+                new List<(string, string)>
+                {
+                    ("plain", "Heading "),
+                    ("ins", "2 Center"),
+                    ("del", "1 Style"),
+                    ("plain", " Demo"),
+                },
+                regions);
+        }
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
     public void PureInsertAndPureDeleteGaps_AreUnaffected()
     {
         // Insert-only gap: no deletes to leapfrog; order = spine, ins, spine.
