@@ -288,6 +288,15 @@ internal static class IrMarkupRenderer
                         new XElement(W.defaultTabStop, new XAttribute(W.val, 720))));
                     settingsPart.PutXDocument();
                 }
+                // Theme backfill: without a theme part, LibreOffice resolves scheme colors
+                // (bg1/tx1/accentN) to BLACK — right-sourced charts and shapes render as black
+                // boxes. Word's compare output always carries a theme; adopt the right's (already
+                // transitional after the strict normalizer) when the left package has none.
+                if (main.ThemePart is null && wDocRight.MainDocumentPart?.ThemePart is { } rightTheme)
+                {
+                    using var themeStream = rightTheme.GetStream();
+                    main.AddNewPart<ThemePart>().FeedData(themeStream);
+                }
             }
             return streamDoc.GetModifiedWmlDocument();
         }

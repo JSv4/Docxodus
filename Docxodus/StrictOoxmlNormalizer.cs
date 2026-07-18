@@ -97,6 +97,7 @@ internal static class StrictOoxmlNormalizer
                 rewritten = rewritten
                     .Replace(" w:conformance=\"strict\"", string.Empty, StringComparison.Ordinal)
                     .Replace(" conformance=\"strict\"", string.Empty, StringComparison.Ordinal);
+                rewritten = UnfoldGraphicDataNamespaces(rewritten);
 
                 using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
                 writer.BaseStream.SetLength(0);
@@ -104,6 +105,67 @@ internal static class StrictOoxmlNormalizer
             }
         }
         return new WmlDocument(doc.FileName, ms.ToArray());
+    }
+
+    private static readonly XNamespace TransitionalWpDrawing =
+        "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+    private static readonly XNamespace TransitionalA =
+        "http://schemas.openxmlformats.org/drawingml/2006/main";
+    private static readonly XName TransitionalWDrawing =
+        XName.Get("drawing", "http://schemas.openxmlformats.org/wordprocessingml/2006/main");
+    private const string Ms2010WpPrefix = "http://schemas.microsoft.com/office/word/2010/wordprocessing";
+
+    /// <summary>
+    /// Un-fold Word's strict-save namespace fold: strict packages write MS-2010
+    /// wordprocessingShape/Group/Canvas payload elements (<c>wsp/spPr/bodyPr/…</c>) IN the strict
+    /// wordprocessingDrawing namespace, with only <c>a:graphicData/@uri</c> naming the real payload
+    /// namespace. Word un-folds on open; after the flat URI substitution those elements sit in the
+    /// TRANSITIONAL wpDrawing namespace — names that do not exist there — and LibreOffice silently
+    /// drops the whole shape. Re-home each such descendant to the <c>@uri</c> namespace, stopping at
+    /// nested <c>w:drawing</c> boundaries (a drawing inside a <c>wps:txbx</c> keeps its own genuine
+    /// wpDrawing container elements).
+    /// </summary>
+    private static string UnfoldGraphicDataNamespaces(string xml)
+    {
+        if (!xml.Contains("graphicData", StringComparison.Ordinal))
+            return xml;
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Parse(xml, LoadOptions.PreserveWhitespace);
+        }
+        catch (System.Xml.XmlException)
+        {
+            return xml;
+        }
+        bool changed = false;
+        foreach (var graphicData in doc.Descendants(TransitionalA + "graphicData"))
+        {
+            var uri = (string?)graphicData.Attribute("uri");
+            if (uri is null || !uri.StartsWith(Ms2010WpPrefix, StringComparison.Ordinal))
+                continue;
+            XNamespace target = uri;
+            void Rehome(XElement el)
+            {
+                foreach (var child in el.Elements())
+                {
+                    if (child.Name == TransitionalWDrawing)
+                        continue;
+                    if (child.Name.Namespace == TransitionalWpDrawing)
+                    {
+                        child.Name = target + child.Name.LocalName;
+                        changed = true;
+                    }
+                    Rehome(child);
+                }
+            }
+            Rehome(graphicData);
+        }
+        if (!changed)
+            return xml;
+        using var sw = new StringWriter();
+        doc.Save(sw, SaveOptions.DisableFormatting);
+        return sw.ToString();
     }
 
     /// <summary>

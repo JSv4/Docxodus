@@ -149,6 +149,61 @@ public class DocxDiffNumberingRepairTests
     }
 
     [Fact]
+    public void MissingThemePart_IsBackfilledFromRight()
+    {
+        // Theme colors (schemeClr bg1/tx1/accentN) resolve to BLACK without a theme part — right-
+        // sourced charts and shapes render as black boxes when the left package ships no theme.
+        // Word's oracle always carries one; backfill the right's (already transitional).
+        static WmlDocument DocMaybeTheme(bool withTheme, string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new Styles(new DocDefaults(
+                    new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                    new ParagraphPropertiesDefault()));
+                mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                if (withTheme)
+                {
+                    var theme = mainPart.AddNewPart<ThemePart>();
+                    using var w = new StreamWriter(theme.GetStream(FileMode.Create), System.Text.Encoding.UTF8);
+                    w.Write("<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"T\">" +
+                        "<a:themeElements><a:clrScheme name=\"O\">" +
+                        "<a:dk1><a:sysClr val=\"windowText\" lastClr=\"000000\"/></a:dk1>" +
+                        "<a:lt1><a:sysClr val=\"window\" lastClr=\"FFFFFF\"/></a:lt1>" +
+                        "<a:dk2><a:srgbClr val=\"44546A\"/></a:dk2><a:lt2><a:srgbClr val=\"E7E6E6\"/></a:lt2>" +
+                        "<a:accent1><a:srgbClr val=\"4472C4\"/></a:accent1><a:accent2><a:srgbClr val=\"ED7D31\"/></a:accent2>" +
+                        "<a:accent3><a:srgbClr val=\"A5A5A5\"/></a:accent3><a:accent4><a:srgbClr val=\"FFC000\"/></a:accent4>" +
+                        "<a:accent5><a:srgbClr val=\"5B9BD5\"/></a:accent5><a:accent6><a:srgbClr val=\"70AD47\"/></a:accent6>" +
+                        "<a:hlink><a:srgbClr val=\"0563C1\"/></a:hlink><a:folHlink><a:srgbClr val=\"954F72\"/></a:folHlink>" +
+                        "</a:clrScheme><a:fontScheme name=\"O\"><a:majorFont><a:latin typeface=\"Calibri Light\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/></a:majorFont>" +
+                        "<a:minorFont><a:latin typeface=\"Calibri\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/></a:minorFont></a:fontScheme>" +
+                        "<a:fmtScheme name=\"O\"><a:fillStyleLst><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:fillStyleLst>" +
+                        "<a:lnStyleLst><a:ln><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:ln><a:ln><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:ln><a:ln><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:ln></a:lnStyleLst>" +
+                        "<a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst>" +
+                        "<a:bgFillStyleLst><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:bgFillStyleLst>" +
+                        "</a:fmtScheme></a:themeElements></a:theme>");
+                }
+                doc.Save();
+            }
+            return new WmlDocument("d.docx", stream.ToArray());
+        }
+
+        var left = DocMaybeTheme(false, "Old text here.");
+        var right = DocMaybeTheme(true, "Entirely new replacement words.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        using var s = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(s, false);
+        Assert.NotNull(wdoc.MainDocumentPart!.ThemePart);
+    }
+
+    [Fact]
     public void ResolvedNumIds_AreLeftUntouched()
     {
         // Both sides plain, no numbering anywhere — the repair must not invent a numbering part.

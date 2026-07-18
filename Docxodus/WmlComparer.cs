@@ -6245,7 +6245,11 @@ namespace Docxodus
             var elementsToUpdate = contentElement
                 .Descendants()
                 .Where(d => d.Attributes().Any(a => ComparisonUnitWord.s_RelationshipAttributeNames.Contains(a.Name)))
-                .Where(d => d.Name != C.externalData)
+                // c:externalData is INCLUDED: skipping it (a leftover from the legacy DetachExternalData
+                // flow, which the IR path never runs) left a copied chart part without its own rels —
+                // the embedded workbook never came across and the chart's rId dangled, so LibreOffice
+                // rendered the chart as a black box. A genuinely dangling externalData rel is skipped
+                // (not thrown) below, preserving the legacy callers' tolerance.
                 // The IR renderer clones whole blocks (paragraphs), which can carry a w:sectPr with
                 // w:headerReference/w:footerReference. Header/footer scopes are NOT diffed, so the LEFT
                 // package's parts (already present, same r:ids — both sides derive from one base) are
@@ -6271,7 +6275,7 @@ namespace Docxodus
                     // dangling reference on unchanged-text content, opts into skipping it.
                     if (!partOfDeletedContent.RelationshipExists(rId))
                     {
-                        if (skipDanglingRelationships)
+                        if (skipDanglingRelationships || element.Name == C.externalData)
                             continue;
                         throw new FileFormatException(
                             $"Content references relationship id '{rId}' that does not exist in the source part.");
@@ -6338,11 +6342,82 @@ namespace Docxodus
                             }
                             using (var stream = newPart.GetStream())
                                 newPartXDoc.Save(stream);
+
+                            // SmartArt's PREBUILT drawing rides an extension inside the DATA part
+                            // (dsp:dataModelExt/@relId) whose relationship lives on the DOCUMENT part,
+                            // not the data part — invisible to the recursion above. Without it the
+                            // diagram renders as bare text. Chase and copy it, rewriting @relId.
+                            if (relationshipForDeletedPart.RelationshipType.EndsWith("/diagramData", StringComparison.Ordinal))
+                                ChaseDiagramDataModelExt(partOfDeletedContent, partInNewDocument, newPart);
                         }
                     }
                 }
             }
             return contentElement;
+        }
+
+        /// <summary>See the call site: copy the MS-2007 prebuilt diagram drawing referenced by the
+        /// copied data part's <c>dsp:dataModelExt/@relId</c> (resolved against the top-level source
+        /// part) and rewire the attribute. A dangling or absent extension is skipped gracefully.</summary>
+        private static void ChaseDiagramDataModelExt(
+            PackagePart topLevelSourcePart, PackagePart partInNewDocument, PackagePart copiedDataPart)
+        {
+            XNamespace dsp = "http://schemas.microsoft.com/office/drawing/2008/diagram";
+            XDocument dataXDoc;
+            using (var s = copiedDataPart.GetStream())
+                dataXDoc = XDocument.Load(s);
+            var ext = dataXDoc.Descendants(dsp + "dataModelExt").FirstOrDefault();
+            var relId = (string)ext?.Attribute("relId");
+            if (ext == null || string.IsNullOrEmpty(relId) || !topLevelSourcePart.RelationshipExists(relId))
+                return;
+            var rel = topLevelSourcePart.GetRelationship(relId);
+            Uri targetUri;
+            try
+            {
+                targetUri = PackUriHelper.ResolvePartUri(
+                    new Uri(topLevelSourcePart.Uri.ToString(), UriKind.RelativeOrAbsolute),
+                    new Uri(rel.TargetUri.ToString(), UriKind.RelativeOrAbsolute));
+            }
+            catch (System.ArgumentException)
+            {
+                return;
+            }
+            if (!topLevelSourcePart.Package.PartExists(targetUri))
+                return;
+            var srcPart = topLevelSourcePart.Package.GetPart(targetUri);
+            var uriSplit = srcPart.Uri.ToString().Split('/');
+            var last = uriSplit[uriSplit.Length - 1].Split('.');
+            var uriString = last.Length == 2
+                ? uriSplit.PtSkipLast(1).Select(p => p + "/").StringConcatenate() +
+                    "P" + Guid.NewGuid().ToString().Replace("-", "") + "." + last[1]
+                : uriSplit.PtSkipLast(1).Select(p => p + "/").StringConcatenate() +
+                    "P" + Guid.NewGuid().ToString().Replace("-", "");
+            var uri = srcPart.Uri.IsAbsoluteUri
+                ? new Uri(uriString, UriKind.Absolute)
+                : new Uri(uriString, UriKind.Relative);
+            var newDrawingPart = partInNewDocument.Package.CreatePart(uri, srcPart.ContentType);
+            using (var oldStream = srcPart.GetStream())
+            using (var newStream = newDrawingPart.GetStream())
+                FileUtils.CopyStream(oldStream, newStream);
+            var newRid = "R" + Guid.NewGuid().ToString().Replace("-", "");
+            partInNewDocument.CreateRelationship(newDrawingPart.Uri, TargetMode.Internal, rel.RelationshipType, newRid);
+            ext.SetAttributeValue("relId", newRid);
+            using (var s = copiedDataPart.GetStream())
+                dataXDoc.Save(s);
+
+            // The drawing part carries its OWN relationships (image blips etc.) — bring them along
+            // exactly like the main flow does for any copied xml part.
+            if (newDrawingPart.ContentType.EndsWith("xml"))
+            {
+                XDocument drawingXDoc;
+                using (var s = newDrawingPart.GetStream())
+                {
+                    drawingXDoc = XDocument.Load(s);
+                    MoveRelatedPartsToDestination(srcPart, newDrawingPart, drawingXDoc.Root, skipDanglingRelationships: true);
+                }
+                using (var s = newDrawingPart.GetStream())
+                    drawingXDoc.Save(s);
+            }
         }
 
         private static XAttribute GetXmlSpaceAttribute(string textOfTextElement)
