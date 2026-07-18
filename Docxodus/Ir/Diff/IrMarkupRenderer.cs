@@ -259,10 +259,14 @@ internal static class IrMarkupRenderer
                 // accept AND reject), left in w:del/w:ins for a wholly deleted/inserted field.
                 NormalizeFields(main);
 
-                // Carry right-only styles + numbering into the left-based package.
-                if (main.StyleDefinitionsPart != null &&
-                    wDocRight.MainDocumentPart?.StyleDefinitionsPart != null)
-                    WmlComparer.CopyMissingStylesFromOneDocToAnother(wDocRight, wDoc);
+                // Style-definition provenance (decoded from the Word-compare oracle corpus): the result
+                // keeps the LEFT document's styles part — docDefaults/theme/latentStyles byte-identical
+                // to the left — while each style whose RAW definition formatting differs between the
+                // sides has its CURRENT payload updated to the RIGHT document's EFFECTIVE formatting,
+                // with the left's effective payload archived in a tracked rPrChange/pPrChange INSIDE
+                // the style definition. Right-only styles are copied in. Numbering keeps the existing
+                // missing-copy treatment (numId collisions are remapped there, not overwritten).
+                TrackStyleDefinitionChanges(wDoc, wDocRight, state);
                 WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRight, wDoc);
             }
             return streamDoc.GetModifiedWmlDocument();
@@ -3962,6 +3966,160 @@ internal static class IrMarkupRenderer
     /// hyperlinks, external links, and data-part references alike). Deterministic: the first free
     /// <c>rIdRemap{n}</c> (n ascending from 1). The dedicated <c>rIdRemap</c> prefix avoids colliding with the
     /// document's own <c>rId{n}</c> numbering — the very collision this remap exists to resolve.</summary>
+    /// <summary>
+    /// Mirror Word compare's style-definition treatment into the LEFT-based output package (decoded
+    /// from the Word-compare oracle corpus — see DocxDiffStyleProvenanceTests): keep the left styles
+    /// part (docDefaults et al.), copy right-only styles, and for every shared style whose RAW
+    /// definition formatting differs (rsid noise ignored), rewrite the CURRENT payload to the right's
+    /// EFFECTIVE formatting (docDefaults + basedOn chain + own definition) while archiving the left's
+    /// effective payload in a tracked <c>w:rPrChange</c>/<c>w:pPrChange</c> inside the definition —
+    /// so the redline renders with the revised document's look and the change history carries the
+    /// original. No-ops gracefully when either side lacks a styles part.
+    /// </summary>
+    private static void TrackStyleDefinitionChanges(
+        WordprocessingDocument wDoc, WordprocessingDocument wDocRight, RenderState state)
+    {
+        if (wDoc.MainDocumentPart?.StyleDefinitionsPart is not { } leftStyles ||
+            wDocRight.MainDocumentPart?.StyleDefinitionsPart is not { } rightStyles)
+            return;
+
+        var outXDoc = leftStyles.GetXDocument();
+        if (outXDoc.Root is not { } root || rightStyles.GetXDocument().Root is not { } rightRoot)
+            return;
+        var leftOriginalRoot = new XElement(root);   // frozen snapshot for left-effective resolution
+
+        foreach (var rightStyle in rightRoot.Elements(W.style))
+        {
+            var type = (string?)rightStyle.Attribute(W.type);
+            var styleId = (string?)rightStyle.Attribute(W.styleId);
+            var leftStyle = root.Elements(W.style).FirstOrDefault(st =>
+                (string?)st.Attribute(W.type) == type &&
+                (string?)st.Attribute(W.styleId) == styleId);
+            if (leftStyle is null)
+            {
+                var cloned = new XElement(rightStyle);
+                cloned.Attribute(W._default)?.Remove();
+                root.Add(cloned);
+                continue;
+            }
+            if (styleId is null || StyleDefinitionPayloadsEqual(leftStyle, rightStyle))
+                continue;
+
+            var (rightPPr, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId);
+            var (leftPPr, leftRPr) = ResolveEffectiveStyleFormatting(leftOriginalRoot, type, styleId);
+
+            // Rewrite pPr: current = right-effective props + pPrChange carrying the left-effective.
+            leftStyle.Elements(W.pPr).Remove();
+            leftStyle.Elements(W.rPr).Remove();
+            var newPPr = new XElement(W.pPr, rightPPr.Elements(),
+                new XElement(W.pPrChange, state.RevisionAttributes(),
+                    new XElement(W.pPr, leftPPr.Elements())));
+            var newRPr = new XElement(W.rPr, rightRPr.Elements(),
+                new XElement(W.rPrChange, state.RevisionAttributes(),
+                    new XElement(W.rPr, leftRPr.Elements())));
+            // Schema: pPr precedes rPr, both after the leading metadata children and before any
+            // table-style children (w:tblPr/w:trPr/w:tcPr/w:tblStylePr).
+            var anchor = leftStyle.Elements().FirstOrDefault(e =>
+                e.Name == W.tblPr || e.Name == W.trPr || e.Name == W.tcPr || e.Name == W.tblStylePr);
+            if (anchor is null)
+            {
+                leftStyle.Add(newPPr);
+                leftStyle.Add(newRPr);
+            }
+            else
+            {
+                anchor.AddBeforeSelf(newPPr);
+                anchor.AddBeforeSelf(newRPr);
+            }
+        }
+        leftStyles.PutXDocument();
+    }
+
+    /// <summary>The comparable formatting payload of a style definition: its direct <c>w:pPr</c> and
+    /// <c>w:rPr</c> (minus any existing tracked change and rsid noise), canonicalized. Two styles with
+    /// equal payloads are the same definition for compare purposes even when the documents'
+    /// docDefaults differ — Word records no style change for them.</summary>
+    private static bool StyleDefinitionPayloadsEqual(XElement a, XElement b)
+    {
+        static XElement Normalize(XName name, XElement? props)
+        {
+            var clone = props is null ? new XElement(name) : new XElement(props);
+            clone.Descendants().Where(d => d.Name == W.rsid || d.Name == W.pPrChange || d.Name == W.rPrChange)
+                .Remove();
+            clone.DescendantsAndSelf().Attributes().Where(at => at.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal))
+                .Remove();
+            return clone;
+        }
+        return XNode.DeepEquals(Normalize(W.pPr, a.Element(W.pPr)), Normalize(W.pPr, b.Element(W.pPr))) &&
+               XNode.DeepEquals(Normalize(W.rPr, a.Element(W.rPr)), Normalize(W.rPr, b.Element(W.rPr)));
+    }
+
+    /// <summary>
+    /// Resolve a style's EFFECTIVE direct formatting within one styles part: docDefaults underlaid,
+    /// then the basedOn chain overlaid outermost-first, then the style's own definition. Same-named
+    /// property elements replace; <c>w:rFonts</c> merges attribute-wise (matching how Word materializes
+    /// the resolved fonts into a tracked style update). Tracked-change and rsid noise excluded.
+    /// </summary>
+    private static (XElement PPr, XElement RPr) ResolveEffectiveStyleFormatting(
+        XElement stylesRoot, string? type, string styleId)
+    {
+        var accPPr = new XElement(W.pPr,
+            stylesRoot.Element(W.docDefaults)?.Element(W.pPrDefault)?.Element(W.pPr)?.Elements());
+        var accRPr = new XElement(W.rPr,
+            stylesRoot.Element(W.docDefaults)?.Element(W.rPrDefault)?.Element(W.rPr)?.Elements());
+
+        var chain = new List<XElement>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var currentId = styleId;
+        while (currentId is not null && seen.Add(currentId) && chain.Count < 16)
+        {
+            var style = stylesRoot.Elements(W.style).FirstOrDefault(st =>
+                (string?)st.Attribute(W.type) == type &&
+                (string?)st.Attribute(W.styleId) == currentId);
+            if (style is null)
+                break;
+            chain.Add(style);
+            currentId = (string?)style.Element(W.basedOn)?.Attribute(W.val);
+        }
+        chain.Reverse();   // outermost ancestor first, the style itself last
+
+        foreach (var style in chain)
+        {
+            OverlayProps(accPPr, style.Element(W.pPr));
+            OverlayProps(accRPr, style.Element(W.rPr));
+        }
+        StripStyleNoise(accPPr);
+        StripStyleNoise(accRPr);
+        return (accPPr, accRPr);
+    }
+
+    private static void OverlayProps(XElement acc, XElement? layer)
+    {
+        if (layer is null)
+            return;
+        foreach (var prop in layer.Elements())
+        {
+            if (prop.Name == W.pPrChange || prop.Name == W.rPrChange || prop.Name == W.rsid)
+                continue;
+            var existing = acc.Element(prop.Name);
+            if (prop.Name == W.rFonts && existing is not null)
+            {
+                foreach (var at in prop.Attributes())
+                    existing.SetAttributeValue(at.Name, at.Value);
+                continue;
+            }
+            existing?.Remove();
+            acc.Add(new XElement(prop));
+        }
+    }
+
+    private static void StripStyleNoise(XElement props)
+    {
+        props.Descendants().Where(d => d.Name == W.rsid).Remove();
+        props.DescendantsAndSelf().Attributes()
+            .Where(at => at.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal)).Remove();
+    }
+
     /// <summary>Remove every <c>w:headerReference</c>/<c>w:footerReference</c> under
     /// <paramref name="bodyEl"/> whose <c>r:id</c> resolves to no relationship on
     /// <paramref name="main"/> (see the call site for why these arise and why removal is safe).</summary>
