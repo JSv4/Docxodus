@@ -141,4 +141,51 @@ public class DocxCompareTests
 
         Assert.True(WmlComparer.GetRevisions(output, settings).Count > 0);
     }
+
+    [Fact]
+    public void DocxDiffBranch_PreAcceptsInputRevisions_LikeWmlComparerAndWord()
+    {
+        // WmlComparer (and Microsoft Word's compare) treat tracked changes in the INPUTS as accepted
+        // before comparing — no input revision markup (or its author) survives into the redline body.
+        // Engine equivalence through DocxCompare requires the DocxDiff branch to behave identically,
+        // so the mapping sets PreAcceptInputRevisions (the raw DocxDiff API default remains opt-in).
+        static WmlDocument DocWithTrackedInsertion(string plain, string inserted)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                mainPart.Document = new Document(new Body(new Paragraph(
+                    new Run(new Text(plain) { Space = SpaceProcessingModeValues.Preserve }),
+                    new InsertedRun(
+                        new Run(new Text(inserted) { Space = SpaceProcessingModeValues.Preserve }))
+                    {
+                        Author = "PriorReviewer",
+                        Id = "99",
+                        Date = System.DateTime.Parse("2020-06-01T00:00:00Z",
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.AdjustToUniversal),
+                    })));
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new Styles(new DocDefaults(
+                    new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                    new ParagraphPropertiesDefault()));
+                mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("tracked.docx", stream.ToArray());
+        }
+
+        var left = DocWithTrackedInsertion("Base text ", "with a prior insertion");
+        var right = Doc("Base text with a prior insertion plus fresh words");
+        var settings = new WmlComparerSettings { AuthorForRevisions = "Bench", DateTimeForRevisions = FixedDate };
+
+        var output = DocxCompare.Compare(left, right, ComparisonEngine.DocxDiff, settings);
+
+        using var stream = new MemoryStream(output.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var bodyXml = wdoc.MainDocumentPart!.Document.Body!.OuterXml;
+        Assert.DoesNotContain("PriorReviewer", bodyXml);
+    }
 }

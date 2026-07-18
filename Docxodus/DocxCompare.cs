@@ -60,6 +60,12 @@ public static class DocxCompare
         DetectMoves = settings.DetectMoves,
         MoveSimilarityThreshold = settings.MoveSimilarityThreshold,
         MoveMinimumWordCount = settings.MoveMinimumWordCount,
+        // Engine equivalence: WmlComparer.Compare accepts BOTH inputs' pre-existing tracked
+        // revisions before comparing (Microsoft Word's compare does the same), so the DocxDiff
+        // branch must too — otherwise inputs that already carry revisions diff their raw
+        // revision-bearing surface and emit whole-document churn. The raw DocxDiff API keeps
+        // its opt-in default; this is the WmlComparer-parity surface.
+        PreAcceptInputRevisions = true,
     };
 
     /// <summary>
