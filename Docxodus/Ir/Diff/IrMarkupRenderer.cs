@@ -276,6 +276,18 @@ internal static class IrMarkupRenderer
                 // synthesizes a decimal multilevel definition on open — its compare oracle carries
                 // exactly that. Mirror the repair so numbered lists survive into the redline.
                 RepairDanglingNumberingReferences(main);
+                // Word always writes a settings part; a package without one makes LibreOffice fall
+                // back to its own default tab stop (≈709 twips) instead of Word's 720, drifting every
+                // tab-positioned run cumulatively. Backfill a minimal settings part with the 720-twip
+                // default so tab metrics match the oracle (tool-generated corpus inputs ship without).
+                if (main.DocumentSettingsPart is null)
+                {
+                    var settingsPart = main.AddNewPart<DocumentSettingsPart>();
+                    settingsPart.GetXDocument().Add(new XElement(W.settings,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        new XElement(W.defaultTabStop, new XAttribute(W.val, 720))));
+                    settingsPart.PutXDocument();
+                }
             }
             return streamDoc.GetModifiedWmlDocument();
         }

@@ -110,6 +110,45 @@ public class DocxDiffNumberingRepairTests
     }
 
     [Fact]
+    public void MissingSettingsPart_IsBackfilledWithWordDefaultTabStop()
+    {
+        // A package with no word/settings.xml makes LibreOffice fall back to its own default tab
+        // stop (1.25cm ≈ 709 twips) instead of Word's 720, drifting every tab-positioned run a
+        // little further per stop. Word always writes a settings part; the renderer backfills one
+        // carrying the 720-twip default so tab metrics match the oracle.
+        static WmlDocument NoSettingsDoc(string text)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new Styles(new DocDefaults(
+                    new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                    new ParagraphPropertiesDefault()));
+                doc.Save();   // deliberately NO DocumentSettingsPart
+            }
+            return new WmlDocument("nosettings.docx", stream.ToArray());
+        }
+
+        var left = NoSettingsDoc("Old words here.");
+        var right = NoSettingsDoc("Entirely different new words.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        using var s = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(s, false);
+        var settings = wdoc.MainDocumentPart!.DocumentSettingsPart;
+        Assert.NotNull(settings);
+        using var reader = new StreamReader(settings!.GetStream());
+        var xml = XDocument.Parse(reader.ReadToEnd());
+        var tab = xml.Root!.Element(W + "defaultTabStop");
+        Assert.Equal("720", (string?)tab?.Attribute(W + "val"));
+    }
+
+    [Fact]
     public void ResolvedNumIds_AreLeftUntouched()
     {
         // Both sides plain, no numbering anywhere — the repair must not invent a numbering part.
