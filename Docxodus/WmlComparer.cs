@@ -2146,11 +2146,17 @@ namespace Docxodus
         // internal (was private): reused by Docxodus.Ir.Diff.IrMarkupRenderer for numbering continuity
         // (esp. legal-numbering preservation, GitHub #1634) when right-only content carries numbering the
         // LEFT package lacks.
-        internal static void CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
+        /// <summary>Copies numbering definitions missing from <paramref name="wDocTo"/> out of
+        /// <paramref name="wDocFrom"/>. Returns the numId translation table for source definitions
+        /// that had to be RENUMBERED around an id collision (source numId → destination numId);
+        /// references to those ids in content cloned from the source document must be rebound by
+        /// the caller — the ids they carry resolve to the destination's (different) definition.</summary>
+        internal static Dictionary<int, int> CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
         {
+            var numIdMap = new Dictionary<int, int>();
             var fromNumberingPart = wDocFrom.MainDocumentPart.NumberingDefinitionsPart;
             if (fromNumberingPart == null)
-                return;
+                return numIdMap;
 
             var toNumberingPart = wDocTo.MainDocumentPart.NumberingDefinitionsPart;
             XDocument toNumberingXDoc;
@@ -2274,6 +2280,7 @@ namespace Docxodus
                     if (abstractNumIdElement != null)
                         abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
                     AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
+                    numIdMap[fromNumId.Value] = maxNumId;
                 }
                 else
                 {
@@ -2290,6 +2297,7 @@ namespace Docxodus
             }
 
             toNumberingPart.PutXDocument(toNumberingXDoc);
+            return numIdMap;
         }
 
         /// <summary>

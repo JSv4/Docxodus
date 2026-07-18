@@ -270,7 +270,16 @@ internal static class IrMarkupRenderer
                 // the style definition. Right-only styles are copied in. Numbering keeps the existing
                 // missing-copy treatment (numId collisions are remapped there, not overwritten).
                 TrackStyleDefinitionChanges(wDoc, wDocRight, state);
-                WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRight, wDoc);
+                // The output's surviving body is RIGHT-sourced (equal/inserted/modified blocks emit
+                // the right document's XML) while the numbering part is seeded from the LEFT. When
+                // a numId collides across the sides with different content, the copy renumbers the
+                // right's definition to a fresh id — rebind every surviving reference to it, or
+                // right-sourced lists silently resolve against the left's definition (decimal
+                // rendering as the left's bullets). Deleted (left-sourced) paragraphs — the ones
+                // whose paragraph mark carries w:del — keep the left id untouched, as do archived
+                // left properties inside *Change elements.
+                var numIdMap = WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRight, wDoc);
+                RebindRightNumberingReferences(main, numIdMap);
                 // Word-parity repair: a body numPr referencing a numId with NO definition (tool-made
                 // corpus inputs ship this) renders as a plain paragraph in LibreOffice, while Word
                 // synthesizes a decimal multilevel definition on open — its compare oracle carries
@@ -4310,6 +4319,41 @@ internal static class IrMarkupRenderer
             nextAbstract++;
         }
         numberingPart.PutXDocument();
+    }
+
+    /// <summary>Rebind right-sourced <c>w:numId</c> references to the ids their definitions were
+    /// renumbered to by the numbering copy's collision handling. Left-sourced references are
+    /// skipped: paragraphs whose mark is deleted (<c>pPr/rPr/w:del</c>) and archived left
+    /// properties inside <c>*Change</c> elements legitimately reference the left's ids. Covers the
+    /// main document and every header/footer story part.</summary>
+    private static void RebindRightNumberingReferences(MainDocumentPart main, Dictionary<int, int> numIdMap)
+    {
+        if (numIdMap.Count == 0)
+            return;
+        var parts = new List<OpenXmlPart> { main };
+        parts.AddRange(main.HeaderParts);
+        parts.AddRange(main.FooterParts);
+        foreach (var part in parts)
+        {
+            var xDoc = part.GetXDocument();
+            var changed = false;
+            foreach (var numIdEl in xDoc.Descendants(W.numPr).Elements(W.numId).ToList())
+            {
+                if (numIdEl.Ancestors().Any(a => a.Name.LocalName.EndsWith("Change", StringComparison.Ordinal)))
+                    continue;
+                var paragraph = numIdEl.Ancestors(W.p).FirstOrDefault();
+                if (paragraph?.Element(W.pPr)?.Element(W.rPr)?.Element(W.del) is not null)
+                    continue;
+                if (int.TryParse((string)numIdEl.Attribute(W.val), out var id) &&
+                    numIdMap.TryGetValue(id, out var mapped))
+                {
+                    numIdEl.SetAttributeValue(W.val, mapped);
+                    changed = true;
+                }
+            }
+            if (changed)
+                part.PutXDocument();
+        }
     }
 
     /// <summary>When the output styles part lacks <c>w:docDefaults</c> (or the whole part is
