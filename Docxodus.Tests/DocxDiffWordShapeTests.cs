@@ -1,0 +1,200 @@
+#nullable enable
+
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using Docxodus;
+using Xunit;
+using WTable = DocumentFormat.OpenXml.Wordprocessing.Table;
+using WTableCell = DocumentFormat.OpenXml.Wordprocessing.TableCell;
+using WTableRow = DocumentFormat.OpenXml.Wordprocessing.TableRow;
+
+namespace Docxodus.Tests;
+
+/// <summary>
+/// Word-shaped arrangement of replace gaps in <see cref="DocxDiff.Compare"/> output. At a gap where
+/// old blocks are deleted and new blocks inserted, Microsoft Word's own compare emits the INSERTED
+/// content first and the deleted content after it; the legacy shape (deletions first) inverts the
+/// entire page layout on heavily-rewritten documents. The reorder is a pure projection change: the
+/// edit script, revision semantics, and the accept ≡ right / reject ≡ left contract are unchanged.
+/// </summary>
+public class DocxDiffWordShapeTests
+{
+    private static WmlDocument Doc(params string[] paragraphs)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(
+                paragraphs.Select(text => new Paragraph(new Run(new Text(text))))));
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new DocDefaults(
+                new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                    new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                new ParagraphPropertiesDefault()));
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("test.docx", stream.ToArray());
+    }
+
+    private static List<string> BodyTexts(WmlDocument doc)
+    {
+        using var stream = new MemoryStream(doc.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var body = wdoc.MainDocumentPart?.Document.Body;
+        return body is null
+            ? new List<string>()
+            : body.Descendants<Paragraph>().Select(p => p.InnerText).ToList();
+    }
+
+    /// <summary>Per body paragraph: "ins" (has inserted runs, no deleted), "del" (deleted, no
+    /// inserted), "mixed", or "plain" — with the paragraph's visible text.</summary>
+    private static List<(string State, string Text)> ParagraphStates(WmlDocument doc)
+    {
+        using var stream = new MemoryStream(doc.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var body = wdoc.MainDocumentPart!.Document.Body!;
+        var result = new List<(string, string)>();
+        foreach (var p in body.Elements<Paragraph>())
+        {
+            var hasIns = p.Descendants<InsertedRun>().Any();
+            var hasDel = p.Descendants<DeletedRun>().Any();
+            var state = hasIns && hasDel ? "mixed" : hasIns ? "ins" : hasDel ? "del" : "plain";
+            result.Add((state, p.InnerText));
+        }
+        return result;
+    }
+
+    [Fact]
+    public void TotalRewrite_InsertedContentRendersBeforeDeletedContent()
+    {
+        // Zero token overlap and multi-block residue on both sides → the aligner lowers the whole
+        // gap to Deletes + Inserts. Word's arrangement: new content first, struck old content after.
+        var left = Doc("Alpha ancient text.", "Bravo bygone text.");
+        var right = Doc("Neon fresh words.", "Quantum modern words.", "Zephyr future words.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var states = ParagraphStates(result);
+        var insIdx = states.FindIndex(s => s.State == "ins");
+        var delIdx = states.FindIndex(s => s.State == "del");
+        Assert.True(insIdx >= 0 && delIdx >= 0, $"expected both ins and del paragraphs, got: {string.Join(", ", states)}");
+        Assert.True(insIdx < delIdx,
+            $"inserted paragraphs must precede deleted ones (Word arrangement); got: {string.Join(", ", states)}");
+
+        // The three inserted paragraphs keep the RIGHT document's order; deletions keep LEFT order.
+        var insTexts = states.Where(s => s.State == "ins").Select(s => s.Text).ToList();
+        var delTexts = states.Where(s => s.State == "del").Select(s => s.Text).ToList();
+        Assert.Equal(new List<string> { "Neon fresh words.", "Quantum modern words.", "Zephyr future words." }, insTexts);
+        Assert.Equal(new List<string> { "Alpha ancient text.", "Bravo bygone text." }, delTexts);
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
+    public void MidDocumentReplaceGap_InsertsBeforeDeletes_BetweenUnchangedSpine()
+    {
+        var left = Doc("Shared opening paragraph.", "Alpha ancient text.", "Bravo bygone text.", "Shared closing paragraph.");
+        var right = Doc("Shared opening paragraph.", "Neon fresh words.", "Quantum modern words.", "Shared closing paragraph.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var states = ParagraphStates(result);
+        var expected = new List<(string, string)>
+        {
+            ("plain", "Shared opening paragraph."),
+            ("ins", "Neon fresh words."),
+            ("ins", "Quantum modern words."),
+            ("del", "Alpha ancient text."),
+            ("del", "Bravo bygone text."),
+            ("plain", "Shared closing paragraph."),
+        };
+        Assert.Equal(expected, states);
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
+    public void PureInsertAndPureDeleteGaps_AreUnaffected()
+    {
+        // Insert-only gap: no deletes to leapfrog; order = spine, ins, spine.
+        var left = Doc("First shared.", "Last shared.");
+        var right = Doc("First shared.", "Brand new middle.", "Last shared.");
+        var insResult = DocxDiff.Compare(left, right);
+        Assert.Equal(
+            new List<(string, string)> { ("plain", "First shared."), ("ins", "Brand new middle."), ("plain", "Last shared.") },
+            ParagraphStates(insResult));
+
+        // Delete-only gap: order = spine, del, spine.
+        var delResult = DocxDiff.Compare(right, left);
+        Assert.Equal(
+            new List<(string, string)> { ("plain", "First shared."), ("del", "Brand new middle."), ("plain", "Last shared.") },
+            ParagraphStates(delResult));
+    }
+
+    [Fact]
+    public void ReplaceGapInsideTableCell_InsertsBeforeDeletes()
+    {
+        static WmlDocument TableDoc(params string[] cellParagraphs)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                var cell = new WTableCell(cellParagraphs.Select(t => new Paragraph(new Run(new Text(t)))));
+                var table = new WTable(
+                    new TableProperties(new TableBorders(
+                        new TopBorder { Val = BorderValues.Single, Size = 4 },
+                        new BottomBorder { Val = BorderValues.Single, Size = 4 })),
+                    new TableGrid(new GridColumn()),
+                    new WTableRow(cell));
+                mainPart.Document = new Document(new Body(table, new Paragraph()));
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new Styles(new DocDefaults(
+                    new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                    new ParagraphPropertiesDefault()));
+                mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("table.docx", stream.ToArray());
+        }
+
+        var left = TableDoc("Anchor cell line.", "Alpha ancient text.", "Bravo bygone text.");
+        var right = TableDoc("Anchor cell line.", "Neon fresh words.", "Quantum modern words.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        using var stream = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var cellOut = wdoc.MainDocumentPart!.Document.Body!.Descendants<WTableCell>().Single();
+        var cellStates = cellOut.Elements<Paragraph>()
+            .Select(p =>
+            {
+                var hasIns = p.Descendants<InsertedRun>().Any();
+                var hasDel = p.Descendants<DeletedRun>().Any();
+                return hasIns && hasDel ? "mixed" : hasIns ? "ins" : hasDel ? "del" : "plain";
+            })
+            .ToList();
+        var insIdx = cellStates.FindIndex(s => s == "ins");
+        var delIdx = cellStates.FindIndex(s => s == "del");
+        Assert.True(insIdx >= 0 && delIdx >= 0, $"expected ins and del cell paragraphs, got: {string.Join(",", cellStates)}");
+        Assert.True(insIdx < delIdx, $"cell inserts must precede cell deletes; got: {string.Join(",", cellStates)}");
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+}

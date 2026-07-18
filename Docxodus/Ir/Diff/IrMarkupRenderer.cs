@@ -125,10 +125,10 @@ internal static class IrMarkupRenderer
 
         var state = new RenderState(irLeft, irRight, settings);
 
-        // Assemble the new body's block-level children (w:p / w:tbl), in script order.
+        // Assemble the new body's block-level children (w:p / w:tbl), in script order with Word's
+        // replace-gap arrangement (inserted blocks before deleted ones inside each gap).
         var bodyBlocks = new List<XElement>();
-        foreach (var op in script.Operations)
-            RenderBlockOp(op, state, bodyBlocks);
+        RenderBlockOpsWordShaped(script.Operations, state, bodyBlocks);
 
         // SimplifyMoveMarkup (Task 4): rewrite native move markup as del/ins + strip range markers, a
         // post-pass mirroring WmlComparer.SimplifyMoveMarkupToDelIns (a Word-compat workaround). Operates on
@@ -295,6 +295,44 @@ internal static class IrMarkupRenderer
     }
 
     // ----------------------------------------------------------------- block-op dispatch
+
+    /// <summary>
+    /// Render a sequence of block ops with Microsoft Word's replace-gap arrangement: within a
+    /// contiguous run of pure <see cref="IrEditOpKind.DeleteBlock"/>/<see cref="IrEditOpKind.InsertBlock"/>
+    /// ops (an aligner "replace gap"), the INSERTED blocks render before the deleted ones — Word's own
+    /// compare emits new content first and the struck old content after it. A pure projection change:
+    /// deletes are buffered until the run ends, inserts within the run leapfrog them; every other op kind
+    /// (Equal/FormatOnly/Modify/Move/Split/Merge) flushes the buffer and renders in script order, so
+    /// single-sided gaps and non-gap ops are byte-identical to the unbuffered loop. The accept ≡ right /
+    /// reject ≡ left contract is unaffected (each block's own revision markup is unchanged).
+    /// </summary>
+    internal static void RenderBlockOpsWordShaped(
+        IEnumerable<IrEditOp> ops, RenderState state, List<XElement> sink)
+    {
+        var pendingDeletes = new List<IrEditOp>();
+        void FlushDeletes()
+        {
+            foreach (var d in pendingDeletes)
+                RenderBlockOp(d, state, sink);
+            pendingDeletes.Clear();
+        }
+        foreach (var op in ops)
+        {
+            if (op.Kind == IrEditOpKind.DeleteBlock)
+            {
+                pendingDeletes.Add(op);
+                continue;
+            }
+            if (op.Kind == IrEditOpKind.InsertBlock && pendingDeletes.Count > 0)
+            {
+                RenderBlockOp(op, state, sink);   // insert leapfrogs the buffered deletes of its gap
+                continue;
+            }
+            FlushDeletes();
+            RenderBlockOp(op, state, sink);
+        }
+        FlushDeletes();
+    }
 
     internal static void RenderBlockOp(IrEditOp op, RenderState state, List<XElement> sink)
     {
@@ -690,8 +728,7 @@ internal static class IrMarkupRenderer
             {
                 // Render the cell's block ops with the same dispatch the body uses (paragraph token diffs, etc.).
                 var cellSink = new List<XElement>();
-                foreach (var bop in cellOp.BlockOps)
-                    RenderBlockOp(bop, state, cellSink);
+                RenderBlockOpsWordShaped(cellOp.BlockOps, state, cellSink);
                 // A cell must contain at least one block-level child; if the ops produced none, keep the right
                 // cell's content verbatim so the table stays schema-valid.
                 if (cellSink.Count == 0)
@@ -1233,8 +1270,7 @@ internal static class IrMarkupRenderer
 
             // Render the note's block ops to a fresh block list (same dispatch as the body).
             var noteBlocks = new List<XElement>();
-            foreach (var op in diff.Ops)
-                RenderBlockOp(op, state, noteBlocks);
+            RenderBlockOpsWordShaped(diff.Ops, state, noteBlocks);
             if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
                 foreach (var b in noteBlocks)
                     SimplifyMoveMarkup(b);
@@ -1353,8 +1389,7 @@ internal static class IrMarkupRenderer
 
         int clonesBefore = state.RightSourcedClones.Count;
         var blocks = new List<XElement>();
-        foreach (var op in diff.Ops)
-            RenderBlockOp(op, state, blocks);
+        RenderBlockOpsWordShaped(diff.Ops, state, blocks);
         if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
             foreach (var b in blocks)
                 SimplifyMoveMarkup(b);
@@ -1428,8 +1463,7 @@ internal static class IrMarkupRenderer
         // Slice the clone registry around this story's render so ONLY its clones import into this part.
         int clonesBefore = state.RightSourcedClones.Count;
         var blocks = new List<XElement>();
-        foreach (var op in diff.Ops)
-            RenderBlockOp(op, state, blocks);
+        RenderBlockOpsWordShaped(diff.Ops, state, blocks);
         if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
             foreach (var b in blocks)
                 SimplifyMoveMarkup(b);
