@@ -965,9 +965,10 @@ internal static class IrReader
                     _fieldDepth--;
                     if (_fieldDepth == 0)
                     {
-                        // Outermost field closed: emit one IrFieldRun. CachedResult is empty for
-                        // instruction-only fields (no separate seen).
-                        EmitInline(new IrFieldRun(
+                        // Outermost field closed: emit one field inline (a HYPERLINK instruction
+                        // canonicalizes to IrHyperlink — see CanonicalizeField). CachedResult is
+                        // empty for instruction-only fields (no separate seen).
+                        EmitInline(CanonicalizeField(
                             _instruction.ToString(),
                             IrNodeList.From(new List<IrInline>(_result))));
                         _inResult = false;
@@ -1009,7 +1010,7 @@ internal static class IrReader
                     // to _output. The result text now reaches both the rendered markdown and the
                     // TextPreview, matching the oracle's raw Descendants(w:t) view.
                     _fieldDepth = 0;
-                    EmitInline(new IrFieldRun(
+                    EmitInline(CanonicalizeField(
                         _instruction.ToString(),
                         IrNodeList.From(new List<IrInline>(_result))));
                 }
@@ -1360,12 +1361,87 @@ internal static class IrReader
     /// <summary>
     /// N9: promote a <c>w:fldSimple</c> to an <see cref="IrFieldRun"/>. The <c>@w:instr</c> is the
     /// instruction string; the child <c>w:r</c> content is walked normally into the cached result.
+    /// A <c>HYPERLINK</c> instruction canonicalizes to <see cref="IrHyperlink"/> instead — see
+    /// <see cref="CanonicalizeField"/>.
     /// </summary>
-    private static IrFieldRun BuildFldSimple(XElement fldSimple, ReadContext ctx)
+    private static IrInline BuildFldSimple(XElement fldSimple, ReadContext ctx)
     {
         var instruction = (string?)fldSimple.Attribute(W + "instr") ?? "";
         var result = WalkInlines(fldSimple.Elements(), ctx);
-        return new IrFieldRun(instruction, IrNodeList.From(result)) { IsSimpleField = true };
+        return CanonicalizeField(instruction, IrNodeList.From(result), isSimpleField: true);
+    }
+
+    /// <summary>
+    /// Canonicalize a parsed field to its IR inline. A <c>HYPERLINK</c> field IS a hyperlink — the
+    /// <c>w:hyperlink</c> element is merely its modern serialization, and Word Compare treats the
+    /// two forms as equal when target and display text match. Modeling the field form as
+    /// <see cref="IrHyperlink"/> makes both forms hash (bracketed target sentinels) and tokenize
+    /// (<c>lnk:</c> MatchKey suffix) identically, so display-identical links never mismatch — and a
+    /// target-only change on the FIELD form becomes detectable at all (the instruction is otherwise
+    /// never tokenized). Every other instruction stays an <see cref="IrFieldRun"/>.
+    /// </summary>
+    private static IrInline CanonicalizeField(string instruction, IrNodeList<IrInline> result, bool isSimpleField = false)
+    {
+        if (TryParseHyperlinkInstruction(instruction, out var target))
+            return new IrHyperlink(target, InternalTarget: null, result);
+        return new IrFieldRun(instruction, result) { IsSimpleField = isSimpleField };
+    }
+
+    /// <summary>
+    /// Parse a <c>HYPERLINK</c> field instruction to the same target convention
+    /// <see cref="BuildHyperlink"/> produces for the element form: the URL argument verbatim, an
+    /// internal <c>\l</c> anchor as <c>#anchor</c> (URL + <c>#anchor</c> when both present).
+    /// Argument-taking switches (<c>\l \o \t \m</c>) consume the following quoted token so a screen
+    /// tip is never mistaken for the URL. Returns false for a target-less instruction.
+    /// </summary>
+    private static bool TryParseHyperlinkInstruction(string instruction, out string target)
+    {
+        target = string.Empty;
+        var s = instruction.Trim();
+        if (!s.StartsWith("HYPERLINK", StringComparison.OrdinalIgnoreCase))
+            return false;
+        string? url = null, anchor = null;
+        string? pendingSwitch = null;
+        int i = "HYPERLINK".Length;
+        while (i < s.Length)
+        {
+            while (i < s.Length && char.IsWhiteSpace(s[i])) i++;
+            if (i >= s.Length)
+                break;
+            if (s[i] == '\\' && i + 1 < s.Length)
+            {
+                int end = i + 1;
+                while (end < s.Length && !char.IsWhiteSpace(s[end]) && s[end] != '"') end++;
+                var sw = s.Substring(i + 1, end - i - 1).ToLowerInvariant();
+                pendingSwitch = sw is "l" or "o" or "t" or "m" ? sw : null;
+                i = end;
+                continue;
+            }
+            string token;
+            if (s[i] == '"')
+            {
+                int end = s.IndexOf('"', i + 1);
+                if (end < 0) end = s.Length;
+                token = s.Substring(i + 1, end - i - 1);
+                i = end + 1;
+            }
+            else
+            {
+                int end = i;
+                while (end < s.Length && !char.IsWhiteSpace(s[end])) end++;
+                token = s.Substring(i, end - i);
+                i = end;
+            }
+            if (pendingSwitch == "l")
+                anchor ??= token;
+            else if (pendingSwitch is null)
+                url ??= token;
+            pendingSwitch = null;
+        }
+        if (url is null && anchor is null)
+            return false;
+        target = url is null ? "#" + anchor : anchor is null ? url : url + "#" + anchor;
+        return true;
     }
 
     /// <summary>
