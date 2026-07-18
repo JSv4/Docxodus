@@ -84,25 +84,33 @@ public class DocxDiffNumberingRemapTests
     }
 
     [Fact]
-    public void CollidingNumId_SurvivingListRebindsToRightDefinition()
+    public void CollidingNumId_InsertedListRebindsToRightDefinition_EqualKeepsLeft()
     {
-        // Same numId 1 on both sides, different definitions: left bullet, right decimal.
-        // The list text survives (equal); the surviving paragraphs must resolve to DECIMAL.
+        // Same numId 1 on both sides, different definitions: left bullet, right decimal. Word does
+        // not compare numbering definitions — EQUAL paragraphs keep the left's id (bullet), but a
+        // paragraph INSERTED from the right must resolve to the right's renumbered definition
+        // (decimal), not silently rebind onto the left's colliding id.
         var left = NumberedDoc("bullet", "alpha item one", "beta item two", "gamma item three");
-        var right = NumberedDoc("decimal", "alpha item one", "beta item two", "gamma item three");
+        var right = NumberedDoc("decimal", "alpha item one", "beta item two", "gamma item three",
+            "delta item four entirely new");
 
         var result = DocxDiff.Compare(left, right);
 
         var (main, numbering) = OpenParts(result);
-        var survivors = main.Descendants(W + "p")
-            .Where(p => p.Element(W + "pPr")?.Element(W + "rPr")?.Element(W + "del") is null)
-            .Select(p => (string?)p.Element(W + "pPr")?.Element(W + "numPr")?.Element(W + "numId")?.Attribute(W + "val"))
-            .Where(id => id is not null)
-            .Distinct()
-            .ToList();
-        Assert.NotEmpty(survivors);
-        foreach (var id in survivors)
+        var paras = main.Descendants(W + "p").ToList();
+        string? NumIdOf(XElement p) =>
+            (string?)p.Element(W + "pPr")?.Element(W + "numPr")?.Element(W + "numId")?.Attribute(W + "val");
+        bool IsInserted(XElement p) =>
+            p.Element(W + "pPr")?.Element(W + "rPr")?.Element(W + "ins") is not null ||
+            (p.Elements(W + "ins").Any() && !p.Elements(W + "r").Any() && !p.Elements(W + "del").Any());
+        var inserted = paras.Where(IsInserted).Select(NumIdOf).Where(id => id is not null).Distinct().ToList();
+        var equal = paras.Where(p => !IsInserted(p)).Select(NumIdOf).Where(id => id is not null).Distinct().ToList();
+        Assert.NotEmpty(inserted);
+        Assert.NotEmpty(equal);
+        foreach (var id in inserted)
             Assert.Equal("decimal", ResolveNumFmt(numbering, id!));
+        foreach (var id in equal)
+            Assert.Equal("bullet", ResolveNumFmt(numbering, id!));
     }
 
     [Fact]

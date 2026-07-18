@@ -4321,11 +4321,13 @@ internal static class IrMarkupRenderer
         numberingPart.PutXDocument();
     }
 
-    /// <summary>Rebind right-sourced <c>w:numId</c> references to the ids their definitions were
-    /// renumbered to by the numbering copy's collision handling. Left-sourced references are
-    /// skipped: paragraphs whose mark is deleted (<c>pPr/rPr/w:del</c>) and archived left
-    /// properties inside <c>*Change</c> elements legitimately reference the left's ids. Covers the
-    /// main document and every header/footer story part.</summary>
+    /// <summary>Rebind INSERTED paragraphs' <c>w:numId</c> references to the ids their (right-doc)
+    /// definitions were renumbered to by the numbering copy's collision handling. Word does not
+    /// compare numbering definitions, so equal and deleted paragraphs keep the left's id — only
+    /// content that exists solely in the right document must follow the right's definition (or it
+    /// silently renders with the left's colliding list format). Archived properties inside
+    /// <c>*Change</c> elements are never touched. Covers the main document and every header/footer
+    /// story part.</summary>
     private static void RebindRightNumberingReferences(MainDocumentPart main, Dictionary<int, int> numIdMap)
     {
         if (numIdMap.Count == 0)
@@ -4342,7 +4344,7 @@ internal static class IrMarkupRenderer
                 if (numIdEl.Ancestors().Any(a => a.Name.LocalName.EndsWith("Change", StringComparison.Ordinal)))
                     continue;
                 var paragraph = numIdEl.Ancestors(W.p).FirstOrDefault();
-                if (paragraph?.Element(W.pPr)?.Element(W.rPr)?.Element(W.del) is not null)
+                if (paragraph is null || !IsInsertedParagraph(paragraph))
                     continue;
                 if (int.TryParse((string)numIdEl.Attribute(W.val), out var id) &&
                     numIdMap.TryGetValue(id, out var mapped))
@@ -4354,6 +4356,24 @@ internal static class IrMarkupRenderer
             if (changed)
                 part.PutXDocument();
         }
+    }
+
+    /// <summary>A paragraph that exists only in the right document: inserted pilcrow
+    /// (<c>pPr/rPr/w:ins</c>), or all of its content inside <c>w:ins</c>/<c>w:moveTo</c> wrappers
+    /// with no live or deleted runs.</summary>
+    private static bool IsInsertedParagraph(XElement paragraph)
+    {
+        if (paragraph.Element(W.pPr)?.Element(W.rPr)?.Element(W.ins) is not null)
+            return true;
+        var hasIns = false;
+        foreach (var child in paragraph.Elements())
+        {
+            if (child.Name == W.ins || child.Name == W.moveTo)
+                hasIns = true;
+            else if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.del || child.Name == W.moveFrom)
+                return false;
+        }
+        return hasIns;
     }
 
     /// <summary>When the output styles part lacks <c>w:docDefaults</c> (or the whole part is
