@@ -1349,8 +1349,24 @@ namespace Docxodus
             documentElement = (XElement)AddEmptyParagraphToAnyEmptyCells(documentElement);
             documentElement.Descendants().Attributes().Where(a => a.Name == PT.UniqueId || a.Name == PT.RunIds).Remove();
             documentElement.Descendants(W.numPr).Where(np => !np.HasElements).Remove();
+            RemoveEmptyParagraphMarkShells(documentElement);
             XDocument newXDoc = new XDocument(documentElement);
             part.PutXDocument(newXDoc);
+        }
+
+        /// <summary>Removing a paragraph-mark revision (<c>w:pPr/w:rPr/w:ins</c> etc.) can leave an
+        /// empty <c>w:rPr</c> — and then an empty <c>w:pPr</c> — husk behind. Word's accept removes
+        /// the emptied shells; keeping them makes text-identical paragraphs from two processed
+        /// documents differ structurally, desynchronizing downstream block matching.</summary>
+        private static void RemoveEmptyParagraphMarkShells(XElement documentElement)
+        {
+            documentElement.Descendants(W.pPr)
+                .Elements(W.rPr)
+                .Where(r => !r.HasElements && !r.HasAttributes)
+                .Remove();
+            documentElement.Descendants(W.pPr)
+                .Where(p => !p.HasElements && !p.HasAttributes)
+                .Remove();
         }
 
         // Note that AcceptRevisionsForElement is an incomplete implementation.  It is not possible to accept all varieties of revisions
