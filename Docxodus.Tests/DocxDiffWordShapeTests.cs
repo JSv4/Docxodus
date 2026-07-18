@@ -201,6 +201,71 @@ public class DocxDiffWordShapeTests
     }
 
     [Fact]
+    public void IntraParagraphReplace_CoalescesAcrossFormatChangedWhitespace()
+    {
+        // When the two sides' run FORMATS differ (e.g. bold-italic → underline), the separator
+        // spaces between replaced words are FormatChanged spans, not Equal — they must still act as
+        // interior glue so the replacement coalesces into one ins region + one del region instead of
+        // a word-by-word zip ("All Bold three italic styles text …").
+        static WmlDocument FormattedDoc(bool underline, params string[] words)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                var runs = words.Select((w, i) =>
+                {
+                    var rPr = underline
+                        ? new RunProperties(new Underline { Val = UnderlineValues.Single })
+                        : new RunProperties(new Bold(), new Italic());
+                    var text = i == words.Length - 1 ? w : w + " ";
+                    return new Run(rPr, new Text(text) { Space = SpaceProcessingModeValues.Preserve });
+                });
+                mainPart.Document = new Document(new Body(new Paragraph(runs)));
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new Styles(new DocDefaults(
+                    new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                    new ParagraphPropertiesDefault()));
+                mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("fmt.docx", stream.ToArray());
+        }
+
+        var left = FormattedDoc(false, "Bold", "italic", "text", "creates", "emphasis");
+        var right = FormattedDoc(true, "All", "three", "styles", "combined", "create");
+
+        var result = DocxDiff.Compare(left, right);
+
+        using var stream2 = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream2, false);
+        var para = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>().Single();
+        var regions = new List<string>();
+        foreach (var child in para.ChildElements)
+        {
+            var kind = child switch
+            {
+                InsertedRun => "ins",
+                DeletedRun => "del",
+                Run => "plain",
+                _ => "",
+            };
+            if (kind == "")
+                continue;
+            if (regions.Count == 0 || regions[^1] != kind)
+                regions.Add(kind);
+        }
+        // ONE inserted region then ONE deleted region — no zip.
+        Assert.Equal(new List<string> { "ins", "del" }, regions);
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
     public void SeamMerge_SkipsParagraphsCarryingPageBreaks()
     {
         // Word keeps a deleted page break PAGINATING — the deleted paragraph stays standalone so the

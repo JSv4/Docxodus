@@ -3224,9 +3224,15 @@ internal static class IrMarkupRenderer
         IReadOnlyList<IrTokenOp> ops,
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens)
     {
-        bool IsInteriorWhitespaceEqual(IrTokenOp op)
+        // Interior separator: an Equal OR FormatChanged span whose raw text is pure whitespace on
+        // both sides. FormatChanged qualifies because when the two sides' run formats differ (a
+        // formatting-change rewrite), every separator space between replaced words is a
+        // FormatChanged span, not Equal — excluding it re-fragments the replacement into the
+        // word-by-word zip this pass exists to remove. The conversion emits each side's own bytes
+        // AND formatting (right space as w:ins, left space as w:del), so it is exact by construction.
+        bool IsInteriorWhitespaceSeparator(IrTokenOp op)
         {
-            if (op.Kind != IrTokenOpKind.Equal)
+            if (op.Kind != IrTokenOpKind.Equal && op.Kind != IrTokenOpKind.FormatChanged)
                 return false;
             var l = RawSpanText(leftTokens, op.LeftStart, op.LeftEnd);
             var r = RawSpanText(rightTokens, op.RightStart, op.RightEnd);
@@ -3254,7 +3260,7 @@ internal static class IrMarkupRenderer
                     lastChanged = j;
                     j++;
                 }
-                else if (IsInteriorWhitespaceEqual(ops[j]))
+                else if (IsInteriorWhitespaceSeparator(ops[j]))
                 {
                     j++;   // tentatively interior; trimmed below if nothing changed follows
                 }
@@ -3279,14 +3285,14 @@ internal static class IrMarkupRenderer
             {
                 if (g.Kind == IrTokenOpKind.Insert)
                     result.Add(g);
-                else if (g.Kind == IrTokenOpKind.Equal)
+                else if (g.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged)
                     result.Add(new IrTokenOp(IrTokenOpKind.Insert, g.LeftStart, g.LeftStart, g.RightStart, g.RightEnd));
             }
             foreach (var g in group)
             {
                 if (g.Kind == IrTokenOpKind.Delete)
                     result.Add(g);
-                else if (g.Kind == IrTokenOpKind.Equal)
+                else if (g.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged)
                     result.Add(new IrTokenOp(IrTokenOpKind.Delete, g.LeftStart, g.LeftEnd, g.RightStart, g.RightStart));
             }
         }
