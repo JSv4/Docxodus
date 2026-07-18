@@ -556,11 +556,20 @@ internal static class IrBlockAligner
         int[] leftMatch, int[] rightMatch,
         IrBlockSimilarity similarity, double threshold)
     {
+        // Locality prior (calibrated against the Word-compare oracle corpus): Word's stream diff
+        // anchors an insertion next to its matched neighbors and deletes distant old content
+        // WHOLESALE — it never pairs a paragraph with a weakly-similar counterpart at the far end of
+        // a large gap (the result renders as interleaved "word salad" inside an unrelated
+        // paragraph). Eligibility therefore scales with the pair's relative displacement inside the
+        // gap: sim ≥ threshold + λ·|relPosLeft − relPosRight|. High-similarity pairs still match
+        // across the whole gap (a swapped-and-edited paragraph at displacement 1 needs
+        // threshold + λ — e.g. 0.65 — which a genuine edit clears); weak pairs only form near their
+        // own position. Ranking subtracts the same penalty so near pairs beat far pairs on ties.
+        var positions = GapRelativePositions(freeLeft, leftMatch, freeRight, rightMatch);
         while (true)
         {
-            double bestScore = threshold;
+            double bestEffective = double.NegativeInfinity;
             int bestLeft = -1, bestRight = -1;
-            bool found = false;
             foreach (int li in freeLeft)
             {
                 if (leftMatch[li] != -1)
@@ -570,19 +579,22 @@ internal static class IrBlockAligner
                     if (rightMatch[rj] != -1)
                         continue;
                     double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
+                    double displacement = Math.Abs(positions.Left[li] - positions.Right[rj]);
+                    if (score < threshold + PairLocalityPenalty * displacement)
+                        continue;
+                    double effective = score - PairLocalityPenalty * displacement;
                     // Strictly-greater wins; on a tie keep the first seen (freeLeft / freeRight are in
                     // ascending index order), which is exactly "smallest left, then smallest right".
-                    if (score > bestScore || (!found && score >= threshold))
+                    if (effective > bestEffective)
                     {
-                        bestScore = score;
+                        bestEffective = effective;
                         bestLeft = li;
                         bestRight = rj;
-                        found = true;
                     }
                 }
             }
 
-            if (!found)
+            if (bestLeft == -1)
                 return;
 
             leftKind[bestLeft] = IrAlignmentKind.Modified;
@@ -590,6 +602,28 @@ internal static class IrBlockAligner
             leftMatch[bestLeft] = bestRight;
             rightMatch[bestRight] = bestLeft;
         }
+    }
+
+    /// <summary>λ of the similarity-pair locality prior — see the comment in
+    /// <see cref="SimilarityPair"/>. At 0.3 with the 0.35 base floor, a full-gap displacement demands
+    /// 0.65 similarity (a genuine swapped edit clears it; corpus word-salad pairs do not).</summary>
+    private const double PairLocalityPenalty = 0.3;
+
+    /// <summary>Relative position (0..1) of each still-free index within its side's free list — the
+    /// coordinate system of the locality prior. Single-element sides sit at 0 so a lone insertion
+    /// measures its displacement against the gap HEAD (where Word anchors it), not the middle.</summary>
+    private static (double[] Left, double[] Right) GapRelativePositions(
+        List<int> freeLeft, int[] leftMatch, List<int> freeRight, int[] rightMatch)
+    {
+        var left = new double[leftMatch.Length];
+        var right = new double[rightMatch.Length];
+        var ls = freeLeft.Where(li => leftMatch[li] == -1).ToList();
+        var rs = freeRight.Where(rj => rightMatch[rj] == -1).ToList();
+        for (int i = 0; i < ls.Count; i++)
+            left[ls[i]] = ls.Count == 1 ? 0 : (double)i / (ls.Count - 1);
+        for (int j = 0; j < rs.Count; j++)
+            right[rs[j]] = rs.Count == 1 ? 0 : (double)j / (rs.Count - 1);
+        return (left, right);
     }
 
     // ------------------------------------------------------------------ split/merge detection (M2.6)
@@ -659,6 +693,15 @@ internal static class IrBlockAligner
             var run = FindQualifyingRun(singularPara, partner, pluralBlocks, pluralFrom, pluralTo,
                 pluralMatch, settings, PluralContent);
             if (run is null)
+                continue;
+
+            // A split/merge GROUP needs ≥ 2 members by definition — a 1-member "run" is just an
+            // ordinary 1:1 pairing wearing a costume, and admitting it here would bypass the
+            // similarity-pair bar entirely (the edge-trimmed containment gates are far laxer than
+            // the Jaccard-with-locality bar; the corpus word-salad pairs slipped through exactly
+            // this way). A true 1:1 edit either cleared SimilarityPair already or should lower to
+            // Delete+Insert.
+            if (run.Count < 2)
                 continue;
 
             // The gate guarantees a paired candidate's partner is inside the run, so the partner's

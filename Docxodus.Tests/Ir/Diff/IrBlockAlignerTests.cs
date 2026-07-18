@@ -342,6 +342,63 @@ public class IrBlockAlignerTests
     }
 
     [Fact]
+    public void In_gap_distant_weak_pair_is_rejected_by_locality()
+    {
+        // A weakly-similar pair (≈0.45 Jaccard, above the base 0.35 floor) at OPPOSITE ends of a large
+        // gap must NOT pair: Word's compare anchors insertions next to their matched neighbors and
+        // deletes distant old content wholesale — pairing across the gap produces interleaved
+        // "word salad" inside an unrelated paragraph. Eligibility is sim ≥ threshold + λ·displacement,
+        // so the same texts DO pair when positionally adjacent (see the companion test below).
+        var l = Doc(
+            "alpha",
+            "unrelated opening chatter entirely",
+            "second block of miscellaneous filler",
+            "third stretch of leftover writing",
+            "fourth patch of assorted content",
+            "fifth wall of other material",
+            "kappa lam sig tau aa bb cc dd ee",
+            "omega");
+        var r = Doc(
+            "alpha",
+            "kappa lam sig tau vv ww xx yy zz",
+            "omega");
+        var a = Align(l, r);
+
+        // The weak far pair is refused: the lone right paragraph is a pure insert, all six left
+        // gap paragraphs are deletes.
+        Assert.True(Count(a, IrAlignmentKind.Modified) == 0,
+            "unexpected pairing: " + string.Join("; ", a.Entries.Select(e =>
+                $"{e.Kind}[{(e.Left is null ? "-" : Text(e.Left))}↔{(e.Right is null ? "-" : Text(e.Right))}]")));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Inserted));
+        Assert.Equal(6, Count(a, IrAlignmentKind.Deleted));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void In_gap_adjacent_weak_pair_still_pairs()
+    {
+        // Same ≈0.45 similarity, but positionally aligned at the head of the gap (displacement ≈ 0):
+        // the pair forms — locality only penalizes DISTANT weak pairs.
+        var l = Doc(
+            "alpha",
+            "kappa lam sig tau aa bb cc dd ee",
+            "unrelated closing chatter entirely",
+            "omega");
+        var r = Doc(
+            "alpha",
+            "kappa lam sig tau vv ww xx yy zz",
+            "final different words altogether now",
+            "omega");
+        var a = Align(l, r);
+
+        Assert.Contains(a.Entries, e =>
+            e.Kind == IrAlignmentKind.Modified &&
+            e.Left is not null && Text(e.Left).Contains("kappa lam sig") &&
+            e.Right is not null && Text(e.Right).Contains("kappa lam sig"));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
     public void In_gap_cross_positioned_edit_pairs_as_modified()
     {
         // Two paragraphs are edited AND swapped WITHIN a single spine gap (between alpha and omega). M2.1's
