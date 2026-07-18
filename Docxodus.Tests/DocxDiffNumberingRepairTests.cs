@@ -149,11 +149,13 @@ public class DocxDiffNumberingRepairTests
     }
 
     [Fact]
-    public void MissingThemePart_IsBackfilledFromRight()
+    public void MissingThemePart_IsBackfilledWithWordStockTheme()
     {
         // Theme colors (schemeClr bg1/tx1/accentN) resolve to BLACK without a theme part — right-
         // sourced charts and shapes render as black boxes when the left package ships no theme.
-        // Word's oracle always carries one; backfill the right's (already transitional).
+        // Word supplies its CURRENT STOCK "Office Theme" (Aptos fonts, 2023+ palette) — verified
+        // byte-identical across 164 independent Word-compare outputs over themeless originals. It
+        // must NOT adopt the revised document's theme: that shifts every theme-referencing run.
         static WmlDocument DocMaybeTheme(bool withTheme, string text)
         {
             using var stream = new MemoryStream();
@@ -200,7 +202,14 @@ public class DocxDiffNumberingRepairTests
 
         using var s = new MemoryStream(result.DocumentByteArray);
         using var wdoc = WordprocessingDocument.Open(s, false);
-        Assert.NotNull(wdoc.MainDocumentPart!.ThemePart);
+        var themePart = wdoc.MainDocumentPart!.ThemePart;
+        Assert.NotNull(themePart);
+        using var themeReader = new StreamReader(themePart!.GetStream());
+        var themeXml = themeReader.ReadToEnd();
+        // Word's stock theme, not the right's: Aptos fonts and the 2023+ Office palette.
+        Assert.Contains("Aptos", themeXml);
+        Assert.Contains("156082", themeXml);      // accent1
+        Assert.DoesNotContain("name=\"T\"", themeXml);
     }
 
     [Fact]

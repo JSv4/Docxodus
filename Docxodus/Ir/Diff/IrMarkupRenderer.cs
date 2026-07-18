@@ -293,8 +293,8 @@ internal static class IrMarkupRenderer
                 // boxes. Word's compare output always carries a theme, and when the ORIGINAL (left)
                 // document has none Word supplies its STOCK default — NOT the revised document's
                 // theme (adopting the right's shifts every theme-referencing cloned run's font away
-                // from the oracle). Backfill the stock Office default (Calibri Light/Calibri fonts,
-                // standard accent palette).
+                // from the oracle). Backfill Word's stock theme byte-for-byte (WordStockTheme:
+                // Aptos fonts, 2023+ palette — verified identical across 164 Word outputs).
                 if (main.ThemePart is null)
                     BackfillDefaultTheme(main);
             }
@@ -4302,39 +4302,17 @@ internal static class IrMarkupRenderer
         numberingPart.PutXDocument();
     }
 
-    /// <summary>Write Microsoft Word's stock default theme (Office palette, Calibri Light/Calibri
-    /// fonts) into a fresh <see cref="ThemePart"/> — the theme Word itself supplies when a themeless
-    /// document passes through its compare. See the call site for why the RIGHT's theme must not be
-    /// adopted instead.</summary>
+    /// <summary>Write Microsoft Word's stock default theme (<see cref="WordStockTheme"/> — Aptos
+    /// fonts, 2023+ Office palette, byte-for-byte as Word's compare backfills it) into a fresh
+    /// <see cref="ThemePart"/>. See the call site for why the RIGHT's theme must not be adopted
+    /// instead.</summary>
     private static void BackfillDefaultTheme(MainDocumentPart main)
     {
-        const string themeXml =
-            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
-            "<a:theme xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" name=\"Office Theme\">" +
-            "<a:themeElements><a:clrScheme name=\"Office\">" +
-            "<a:dk1><a:sysClr val=\"windowText\" lastClr=\"000000\"/></a:dk1>" +
-            "<a:lt1><a:sysClr val=\"window\" lastClr=\"FFFFFF\"/></a:lt1>" +
-            "<a:dk2><a:srgbClr val=\"44546A\"/></a:dk2><a:lt2><a:srgbClr val=\"E7E6E6\"/></a:lt2>" +
-            "<a:accent1><a:srgbClr val=\"4472C4\"/></a:accent1><a:accent2><a:srgbClr val=\"ED7D31\"/></a:accent2>" +
-            "<a:accent3><a:srgbClr val=\"A5A5A5\"/></a:accent3><a:accent4><a:srgbClr val=\"FFC000\"/></a:accent4>" +
-            "<a:accent5><a:srgbClr val=\"5B9BD5\"/></a:accent5><a:accent6><a:srgbClr val=\"70AD47\"/></a:accent6>" +
-            "<a:hlink><a:srgbClr val=\"0563C1\"/></a:hlink><a:folHlink><a:srgbClr val=\"954F72\"/></a:folHlink>" +
-            "</a:clrScheme>" +
-            "<a:fontScheme name=\"Office\">" +
-            "<a:majorFont><a:latin typeface=\"Calibri Light\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/></a:majorFont>" +
-            "<a:minorFont><a:latin typeface=\"Calibri\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/></a:minorFont>" +
-            "</a:fontScheme>" +
-            "<a:fmtScheme name=\"Office\">" +
-            "<a:fillStyleLst><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:fillStyleLst>" +
-            "<a:lnStyleLst><a:ln><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:ln><a:ln><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:ln><a:ln><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:ln></a:lnStyleLst>" +
-            "<a:effectStyleLst><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle><a:effectStyle><a:effectLst/></a:effectStyle></a:effectStyleLst>" +
-            "<a:bgFillStyleLst><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill><a:solidFill><a:schemeClr val=\"phClr\"/></a:solidFill></a:bgFillStyleLst>" +
-            "</a:fmtScheme></a:themeElements></a:theme>";
         // Explicit relationship id: AddNewPart's auto-generated ids are RANDOM, which breaks
         // byte-determinism between identical Compare invocations.
         var themePart = main.AddNewPart<ThemePart>("rIdThemeBackfill");
         using var writer = new StreamWriter(themePart.GetStream(FileMode.Create), new System.Text.UTF8Encoding(false));
-        writer.Write(themeXml);
+        writer.Write(WordStockTheme.Xml);
     }
 
     /// <summary>The RAW formatting payload of a style definition: its direct <c>pPr</c>/<c>rPr</c>
