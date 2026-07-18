@@ -448,6 +448,9 @@ public static class DocxDiff
         // Strict-conformance packages (ISO 29500 purl.oclc.org namespaces) are normalized to
         // transitional before ANY read — Word does the same on open. No-op for transitional docs.
         doc = StrictOoxmlNormalizer.NormalizeToTransitional(doc);
+        // mc:AlternateContent resolution (VML-choice unwrap, dead-draft fallback) — Word resolves
+        // on open and its compare output carries the resolved content. No-op when nothing matches.
+        doc = MarkupCompatibilityNormalizer.Normalize(doc);
         return settings.PreAcceptInputRevisions ? RevisionProcessor.AcceptRevisions(doc) : doc;
     }
 
