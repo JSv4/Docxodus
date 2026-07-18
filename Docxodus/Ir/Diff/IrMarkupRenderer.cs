@@ -189,14 +189,6 @@ internal static class IrMarkupRenderer
                 var rightMain = wDocRight.MainDocumentPart;
                 ImportRightSourcedMedia(state.RightSourcedClones, main, rightMain, streamDoc, rightStream);
 
-                // Strip DANGLING header/footer references: an inserted clone's inline w:sectPr can carry
-                // w:headerReference/w:footerReference r:ids that only exist in the RIGHT package (the media
-                // import intentionally skips header/footer refs — correct for the shared-base consolidate
-                // case, wrong for a two-way compare of unrelated documents). A dangling reference makes
-                // LibreOffice refuse the whole package; per OOXML an ABSENT reference falls back to section
-                // inheritance, so dropping the unresolvable element keeps the document valid and loadable.
-                RemoveDanglingHeaderFooterReferences(bodyEl, main);
-
                 // Strip ALL engine-internal pt:Unid bookkeeping attributes from the assembled body (cloned runs
                 // inside ins/del wrappers carry them too; a single sweep here catches every nested occurrence).
                 foreach (var attr in bodyEl.DescendantsAndSelf().Attributes()
@@ -219,6 +211,17 @@ internal static class IrMarkupRenderer
                 if (script.HeaderFooterOps is { Count: > 0 })
                     RenderHeaderFooterScopes(script.HeaderFooterOps, state, main,
                         wDocRight.MainDocumentPart, settings, streamDoc, rightStream);
+
+                // Story-reference reconciliation — MUST run after the story machinery above so its
+                // part mapping is known. Cloned RIGHT-side content (a paired paragraph's adopted pPr,
+                // a seam, a whole-block insert) can carry inline w:sectPr story references under the
+                // RIGHT package's r:ids, which in this left-based package are dangling or name a
+                // relationship of the wrong kind — LibreOffice refuses such a package outright.
+                // Each reference is REBOUND to the output part carrying that story (the left part the
+                // story diff merged into for a matched pair, the freshly-inserted part for a
+                // right-only story, or a wholesale import as a last resort); only references no
+                // package can resolve are dropped (absent reference ⇒ OOXML section inheritance).
+                RebindOrStripStoryReferences(state, main, wDocRight.MainDocumentPart);
 
                 // Note-id renumber pass (M2.6 Task 1): mirror the oracle's ChangeFootnoteEndnoteReferencesToUniqueRange.
                 // Walk the produced body in document order; every footnote/endnote reference gets a sequential id
@@ -1411,6 +1414,8 @@ internal static class IrMarkupRenderer
                 var part = FindHeaderFooterPart(main, diff.IsHeader, leftUri);
                 if (part is null)
                     continue; // left part vanished (malformed input) — keep the carry-over
+                if (diff.RightPartUri is { } rightUri)
+                    state.StoryOutputParts[rightUri] = part;
                 ApplyHeaderFooterDiffToPart(diff, part, state, settings, rightMain, leftStreamDoc, rightStreamDoc);
             }
             else
@@ -1458,6 +1463,7 @@ internal static class IrMarkupRenderer
         OpenXmlPart newPart = diff.IsHeader
             ? main.AddNewPart<HeaderPart>()
             : main.AddNewPart<FooterPart>();
+        state.StoryOutputParts[diff.RightPartUri] = newPart;
         var newRoot = new XElement(rightRoot.Name, rightRoot.Attributes());
         var xDoc = newPart.GetXDocument();
         if (xDoc.Root == null)
@@ -4120,14 +4126,24 @@ internal static class IrMarkupRenderer
             .Where(at => at.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal)).Remove();
     }
 
-    /// <summary>Remove every <c>w:headerReference</c>/<c>w:footerReference</c> under
-    /// <paramref name="bodyEl"/> whose <c>r:id</c> does not resolve to a part of its OWN kind on
-    /// <paramref name="main"/> — dangling ids AND ids colliding with a left relationship of a
-    /// different type (a hyperlink, comments part, …) both make LibreOffice refuse the package
-    /// (see the call site for why these arise and why removal is safe: absent reference ⇒ OOXML
-    /// section inheritance).</summary>
-    private static void RemoveDanglingHeaderFooterReferences(XElement bodyEl, OpenXmlPart main)
+    /// <summary>
+    /// Reconcile every <c>w:headerReference</c>/<c>w:footerReference</c> in the output body (see the
+    /// call site in <see cref="Render"/> for the phenomenon): a reference whose <c>r:id</c> does not
+    /// resolve to a part of its own kind is REBOUND to the output part carrying that story — the part
+    /// the story diff produced for the right part with that id (matched → merged left part; inserted →
+    /// fresh part), or a wholesale import of the right story part as a last resort — and only
+    /// references neither package can resolve are removed. Finally, duplicate same-kind/same-type
+    /// references within one sectPr (a rebind can land next to a story-diff-attached reference to the
+    /// SAME part) are collapsed to the first.
+    /// </summary>
+    private static void RebindOrStripStoryReferences(
+        RenderState state, MainDocumentPart main, MainDocumentPart? rightMain)
     {
+        var xDoc = main.GetXDocument();
+        var body = xDoc.Root?.Element(W.body);
+        if (body is null)
+            return;
+
         var headerIds = new HashSet<string>(StringComparer.Ordinal);
         var footerIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var rel in main.Parts)
@@ -4137,17 +4153,86 @@ internal static class IrMarkupRenderer
             else if (rel.OpenXmlPart is FooterPart)
                 footerIds.Add(rel.RelationshipId);
         }
-        bodyEl.Descendants()
-            .Where(e =>
+
+        var remap = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var el in body.Descendants()
+                     .Where(e => e.Name == W.headerReference || e.Name == W.footerReference)
+                     .ToList())
+        {
+            var isHeader = el.Name == W.headerReference;
+            var valid = isHeader ? headerIds : footerIds;
+            if ((string?)el.Attribute(R.id) is not { Length: > 0 } id)
             {
-                var isHeader = e.Name == W.headerReference;
-                if (!isHeader && e.Name != W.footerReference)
-                    return false;
-                return (string?)e.Attribute(R.id) is not { Length: > 0 } id ||
-                       !(isHeader ? headerIds : footerIds).Contains(id);
-            })
-            .ToList()
-            .ForEach(e => e.Remove());
+                el.Remove();
+                continue;
+            }
+            if (valid.Contains(id))
+                continue;
+            if (remap.TryGetValue(id, out var mappedId))
+            {
+                el.SetAttributeValue(R.id, mappedId);
+                continue;
+            }
+
+            OpenXmlPart? rightPart = null;
+            if (rightMain is not null)
+            {
+                try { rightPart = rightMain.GetPartById(id); }
+                catch (ArgumentOutOfRangeException) { }
+            }
+            var kindMatches = isHeader ? rightPart is HeaderPart : rightPart is FooterPart;
+            if (!kindMatches || rightPart is null)
+            {
+                el.Remove();   // unresolvable in either package — inheritance takes over
+                continue;
+            }
+
+            if (!state.StoryOutputParts.TryGetValue(rightPart.Uri, out var target))
+            {
+                // Last resort: import the right story part wholesale. Descendants carrying their own
+                // relationship references (drawings, embedded images) are pruned — their relationship
+                // graph did not come along, and a dangling id INSIDE the story part would make the
+                // package unloadable again. Text, fields and page numbers survive.
+                target = isHeader
+                    ? main.AddNewPart<HeaderPart>()
+                    : (OpenXmlPart)main.AddNewPart<FooterPart>();
+                var clone = new XElement(rightPart.GetXDocument().Root!);
+                clone.Descendants()
+                    .Where(d => d.Attributes().Any(a => a.Name.Namespace == R.r))
+                    .ToList()
+                    .ForEach(d => d.Remove());
+                foreach (var attr in clone.DescendantsAndSelf().Attributes()
+                             .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
+                    attr.Remove();
+                var targetXDoc = target.GetXDocument();
+                if (targetXDoc.Root is null)
+                    targetXDoc.Add(clone);
+                else
+                    targetXDoc.Root.ReplaceWith(clone);
+                target.PutXDocument();
+                state.StoryOutputParts[rightPart.Uri] = target;
+            }
+
+            var newId = main.GetIdOfPart(target);
+            remap[id] = newId;
+            el.SetAttributeValue(R.id, newId);
+            (isHeader ? headerIds : footerIds).Add(newId);
+        }
+
+        // Collapse duplicate same-kind/same-type references within each sectPr (keep the first).
+        foreach (var sectPr in body.Descendants(W.sectPr))
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var el in sectPr.Elements()
+                         .Where(e => e.Name == W.headerReference || e.Name == W.footerReference)
+                         .ToList())
+            {
+                var key = $"{el.Name.LocalName}:{(string?)el.Attribute(W.type)}";
+                if (!seen.Add(key))
+                    el.Remove();
+            }
+        }
+        main.PutXDocument();
     }
 
     /// <summary>Every relationship id currently in use on <paramref name="part"/>, all kinds
@@ -4281,6 +4366,12 @@ internal static class IrMarkupRenderer
         /// actually containing an r-namespace attribute are recorded, so the common text-only case adds nothing.
         /// In a two-way render every clone lands in bucket 0 (the right package).</summary>
         public Dictionary<int, List<XElement>> RightSourcedClonesBySource { get; } = new();
+
+        /// <summary>RIGHT story-part URI → the OUTPUT part carrying that story: the merged left part
+        /// for a matched pair, the freshly-created part for an inserted story, or a wholesale import.
+        /// Populated by the header/footer scope renderer and the story-reference rebind pass — see
+        /// <see cref="RebindOrStripStoryReferences"/>.</summary>
+        public Dictionary<Uri, OpenXmlPart> StoryOutputParts { get; } = new();
 
         /// <summary>The two-way render's single clone bucket (bucket 0 = the right package). Preserves the original
         /// flat-list API for the two-way <see cref="Render"/> media-import pass; equivalent to the bucket-0 list.

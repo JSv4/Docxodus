@@ -127,6 +127,15 @@ public class DocxDiffDanglingSectionRefTests
             .Where(id => !string.IsNullOrEmpty(id) && !headerIds.Contains(id!))
             .ToList();
         Assert.Empty(badRefs);
+
+        // The right's header STORY must survive the rebind — a resolving reference to an imported
+        // HeaderPart carrying the right's content (not a silent drop of the whole story).
+        var resolvingRefs = main.Document.Body!.Descendants<HeaderReference>()
+            .Where(h => h.Id?.Value is { } id && headerIds.Contains(id))
+            .ToList();
+        Assert.NotEmpty(resolvingRefs);
+        var headerTexts = main.HeaderParts.Select(hp => hp.Header?.InnerText ?? string.Empty).ToList();
+        Assert.Contains(headerTexts, t => t.Contains("Right-only header"));
     }
 
     [Fact]
@@ -151,6 +160,10 @@ public class DocxDiffDanglingSectionRefTests
             .Where(id => !string.IsNullOrEmpty(id) && !known.Contains(id!))
             .ToList();
         Assert.Empty(danglingRefs);
+
+        // The right's header story is REBOUND (part imported + reference remapped), not dropped.
+        var headerTexts = main.HeaderParts.Select(hp => hp.Header?.InnerText ?? string.Empty).ToList();
+        Assert.Contains(headerTexts, t => t.Contains("Right-only header"));
 
         // Round-trip contract still holds at body-text level.
         var accepted = RevisionProcessor.AcceptRevisions(result);
