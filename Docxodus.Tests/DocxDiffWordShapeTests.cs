@@ -74,24 +74,23 @@ public class DocxDiffWordShapeTests
     public void TotalRewrite_InsertedContentRendersBeforeDeletedContent()
     {
         // Zero token overlap and multi-block residue on both sides → the aligner lowers the whole
-        // gap to Deletes + Inserts. Word's arrangement: new content first, struck old content after.
+        // gap to Deletes + Inserts. Word's arrangement: new content first; the LAST inserted
+        // paragraph and the FIRST deleted paragraph share one w:p (the seam); remaining deleted
+        // content after it.
         var left = Doc("Alpha ancient text.", "Bravo bygone text.");
         var right = Doc("Neon fresh words.", "Quantum modern words.", "Zephyr future words.");
 
         var result = DocxDiff.Compare(left, right);
 
         var states = ParagraphStates(result);
-        var insIdx = states.FindIndex(s => s.State == "ins");
-        var delIdx = states.FindIndex(s => s.State == "del");
-        Assert.True(insIdx >= 0 && delIdx >= 0, $"expected both ins and del paragraphs, got: {string.Join(", ", states)}");
-        Assert.True(insIdx < delIdx,
-            $"inserted paragraphs must precede deleted ones (Word arrangement); got: {string.Join(", ", states)}");
-
-        // The three inserted paragraphs keep the RIGHT document's order; deletions keep LEFT order.
-        var insTexts = states.Where(s => s.State == "ins").Select(s => s.Text).ToList();
-        var delTexts = states.Where(s => s.State == "del").Select(s => s.Text).ToList();
-        Assert.Equal(new List<string> { "Neon fresh words.", "Quantum modern words.", "Zephyr future words." }, insTexts);
-        Assert.Equal(new List<string> { "Alpha ancient text.", "Bravo bygone text." }, delTexts);
+        var expected = new List<(string, string)>
+        {
+            ("ins", "Neon fresh words."),
+            ("ins", "Quantum modern words."),
+            ("mixed", "Zephyr future words.Alpha ancient text."),
+            ("del", "Bravo bygone text."),
+        };
+        Assert.Equal(expected, states);
 
         var accepted = RevisionProcessor.AcceptRevisions(result);
         var rejected = RevisionProcessor.RejectRevisions(result);
@@ -112,10 +111,35 @@ public class DocxDiffWordShapeTests
         {
             ("plain", "Shared opening paragraph."),
             ("ins", "Neon fresh words."),
-            ("ins", "Quantum modern words."),
-            ("del", "Alpha ancient text."),
+            ("mixed", "Quantum modern words.Alpha ancient text."),
             ("del", "Bravo bygone text."),
             ("plain", "Shared closing paragraph."),
+        };
+        Assert.Equal(expected, states);
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
+    public void SeamMerge_SingleDeletedParagraph_LiveMarkRoundTrips()
+    {
+        // m=1: the seam consumes the only deleted paragraph; its mark stays LIVE so accept ends the
+        // inserted text at it (no bleed into following content) and reject restores the old paragraph.
+        var left = Doc("Common head.", "Obsolete removed prose.", "Common tail.");
+        var right = Doc("Common head.", "Fresh writing appears.", "Second novel sentence.", "Common tail.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var states = ParagraphStates(result);
+        var expected = new List<(string, string)>
+        {
+            ("plain", "Common head."),
+            ("ins", "Fresh writing appears."),
+            ("mixed", "Second novel sentence.Obsolete removed prose."),
+            ("plain", "Common tail."),
         };
         Assert.Equal(expected, states);
 

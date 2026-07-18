@@ -305,41 +305,107 @@ internal static class IrMarkupRenderer
     // ----------------------------------------------------------------- block-op dispatch
 
     /// <summary>
-    /// Render a sequence of block ops with Microsoft Word's replace-gap arrangement: within a
-    /// contiguous run of pure <see cref="IrEditOpKind.DeleteBlock"/>/<see cref="IrEditOpKind.InsertBlock"/>
-    /// ops (an aligner "replace gap"), the INSERTED blocks render before the deleted ones — Word's own
-    /// compare emits new content first and the struck old content after it. A pure projection change:
-    /// deletes are buffered until the run ends, inserts within the run leapfrog them; every other op kind
-    /// (Equal/FormatOnly/Modify/Move/Split/Merge) flushes the buffer and renders in script order, so
-    /// single-sided gaps and non-gap ops are byte-identical to the unbuffered loop. The accept ≡ right /
-    /// reject ≡ left contract is unaffected (each block's own revision markup is unchanged).
+    /// Render a sequence of block ops with Microsoft Word's replace-gap arrangement (the grammar Word's
+    /// own compare output uses at every site where old blocks are deleted and new blocks inserted):
+    /// <list type="number">
+    /// <item>INSERTED blocks render before the deleted ones (Word emits new content first, struck old
+    /// content after it) — deletes are buffered until the run of pure Delete/Insert ops ends.</item>
+    /// <item>The SEAM: the last inserted paragraph and the first deleted paragraph share one
+    /// <c>w:p</c> — Word renders the old text inline right after the new text. The seam paragraph keeps
+    /// the deleted paragraph's <c>pPr</c> (whose tracked paragraph mark makes reject restore the old
+    /// paragraph exactly); the inserted paragraph's own mark-ins is dropped (the new side contributes
+    /// n−1 inserted marks, exactly as Word does).</item>
+    /// <item>The TERMINATOR: the last deleted paragraph of a seam-merged gap keeps a LIVE (untracked)
+    /// mark, so accepting ends the inserted text at it instead of bleeding into the following block,
+    /// and rejecting still restores that paragraph under its own mark.</item>
+    /// </list>
+    /// Every other op kind (Equal/FormatOnly/Modify/Move/Split/Merge) flushes the buffer and renders in
+    /// script order, so single-sided gaps and non-gap ops render exactly as before. The seam mutates the
+    /// last inserted paragraph IN PLACE (it may be registered as a right-sourced clone for the
+    /// post-assembly media/relationship import — the registered instance must stay the live tree node);
+    /// deleted blocks are left-sourced and safe to consume. The accept ≡ right / reject ≡ left contract
+    /// is preserved in both directions (proof: DocxDiffWordShapeTests).
     /// </summary>
     internal static void RenderBlockOpsWordShaped(
         IEnumerable<IrEditOp> ops, RenderState state, List<XElement> sink)
     {
         var pendingDeletes = new List<IrEditOp>();
-        void FlushDeletes()
+        int gapInsertStart = -1;   // sink index where the current gap's inserted elements begin
+
+        void FlushGap()
         {
+            if (pendingDeletes.Count == 0)
+            {
+                gapInsertStart = -1;
+                return;
+            }
+            var delEls = new List<XElement>();
             foreach (var d in pendingDeletes)
-                RenderBlockOp(d, state, sink);
+                RenderBlockOp(d, state, delEls);
             pendingDeletes.Clear();
+
+            var hasInserts = gapInsertStart >= 0 && sink.Count > gapInsertStart;
+            var lastIns = hasInserts ? sink[^1] : null;
+            var firstDel = delEls.Count > 0 ? delEls[0] : null;
+            // Seam-merge guard: both boundary blocks must be plain paragraphs, and neither paragraph's
+            // pPr may carry an inline w:sectPr (swapping the pPr would silently move a section break).
+            if (lastIns is not null && firstDel is not null &&
+                lastIns.Name == W.p && firstDel.Name == W.p &&
+                lastIns.Element(W.pPr)?.Element(W.sectPr) is null &&
+                firstDel.Element(W.pPr)?.Element(W.sectPr) is null)
+            {
+                // Mutate lastIns in place into the seam: drop its pPr (and with it the mark-ins),
+                // adopt the deleted paragraph's pPr (carrying the tracked mark + old paragraph props),
+                // and move the deleted paragraph's content in AFTER the inserted runs.
+                lastIns.Element(W.pPr)?.Remove();
+                if (firstDel.Element(W.pPr) is { } delPPr)
+                {
+                    delPPr.Remove();
+                    lastIns.AddFirst(delPPr);
+                }
+                foreach (var child in firstDel.Elements().ToList())
+                {
+                    child.Remove();
+                    lastIns.Add(child);
+                }
+                delEls.RemoveAt(0);
+
+                // Live terminator: the last deleted paragraph of the CONTIGUOUS paragraph chain that
+                // starts at the seam (the seam itself when no deleted paragraph follows it directly)
+                // keeps an untracked mark — accept coalesces the chain into it, ending the inserted
+                // text there. A deleted TABLE breaks the chain: paragraphs beyond it are disconnected
+                // from the seam's accept-time coalescing, so they keep their tracked marks (accept
+                // removes them via the deleted-range rules; a live mark there would leave a stray
+                // empty paragraph behind).
+                var terminator = lastIns;
+                foreach (var el in delEls)
+                {
+                    if (el.Name != W.p)
+                        break;
+                    terminator = el;
+                }
+                terminator.Element(W.pPr)?.Element(W.rPr)?.Elements(W.del).Remove();
+            }
+            sink.AddRange(delEls);
+            gapInsertStart = -1;
         }
+
         foreach (var op in ops)
         {
-            if (op.Kind == IrEditOpKind.DeleteBlock)
+            if (op.Kind == IrEditOpKind.DeleteBlock || op.Kind == IrEditOpKind.InsertBlock)
             {
-                pendingDeletes.Add(op);
+                if (gapInsertStart < 0)
+                    gapInsertStart = sink.Count;
+                if (op.Kind == IrEditOpKind.DeleteBlock)
+                    pendingDeletes.Add(op);       // buffered: renders after the gap's inserts
+                else
+                    RenderBlockOp(op, state, sink); // insert leapfrogs the buffered deletes of its gap
                 continue;
             }
-            if (op.Kind == IrEditOpKind.InsertBlock && pendingDeletes.Count > 0)
-            {
-                RenderBlockOp(op, state, sink);   // insert leapfrogs the buffered deletes of its gap
-                continue;
-            }
-            FlushDeletes();
+            FlushGap();
             RenderBlockOp(op, state, sink);
         }
-        FlushDeletes();
+        FlushGap();
     }
 
     internal static void RenderBlockOp(IrEditOp op, RenderState state, List<XElement> sink)
