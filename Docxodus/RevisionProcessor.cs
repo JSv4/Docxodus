@@ -1537,7 +1537,24 @@ namespace Docxodus
                 if (element.Name == W.moveTo)
                     return element.Nodes().Select(n => AcceptMoveFromMoveToTransform(n));
                 if (element.Name == W.moveFrom)
+                {
+                    // w:pPr/w:rPr/w:moveFrom is the paragraph-MARK move-source sentinel (CT_ParaRPr),
+                    // not moved run content. Word removes the paragraph mark when the move is accepted
+                    // (the paragraph coalesces with what follows, or vanishes when all its content
+                    // moved away). Rewrite the mark to w:del so the later
+                    // AcceptDeletedAndMoveFromParagraphMarks pass — which already handles deleted
+                    // paragraph marks, including the paragraph-before-a-table / end-of-container
+                    // removal rule — treats it exactly like a deleted mark. Returning null here (the
+                    // old behavior) destroyed the mark before that pass could see it, leaving a
+                    // spurious empty paragraph behind on every Word-authored moved-away paragraph
+                    // (Word writes w:moveFrom marks; DocxDiff's own move markup writes w:del, which
+                    // is why in-house round-trips never hit this). Reject routes reversed moveTo
+                    // marks through this same path, so both directions are covered.
+                    if (element.Parent is { } rPr && rPr.Name == W.rPr &&
+                        rPr.Parent is { } pPr && pPr.Name == W.pPr)
+                        return new XElement(W.del, element.Attributes());
                     return null;
+                }
                 return new XElement(element.Name,
                     element.Attributes(),
                     element.Nodes().Select(n => AcceptMoveFromMoveToTransform(n)));
