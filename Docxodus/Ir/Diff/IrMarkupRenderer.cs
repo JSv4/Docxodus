@@ -413,6 +413,17 @@ internal static class IrMarkupRenderer
                 firstDel.Element(W.pPr)?.Element(W.sectPr) is null &&
                 !CarriesPageBreak(firstDel) && !CarriesPageBreak(lastIns))
             {
+                // Capture the ins-side pPr BEFORE it is dropped: the terminator — the paragraph
+                // that survives accept — must present it as CURRENT (accept ≡ right at the
+                // property level), with the del-side pPr archived in w:pPrChange.
+                XElement? insPPr = null;
+                if (lastIns.Element(W.pPr) is { } insSrc)
+                {
+                    insPPr = StripUnids(new XElement(insSrc));
+                    insPPr.Elements(W.rPr).Elements(W.ins).Remove();
+                    insPPr.Elements(W.rPr).Where(r => !r.HasElements && !r.HasAttributes).Remove();
+                }
+
                 // Mutate lastIns in place into the seam: drop its pPr (and with it the mark-ins),
                 // adopt the deleted paragraph's pPr (carrying the tracked mark + old paragraph props),
                 // and move the deleted paragraph's content in AFTER the inserted runs.
@@ -444,6 +455,32 @@ internal static class IrMarkupRenderer
                     terminator = el;
                 }
                 terminator.Element(W.pPr)?.Element(W.rPr)?.Elements(W.del).Remove();
+
+                // The surviving paragraph must equal the LAST INSERTED paragraph after accept: swap
+                // the terminator's del-side pPr for the ins side and archive the left through the
+                // block-format machinery (w:pPrChange — a no-op when the two are policy-equal, the
+                // dominant seam case). Skipped when the del-side pPr carries an inline w:sectPr:
+                // swapping would silently move a section break (the seam guard above only vets
+                // firstDel/lastIns, not a chain terminator).
+                if (terminator.Element(W.pPr)?.Element(W.sectPr) is null)
+                {
+                    var leftShell = new XElement(W.p);
+                    if (terminator.Element(W.pPr) is { } delSide)
+                    {
+                        var leftPPr = new XElement(delSide);
+                        leftPPr.Elements(W.rPr).Elements(W.del).Remove();
+                        leftPPr.Elements(W.rPr).Where(r => !r.HasElements && !r.HasAttributes).Remove();
+                        leftShell.Add(leftPPr);
+                        delSide.Remove();
+                    }
+                    var rightShell = new XElement(W.p);
+                    if (insPPr is not null)
+                    {
+                        terminator.AddFirst(new XElement(insPPr));
+                        rightShell.Add(new XElement(insPPr));
+                    }
+                    ApplyBlockFormatChanges(terminator, leftShell, rightShell, state);
+                }
             }
             sink.AddRange(delEls);
             gapInsertStart = -1;

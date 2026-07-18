@@ -583,6 +583,14 @@ internal static class IrBlockAligner
                 {
                     if (rightMatch[rj] != -1)
                         continue;
+                    // Empty-vs-empty paragraphs score a vacuous 1.0 ("identical content") that
+                    // defeats the locality prior at any displacement — an empty freed elsewhere in
+                    // the gap would relocate here as a Modified pair. Word never fuzzy-pairs
+                    // empties; they belong to the in-order passes (which pair them monotonically)
+                    // or fall out as plain delete/insert.
+                    if (leftBlocks[li] is IrParagraph && rightBlocks[rj] is IrParagraph &&
+                        similarity.WordCount(leftBlocks[li]) == 0 && similarity.WordCount(rightBlocks[rj]) == 0)
+                        continue;
                     double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
                     double displacement = Math.Abs(positions.Left[li] - positions.Right[rj]);
                     if (score < threshold + PairLocalityPenalty * displacement)
@@ -897,6 +905,48 @@ internal static class IrBlockAligner
         // to cross document order and reconstruct swapped on reject. Reserving identities keeps the pairing
         // monotonic. Pure deterministic tie-break: it only changes WHICH equal-key left fills an equal-key
         // right (same kind, same accept/reject content), never which blocks pair overall.
+        //
+        // In-gap pairing is ORDER-PRESERVING: a candidate that crosses any already-formed non-Moved
+        // pair is rejected outright (long-range correspondence belongs exclusively to the move
+        // detector). Both phases enforce it — unids are content-derived and collide across distinct
+        // blocks, so even the phase-1 "identity" reservation can propose a crossing pair. Without
+        // the guard, content-equal empty paragraphs pair across intervening tables and the left's
+        // empties silently RELOCATE (reject then reproduces the wrong block order).
+        // Candidate (l, r) is order-safe iff maxJBelow[l] < r < minJAbove[l]; the bounds are
+        // rebuilt after each accepted pair (O(n) per acceptance — within the documented G² budget)
+        // so the per-candidate check stays O(1) and the scale guard holds.
+        int n = leftMatch.Length;
+        var maxJBelow = new int[n];
+        var minJAbove = new int[n];
+        void RebuildBounds()
+        {
+            int running = int.MinValue;
+            for (int i = 0; i < n; i++)
+            {
+                maxJBelow[i] = running;
+                if (leftMatch[i] != -1 && leftKind[i] != IrAlignmentKind.Moved)
+                    running = Math.Max(running, leftMatch[i]);
+            }
+            running = int.MaxValue;
+            for (int i = n - 1; i >= 0; i--)
+            {
+                minJAbove[i] = running;
+                if (leftMatch[i] != -1 && leftKind[i] != IrAlignmentKind.Moved)
+                    running = Math.Min(running, leftMatch[i]);
+            }
+        }
+        bool Crosses(int l, int r) => r <= maxJBelow[l] || r >= minJAbove[l];
+        // Incremental bound propagation with early termination: each position's maxJBelow only
+        // ever increases (minJAbove only decreases), so total propagation work across all
+        // acceptances is O(n + inversions) — amortized linear for the monotone boilerplate case
+        // the scale guard times, never worse than O(n) per acceptance.
+        void NoteAccepted(int l0, int r0)
+        {
+            for (int i = l0 + 1; i < n && maxJBelow[i] < r0; i++) maxJBelow[i] = r0;
+            for (int i = l0 - 1; i >= 0 && minJAbove[i] > r0; i--) minJAbove[i] = r0;
+        }
+        RebuildBounds();
+
         foreach (int rj in freeRight)
         {
             if (rightMatch[rj] != -1)
@@ -912,11 +962,14 @@ internal static class IrBlockAligner
                     continue;
                 if (requireFormatEqual != FormatEqual(leftBlocks[candLeft], rightBlocks[rj], settings))
                     continue;
+                if (Crosses(candLeft, rj))
+                    continue;
 
                 leftKind[candLeft] = kind;
                 rightKind[rj] = kind;
                 leftMatch[candLeft] = rj;
                 rightMatch[rj] = candLeft;
+                NoteAccepted(candLeft, rj);
                 break;
             }
         }
@@ -935,11 +988,14 @@ internal static class IrBlockAligner
                 bool formatEqual = FormatEqual(leftBlocks[candLeft], rightBlocks[rj], settings);
                 if (requireFormatEqual != formatEqual)
                     continue; // Unchanged needs format-equal; FormatOnly needs format-differ
+                if (Crosses(candLeft, rj))
+                    continue;
 
                 leftKind[candLeft] = kind;
                 rightKind[rj] = kind;
                 leftMatch[candLeft] = rj;
                 rightMatch[rj] = candLeft;
+                NoteAccepted(candLeft, rj);
                 break;
             }
         }
