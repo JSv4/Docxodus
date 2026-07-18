@@ -359,12 +359,19 @@ internal static class IrMarkupRenderer
             var hasInserts = gapInsertStart >= 0 && sink.Count > gapInsertStart;
             var lastIns = hasInserts ? sink[^1] : null;
             var firstDel = delEls.Count > 0 ? delEls[0] : null;
-            // Seam-merge guard: both boundary blocks must be plain paragraphs, and neither paragraph's
-            // pPr may carry an inline w:sectPr (swapping the pPr would silently move a section break).
+            // Seam-merge guard: both boundary blocks must be plain paragraphs; neither paragraph's
+            // pPr may carry an inline w:sectPr (swapping the pPr would silently move a section
+            // break); and the deleted paragraph must not carry a PAGE BREAK (pageBreakBefore or a
+            // w:br type="page" run) — Word keeps a deleted page break PAGINATING, so the deleted
+            // paragraph stays standalone and the following struck content still starts its own page.
+            static bool CarriesPageBreak(XElement p) =>
+                p.Element(W.pPr)?.Element(W.pageBreakBefore) is not null ||
+                p.Descendants(W.br).Any(b => (string?)b.Attribute(W.type) == "page");
             if (lastIns is not null && firstDel is not null &&
                 lastIns.Name == W.p && firstDel.Name == W.p &&
                 lastIns.Element(W.pPr)?.Element(W.sectPr) is null &&
-                firstDel.Element(W.pPr)?.Element(W.sectPr) is null)
+                firstDel.Element(W.pPr)?.Element(W.sectPr) is null &&
+                !CarriesPageBreak(firstDel) && !CarriesPageBreak(lastIns))
             {
                 // Mutate lastIns in place into the seam: drop its pPr (and with it the mark-ins),
                 // adopt the deleted paragraph's pPr (carrying the tracked mark + old paragraph props),

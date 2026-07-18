@@ -201,6 +201,63 @@ public class DocxDiffWordShapeTests
     }
 
     [Fact]
+    public void SeamMerge_SkipsParagraphsCarryingPageBreaks()
+    {
+        // Word keeps a deleted page break PAGINATING — the deleted paragraph stays standalone so the
+        // following struck content still starts on its own page. Merging it into the seam would
+        // swallow the break and shift every subsequent page.
+        static WmlDocument DocWithPageBreakPara(params string[] texts)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                var body = new Body();
+                for (int i = 0; i < texts.Length; i++)
+                {
+                    var para = new Paragraph(new Run(new Text(texts[i])));
+                    if (i == 0)
+                        para.PrependChild(new ParagraphProperties(new PageBreakBefore()));
+                    body.Append(para);
+                }
+                mainPart.Document = new Document(body);
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new Styles(new DocDefaults(
+                    new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                    new ParagraphPropertiesDefault()));
+                mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("pb.docx", stream.ToArray());
+        }
+
+        // 2 left × 1 right with zero token overlap: a pure del+ins gap (no similarity pairing, no
+        // 1×1 residue), so the block seam is the only merge candidate — and must decline.
+        var left = DocWithPageBreakPara("Obsolete removed prose.", "Ancient trailing words.");
+        var right = Doc("Fresh writing appears.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var states = ParagraphStates(result);
+        // No mixed (seam) paragraph: the page-break-carrying deleted paragraph stays standalone.
+        Assert.DoesNotContain(states, s => s.State == "mixed");
+        using (var stream = new MemoryStream(result.DocumentByteArray))
+        using (var wdoc = WordprocessingDocument.Open(stream, false))
+        {
+            var pageBreakParas = wdoc.MainDocumentPart!.Document.Body!
+                .Elements<Paragraph>()
+                .Count(p => p.ParagraphProperties?.PageBreakBefore is not null);
+            Assert.Equal(1, pageBreakParas);
+        }
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
     public void PureInsertAndPureDeleteGaps_AreUnaffected()
     {
         // Insert-only gap: no deletes to leapfrog; order = spine, ins, spine.
