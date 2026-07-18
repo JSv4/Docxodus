@@ -3135,13 +3135,99 @@ internal static class IrMarkupRenderer
     /// own absolute StartChar/EndChar, so a SLICE of a paragraph's token list (which retains the source
     /// paragraph's char positions) composes with the full paragraph's <see cref="SourceRunModel"/> unchanged.
     /// </summary>
+    /// <summary>
+    /// Rearrange a paragraph's token ops into Word's replace-region grammar (the token-level analogue
+    /// of <see cref="RenderBlockOpsWordShaped"/>): a maximal run of Insert/Delete ops separated only by
+    /// WHITESPACE Equal ops renders as ONE inserted region (all right-side tokens, interior whitespace
+    /// included) followed by ONE deleted region (all left-side tokens likewise) — Word writes
+    /// "Heading <ins>2 Center</ins><del>1 Style</del> Demo", never per-word del/ins alternation.
+    /// Interior whitespace Equals are CONVERTED to an Insert op over their right span plus a Delete op
+    /// over their left span, so accept still yields exactly the right bytes and reject the left bytes
+    /// (each side's raw text is emitted from its own source; per-side span tiling is preserved — the
+    /// converted ops carry an empty span on the opposite side). Pure-insert or pure-delete runs, and
+    /// any Equal that is non-whitespace, zero-width, or FormatChanged, pass through untouched. A pure
+    /// projection change: the edit script keeps its token grain.
+    /// </summary>
+    private static List<IrTokenOp> CoalesceTokenOpsWordShaped(
+        IReadOnlyList<IrTokenOp> ops,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens)
+    {
+        bool IsInteriorWhitespaceEqual(IrTokenOp op)
+        {
+            if (op.Kind != IrTokenOpKind.Equal)
+                return false;
+            var l = RawSpanText(leftTokens, op.LeftStart, op.LeftEnd);
+            var r = RawSpanText(rightTokens, op.RightStart, op.RightEnd);
+            return l.Length > 0 && r.Length > 0 &&
+                   string.IsNullOrWhiteSpace(l) && string.IsNullOrWhiteSpace(r);
+        }
+
+        var result = new List<IrTokenOp>(ops.Count);
+        int i = 0;
+        while (i < ops.Count)
+        {
+            if (ops[i].Kind != IrTokenOpKind.Insert && ops[i].Kind != IrTokenOpKind.Delete)
+            {
+                result.Add(ops[i]);
+                i++;
+                continue;
+            }
+            // Grow the window over changed ops and interior whitespace Equals; it must END changed.
+            int lastChanged = i;
+            int j = i + 1;
+            while (j < ops.Count)
+            {
+                if (ops[j].Kind is IrTokenOpKind.Insert or IrTokenOpKind.Delete)
+                {
+                    lastChanged = j;
+                    j++;
+                }
+                else if (IsInteriorWhitespaceEqual(ops[j]))
+                {
+                    j++;   // tentatively interior; trimmed below if nothing changed follows
+                }
+                else
+                {
+                    break;
+                }
+            }
+            var group = new List<IrTokenOp>();
+            for (int k = i; k <= lastChanged; k++)
+                group.Add(ops[k]);
+            i = lastChanged + 1;
+
+            var hasIns = group.Any(g => g.Kind == IrTokenOpKind.Insert);
+            var hasDel = group.Any(g => g.Kind == IrTokenOpKind.Delete);
+            if (!hasIns || !hasDel)
+            {
+                result.AddRange(group);
+                continue;
+            }
+            foreach (var g in group)
+            {
+                if (g.Kind == IrTokenOpKind.Insert)
+                    result.Add(g);
+                else if (g.Kind == IrTokenOpKind.Equal)
+                    result.Add(new IrTokenOp(IrTokenOpKind.Insert, g.LeftStart, g.LeftStart, g.RightStart, g.RightEnd));
+            }
+            foreach (var g in group)
+            {
+                if (g.Kind == IrTokenOpKind.Delete)
+                    result.Add(g);
+                else if (g.Kind == IrTokenOpKind.Equal)
+                    result.Add(new IrTokenOp(IrTokenOpKind.Delete, g.LeftStart, g.LeftEnd, g.RightStart, g.RightStart));
+            }
+        }
+        return result;
+    }
+
     private static List<XElement> BuildTokenOpContent(
         IrTokenDiff tokenDiff,
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
         SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state)
     {
         var content = new List<XElement>();
-        foreach (var tokenOp in tokenDiff.Ops)
+        foreach (var tokenOp in CoalesceTokenOpsWordShaped(tokenDiff.Ops, leftTokens, rightTokens))
         {
             switch (tokenOp.Kind)
             {
@@ -4011,15 +4097,21 @@ internal static class IrMarkupRenderer
             if (styleId is null || StyleDefinitionPayloadsEqual(leftStyle, rightStyle))
                 continue;
 
-            var (rightPPr, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId);
-            var (leftPPr, leftRPr) = ResolveEffectiveStyleFormatting(leftOriginalRoot, type, styleId);
+            // Payload provenance decoded from the oracle: the PARAGRAPH side stays at RAW definition
+            // payloads — Word's updated Normal carries an EMPTY current pPr (docDefaults spacing is
+            // NOT materialized into the style; doing so outranks table-style conditional spacing and
+            // inflates every styled table's rows) — while the RUN side materializes the resolved
+            // (docDefaults + basedOn chain) fonts/size, exactly as Word writes them.
+            var rightRawPPr = RawStylePayload(W.pPr, rightStyle);
+            var leftRawPPr = RawStylePayload(W.pPr, leftStyle);
+            var (_, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId);
+            var (_, leftRPr) = ResolveEffectiveStyleFormatting(leftOriginalRoot, type, styleId);
 
-            // Rewrite pPr: current = right-effective props + pPrChange carrying the left-effective.
             leftStyle.Elements(W.pPr).Remove();
             leftStyle.Elements(W.rPr).Remove();
-            var newPPr = new XElement(W.pPr, rightPPr.Elements(),
+            var newPPr = new XElement(W.pPr, rightRawPPr.Elements(),
                 new XElement(W.pPrChange, state.RevisionAttributes(),
-                    new XElement(W.pPr, leftPPr.Elements())));
+                    new XElement(W.pPr, leftRawPPr.Elements())));
             var newRPr = new XElement(W.rPr, rightRPr.Elements(),
                 new XElement(W.rPrChange, state.RevisionAttributes(),
                     new XElement(W.rPr, leftRPr.Elements())));
@@ -4041,24 +4133,24 @@ internal static class IrMarkupRenderer
         leftStyles.PutXDocument();
     }
 
-    /// <summary>The comparable formatting payload of a style definition: its direct <c>w:pPr</c> and
-    /// <c>w:rPr</c> (minus any existing tracked change and rsid noise), canonicalized. Two styles with
-    /// equal payloads are the same definition for compare purposes even when the documents'
-    /// docDefaults differ — Word records no style change for them.</summary>
-    private static bool StyleDefinitionPayloadsEqual(XElement a, XElement b)
+    /// <summary>The RAW formatting payload of a style definition: its direct <c>pPr</c>/<c>rPr</c>
+    /// minus tracked-change markers and rsid noise.</summary>
+    private static XElement RawStylePayload(XName name, XElement style)
     {
-        static XElement Normalize(XName name, XElement? props)
-        {
-            var clone = props is null ? new XElement(name) : new XElement(props);
-            clone.Descendants().Where(d => d.Name == W.rsid || d.Name == W.pPrChange || d.Name == W.rPrChange)
-                .Remove();
-            clone.DescendantsAndSelf().Attributes().Where(at => at.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal))
-                .Remove();
-            return clone;
-        }
-        return XNode.DeepEquals(Normalize(W.pPr, a.Element(W.pPr)), Normalize(W.pPr, b.Element(W.pPr))) &&
-               XNode.DeepEquals(Normalize(W.rPr, a.Element(W.rPr)), Normalize(W.rPr, b.Element(W.rPr)));
+        var props = style.Element(name);
+        var clone = props is null ? new XElement(name) : new XElement(props);
+        clone.Descendants().Where(d => d.Name == W.rsid || d.Name == W.pPrChange || d.Name == W.rPrChange)
+            .Remove();
+        clone.DescendantsAndSelf().Attributes().Where(at => at.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal))
+            .Remove();
+        return clone;
     }
+
+    /// <summary>Two styles with equal raw payloads are the same definition for compare purposes even
+    /// when the documents' docDefaults differ — Word records no style change for them.</summary>
+    private static bool StyleDefinitionPayloadsEqual(XElement a, XElement b)
+        => XNode.DeepEquals(RawStylePayload(W.pPr, a), RawStylePayload(W.pPr, b)) &&
+           XNode.DeepEquals(RawStylePayload(W.rPr, a), RawStylePayload(W.rPr, b));
 
     /// <summary>
     /// Resolve a style's EFFECTIVE direct formatting within one styles part: docDefaults underlaid,
