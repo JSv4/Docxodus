@@ -189,6 +189,14 @@ internal static class IrMarkupRenderer
                 var rightMain = wDocRight.MainDocumentPart;
                 ImportRightSourcedMedia(state.RightSourcedClones, main, rightMain, streamDoc, rightStream);
 
+                // Strip DANGLING header/footer references: an inserted clone's inline w:sectPr can carry
+                // w:headerReference/w:footerReference r:ids that only exist in the RIGHT package (the media
+                // import intentionally skips header/footer refs — correct for the shared-base consolidate
+                // case, wrong for a two-way compare of unrelated documents). A dangling reference makes
+                // LibreOffice refuse the whole package; per OOXML an ABSENT reference falls back to section
+                // inheritance, so dropping the unresolvable element keeps the document valid and loadable.
+                RemoveDanglingHeaderFooterReferences(bodyEl, main);
+
                 // Strip ALL engine-internal pt:Unid bookkeeping attributes from the assembled body (cloned runs
                 // inside ins/del wrappers carry them too; a single sweep here catches every nested occurrence).
                 foreach (var attr in bodyEl.DescendantsAndSelf().Attributes()
@@ -3888,6 +3896,20 @@ internal static class IrMarkupRenderer
     /// hyperlinks, external links, and data-part references alike). Deterministic: the first free
     /// <c>rIdRemap{n}</c> (n ascending from 1). The dedicated <c>rIdRemap</c> prefix avoids colliding with the
     /// document's own <c>rId{n}</c> numbering — the very collision this remap exists to resolve.</summary>
+    /// <summary>Remove every <c>w:headerReference</c>/<c>w:footerReference</c> under
+    /// <paramref name="bodyEl"/> whose <c>r:id</c> resolves to no relationship on
+    /// <paramref name="main"/> (see the call site for why these arise and why removal is safe).</summary>
+    private static void RemoveDanglingHeaderFooterReferences(XElement bodyEl, OpenXmlPart main)
+    {
+        var known = UsedRelationshipIds(main);
+        bodyEl.Descendants()
+            .Where(e => (e.Name == W.headerReference || e.Name == W.footerReference) &&
+                        (string?)e.Attribute(R.id) is { Length: > 0 } id &&
+                        !known.Contains(id))
+            .ToList()
+            .ForEach(e => e.Remove());
+    }
+
     /// <summary>Every relationship id currently in use on <paramref name="part"/>, all kinds
     /// (part, hyperlink, external, data-part reference).</summary>
     private static HashSet<string> UsedRelationshipIds(OpenXmlPart part)
