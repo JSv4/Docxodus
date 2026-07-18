@@ -4121,15 +4121,31 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>Remove every <c>w:headerReference</c>/<c>w:footerReference</c> under
-    /// <paramref name="bodyEl"/> whose <c>r:id</c> resolves to no relationship on
-    /// <paramref name="main"/> (see the call site for why these arise and why removal is safe).</summary>
+    /// <paramref name="bodyEl"/> whose <c>r:id</c> does not resolve to a part of its OWN kind on
+    /// <paramref name="main"/> — dangling ids AND ids colliding with a left relationship of a
+    /// different type (a hyperlink, comments part, …) both make LibreOffice refuse the package
+    /// (see the call site for why these arise and why removal is safe: absent reference ⇒ OOXML
+    /// section inheritance).</summary>
     private static void RemoveDanglingHeaderFooterReferences(XElement bodyEl, OpenXmlPart main)
     {
-        var known = UsedRelationshipIds(main);
+        var headerIds = new HashSet<string>(StringComparer.Ordinal);
+        var footerIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rel in main.Parts)
+        {
+            if (rel.OpenXmlPart is HeaderPart)
+                headerIds.Add(rel.RelationshipId);
+            else if (rel.OpenXmlPart is FooterPart)
+                footerIds.Add(rel.RelationshipId);
+        }
         bodyEl.Descendants()
-            .Where(e => (e.Name == W.headerReference || e.Name == W.footerReference) &&
-                        (string?)e.Attribute(R.id) is { Length: > 0 } id &&
-                        !known.Contains(id))
+            .Where(e =>
+            {
+                var isHeader = e.Name == W.headerReference;
+                if (!isHeader && e.Name != W.footerReference)
+                    return false;
+                return (string?)e.Attribute(R.id) is not { Length: > 0 } id ||
+                       !(isHeader ? headerIds : footerIds).Contains(id);
+            })
             .ToList()
             .ForEach(e => e.Remove());
     }

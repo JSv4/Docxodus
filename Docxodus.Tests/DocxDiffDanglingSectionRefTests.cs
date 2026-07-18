@@ -86,6 +86,50 @@ public class DocxDiffDanglingSectionRefTests
     }
 
     [Fact]
+    public void InsertedInlineSectPr_HeaderRefCollidingWithWrongTypeRelationship_IsStripped()
+    {
+        // The right's headerReference id may RESOLVE in the left package — to a relationship of the
+        // wrong KIND (a hyperlink, the comments part, ...). LibreOffice refuses such a package and the
+        // SDK validator throws on the relationship-type constraint, so the reference must be stripped
+        // exactly like a dangling one (absent reference ⇒ OOXML section inheritance).
+        WmlDocument LeftWithHyperlinkAt(string relId)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                mainPart.Document = new Document(new Body(new Paragraph(
+                    new Hyperlink(new Run(new Text("left link"))) { Id = relId })));
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new Styles(new DocDefaults(
+                    new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                    new ParagraphPropertiesDefault()));
+                mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                mainPart.AddHyperlinkRelationship(new System.Uri("https://example.com/left"), true, relId);
+                doc.Save();
+            }
+            return new WmlDocument("left.docx", stream.ToArray());
+        }
+
+        var left = LeftWithHyperlinkAt("rId77");
+        var right = DocWithSectionHeader("Sectioned new content.", "Closing new content.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        using var s = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(s, false);
+        var main = wdoc.MainDocumentPart!;
+        var headerIds = new HashSet<string>(main.Parts
+            .Where(p => p.OpenXmlPart is HeaderPart).Select(p => p.RelationshipId));
+        var badRefs = main.Document.Body!.Descendants<HeaderReference>()
+            .Select(h => h.Id?.Value)
+            .Where(id => !string.IsNullOrEmpty(id) && !headerIds.Contains(id!))
+            .ToList();
+        Assert.Empty(badRefs);
+    }
+
+    [Fact]
     public void InsertedInlineSectPr_WithRightOnlyHeaderRef_ProducesNoDanglingReferences()
     {
         var left = SimpleDoc("Totally unrelated left content.");
