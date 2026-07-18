@@ -1429,6 +1429,7 @@ internal static class IrMarkupRenderer
                 if (diff.RightPartUri is { } rightUri)
                     state.StoryOutputParts[rightUri] = part;
                 ApplyHeaderFooterDiffToPart(diff, part, state, settings, rightMain, leftStreamDoc, rightStreamDoc);
+                EnsureStoryReference(diff, part, main);
             }
             else
             {
@@ -1467,7 +1468,11 @@ internal static class IrMarkupRenderer
         var body = mainXDoc.Root?.Element(W.body);
         if (body is null)
             return;
-        var sectPrs = body.Descendants(W.sectPr).ToList();
+        // A w:sectPrChange's inner sectPr is change history, not a section — counting it mis-indexes
+        // multi-section outputs.
+        var sectPrs = body.Descendants(W.sectPr)
+            .Where(s => s.Parent?.Name != W.sectPrChange)
+            .ToList();
         if (diff.SectionIndex >= sectPrs.Count)
             return;
         var sectPr = sectPrs[diff.SectionIndex];
@@ -1511,10 +1516,65 @@ internal static class IrMarkupRenderer
         sectPr.AddFirst(new XElement(refName,
             new XAttribute(W.type, typeValue),
             new XAttribute(R.id, main.GetIdOfPart(newPart))));
-        if (diff.Kind == IrHeaderFooterKind.First && sectPr.Element(W.titlePg) is null)
+        // Activate the story's visibility flag ONLY when the right document itself activates it —
+        // a latent First/Even reference (ref present, flag absent) must stay latent, exactly as the
+        // Word oracle carries it; forcing titlePg/evenAndOddHeaders re-routes page 1 / even pages to
+        // an EMPTY inserted story and blanks them (accept ≢ right at the render level).
+        if (diff.Kind == IrHeaderFooterKind.First && sectPr.Element(W.titlePg) is null &&
+            RightSectionHasTitlePg(rightMain, diff.SectionIndex))
             InsertIntoSectPr(sectPr, new XElement(W.titlePg));
-        if (diff.Kind == IrHeaderFooterKind.Even)
+        if (diff.Kind == IrHeaderFooterKind.Even &&
+            rightMain.DocumentSettingsPart?.GetXDocument().Root?.Element(W.evenAndOddHeaders) is not null)
             WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
+        main.PutXDocument();
+    }
+
+    /// <summary>Whether the right document's <paramref name="sectionIndex"/>-th section activates
+    /// <c>w:titlePg</c> (sectPrChange inners excluded from the section count).</summary>
+    private static bool RightSectionHasTitlePg(MainDocumentPart rightMain, int sectionIndex)
+    {
+        var body = rightMain.GetXDocument().Root?.Element(W.body);
+        if (body is null)
+            return false;
+        var sectPrs = body.Descendants(W.sectPr)
+            .Where(s => s.Parent?.Name != W.sectPrChange)
+            .ToList();
+        return sectionIndex < sectPrs.Count && sectPrs[sectionIndex].Element(W.titlePg) is not null;
+    }
+
+    /// <summary>
+    /// A matched or deleted-only story merges into the LEFT part assuming "the part and its
+    /// reference stay". When the left reference lived on an inline <c>w:sectPr</c> the body render
+    /// did not preserve (the section structure collapsed), the merged part is ORPHANED — nothing
+    /// renders and reject cannot restore the left story. Re-attach a reference of the story's
+    /// kind/type at its section ordinal (clamped to the surviving structure) iff no reference of
+    /// that kind/type is reachable there — a reference on this or any EARLIER section keeps the
+    /// story reachable via OOXML inheritance.
+    /// </summary>
+    private static void EnsureStoryReference(IrHeaderFooterDiff diff, OpenXmlPart part, MainDocumentPart main)
+    {
+        var body = main.GetXDocument().Root?.Element(W.body);
+        if (body is null)
+            return;
+        var sectPrs = body.Descendants(W.sectPr)
+            .Where(s => s.Parent?.Name != W.sectPrChange)
+            .ToList();
+        if (sectPrs.Count == 0)
+            return;
+        int idx = Math.Min(diff.SectionIndex, sectPrs.Count - 1);
+        var refName = diff.IsHeader ? W.headerReference : W.footerReference;
+        string typeValue = diff.Kind switch
+        {
+            IrHeaderFooterKind.First => "first",
+            IrHeaderFooterKind.Even => "even",
+            _ => "default",
+        };
+        if (sectPrs.Take(idx + 1).Any(s =>
+                s.Elements(refName).Any(e => (string?)e.Attribute(W.type) == typeValue)))
+            return;
+        sectPrs[idx].AddFirst(new XElement(refName,
+            new XAttribute(W.type, typeValue),
+            new XAttribute(R.id, main.GetIdOfPart(part))));
         main.PutXDocument();
     }
 

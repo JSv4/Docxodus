@@ -86,6 +86,61 @@ public class DocxDiffDanglingSectionRefTests
     }
 
     [Fact]
+    public void ChangedStoryWhoseOnlyRefLivedOnCollapsedInlineSectPr_IsReattached()
+    {
+        // The left's ONLY footerReference sits on an inline sectPr; the body diff collapses the
+        // section structure, so the merged (tracked-deleted) story part would be ORPHANED — nothing
+        // renders and reject cannot restore the left footer. The renderer re-attaches a reference of
+        // the story's kind at the surviving section.
+        static WmlDocument LeftWithInlineFooter()
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                var footerPart = mainPart.AddNewPart<FooterPart>("rId77");
+                footerPart.Footer = new Footer(new Paragraph(new Run(new Text("Old left footer text"))));
+                // The ref-carrying paragraph is EMPTY (the corpus shape): the body diff pairs it
+                // content-equal with an empty right paragraph, and the emitted right side has no
+                // sectPr — the reference collapses with it.
+                var body = new Body(
+                    new Paragraph(
+                        new ParagraphProperties(new SectionProperties(
+                            new FooterReference { Type = HeaderFooterValues.Default, Id = "rId77" }))),
+                    new Paragraph(new Run(new Text("Ancient body words here."))),
+                    new SectionProperties());
+                mainPart.Document = new Document(body);
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new Styles(new DocDefaults(
+                    new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                    new ParagraphPropertiesDefault()));
+                mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("left.docx", stream.ToArray());
+        }
+
+        var left = LeftWithInlineFooter();
+        var right = SimpleDoc("", "Completely fresh replacement body.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        using var s = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(s, false);
+        var main = wdoc.MainDocumentPart!;
+        var footerIds = main.Parts.Where(p => p.OpenXmlPart is FooterPart)
+            .Select(p => p.RelationshipId).ToHashSet();
+        var resolvingFooterRefs = main.Document.Body!.Descendants<FooterReference>()
+            .Where(f => f.Id?.Value is { } id && footerIds.Contains(id))
+            .ToList();
+        Assert.NotEmpty(resolvingFooterRefs);
+        // The reachable story carries the left footer's tracked-deleted content.
+        var footerTexts = main.FooterParts.Select(fp => fp.Footer?.InnerText ?? string.Empty).ToList();
+        Assert.Contains(footerTexts, t => t.Contains("Old left footer text"));
+    }
+
+    [Fact]
     public void InsertedInlineSectPr_HeaderRefCollidingWithWrongTypeRelationship_IsStripped()
     {
         // The right's headerReference id may RESOLVE in the left package — to a relationship of the
