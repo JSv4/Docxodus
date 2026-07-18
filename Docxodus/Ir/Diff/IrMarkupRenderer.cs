@@ -295,8 +295,18 @@ internal static class IrMarkupRenderer
                 // theme (adopting the right's shifts every theme-referencing cloned run's font away
                 // from the oracle). Backfill Word's stock theme byte-for-byte (WordStockTheme:
                 // Aptos fonts, 2023+ palette — verified identical across 164 Word outputs).
-                if (main.ThemePart is null)
+                var leftHadTheme = main.ThemePart is not null;
+                if (!leftHadTheme)
                     BackfillDefaultTheme(main);
+                // docDefaults backfill (same provenance rule as the theme): when the left's styles
+                // part carries no w:docDefaults, Word's compare output backfills Word's STOCK
+                // docDefaults — never the revised document's. Which stock depends on whether the
+                // left had a theme: themeless lefts are seeded like a new document (modern stock:
+                // sz 24, spacing after=160 line=278, kern, ligatures — the era of the stock theme
+                // above), while a left with its own theme gets the classic-era stock (sz 22,
+                // line=259). Verified across the six corpus oracles whose lefts lack docDefaults
+                // (two byte-identical groups keyed exactly on theme presence).
+                BackfillStockDocDefaults(main, leftHadTheme);
             }
             return streamDoc.GetModifiedWmlDocument();
         }
@@ -4300,6 +4310,28 @@ internal static class IrMarkupRenderer
             nextAbstract++;
         }
         numberingPart.PutXDocument();
+    }
+
+    /// <summary>When the output styles part lacks <c>w:docDefaults</c> (or the whole part is
+    /// missing), insert Word's stock docDefaults (<see cref="WordStockDocDefaults"/>) — the era
+    /// variant keyed on whether the left shipped a theme. See the call site for provenance.</summary>
+    private static void BackfillStockDocDefaults(MainDocumentPart main, bool leftHadTheme)
+    {
+        var stylesPart = main.StyleDefinitionsPart;
+        if (stylesPart is null)
+        {
+            stylesPart = main.AddNewPart<StyleDefinitionsPart>("rIdStylesBackfill");
+            var stylesDoc = stylesPart.GetXDocument();
+            stylesDoc.Add(new XElement(W.styles,
+                new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName)));
+            stylesPart.PutXDocument();
+        }
+        var root = stylesPart.GetXDocument().Root;
+        if (root is null || root.Element(W.docDefaults) is not null)
+            return;
+        var stock = XElement.Parse(leftHadTheme ? WordStockDocDefaults.ClassicXml : WordStockDocDefaults.ModernXml);
+        root.AddFirst(stock);
+        stylesPart.PutXDocument();
     }
 
     /// <summary>Write Microsoft Word's stock default theme (<see cref="WordStockTheme"/> — Aptos
