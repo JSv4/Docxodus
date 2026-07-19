@@ -362,6 +362,217 @@ export class PaginationEngine {
   }
 
   /**
+   * Measures one element in the same hidden staging context used for the source blocks.
+   * This is intentionally DOM-based: table row heights cannot be inferred from individual
+   * rows because wrapping and collapsed borders change the height of a fragment.
+   */
+  private measureElement(element: HTMLElement, dims: PageDimensions): MeasuredBlock {
+    const measurementHost = document.createElement("div");
+    measurementHost.style.position = "absolute";
+    measurementHost.style.visibility = "hidden";
+    measurementHost.style.left = "-9999px";
+    measurementHost.style.width = `${dims.contentWidth}pt`;
+
+    const measuredElement = element.cloneNode(true) as HTMLElement;
+    measurementHost.appendChild(measuredElement);
+    this.stagingElement.appendChild(measurementHost);
+
+    const rect = measuredElement.getBoundingClientRect();
+    const style = window.getComputedStyle(measuredElement);
+    const measured: MeasuredBlock = {
+      element,
+      heightPt: pxToPt(rect.height),
+      marginTopPt: pxToPt(parseFloat(style.marginTop) || 0),
+      marginBottomPt: pxToPt(parseFloat(style.marginBottom) || 0),
+      keepWithNext: element.dataset.keepWithNext === "true",
+      keepLines: element.dataset.keepLines === "true",
+      pageBreakBefore: element.dataset.pageBreakBefore === "true",
+      isPageBreak:
+        element.dataset.pageBreak === "true" ||
+        element.classList.contains(`${this.cssPrefix}break`),
+    };
+
+    this.stagingElement.removeChild(measurementHost);
+    return measured;
+  }
+
+  /**
+   * The shortest body available to a section's first, default, or even page.
+   * A row fragment must fit every variant, otherwise a later header/footer could
+   * send it through the oversized-block fallback again.
+   */
+  private smallestEffectiveContentHeight(dims: PageDimensions, sectionIndex: number): number {
+    return Math.min(
+      this.getEffectiveHeights(dims, sectionIndex, 1, 1).contentHeight,
+      this.getEffectiveHeights(dims, sectionIndex, 2, 1).contentHeight,
+      this.getEffectiveHeights(dims, sectionIndex, 2, 2).contentHeight
+    );
+  }
+
+  /**
+   * Builds a clone of a simple table wrapper containing a contiguous run of rows.
+   * Complex table features are deliberately rejected by the caller: a split across
+   * merged cells, nested tables, or footnotes cannot be made correct by cloning rows.
+   */
+  private createSimpleTableFragment(
+    wrapper: HTMLElement,
+    table: HTMLTableElement,
+    body: HTMLTableSectionElement,
+    rows: HTMLTableRowElement[],
+    retainAnchor: boolean
+  ): HTMLElement {
+    const wrapperClone = wrapper.cloneNode(false) as HTMLElement;
+    const tableClone = table.cloneNode(false) as HTMLTableElement;
+
+    // The eligibility gate permits only colgroups alongside the body. Keep each
+    // colgroup so fixed and proportional column widths remain stable per fragment.
+    for (const child of Array.from(table.children)) {
+      if (child !== body) {
+        tableClone.appendChild(child.cloneNode(true));
+      }
+    }
+
+    const bodyClone = body.cloneNode(false) as HTMLTableSectionElement;
+    for (const row of rows) {
+      bodyClone.appendChild(row.cloneNode(true));
+    }
+    tableClone.appendChild(bodyClone);
+
+    if (!retainAnchor) {
+      wrapperClone.removeAttribute("data-anchor");
+      tableClone.removeAttribute("data-anchor");
+    }
+
+    wrapperClone.appendChild(tableClone);
+    return wrapperClone;
+  }
+
+  /**
+   * Splits an oversized, ordinary table at row boundaries. This only participates
+   * in the existing oversized-block fallback; unsupported tables keep the previous
+   * overflow behavior rather than risking broken table semantics.
+   */
+  private trySplitSimpleOversizedTable(
+    block: MeasuredBlock,
+    dims: PageDimensions,
+    sectionIndex: number
+  ): MeasuredBlock[] | null {
+    const wrapper = block.element;
+    if (
+      wrapper.tagName !== "DIV" ||
+      wrapper.children.length !== 1 ||
+      block.keepWithNext ||
+      block.keepLines ||
+      block.pageBreakBefore ||
+      block.isPageBreak
+    ) {
+      return null;
+    }
+
+    const table = wrapper.firstElementChild;
+    if (!(table instanceof HTMLTableElement)) {
+      return null;
+    }
+
+    const body = table.tBodies.length === 1 ? table.tBodies[0] : null;
+    if (
+      !body ||
+      table.tHead ||
+      table.tFoot ||
+      body.rows.length < 2 ||
+      Array.from(table.children).some(child => child !== body && child.tagName !== "COLGROUP") ||
+      table.querySelector("table, [rowspan], [colspan], [data-footnote-id]") ||
+      wrapper.querySelector("[data-footnote-id]")
+    ) {
+      return null;
+    }
+
+    const rows = Array.from(body.rows);
+    const minimumContentHeight = this.smallestEffectiveContentHeight(dims, sectionIndex);
+    // Use the source's full vertical margins while forming groups. Continuation
+    // fragments later clear their joining margins, so this conservative bound
+    // cannot create a fragment that overflows a header/footer variant.
+    const maximumFragmentHeight = minimumContentHeight - block.marginTopPt - block.marginBottomPt;
+    if (maximumFragmentHeight <= 0) {
+      return null;
+    }
+
+    const groups: HTMLTableRowElement[][] = [];
+    let start = 0;
+    while (start < rows.length) {
+      let end = start;
+      while (end < rows.length) {
+        const candidate = this.createSimpleTableFragment(
+          wrapper,
+          table,
+          body,
+          rows.slice(start, end + 1),
+          start === 0
+        );
+        const measured = this.measureElement(candidate, dims);
+        if (measured.heightPt > maximumFragmentHeight) {
+          break;
+        }
+        end++;
+      }
+
+      // Even a one-row fragment cannot fit. Preserve the established overflow
+      // fallback rather than looping or clipping a partially split row.
+      if (end === start) {
+        return null;
+      }
+
+      groups.push(rows.slice(start, end));
+      start = end;
+    }
+
+    if (groups.length < 2) {
+      return null;
+    }
+
+    const fragments: MeasuredBlock[] = [];
+    for (let index = 0; index < groups.length; index++) {
+      const isFirst = index === 0;
+      const isLast = index === groups.length - 1;
+      const fragment = this.createSimpleTableFragment(
+        wrapper,
+        table,
+        body,
+        groups[index],
+        isFirst
+      );
+
+      // Keep the source's outer spacing only at the table's real boundaries.
+      // Continuation margins would otherwise add blank space at the top/bottom
+      // of every paginated fragment.
+      if (!isFirst) {
+        fragment.style.setProperty("margin-top", "0", "important");
+      }
+      if (!isLast) {
+        fragment.style.setProperty("margin-bottom", "0", "important");
+      }
+
+      const measured = this.measureElement(fragment, dims);
+      if (
+        measured.heightPt + measured.marginTopPt + measured.marginBottomPt >
+        minimumContentHeight
+      ) {
+        return null;
+      }
+
+      fragments.push({
+        ...measured,
+        keepWithNext: false,
+        keepLines: false,
+        pageBreakBefore: false,
+        isPageBreak: false,
+      });
+    }
+
+    return fragments;
+  }
+
+  /**
    * Parses the header/footer registry from the staging element.
    * Also measures heights during parsing for lazy-loading compatibility.
    */
@@ -1183,8 +1394,21 @@ export class PaginationEngine {
           currentFootnoteHeight = newPageFootnoteHeight;
         }
       } else {
-        // Block is taller than a page - add it and let it overflow
-        // (In a more sophisticated implementation, we would split the block)
+        // Block is taller than a page. Ordinary tables can be split at complete
+        // row boundaries; every other block retains the established overflow path.
+        const tableFragments = this.trySplitSimpleOversizedTable(block, dims, sectionIndex);
+        if (tableFragments) {
+          if (currentContent.length > 0 || currentContinuation) {
+            finishPage();
+          }
+          blocks.splice(i, 1, ...tableFragments);
+          i--;
+          continue;
+        }
+
+        // Unsupported oversized blocks are intentionally left intact. Splitting
+        // arbitrary HTML, merged tables, or footnote-bearing tables would be less
+        // correct than the prior clipped fallback.
         if (currentContent.length > 0) {
           finishPage();
         }
