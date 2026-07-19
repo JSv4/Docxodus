@@ -789,6 +789,12 @@ class DocxDiffSettings:
     author_for_revisions: str = "Open-Xml-PowerTools"
     deterministic: bool = True
     date_time_for_revisions: str | None = None
+    #: Accept every tracked revision already present in both inputs before diffing (default False).
+    #: ``preserve_input_revisions`` wins when both policies are enabled.
+    pre_accept_input_revisions: bool = False
+    #: Preserve the inputs' existing tracked revisions Word-style (default False).
+    #: This takes precedence over ``pre_accept_input_revisions``.
+    preserve_input_revisions: bool = False
     case_insensitive: bool = False
     culture: str | None = None
     conflate_breaking_and_nonbreaking_spaces: bool = True
@@ -818,6 +824,10 @@ class DocxDiffSettings:
             wire["deterministic"] = False
         if self.date_time_for_revisions is not None:
             wire["dateTimeForRevisions"] = self.date_time_for_revisions
+        if self.pre_accept_input_revisions:
+            wire["preAcceptInputRevisions"] = True
+        if self.preserve_input_revisions:
+            wire["preserveInputRevisions"] = True
         if self.case_insensitive:
             wire["caseInsensitive"] = True
         if self.culture is not None:

@@ -697,7 +697,8 @@ public sealed class DocxDiffSettings
     /// every insertion and dropping every deletion. If you need to preserve or re-adjudicate the inputs'
     /// in-flight revisions, do not enable this; resolve them first by your own policy, then diff.</para>
     ///
-    /// <para>.NET-only in v1: not yet surfaced on the WASM/npm/python bridges.</para>
+    /// <para>The shared WASM/npm/python wire surface exposes this as
+    /// <c>preAcceptInputRevisions</c>.</para>
     /// </summary>
     public bool PreAcceptInputRevisions { get; set; }
 
@@ -733,6 +734,9 @@ public sealed class DocxDiffSettings
     /// <para><b>Precedence.</b> When both this and <see cref="PreAcceptInputRevisions"/> are set, Preserve
     /// wins: the byte-level pre-accept is skipped entirely (the two flags are opposite policies for the same
     /// input markup; preserving is the Word-parity choice).</para>
+    ///
+    /// <para>The shared WASM/npm/python wire surface exposes this as
+    /// <c>preserveInputRevisions</c>.</para>
     /// </summary>
     public bool PreserveInputRevisions { get; set; }
 

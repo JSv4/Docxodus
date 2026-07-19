@@ -479,6 +479,16 @@ export interface DocxDiffSettings {
   deterministic?: boolean;
   /** Explicit ISO-8601 revision date; overrides `deterministic` when set. */
   dateTimeForRevisions?: string;
+  /**
+   * Accept every pre-existing revision on both inputs before comparing (default false).
+   * This flattens prior authorship; `preserveInputRevisions` takes precedence when both are set.
+   */
+  preAcceptInputRevisions?: boolean;
+  /**
+   * Preserve the inputs' existing tracked revisions Word-style (default false).
+   * This takes precedence over `preAcceptInputRevisions` when both are set.
+   */
+  preserveInputRevisions?: boolean;
   /** Case-fold word match keys (default false). */
   caseInsensitive?: boolean;
   /** Culture name (e.g. "tr-TR") for case folding when `caseInsensitive` is true; default invariant/ordinal. */
@@ -3042,4 +3052,3 @@ export interface ExternalAnnotationProjectionSettings {
   /** Whether to validate annotations before projection (default: true) */
   validateBeforeProjection?: boolean;
 }
-
