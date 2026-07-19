@@ -226,6 +226,16 @@ internal static class IrMarkupRenderer
                 var bodyEl = mainXDoc.Root?.Element(W.body)
                     ?? throw new DocxodusException("LEFT document has no w:body.");
 
+                // Capture this predicate while MAIN still is the untouched LEFT package.  Once
+                // the body is assembled below, the output deliberately contains clones from both
+                // sides and can no longer serve as evidence that a font list was shared by the
+                // original inputs.
+                var sharedUnquotedCssFontStacks = DirectUnquotedCssFontStacks(main);
+                if (wDocRight.MainDocumentPart is { } rightMainForFontStacks)
+                    sharedUnquotedCssFontStacks.IntersectWith(DirectUnquotedCssFontStacks(rightMainForFontStacks));
+                else
+                    sharedUnquotedCssFontStacks.Clear();
+
                 // A very narrow malformed-input compatibility shape: a complete body replacement can
                 // introduce an entirely new paragraph-style universe into a left package that has no
                 // defaults or default paragraph style of its own. Word projects the USED inserted styles
@@ -403,9 +413,94 @@ internal static class IrMarkupRenderer
                 // line=259). Verified across the six corpus oracles whose lefts lack docDefaults
                 // (two byte-identical groups keyed exactly on theme presence).
                 BackfillStockDocDefaults(main, leftHadTheme);
+
+                // Some HTML-to-DOCX producers write CSS font-family lists directly into w:rFonts
+                // (for example "Roboto, sans-serif").  Word's comparison output keeps that raw
+                // string, but LibreOffice does not apply Word's fallback behavior when rendering a
+                // tracked document.  A tightly-scoped compatibility projection is warranted only
+                // when BOTH original documents carry the identical unquoted list in direct run
+                // formatting AND it is not archived by a tracked run-format change: together,
+                // those prove it is shared formatting rather than one side's actual edit.  Quoted
+                // lists intentionally stay untouched -- Word's behavior for those is not CSS-like
+                // -- as do styles, themes, east-Asian fonts, and one-sided lists.
+                ProjectSharedUnquotedCssFontStacks(main, sharedUnquotedCssFontStacks);
             }
             return streamDoc.GetModifiedWmlDocument();
         }
+    }
+
+    /// <summary>
+    /// Projects the narrowly malformed, shared CSS-like direct font-list shape described at the
+    /// call site to LibreOffice's reliable sans-serif fallback.  This runs after all renderer
+    /// package work has completed so it cannot influence edit alignment, source provenance, or
+    /// style/numbering reconciliation.
+    /// </summary>
+    private static void ProjectSharedUnquotedCssFontStacks(
+        MainDocumentPart outputMain,
+        HashSet<string> sharedStacks)
+    {
+        if (sharedStacks.Count == 0)
+            return;
+
+        var output = outputMain.GetXDocument();
+        // A run-format revision's current rPr becomes the accepted document.  Projecting its font
+        // would therefore leak the renderer fallback into that accepted result (and empirically
+        // breaks the accepted-output oracle). Exclude only the exact stack recorded by such a
+        // revision; unrelated format revisions remain harmless.
+        sharedStacks.RemoveWhere(stack => output.Descendants(W.rPrChange)
+            .Descendants(W.rFonts)
+            .Any(fonts => IsExactFontTriplet(fonts, stack)));
+        if (sharedStacks.Count == 0)
+            return;
+
+        var changed = false;
+        foreach (var fonts in output.Descendants(W.rFonts))
+        {
+            // Limit the projection to direct run properties.  A style/default/theme carrying a
+            // similarly-shaped value is semantically broader and has not earned this workaround.
+            if (fonts.Parent?.Name != W.rPr || fonts.Parent.Parent?.Name != W.r)
+                continue;
+
+            var ascii = (string?)fonts.Attribute(W.ascii);
+            if (ascii is null || !sharedStacks.Contains(ascii) || !IsExactFontTriplet(fonts, ascii))
+                continue;
+
+            fonts.SetAttributeValue(W.ascii, "Arial");
+            fonts.SetAttributeValue(W.hAnsi, "Arial");
+            fonts.SetAttributeValue(W.cs, "Arial");
+            changed = true;
+        }
+
+        if (changed)
+            outputMain.PutXDocument();
+    }
+
+    /// <summary>Returns exact direct-run font triplets that are unquoted comma-bearing CSS-like
+    /// lists.  Exact matching is deliberate: different capitalization, fallback ordering, or a
+    /// one-sided occurrence must not opt a document into the renderer compatibility projection.</summary>
+    private static HashSet<string> DirectUnquotedCssFontStacks(MainDocumentPart main)
+    {
+        var stacks = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var run in main.GetXDocument().Descendants(W.r))
+        {
+            var fonts = run.Element(W.rPr)?.Element(W.rFonts);
+            var ascii = (string?)fonts?.Attribute(W.ascii);
+            if (ascii is not null && fonts is not null && IsExactFontTriplet(fonts, ascii) &&
+                IsUnquotedCssFontStack(ascii))
+                stacks.Add(ascii);
+        }
+        return stacks;
+    }
+
+    private static bool IsExactFontTriplet(XElement fonts, string face)
+        => (string?)fonts.Attribute(W.ascii) == face &&
+           (string?)fonts.Attribute(W.hAnsi) == face &&
+           (string?)fonts.Attribute(W.cs) == face;
+
+    private static bool IsUnquotedCssFontStack(string value)
+    {
+        var first = value.TrimStart();
+        return first.Length > 1 && first.IndexOf(',') > 0 && first[0] is not '\'' and not '\"';
     }
 
     /// <summary>
