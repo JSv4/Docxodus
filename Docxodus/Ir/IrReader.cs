@@ -426,23 +426,18 @@ internal static class IrReader
 
             case RevisionView.Accept:
             case RevisionView.Reject:
-                // Accepting/rejecting revisions on a document with NO revision markup is a pure no-op
-                // round-trip (RevisionProcessor opens, clones, walks, and re-serializes the whole
-                // package only to change nothing). A cheap in-memory descendant scan lets the common
-                // revision-free document skip that round-trip — the single largest per-Read cost.
-                // The scan set (ProcessorActsOnNameSet) is a strict SUPERSET of every element
-                // Accept/RejectRevisions acts on (run/paragraph ins/del/move, the *PrChange and
-                // tblPrExChange property-revision markers, table cell/grid revisions, deleted text
-                // markers, and the customXml*RangeStart range markers), and the scan covers EVERY part
-                // the reader consumes (main + headers + footers + footnotes + endnotes + comments) —
-                // exactly the parts RevisionProcessor itself transforms. So "no markup found" provably
-                // implies the processor would not have changed a byte — output stays identical. See the
-                // masking analysis on ProcessorActsOnNameSet for why w:instrText/w:t are deliberately
-                // omitted (covered by their w:ins ancestor).
+                // A revision-free input's accepted/rejected VIEW is the input itself.  Skip the full
+                // RevisionProcessor package round-trip in that common case: besides being expensive,
+                // its document normalizers (notably adjacent-table coalescing) deliberately change
+                // clean structure even though there is no revision to accept/reject.  The scan set
+                // covers every revision element the processor reacts to, across every story the reader
+                // consumes, so any document that actually needs a revision transform still takes that
+                // path.  See the masking analysis on ProcessorActsOnNameSet for why w:instrText/w:t are
+                // deliberately omitted (covered by their w:ins ancestor).
                 if (!HasRevisionMarkup(working, ProcessorActsOnNameSet))
                     return working;
                 return view == RevisionView.Accept
-                    ? RevisionProcessor.AcceptRevisions(working)
+                    ? RevisionProcessor.AcceptRevisionsForIrReader(working)
                     : RevisionProcessor.RejectRevisions(working);
 
             default:
