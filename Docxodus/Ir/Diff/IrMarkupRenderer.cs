@@ -4845,6 +4845,22 @@ internal static class IrMarkupRenderer
     /// the "does this block carry pre-existing revisions worth preserving?" gate.</summary>
     private static readonly HashSet<XName> TrackedRevisionNames = new(RevisionProcessor.TrackedRevisionsElements);
 
+    /// <summary>Range-start → matching range-end names among the tracked revision elements. The two
+    /// endpoints of one range deliberately share an id; every other tracked-revision element needs a
+    /// distinct annotation id.</summary>
+    private static readonly IReadOnlyDictionary<XName, XName> PreservedRangeEnds =
+        new Dictionary<XName, XName>
+        {
+            [W.moveFromRangeStart] = W.moveFromRangeEnd,
+            [W.moveToRangeStart] = W.moveToRangeEnd,
+            [W.customXmlDelRangeStart] = W.customXmlDelRangeEnd,
+            [W.customXmlInsRangeStart] = W.customXmlInsRangeEnd,
+        };
+
+    /// <summary>Range-end → matching range-start names, materialized once for normalizing preserved clones.</summary>
+    private static readonly IReadOnlyDictionary<XName, XName> PreservedRangeStarts =
+        PreservedRangeEnds.ToDictionary(p => p.Value, p => p.Key);
+
     /// <summary>The run-level revision WRAPPERS a preserved (original) block may legitimately contain as
     /// paragraph children. When <c>PreserveInputRevisions</c> is on, <see cref="MarkWholeParagraph"/> leaves
     /// these as-is instead of re-wrapping them — a foreign <c>w:ins</c> stays a single <c>w:ins</c> (its
@@ -4976,8 +4992,10 @@ internal static class IrMarkupRenderer
     /// <summary>
     /// Normalize a PRESERVED original clone before emission: every tracked-revision element gets a FRESH
     /// <c>w:id</c> from the render's single ascending counter (the input's own ids would collide with this
-    /// diff's — validator-flagged duplicates; range-marker pairs stay linked via a per-render old→new
-    /// remap), and non-W-namespace extension attributes on revision elements (e.g. Word 2023's
+    /// diff's — validator-flagged duplicates). The two endpoints of an actual range keep one shared fresh
+    /// id, while a wrapper/property-change that happens to reuse its input id gets its own id. This repairs
+    /// malformed input documents that reuse one id for unrelated revisions. Non-W-namespace extension
+    /// attributes on revision elements (e.g. Word 2023's
     /// <c>w16du:dateUtc</c>) are dropped — the preserved facts are author/date/content, and the extension
     /// attrs are undeclared noise to the SDK schema the output is validated against.
     /// </summary>
@@ -4987,10 +5005,11 @@ internal static class IrMarkupRenderer
         {
             if (rev.Attribute(W.id) is { } id)
             {
-                if (!state.PreservedIdRemap.TryGetValue(id.Value, out var mapped))
-                    state.PreservedIdRemap[id.Value] = mapped =
-                        state.NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
-                id.Value = mapped;
+                id.Value = PreservedRangeEnds.ContainsKey(rev.Name)
+                    ? state.OpenPreservedRange(rev.Name, id.Value)
+                    : PreservedRangeStarts.TryGetValue(rev.Name, out var startName)
+                        ? state.ClosePreservedRange(startName, id.Value)
+                        : state.NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
             }
             rev.Attributes()
                 .Where(a => !a.IsNamespaceDeclaration && a.Name.Namespace != W.w)
@@ -5106,11 +5125,36 @@ internal static class IrMarkupRenderer
         public List<XElement>? PreservedGroup(XElement src) =>
             PreservedOriginals != null && PreservedOriginals.TryGetValue(src, out var group) ? group : null;
 
-        /// <summary>Original-input revision id → fresh output id remap for PRESERVED clones (see
-        /// <see cref="IrMarkupRenderer.NormalizePreservedClone"/>): shared across the render so a range
-        /// marker pair split over two preserved blocks keeps one id. Unused (empty) when preservation is
-        /// off.</summary>
-        public Dictionary<string, string> PreservedIdRemap { get; } = new();
+        // Active preserved range ids, shared across emitted clones because one source range can span
+        // multiple preserved blocks. The start element name is part of the key: the same malformed input
+        // id may legitimately occur in both a move-from and a move-to range. A stack repairs duplicate/nested
+        // same-id ranges deterministically while preserving well-formed start/end pairs.
+        private readonly Dictionary<(XName StartName, string OriginalId), Stack<string>> _preservedRangeIds = new();
+
+        /// <summary>Allocate and remember a fresh id for one preserved range start.</summary>
+        public string OpenPreservedRange(XName startName, string originalId)
+        {
+            string fresh = NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var key = (startName, originalId);
+            if (!_preservedRangeIds.TryGetValue(key, out var ids))
+                _preservedRangeIds[key] = ids = new Stack<string>();
+            ids.Push(fresh);
+            return fresh;
+        }
+
+        /// <summary>Close a preserved range, or give an unmatched malformed end marker its own fresh id.</summary>
+        public string ClosePreservedRange(XName startName, string originalId)
+        {
+            var key = (startName, originalId);
+            if (_preservedRangeIds.TryGetValue(key, out var ids) && ids.Count > 0)
+            {
+                string fresh = ids.Pop();
+                if (ids.Count == 0)
+                    _preservedRangeIds.Remove(key);
+                return fresh;
+            }
+            return NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
 
         /// <summary>The bucket key of the CURRENTLY-active right source package, used to attribute media-bearing
         /// clones to the package they must be imported FROM. Two-way uses the single key 0 (the right package);

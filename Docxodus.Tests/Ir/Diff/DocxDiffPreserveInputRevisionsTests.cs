@@ -233,6 +233,57 @@ public class DocxDiffPreserveInputRevisionsTests
         Assert.DoesNotContain("Removed by B", AcceptedBodyText(result));
     }
 
+    [Fact]
+    public void Preserved_duplicate_foreign_wrapper_ids_are_normalized_independently()
+    {
+        // Some real-world documents reuse a w:id across unrelated w:ins elements. Each output revision
+        // wrapper needs its own fresh annotation id; treating the source id as a global key duplicates ids
+        // in the result and causes OOXML validation/Word-cleanliness problems.
+        var left = BodyDoc(R("Shared first second"), R("Alpha"));
+        var right = BodyDoc(
+            R("Shared ") + Ins("Reviewer B", "first", 900) + R(" ") + Ins("Reviewer B", "second", 900),
+            R("Beta"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+        var foreignIds = MainXDoc(result).Descendants(W + "ins")
+            .Where(e => (string?)e.Attribute(W + "author") == "Reviewer B")
+            .Select(e => (string?)e.Attribute(W + "id"))
+            .Where(id => id != null)
+            .ToList();
+
+        Assert.Equal(2, foreignIds.Count);
+        Assert.Equal(foreignIds.Count, foreignIds.Distinct().Count());
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+    }
+
+    [Fact]
+    public void Preserved_range_endpoints_share_an_id_but_wrapper_does_not()
+    {
+        // A range start/end pair must stay linked, even across preserved-clone normalization. Its moveTo
+        // wrapper is a separate revision annotation though, despite deliberately reusing id 900 in the
+        // malformed source document.
+        const string moveStart =
+            "<w:moveToRangeStart w:id=\"900\" w:author=\"Reviewer B\" w:date=\"2020-01-01T00:00:00Z\" w:name=\"move900\"/>";
+        const string move =
+            "<w:moveTo w:id=\"900\" w:author=\"Reviewer B\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:t>moved</w:t></w:r></w:moveTo>";
+        const string moveEnd = "<w:moveToRangeEnd w:id=\"900\"/>";
+        var left = BodyDoc(R("Shared moved end"), R("Alpha"));
+        var right = BodyDoc(R("Shared ") + moveStart + move + moveEnd + R(" end"), R("Beta"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+        var xd = MainXDoc(result);
+        var start = xd.Descendants(W + "moveToRangeStart")
+            .Single(e => (string?)e.Attribute(W + "author") == "Reviewer B");
+        var end = xd.Descendants(W + "moveToRangeEnd").Single();
+        var wrapper = xd.Descendants(W + "moveTo")
+            .Single(e => (string?)e.Attribute(W + "author") == "Reviewer B");
+
+        Assert.Equal((string?)start.Attribute(W + "id"), (string?)end.Attribute(W + "id"));
+        Assert.NotEqual((string?)start.Attribute(W + "id"), (string?)wrapper.Attribute(W + "id"));
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+    }
+
     // ----------------------------------------------------------------- note-scope preservation
 
     /// <summary>A document whose body paragraph optionally references footnote 1; the note body carries the
