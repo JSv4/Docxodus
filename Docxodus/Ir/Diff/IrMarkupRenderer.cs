@@ -4435,25 +4435,39 @@ internal static class IrMarkupRenderer
         numberingPart.PutXDocument();
     }
 
-    /// <summary>True when the document's main part carries markup that <see cref="RevisionProcessor"/>
-    /// treats as a tracked revision. The scan is namespace-aware so an alternate prefix for
-    /// WordprocessingML cannot evade the one-sided input-revision-preservation gate.</summary>
+    /// <summary>True when any story part that <see cref="RevisionProcessor"/> considers carries tracked
+    /// revision markup. The scan is namespace-aware so an alternate prefix for WordprocessingML cannot evade
+    /// the one-sided input-revision-preservation gate. It deliberately covers the main document plus headers,
+    /// footers, endnotes, and footnotes — a dirty header is just as asymmetric as a dirty body when only the
+    /// RIGHT input's revisions would otherwise be preserved.</summary>
     private static bool HasTrackedRevisionMarkup(WmlDocument doc)
     {
         try
         {
             using var ms = new MemoryStream(doc.DocumentByteArray, writable: false);
             using var zip = new System.IO.Compression.ZipArchive(ms, System.IO.Compression.ZipArchiveMode.Read);
-            var entry = zip.GetEntry("word/document.xml");
-            if (entry is null)
-                return false;
-            using var stream = entry.Open();
-            using var reader = System.Xml.XmlReader.Create(stream);
-            while (reader.Read())
+            foreach (var entry in zip.Entries)
             {
-                if (reader.NodeType == System.Xml.XmlNodeType.Element &&
-                    TrackedRevisionNames.Contains(XName.Get(reader.LocalName, reader.NamespaceURI)))
-                    return true;
+                // Mirrors RevisionProcessor.HasTrackedRevisions' story-part scope without opening the
+                // document through the SDK before the renderer's package pass. Header/footer part names are
+                // generated as word/header*.xml and word/footer*.xml by Word/Open XML SDK; scanning every
+                // such part is conservative for an orphaned relationship and never risks asymmetric output.
+                bool trackedStoryPart = entry.FullName is "word/document.xml" or "word/endnotes.xml" or "word/footnotes.xml" ||
+                    (entry.FullName.StartsWith("word/header", StringComparison.Ordinal) &&
+                     entry.FullName.EndsWith(".xml", StringComparison.Ordinal)) ||
+                    (entry.FullName.StartsWith("word/footer", StringComparison.Ordinal) &&
+                     entry.FullName.EndsWith(".xml", StringComparison.Ordinal));
+                if (!trackedStoryPart)
+                    continue;
+
+                using var stream = entry.Open();
+                using var reader = System.Xml.XmlReader.Create(stream);
+                while (reader.Read())
+                {
+                    if (reader.NodeType == System.Xml.XmlNodeType.Element &&
+                        TrackedRevisionNames.Contains(XName.Get(reader.LocalName, reader.NamespaceURI)))
+                        return true;
+                }
             }
             return false;
         }

@@ -67,6 +67,26 @@ public class DocxDiffPreserveInputRevisionsTests
         return new WmlDocument("preserve-fixture.docx", ms.ToArray());
     }
 
+    /// <summary>Add a header story carrying arbitrary WordprocessingML. The preservation gate must inspect
+    /// this relationship just as <see cref="RevisionProcessor.HasTrackedRevisions(WmlDocument)"/> does; a
+    /// body-only scan would preserve the right side of an asymmetric dirty pair.</summary>
+    private static WmlDocument WithHeader(WmlDocument source, string headerInnerXml)
+    {
+        // The package gains a part/relationship, so use an expandable stream rather than the fixed-capacity
+        // MemoryStream(byte[]) constructor.
+        using var ms = new MemoryStream();
+        ms.Write(source.DocumentByteArray, 0, source.DocumentByteArray.Length);
+        ms.Position = 0;
+        using (var wDoc = WordprocessingDocument.Open(ms, true))
+        {
+            var header = wDoc.MainDocumentPart!.AddNewPart<HeaderPart>();
+            using var stream = header.GetStream(FileMode.Create, FileAccess.Write);
+            using var writer = new StreamWriter(stream);
+            writer.Write($"<w:hdr xmlns:w=\"{Wns}\">{headerInnerXml}</w:hdr>");
+        }
+        return new WmlDocument("preserve-header-fixture.docx", ms.ToArray());
+    }
+
     // ----------------------------------------------------------------- projections
 
     private static XDocument MainXDoc(WmlDocument d)
@@ -396,6 +416,28 @@ public class DocxDiffPreserveInputRevisionsTests
             R("Alpha"));
         var right = BodyDoc(
             centered + R("Stable"),
+            R("Shared lead ") + Ins("Reviewer B", "REVTEXT") + R(" end"),
+            R("Beta"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.Empty(RevisionWrappersBy(result, "Reviewer B"));
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+    }
+
+    [Fact]
+    public void Left_header_revision_disables_right_preservation()
+    {
+        // RevisionProcessor scans headers as well as the main story. A body-only preservation gate would
+        // flatten this left-side foreign insertion while retaining Reviewer B's right-side one, recreating
+        // the asymmetry that PreserveInputRevisions intentionally avoids.
+        var left = WithHeader(BodyDoc(
+            R("Left revision"),
+            R("Shared lead REVTEXT end"),
+            R("Alpha")),
+            $"<w:p>{Ins("Reviewer A", "header revision")}</w:p>");
+        var right = BodyDoc(
+            R("Left revision"),
             R("Shared lead ") + Ins("Reviewer B", "REVTEXT") + R(" end"),
             R("Beta"));
 
