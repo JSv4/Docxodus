@@ -29,13 +29,19 @@ public class MarkupCompatibilityNormalizerTests
 
     private static byte[] DocWithBodyXml(string runInnerXml)
     {
+        return DocWithParagraphXml(
+            "<w:r>" + runInnerXml + "</w:r>" +
+            "<w:r><w:t>anchor text</w:t></w:r>");
+    }
+
+    private static byte[] DocWithParagraphXml(string paragraphInnerXml)
+    {
         var documentXml =
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
             "<w:document xmlns:w=\"" + WNs + "\"" +
             " xmlns:mc=\"" + McNs + "\"" +
             " xmlns:v=\"" + VNs + "\">" +
-            "<w:body><w:p><w:r>" + runInnerXml + "</w:r>" +
-            "<w:r><w:t>anchor text</w:t></w:r></w:p>" +
+            "<w:body><w:p>" + paragraphInnerXml + "</w:p>" +
             "<w:sectPr/></w:body></w:document>";
         var relsXml =
             "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" +
@@ -146,5 +152,74 @@ public class MarkupCompatibilityNormalizerTests
         var main = MainPart(normalized);
         XNamespace mc = McNs;
         Assert.Single(main.Descendants(mc + "AlternateContent"));
+    }
+
+    [Fact]
+    public void DisjointDuplicateParagraphProperties_AreCoalescedAndOrdered()
+    {
+        var doc = new WmlDocument("d.docx", DocWithParagraphXml(
+            "<w:pPr w:rsidR=\"001\"><w:spacing w:after=\"0\" w:line=\"240\" w:lineRule=\"auto\"/></w:pPr>" +
+            "<w:r><w:t>anchor text</w:t></w:r>" +
+            "<w:pPr w:rsidRDefault=\"002\"><w:numPr><w:numId w:val=\"42\"/></w:numPr></w:pPr>"));
+
+        var normalized = MarkupCompatibilityNormalizer.Normalize(doc);
+
+        Assert.NotSame(doc, normalized);
+        XNamespace w = WNs;
+        var paragraph = MainPart(normalized).Descendants(w + "p").Single();
+        var properties = paragraph.Elements(w + "pPr").ToList();
+        var pPr = Assert.Single(properties);
+        Assert.Same(pPr, paragraph.Elements().First());
+        Assert.Equal(new[] { w + "numPr", w + "spacing" }, pPr.Elements().Select(e => e.Name));
+        Assert.Equal("001", (string?)pPr.Attribute(w + "rsidR"));
+        Assert.Equal("002", (string?)pPr.Attribute(w + "rsidRDefault"));
+    }
+
+    [Fact]
+    public void ConflictingDuplicateParagraphProperties_AreLeftUntouched()
+    {
+        var doc = new WmlDocument("d.docx", DocWithParagraphXml(
+            "<w:pPr><w:spacing w:after=\"0\"/></w:pPr>" +
+            "<w:r><w:t>anchor text</w:t></w:r>" +
+            "<w:pPr><w:spacing w:after=\"240\"/></w:pPr>"));
+
+        var normalized = MarkupCompatibilityNormalizer.Normalize(doc);
+
+        Assert.Same(doc, normalized);
+        XNamespace w = WNs;
+        Assert.Equal(2, MainPart(normalized).Descendants(w + "p").Single().Elements(w + "pPr").Count());
+    }
+
+    [Fact]
+    public void RevisionBearingDuplicateParagraphProperties_AreLeftUntouched()
+    {
+        var doc = new WmlDocument("d.docx", DocWithParagraphXml(
+            "<w:pPr><w:numPr><w:numId w:val=\"42\"/></w:numPr></w:pPr>" +
+            "<w:r><w:t>anchor text</w:t></w:r>" +
+            "<w:pPr><w:pPrChange w:id=\"1\" w:author=\"test\" w:date=\"2026-07-18T00:00:00Z\"><w:pPr><w:spacing w:after=\"0\"/></w:pPr></w:pPrChange></w:pPr>"));
+
+        var normalized = MarkupCompatibilityNormalizer.Normalize(doc);
+
+        Assert.Same(doc, normalized);
+    }
+
+    [Fact]
+    public void Compare_NormalizesDisjointDuplicateParagraphPropertiesBeforeDiff()
+    {
+        var left = new WmlDocument("l.docx", DocWithParagraphXml(
+            "<w:pPr><w:spacing w:after=\"0\"/></w:pPr>" +
+            "<w:r><w:t>anchor text</w:t></w:r>" +
+            "<w:pPr><w:numPr><w:numId w:val=\"42\"/></w:numPr></w:pPr>"));
+        var right = new WmlDocument("r.docx", DocWithParagraphXml(
+            "<w:pPr><w:spacing w:after=\"0\"/></w:pPr>" +
+            "<w:r><w:t>anchor text</w:t></w:r>" +
+            "<w:pPr><w:numPr><w:numId w:val=\"42\"/></w:numPr></w:pPr>"));
+
+        var result = DocxDiff.Compare(left, right);
+
+        XNamespace w = WNs;
+        var paragraph = MainPart(result).Descendants(w + "p").Single();
+        var pPr = Assert.Single(paragraph.Elements(w + "pPr"));
+        Assert.Same(pPr, paragraph.Elements().First());
     }
 }
