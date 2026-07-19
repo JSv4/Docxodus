@@ -414,6 +414,20 @@ internal static class IrMarkupRenderer
                 firstDel.Element(W.pPr)?.Element(W.sectPr) is null &&
                 !CarriesPageBreak(firstDel) && !CarriesPageBreak(lastIns))
             {
+                // Capture the ins-side pPr before it is dropped: Word's seam-terminator carries the
+                // RIGHT side's DIRECT paragraph props (real spacing/indents survive) but never a
+                // style reference the left universe can't resolve, and never format-change bars.
+                XElement? insPPr = null;
+                if (lastIns.Element(W.pPr) is { } insSrc)
+                {
+                    insPPr = StripUnids(new XElement(insSrc));
+                    insPPr.Elements(W.rPr).Elements(W.ins).Remove();
+                    insPPr.Elements(W.rPr).Where(r => !r.HasElements && !r.HasAttributes).Remove();
+                    DropUnresolvableStyleRef(insPPr, state);
+                    if (!insPPr.HasElements && !insPPr.HasAttributes)
+                        insPPr = null;
+                }
+
                 // Mutate lastIns in place into the seam: drop its pPr (and with it the mark-ins),
                 // adopt the deleted paragraph's pPr (carrying the tracked mark + old paragraph props),
                 // and move the deleted paragraph's content in AFTER the inserted runs.
@@ -446,17 +460,21 @@ internal static class IrMarkupRenderer
                 }
                 terminator.Element(W.pPr)?.Element(W.rPr)?.Elements(W.del).Remove();
 
-                // Word's seam-terminator shape (verified on every decoded oracle sighting): the
-                // surviving paragraph carries an EMPTY pPr — no style, no direct props, no
-                // pPrChange. Word deliberately drops BOTH sides' paragraph properties at the seam
-                // (a Title style on either side renders plain in its own compare output). Keeping
-                // the del-side pPr leaked the left's style through accept; stamping the ins side
-                // put format-change bars on every seam line that Word's output doesn't have.
-                // Skipped when the pPr carries an inline w:sectPr — dropping it would silently
-                // remove a section break (the seam guard above only vets firstDel/lastIns, not a
-                // chain terminator).
-                if (terminator.Element(W.pPr) is { } termPPr && termPPr.Element(W.sectPr) is null)
-                    termPPr.Remove();
+                // Word's seam-terminator shape (decoded across the oracle corpus): the surviving
+                // paragraph carries the INS side's DIRECT props — real spacing/indent survive —
+                // but never a style reference the left universe can't resolve (a Title/Heading on
+                // the right renders plain in Word's own compare output when the left lacks the
+                // style), never the del side's pPr (the left's style must not outlive accept),
+                // and never a w:pPrChange (Word puts no format-change bars on seam lines).
+                // Skipped when the del-side pPr carries an inline w:sectPr — replacing it would
+                // silently move a section break (the seam guard above only vets firstDel/lastIns,
+                // not a chain terminator).
+                if (terminator.Element(W.pPr) is not { } termPPr || termPPr.Element(W.sectPr) is null)
+                {
+                    terminator.Element(W.pPr)?.Remove();
+                    if (insPPr is not null)
+                        terminator.AddFirst(new XElement(insPPr));
+                }
             }
             sink.AddRange(delEls);
             gapInsertStart = -1;
