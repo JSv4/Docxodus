@@ -148,7 +148,9 @@ internal sealed record IrDiffSettings
     /// <summary>
     /// DIFF-TIME setting. Characters that split an <c>IrTextRun</c>'s text into word vs. separator
     /// tokens. Each separator character becomes its own <see cref="IrDiffTokenKind.Separator"/> token
-    /// (matching <c>WmlComparer</c>'s atom granularity — one atom per separator char).
+    /// (matching <c>WmlComparer</c>'s atom granularity — one atom per separator char). The tokenizer
+    /// applies WmlComparer's special <c>.</c>/<c>,</c> rule before this set: either punctuation mark
+    /// remains part of a word when immediately adjacent to a digit (including across adjacent text runs).
     /// </summary>
     /// <remarks>
     /// Default copied verbatim from <c>WmlComparerSettings.WordSeparators</c> (Docxodus/WmlComparer.cs

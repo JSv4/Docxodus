@@ -55,10 +55,95 @@ internal static class IrDiffTokenizer
     {
         var tokens = new List<IrDiffToken>();
         int charOffset = 0;
-        WalkInlines(paragraph.Inlines, settings, linkSuffix: null, tokens, ref charOffset);
+        var textRunEdges = GetTextRunEdges(paragraph.Inlines);
+        int textRunIndex = 0;
+        WalkInlines(
+            paragraph.Inlines, settings, linkSuffix: null, textRunEdges, ref textRunIndex, tokens, ref charOffset);
         InterruptionPostPass(tokens);
         return tokens;
     }
+
+    /// <summary>
+    /// Build the immediate text-character lookaround for each text run in paragraph order. This mirrors
+    /// WmlComparer's punctuation grouping without flattening or coalescing the emitted run tokens: adjacent
+    /// formatted runs (and transparent field/hyperlink children) see each other's boundary chars, while every
+    /// non-text inline atom is a hard boundary.
+    /// </summary>
+    private static IReadOnlyList<TextRunEdges> GetTextRunEdges(IReadOnlyList<IrInline> inlines)
+    {
+        var textRunsAndBoundaries = new List<IrTextRun?>();
+        CollectTextRunsAndBoundaries(inlines, textRunsAndBoundaries);
+
+        var edges = new List<TextRunEdges>();
+        for (int i = 0; i < textRunsAndBoundaries.Count; i++)
+        {
+            if (textRunsAndBoundaries[i] is not IrTextRun)
+                continue;
+
+            edges.Add(new TextRunEdges(
+                FindPreviousTextChar(textRunsAndBoundaries, i),
+                FindNextTextChar(textRunsAndBoundaries, i)));
+        }
+        return edges;
+    }
+
+    /// <summary>
+    /// Flatten only the adjacency relation needed by Word's punctuation rule. Field results and hyperlink
+    /// children are transparent in the token stream, while every other inline is a comparison-atom boundary.
+    /// </summary>
+    private static void CollectTextRunsAndBoundaries(
+        IReadOnlyList<IrInline> inlines, List<IrTextRun?> sink)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrTextRun run:
+                    sink.Add(run);
+                    break;
+
+                case IrFieldRun field:
+                    CollectTextRunsAndBoundaries(field.CachedResult, sink);
+                    break;
+
+                case IrHyperlink link:
+                    CollectTextRunsAndBoundaries(link.Inlines, sink);
+                    break;
+
+                default:
+                    sink.Add(null);
+                    break;
+            }
+        }
+    }
+
+    private static char? FindPreviousTextChar(IReadOnlyList<IrTextRun?> sequence, int index)
+    {
+        for (int i = index - 1; i >= 0; i--)
+        {
+            var candidate = sequence[i];
+            if (candidate is null)
+                return null;
+            if (candidate.Text.Length != 0)
+                return candidate.Text[candidate.Text.Length - 1];
+        }
+        return null;
+    }
+
+    private static char? FindNextTextChar(IReadOnlyList<IrTextRun?> sequence, int index)
+    {
+        for (int i = index + 1; i < sequence.Count; i++)
+        {
+            var candidate = sequence[i];
+            if (candidate is null)
+                return null;
+            if (candidate.Text.Length != 0)
+                return candidate.Text[0];
+        }
+        return null;
+    }
+
+    private readonly record struct TextRunEdges(char? PreviousTextChar, char? NextTextChar);
 
     /// <summary>
     /// Rewrite the MatchKeys of word tokens that flank an <b>intra-word interruption</b>: a maximal run
@@ -147,6 +232,7 @@ internal static class IrDiffTokenizer
     /// </summary>
     private static void WalkInlines(
         IReadOnlyList<IrInline> inlines, IrDiffSettings settings, string? linkSuffix,
+        IReadOnlyList<TextRunEdges> textRunEdges, ref int textRunIndex,
         List<IrDiffToken> tokens, ref int charOffset)
     {
         foreach (var inline in inlines)
@@ -154,14 +240,19 @@ internal static class IrDiffTokenizer
             switch (inline)
             {
                 case IrTextRun run:
-                    EmitTextRun(run.Text, run.Format, settings, linkSuffix, tokens, ref charOffset);
+                    var edges = textRunEdges[textRunIndex++];
+                    EmitTextRun(
+                        run.Text, run.Format, settings, linkSuffix,
+                        edges.PreviousTextChar, edges.NextTextChar, tokens, ref charOffset);
                     break;
 
                 case IrFieldRun field:
                     // §6.1 / N9: the cached result is tokenized transparently — its IrTextRuns are
                     // indistinguishable from literal text, and (like the reader) their chars advance
                     // the offset. The instruction is never tokenized.
-                    WalkInlines(field.CachedResult, settings, linkSuffix, tokens, ref charOffset);
+                    WalkInlines(
+                        field.CachedResult, settings, linkSuffix,
+                        textRunEdges, ref textRunIndex, tokens, ref charOffset);
                     break;
 
                 case IrHyperlink link:
@@ -170,7 +261,9 @@ internal static class IrDiffTokenizer
                     // a content change. Suffixes compose in document order (outer applied first).
                     var target = link.Target ?? link.InternalTarget?.ToString() ?? "";
                     var composed = linkSuffix is null ? LinkSuffix(target) : linkSuffix + LinkSuffix(target);
-                    WalkInlines(link.Inlines, settings, composed, tokens, ref charOffset);
+                    WalkInlines(
+                        link.Inlines, settings, composed,
+                        textRunEdges, ref textRunIndex, tokens, ref charOffset);
                     break;
 
                 case IrTab tab:
@@ -223,9 +316,9 @@ internal static class IrDiffTokenizer
     }
 
     /// <summary>
-    /// Split a text run on <see cref="IrDiffSettings.WordSeparators"/> into alternating Word and
-    /// Separator tokens (one Separator token per separator char). Advances <paramref name="charOffset"/>
-    /// by the run's raw length.
+    /// Split a text run on <see cref="IrDiffSettings.WordSeparators"/> plus WmlComparer's dynamic
+    /// punctuation rule into alternating Word and Separator tokens (one Separator token per separator char).
+    /// Advances <paramref name="charOffset"/> by the run's raw length.
     /// </summary>
     /// <remarks>
     /// <para><b>NBSP conflation happens at SPLIT time, not just in the match key.</b> When
@@ -243,18 +336,36 @@ internal static class IrDiffTokenizer
     /// </remarks>
     private static void EmitTextRun(
         string text, IrRunFormat format, IrDiffSettings settings, string? linkSuffix,
-        List<IrDiffToken> tokens, ref int charOffset)
+        char? previousTextChar, char? nextTextChar, List<IrDiffToken> tokens, ref int charOffset)
     {
         bool nbspIsSeparator = settings.ConflateBreakingAndNonbreakingSpaces;
 
-        bool IsSeparator(char c) =>
-            settings.WordSeparators.Contains(c) || (nbspIsSeparator && c == '\u00A0');
+        bool IsSeparator(int index)
+        {
+            char c = text[index];
+            // WmlComparer's GetComparisonUnitList gives '.' and ',' priority over the static separator
+            // set: either stays in a word when immediately adjacent to a digit. Precomputed run edges make
+            // that test correct across formatted, field, and hyperlink boundaries without looking through
+            // a non-text atom.
+            if (c is '.' or ',')
+            {
+                bool previousIsDigit = index > 0
+                    ? char.IsDigit(text[index - 1])
+                    : previousTextChar is char previous && char.IsDigit(previous);
+                bool nextIsDigit = index < text.Length - 1
+                    ? char.IsDigit(text[index + 1])
+                    : nextTextChar is char next && char.IsDigit(next);
+                return !(previousIsDigit || nextIsDigit);
+            }
+
+            return settings.WordSeparators.Contains(c) || (nbspIsSeparator && c == '\u00A0');
+        }
 
         int i = 0;
         while (i < text.Length)
         {
             char c = text[i];
-            if (IsSeparator(c))
+            if (IsSeparator(i))
             {
                 int start = charOffset + i;
                 string raw = c.ToString();
@@ -266,7 +377,7 @@ internal static class IrDiffTokenizer
             else
             {
                 int wordStart = i;
-                while (i < text.Length && !IsSeparator(text[i]))
+                while (i < text.Length && !IsSeparator(i))
                     i++;
                 string raw = text.Substring(wordStart, i - wordStart);
                 int start = charOffset + wordStart;
