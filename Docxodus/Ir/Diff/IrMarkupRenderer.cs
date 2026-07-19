@@ -101,6 +101,56 @@ internal static class IrMarkupRenderer
     /// removed explicitly before output regardless.</summary>
     private static readonly XName SourceLinkTarget = PtOpenXml.pt + "SourceLinkTarget";
 
+    // Mirrors the tail of DocxSession.PPrChildOrder after w:spacing. When a right-only style
+    // delegates paragraph spacing to defaults, the materialized w:spacing must precede the first
+    // present CT_PPrBase child in this set (for example w:ind or w:jc), not merely w:outlineLvl.
+    private static readonly HashSet<XName> PPrChildrenAfterSpacing = new()
+    {
+        W.ind,
+        W.contextualSpacing,
+        W.mirrorIndents,
+        W.suppressOverlap,
+        W.jc,
+        W.textDirection,
+        W.textAlignment,
+        W.textboxTightWrap,
+        W.outlineLvl,
+        W.divId,
+        W.cnfStyle,
+        W.rPr,
+        W.sectPr,
+        W.pPrChange,
+    };
+
+    // Mirrors the tail of PtOpenXmlUtil.Order_rPr after w:kern. Synthesized kerning must remain
+    // between w:w and w:position even when a copied style has no explicit size; appending it after
+    // w:lang, for example, produces schema-invalid CT_RPr ordering.
+    private static readonly HashSet<XName> RPrChildrenAfterKern = new()
+    {
+        W.position,
+        W.sz,
+        W14.wShadow,
+        W14.wTextOutline,
+        W14.wTextFill,
+        W14.wScene3d,
+        W14.wProps3d,
+        W.szCs,
+        W.highlight,
+        W.u,
+        W.effect,
+        W.bdr,
+        W.shd,
+        W.fitText,
+        W.vertAlign,
+        W.rtl,
+        W.cs,
+        W.em,
+        W.lang,
+        W.eastAsianLayout,
+        W.specVanish,
+        W.oMath,
+    };
+
     /// <summary>
     /// Render <paramref name="script"/> into a tracked-revisions <see cref="WmlDocument"/> on the LEFT
     /// document's package. <paramref name="left"/>/<paramref name="right"/> are the original documents the
@@ -175,6 +225,17 @@ internal static class IrMarkupRenderer
                 var mainXDoc = main.GetXDocument();
                 var bodyEl = mainXDoc.Root?.Element(W.body)
                     ?? throw new DocxodusException("LEFT document has no w:body.");
+
+                // A very narrow malformed-input compatibility shape: a complete body replacement can
+                // introduce an entirely new paragraph-style universe into a left package that has no
+                // defaults or default paragraph style of its own. Word projects the USED inserted styles
+                // against the left package's stock defaults (rather than raw-copying them), which keeps
+                // their line metrics compact. The helper proves all of the safety preconditions while the
+                // package still contains the original LEFT stories; outside that shape it returns null and
+                // style treatment remains the established general path.
+                var leftHadTheme = main.ThemePart is not null;
+                var insertedStyleNormalization = TryCreateInsertedStyleNormalization(
+                    script, state, main, wDocRight.MainDocumentPart);
 
                 // Preserve the trailing top-level sectPr (a direct child of w:body that is NOT inside a pPr).
                 var trailingSectPr = bodyEl.Elements(W.sectPr).LastOrDefault();
@@ -292,7 +353,7 @@ internal static class IrMarkupRenderer
                 // with the left's effective payload archived in a tracked rPrChange/pPrChange INSIDE
                 // the style definition. Right-only styles are copied in. Numbering keeps the existing
                 // missing-copy treatment (numId collisions are remapped there, not overwritten).
-                TrackStyleDefinitionChanges(wDoc, wDocRight, state);
+                TrackStyleDefinitionChanges(wDoc, wDocRight, state, insertedStyleNormalization, leftHadTheme);
                 // The output's surviving body is RIGHT-sourced (equal/inserted/modified blocks emit
                 // the right document's XML) while the numbering part is seeded from the LEFT. When
                 // a numId collides across the sides with different content, the copy renumbers the
@@ -327,7 +388,6 @@ internal static class IrMarkupRenderer
                 // theme (adopting the right's shifts every theme-referencing cloned run's font away
                 // from the oracle). Backfill Word's stock theme byte-for-byte (WordStockTheme:
                 // Aptos fonts, 2023+ palette — verified identical across 164 Word outputs).
-                var leftHadTheme = main.ThemePart is not null;
                 if (!leftHadTheme)
                     BackfillDefaultTheme(main);
                 // docDefaults backfill (same provenance rule as the theme): when the left's styles
@@ -4330,10 +4390,282 @@ internal static class IrMarkupRenderer
         }
     }
 
-    /// <summary>A relationship id not currently in use by any of the left main part's relationships (parts,
-    /// hyperlinks, external links, and data-part references alike). Deterministic: the first free
-    /// <c>rIdRemap{n}</c> (n ascending from 1). The dedicated <c>rIdRemap</c> prefix avoids colliding with the
-    /// document's own <c>rId{n}</c> numbering — the very collision this remap exists to resolve.</summary>
+    /// <summary>One deliberately narrow style-normalization candidate. It is created only for a
+    /// total main-body replacement whose LEFT stories cannot observe a newly-defaulted paragraph
+    /// style after rejection. The style ids are the complete RIGHT paragraph-style closure actually
+    /// reachable from inserted blocks, including default and basedOn ancestors.</summary>
+    private sealed class InsertedStyleNormalization
+    {
+        public InsertedStyleNormalization(HashSet<string> usedStyleIds)
+        {
+            UsedStyleIds = usedStyleIds;
+        }
+
+        public HashSet<string> UsedStyleIds { get; }
+
+        public bool Uses(string styleId) => UsedStyleIds.Contains(styleId);
+    }
+
+    /// <summary>
+    /// Return the special Word-style provenance mode only when the comparison is a literal full
+    /// replacement of the main body, the LEFT has neither docDefaults nor a default paragraph style,
+    /// and every paragraph in every LEFT story names a fully resolvable LEFT paragraph-style chain.
+    /// Those conditions make a right-only default style observationally unreachable after reject, so
+    /// its tracked style projection cannot alter LEFT body content or direct formatting.
+    /// </summary>
+    private static InsertedStyleNormalization? TryCreateInsertedStyleNormalization(
+        IrEditScript script, RenderState state, MainDocumentPart main, MainDocumentPart? rightMain)
+    {
+        // Notes and headers/footers are global-style consumers too. Keep this compatibility path
+        // main-body-only until their right-only style provenance has a separately proven projection.
+        // The renderer preserves the glossary part untouched. Until its style reachability is
+        // explicitly modeled, a right default must not be allowed to change its rejected view.
+        if (main.GlossaryDocumentPart is not null ||
+            script.NoteOps is not null || script.HeaderFooterOps is not null ||
+            !IsPureFullBodyReplacement(script, state) ||
+            !LeftLacksDefaultsAndDefaultParagraphStyle(main) ||
+            !AllLeftStoryParagraphStylesResolveWithinLeftStyles(main))
+            return null;
+
+        var directlyUsedStyleIds = new HashSet<string>(StringComparer.Ordinal);
+        bool usesImplicitDefault = false;
+        foreach (var op in script.Operations)
+        {
+            if (op.Kind != IrEditOpKind.InsertBlock || IsSectionBreakOp(op, state))
+                continue;
+            var source = SourceElement(op.RightAnchor, state.RightSource);
+            if (source is null)
+                return null; // Provenance is load-bearing for the guard as well as the renderer.
+            foreach (var paragraph in source.DescendantsAndSelf(W.p))
+            {
+                var styleId = (string?)paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val);
+                if (string.IsNullOrEmpty(styleId))
+                    usesImplicitDefault = true;
+                else
+                    directlyUsedStyleIds.Add(styleId);
+            }
+        }
+
+        if (directlyUsedStyleIds.Count == 0 && !usesImplicitDefault)
+            return null;
+
+        // A direct pStyle can inherit all visible formatting from right-only ancestors. Resolve the
+        // whole same-type chain now, while the untouched RIGHT styles part is available; ambiguity,
+        // a missing node, a cycle, or a cross-type hop makes this special projection unsafe.
+        var leftStylesRoot = main.StyleDefinitionsPart?.GetXDocument().Root;
+        var rightStylesRoot = rightMain?.StyleDefinitionsPart?.GetXDocument().Root;
+        return leftStylesRoot is not null && rightStylesRoot is not null &&
+            TryResolveUsedRightParagraphStyleClosure(
+                leftStylesRoot, rightStylesRoot, directlyUsedStyleIds, usesImplicitDefault, out var usedStyleIds)
+            ? new InsertedStyleNormalization(usedStyleIds)
+            : null;
+    }
+
+    private static bool TryResolveUsedRightParagraphStyleClosure(
+        XElement leftStylesRoot, XElement stylesRoot, IReadOnlyCollection<string> directlyUsedStyleIds,
+        bool usesImplicitDefault,
+        out HashSet<string> usedStyleIds)
+    {
+        usedStyleIds = new HashSet<string>(StringComparer.Ordinal);
+
+        // Style ids are package-global. Refuse an ambiguous id even if its duplicate is a different
+        // type: a malformed package can otherwise bind a basedOn edge differently after style copy.
+        var stylesById = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var style in stylesRoot.Elements(W.style))
+        {
+            var styleId = (string?)style.Attribute(W.styleId);
+            if (string.IsNullOrEmpty(styleId))
+                continue;
+            if (!stylesById.TryAdd(styleId, style))
+                return false;
+        }
+
+        var roots = new HashSet<string>(directlyUsedStyleIds, StringComparer.Ordinal);
+        if (usesImplicitDefault)
+        {
+            var defaults = stylesById
+                .Where(pair => string.Equals((string?)pair.Value.Attribute(W.type), "paragraph", StringComparison.Ordinal) &&
+                    IsOn((string?)pair.Value.Attribute(W._default)))
+                .Select(pair => pair.Key)
+                .ToList();
+            if (defaults.Count != 1)
+                return false;
+            roots.Add(defaults[0]);
+        }
+
+        foreach (var styleId in roots)
+            if (!TryAddRightParagraphStyleChain(styleId, stylesById, usedStyleIds))
+                return false;
+
+        // The general style merger matches by (type, styleId), but styleId itself is package-global.
+        // A right paragraph style that collides with any LEFT type would be appended alongside the
+        // left definition. Decline the exceptional projection rather than making that ambiguity
+        // carry a retained default or synthesized property revisions.
+        var leftStyleIds = leftStylesRoot.Elements(W.style)
+            .Select(style => (string?)style.Attribute(W.styleId))
+            .Where(styleId => !string.IsNullOrEmpty(styleId))
+            .Cast<string>()
+            .ToHashSet(StringComparer.Ordinal);
+        if (usedStyleIds.Overlaps(leftStyleIds))
+            return false;
+        return true;
+    }
+
+    private static bool TryAddRightParagraphStyleChain(
+        string styleId, IReadOnlyDictionary<string, XElement> stylesById, HashSet<string> usedStyleIds)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var currentId = styleId;
+        while (true)
+        {
+            if (!seen.Add(currentId) || !stylesById.TryGetValue(currentId, out var style) ||
+                !string.Equals((string?)style.Attribute(W.type), "paragraph", StringComparison.Ordinal))
+                return false;
+
+            usedStyleIds.Add(currentId);
+            var basedOn = style.Element(W.basedOn);
+            if (basedOn is null)
+                return true;
+
+            var basedOnStyleId = (string?)basedOn.Attribute(W.val);
+            if (string.IsNullOrEmpty(basedOnStyleId))
+                return false;
+            currentId = basedOnStyleId;
+        }
+    }
+
+    /// <summary>Strictly prove that every non-section main-body block is either deleted from LEFT or
+    /// inserted from RIGHT, exactly once. A paired/modified/moved block is intentionally disqualifying:
+    /// it could still observe a style on both accept and reject.</summary>
+    private static bool IsPureFullBodyReplacement(IrEditScript script, RenderState state)
+    {
+        var leftAnchors = state.Left.Body.Blocks
+            .Where(b => b is not IrSectionBreak)
+            .Select(b => b.Anchor.ToString())
+            .ToHashSet(StringComparer.Ordinal);
+        var rightAnchors = state.RightSource.Body.Blocks
+            .Where(b => b is not IrSectionBreak)
+            .Select(b => b.Anchor.ToString())
+            .ToHashSet(StringComparer.Ordinal);
+        if (leftAnchors.Count == 0 || rightAnchors.Count == 0)
+            return false;
+
+        var deleted = new HashSet<string>(StringComparer.Ordinal);
+        var inserted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var op in script.Operations)
+        {
+            if (IsSectionBreakOp(op, state))
+                continue;
+            switch (op.Kind)
+            {
+                case IrEditOpKind.DeleteBlock when op.LeftAnchor is { } left && op.RightAnchor is null:
+                    if (!leftAnchors.Contains(left) || !deleted.Add(left))
+                        return false;
+                    break;
+                case IrEditOpKind.InsertBlock when op.RightAnchor is { } right && op.LeftAnchor is null:
+                    if (!rightAnchors.Contains(right) || !inserted.Add(right))
+                        return false;
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return deleted.SetEquals(leftAnchors) && inserted.SetEquals(rightAnchors);
+    }
+
+    /// <summary>The compatibility projection is valid only when the left styles part is present but
+    /// has neither docDefaults nor a default paragraph style. Missing a styles part takes the existing
+    /// stock-default backfill path instead; it has no right-style copy surface to normalize.</summary>
+    private static bool LeftLacksDefaultsAndDefaultParagraphStyle(MainDocumentPart main)
+    {
+        var root = main.StyleDefinitionsPart?.GetXDocument().Root;
+        return root is not null && root.Element(W.docDefaults) is null &&
+            !root.Elements(W.style).Any(style =>
+                ((string?)style.Attribute(W.type) is null or "paragraph") &&
+                IsOn((string?)style.Attribute(W._default)));
+    }
+
+    /// <summary>Scan the same text stories the reader/revision processor understands. Every LEFT
+    /// paragraph style must resolve entirely within the original LEFT styles part: a missing node,
+    /// cycle, type mismatch, malformed basedOn, or default-style dependency could otherwise become
+    /// observable when the right style universe is copied into the rejected package.</summary>
+    private static bool AllLeftStoryParagraphStylesResolveWithinLeftStyles(MainDocumentPart main)
+    {
+        var stylesRoot = main.StyleDefinitionsPart?.GetXDocument().Root;
+        if (stylesRoot is null)
+            return false;
+
+        // Style ids are package-global across types. Ambiguous duplicate ids could resolve to a
+        // different definition after right-only styles are copied, so this deliberately declines.
+        var stylesById = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var style in stylesRoot.Elements(W.style))
+        {
+            var styleId = (string?)style.Attribute(W.styleId);
+            if (string.IsNullOrEmpty(styleId))
+                continue;
+            if (!stylesById.TryAdd(styleId, style))
+                return false;
+        }
+
+        foreach (var part in StyleSafetyStoryParts(main))
+        {
+            var root = part.GetXDocument().Root;
+            if (root is null)
+                return false;
+            foreach (var paragraph in root.DescendantsAndSelf(W.p))
+            {
+                var styleId = (string?)paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val);
+                if (string.IsNullOrEmpty(styleId) ||
+                    !ResolvesLeftParagraphStyleChain(styleId, stylesById))
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool ResolvesLeftParagraphStyleChain(
+        string styleId, IReadOnlyDictionary<string, XElement> stylesById)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var currentId = styleId;
+        while (true)
+        {
+            if (!seen.Add(currentId) || !stylesById.TryGetValue(currentId, out var style) ||
+                !string.Equals((string?)style.Attribute(W.type), "paragraph", StringComparison.Ordinal) ||
+                IsOn((string?)style.Attribute(W._default)))
+                return false;
+
+            var basedOn = style.Element(W.basedOn);
+            if (basedOn is null)
+                return true;
+
+            var basedOnStyleId = (string?)basedOn.Attribute(W.val);
+            if (string.IsNullOrEmpty(basedOnStyleId))
+                return false;
+            currentId = basedOnStyleId;
+        }
+    }
+
+    private static IEnumerable<OpenXmlPart> StyleSafetyStoryParts(MainDocumentPart main)
+    {
+        yield return main;
+        foreach (var header in main.HeaderParts)
+            yield return header;
+        foreach (var footer in main.FooterParts)
+            yield return footer;
+        if (main.FootnotesPart is not null)
+            yield return main.FootnotesPart;
+        if (main.EndnotesPart is not null)
+            yield return main.EndnotesPart;
+        if (main.WordprocessingCommentsPart is not null)
+            yield return main.WordprocessingCommentsPart;
+    }
+
+    private static bool IsOn(string? value) =>
+        string.Equals(value, "1", StringComparison.Ordinal) ||
+        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
     /// Mirror Word compare's style-definition treatment into the LEFT-based output package (decoded
     /// from the Word-compare oracle corpus — see DocxDiffStyleProvenanceTests): keep the left styles
@@ -4345,7 +4677,8 @@ internal static class IrMarkupRenderer
     /// original. No-ops gracefully when either side lacks a styles part.
     /// </summary>
     private static void TrackStyleDefinitionChanges(
-        WordprocessingDocument wDoc, WordprocessingDocument wDocRight, RenderState state)
+        WordprocessingDocument wDoc, WordprocessingDocument wDocRight, RenderState state,
+        InsertedStyleNormalization? insertedStyleNormalization, bool leftHadTheme)
     {
         if (wDoc.MainDocumentPart?.StyleDefinitionsPart is not { } leftStyles ||
             wDocRight.MainDocumentPart?.StyleDefinitionsPart is not { } rightStyles)
@@ -4355,6 +4688,9 @@ internal static class IrMarkupRenderer
         if (outXDoc.Root is not { } root || rightStyles.GetXDocument().Root is not { } rightRoot)
             return;
         var leftOriginalRoot = new XElement(root);   // frozen snapshot for left-effective resolution
+        var stockDocDefaults = insertedStyleNormalization is null
+            ? null
+            : XElement.Parse(leftHadTheme ? WordStockDocDefaults.ClassicXml : WordStockDocDefaults.ModernXml);
 
         foreach (var rightStyle in rightRoot.Elements(W.style))
         {
@@ -4366,7 +4702,27 @@ internal static class IrMarkupRenderer
             if (leftStyle is null)
             {
                 var cloned = new XElement(rightStyle);
-                cloned.Attribute(W._default)?.Remove();
+                bool usedInsertedParagraphStyle = styleId is not null && type == "paragraph" &&
+                    insertedStyleNormalization is not null &&
+                    insertedStyleNormalization.Uses(styleId);
+                // RawStylePayload deliberately strips these markers; never send a pre-existing input
+                // style revision through that path. Keep this individual used style verbatim while
+                // still normalizing other independently-safe members of the same basedOn closure.
+                bool preservesInputPropertyRevisions = usedInsertedParagraphStyle &&
+                    HasStylePropertyRevisions(rightStyle);
+                if (usedInsertedParagraphStyle && !preservesInputPropertyRevisions)
+                {
+                    NormalizeInsertedParagraphStyle(cloned, rightStyle, stockDocDefaults!, state);
+                }
+                else if (!preservesInputPropertyRevisions)
+                {
+                    // In the general path the LEFT's default paragraph style remains authoritative.
+                    // The exceptional normalized path above retains a right default only after proving
+                    // every LEFT story paragraph names a style explicitly. A used default with an
+                    // input property revision is also retained: stripping its default flag would
+                    // change the source revision's reachability before it can be preserved.
+                    cloned.Attribute(W._default)?.Remove();
+                }
                 root.Add(cloned);
                 continue;
             }
@@ -4407,6 +4763,143 @@ internal static class IrMarkupRenderer
             }
         }
         leftStyles.PutXDocument();
+    }
+
+    private static bool HasStylePropertyRevisions(XElement style) =>
+        style.Descendants(W.pPrChange).Any() || style.Descendants(W.rPrChange).Any();
+
+    /// <summary>
+    /// Project a copied, right-only paragraph style as Word does for the guarded total-replacement
+    /// shape. The body keeps its source pPr/rPr verbatim; only the otherwise unreachable style
+    /// definition is made explicit against the LEFT stock defaults, with the raw source payload kept
+    /// in tracked property history. That keeps accept/reject content and direct formatting unchanged.
+    /// </summary>
+    private static void NormalizeInsertedParagraphStyle(
+        XElement outputStyle, XElement rightStyle, XElement stockDocDefaults, RenderState state)
+    {
+        var sourcePPr = RawStylePayload(W.pPr, rightStyle);
+        var sourceRPr = RawStylePayload(W.rPr, rightStyle);
+        var currentPPr = new XElement(sourcePPr);
+        var currentRPr = new XElement(sourceRPr);
+        var stockPPr = StockStyleProperties(stockDocDefaults, W.pPr);
+        var stockRPr = StockStyleProperties(stockDocDefaults, W.rPr);
+
+        // Word's imported style payloads pin an auto 12pt line even when the right source delegated
+        // spacing to its own empty docDefaults. Preserve real before/after values from the source;
+        // only supply a zero after-value when it was inherited. This is the layout-critical piece of
+        // the malformed pgsz → uiPriority projection.
+        EnsureCompactStyleSpacing(currentPPr);
+        NormalizeInsertedStyleRunProperties(currentRPr, stockRPr);
+
+        bool isDefaultParagraphStyle = IsOn((string?)rightStyle.Attribute(W._default));
+        // For the right default, the old payload is the left package's stock defaults — precisely the
+        // values this projection supersedes. Other right-only styles archive their direct source
+        // payload; after reject every one is unreachable by the guard, but retaining it makes the
+        // change history honest and inspectable.
+        var previousPPr = isDefaultParagraphStyle ? stockPPr : sourcePPr;
+        var previousRPr = isDefaultParagraphStyle ? stockRPr : sourceRPr;
+        if (!XNode.DeepEquals(currentPPr, previousPPr))
+            currentPPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), new XElement(previousPPr)));
+        if (!XNode.DeepEquals(currentRPr, previousRPr))
+            currentRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), new XElement(previousRPr)));
+
+        outputStyle.Elements(W.pPr).Remove();
+        outputStyle.Elements(W.rPr).Remove();
+        var anchor = outputStyle.Elements().FirstOrDefault(e =>
+            e.Name == W.tblPr || e.Name == W.trPr || e.Name == W.tcPr || e.Name == W.tblStylePr);
+        if (anchor is null)
+        {
+            outputStyle.Add(currentPPr);
+            outputStyle.Add(currentRPr);
+        }
+        else
+        {
+            anchor.AddBeforeSelf(currentPPr);
+            anchor.AddBeforeSelf(currentRPr);
+        }
+    }
+
+    private static XElement StockStyleProperties(XElement docDefaults, XName propertyName)
+    {
+        var properties = propertyName == W.pPr
+            ? docDefaults.Element(W.pPrDefault)?.Element(W.pPr)
+            : docDefaults.Element(W.rPrDefault)?.Element(W.rPr);
+        return new XElement(propertyName, properties?.Elements());
+    }
+
+    /// <summary>Ensure the compact Word-style line spacing without replacing source direct pPr
+    /// facts such as heading before/after spacing, outline level, shading, or indentation.</summary>
+    private static void EnsureCompactStyleSpacing(XElement pPr)
+    {
+        var spacing = pPr.Element(W.spacing);
+        if (spacing is null)
+        {
+            spacing = new XElement(W.spacing,
+                new XAttribute(W.after, 0),
+                new XAttribute(W.line, 240),
+                new XAttribute(W.lineRule, "auto"));
+            // Insert before the first present CT_PPrBase child ordered after w:spacing (or any
+            // foreign-namespace extension, which likewise belongs after the standard sequence). In
+            // particular w:ind/w:jc commonly occur without explicit spacing; appending in that
+            // shape violates schema order and makes Word repair the styles part on open.
+            var tail = pPr.Elements().FirstOrDefault(e =>
+                PPrChildrenAfterSpacing.Contains(e.Name) || e.Name.Namespace != W.w);
+            if (tail is null)
+                pPr.Add(spacing);
+            else
+                tail.AddBeforeSelf(spacing);
+        }
+        else
+        {
+            if (spacing.Attribute(W.after) is null)
+                spacing.SetAttributeValue(W.after, 0);
+            spacing.SetAttributeValue(W.line, 240);
+            spacing.SetAttributeValue(W.lineRule, "auto");
+        }
+
+        // Word writes the schema-default color explicitly when it materializes a shaded style.
+        // This is rendering-neutral but makes the copied style deterministic across consumers.
+        var shading = pPr.Element(W.shd);
+        if (shading is not null && shading.Attribute(W.color) is null)
+            shading.SetAttributeValue(W.color, "auto");
+    }
+
+    /// <summary>
+    /// Materialize only the run-format facts that differ from the stock left defaults. A right
+    /// 12-point style inherits size from stock, while an explicit larger heading/title keeps its
+    /// size. Modern stock has kern=2, whereas Word projects these imported source styles with
+    /// kern=0.
+    /// </summary>
+    private static void NormalizeInsertedStyleRunProperties(XElement rPr, XElement stockRPr)
+    {
+        var stockSize = (string?)stockRPr.Element(W.sz)?.Attribute(W.val);
+        var stockSizeCs = (string?)stockRPr.Element(W.szCs)?.Attribute(W.val);
+        var size = rPr.Element(W.sz);
+        var sizeCs = rPr.Element(W.szCs);
+        if (size is not null && sizeCs is not null &&
+            string.Equals((string?)size.Attribute(W.val), stockSize, StringComparison.Ordinal) &&
+            string.Equals((string?)sizeCs.Attribute(W.val), stockSizeCs, StringComparison.Ordinal))
+        {
+            size.Remove();
+            sizeCs.Remove();
+        }
+
+        // Only override kerning when the stock defaults supplied a nonzero baseline. An explicit
+        // source kern setting is direct style formatting and must remain authoritative.
+        if (stockRPr.Element(W.kern) is not null && rPr.Element(W.kern) is null)
+        {
+            var kern = new XElement(W.kern, new XAttribute(W.val, 0));
+            // Extensions such as w14:ligatures belong after the standard CT_RPr sequence, so they
+            // are an insertion tail too. Appending kern after one is just as schema-invalid as
+            // appending it after w:lang.
+            var tail = rPr.Elements().FirstOrDefault(e =>
+                RPrChildrenAfterKern.Contains(e.Name) || e.Name.Namespace != W.w);
+            if (tail is null)
+                rPr.Add(kern);
+            else
+                tail.AddBeforeSelf(kern);
+        }
+
     }
 
     /// <summary>
@@ -4858,6 +5351,10 @@ internal static class IrMarkupRenderer
         return used;
     }
 
+    /// <summary>A relationship id not currently in use by any of the left main part's relationships (parts,
+    /// hyperlinks, external links, and data-part references alike). Deterministic: the first free
+    /// <c>rIdRemap{n}</c> (n ascending from 1). The dedicated <c>rIdRemap</c> prefix avoids colliding with the
+    /// document's own <c>rId{n}</c> numbering — the very collision this remap exists to resolve.</summary>
     private static string FreshRelationshipId(OpenXmlPart leftMain)
     {
         var used = UsedRelationshipIds(leftMain);
