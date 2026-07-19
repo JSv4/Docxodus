@@ -654,6 +654,68 @@ public class HtmlConversionOpsTests
         Assert.DoesNotContain("line-height", html);
     }
 
+    // Strict/compatibility producers can express paragraph spacing as fractional point measures
+    // rather than raw twips. It must use the same measure parser for before and line spacing so
+    // one style default cannot abort every paragraph in the document.
+    [Fact]
+    public void HCO073_PointSuffixedAutoLineSpacing_ConvertsToPercent()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:body><w:p><w:pPr><w:spacing w:before=\"2pt\" w:line=\"12.95pt\" w:lineRule=\"auto\"/>" +
+                    "</w:pPr><w:r><w:t>HCO073 retained text</w:t></w:r></w:p><w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO073 retained text", html);
+        Assert.Contains("line-height: 107.9%", html);
+    }
+
+    // Table indentation and preceding paragraph spacing can use point measures too. A table-cell
+    // fill with no explicit shading pattern is likewise a common Word-compatible clear shading
+    // form. Normalize both shapes without throwing while probing the shade mapper.
+    [Fact]
+    public void HCO074_CellFillWithoutShadeValue_RendersClearFill()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:body><w:p><w:pPr><w:spacing w:after=\"8pt\"/></w:pPr><w:r><w:t>HCO074 preceding text</w:t></w:r></w:p>" +
+                    "<w:tbl><w:tblPr><w:tblInd w:w=\"0pt\" w:type=\"dxa\"/></w:tblPr>" +
+                    "<w:tblGrid><w:gridCol w:w=\"2400\"/></w:tblGrid><w:tr><w:tc>" +
+                    "<w:tcPr><w:tcW w:w=\"2400\" w:type=\"dxa\"/><w:shd w:fill=\"D9EAF7\"/></w:tcPr>" +
+                    "<w:p><w:r><w:t>HCO074 retained text</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
+                    "<w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO074 retained text", html);
+        Assert.Contains("background: #D9EAF7", html);
+    }
+
     // The viewer's byte-based HTML bridge must open Strict OOXML packages just as DocxDiff does.
     // Exercise both full-document and anchor-addressed block rendering; before normalization the
     // converter sees no transitional w:body and throws on these packages.

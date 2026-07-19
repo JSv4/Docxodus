@@ -4542,7 +4542,7 @@ namespace Docxodus
                 {
                     if (tblIndType == "dxa")
                     {
-                        var width = (decimal?)tblInd.Attribute(W._w);
+                        var width = WordprocessingMLUtil.AttributeToTwips(tblInd.Attribute(W._w));
                         if (width != null)
                         {
                             style.AddIfMissing("margin-left",
@@ -4557,12 +4557,12 @@ namespace Docxodus
             var tblpPr = element.Elements(W.tblPr).Elements(W.tblpPr).FirstOrDefault();
             if (tblpPr != null)
             {
-                var topFromText = (decimal?)tblpPr.Attribute(W.topFromText);
+                var topFromText = WordprocessingMLUtil.AttributeToTwips(tblpPr.Attribute(W.topFromText));
                 if (topFromText != null && topFromText > 0)
                     style.AddIfMissing("margin-top",
                         string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", topFromText / 20m));
 
-                var bottomFromText = (decimal?)tblpPr.Attribute(W.bottomFromText);
+                var bottomFromText = WordprocessingMLUtil.AttributeToTwips(tblpPr.Attribute(W.bottomFromText));
                 if (bottomFromText != null && bottomFromText > 0)
                     style.AddIfMissing("margin-bottom",
                         string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", bottomFromText / 20m));
@@ -4582,7 +4582,7 @@ namespace Docxodus
                 {
                     var precedingPPr = precedingSibling.Element(W.pPr);
                     var precedingSpacing = precedingPPr?.Element(W.spacing);
-                    var afterVal = (decimal?)precedingSpacing?.Attribute(W.after);
+                    var afterVal = WordprocessingMLUtil.AttributeToTwips(precedingSpacing?.Attribute(W.after));
 
                     // If preceding paragraph has no spacing-after or zero, table needs top margin
                     if (precedingSpacing == null || afterVal == null || afterVal == 0)
@@ -5333,7 +5333,9 @@ namespace Docxodus
         {
             if (spacing == null) return;
 
-            var spacingBefore = suppressLeadingWhiteSpace ? 0 : (decimal?) spacing.Attribute(W.before);
+            var spacingBefore = suppressLeadingWhiteSpace
+                ? 0
+                : WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.before));
             if (spacingBefore != null && elementName != Xhtml.span)
                 style.AddIfMissing("margin-top",
                     spacingBefore > 0m
@@ -5342,7 +5344,11 @@ namespace Docxodus
 
             // Per OOXML spec (ISO/IEC 29500), when lineRule is absent the default is "auto"
             var lineRule = (string) spacing.Attribute(W.lineRule) ?? (spacing.Attribute(W.line) != null ? "auto" : null);
-            if (lineRule == "auto" && (decimal?)spacing.Attribute(W.line) is { } autoLine)
+            // Word also permits point-suffixed line values (for example, 12.95pt) in
+            // compatibility-produced packages.  Normalize all line measures to twips before
+            // deriving their CSS value, just as before/after spacing already does below.
+            var line = WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.line));
+            if (lineRule == "auto" && line is { } autoLine)
             {
                 if (autoLine != 240m)
                 {
@@ -5350,12 +5356,12 @@ namespace Docxodus
                     style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}%", pct));
                 }
             }
-            if (lineRule == "exact" && (decimal?)spacing.Attribute(W.line) is { } exactLine)
+            if (lineRule == "exact" && line is { } exactLine)
             {
                 var points = exactLine/20m;
                 style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", points));
             }
-            if (lineRule == "atLeast" && (decimal?)spacing.Attribute(W.line) is { } atLeastLine)
+            if (lineRule == "atLeast" && line is { } atLeastLine)
             {
                 var points = atLeastLine/20m;
                 if (points >= 14m)
@@ -7602,17 +7608,18 @@ namespace Docxodus
         {
             if (shd == null)
                 return;
-            var shadeType = (string)shd.Attribute(W.val);
+            // Word and other producers sometimes omit w:val for a plain cell fill.  OOXML's
+            // effective behavior is a clear shading pattern, so retain the fill rather than
+            // passing a null key to the shade lookup.
+            var shadeType = (string?)shd.Attribute(W.val) ?? "clear";
 
             // Resolve color and fill with theme support
             var themeScheme = contextElement != null ? GetThemeColorScheme(contextElement) : null;
             var color = ResolveThemeColor(shd, W.color, W.themeColor, W.themeTint, W.themeShade, themeScheme);
             var fill = ResolveThemeColor(shd, W.fill, W.themeFill, W.themeFillTint, W.themeFillShade, themeScheme);
 
-            if (ShadeMapper.ContainsKey(shadeType))
-            {
-                color = ShadeMapper[shadeType](color, fill);
-            }
+            if (ShadeMapper.TryGetValue(shadeType, out var shadeMapper))
+                color = shadeMapper(color, fill);
             if (color != null)
             {
                 var cvtColor = ConvertColor(color);
