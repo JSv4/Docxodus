@@ -444,24 +444,36 @@ internal static class IrMarkupRenderer
                 }
                 delEls.RemoveAt(0);
 
-                // Word's seam shape (decoded across the oracle corpus): the seam paragraph — the
-                // one that survives BOTH accept and reject — carries a LIVE mark and the INS side's
-                // DIRECT props (real spacing/indent survive accept) but never a style reference the
-                // left universe can't resolve (a Title/Heading on the right renders plain in Word's
-                // own compare output when the left lacks the style), never the del side's pPr (the
-                // left's style must not outlive accept), and never a w:pPrChange (no format-change
-                // bars on seam lines). With the seam mark live, accept and reject round-trip with
-                // no further help: the ins runs survive accept, the del runs survive reject, and
-                // every FOLLOWING deleted paragraph keeps its tracked del mark exactly as Word's
-                // output does (no "live terminator" — lifting a real deleted paragraph to a live
-                // mark stamped a phantom paragraph into the accepted document). The del-side pPr
-                // was adopted above for its tracked mark; replace it unless it carries an inline
-                // w:sectPr (dropping that would silently move a section break).
-                if (lastIns.Element(W.pPr) is not { } seamPPr || seamPPr.Element(W.sectPr) is null)
+                // Live terminator: the last deleted paragraph of the CONTIGUOUS paragraph chain that
+                // starts at the seam (the seam itself when no deleted paragraph follows it directly)
+                // keeps an untracked mark — accept coalesces the chain into it, ending the inserted
+                // text there. A deleted TABLE breaks the chain: paragraphs beyond it are disconnected
+                // from the seam's accept-time coalescing, so they keep their tracked marks (accept
+                // removes them via the deleted-range rules; a live mark there would leave a stray
+                // empty paragraph behind).
+                var terminator = lastIns;
+                foreach (var el in delEls)
                 {
-                    lastIns.Element(W.pPr)?.Remove();
+                    if (el.Name != W.p)
+                        break;
+                    terminator = el;
+                }
+                terminator.Element(W.pPr)?.Element(W.rPr)?.Elements(W.del).Remove();
+
+                // Word's seam-terminator shape (decoded across the oracle corpus): the surviving
+                // paragraph carries the INS side's DIRECT props — real spacing/indent survive —
+                // but never a style reference the left universe can't resolve (a Title/Heading on
+                // the right renders plain in Word's own compare output when the left lacks the
+                // style), never the del side's pPr (the left's style must not outlive accept),
+                // and never a w:pPrChange (Word puts no format-change bars on seam lines).
+                // Skipped when the del-side pPr carries an inline w:sectPr — replacing it would
+                // silently move a section break (the seam guard above only vets firstDel/lastIns,
+                // not a chain terminator).
+                if (terminator.Element(W.pPr) is not { } termPPr || termPPr.Element(W.sectPr) is null)
+                {
+                    terminator.Element(W.pPr)?.Remove();
                     if (insPPr is not null)
-                        lastIns.AddFirst(new XElement(insPPr));
+                        terminator.AddFirst(new XElement(insPPr));
                 }
             }
             sink.AddRange(delEls);
