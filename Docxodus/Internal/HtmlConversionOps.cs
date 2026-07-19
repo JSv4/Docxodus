@@ -74,6 +74,11 @@ internal static class HtmlConversionOps
         }
 
         var renderComments = options.CommentRenderMode >= 0;
+        // The paginated React viewer injects this document HTML into its capture host. A body margin
+        // therefore applies to the HOST body as well as the document staging tree and makes every fixed-size
+        // page box overflow onto a second printed page. Keep the comfortable standalone-document margin, but
+        // leave the host flush when pagination owns page geometry.
+        string bodyMargin = options.PaginationMode == (int)PaginationMode.Paginated ? "0" : "20px";
 
         var settings = new WmlToHtmlConverterSettings
         {
@@ -81,7 +86,7 @@ internal static class HtmlConversionOps
             CssClassPrefix = options.CssClassPrefix,
             FabricateCssClasses = options.FabricateCssClasses,
             AdditionalCss = options.AdditionalCss,
-            GeneralCss = "body { font-family: Arial, sans-serif; margin: 20px; } " +
+            GeneralCss = $"body {{ font-family: Arial, sans-serif; margin: {bodyMargin}; }} " +
                          "span { white-space: pre-wrap; }",
             RenderComments = renderComments,
             CommentRenderMode = renderComments

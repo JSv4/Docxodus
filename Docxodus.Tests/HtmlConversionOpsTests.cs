@@ -30,6 +30,20 @@ public class HtmlConversionOpsTests
     }
 
     [Fact]
+    public void HCO003_PaginatedHtml_LeavesTheCaptureHostBodyFlush()
+    {
+        // Paginated HTML is injected into the React viewer's capture host. Its fixed-size page boxes
+        // own geometry, so a converter-level body margin must not shrink/overflow that host. Standalone
+        // conversion retains the readable 20px margin for existing consumers.
+        string paginated = HtmlConversionOps.ConvertToHtml(TourPlanBytes(),
+            new HtmlConversionOptions { PaginationMode = (int)PaginationMode.Paginated });
+        string standalone = HtmlConversionOps.ConvertToHtml(TourPlanBytes(), new HtmlConversionOptions());
+
+        Assert.Contains("body { font-family: Arial, sans-serif; margin: 0; }", paginated);
+        Assert.Contains("body { font-family: Arial, sans-serif; margin: 20px; }", standalone);
+    }
+
+    [Fact]
     public void HCO020_BulletListMarker_RendersUnicodeBullet()
     {
         // A bullet list item carries the Symbol-font glyph U+F0B7, which renders as a blank box in a
