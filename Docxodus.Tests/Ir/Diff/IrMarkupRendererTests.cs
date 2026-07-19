@@ -405,6 +405,61 @@ public class IrMarkupRendererTests
         AssertRoundTrip(left, right, label: "modify-paragraph");
     }
 
+    /// <summary>
+    /// A Modified table with a tail column add must stay ONE table. The table differ deliberately
+    /// emits three paired cell ops plus one right-only cell op per row; rendering that right-only
+    /// tail cell as <c>w:cellIns</c> lets the native <c>w:tblGridChange</c> restore the old grid on
+    /// reject. Falling back to whole-table del+ins is structurally coarser than Word's one-table
+    /// revision shape and is especially visible when every row grows by one column.
+    /// </summary>
+    [Fact]
+    public void Render_table_tail_column_add_stays_one_table_and_round_trips()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(c => Cell(c, width))) + "</w:tr>";
+        static string Grid(int width, int count) =>
+            "<w:tblGrid>" + string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", count)) + "</w:tblGrid>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr><w:tblW w:w=\"6000\" w:type=\"dxa\"/></w:tblPr>" +
+            Grid(width, columns) + string.Concat(rows) + "</w:tbl>";
+
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>lead</w:t></w:r></w:p>" +
+            Table(2000, 3,
+                Row(2000, "old A", "old B", "old C"),
+                Row(2000, "old D", "old E", "old F"),
+                Row(2000, "old G", "old H", "old I")));
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>lead</w:t></w:r></w:p>" +
+            Table(1500, 4,
+                Row(1500, "new A", "new B", "new C", "new D"),
+                Row(1500, "new E", "new F", "new G", "new H"),
+                Row(1500, "new I", "new J", "new K", "new L")));
+
+        var rendered = RenderMarkup(left, right);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var table = Assert.Single(body.Elements(W.tbl)); // not the whole-table del+ins fallback
+        var rows = table.Elements(W.tr).ToList();
+        Assert.Equal(3, rows.Count);
+        Assert.All(rows, row => Assert.Equal(4, row.Elements(W.tc).Count()));
+        Assert.Equal(3, table.Descendants(W.cellIns).Count());
+        Assert.Empty(table.Descendants(W.cellDel));
+        Assert.Single(table.Descendants(W.tblGridChange));
+        Assert.Equal(9, table.Descendants(W.tcPrChange).Count());
+        Assert.Equal(0, SchemaErrorCount(rendered));
+
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "table-tail-column-add");
+    }
+
     [Fact]
     public void Render_split_run_fragment_with_boundary_whitespace_carries_xml_space_preserve()
     {

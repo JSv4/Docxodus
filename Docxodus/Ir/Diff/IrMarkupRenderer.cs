@@ -954,27 +954,46 @@ internal static class IrMarkupRenderer
             return true;
         }
 
-        // A column add/remove (a cell op missing its left or right anchor — IrTableDiffer.DiffCells emits these
-        // for surplus cells) cannot be rendered as in-place per-cell markup: a deleted column's cell op would be
-        // dropped (the `ci >= rightCells.Count` cutoff below), so RejectRevisions would NOT restore the column,
-        // and an added column's cell would render unmarked. Bail to the caller's whole-table del(left)+ins(right)
-        // fallback, which round-trips exactly (reject ≡ left, accept ≡ right) at the cost of coarser markup —
-        // the honest representation, since the per-cell renderer is column-count-stable in v1.
+        var rightCells = rightRowSrc.Elements(W.tc).ToList();
+        // Tail column additions have unpaired right cells. They can round-trip in-place: start from the
+        // accepted (right) table grid, mark the new cells with w:cellIns, and let the table-grid property
+        // revision restore the old grid on reject. Restrict this path to a contiguous tail: accepting an
+        // unpaired cell in the middle would silently render a non-tail column insertion with the wrong
+        // geometry. A left-only cell still uses the conservative fallback here.
+        if (rowOp.CellOps.Count != rightCells.Count || rowOp.CellOps.Any(c => c.RightCellAnchor == null))
+            return false;
+
+        var inRightOnlyTail = false;
         foreach (var cellOp in rowOp.CellOps)
-            if (cellOp.LeftCellAnchor == null || cellOp.RightCellAnchor == null)
+        {
+            if (cellOp.LeftCellAnchor == null)
+            {
+                inRightOnlyTail = true;
+                continue;
+            }
+
+            if (inRightOnlyTail)
                 return false;
+        }
 
         var newRow = new XElement(W.tr);
         foreach (var pre in rightRowSrc.Elements().Where(e => e.Name != W.tc))
             newRow.Add(StripUnids(new XElement(pre)));
 
-        var rightCells = rightRowSrc.Elements(W.tc).ToList();
         int ci = 0;
         foreach (var cellOp in rowOp.CellOps)
         {
             if (ci >= rightCells.Count)
-                break;
+                return false;
             var cellSrc = rightCells[ci++];
+            if (cellOp.LeftCellAnchor == null)
+            {
+                var insertedCell = StripUnids(new XElement(cellSrc));
+                state.RegisterMediaReferences(insertedCell);
+                MarkWholeCell(insertedCell, RevKind.Ins, state);
+                newRow.Add(insertedCell);
+                continue;
+            }
             var newCell = new XElement(W.tc);
             foreach (var pre in cellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
                 newCell.Add(StripUnids(new XElement(pre)));
@@ -998,10 +1017,6 @@ internal static class IrMarkupRenderer
             }
             newRow.Add(newCell);
         }
-        // Append any right cells the cell-op list did not cover (column surplus) verbatim.
-        for (; ci < rightCells.Count; ci++)
-            newRow.Add(StripUnids(new XElement(rightCells[ci])));
-
         state.RegisterMediaReferences(newRow);
         // Track this row's trPr + each cell's tcPr shell change against the accepted-state left row.
         if (leftRowSrc != null)
