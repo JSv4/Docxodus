@@ -90,6 +90,17 @@ internal sealed class IrBlockSimilarity
     public int PairingWordCount(IrParagraph paragraph) => Bag(paragraph).PairingWordCount;
 
     /// <summary>
+    /// The weak junction matcher admits lexical words plus a deliberately narrow semantic-numeric
+    /// category: four-digit calendar years. A year carries enough meaning to preserve Word's
+    /// date↔heading pairing, unlike a list ordinal such as <c>17</c>; the stricter
+    /// <see cref="PairingWordKeys"/> gate remains unchanged for similarity pairing.
+    /// </summary>
+    public IReadOnlyDictionary<string, int> JunctionWordKeys(IrParagraph paragraph) => Bag(paragraph).JunctionWordCounts;
+
+    /// <summary>Number of lexical-or-year tokens used by the weak junction matcher.</summary>
+    public int JunctionWordCount(IrParagraph paragraph) => Bag(paragraph).JunctionWordCount;
+
+    /// <summary>
     /// Should a lone 1×1 gap residue of these two paragraphs force-pair as Modified? True when
     /// EITHER side has no <see cref="IrDiffTokenKind.Word"/> tokens at all (an atomic-only or empty
     /// paragraph — textboxes/images carry no lexical evidence to demand, and demoting them to
@@ -172,6 +183,28 @@ internal sealed class IrBlockSimilarity
         return (intersection, union == 0 ? 0.0 : (double)intersection / union);
     }
 
+    /// <summary>
+    /// Junction-only overlap over lexical word tokens plus four-digit calendar years. This preserves
+    /// the numeric-ordinal protection for the general similarity pass while allowing Word's known
+    /// date-bearing weak pairing behavior to participate in the junction LCS.
+    /// </summary>
+    public (int SharedWords, double WordJaccard) JunctionWordOverlap(IrParagraph left, IrParagraph right)
+    {
+        var a = Bag(left);
+        var b = Bag(right);
+        if (a.JunctionWordCount == 0 || b.JunctionWordCount == 0)
+            return (0, 0.0);
+
+        int intersection = 0;
+        var (small, large) = a.JunctionWordCounts.Count <= b.JunctionWordCounts.Count ? (a, b) : (b, a);
+        foreach (var kv in small.JunctionWordCounts)
+            if (large.JunctionWordCounts.TryGetValue(kv.Key, out int other))
+                intersection += System.Math.Min(kv.Value, other);
+
+        int union = a.JunctionWordCount + b.JunctionWordCount - intersection;
+        return (intersection, union == 0 ? 0.0 : (double)intersection / union);
+    }
+
     private MatchKeyBag Bag(IrParagraph paragraph)
     {
         if (_bagCache.TryGetValue(paragraph, out var bag))
@@ -221,22 +254,27 @@ internal sealed class IrBlockSimilarity
         public Dictionary<string, int> Counts { get; }
         public Dictionary<string, int> WordCounts { get; }  // Word-kind tokens only, by MatchKey
         public Dictionary<string, int> PairingWordCounts { get; } // Word keys containing at least one letter
+        public Dictionary<string, int> JunctionWordCounts { get; } // lexical keys plus year-like values
         public HashSet<string> TrimmedWords { get; }        // raw word texts, punct-trimmed + case-folded
         public int Total { get; }      // sum of all multiplicities (every token kind)
         public int WordCount { get; }  // Word-kind tokens only
         public int PairingWordCount { get; } // Word-kind tokens carrying lexical (not ordinal-only) content
+        public int JunctionWordCount { get; } // Lexical tokens plus semantic calendar years
 
         private MatchKeyBag(Dictionary<string, int> counts, Dictionary<string, int> wordCounts,
-            Dictionary<string, int> pairingWordCounts, HashSet<string> trimmedWords, int total,
-            int wordCount, int pairingWordCount)
+            Dictionary<string, int> pairingWordCounts, Dictionary<string, int> junctionWordCounts,
+            HashSet<string> trimmedWords, int total, int wordCount, int pairingWordCount,
+            int junctionWordCount)
         {
             Counts = counts;
             WordCounts = wordCounts;
             PairingWordCounts = pairingWordCounts;
+            JunctionWordCounts = junctionWordCounts;
             TrimmedWords = trimmedWords;
             Total = total;
             WordCount = wordCount;
             PairingWordCount = pairingWordCount;
+            JunctionWordCount = junctionWordCount;
         }
 
         public static MatchKeyBag Build(IrParagraph paragraph, IrDiffSettings settings)
@@ -245,8 +283,9 @@ internal sealed class IrBlockSimilarity
             var counts = new Dictionary<string, int>();
             var wordCounts = new Dictionary<string, int>();
             var pairingWordCounts = new Dictionary<string, int>();
+            var junctionWordCounts = new Dictionary<string, int>();
             var trimmedWords = new HashSet<string>();
-            int wordCount = 0, pairingWordCount = 0;
+            int wordCount = 0, pairingWordCount = 0, junctionWordCount = 0;
             foreach (var t in tokens)
             {
                 counts[t.MatchKey] = counts.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
@@ -259,11 +298,17 @@ internal sealed class IrBlockSimilarity
                         pairingWordCounts[t.MatchKey] = pairingWordCounts.TryGetValue(t.MatchKey, out int p) ? p + 1 : 1;
                         pairingWordCount++;
                     }
+                    if (ContainsLetter(t.Text) || IsCalendarYear(t.Text))
+                    {
+                        junctionWordCounts[t.MatchKey] = junctionWordCounts.TryGetValue(t.MatchKey, out int j) ? j + 1 : 1;
+                        junctionWordCount++;
+                    }
                     AddLexicalPieces(t.Text, trimmedWords, settings);
                 }
             }
             return new MatchKeyBag(
-                counts, wordCounts, pairingWordCounts, trimmedWords, tokens.Count, wordCount, pairingWordCount);
+                counts, wordCounts, pairingWordCounts, junctionWordCounts, trimmedWords, tokens.Count,
+                wordCount, pairingWordCount, junctionWordCount);
         }
 
         private static bool ContainsLetter(string value)
@@ -272,6 +317,20 @@ internal sealed class IrBlockSimilarity
                 if (char.IsLetter(c))
                     return true;
             return false;
+        }
+
+        private static bool IsCalendarYear(string value)
+        {
+            if (value.Length != 4)
+                return false;
+            int year = 0;
+            foreach (char c in value)
+            {
+                if (c < '0' || c > '9')
+                    return false;
+                year = year * 10 + (c - '0');
+            }
+            return year is >= 1900 and <= 2099;
         }
 
         /// <summary>Split a raw word on EVERY non-letter/digit character and add pieces normalized
@@ -322,7 +381,8 @@ internal sealed class IrBlockSimilarity
                             }
             // Table bags never feed WordOverlap/ResidueForcePair (junction pairing is
             // paragraph-only), so the word-only structures are not materialized.
-            return new MatchKeyBag(counts, EmptyCounts, EmptyCounts, EmptyWords, total, wordCount, 0);
+            return new MatchKeyBag(
+                counts, EmptyCounts, EmptyCounts, EmptyCounts, EmptyWords, total, wordCount, 0, 0);
         }
     }
 }

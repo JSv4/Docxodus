@@ -845,11 +845,11 @@ internal static class IrBlockAligner
         // mostly-contained paragraph is an extension, not a replacement).
         bool HasPairingEvidence(IrParagraph lp, IrParagraph rp, int sharedWords)
         {
-            int minWords = Math.Min(similarity.PairingWordCount(lp), similarity.PairingWordCount(rp));
+            int minWords = Math.Min(similarity.JunctionWordCount(lp), similarity.JunctionWordCount(rp));
             if (minWords > 0 && sharedWords * 2 >= minWords)
                 return true;
-            var a = similarity.PairingWordKeys(lp);
-            var b = similarity.PairingWordKeys(rp);
+            var a = similarity.JunctionWordKeys(lp);
+            var b = similarity.JunctionWordKeys(rp);
             var (small, large) = a.Count <= b.Count ? (a, b) : (b, a);
             foreach (var kv in small)
                 if (large.ContainsKey(kv.Key) && !FunctionWords.Contains(kv.Key))
@@ -866,7 +866,7 @@ internal static class IrBlockAligner
                 return 0;
             var lp = (IrParagraph)leftBlocks[li];
             var rp = (IrParagraph)rightBlocks[rj];
-            var (shared, jaccard) = similarity.PairingWordOverlap(lp, rp);
+            var (shared, jaccard) = similarity.JunctionWordOverlap(lp, rp);
             if (shared < JunctionMinSharedWords)
                 return 0;
             double posL = m == 1 ? 0 : (double)i / (m - 1);
@@ -985,12 +985,12 @@ internal static class IrBlockAligner
                         continue;
                     if (leftBlocks[nl] is not IrParagraph lp || rightBlocks[nr] is not IrParagraph rp)
                         continue;
-                    var (shared, _) = similarity.PairingWordOverlap(lp, rp);
+                    var (shared, _) = similarity.JunctionWordOverlap(lp, rp);
                     if (shared < JunctionMinSharedWords)
                         continue;
                     // Size-parity guard: on shared-word-only evidence a paragraph does not pair
                     // with one several times its word count (see JunctionGrowRatio).
-                    int wl = similarity.PairingWordCount(lp), wr = similarity.PairingWordCount(rp);
+                    int wl = similarity.JunctionWordCount(lp), wr = similarity.JunctionWordCount(rp);
                     if (Math.Min(wl, wr) < JunctionGrowRatio * Math.Max(wl, wr))
                         continue;
                     // Pairing-evidence discipline (same as the LCS): adjacency to a pair plus

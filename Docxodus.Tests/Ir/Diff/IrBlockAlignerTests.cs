@@ -495,6 +495,49 @@ public class IrBlockAlignerTests
     }
 
     [Fact]
+    public void Junction_pairs_date_and_heading_on_a_shared_calendar_year()
+    {
+        // Word Compare's product-roadmap ↔ project-plan redline joins the old heading to the
+        // inserted date on their shared 2026. A calendar year is semantic date content, unlike a
+        // short list ordinal, so it remains valid weak-junction evidence. The 8×7 replace gap keeps
+        // the Date paragraph at the same relative location as the corpus regression.
+        var l = Doc(
+            "Product Roadmap 2026",
+            "ablation1", "ablation2", "ablation3", "ablation4",
+            "ablation5", "ablation6", "ablation7");
+        var r = Doc(
+            "Project Plan",
+            "Date: February 1, 2026",
+            "quartz1", "quartz2", "quartz3", "quartz4", "quartz5");
+        var a = Align(l, r);
+
+        Assert.Contains(a.Entries, e => e.Kind == IrAlignmentKind.Modified &&
+            e.Left is not null && e.Right is not null &&
+            Text(e.Left) == "Product Roadmap 2026" &&
+            Text(e.Right) == "Date: February 1, 2026");
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Junction_keeps_short_shared_ordinals_out_of_weak_pairing()
+    {
+        // The numeric guard added in 19e0 exists to stop list scaffolding from manufacturing a
+        // Modified diagonal. The calendar-year exception must not re-admit a short ordinal.
+        var l = Doc(
+            "Legacy Ledger 17",
+            "ablation1", "ablation2", "ablation3", "ablation4",
+            "ablation5", "ablation6", "ablation7");
+        var r = Doc(
+            "Project Plan",
+            "Briefing Note 17",
+            "quartz1", "quartz2", "quartz3", "quartz4", "quartz5");
+        var a = Align(l, r);
+
+        Assert.Equal(0, Count(a, IrAlignmentKind.Modified));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
     public void Junction_declines_stopword_grade_overlap()
     {
         // Word-oracle data point (header_no_rels ↔ heading_1_bold): despite sharing "with"/"the",
