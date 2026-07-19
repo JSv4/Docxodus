@@ -281,6 +281,22 @@ internal sealed record IrDiffSettings
     public bool PreserveInputRevisions { get; init; }
 
     /// <summary>
+    /// RENDER-TIME, explicit compatibility projection for a narrow class of Microsoft Word repair artifacts.
+    /// When enabled, the markup renderer may replace an otherwise content-equal / table-format-only body with
+    /// paired whole-block deletes and inserts, but only after the raw-package detector proves all of the
+    /// following: accepted body content and all modeled side stories are equal; both inputs carry matching
+    /// pre-existing insertions and deletions; at least 64 paired raw <c>w14:paraId</c>s churn by at least 50%;
+    /// all non-identity body differences are the whitelisted table-shell repair normalization; and styles.xml
+    /// differs only by implicit <c>basedOn</c>/<c>next</c> defaults. The default is false.
+    ///
+    /// This setting deliberately changes only markup projection, never the edit script or aligner. It reads the
+    /// raw package for detection but renders over the accepted source view (it therefore does not preserve old
+    /// revision wrappers). It is the semantic, round-tripping alternative to Word Compare's own insertion-only
+    /// phantom replay: accept yields the right accepted body and reject yields the left accepted body.
+    /// </summary>
+    public bool WordRepairCompatibility { get; init; }
+
+    /// <summary>
     /// DIFF-TIME setting (block-format-change family, 2026-07-03). When true (the DEFAULT), paragraph-and-above
     /// property changes are DETECTED and TRACKED: the aligner's modeled-only block signature includes the
     /// paragraph's modeled <see cref="IrParaFormat"/> key (so a pPr-only change classifies FormatOnly instead of

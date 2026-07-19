@@ -43,6 +43,12 @@ public class DocxDiffOpsConsolidateTests
     }
 
     [Fact]
+    public void ParseSettings_reads_word_repair_compatibility()
+    {
+        Assert.True(DocxDiffOps.ParseSettings("{\"wordRepairCompatibility\":true}").WordRepairCompatibility);
+    }
+
+    [Fact]
     public void ConflictResolution_setting_parsed_from_wire()
     {
         var b = Doc("the quick brown fox");

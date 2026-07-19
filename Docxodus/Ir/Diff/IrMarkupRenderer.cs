@@ -149,9 +149,21 @@ internal static class IrMarkupRenderer
         }
 
         // Assemble the new body's block-level children (w:p / w:tbl), in script order with Word's
-        // replace-gap arrangement (inserted blocks before deleted ones inside each gap).
+        // replace-gap arrangement (inserted blocks before deleted ones inside each gap). The explicit
+        // WordRepairCompatibility opt-in is the sole exception: it recognizes a strict raw-package repair
+        // signature and projects its otherwise invisible table-shell cleanup as conservative paired whole-block
+        // replacements. Crucially, that projection happens HERE, after semantic alignment, never in the IR
+        // aligner — regenerated w14:paraId/rsid bookkeeping must remain irrelevant to ordinary comparisons.
         var bodyBlocks = new List<XElement>();
-        RenderBlockOpsWordShaped(script.Operations, state, bodyBlocks);
+        if (settings.WordRepairCompatibility &&
+            WordRepairCompatibilityProjection.ShouldRenderWholeBodyReplacement(script, irLeft, irRight, left, right))
+        {
+            RenderWordRepairCompatibilityBody(irLeft, irRight, state, bodyBlocks);
+        }
+        else
+        {
+            RenderBlockOpsWordShaped(script.Operations, state, bodyBlocks);
+        }
 
         // SimplifyMoveMarkup (Task 4): rewrite native move markup as del/ins + strip range markers, a
         // post-pass mirroring WmlComparer.SimplifyMoveMarkupToDelIns (a Word-compat workaround). Operates on
@@ -598,6 +610,35 @@ internal static class IrMarkupRenderer
             case IrEditOpKind.MergeBlock:
                 RenderMergeBlock(op, state, sink);
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Conservative projection for the detector in <see cref="WordRepairCompatibilityProjection"/>. The inputs
+    /// were proven content-identical in accepted view, so each paired body block can safely become a complete
+    /// deletion followed by a complete insertion. Unlike Word Compare's insertion-only phantom replay, this
+    /// shape preserves the normal semantic contract: accepting gives the right body and rejecting gives the left.
+    /// </summary>
+    private static void RenderWordRepairCompatibilityBody(
+        IrDocument left, IrDocument right, RenderState state, List<XElement> sink)
+    {
+        // The detector already checked this; retain a defensive bounded pairing so a future detector change
+        // cannot turn an out-of-range condition into a partial body rewrite.
+        if (left.Body.Blocks.Count != right.Body.Blocks.Count)
+            return;
+
+        for (int i = 0; i < left.Body.Blocks.Count; i++)
+        {
+            var leftBlock = left.Body.Blocks[i];
+            var rightBlock = right.Body.Blocks[i];
+
+            // The trailing direct-body sectPr remains on the cloned left package and is handled by the normal
+            // trailing-section merge below. Emitting it as a body block would make the package schema-invalid.
+            if (leftBlock is IrSectionBreak || rightBlock is IrSectionBreak)
+                continue;
+
+            EmitWholeBlock(leftBlock.Anchor.ToString(), state.Left, state, sink, RevKind.Del, fromRight: false);
+            EmitWholeBlock(rightBlock.Anchor.ToString(), state.RightSource, state, sink, RevKind.Ins, fromRight: true);
         }
     }
 

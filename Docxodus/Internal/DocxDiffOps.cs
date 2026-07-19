@@ -141,6 +141,8 @@ internal static class DocxDiffOps
             settings.CompareHeadersFooters = compareHf;
         if (TryGetBool(root, "trackBlockFormatChanges", out var trackBlockFmt))
             settings.TrackBlockFormatChanges = trackBlockFmt;
+        if (TryGetBool(root, "wordRepairCompatibility", out var wordRepairCompatibility))
+            settings.WordRepairCompatibility = wordRepairCompatibility;
 
         return settings;
     }
