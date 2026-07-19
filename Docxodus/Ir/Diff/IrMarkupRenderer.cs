@@ -5072,6 +5072,14 @@ internal static class IrMarkupRenderer
                 e.Name == W.instrText || e.Name == W.delInstrText))
             return false;
 
+        // RevisionProcessor's public tracked-element list does not include the custom-XML move range
+        // endpoints even though it transforms them. They are move provenance, never simple deletion
+        // provenance, so keep all four on the accepted-view fallback explicitly.
+        if (candidate.DescendantsAndSelf().Any(e =>
+                e.Name == W.customXmlMoveFromRangeStart || e.Name == W.customXmlMoveFromRangeEnd ||
+                e.Name == W.customXmlMoveToRangeStart || e.Name == W.customXmlMoveToRangeEnd))
+            return false;
+
         var tracked = candidate.DescendantsAndSelf()
             .Where(e => TrackedRevisionNames.Contains(e.Name))
             .ToList();

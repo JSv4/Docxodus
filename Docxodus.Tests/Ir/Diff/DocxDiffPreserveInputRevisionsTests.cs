@@ -592,6 +592,14 @@ public class DocxDiffPreserveInputRevisionsTests
         AssertLeftDeletionInsertionFallsBack(deleted + "<w:fldSimple w:instr=\"DATE\"/>", "Unsafe projection");
         AssertLeftDeletionInsertionFallsBack(deleted +
             $"<w:moveFrom w:id=\"971\" w:author=\"{author}\" w:date=\"{date}\"/>", "Unsafe projection");
+        foreach (var moveRange in new[]
+                 {
+                     "customXmlMoveFromRangeStart", "customXmlMoveFromRangeEnd",
+                     "customXmlMoveToRangeStart", "customXmlMoveToRangeEnd",
+                 })
+            AssertLeftDeletionInsertionFallsBack(deleted +
+                $"<w:{moveRange} w:id=\"971\" w:author=\"{author}\" w:date=\"{date}\"/>",
+                "Unsafe projection");
         AssertLeftDeletionInsertionFallsBack(
             "<w:del w:id=\"972\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
             "<w:r><w:rPr><w:rPrChange w:id=\"973\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
