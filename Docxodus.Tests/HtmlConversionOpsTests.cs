@@ -686,7 +686,8 @@ public class HtmlConversionOpsTests
             "</a:solidFill><a:ln w=\"12700\"><a:solidFill><a:srgbClr val=\"000000\"/>" +
             "</a:solidFill></a:ln></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r><w:t>" +
             "HCO068 modern text box</w:t></w:r></w:p></w:txbxContent></wps:txbx>" +
-            "<wps:bodyPr lIns=\"91440\" tIns=\"45720\" rIns=\"91440\" bIns=\"45720\"/>" +
+            "<wps:bodyPr lIns=\"91440\" tIns=\"45720\" rIns=\"91440\" bIns=\"45720\"><a:spAutoFit/>" +
+            "</wps:bodyPr>" +
             "</wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>" +
             "<mc:Fallback><w:pict><v:shape style=\"width:120pt;height:60pt\"><v:textbox>" +
             "<w:txbxContent><w:p><w:r><w:t>HCO068 fallback text box</w:t></w:r></w:p>" +
@@ -699,13 +700,13 @@ public class HtmlConversionOpsTests
         Assert.Contains("HCO068 modern text box", html);
         Assert.DoesNotContain("HCO068 fallback text box", html);
         Assert.Contains("width: 120pt", html);
-        Assert.Contains("height: 60pt", html);
+        Assert.DoesNotContain("height: 60pt", html);
     }
 
-    // Old Office 2008 wps markup is not a namespace this renderer understands. It must select the
-    // VML fallback instead of silently choosing a DrawingML branch whose textbox body cannot be read.
+    // Old Office 2008 wps markup is not a namespace this renderer understands. The visual oracle
+    // (LibreOffice) leaves this AlternateContent shape blank, so do not promote its VML fallback.
     [Fact]
-    public void HCO069_LegacyDrawingMlTextBox_UsesVmlFallback()
+    public void HCO069_LegacyDrawingMlTextBox_DoesNotPromoteVmlFallback()
     {
         byte[] bytes = TextBoxDocxBytes(
             "<mc:AlternateContent>" +
@@ -720,7 +721,23 @@ public class HtmlConversionOpsTests
         string html = HtmlConversionOps.ConvertToHtml(bytes,
             new HtmlConversionOptions { FabricateCssClasses = false });
 
-        Assert.Contains("HCO069 legacy fallback text box", html);
+        Assert.DoesNotContain("HCO069 legacy fallback text box", html);
+    }
+
+    // A direct VML text box is not an AlternateContent compatibility fallback and remains a
+    // supported, standalone shape. Preserve its content and size in the HTML projection.
+    [Fact]
+    public void HCO070_DirectVmlTextBox_RendersTextAndDimensions()
+    {
+        byte[] bytes = TextBoxDocxBytes(
+            "<w:pict><v:shape style=\"width:100pt;height:40pt\"><v:textbox><w:txbxContent>" +
+            "<w:p><w:r><w:t>HCO070 direct VML text box</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict>");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO070 direct VML text box", html);
         Assert.Contains("width: 100pt", html);
         Assert.Contains("height: 40pt", html);
     }

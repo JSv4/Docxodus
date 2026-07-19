@@ -2643,8 +2643,10 @@ namespace Docxodus
 
             // An AlternateContent run carries two representations of the same object (normally a
             // modern DrawingML choice and a VML fallback). Rendering both duplicates text boxes
-            // and images; rendering neither loses the object altogether. Select the first choice
-            // whose required namespaces this converter understands, otherwise use the fallback.
+            // and images. Select the first choice whose required namespaces this converter
+            // understands; do not promote an unsupported branch's VML fallback because the
+            // browser/LibreOffice-compatible projection deliberately leaves that legacy markup
+            // unrendered.
             if (element.Name == MC.AlternateContent)
             {
                 return ProcessAlternateContent(wordDoc, settings, element, currentMarginLeft);
@@ -7959,10 +7961,14 @@ namespace Docxodus
         private static object ProcessAlternateContent(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement alternateContent, decimal currentMarginLeft)
         {
-            var selected = alternateContent.Elements(MC.Choice)
-                .FirstOrDefault(IsSupportedMarkupChoice)
-                ?? alternateContent.Element(MC.Fallback)
-                ?? alternateContent.Element(MC.Choice);
+            var choices = alternateContent.Elements(MC.Choice).ToList();
+            var selected = choices.FirstOrDefault(IsSupportedMarkupChoice);
+            if (selected == null && choices.Count != 0)
+                return null;
+
+            // A malformed AlternateContent wrapper can omit all Choice nodes. In that narrow
+            // case, retain the fallback's direct, independently-renderable content.
+            selected ??= alternateContent.Element(MC.Fallback);
 
             return selected == null
                 ? null
@@ -8135,6 +8141,11 @@ namespace Docxodus
             var bodyProperties = drawing.Descendants(WPS.bodyPr).FirstOrDefault();
             if (bodyProperties != null)
             {
+                // LibreOffice honors DrawingML's automatic shape fitting: a one-line text box
+                // with a large stored extent shrinks to its content height. Leaving the fixed
+                // extent here creates a visibly oversized rectangle in the visual oracle.
+                if (bodyProperties.Element(A.spAutoFit) != null)
+                    style.Remove("height");
                 AddEmuPadding(style, "padding-left", (long?)bodyProperties.Attribute("lIns"));
                 AddEmuPadding(style, "padding-top", (long?)bodyProperties.Attribute("tIns"));
                 AddEmuPadding(style, "padding-right", (long?)bodyProperties.Attribute("rIns"));
@@ -8162,6 +8173,10 @@ namespace Docxodus
             var stroke = (string)shape.Attribute("strokecolor");
             if (IsCssColor(stroke))
                 style.AddIfMissing("border", "1pt solid " + stroke);
+
+            var textBoxStyle = (string)shape.Element(VML.textbox)?.Attribute("style");
+            if (textBoxStyle?.IndexOf("mso-fit-shape-to-text:t", StringComparison.OrdinalIgnoreCase) >= 0)
+                style.Remove("height");
         }
 
         private static void AddEmuDimensions(Dictionary<string, string> style, long? widthEmu, long? heightEmu)
