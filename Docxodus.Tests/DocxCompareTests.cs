@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using Docxodus.Internal;
@@ -48,6 +49,13 @@ public class DocxCompareTests
         WmlComparer.GetRevisions(redline, settings)
             .Select(r => $"{r.RevisionType}:{r.Text}")
             .ToArray();
+
+    private static string[] SchemaErrors(WmlDocument document)
+    {
+        using var stream = new MemoryStream(document.DocumentByteArray);
+        using var wordDoc = WordprocessingDocument.Open(stream, false);
+        return new OpenXmlValidator().Validate(wordDoc).Select(error => error.Description).ToArray();
+    }
 
     [Fact]
     public void DefaultEngine_IsWmlComparer()
@@ -117,6 +125,25 @@ public class DocxCompareTests
         Assert.Equal(source.DocumentByteArray, result.DocumentByteArray);
         result.DocumentByteArray[0] ^= 0x01;
         Assert.NotEqual(source.DocumentByteArray, result.DocumentByteArray);
+    }
+
+    [Fact]
+    public void ByteIdenticalMalformedMathRevision_UsesLegacyNormalizationInsteadOfExactClone()
+    {
+        var source = new WmlDocument(Path.GetFullPath(Path.Combine(
+            "../../../../TestFiles", "WC", "WC012-Math-After.docx")));
+        var samePackage = new WmlDocument(source);
+
+        Assert.NotEmpty(SchemaErrors(source));
+        Assert.False(DocxCompare.CanReturnExactNoOp(source, samePackage));
+
+        var direct = WmlComparer.Compare(source, samePackage, new WmlComparerSettings());
+        var viaFacade = DocxCompare.Compare(source, samePackage,
+            ComparisonEngine.WmlComparer, new WmlComparerSettings());
+
+        Assert.NotEqual(source.DocumentByteArray, direct.DocumentByteArray);
+        Assert.Empty(SchemaErrors(direct));
+        Assert.Empty(SchemaErrors(viaFacade));
     }
 
     [Fact]

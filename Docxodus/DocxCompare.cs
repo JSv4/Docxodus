@@ -1,5 +1,11 @@
 #nullable enable
 
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Xml.Linq;
+using DocumentFormat.OpenXml.Packaging;
+
 namespace Docxodus;
 
 /// <summary>
@@ -28,7 +34,8 @@ public static class DocxCompare
     /// <paramref name="engine"/> and return the redlined document. <see cref="ComparisonEngine.WmlComparer"/>
     /// (the default) delegates directly for transitional documents and normalizes Word Strict inputs first,
     /// matching Word's open behavior; byte-identical inputs instead return a detached exact clone without
-    /// normalization or reserialization; <see cref="ComparisonEngine.DocxDiff"/> routes to
+    /// normalization or reserialization when the legacy comparer need not repair malformed math revision
+    /// markup; <see cref="ComparisonEngine.DocxDiff"/> routes to
     /// <see cref="DocxDiff.Compare"/> with the mapped settings.
     /// </summary>
     /// <param name="left">The earlier / original document.</param>
@@ -45,7 +52,7 @@ public static class DocxCompare
         // must not silently rewrite a valid Strict package or discard unrelated existing revision
         // markup merely because it passed through the comparison API. Return a detached clone so the
         // result remains safe for callers to mutate/save independently of the input.
-        if (HasIdenticalPackageBytes(left, right))
+        if (CanReturnExactNoOp(left, right))
             return new WmlDocument(left);
 
         return engine == ComparisonEngine.DocxDiff
@@ -59,6 +66,35 @@ public static class DocxCompare
     /// <summary>Whether two documents are the exact same package bytes, not merely semantically equal.</summary>
     internal static bool HasIdenticalPackageBytes(WmlDocument left, WmlDocument right) =>
         left.DocumentByteArray.AsSpan().SequenceEqual(right.DocumentByteArray);
+
+    /// <summary>
+    /// Whether an exact-package comparison can skip the legacy comparer safely. A small set of old Word
+    /// documents place tracked-revision wrappers directly inside an Office Math run, which is schema-invalid.
+    /// The legacy preprocessing path repairs that shape; returning an exact clone would retain the invalid
+    /// markup and violate the comparer’s long-standing valid-output contract.
+    /// </summary>
+    internal static bool CanReturnExactNoOp(WmlDocument left, WmlDocument right) =>
+        HasIdenticalPackageBytes(left, right) && !HasRevisionMarkupInsideMathRun(left);
+
+    private static readonly HashSet<XName> TrackedRevisionNames = new(RevisionProcessor.TrackedRevisionsElements);
+
+    private static bool HasRevisionMarkupInsideMathRun(WmlDocument document)
+    {
+        try
+        {
+            using var streamDoc = new OpenXmlMemoryStreamDocument(document);
+            using var wordDoc = streamDoc.GetWordprocessingDocument();
+            var mainXDoc = wordDoc.MainDocumentPart?.GetXDocument();
+            return mainXDoc?.Descendants(M.r).Any(mathRun =>
+                mathRun.Descendants().Any(element => TrackedRevisionNames.Contains(element.Name))) ?? false;
+        }
+        catch (Exception)
+        {
+            // A damaged package cannot safely take an exact-package shortcut. Let the established comparer
+            // path report or repair it with its normal diagnostics instead.
+            return true;
+        }
+    }
 
     /// <summary>
     /// Map the option set shared by both engines from <see cref="WmlComparerSettings"/> onto a fresh
