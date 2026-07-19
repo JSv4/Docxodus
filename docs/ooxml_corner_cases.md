@@ -528,18 +528,39 @@ silently:
    reviewer's intent. If the inputs' in-flight revisions must be preserved or re-adjudicated, resolve them by an
    explicit policy first, then diff — do not reach for `PreAcceptInputRevisions`.
 
+### The Word-parity alternative — `PreserveInputRevisions` and the one-sided Reject All
+
+Word's own Compare does neither the default's leak nor the flag's flatten: it **preserves** the inputs'
+pre-existing tracked revisions in the compare output verbatim (original author/date markup intact) while the
+text diff is computed over the accepted view. Verified against Word-oracle outputs: an input with 176
+revisions by another author keeps them in Word's compare result alongside the fresh compare revisions.
+`DocxDiffSettings.PreserveInputRevisions` reproduces this (equal blocks + whole-block inserts, in the body
+and in footnote/endnote bodies, in v1; it WINS
+over `PreAcceptInputRevisions` when both are set, and the `DocxCompare` engine-selector path enables it).
+
+The Word behavior worth pinning here: **Reject All on such an output does NOT restore the left document.**
+Rejecting a preserved foreign `w:del` RESTORES its deleted text (text the left side never showed), and
+rejecting a preserved foreign `w:ins` removes text the accepted view carried. Word's Compare output behaves
+identically under Reject All — the one-sided round trip (`accept ≡ right` holds, `reject ≠ left` where
+foreign markup exists) is inherent to preserving input revisions, not a Docxodus defect. Do not "fix" it.
+
 ### Relevant code
 
 - `Docxodus/DocxDiff.cs` — `DocxDiffSettings.PreAcceptInputRevisions` + the `PreAccept(...)` pre-pass wired into
-  all seven entry points; `IrMarkupRenderer.Render` clones the output on the LEFT package (the carry-over source).
+  all seven entry points; `IrMarkupRenderer.Render` clones the output on the LEFT package (the carry-over source);
+  `DocxDiffSettings.PreserveInputRevisions` (the Word-parity opt-in, precedence over the pre-accept).
 - `Docxodus/Ir/IrReader.cs` — `ApplyRevisionView` (rule N13: `RevisionView.Accept` before IR build).
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `BuildPreservedOriginalIndex` / `NormalizePreservedClone` + the
+  preserve-aware `EmitVerbatim`/`EmitWholeBlock`/`MarkWholeParagraph`/`MarkParagraphMark`/`MarkWholeTable`.
 - `Docxodus/DocxDiffCompatibility.cs` — the `revisionsInInput` catalog entry (now `Covered`).
 
 ### Tests
 
 `Docxodus.Tests/Ir/Diff/RevisionsInInputDefaultTests.cs` (pins the default: clean body + leaking carry-over +
-the broken header round-trip) and `PreAcceptInputRevisionsTests.cs` (the flag is the wrapper, no stale
-authorship, every-scope round-trip, schema validity, multi-author redline-of-a-redline).
+the broken header round-trip), `PreAcceptInputRevisionsTests.cs` (the flag is the wrapper, no stale
+authorship, every-scope round-trip, schema validity, multi-author redline-of-a-redline), and
+`DocxDiffPreserveInputRevisionsTests.cs` (preservation of foreign ins/del in equal + inserted blocks, no
+same-kind nesting, the fully-deleted-paragraph ride-along, the pinned reject caveat, precedence).
 
 ---
 

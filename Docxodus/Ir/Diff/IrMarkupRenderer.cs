@@ -126,6 +126,13 @@ internal static class IrMarkupRenderer
         var state = new RenderState(irLeft, irRight, settings);
         state.LeftStyleIds = ReadStyleIds(left);
 
+        // Word-parity input-revision preservation (PreserveInputRevisions): map each accepted working-copy
+        // body block back to its ORIGINAL right element so Equal/Insert emissions can carry the input's own
+        // revision markup through verbatim. Null (no preservation) when the flag is off or the original
+        // body cannot be positionally paired with the accepted working body.
+        if (settings.PreserveInputRevisions)
+            state.PreservedOriginals = BuildPreservedOriginalIndex(irRight, right);
+
         // Assemble the new body's block-level children (w:p / w:tbl), in script order with Word's
         // replace-gap arrangement (inserted blocks before deleted ones inside each gap).
         var bodyBlocks = new List<XElement>();
@@ -2847,6 +2854,23 @@ internal static class IrMarkupRenderer
         var src = SourceElement(anchor, doc);
         if (src == null)
             return;
+        // Word-parity preservation: an EQUAL block emits the ORIGINAL right element(s) — pre-existing
+        // input revision markup intact — when PreserveInputRevisions mapped a group; otherwise the
+        // accepted working element exactly as before. A multi-member group carries the mark-deleted
+        // paragraphs the document-level accept merged away; they vanish again on accept, so the accept
+        // round-trip is unchanged. (The map only ever holds right-body elements, so left-side and
+        // composite lookups are no-ops.)
+        if (state.PreservedGroup(src) is { } group)
+        {
+            foreach (var member in group)
+            {
+                var preserved = NormalizePreservedClone(new XElement(member), state);
+                if (fromRight)
+                    state.RegisterMediaReferences(preserved);
+                sink.Add(StripUnids(preserved));
+            }
+            return;
+        }
         var clone = new XElement(src);
         if (fromRight)
             state.RegisterMediaReferences(clone);
@@ -2864,7 +2888,26 @@ internal static class IrMarkupRenderer
         var src = SourceElement(anchor, doc);
         if (src == null)
             return;
-        var clone = StripUnids(new XElement(src));
+        // Word-parity preservation: an INSERTED right-only block is built from the ORIGINAL right
+        // element(s) when PreserveInputRevisions mapped a group, so the input's own w:ins/w:del markup
+        // rides through — MarkWholeParagraph leaves foreign wrappers as-is (never nesting a same-kind
+        // wrapper) and wraps only the plain runs as this diff's insertion; MarkParagraphMark keeps a
+        // foreign mark marker (a multi-member group's mark-deleted members vanish again on accept, so
+        // the accept round-trip is unchanged).
+        if (state.PreservedGroup(src) is { } group)
+        {
+            foreach (var member in group)
+                EmitOneWholeBlock(NormalizePreservedClone(new XElement(member), state), state, sink, kind, fromRight);
+            return;
+        }
+        EmitOneWholeBlock(new XElement(src), state, sink, kind, fromRight);
+    }
+
+    /// <summary>The single-block tail of <see cref="EmitWholeBlock"/>: strip engine bookkeeping, register
+    /// media, revision-mark per block kind, and emit.</summary>
+    private static void EmitOneWholeBlock(XElement clone, RenderState state, List<XElement> sink, RevKind kind, bool fromRight)
+    {
+        StripUnids(clone);
         if (fromRight)
             state.RegisterMediaReferences(clone);
 
@@ -2905,11 +2948,19 @@ internal static class IrMarkupRenderer
                 trPr = new XElement(W.trPr);
                 tr.AddFirst(trPr);   // trPr is the first child of tr per schema order
             }
-            // In w:trPr the row-revision markers w:ins/w:del come at the END of the property order (after
-            // cnfStyle/trHeight/cantSplit/…, before only w:trPrChange) — so APPEND, never AddFirst, or a
-            // following w:trHeight becomes schema-invalid.
-            trPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del).Remove();
-            trPr.Add(new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes()));
+            // PreserveInputRevisions: a preserved ORIGINAL row that already carries a foreign row marker
+            // (Arthur's inserted/deleted row) keeps it — same rule as MarkParagraphMark. Unreachable when
+            // the flag is off (accept-view sources carry none).
+            bool foreignRowMark = state.Settings.PreserveInputRevisions &&
+                trPr.Elements().Any(e => e.Name == W.ins || e.Name == W.del);
+            if (!foreignRowMark)
+            {
+                // In w:trPr the row-revision markers w:ins/w:del come at the END of the property order (after
+                // cnfStyle/trHeight/cantSplit/…, before only w:trPrChange) — so APPEND, never AddFirst, or a
+                // following w:trHeight becomes schema-invalid.
+                trPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del).Remove();
+                trPr.Add(new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes()));
+            }
 
             // Mark every paragraph in the row's cells (runs + paragraph mark).
             foreach (var p in tr.Descendants(W.p).ToList())
@@ -2930,7 +2981,16 @@ internal static class IrMarkupRenderer
 
         var wrapped = new List<XElement>();
         foreach (var child in runChildren)
-            wrapped.AddRange(WrapFieldAware(child, kind, state));
+        {
+            // PreserveInputRevisions: a preserved ORIGINAL block may carry foreign revision wrappers as
+            // paragraph children. Leave them exactly as-is — their content is already revision-marked
+            // (foreign ins stays inserted, foreign del/moveFrom stays deleted-grade), and re-wrapping
+            // would nest same-kind wrappers. Unreachable when the flag is off: sources are accept-view.
+            if (state.Settings.PreserveInputRevisions && PreservedWrapperNames.Contains(child.Name))
+                wrapped.Add(child);
+            else
+                wrapped.AddRange(WrapFieldAware(child, kind, state));
+        }
 
         // Re-insert wrapped runs after pPr (or at the front if no pPr).
         if (pPr != null)
@@ -3008,6 +3068,17 @@ internal static class IrMarkupRenderer
     /// TO marks it inserted (ins-grade).</summary>
     private static void MarkParagraphMark(XElement para, RevKind kind, RenderState state)
     {
+        // PreserveInputRevisions: a preserved ORIGINAL paragraph whose mark already carries a revision
+        // marker (a foreign mark-insertion or mark-deletion) keeps it — the input's own paragraph-structure
+        // revision is the Word-parity fact, and stamping ours would re-attribute (or resurrect) it. A
+        // foreign mark-DELETED paragraph still vanishes on accept, so the accept round-trip is unchanged.
+        // Unreachable when the flag is off: accept-view sources carry no mark markers.
+        if (state.Settings.PreserveInputRevisions &&
+            para.Element(W.pPr)?.Element(W.rPr) is { } presentRPr &&
+            presentRPr.Elements().Any(e =>
+                e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo))
+            return;
+
         var pPr = para.Element(W.pPr);
         if (pPr == null)
         {
@@ -4737,6 +4808,186 @@ internal static class IrMarkupRenderer
     private static XElement? SourceElement(string? anchor, IrDocument doc) =>
         ResolveBlock(anchor, doc)?.Source.Element;
 
+    // ------------------------------------------- input-revision preservation (PreserveInputRevisions)
+
+    /// <summary>Every element name <see cref="RevisionProcessor"/> recognizes as tracked-revision markup —
+    /// the "does this block carry pre-existing revisions worth preserving?" gate.</summary>
+    private static readonly HashSet<XName> TrackedRevisionNames = new(RevisionProcessor.TrackedRevisionsElements);
+
+    /// <summary>The run-level revision WRAPPERS a preserved (original) block may legitimately contain as
+    /// paragraph children. When <c>PreserveInputRevisions</c> is on, <see cref="MarkWholeParagraph"/> leaves
+    /// these as-is instead of re-wrapping them — a foreign <c>w:ins</c> stays a single <c>w:ins</c> (its
+    /// content is already marked inserted), a foreign <c>w:del</c>/<c>w:moveFrom</c> stays deleted-grade, and
+    /// no same-kind wrapper ever nests. Range markers ride through unchanged (they wrap nothing).</summary>
+    private static readonly HashSet<XName> PreservedWrapperNames = new()
+    {
+        W.ins, W.del, W.moveFrom, W.moveTo,
+        W.moveFromRangeStart, W.moveFromRangeEnd, W.moveToRangeStart, W.moveToRangeEnd,
+    };
+
+    /// <summary>
+    /// Build the accepted-working-element → ORIGINAL right body element(s) map that powers
+    /// <c>PreserveInputRevisions</c>. The renderer's IR read normalizes revisions by ACCEPTING the whole
+    /// working copy first (see <see cref="IrReaderOptions.RevisionView"/>), so every retained
+    /// <c>Source.Element</c> is revision-free; preserving Word-style requires reaching back to the ORIGINAL
+    /// elements. Pairing is an in-order two-pointer walk over the two bodies' child sequences that mirrors
+    /// the document-level accept's ONLY body restructurings — a paragraph whose MARK is deleted merges into
+    /// the NEXT paragraph (a fully-deleted paragraph vanishes the same way) — by growing a GROUP of original
+    /// elements until its last member no longer merge-continues, then requiring the group's accepted visible
+    /// text to equal the working block's text. A verified group maps working → [originals] (one working
+    /// block may correspond to SEVERAL originals: the mark-deleted members ride along and vanish again on
+    /// accept, exactly Word's shape). Any unexplained divergence (adjacent-table merges, removed content
+    /// controls, trailing unmatched originals) stops the walk and returns the PARTIAL map — every entry
+    /// already emitted was verified in order, and unmapped blocks degrade to accepted-view emission rather
+    /// than risking a wrong pairing. Only markup-bearing groups are mapped (a clean block's accepted
+    /// emission already equals its original content, so mapping it would change nothing but bytes churn).
+    /// <para><b>Note scopes ride the same map.</b> Footnote/endnote definitions pair by <c>w:id</c> (stable
+    /// across accept) and each paired definition's child blocks are aligned with the same walk — the note
+    /// renderer dispatches through the shared <see cref="RenderBlockOp"/>, so Equal/Insert note blocks then
+    /// preserve through the same two emit hooks with zero extra plumbing.</para>
+    /// </summary>
+    private static Dictionary<XElement, List<XElement>>? BuildPreservedOriginalIndex(IrDocument irRight, WmlDocument right)
+    {
+        // The working (accepted) part trees: the IR read pins each part's parsed XDocument in Sources;
+        // every body block's Source.Element lives in the w:document tree, note blocks in w:footnotes/w:endnotes.
+        XElement? WorkingRoot(XName rootName) =>
+            irRight.Sources.Values.Select(xd => xd.Root).FirstOrDefault(r => r?.Name == rootName);
+
+        var workingBody = WorkingRoot(W.document)?.Element(W.body);
+        if (workingBody == null)
+            return null;
+
+        var map = new Dictionary<XElement, List<XElement>>();
+        using (var streamDoc = new OpenXmlMemoryStreamDocument(right))
+        using (var wDoc = streamDoc.GetWordprocessingDocument())
+        {
+            var main = wDoc.MainDocumentPart;
+            var originalBody = main?.GetXDocument().Root?.Element(W.body);
+            if (originalBody == null)
+                return null;
+            AlignPreservedChildren(workingBody, originalBody, map);
+
+            AlignPreservedNoteScope(WorkingRoot(W.footnotes),
+                main?.FootnotesPart?.GetXDocument().Root, W.footnote, map);
+            AlignPreservedNoteScope(WorkingRoot(W.endnotes),
+                main?.EndnotesPart?.GetXDocument().Root, W.endnote, map);
+        }
+        return map.Count == 0 ? null : map;
+    }
+
+    /// <summary>Pair each working note definition with the original of the SAME <c>w:id</c> (note ids are
+    /// untouched by the accept normalization) and align their child blocks — the note-scope leg of
+    /// <see cref="BuildPreservedOriginalIndex"/>. Null roots (scope absent on either side) are a no-op.</summary>
+    private static void AlignPreservedNoteScope(
+        XElement? workingRoot, XElement? originalRoot, XName noteName, Dictionary<XElement, List<XElement>> map)
+    {
+        if (workingRoot == null || originalRoot == null)
+            return;
+        var originalById = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var note in originalRoot.Elements(noteName))
+            if ((string?)note.Attribute(W.id) is { } id && !originalById.ContainsKey(id))
+                originalById[id] = note;
+        foreach (var workingNote in workingRoot.Elements(noteName))
+            if ((string?)workingNote.Attribute(W.id) is { } id && originalById.TryGetValue(id, out var originalNote))
+                AlignPreservedChildren(workingNote, originalNote, map);
+    }
+
+    /// <summary>The container-level two-pointer alignment walk of <see cref="BuildPreservedOriginalIndex"/>
+    /// (see there for the model and the conservative-bail rules). Adds verified markup-bearing groups to
+    /// <paramref name="map"/>; a divergence stops THIS container's walk only (entries already added stand).</summary>
+    private static void AlignPreservedChildren(
+        XElement workingContainer, XElement originalContainer, Dictionary<XElement, List<XElement>> map)
+    {
+        var working = workingContainer.Elements().ToList();
+        var original = originalContainer.Elements().ToList();
+
+        int i = 0;
+        foreach (var w in working)
+        {
+            if (i >= original.Count)
+                return;   // originals exhausted early — alignment lost; keep what was verified.
+
+            // Non-block children (trailing sectPr, body-level bookmarks, …): require an exact 1:1
+            // name match to stay aligned; they are never preserved themselves.
+            if (w.Name != W.p && w.Name != W.tbl)
+            {
+                if (original[i].Name != w.Name)
+                    return;
+                i++;
+                continue;
+            }
+
+            string target = VisibleText(w);
+            var group = new List<XElement>();
+            var acc = new System.Text.StringBuilder();
+            while (true)
+            {
+                if (i >= original.Count)
+                    return;   // ran out of originals mid-group — alignment lost.
+                var o = original[i];
+                group.Add(o);
+                acc.Append(AcceptedVisibleText(o));
+                i++;
+                // A paragraph whose MARK is deleted merge-continues into the next original — keep growing.
+                if (HasDeletedParagraphMark(o))
+                    continue;
+                // Group boundary: the last member contributes the block identity. Verify.
+                if (o.Name != w.Name || !string.Equals(acc.ToString(), target, StringComparison.Ordinal))
+                    return;   // accept semantics we do not model (table merge, removed sdt, …) — stop.
+                break;
+            }
+
+            if (group.Any(g => g.Descendants().Any(d => TrackedRevisionNames.Contains(d.Name))))
+                map[w] = group;
+        }
+    }
+
+    /// <summary>
+    /// Normalize a PRESERVED original clone before emission: every tracked-revision element gets a FRESH
+    /// <c>w:id</c> from the render's single ascending counter (the input's own ids would collide with this
+    /// diff's — validator-flagged duplicates; range-marker pairs stay linked via a per-render old→new
+    /// remap), and non-W-namespace extension attributes on revision elements (e.g. Word 2023's
+    /// <c>w16du:dateUtc</c>) are dropped — the preserved facts are author/date/content, and the extension
+    /// attrs are undeclared noise to the SDK schema the output is validated against.
+    /// </summary>
+    private static XElement NormalizePreservedClone(XElement clone, RenderState state)
+    {
+        foreach (var rev in clone.DescendantsAndSelf().Where(e => TrackedRevisionNames.Contains(e.Name)))
+        {
+            if (rev.Attribute(W.id) is { } id)
+            {
+                if (!state.PreservedIdRemap.TryGetValue(id.Value, out var mapped))
+                    state.PreservedIdRemap[id.Value] = mapped =
+                        state.NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+                id.Value = mapped;
+            }
+            rev.Attributes()
+                .Where(a => !a.IsNamespaceDeclaration && a.Name.Namespace != W.w)
+                .Remove();
+        }
+        return clone;
+    }
+
+    /// <summary>True when a paragraph's MARK is revision-deleted (<c>w:pPr/w:rPr/w:del</c> or
+    /// <c>w:moveFrom</c>) — on accept the paragraph merges into the NEXT one (vanishing entirely when its
+    /// content is all delete-grade), the one body restructuring the preservation walk models.</summary>
+    private static bool HasDeletedParagraphMark(XElement block) =>
+        block.Name == W.p &&
+        (block.Element(W.pPr)?.Element(W.rPr)?.Elements()
+            .Any(e => e.Name == W.del || e.Name == W.moveFrom) ?? false);
+
+    /// <summary>Concatenated <c>w:t</c> text of an (already accepted) working block.</summary>
+    private static string VisibleText(XElement block) =>
+        string.Concat(block.Descendants(W.t).Select(t => t.Value));
+
+    /// <summary>The accepted-view visible text of an ORIGINAL (markup-bearing) block: every <c>w:t</c> not
+    /// inside delete-grade markup (<c>w:del</c> holds <c>w:delText</c>, excluded implicitly; <c>w:moveFrom</c>
+    /// holds <c>w:t</c> that accept REMOVES, excluded explicitly).</summary>
+    private static string AcceptedVisibleText(XElement block) =>
+        string.Concat(block.Descendants(W.t)
+            .Where(t => !t.Ancestors(W.moveFrom).Any() && !t.Ancestors(W.del).Any())
+            .Select(t => t.Value));
+
     private static IReadOnlyList<IrDiffToken> ParagraphTokens(string? anchor, IrDocument doc, IrDiffSettings settings)
     {
         if (anchor != null && doc.AnchorIndex.TryGetValue(anchor, out var block) && block is IrParagraph p)
@@ -4809,6 +5060,26 @@ internal static class IrMarkupRenderer
         /// as current (<see cref="DropUnresolvableStyleRef"/>) — Word expresses a paired
         /// paragraph's format change within the left style universe. Null disables the check.</summary>
         public HashSet<string>? LeftStyleIds { get; set; }
+
+        /// <summary>Accepted-working-element → ORIGINAL right body element(s) map for
+        /// <c>PreserveInputRevisions</c> (see <see cref="IrMarkupRenderer.BuildPreservedOriginalIndex"/>).
+        /// A working block maps to MULTIPLE originals when the document-level accept merged mark-deleted
+        /// paragraphs into it (they ride through and vanish again on accept). Null when preservation is
+        /// off, when the original body could not be paired, or in a composite render (Consolidate does
+        /// not preserve input revisions in v1) — a null map means zero behavior change.</summary>
+        public Dictionary<XElement, List<XElement>>? PreservedOriginals { get; set; }
+
+        /// <summary>The ORIGINAL right element group mapped for <paramref name="src"/> under
+        /// <c>PreserveInputRevisions</c>, or null (the common case: flag off, a left/composite-sourced
+        /// element, or a block with no pre-existing markup).</summary>
+        public List<XElement>? PreservedGroup(XElement src) =>
+            PreservedOriginals != null && PreservedOriginals.TryGetValue(src, out var group) ? group : null;
+
+        /// <summary>Original-input revision id → fresh output id remap for PRESERVED clones (see
+        /// <see cref="IrMarkupRenderer.NormalizePreservedClone"/>): shared across the render so a range
+        /// marker pair split over two preserved blocks keeps one id. Unused (empty) when preservation is
+        /// off.</summary>
+        public Dictionary<string, string> PreservedIdRemap { get; } = new();
 
         /// <summary>The bucket key of the CURRENTLY-active right source package, used to attribute media-bearing
         /// clones to the package they must be imported FROM. Two-way uses the single key 0 (the right package);

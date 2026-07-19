@@ -442,6 +442,8 @@ public static class DocxDiff
     /// <paramref name="doc"/> (a new <see cref="WmlDocument"/>; the input is untouched) so both the IR read AND
     /// the output-package clone are revision-free; when not set, return <paramref name="doc"/> unchanged so the
     /// default path is byte-for-byte what it was before the flag existed.
+    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> WINS over the pre-accept: preserving input markup
+    /// and pre-flattening it are opposite policies, and the Word-parity choice is to keep it.
     /// </summary>
     private static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc)
     {
@@ -451,11 +453,15 @@ public static class DocxDiff
         // mc:AlternateContent resolution (VML-choice unwrap, dead-draft fallback) — Word resolves
         // on open and its compare output carries the resolved content. No-op when nothing matches.
         doc = MarkupCompatibilityNormalizer.Normalize(doc);
-        return settings.PreAcceptInputRevisions ? RevisionProcessor.AcceptRevisions(doc) : doc;
+        // The byte-level accept-flatten is skipped under Preserve; the normalizers above always apply.
+        return settings.PreAcceptInputRevisions && !settings.PreserveInputRevisions
+            ? RevisionProcessor.AcceptRevisions(doc)
+            : doc;
     }
 
     /// <summary>Per-reviewer <see cref="PreAccept(DocxDiffSettings, WmlDocument)"/> for the N-way entry points
-    /// (strict normalization always applies; the accept-flatten only when the flag is set).</summary>
+    /// (strict normalization always applies; the accept-flatten only when the flag is set and not
+    /// overridden by Preserve).</summary>
     private static IReadOnlyList<DocxDiffReviewer> PreAccept(
         DocxDiffSettings settings, IReadOnlyList<DocxDiffReviewer> reviewers)
     {
@@ -679,6 +685,41 @@ public sealed class DocxDiffSettings
     public bool PreAcceptInputRevisions { get; set; }
 
     /// <summary>
+    /// When true, tracked revisions ALREADY PRESENT in the input documents are PRESERVED in the compare
+    /// output — the inputs' original author/date markup rides through verbatim alongside this diff's fresh
+    /// revisions — while the text diff itself is still computed over the <b>accepted view</b> of each side.
+    /// This is Word Compare's own behavior: an input's pre-existing <c>w:ins</c>/<c>w:del</c> markup is kept
+    /// intact in Word's output. Default false.
+    ///
+    /// <para><b>V1 scope (what is preserved).</b> The RIGHT input's foreign markup is preserved in blocks
+    /// the diff finds content-EQUAL (emitted verbatim from the original right element) and in whole-block
+    /// INSERTED content (the diff's <c>w:ins</c> wraps only the plain runs; a foreign <c>w:ins</c>/<c>w:del</c>
+    /// child is left as-is, so no same-kind wrapper ever nests) — in the BODY and in footnote/endnote
+    /// bodies (note definitions pair by id and their blocks preserve through the same emission paths).
+    /// The LEFT package's carried-over parts (headers/footers, unchanged notes, styles, comments) keep
+    /// their markup because no pre-accept runs.
+    /// NOT preserved (flattened to the accepted view, attributable to this diff only): foreign markup inside
+    /// MODIFIED/format-only/split/merge/moved blocks and inside changed header/footer stories — the
+    /// char-precise renderers there require accept-view sources; the LEFT side's foreign markup in deleted
+    /// blocks is likewise flattened. <see cref="DocxDiff.GetRevisions"/> does not report preserved foreign
+    /// revisions (they are input facts, not edits of this diff).</para>
+    ///
+    /// <para><b>Round-trip contract under the flag (one-sided, exactly like Word).</b>
+    /// <c>accept(Compare(left, right))</c> still content-equals <c>accept(right)</c> — a preserved foreign
+    /// deletion vanishes on accept and a preserved foreign insertion is kept, matching the right side's own
+    /// accepted view. But <c>reject(Compare(left, right))</c> does NOT equal <c>left</c> wherever foreign
+    /// markup was preserved: rejecting a foreign <c>w:del</c> RESTORES its deleted text (and rejecting a
+    /// foreign <c>w:ins</c> removes text the left side never had). Word's Compare output behaves identically
+    /// under Reject All — this is inherent to preserving input revisions, not a defect; do not rely on
+    /// reject ≡ left when enabling this flag.</para>
+    ///
+    /// <para><b>Precedence.</b> When both this and <see cref="PreAcceptInputRevisions"/> are set, Preserve
+    /// wins: the byte-level pre-accept is skipped entirely (the two flags are opposite policies for the same
+    /// input markup; preserving is the Word-parity choice).</para>
+    /// </summary>
+    public bool PreserveInputRevisions { get; set; }
+
+    /// <summary>
     /// When true (the DEFAULT — matching Word Compare's "Headers and footers" comparison setting, which
     /// is also on by default), header/footer stories are compared: each section's effective
     /// default/first/even header and footer stories pair across the two documents (Word's
@@ -752,6 +793,7 @@ public sealed class DocxDiffSettings
                 ? IrFormatComparison.Full
                 : IrFormatComparison.ModeledOnly,
             CompareHeadersFooters = CompareHeadersFooters,
+            PreserveInputRevisions = PreserveInputRevisions,
             TrackBlockFormatChanges = TrackBlockFormatChanges,
             // The three slices default equal to the block flag (two-way behaves identically) — so the public
             // opt-out cascades to all of them. Only the composite diverges them (all slices on, umbrella off)

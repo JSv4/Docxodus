@@ -267,6 +267,20 @@ internal sealed record IrDiffSettings
     public bool CompareHeadersFooters { get; init; } = true;
 
     /// <summary>
+    /// RENDER-TIME setting (Word-parity input-revision preservation). When true, the markup renderer
+    /// carries the RIGHT input's pre-existing tracked-revision markup through into the output for
+    /// content-EQUAL blocks (verbatim from the ORIGINAL right element rather than the accepted working
+    /// copy) and for whole-block INSERTED content (the diff's <c>w:ins</c> wraps only plain runs; a
+    /// foreign <c>w:ins</c>/<c>w:del</c> child stays as-is, never nested same-kind) — in the body and
+    /// in footnote/endnote bodies (note definitions pair by id). All char-precise paths
+    /// (modify/format-only/split/merge/move, changed header/footer stories) keep rendering
+    /// over the accepted view. Default false — the accepted-view-only behavior. Public mirror:
+    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> (see it for the one-sided round-trip
+    /// contract: accept ≡ accept(right) holds; reject ≠ left where foreign markup exists).
+    /// </summary>
+    public bool PreserveInputRevisions { get; init; }
+
+    /// <summary>
     /// DIFF-TIME setting (block-format-change family, 2026-07-03). When true (the DEFAULT), paragraph-and-above
     /// property changes are DETECTED and TRACKED: the aligner's modeled-only block signature includes the
     /// paragraph's modeled <see cref="IrParaFormat"/> key (so a pPr-only change classifies FormatOnly instead of

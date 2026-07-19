@@ -60,12 +60,17 @@ public static class DocxCompare
         DetectMoves = settings.DetectMoves,
         MoveSimilarityThreshold = settings.MoveSimilarityThreshold,
         MoveMinimumWordCount = settings.MoveMinimumWordCount,
-        // Engine equivalence: WmlComparer.Compare accepts BOTH inputs' pre-existing tracked
-        // revisions before comparing (Microsoft Word's compare does the same), so the DocxDiff
-        // branch must too — otherwise inputs that already carry revisions diff their raw
-        // revision-bearing surface and emit whole-document churn. The raw DocxDiff API keeps
-        // its opt-in default; this is the WmlComparer-parity surface.
+        // Input-revision policy on the selector path: the DIFF must run over the accepted view (as
+        // WmlComparer does internally — otherwise revision-bearing inputs diff their raw surface and
+        // emit whole-document churn), and Word's Compare additionally PRESERVES the inputs' own markup
+        // in its output (original author/date rides through, verified against Word-oracle outputs).
+        // Preserve WINS over the pre-accept by precedence: matching still happens on the accepted view
+        // (the IR read accepts regardless), the byte-level flatten is skipped, and equal/inserted blocks
+        // carry the input's markup through. See DocxDiffSettings.PreserveInputRevisions for the
+        // one-sided round-trip contract this implies (accept ≡ right holds; reject ≠ left where foreign
+        // markup exists — exactly Word). The raw DocxDiff API keeps both flags' opt-in defaults.
         PreAcceptInputRevisions = true,
+        PreserveInputRevisions = true,
     };
 
     /// <summary>
