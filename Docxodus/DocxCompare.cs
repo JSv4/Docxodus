@@ -26,9 +26,9 @@ public static class DocxCompare
     /// <summary>
     /// Compare <paramref name="left"/> against <paramref name="right"/> with the selected
     /// <paramref name="engine"/> and return the redlined document. <see cref="ComparisonEngine.WmlComparer"/>
-    /// (the default) is a straight delegate to <see cref="WmlComparer.Compare"/> — byte-for-byte today's
-    /// behavior; <see cref="ComparisonEngine.DocxDiff"/> routes to <see cref="DocxDiff.Compare"/> with the
-    /// mapped settings.
+    /// (the default) delegates directly for transitional documents and normalizes Word Strict inputs first,
+    /// matching Word's open behavior; <see cref="ComparisonEngine.DocxDiff"/> routes to
+    /// <see cref="DocxDiff.Compare"/> with the mapped settings.
     /// </summary>
     /// <param name="left">The earlier / original document.</param>
     /// <param name="right">The later / revised document.</param>
@@ -41,7 +41,10 @@ public static class DocxCompare
         WmlComparerSettings settings)
         => engine == ComparisonEngine.DocxDiff
             ? DocxDiff.Compare(left, right, ToDocxDiffSettings(settings))
-            : WmlComparer.Compare(left, right, settings);
+            : WmlComparer.Compare(
+                StrictOoxmlNormalizer.NormalizeToTransitional(left),
+                StrictOoxmlNormalizer.NormalizeToTransitional(right),
+                settings);
 
     /// <summary>
     /// Map the option set shared by both engines from <see cref="WmlComparerSettings"/> onto a fresh
