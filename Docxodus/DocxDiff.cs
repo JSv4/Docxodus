@@ -442,10 +442,8 @@ public static class DocxDiff
     /// <paramref name="doc"/> (a new <see cref="WmlDocument"/>; the input is untouched) so both the IR read AND
     /// the output-package clone are revision-free; when not set, return <paramref name="doc"/> unchanged so the
     /// default path is byte-for-byte what it was before the flag existed.
-    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> wins over pre-accept because preserving input
-    /// markup and pre-flattening it are opposite policies. The narrower
-    /// <see cref="DocxDiffSettings.WordRepairCompatibility"/> opt-in also skips the pre-accept, but only so its
-    /// detector can inspect the original package; its renderer deliberately emits accepted-source blocks.
+    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> WINS over the pre-accept: preserving input markup
+    /// and pre-flattening it are opposite policies, and the Word-parity choice is to keep it.
     /// </summary>
     private static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc)
     {
@@ -456,7 +454,7 @@ public static class DocxDiff
         // on open and its compare output carries the resolved content. No-op when nothing matches.
         doc = MarkupCompatibilityNormalizer.Normalize(doc);
         // The byte-level accept-flatten is skipped under Preserve; the normalizers above always apply.
-        return settings.PreAcceptInputRevisions && !settings.PreserveInputRevisions && !settings.WordRepairCompatibility
+        return settings.PreAcceptInputRevisions && !settings.PreserveInputRevisions
             ? RevisionProcessor.AcceptRevisions(doc)
             : doc;
     }
@@ -722,21 +720,6 @@ public sealed class DocxDiffSettings
     public bool PreserveInputRevisions { get; set; }
 
     /// <summary>
-    /// Opt in to a conservative compatibility projection for a narrowly diagnosed Microsoft Word repair
-    /// artifact. The detector is intentionally strict: it fires only when both accepted documents have no
-    /// semantic body/story edit, pre-existing revisions match, raw <c>w14:paraId</c> churn is pervasive, table
-    /// cleanup is limited to the known repair normalization, and styles.xml differs only by implicit
-    /// <c>basedOn</c>/<c>next</c> defaults. When it fires, <see cref="Compare"/> emits paired whole-block
-    /// deletions and insertions for the body instead of invisible table-format-only markers.
-    ///
-    /// Default <c>false</c>. The detector reads the original packages but the projection deliberately emits the
-    /// accepted source view, rather than preserving old revision wrappers. It is a semantic, round-tripping
-    /// approximation: accepting the result yields the right accepted body and rejecting it yields the left
-    /// accepted body; it does not reproduce Word's non-round-tripping insertion-only suffix replay.
-    /// </summary>
-    public bool WordRepairCompatibility { get; set; }
-
-    /// <summary>
     /// When true (the DEFAULT — matching Word Compare's "Headers and footers" comparison setting, which
     /// is also on by default), header/footer stories are compared: each section's effective
     /// default/first/even header and footer stories pair across the two documents (Word's
@@ -810,10 +793,7 @@ public sealed class DocxDiffSettings
                 ? IrFormatComparison.Full
                 : IrFormatComparison.ModeledOnly,
             CompareHeadersFooters = CompareHeadersFooters,
-            // The repair detector reads the raw packages but deliberately renders the accepted source view:
-            // preservation would retain nested historical markup and weaken its accept/reject contract.
-            WordRepairCompatibility = WordRepairCompatibility,
-            PreserveInputRevisions = PreserveInputRevisions && !WordRepairCompatibility,
+            PreserveInputRevisions = PreserveInputRevisions,
             TrackBlockFormatChanges = TrackBlockFormatChanges,
             // The three slices default equal to the block flag (two-way behaves identically) — so the public
             // opt-out cascades to all of them. Only the composite diverges them (all slices on, umbrella off)

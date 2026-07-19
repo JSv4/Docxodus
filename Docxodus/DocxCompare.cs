@@ -60,7 +60,6 @@ public static class DocxCompare
         DetectMoves = settings.DetectMoves,
         MoveSimilarityThreshold = settings.MoveSimilarityThreshold,
         MoveMinimumWordCount = settings.MoveMinimumWordCount,
-        WordRepairCompatibility = settings.WordRepairCompatibility,
         // Input-revision policy on the selector path: the DIFF must run over the accepted view (as
         // WmlComparer does internally — otherwise revision-bearing inputs diff their raw surface and
         // emit whole-document churn), and Word's Compare additionally PRESERVES the inputs' own markup
@@ -71,9 +70,7 @@ public static class DocxCompare
         // one-sided round-trip contract this implies (accept ≡ right holds; reject ≠ left where foreign
         // markup exists — exactly Word). The raw DocxDiff API keeps both flags' opt-in defaults.
         PreAcceptInputRevisions = true,
-        // The repair-compatibility projection must render accepted source blocks so its wholesale body
-        // replacement keeps the normal accept/reject contract. Its detector still reads the raw packages.
-        PreserveInputRevisions = !settings.WordRepairCompatibility,
+        PreserveInputRevisions = true,
     };
 
     /// <summary>

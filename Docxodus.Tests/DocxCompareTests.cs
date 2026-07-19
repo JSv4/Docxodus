@@ -96,7 +96,6 @@ public class DocxCompareTests
             DetectMoves = false,
             MoveSimilarityThreshold = 0.55,
             MoveMinimumWordCount = 9,
-            WordRepairCompatibility = true,
         };
 
         var mapped = DocxCompare.ToDocxDiffSettings(settings);
@@ -108,7 +107,6 @@ public class DocxCompareTests
         Assert.False(mapped.DetectMoves);
         Assert.Equal(0.55, mapped.MoveSimilarityThreshold);
         Assert.Equal(9, mapped.MoveMinimumWordCount);
-        Assert.True(mapped.WordRepairCompatibility);
     }
 
     [Theory]

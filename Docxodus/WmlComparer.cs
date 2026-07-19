@@ -100,20 +100,6 @@ namespace Docxodus
         public bool DetectFormatChanges = true;
 
         /// <summary>
-        /// Enables the narrowly-scoped Word-repair compatibility projection when this settings object is
-        /// routed through <see cref="DocxCompare"/> with
-        /// <see cref="ComparisonEngine.DocxDiff"/>. It has no effect on the legacy
-        /// <see cref="WmlComparer"/> engine.
-        ///
-        /// The projection is intentionally opt-in: it recognizes a very specific Word repair artifact
-        /// (no accepted-content edit, pervasive regenerated <c>w14:paraId</c>s, implicit style-default
-        /// materialization, and table-shell cleanup) and renders a conservative whole-body delete/insert
-        /// replacement. See <see cref="DocxDiffSettings.WordRepairCompatibility"/> for the full predicate
-        /// and round-trip contract.
-        /// </summary>
-        public bool WordRepairCompatibility = false;
-
-        /// <summary>
         /// Optional log to collect warnings and errors during comparison.
         /// When provided, the comparison will attempt to continue past recoverable errors
         /// (like orphaned footnote references) and log them instead of throwing exceptions.

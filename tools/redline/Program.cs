@@ -141,10 +141,6 @@ class Program
             {
                 settings.DetectFormatChanges = false;
             }
-            else if (flag == "--word-repair-compatibility")
-            {
-                settings.WordRepairCompatibility = true;
-            }
             else if (flag == "--no-conflate-spaces")
             {
                 settings.ConflateBreakingAndNonbreakingSpaces = false;
@@ -169,12 +165,6 @@ class Program
                 PrintUsage();
                 return 1;
             }
-        }
-
-        if (settings.WordRepairCompatibility && engine != ComparisonEngine.DocxDiff)
-        {
-            Console.Error.WriteLine("Error: --word-repair-compatibility requires --engine=docxdiff.");
-            return 1;
         }
 
         settings.AuthorForRevisions = authorTag;
@@ -236,7 +226,6 @@ class Program
         Console.WriteLine("  --move-similarity-threshold=<val>  Jaccard threshold for move matching (default: 0.8)");
         Console.WriteLine("  --move-minimum-word-count=<val>    Min words for move detection (default: 3)");
         Console.WriteLine("  --no-detect-format-changes         Disable formatting change detection");
-        Console.WriteLine("  --word-repair-compatibility       Opt into the narrow DocxDiff Word-repair projection (requires --engine=docxdiff)");
         Console.WriteLine("  --no-conflate-spaces               Distinguish breaking/non-breaking spaces");
         Console.WriteLine("  --date-time=<ISO8601>              Custom timestamp for revisions");
         Console.WriteLine("  -h, --help                         Show this help message");
