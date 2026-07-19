@@ -915,11 +915,17 @@ internal static class IrBlockAligner
         // Candidate (l, r) is order-safe iff maxJBelow[l] < r < minJAbove[l]; the bounds are
         // rebuilt after each accepted pair (O(n) per acceptance — within the documented G² budget)
         // so the per-candidate check stays O(1) and the scale guard holds.
+        // Bounds are LAZY: allocated and filled on the first actual crossing check. InOrderRefine
+        // runs for every gap and most gaps never reach a check (candidates fail the content-hash
+        // gate first) — an eager O(n) rebuild per gap invocation compounds to O(n²) across a
+        // document's gaps and trips the aligner's scale guard.
         int n = leftMatch.Length;
-        var maxJBelow = new int[n];
-        var minJAbove = new int[n];
+        int[]? maxJBelow = null;
+        int[]? minJAbove = null;
         void RebuildBounds()
         {
+            maxJBelow ??= new int[n];
+            minJAbove ??= new int[n];
             int running = int.MinValue;
             for (int i = 0; i < n; i++)
             {
@@ -935,17 +941,23 @@ internal static class IrBlockAligner
                     running = Math.Min(running, leftMatch[i]);
             }
         }
-        bool Crosses(int l, int r) => r <= maxJBelow[l] || r >= minJAbove[l];
+        bool Crosses(int l, int r)
+        {
+            if (maxJBelow is null)
+                RebuildBounds();
+            return r <= maxJBelow![l] || r >= minJAbove![l];
+        }
         // Incremental bound propagation with early termination: each position's maxJBelow only
         // ever increases (minJAbove only decreases), so total propagation work across all
         // acceptances is O(n + inversions) — amortized linear for the monotone boilerplate case
         // the scale guard times, never worse than O(n) per acceptance.
         void NoteAccepted(int l0, int r0)
         {
+            if (maxJBelow is null)
+                return; // bounds never materialized — next Crosses() builds them fresh
             for (int i = l0 + 1; i < n && maxJBelow[i] < r0; i++) maxJBelow[i] = r0;
-            for (int i = l0 - 1; i >= 0 && minJAbove[i] > r0; i--) minJAbove[i] = r0;
+            for (int i = l0 - 1; i >= 0 && minJAbove![i] > r0; i--) minJAbove[i] = r0;
         }
-        RebuildBounds();
 
         foreach (int rj in freeRight)
         {

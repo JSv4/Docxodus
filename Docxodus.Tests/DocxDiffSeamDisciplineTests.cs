@@ -45,10 +45,14 @@ public class DocxDiffSeamDisciplineTests
     }
 
     [Fact]
-    public void SeamTerminator_AcceptCarriesRightPPr_ArchivesLeftInPPrChange()
+    public void SeamTerminator_CarriesEmptyPPr_WordShape()
     {
         // Middle paragraphs share tokens (ModifyBlock); the outer two are ~0.2 Jaccard, so they
         // lower to Delete+Insert (a 2x2 gap — no 1x1 force-pair) and render through the seam.
+        // Word's seam shape (every decoded oracle sighting): the surviving seam paragraph carries
+        // an EMPTY pPr — no style, no props, no pPrChange — so neither side's paragraph
+        // formatting outlives the seam. (Word itself gives up property-level round-trip here;
+        // text-level accept ≡ right / reject ≡ left still holds.)
         var left = ParaDoc(centered: true,
             "Alpha ancient prose.", "This document demonstrates the old body.", "Omega bygone prose.");
         var right = ParaDoc(centered: false,
@@ -56,7 +60,8 @@ public class DocxDiffSeamDisciplineTests
 
         var redline = DocxDiff.Compare(left, right);
 
-        // accept ≡ right at the PROPERTY level: the right has no centered paragraphs.
+        // accept ≡ right at the property level: the right has no centered paragraphs, and the
+        // LEFT's centering must not leak through the surviving seam paragraphs.
         var accepted = RevisionProcessor.AcceptRevisions(redline);
         using (var s = new MemoryStream(accepted.DocumentByteArray))
         using (var d = WordprocessingDocument.Open(s, false))
@@ -67,36 +72,68 @@ public class DocxDiffSeamDisciplineTests
             Assert.Equal(0, centeredAfterAccept);
         }
 
-        // reject ≡ left at the property level too.
-        var rejected = RevisionProcessor.RejectRevisions(redline);
-        using (var s = new MemoryStream(rejected.DocumentByteArray))
-        using (var d = WordprocessingDocument.Open(s, false))
-        {
-            var uncentered = d.MainDocumentPart!.Document.Body!
-                .Elements<Paragraph>()
-                .Count(p => p.ParagraphProperties?.Justification?.Val?.Value != JustificationValues.Center);
-            Assert.Equal(0, uncentered);
-        }
-
-        // The redline itself: every surviving mixed ins+del paragraph carries the RIGHT pPr as
-        // current and archives the LEFT in pPrChange.
+        // The redline itself: surviving mixed ins+del (seam) paragraphs carry NO pPr content.
         using (var s = new MemoryStream(redline.DocumentByteArray))
         using (var d = WordprocessingDocument.Open(s, false))
         {
             var mixed = d.MainDocumentPart!.Document.Body!.Elements<Paragraph>()
                 .Where(p => p.Descendants<InsertedRun>().Any() && p.Descendants<DeletedRun>().Any())
                 .Where(p => p.ParagraphProperties?.ParagraphMarkRunProperties?.GetFirstChild<Deleted>() is null)
+                .Where(p => p.ParagraphProperties?.GetFirstChild<ParagraphPropertiesChange>() is null)
                 .ToList();
             Assert.NotEmpty(mixed);
             foreach (var p in mixed)
-            {
-                var currentCentered =
-                    p.ParagraphProperties?.Justification?.Val?.Value == JustificationValues.Center;
-                var archived = p.ParagraphProperties?.GetFirstChild<ParagraphPropertiesChange>() is not null;
-                Assert.False(currentCentered, $"surviving paragraph '{p.InnerText}' kept the LEFT pPr");
-                Assert.True(archived, $"surviving paragraph '{p.InnerText}' lost the LEFT pPr archive");
-            }
+                Assert.True(p.ParagraphProperties is null || !p.ParagraphProperties.HasChildren,
+                    $"seam paragraph '{p.InnerText}' must carry an empty pPr, got: {p.ParagraphProperties?.OuterXml}");
         }
+    }
+
+    [Fact]
+    public void PairedParagraph_RightOnlyStyleRef_IsDroppedFromCurrentPPr()
+    {
+        // The left style universe has no "GrandTitle"; the right styles every paragraph with it.
+        // Word expresses a PAIRED paragraph's format change within the LEFT style universe: the
+        // unresolvable pStyle is dropped from the current pPr (direct props only) — the oracle's
+        // output for exactly this corpus shape carries no pStyle and no imported style definition.
+        static WmlDocument StyledDoc(bool styled, params string[] texts)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                main.Document = new Document(new Body(texts.Select(t =>
+                {
+                    var p = new Paragraph(new Run(new Text(t)));
+                    if (styled)
+                        p.PrependChild(new ParagraphProperties(new ParagraphStyleId { Val = "GrandTitle" }));
+                    return (OpenXmlElement)p;
+                })));
+                var styles = new Styles(new DocDefaults());
+                if (styled)
+                    styles.Append(new Style(new StyleName { Val = "Grand Title" })
+                    { Type = StyleValues.Paragraph, StyleId = "GrandTitle" });
+                main.AddNewPart<StyleDefinitionsPart>().Styles = styles;
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("t.docx", stream.ToArray());
+        }
+
+        var left = StyledDoc(styled: false,
+            "Alpha ancient prose.", "This document demonstrates the old body.", "Omega bygone prose.");
+        var right = StyledDoc(styled: true,
+            "Zulu contemporary words.", "This document demonstrates superscript body.", "Kappa modern words.");
+
+        var redline = DocxDiff.Compare(left, right);
+
+        using var s = new MemoryStream(redline.DocumentByteArray);
+        using var d = WordprocessingDocument.Open(s, false);
+        var refs = d.MainDocumentPart!.Document.Body!
+            .Descendants<ParagraphStyleId>()
+            .Where(id => id.Val?.Value == "GrandTitle" &&
+                         id.Ancestors<ParagraphPropertiesChange>().FirstOrDefault() is null)
+            .ToList();
+        Assert.Empty(refs);
     }
 
     private static WmlDocument BlockDoc(params string[] blocks)

@@ -124,6 +124,7 @@ internal static class IrMarkupRenderer
         var irRight = IrReader.Read(right, readOpts);
 
         var state = new RenderState(irLeft, irRight, settings);
+        state.LeftStyleIds = ReadStyleIds(left);
 
         // Assemble the new body's block-level children (w:p / w:tbl), in script order with Word's
         // replace-gap arrangement (inserted blocks before deleted ones inside each gap).
@@ -413,17 +414,6 @@ internal static class IrMarkupRenderer
                 firstDel.Element(W.pPr)?.Element(W.sectPr) is null &&
                 !CarriesPageBreak(firstDel) && !CarriesPageBreak(lastIns))
             {
-                // Capture the ins-side pPr BEFORE it is dropped: the terminator — the paragraph
-                // that survives accept — must present it as CURRENT (accept ≡ right at the
-                // property level), with the del-side pPr archived in w:pPrChange.
-                XElement? insPPr = null;
-                if (lastIns.Element(W.pPr) is { } insSrc)
-                {
-                    insPPr = StripUnids(new XElement(insSrc));
-                    insPPr.Elements(W.rPr).Elements(W.ins).Remove();
-                    insPPr.Elements(W.rPr).Where(r => !r.HasElements && !r.HasAttributes).Remove();
-                }
-
                 // Mutate lastIns in place into the seam: drop its pPr (and with it the mark-ins),
                 // adopt the deleted paragraph's pPr (carrying the tracked mark + old paragraph props),
                 // and move the deleted paragraph's content in AFTER the inserted runs.
@@ -456,31 +446,17 @@ internal static class IrMarkupRenderer
                 }
                 terminator.Element(W.pPr)?.Element(W.rPr)?.Elements(W.del).Remove();
 
-                // The surviving paragraph must equal the LAST INSERTED paragraph after accept: swap
-                // the terminator's del-side pPr for the ins side and archive the left through the
-                // block-format machinery (w:pPrChange — a no-op when the two are policy-equal, the
-                // dominant seam case). Skipped when the del-side pPr carries an inline w:sectPr:
-                // swapping would silently move a section break (the seam guard above only vets
-                // firstDel/lastIns, not a chain terminator).
-                if (terminator.Element(W.pPr)?.Element(W.sectPr) is null)
-                {
-                    var leftShell = new XElement(W.p);
-                    if (terminator.Element(W.pPr) is { } delSide)
-                    {
-                        var leftPPr = new XElement(delSide);
-                        leftPPr.Elements(W.rPr).Elements(W.del).Remove();
-                        leftPPr.Elements(W.rPr).Where(r => !r.HasElements && !r.HasAttributes).Remove();
-                        leftShell.Add(leftPPr);
-                        delSide.Remove();
-                    }
-                    var rightShell = new XElement(W.p);
-                    if (insPPr is not null)
-                    {
-                        terminator.AddFirst(new XElement(insPPr));
-                        rightShell.Add(new XElement(insPPr));
-                    }
-                    ApplyBlockFormatChanges(terminator, leftShell, rightShell, state);
-                }
+                // Word's seam-terminator shape (verified on every decoded oracle sighting): the
+                // surviving paragraph carries an EMPTY pPr — no style, no direct props, no
+                // pPrChange. Word deliberately drops BOTH sides' paragraph properties at the seam
+                // (a Title style on either side renders plain in its own compare output). Keeping
+                // the del-side pPr leaked the left's style through accept; stamping the ins side
+                // put format-change bars on every seam line that Word's output doesn't have.
+                // Skipped when the pPr carries an inline w:sectPr — dropping it would silently
+                // remove a section break (the seam guard above only vets firstDel/lastIns, not a
+                // chain terminator).
+                if (terminator.Element(W.pPr) is { } termPPr && termPPr.Element(W.sectPr) is null)
+                    termPPr.Remove();
             }
             sink.AddRange(delEls);
             gapInsertStart = -1;
@@ -3063,7 +3039,11 @@ internal static class IrMarkupRenderer
         var newPara = new XElement(W.p);
         var rightPPr = rightPara.Element(W.pPr);
         if (rightPPr != null)
-            newPara.Add(StripUnids(new XElement(rightPPr)));
+        {
+            var stamped = StripUnids(new XElement(rightPPr));
+            DropUnresolvableStyleRef(stamped, state);
+            newPara.Add(stamped);
+        }
         ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
 
         int cursor = 0;
@@ -3266,11 +3246,16 @@ internal static class IrMarkupRenderer
         var rightTokens = ParagraphTokens(op.RightAnchor, state.RightSource, state.Settings);
 
         // The new paragraph: clone the RIGHT paragraph's pPr (accepted-state paragraph properties) and rebuild
-        // its run-level content from the spans.
+        // its run-level content from the spans. A right pStyle absent from the LEFT style universe is
+        // dropped — Word expresses a paired paragraph's format change in direct props only.
         var newPara = new XElement(W.p);
         var rightPPr = rightPara.Element(W.pPr);
         if (rightPPr != null)
-            newPara.Add(StripUnids(new XElement(rightPPr)));
+        {
+            var stamped = StripUnids(new XElement(rightPPr));
+            DropUnresolvableStyleRef(stamped, state);
+            newPara.Add(stamped);
+        }
         ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
 
         newPara.Add(BuildTokenOpContent(tokenDiff, leftTokens, rightTokens, leftRuns, rightRuns, state));
@@ -4358,6 +4343,47 @@ internal static class IrMarkupRenderer
         numberingPart.PutXDocument();
     }
 
+    /// <summary>Style ids defined in a document's styles part, read without opening the package
+    /// through the SDK (called before the render's package pass).</summary>
+    private static HashSet<string> ReadStyleIds(WmlDocument doc)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            using var ms = new MemoryStream(doc.DocumentByteArray, writable: false);
+            using var zip = new System.IO.Compression.ZipArchive(ms, System.IO.Compression.ZipArchiveMode.Read);
+            var entry = zip.GetEntry("word/styles.xml");
+            if (entry is null)
+                return ids;
+            using var stream = entry.Open();
+            var root = XDocument.Load(stream).Root;
+            if (root is null)
+                return ids;
+            foreach (var style in root.Elements(W.style))
+                if ((string?)style.Attribute(W.styleId) is { } id)
+                    ids.Add(id);
+        }
+        catch (Exception e) when (e is InvalidDataException or System.Xml.XmlException)
+        {
+            // Malformed package/part: leave the set as-is; the drop check degrades to a no-op set.
+        }
+        return ids;
+    }
+
+    /// <summary>Drop a stamped-current pPr's <c>w:pStyle</c> when the referenced style is not
+    /// defined in the LEFT styles part. Word expresses a PAIRED paragraph's format change within
+    /// the left style universe — an unresolvable style reference is dropped and the delta lives in
+    /// direct properties (oracle-verified: the output styles part never gains the right-only style
+    /// for a paired paragraph; only wholly-inserted paragraphs import their styles).</summary>
+    private static void DropUnresolvableStyleRef(XElement pPr, RenderState state)
+    {
+        if (state.LeftStyleIds is not { } known)
+            return;
+        var pStyle = pPr.Element(W.pStyle);
+        if (pStyle is not null && (string?)pStyle.Attribute(W.val) is { } id && !known.Contains(id))
+            pStyle.Remove();
+    }
+
     /// <summary>Rebind INSERTED paragraphs' <c>w:numId</c> references to the ids their (right-doc)
     /// definitions were renumbered to by the numbering copy's collision handling. Word does not
     /// compare numbering definitions, so equal and deleted paragraphs keep the left's id — only
@@ -4759,6 +4785,12 @@ internal static class IrMarkupRenderer
         /// <summary>When non-null, overrides Settings.AuthorForRevisions for emitted revision attributes
         /// (composite multi-author rendering). Null for normal two-way render → behavior unchanged.</summary>
         public string? AuthorOverride { get; set; }
+
+        /// <summary>Style ids defined in the LEFT document's styles part. A PAIRED paragraph's
+        /// right-side <c>w:pStyle</c> referencing a style outside this set is dropped when stamped
+        /// as current (<see cref="DropUnresolvableStyleRef"/>) — Word expresses a paired
+        /// paragraph's format change within the left style universe. Null disables the check.</summary>
+        public HashSet<string>? LeftStyleIds { get; set; }
 
         /// <summary>The bucket key of the CURRENTLY-active right source package, used to attribute media-bearing
         /// clones to the package they must be imported FROM. Two-way uses the single key 0 (the right package);
