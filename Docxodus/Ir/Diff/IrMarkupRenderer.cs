@@ -4435,8 +4435,9 @@ internal static class IrMarkupRenderer
         numberingPart.PutXDocument();
     }
 
-    /// <summary>True when the document's main part carries tracked-revision markup (w:ins/w:del) —
-    /// a cheap byte-level scan used to gate one-sided input-revision preservation.</summary>
+    /// <summary>True when the document's main part carries markup that <see cref="RevisionProcessor"/>
+    /// treats as a tracked revision. The scan is namespace-aware so an alternate prefix for
+    /// WordprocessingML cannot evade the one-sided input-revision-preservation gate.</summary>
     private static bool HasTrackedRevisionMarkup(WmlDocument doc)
     {
         try
@@ -4446,13 +4447,17 @@ internal static class IrMarkupRenderer
             var entry = zip.GetEntry("word/document.xml");
             if (entry is null)
                 return false;
-            using var reader = new StreamReader(entry.Open());
-            var text = reader.ReadToEnd();
-            return text.Contains("<w:ins ", StringComparison.Ordinal) ||
-                   text.Contains("<w:del ", StringComparison.Ordinal) ||
-                   text.Contains("<w:moveFrom ", StringComparison.Ordinal);
+            using var stream = entry.Open();
+            using var reader = System.Xml.XmlReader.Create(stream);
+            while (reader.Read())
+            {
+                if (reader.NodeType == System.Xml.XmlNodeType.Element &&
+                    TrackedRevisionNames.Contains(XName.Get(reader.LocalName, reader.NamespaceURI)))
+                    return true;
+            }
+            return false;
         }
-        catch (InvalidDataException)
+        catch (Exception e) when (e is InvalidDataException or System.Xml.XmlException)
         {
             return false;
         }

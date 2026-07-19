@@ -40,6 +40,10 @@ public class DocxDiffPreserveInputRevisionsTests
         $"<w:ins w:id=\"{id}\" w:author=\"{author}\" w:date=\"2020-01-01T00:00:00Z\">" +
         $"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:ins>";
 
+    private static string InsWithPrefix(string prefix, string author, string text, int id = 900) =>
+        $"<{prefix}:ins xmlns:{prefix}=\"{Wns}\" {prefix}:id=\"{id}\" {prefix}:author=\"{author}\" {prefix}:date=\"2020-01-01T00:00:00Z\">" +
+        $"<{prefix}:r><{prefix}:t xml:space=\"preserve\">{text}</{prefix}:t></{prefix}:r></{prefix}:ins>";
+
     private static string Del(string author, string text, int id = 901) =>
         $"<w:del w:id=\"{id}\" w:author=\"{author}\" w:date=\"2020-01-01T00:00:00Z\">" +
         $"<w:r><w:delText xml:space=\"preserve\">{text}</w:delText></w:r></w:del>";
@@ -303,6 +307,52 @@ public class DocxDiffPreserveInputRevisionsTests
     }
 
     // ----------------------------------------------------------------- 4: flag interactions / guards
+
+    [Fact]
+    public void Left_revision_with_an_alternate_wordprocessingml_prefix_disables_right_preservation()
+    {
+        // The LEFT's x:ins is exactly the same OOXML element as w:ins. It must disable preservation of
+        // RIGHT-only markup, otherwise the render flattens the left revision but retains Reviewer B's,
+        // producing the asymmetry this guard is intended to prevent.
+        var left = BodyDoc(
+            R("Left ") + InsWithPrefix("x", "Reviewer A", "revision"),
+            R("Shared lead REVTEXT end"),
+            R("Alpha"));
+        var right = BodyDoc(
+            R("Left revision"),
+            R("Shared lead ") + Ins("Reviewer B", "REVTEXT") + R(" end"),
+            R("Beta"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.Empty(RevisionWrappersBy(result, "Reviewer B"));
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+    }
+
+    [Fact]
+    public void Left_property_revision_disables_right_preservation()
+    {
+        // pPrChange has no w:ins/w:del wrapper, but RevisionProcessor treats it as a tracked revision.
+        // The current (accepted) centered pPr matches RIGHT exactly; the old left alignment lives only in
+        // pPrChange, isolating this test to the gate rather than a format diff.
+        const string centered = "<w:pPr><w:jc w:val=\"center\"/></w:pPr>";
+        const string centeredWithChange =
+            "<w:pPr><w:jc w:val=\"center\"/><w:pPrChange w:id=\"902\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:pPr><w:jc w:val=\"left\"/></w:pPr></w:pPrChange></w:pPr>";
+        var left = BodyDoc(
+            centeredWithChange + R("Stable"),
+            R("Shared lead REVTEXT end"),
+            R("Alpha"));
+        var right = BodyDoc(
+            centered + R("Stable"),
+            R("Shared lead ") + Ins("Reviewer B", "REVTEXT") + R(" end"),
+            R("Beta"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.Empty(RevisionWrappersBy(result, "Reviewer B"));
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+    }
 
     [Fact]
     public void Clean_inputs_flag_on_is_byte_identical_to_flag_off()
