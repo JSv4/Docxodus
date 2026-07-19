@@ -672,9 +672,20 @@ internal static class IrBlockAligner
                     // the gap would relocate here as a Modified pair. Word never fuzzy-pairs
                     // empties; they belong to the in-order passes (which pair them monotonically)
                     // or fall out as plain delete/insert.
-                    if (leftBlocks[li] is IrParagraph && rightBlocks[rj] is IrParagraph &&
-                        similarity.WordCount(leftBlocks[li]) == 0 && similarity.WordCount(rightBlocks[rj]) == 0)
-                        continue;
+                    if (leftBlocks[li] is IrParagraph leftParagraph && rightBlocks[rj] is IrParagraph rightParagraph)
+                    {
+                        if (similarity.WordCount(leftParagraph) == 0 && similarity.WordCount(rightParagraph) == 0)
+                            continue;
+
+                        // The general score includes spaces and punctuation because it deliberately
+                        // shares the downstream token model.  At the lowered similarity threshold,
+                        // two unrelated prose paragraphs can therefore clear the score merely by
+                        // having the same separator skeleton (especially numbered lists).  Weak
+                        // in-gap pairing needs actual lexical evidence; the dedicated 1×1 residue
+                        // rule below still handles unambiguous labels and atomic-only paragraphs.
+                        if (similarity.PairingWordOverlap(leftParagraph, rightParagraph).SharedWords == 0)
+                            continue;
+                    }
                     double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
                     double displacement = Math.Abs(positions.Left[li] - positions.Right[rj]);
                     if (score < threshold + PairLocalityPenalty * displacement)
@@ -821,7 +832,7 @@ internal static class IrBlockAligner
             }
         }
 
-        // PAIRING-EVIDENCE discipline (both corpus-decoded): qualifying shared content is either
+        // PAIRING-EVIDENCE discipline (both corpus-decoded): qualifying shared lexical content is either
         // (a) at least one shared word that is not an English closed-class function word — Word
         // never pairs replace-gap paragraphs on stopword-grade overlap alone ('2.2 Numbered (with
         // nested)' does NOT merge into 'Q1: Launch v2.0 with new dashboard' on the shared "with",
@@ -834,11 +845,11 @@ internal static class IrBlockAligner
         // mostly-contained paragraph is an extension, not a replacement).
         bool HasPairingEvidence(IrParagraph lp, IrParagraph rp, int sharedWords)
         {
-            int minWords = Math.Min(similarity.WordCount(lp), similarity.WordCount(rp));
+            int minWords = Math.Min(similarity.PairingWordCount(lp), similarity.PairingWordCount(rp));
             if (minWords > 0 && sharedWords * 2 >= minWords)
                 return true;
-            var a = similarity.WordKeys(lp);
-            var b = similarity.WordKeys(rp);
+            var a = similarity.PairingWordKeys(lp);
+            var b = similarity.PairingWordKeys(rp);
             var (small, large) = a.Count <= b.Count ? (a, b) : (b, a);
             foreach (var kv in small)
                 if (large.ContainsKey(kv.Key) && !FunctionWords.Contains(kv.Key))
@@ -855,7 +866,7 @@ internal static class IrBlockAligner
                 return 0;
             var lp = (IrParagraph)leftBlocks[li];
             var rp = (IrParagraph)rightBlocks[rj];
-            var (shared, jaccard) = similarity.WordOverlap(lp, rp);
+            var (shared, jaccard) = similarity.PairingWordOverlap(lp, rp);
             if (shared < JunctionMinSharedWords)
                 return 0;
             double posL = m == 1 ? 0 : (double)i / (m - 1);
@@ -974,12 +985,12 @@ internal static class IrBlockAligner
                         continue;
                     if (leftBlocks[nl] is not IrParagraph lp || rightBlocks[nr] is not IrParagraph rp)
                         continue;
-                    var (shared, _) = similarity.WordOverlap(lp, rp);
+                    var (shared, _) = similarity.PairingWordOverlap(lp, rp);
                     if (shared < JunctionMinSharedWords)
                         continue;
                     // Size-parity guard: on shared-word-only evidence a paragraph does not pair
                     // with one several times its word count (see JunctionGrowRatio).
-                    int wl = similarity.WordCount(lp), wr = similarity.WordCount(rp);
+                    int wl = similarity.PairingWordCount(lp), wr = similarity.PairingWordCount(rp);
                     if (Math.Min(wl, wr) < JunctionGrowRatio * Math.Max(wl, wr))
                         continue;
                     // Pairing-evidence discipline (same as the LCS): adjacency to a pair plus
@@ -1225,6 +1236,16 @@ internal static class IrBlockAligner
         // but do not count toward N — a "split" whose other member is an empty carrier is not a split.
         int contentMembers = paras.Count(p => HasContentTokens(p, settings));
         if (contentMembers < 2)
+            return null;
+
+        // A split needs two phrase-sized inherited fragments, not merely two isolated retained
+        // tokens. Without this guard `Video. Click.` → `Video.` + inserted math + `Click` is
+        // indistinguishable to the raw LCS from a true split, yet Word treats it as one deleted
+        // paragraph plus one coalesced inserted region (WC-1840). The genuine corpus splits and
+        // the public split model both carry multiple inherited Word tokens in each textual half.
+        const int MinMatchedWordsPerSplitFragment = 2;
+        int phraseMembers = score.MemberMatchedWords.Count(n => n >= MinMatchedWordsPerSplitFragment);
+        if (phraseMembers < 2)
             return null;
 
         // Gate 2 (paired candidate only): the partner must survive the trim, and at least one OTHER

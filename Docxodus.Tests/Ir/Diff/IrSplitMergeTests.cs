@@ -525,6 +525,53 @@ public class IrSplitMergeTests
     }
 
     [Fact]
+    public void WC1840_compat_revisions_match_oracle_count()
+    {
+        // WmlComparer's two revisions are a textual deletion and an inserted math-led atom group.
+        // The latter is counted but reports no text because GetRevisions starts the group at m:oMathPara.
+        var revs = FixtureRevisions("WC/WC042-Table-5.docx", "WC/WC042-Table-5-Mod.docx");
+        Assert.True(revs.Count == 2,
+            $"expected 2 revisions, got {revs.Count}:\n" +
+            string.Join("\n", revs.Select(rv => $"  {rv.Type}: [{rv.Text}]")));
+        Assert.Contains(revs, rv => rv.Type == IrRevisionType.Deleted && rv.Text.Trim() == "Click.");
+        Assert.Contains(revs, rv => rv.Type == IrRevisionType.Inserted && rv.Text.Length == 0);
+    }
+
+    [Fact]
+    public void WC1840_reverse_compat_revisions_match_oracle_text_surface()
+    {
+        var revs = FixtureRevisions("WC/WC042-Table-5-Mod.docx", "WC/WC042-Table-5.docx");
+        Assert.True(revs.Count == 2,
+            $"expected 2 revisions, got {revs.Count}:\n" +
+            string.Join("\n", revs.Select(rv => $"  {rv.Type}: [{rv.Text}]")));
+        Assert.Contains(revs, rv => rv.Type == IrRevisionType.Inserted && rv.Text.Trim() == "Click.");
+        Assert.Contains(revs, rv => rv.Type == IrRevisionType.Deleted && rv.Text.Length == 0);
+    }
+
+    [Fact]
+    public void Compatible_projection_does_not_depend_on_a_prior_fine_projection()
+    {
+        // The differential harness renders Fine before WmlComparerCompatible using the same script
+        // and IR documents. Rendering is a projection, so the second result must equal a direct
+        // compatible render; otherwise the renderer is mutating its inputs.
+        const string leftPath = "WC/WC042-Table-5.docx";
+        const string rightPath = "WC/WC042-Table-5-Mod.docx";
+        var fine = new IrDiffSettings();
+        var compatible = fine with { RevisionGranularity = RevisionGranularity.WmlComparerCompatible };
+        var left = IrReader.Read(new WmlDocument(Path.Combine("../../../../TestFiles/", leftPath)), WcCorpus.ReadOpts);
+        var right = IrReader.Read(new WmlDocument(Path.Combine("../../../../TestFiles/", rightPath)), WcCorpus.ReadOpts);
+
+        var directScript = IrEditScriptBuilder.Build(left, right, fine);
+        var direct = IrRevisionRenderer.Render(directScript, left, right, compatible).ToList();
+
+        var afterFineScript = IrEditScriptBuilder.Build(left, right, fine);
+        _ = IrRevisionRenderer.Render(afterFineScript, left, right, fine).ToList();
+        var afterFine = IrRevisionRenderer.Render(afterFineScript, left, right, compatible).ToList();
+
+        Assert.Equal(direct, afterFine);
+    }
+
+    [Fact]
     public void WC1450_compat_revisions_match_oracle_count()
     {
         var revs = FixtureRevisions("WC/WC023-Table-4-Row-Image-Before.docx",

@@ -258,18 +258,25 @@ internal static class IrRevisionRenderer
         // paragraph's content followed by its mark (a newline), so the run reads as one multi-paragraph
         // ins/del. An empty-mark paragraph contributes only its newline; a math/image paragraph contributes
         // its surface text then a newline (matching the oracle's coalesced multi-paragraph text).
+        string? firstAnchor = insert ? ops[start].RightAnchor : ops[start].LeftAnchor;
+        var doc = insert ? ctx.Right : ctx.Left;
+        // GetRevisions groups adjacent atoms by revision metadata, then bases the whole group's text
+        // on its first atom.  Math and drawings are its explicit no-text atoms, so a coalesced region
+        // which begins with one remains a counted revision but has no semantic text even if a later
+        // paragraph carries words (WC-1840's math paragraph followed by "Click").
+        bool legacyNoTextLeader = StartsWithLegacyNoTextRevisionContent(firstAnchor, doc);
         var sb = new StringBuilder();
-        string? firstAnchor = null;
         for (int k = start; k < end; k++)
         {
             string? anchor = insert ? ops[k].RightAnchor : ops[k].LeftAnchor;
-            firstAnchor ??= anchor;
             sb.Append(BlockText(anchor, insert ? ctx.Right : ctx.Left, ctx.Settings));
             sb.Append('\n');
         }
         sink.Add(insert
-            ? new IrRevision(IrRevisionType.Inserted, sb.ToString(), ctx.Author, ctx.Date, RightAnchor: firstAnchor)
-            : new IrRevision(IrRevisionType.Deleted, sb.ToString(), ctx.Author, ctx.Date, LeftAnchor: firstAnchor));
+            ? new IrRevision(IrRevisionType.Inserted, legacyNoTextLeader ? string.Empty : sb.ToString(),
+                ctx.Author, ctx.Date, RightAnchor: firstAnchor)
+            : new IrRevision(IrRevisionType.Deleted, legacyNoTextLeader ? string.Empty : sb.ToString(),
+                ctx.Author, ctx.Date, LeftAnchor: firstAnchor));
     }
 
     /// <summary>True iff any block in the ins/del sub-region [start,end) is a paragraph with ≥1 Word token.</summary>
@@ -285,6 +292,30 @@ internal static class IrRevisionRenderer
                     if (t.Kind == IrDiffTokenKind.Word)
                         return true;
             }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a coalesced region's first paragraph begins with the same content kind that the legacy
+    /// comparer deliberately reports with null text: Office Math or a drawing.  The IR keeps a non-null
+    /// string surface, so the equivalent observable value here is <see cref="string.Empty"/>.
+    /// </summary>
+    private static bool StartsWithLegacyNoTextRevisionContent(string? anchor, IrDocument doc)
+    {
+        if (anchor is null || !doc.AnchorIndex.TryGetValue(anchor, out var block) || block is not IrParagraph p)
+            return false;
+
+        foreach (var inline in p.Inlines)
+        {
+            if (inline is IrTextRun { Text.Length: 0 })
+                continue;
+            if (inline is IrInlineImage)
+                return true;
+            if (inline is IrOpaqueInline opaque &&
+                (opaque.ElementName == M.oMath || opaque.ElementName == M.oMathPara))
+                return true;
+            return false;
         }
         return false;
     }

@@ -78,6 +78,18 @@ internal sealed class IrBlockSimilarity
     public IReadOnlyDictionary<string, int> WordKeys(IrParagraph paragraph) => Bag(paragraph).WordCounts;
 
     /// <summary>
+    /// The subset of a paragraph's word-token keys that contains lexical content (at least one
+    /// letter).  The weak, corpus-calibrated junction matcher uses this rather than every
+    /// word-token: a shared ordinal such as <c>17</c> is positional scaffolding, not evidence that
+    /// two otherwise unrelated paragraphs are revisions of one another.  Alphanumeric labels such
+    /// as <c>Q1</c> remain lexical and therefore continue to count.
+    /// </summary>
+    public IReadOnlyDictionary<string, int> PairingWordKeys(IrParagraph paragraph) => Bag(paragraph).PairingWordCounts;
+
+    /// <summary>Number of lexical word tokens used by the weak junction-pairing evidence gate.</summary>
+    public int PairingWordCount(IrParagraph paragraph) => Bag(paragraph).PairingWordCount;
+
+    /// <summary>
     /// Should a lone 1×1 gap residue of these two paragraphs force-pair as Modified? True when
     /// EITHER side has no <see cref="IrDiffTokenKind.Word"/> tokens at all (an atomic-only or empty
     /// paragraph — textboxes/images carry no lexical evidence to demand, and demoting them to
@@ -137,6 +149,29 @@ internal sealed class IrBlockSimilarity
         return (intersection, union == 0 ? 0.0 : (double)intersection / union);
     }
 
+    /// <summary>
+    /// Lexical-only variant of <see cref="WordOverlap"/> for the weak junction-pairing pass.
+    /// Numeric-only tokens are deliberately excluded: otherwise synthetic or numbered documents
+    /// whose paragraphs merely share their ordinal become an all-Modified diagonal despite having
+    /// no common prose.
+    /// </summary>
+    public (int SharedWords, double WordJaccard) PairingWordOverlap(IrParagraph left, IrParagraph right)
+    {
+        var a = Bag(left);
+        var b = Bag(right);
+        if (a.PairingWordCount == 0 || b.PairingWordCount == 0)
+            return (0, 0.0);
+
+        int intersection = 0;
+        var (small, large) = a.PairingWordCounts.Count <= b.PairingWordCounts.Count ? (a, b) : (b, a);
+        foreach (var kv in small.PairingWordCounts)
+            if (large.PairingWordCounts.TryGetValue(kv.Key, out int other))
+                intersection += System.Math.Min(kv.Value, other);
+
+        int union = a.PairingWordCount + b.PairingWordCount - intersection;
+        return (intersection, union == 0 ? 0.0 : (double)intersection / union);
+    }
+
     private MatchKeyBag Bag(IrParagraph paragraph)
     {
         if (_bagCache.TryGetValue(paragraph, out var bag))
@@ -185,18 +220,23 @@ internal sealed class IrBlockSimilarity
 
         public Dictionary<string, int> Counts { get; }
         public Dictionary<string, int> WordCounts { get; }  // Word-kind tokens only, by MatchKey
+        public Dictionary<string, int> PairingWordCounts { get; } // Word keys containing at least one letter
         public HashSet<string> TrimmedWords { get; }        // raw word texts, punct-trimmed + case-folded
         public int Total { get; }      // sum of all multiplicities (every token kind)
         public int WordCount { get; }  // Word-kind tokens only
+        public int PairingWordCount { get; } // Word-kind tokens carrying lexical (not ordinal-only) content
 
         private MatchKeyBag(Dictionary<string, int> counts, Dictionary<string, int> wordCounts,
-            HashSet<string> trimmedWords, int total, int wordCount)
+            Dictionary<string, int> pairingWordCounts, HashSet<string> trimmedWords, int total,
+            int wordCount, int pairingWordCount)
         {
             Counts = counts;
             WordCounts = wordCounts;
+            PairingWordCounts = pairingWordCounts;
             TrimmedWords = trimmedWords;
             Total = total;
             WordCount = wordCount;
+            PairingWordCount = pairingWordCount;
         }
 
         public static MatchKeyBag Build(IrParagraph paragraph, IrDiffSettings settings)
@@ -204,8 +244,9 @@ internal sealed class IrBlockSimilarity
             var tokens = IrDiffTokenizer.Tokenize(paragraph, settings);
             var counts = new Dictionary<string, int>();
             var wordCounts = new Dictionary<string, int>();
+            var pairingWordCounts = new Dictionary<string, int>();
             var trimmedWords = new HashSet<string>();
-            int wordCount = 0;
+            int wordCount = 0, pairingWordCount = 0;
             foreach (var t in tokens)
             {
                 counts[t.MatchKey] = counts.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
@@ -213,10 +254,24 @@ internal sealed class IrBlockSimilarity
                 {
                     wordCounts[t.MatchKey] = wordCounts.TryGetValue(t.MatchKey, out int w) ? w + 1 : 1;
                     wordCount++;
+                    if (ContainsLetter(t.Text))
+                    {
+                        pairingWordCounts[t.MatchKey] = pairingWordCounts.TryGetValue(t.MatchKey, out int p) ? p + 1 : 1;
+                        pairingWordCount++;
+                    }
                     AddLexicalPieces(t.Text, trimmedWords, settings);
                 }
             }
-            return new MatchKeyBag(counts, wordCounts, trimmedWords, tokens.Count, wordCount);
+            return new MatchKeyBag(
+                counts, wordCounts, pairingWordCounts, trimmedWords, tokens.Count, wordCount, pairingWordCount);
+        }
+
+        private static bool ContainsLetter(string value)
+        {
+            foreach (char c in value)
+                if (char.IsLetter(c))
+                    return true;
+            return false;
         }
 
         /// <summary>Split a raw word on EVERY non-letter/digit character and add pieces normalized
@@ -267,7 +322,7 @@ internal sealed class IrBlockSimilarity
                             }
             // Table bags never feed WordOverlap/ResidueForcePair (junction pairing is
             // paragraph-only), so the word-only structures are not materialized.
-            return new MatchKeyBag(counts, EmptyCounts, EmptyWords, total, wordCount);
+            return new MatchKeyBag(counts, EmptyCounts, EmptyCounts, EmptyWords, total, wordCount, 0);
         }
     }
 }
