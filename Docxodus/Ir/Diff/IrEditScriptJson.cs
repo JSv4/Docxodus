@@ -17,7 +17,7 @@ namespace Docxodus.Ir.Diff;
 /// <remarks>
 /// <para><b>Shape.</b> <c>{"operations":[ … ]}</c>. Each op is an object with a fixed field order:
 /// <c>kind</c> (enum name), then any of <c>leftAnchor</c>/<c>rightAnchor</c>/<c>moveGroupId</c>/
-/// <c>isMoveSource</c>/<c>tokenDiff</c> that are present (absent fields are simply omitted, matching the
+/// <c>isMoveSource</c>/<c>bodyFullRewriteGroupId</c>/<c>tokenDiff</c> that are present (absent fields are simply omitted, matching the
 /// record's nullability). A <c>tokenDiff</c> is <c>{"ops":[ [kind,ls,le,rs,re], … ]}</c> — each token
 /// op a COMPACT 5-element array: an integer kind code (0=Equal,1=Insert,2=Delete,3=FormatChanged) plus
 /// the four half-open span bounds. The compact array keeps a large corpus script terse while staying
@@ -74,6 +74,8 @@ internal static class IrEditScriptJson
         if (op.RightAnchor is { } right) writer.WriteString("rightAnchor", right);
         if (op.MoveGroupId is { } group) writer.WriteNumber("moveGroupId", group);
         if (op.IsMoveSource is { } source) writer.WriteBoolean("isMoveSource", source);
+        if (op.BodyFullRewriteGroupId is { } rewriteGroup)
+            writer.WriteNumber("bodyFullRewriteGroupId", rewriteGroup);
         if (op.TokenDiff is { } diff)
         {
             writer.WritePropertyName("tokenDiff");
@@ -302,6 +304,8 @@ internal static class IrEditScriptJson
         string? rightAnchor = element.TryGetProperty("rightAnchor", out var r) ? r.GetString() : null;
         int? moveGroupId = element.TryGetProperty("moveGroupId", out var g) ? g.GetInt32() : null;
         bool? isMoveSource = element.TryGetProperty("isMoveSource", out var s) ? s.GetBoolean() : null;
+        int? bodyFullRewriteGroupId = element.TryGetProperty("bodyFullRewriteGroupId", out var brg)
+            ? brg.GetInt32() : null;
         IrTokenDiff? tokenDiff = element.TryGetProperty("tokenDiff", out var t) ? ReadTokenDiff(t) : null;
         IrTableDiff? tableDiff = element.TryGetProperty("tableDiff", out var td) ? ReadTableDiff(td) : null;
         IrNodeList<IrTextboxDiff>? textboxDiffs = null;
@@ -334,7 +338,7 @@ internal static class IrEditScriptJson
             segmentDiffs = IrNodeList.From(list);
         }
         return new IrEditOp(kind, leftAnchor, rightAnchor, tokenDiff, moveGroupId, isMoveSource,
-            tableDiff, textboxDiffs, splitMergeAnchors, segmentDiffs);
+            tableDiff, textboxDiffs, splitMergeAnchors, segmentDiffs, bodyFullRewriteGroupId);
     }
 
     private static IrTableDiff ReadTableDiff(JsonElement element)

@@ -30,7 +30,7 @@ internal static class IrBlockAligner
     /// Align the body block lists of <paramref name="left"/> and <paramref name="right"/>.
     /// </summary>
     public static IrBlockAlignment Align(IrDocument left, IrDocument right, IrDiffSettings settings)
-        => AlignBlocks(left.Body.Blocks, right.Body.Blocks, settings);
+        => AlignBlocks(left.Body.Blocks, right.Body.Blocks, settings, markBodyFullRewriteGaps: true);
 
     /// <summary>
     /// Align two raw block lists (M2.2 Task 4 generalization). The public <see cref="Align"/> calls this
@@ -40,6 +40,16 @@ internal static class IrBlockAligner
     /// </summary>
     public static IrBlockAlignment AlignBlocks(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrDiffSettings settings)
+        => AlignBlocks(leftBlocks, rightBlocks, settings, markBodyFullRewriteGaps: false);
+
+    /// <summary>
+    /// Shared block-list implementation. Only the document-body entry point enables
+    /// <paramref name="markBodyFullRewriteGaps"/>: a full lexical 1×1 rewrite in a cell, textbox,
+    /// note, header, or footer keeps the normal Word-shaped seam.
+    /// </summary>
+    private static IrBlockAlignment AlignBlocks(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrDiffSettings settings,
+        bool markBodyFullRewriteGaps)
     {
         // M2.2 Task 3: settings now drive similarity-based in-gap pairing + cross-gap fuzzy moves.
         // One per-call similarity scorer carries the tokenization cache (each block tokenized at most
@@ -117,8 +127,19 @@ internal static class IrBlockAligner
         var splitGroups = new List<(int SingularIndex, List<int> PluralIndexes)>();
         var mergeGroups = new List<(int SingularIndex, List<int> PluralIndexes)>();
 
+        // Renderer-only body provenance: an explicit shared id survives on the two standalone
+        // Delete/Insert entries of a 1×1 full lexical rewrite. It deliberately lives beside, rather
+        // than inside, the alignment kind/match arrays: the two blocks are still genuinely unpaired.
+        // Nested callers use the same engine with marking disabled, so their normal seam behavior is
+        // byte-for-byte unchanged — and do not allocate these per-block arrays.
+        int?[]? leftBodyFullRewriteGroups = markBodyFullRewriteGaps ? new int?[nLeft] : null;
+        int?[]? rightBodyFullRewriteGroups = markBodyFullRewriteGaps ? new int?[nRight] : null;
+        int nextBodyFullRewriteGroupId = 1;
+
         FillGaps(leftBlocks, rightBlocks, spinePairs, leftKind, rightKind, leftMatch, rightMatch,
-            similarity, settings, splitGroups, mergeGroups);
+            similarity, settings, splitGroups, mergeGroups,
+            leftBodyFullRewriteGroups, rightBodyFullRewriteGroups, markBodyFullRewriteGaps,
+            ref nextBodyFullRewriteGroupId);
 
         // --- Cross-gap fuzzy moves: over the GLOBAL leftover Deleted × Inserted sets (after all gap
         // fill), re-pair similar blocks as Moved / MovedModified. Runs AFTER gap fill so it sees the
@@ -127,7 +148,7 @@ internal static class IrBlockAligner
 
         // --- Emit in right order with left-anchored deletion interleave.
         var entries = EmitEntries(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch,
-            splitGroups, mergeGroups);
+            splitGroups, mergeGroups, leftBodyFullRewriteGroups, rightBodyFullRewriteGroups);
         return new IrBlockAlignment(IrNodeList.From(entries));
     }
 
@@ -386,19 +407,25 @@ internal static class IrBlockAligner
         int[] leftMatch, int[] rightMatch,
         IrBlockSimilarity similarity, IrDiffSettings settings,
         List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
-        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups)
+        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups,
+        int?[]? leftBodyFullRewriteGroups, int?[]? rightBodyFullRewriteGroups,
+        bool markBodyFullRewriteGaps, ref int nextBodyFullRewriteGroupId)
     {
         int prevLeft = -1, prevRight = -1;
         foreach (var (sl, sr) in spinePairs)
         {
             FillOneGap(leftBlocks, rightBlocks, prevLeft + 1, sl, prevRight + 1, sr,
-                leftKind, rightKind, leftMatch, rightMatch, similarity, settings, splitGroups, mergeGroups);
+                leftKind, rightKind, leftMatch, rightMatch, similarity, settings, splitGroups, mergeGroups,
+                leftBodyFullRewriteGroups, rightBodyFullRewriteGroups, markBodyFullRewriteGaps,
+                ref nextBodyFullRewriteGroupId);
             prevLeft = sl;
             prevRight = sr;
         }
         // Tail gap (after the last spine pair, or the whole document if there were no spine pairs).
         FillOneGap(leftBlocks, rightBlocks, prevLeft + 1, leftBlocks.Count, prevRight + 1, rightBlocks.Count,
-            leftKind, rightKind, leftMatch, rightMatch, similarity, settings, splitGroups, mergeGroups);
+            leftKind, rightKind, leftMatch, rightMatch, similarity, settings, splitGroups, mergeGroups,
+            leftBodyFullRewriteGroups, rightBodyFullRewriteGroups, markBodyFullRewriteGaps,
+            ref nextBodyFullRewriteGroupId);
     }
 
     /// <summary>
@@ -418,7 +445,9 @@ internal static class IrBlockAligner
         int[] leftMatch, int[] rightMatch,
         IrBlockSimilarity similarity, IrDiffSettings settings,
         List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
-        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups)
+        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups,
+        int?[]? leftBodyFullRewriteGroups, int?[]? rightBodyFullRewriteGroups,
+        bool markBodyFullRewriteGaps, ref int nextBodyFullRewriteGroupId)
     {
         var freeLeft = new List<int>();
         for (int i = leftFrom; i < leftTo; i++)
@@ -519,23 +548,78 @@ internal static class IrBlockAligner
                 IrAlignmentKind.Merge, mergeGroups, settings);
         }
 
-        // Unambiguous 1×1 residue → Modified regardless of score. When exactly ONE free left and ONE free
-        // right survive the threshold, there is no competing candidate to disambiguate: classifying the
-        // lone pair as "the same block, edited" is the only sensible reading (and is what M2.1's positional
-        // pairing did for an isolated edit). The BlockSimilarityThreshold exists to choose AMONG candidates
-        // and to reject leftovers when there is a surplus on one side — not to demote a solitary in-place
-        // edit (e.g. "beta" → "BETA-edited") to Delete+Insert. A genuine cross-gap relocation never reaches
-        // here as a 1×1 gap residue (it occupies DIFFERENT gaps, handled by DetectCrossGapMoves), so this
-        // does not manufacture false in-place edits out of moves.
+        // Word-matcher junction pairing (calibrated against the Word-compare oracle corpus). Word's
+        // replace-gap arrangement pairs old/new paragraphs by ITS OWN matcher first and only then
+        // merges each pair into a single mixed ins+del paragraph; unpaired paragraphs stay separate.
+        // The similarity pass above (Jaccard ≥ BlockSimilarityThreshold + locality) reproduces the
+        // strong pairs; this pass reproduces the WEAK ones Word still forms — e.g. the corpus-decoded
+        // "Subtitle Style Demo" ↔ "Superscript Demo" (one shared word, Jaccard 0.25) and
+        // "Title Style Centered Demo" ↔ "Times New Roman Font Demo" (Jaccard 0.125) — via an
+        // order-preserving LCS over the remaining free paragraphs with a word-overlap predicate.
+        // Word does NOT pair on zero shared words ("Support Tickets" ↔ "Test 1 – Fixed Width Table")
+        // nor on stopword-grade overlap (header_no_rels: "…with just an empty p…" vs "…with extra
+        // bold emphasis." stayed separate), which the word-Jaccard floor encodes.
+        JunctionPair(leftBlocks, rightBlocks, leftFrom, leftTo, rightFrom, rightTo,
+            leftoverLeft, leftoverRight, leftKind, rightKind, leftMatch, rightMatch, similarity);
+
+        // Unambiguous 1×1 residue → Modified. When exactly ONE free left and ONE free right survive
+        // the threshold, there is no competing candidate to disambiguate: classifying the lone pair
+        // as "the same block, edited" is the natural reading (and is what M2.1's positional pairing
+        // did for an isolated edit). A genuine cross-gap relocation never reaches here as a 1×1 gap
+        // residue (it occupies DIFFERENT gaps, handled by DetectCrossGapMoves), so this does not
+        // manufacture false in-place edits out of moves.
+        //
+        // CONDITION (Word-matcher calibration): a PARAGRAPH residue pair that is a full LEXICAL
+        // rewrite stays separate — the Word oracle keeps those as an ins-marked + a del-marked
+        // paragraph ("24" ↔ "1.5 Line Spacing Demo"; forcing them into one Modified paragraph
+        // token-interleaves two unrelated texts — the corpus scored it strictly worse). The
+        // evidence test (IrBlockSimilarity.ResidueForcePair) is punctuation-trimmed + case-folded
+        // raw-word overlap, and an atomic-only/empty paragraph (textboxes, images — no words at
+        // all) always force-pairs: there is no lexical evidence to demand, and demoting it would
+        // lose the nested textbox/image diff (WC013/WC019 round-trip regressions proved it).
+        // Non-paragraph (or mixed) residues keep the unconditional behavior.
         if (leftoverLeft.Count == 1 && leftoverRight.Count == 1)
         {
             int li = leftoverLeft[0];
             int rj = leftoverRight[0];
-            leftKind[li] = IrAlignmentKind.Modified;
-            rightKind[rj] = IrAlignmentKind.Modified;
-            leftMatch[li] = rj;
-            rightMatch[rj] = li;
-            return;
+            bool forcePair =
+                leftBlocks[li] is not IrParagraph lp || rightBlocks[rj] is not IrParagraph rp ||
+                similarity.ResidueForcePair(lp, rp);
+            if (forcePair)
+            {
+                leftKind[li] = IrAlignmentKind.Modified;
+                rightKind[rj] = IrAlignmentKind.Modified;
+                leftMatch[li] = rj;
+                rightMatch[rj] = li;
+                return;
+            }
+
+            // A body-only full lexical 1×1 rewrite is deliberately still Delete+Insert at the
+            // alignment layer. Word's paragraph-mark arrangement depends on the FIRST following
+            // in-place pair: when that pair is a real body block it keeps separate marked paragraphs
+            // (the interior blue-underline→bold-italic rewrite and the head title before the
+            // incompatible 3→4-column table); when the only follower is the trailing section-break
+            // sentinel it emits one mixed paragraph. This is explicit adjacent alignment evidence,
+            // not a renderer guess based on cardinality or text.
+            bool HasFollowingBodyPair()
+            {
+                int nextLeft = li + 1, nextRight = rj + 1;
+                return nextLeft < leftBlocks.Count && nextRight < rightBlocks.Count &&
+                    leftMatch[nextLeft] == nextRight && rightMatch[nextRight] == nextLeft &&
+                    leftKind[nextLeft] is not (IrAlignmentKind.Moved or IrAlignmentKind.MovedModified) &&
+                    rightKind[nextRight] is not (IrAlignmentKind.Moved or IrAlignmentKind.MovedModified) &&
+                    leftBlocks[nextLeft] is not IrSectionBreak && rightBlocks[nextRight] is not IrSectionBreak;
+            }
+            if (markBodyFullRewriteGaps &&
+                leftBodyFullRewriteGroups is { } leftGroups &&
+                rightBodyFullRewriteGroups is { } rightGroups &&
+                HasFollowingBodyPair() &&
+                leftBlocks[li] is IrParagraph && rightBlocks[rj] is IrParagraph)
+            {
+                int groupId = nextBodyFullRewriteGroupId++;
+                leftGroups[li] = groupId;
+                rightGroups[rj] = groupId;
+            }
         }
 
         // Otherwise the leftovers fall out as Deleted / Inserted (a surplus on one side, or a multi-block
@@ -638,6 +722,307 @@ internal static class IrBlockAligner
             right[rs[j]] = rs.Count == 1 ? 0 : (double)j / (rs.Count - 1);
         return (left, right);
     }
+
+    // ------------------------------------------------------------------ junction pairing (Word matcher parity)
+
+    // Calibrated constants (empirically fitted against the Word-compare oracle corpus, 2026-07;
+    // per-variant subset means and the decoded oracle data points are recorded in the commit
+    // message / CHANGELOG). Candidate predicates measured: ≥1 shared word (mean +5.13, 3 docs
+    // regressed >2pts), ≥2 shared words (−0.68), shared word + hard displacement cap (+4.61,
+    // 3 regressed), word-Jaccard floors 0.10/0.15/0.20 (+4.06/+3.40/+1.74), Jaccard+λ·displacement
+    // (+4.34), + diagonal growth (+5.65), + conditional 1×1 (+5.71), + growth size-parity (+6.00,
+    // ZERO docs regressed >2pts — the shipped configuration).
+
+    /// <summary>A junction pair must share at least this many WORD tokens — zero-shared paragraphs
+    /// never pair (oracle: "Support Tickets" ↔ "Test 1 – Fixed Width Table" stayed separate).</summary>
+    private const int JunctionMinSharedWords = 1;
+
+    /// <summary>Word-token Jaccard floor of the junction LCS. 0.10 splits the decoded oracle
+    /// boundary: "Title Style Centered Demo" ↔ "Times New Roman Font Demo" (0.125, Word PAIRS) vs
+    /// header_no_rels's stopword-grade overlap ("…with just an empty p…" ↔ "…with bold creates the
+    /// strongest…", 0.091, Word keeps separate).</summary>
+    private const double JunctionMinWordJaccard = 0.10;
+
+    /// <summary>λ of the junction locality term: the Jaccard floor grows by λ·|relative
+    /// displacement|, so weak pairs only form near their own position (same discipline as
+    /// <see cref="PairLocalityPenalty"/> — Word deletes distant old content wholesale rather than
+    /// pairing it with a weakly-similar counterpart across the gap).</summary>
+    private const double JunctionDispLambda = 0.3;
+
+    /// <summary>Growth size-parity guard: on shared-word-only evidence a paragraph does not pair
+    /// with one more than ~3× its word count (oracle: the 30-word justified body does NOT merge
+    /// into the 7-word "This document demonstrates large 24pt font size." although they share
+    /// "This document demonstrates").</summary>
+    private const double JunctionGrowRatio = 1.0 / 3;
+
+    /// <summary>
+    /// LCS bound: the pass is skipped when the free-paragraph grid exceeds this product, keeping the
+    /// aligner inside its documented G²-class gap budget (the adversarial scale guard).
+    /// </summary>
+    private const int JunctionPairScaleCeiling = 10000;
+
+    /// <summary>
+    /// Order-preserving junction pairing over a gap's remaining free PARAGRAPHS (Word-matcher
+    /// parity — see the call-site comment in <see cref="FillOneGap"/>). Computes the maximum
+    /// weighted longest-common-subsequence over the (still-ordered) leftover paragraph lists where a
+    /// pair is admissible iff it (a) does not cross an already-formed non-Moved pair of this gap,
+    /// (b) shares at least <see cref="JunctionMinSharedWords"/> WORD tokens (punctuation/whitespace
+    /// overlap is no evidence — Word never pairs on it), and (c) clears the displacement-scaled
+    /// word-Jaccard floor <see cref="JunctionMinWordJaccard"/> + <see cref="JunctionDispLambda"/>·disp.
+    /// Chosen pairs become <see cref="IrAlignmentKind.Modified"/> (rendered as Word's single mixed
+    /// ins+del paragraph); the rest fall through to Deleted/Inserted exactly as before. LCS
+    /// maximizes pair COUNT first, then total word-Jaccard (deterministic index-order tie-break),
+    /// and is non-crossing among its own picks by construction. A diagonal growth phase then
+    /// extends pairings outward from every in-gap pair (see the inline comment).
+    /// </summary>
+    private static void JunctionPair(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
+        int leftFrom, int leftTo, int rightFrom, int rightTo,
+        List<int> leftoverLeft, List<int> leftoverRight,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
+        int[] leftMatch, int[] rightMatch,
+        IrBlockSimilarity similarity)
+    {
+        var ls = new List<int>();
+        foreach (int li in leftoverLeft)
+            if (leftBlocks[li] is IrParagraph)
+                ls.Add(li);
+        var rs = new List<int>();
+        foreach (int rj in leftoverRight)
+            if (rightBlocks[rj] is IrParagraph)
+                rs.Add(rj);
+        int m = ls.Count, n = rs.Count;
+        if (m == 0 || n == 0 || (long)m * n > JunctionPairScaleCeiling)
+            return;
+
+        // Non-crossing bounds versus pairs already formed INSIDE this gap (SimilarityPair Modified
+        // pairs, table zips, split/merge groups; Moved/MovedModified are exempt — long-range
+        // correspondence belongs to the move detector). All in-gap partners lie inside the gap, so a
+        // single ascending/descending sweep over [leftFrom, leftTo) yields, for each candidate left,
+        // the window of right indexes that keeps document order reconstructible on reject.
+        var maxBelow = new int[m];
+        var minAbove = new int[m];
+        {
+            int running = int.MinValue, k = 0;
+            for (int i = leftFrom; i < leftTo && k < m; i++)
+            {
+                if (i == ls[k]) { maxBelow[k] = running; k++; continue; }
+                if (leftMatch[i] != -1 &&
+                    leftKind[i] != IrAlignmentKind.Moved && leftKind[i] != IrAlignmentKind.MovedModified)
+                    running = Math.Max(running, leftMatch[i]);
+            }
+            running = int.MaxValue; k = m - 1;
+            for (int i = leftTo - 1; i >= leftFrom && k >= 0; i--)
+            {
+                if (i == ls[k]) { minAbove[k] = running; k--; continue; }
+                if (leftMatch[i] != -1 &&
+                    leftKind[i] != IrAlignmentKind.Moved && leftKind[i] != IrAlignmentKind.MovedModified)
+                    running = Math.Min(running, leftMatch[i]);
+            }
+        }
+
+        // PAIRING-EVIDENCE discipline (both corpus-decoded): qualifying shared content is either
+        // (a) at least one shared word that is not an English closed-class function word — Word
+        // never pairs replace-gap paragraphs on stopword-grade overlap alone ('2.2 Numbered (with
+        // nested)' does NOT merge into 'Q1: Launch v2.0 with new dashboard' on the shared "with",
+        // 34pts worse when it did; 'This text will be indented.' does NOT merge into 'This
+        // document contains a hyperlink to a website.' on the sentence-initial "This", 19pts
+        // worse — while shared CONTENT words pair even when repeated across the gap: 'Title',
+        // 'Demo', 'Q1'); or (b) CONTAINMENT — the shared words cover at least HALF of the smaller
+        // side's words, in which case even function-word overlap pairs (Word merges the paragraph
+        // 'a' into "A) ST_OnOff values for <w:b> on a run:", 21pts better when we do too: a
+        // mostly-contained paragraph is an extension, not a replacement).
+        bool HasPairingEvidence(IrParagraph lp, IrParagraph rp, int sharedWords)
+        {
+            int minWords = Math.Min(similarity.WordCount(lp), similarity.WordCount(rp));
+            if (minWords > 0 && sharedWords * 2 >= minWords)
+                return true;
+            var a = similarity.WordKeys(lp);
+            var b = similarity.WordKeys(rp);
+            var (small, large) = a.Count <= b.Count ? (a, b) : (b, a);
+            foreach (var kv in small)
+                if (large.ContainsKey(kv.Key) && !FunctionWords.Contains(kv.Key))
+                    return true;
+            return false;
+        }
+
+        // Pair weight: 0 = inadmissible; otherwise the word-Jaccard (used only as the LCS
+        // secondary objective). Computed once per candidate cell; bags are cached per Align call.
+        double Weight(int i, int j)
+        {
+            int li = ls[i], rj = rs[j];
+            if (rj <= maxBelow[i] || rj >= minAbove[i])
+                return 0;
+            var lp = (IrParagraph)leftBlocks[li];
+            var rp = (IrParagraph)rightBlocks[rj];
+            var (shared, jaccard) = similarity.WordOverlap(lp, rp);
+            if (shared < JunctionMinSharedWords)
+                return 0;
+            double posL = m == 1 ? 0 : (double)i / (m - 1);
+            double posR = n == 1 ? 0 : (double)j / (n - 1);
+            double disp = Math.Abs(posL - posR);
+            if (jaccard < JunctionMinWordJaccard + JunctionDispLambda * disp)
+                return 0;
+            if (!HasPairingEvidence(lp, rp, shared))
+                return 0;
+            return jaccard;
+        }
+
+        var weight = new double[m, n];
+        for (int i = 0; i < m; i++)
+            for (int j = 0; j < n; j++)
+                weight[i, j] = Weight(i, j);
+
+        // Weighted LCS DP: maximize (pair count, total weight) lexicographically. dp[i, j] covers
+        // ls[0..i) × rs[0..j). Deterministic: pure function of the weight grid + fixed preference
+        // order (take > skip-left > skip-right) applied identically in DP and backtrack.
+        var count = new int[m + 1, n + 1];
+        var total = new double[m + 1, n + 1];
+        for (int i = 1; i <= m; i++)
+            for (int j = 1; j <= n; j++)
+            {
+                int bc = count[i - 1, j];
+                double bt = total[i - 1, j];
+                if (count[i, j - 1] > bc || (count[i, j - 1] == bc && total[i, j - 1] > bt))
+                {
+                    bc = count[i, j - 1];
+                    bt = total[i, j - 1];
+                }
+                double w = weight[i - 1, j - 1];
+                if (w > 0)
+                {
+                    int tc = count[i - 1, j - 1] + 1;
+                    double tt = total[i - 1, j - 1] + w;
+                    if (tc > bc || (tc == bc && tt > bt))
+                    {
+                        bc = tc;
+                        bt = tt;
+                    }
+                }
+                count[i, j] = bc;
+                total[i, j] = bt;
+            }
+
+        // Backtrack (mirrors the DP's preference order).
+        var pairs = new List<(int Li, int Rj)>();
+        {
+            int i = m, j = n;
+            while (i > 0 && j > 0)
+            {
+                double w = weight[i - 1, j - 1];
+                if (w > 0 && count[i, j] == count[i - 1, j - 1] + 1 &&
+                    total[i, j] == total[i - 1, j - 1] + w)
+                {
+                    pairs.Add((ls[i - 1], rs[j - 1]));
+                    i--; j--;
+                }
+                else if (count[i, j] == count[i - 1, j] && total[i, j] == total[i - 1, j])
+                    i--;
+                else
+                    j--;
+            }
+        }
+
+        foreach (var (li, rj) in pairs)
+        {
+            leftKind[li] = IrAlignmentKind.Modified;
+            rightKind[rj] = IrAlignmentKind.Modified;
+            leftMatch[li] = rj;
+            rightMatch[rj] = li;
+            leftoverLeft.Remove(li);
+            leftoverRight.Remove(rj);
+        }
+
+        // Diagonal GROWTH (patience-style anchor extension): a free paragraph DIAGONALLY ADJACENT to
+        // an already-formed pair of this gap pairs on ≥1 shared word alone — the neighbor pair is the
+        // positional evidence the Jaccard floor otherwise demands. This reproduces Word pairing e.g.
+        // "Demonstrating Heading 3 paragraph style." ↔ "Heading 4 style with right alignment and
+        // italic formatting." (word-Jaccard 0.077 — below any defensible floor, but sitting right
+        // under the paired demo titles). Unsupported stopword-grade pairs (header_no_rels) still
+        // never form: growth only steps ±1 from a real pair, and each step needs a shared word.
+        // Same scale ceiling as the LCS, measured on the FULL gap (growth scans it for seeds).
+        if ((long)(leftTo - leftFrom) * (rightTo - rightFrom) <= JunctionPairScaleCeiling)
+        {
+            bool CrossesAny(int nl, int nr)
+            {
+                for (int i = leftFrom; i < leftTo; i++)
+                {
+                    if (leftMatch[i] == -1 ||
+                        leftKind[i] == IrAlignmentKind.Moved || leftKind[i] == IrAlignmentKind.MovedModified)
+                        continue;
+                    if ((i < nl && leftMatch[i] > nr) || (i > nl && leftMatch[i] < nr))
+                        return true;
+                }
+                return false;
+            }
+
+            var queue = new Queue<(int L, int R)>();
+            for (int i = leftFrom; i < leftTo; i++)
+                if (leftMatch[i] != -1 &&
+                    leftKind[i] != IrAlignmentKind.Moved && leftKind[i] != IrAlignmentKind.MovedModified)
+                    queue.Enqueue((i, leftMatch[i]));
+
+            while (queue.Count > 0)
+            {
+                var (l, r) = queue.Dequeue();
+                for (int d = -1; d <= 1; d += 2)
+                {
+                    int nl = l + d, nr = r + d;
+                    if (nl < leftFrom || nl >= leftTo || nr < rightFrom || nr >= rightTo)
+                        continue;
+                    if (leftMatch[nl] != -1 || rightMatch[nr] != -1)
+                        continue;
+                    if (leftBlocks[nl] is not IrParagraph lp || rightBlocks[nr] is not IrParagraph rp)
+                        continue;
+                    var (shared, _) = similarity.WordOverlap(lp, rp);
+                    if (shared < JunctionMinSharedWords)
+                        continue;
+                    // Size-parity guard: on shared-word-only evidence a paragraph does not pair
+                    // with one several times its word count (see JunctionGrowRatio).
+                    int wl = similarity.WordCount(lp), wr = similarity.WordCount(rp);
+                    if (Math.Min(wl, wr) < JunctionGrowRatio * Math.Max(wl, wr))
+                        continue;
+                    // Pairing-evidence discipline (same as the LCS): adjacency to a pair plus
+                    // a shared function word is still no evidence — see HasPairingEvidence.
+                    if (!HasPairingEvidence(lp, rp, shared))
+                        continue;
+                    if (CrossesAny(nl, nr))
+                        continue;
+                    leftKind[nl] = IrAlignmentKind.Modified;
+                    rightKind[nr] = IrAlignmentKind.Modified;
+                    leftMatch[nl] = nr;
+                    rightMatch[nr] = nl;
+                    leftoverLeft.Remove(nl);
+                    leftoverRight.Remove(nr);
+                    queue.Enqueue((nl, nr));
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// English closed-class function words (case-insensitive) — words that carry no pairing
+    /// evidence for the junction discipline (see <c>HasContentSharedWord</c> in
+    /// <see cref="JunctionPair"/>). Non-English text simply finds no members here, so the
+    /// discipline degrades to "any shared word" for such corpora (documented scope).
+    /// </summary>
+    private static readonly HashSet<string> FunctionWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "a", "an", "the", "and", "or", "but", "nor", "so", "yet",
+        "of", "in", "on", "at", "by", "for", "with", "to", "from", "as",
+        "into", "over", "under", "up", "down", "out", "off", "about", "after",
+        "before", "between", "during", "through", "per", "via",
+        "is", "are", "was", "were", "be", "been", "being", "am",
+        "do", "does", "did", "have", "has", "had",
+        "will", "would", "can", "could", "shall", "should", "may", "might", "must",
+        "this", "that", "these", "those", "it", "its",
+        "he", "she", "they", "them", "his", "her", "their",
+        "we", "us", "our", "you", "your", "i", "me", "my",
+        "not", "no", "if", "then", "than", "there", "here",
+        "when", "where", "which", "who", "whom", "what", "why", "how",
+        "all", "each", "both", "some", "any", "such", "same", "other", "another",
+        "more", "most", "only", "just", "also", "too", "very", "own",
+    };
 
     // ------------------------------------------------------------------ split/merge detection (M2.6)
 
@@ -1120,7 +1505,8 @@ internal static class IrBlockAligner
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
         int[] leftMatch, int[] rightMatch,
         List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
-        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups)
+        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups,
+        int?[]? leftBodyFullRewriteGroups, int?[]? rightBodyFullRewriteGroups)
     {
         // O(1) lookups for the right-walk below (lookup only — never enumerated, so determinism
         // rests purely on the index-ascending walk).
@@ -1163,7 +1549,7 @@ internal static class IrBlockAligner
         var entries = new List<IrAlignedBlock>();
 
         // Front deletions (those preceding every paired left block).
-        EmitDeletions(deletionsAfterLeft, -1, leftBlocks, entries);
+        EmitDeletions(deletionsAfterLeft, -1, leftBlocks, entries, leftBodyFullRewriteGroups);
 
         for (int j = 0; j < rightBlocks.Count; j++)
         {
@@ -1177,7 +1563,8 @@ internal static class IrBlockAligner
                 {
                     entries.Add(new IrAlignedBlock(IrAlignmentKind.Split, leftBlocks[sg.SingularIndex], null,
                         IrNodeList.From(sg.PluralIndexes.Select(rj => rightBlocks[rj]).ToList())));
-                    EmitDeletions(deletionsAfterLeft, sg.SingularIndex, leftBlocks, entries);
+                    EmitDeletions(deletionsAfterLeft, sg.SingularIndex, leftBlocks, entries,
+                        leftBodyFullRewriteGroups);
                 }
 
                 continue;
@@ -1197,18 +1584,20 @@ internal static class IrBlockAligner
                 // Flush the deletion bucket of EVERY left member, in ascending left order — a
                 // deletion anchored to a non-final member must still flush exactly once.
                 foreach (int mi in mg.PluralIndexes)
-                    EmitDeletions(deletionsAfterLeft, mi, leftBlocks, entries);
+                    EmitDeletions(deletionsAfterLeft, mi, leftBlocks, entries, leftBodyFullRewriteGroups);
                 continue;
             }
 
             var kind = rightKind[j] ?? IrAlignmentKind.Inserted;
             int li = rightMatch[j];
             IrBlock? leftBlock = li != -1 ? leftBlocks[li] : null;
-            entries.Add(new IrAlignedBlock(kind, leftBlock, rightBlocks[j]));
+            entries.Add(new IrAlignedBlock(kind, leftBlock, rightBlocks[j],
+                BodyFullRewriteGroupId: kind == IrAlignmentKind.Inserted && rightBodyFullRewriteGroups is { } rightGroups
+                    ? rightGroups[j] : null));
 
             // After emitting a paired right block, flush deletions anchored to its left partner.
             if (li != -1)
-                EmitDeletions(deletionsAfterLeft, li, leftBlocks, entries);
+                EmitDeletions(deletionsAfterLeft, li, leftBlocks, entries, leftBodyFullRewriteGroups);
         }
 
         return entries;
@@ -1216,11 +1605,13 @@ internal static class IrBlockAligner
 
     private static void EmitDeletions(
         Dictionary<int, List<int>> deletionsAfterLeft, int anchorLeftIndex,
-        IrNodeList<IrBlock> leftBlocks, List<IrAlignedBlock> entries)
+        IrNodeList<IrBlock> leftBlocks, List<IrAlignedBlock> entries,
+        int?[]? leftBodyFullRewriteGroups)
     {
         if (!deletionsAfterLeft.TryGetValue(anchorLeftIndex, out var list))
             return;
         foreach (int li in list) // already in ascending left order
-            entries.Add(new IrAlignedBlock(IrAlignmentKind.Deleted, leftBlocks[li], null));
+            entries.Add(new IrAlignedBlock(IrAlignmentKind.Deleted, leftBlocks[li], null,
+                BodyFullRewriteGroupId: leftBodyFullRewriteGroups is { } leftGroups ? leftGroups[li] : null));
     }
 }

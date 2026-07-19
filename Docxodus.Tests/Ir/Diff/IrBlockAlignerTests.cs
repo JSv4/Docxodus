@@ -31,6 +31,9 @@ public class IrBlockAlignerTests
     private static IrBlockAlignment Align(IrDocument l, IrDocument r) =>
         IrBlockAligner.Align(l, r, Default);
 
+    private static IrBlockAlignment Align(IrDocument l, IrDocument r, IrDiffSettings settings) =>
+        IrBlockAligner.Align(l, r, settings);
+
     /// <summary>The aligner invariants the plan pins — see <see cref="IrAlignmentAsserts"/>.</summary>
     private static void AssertInvariants(IrDocument left, IrDocument right, IrBlockAlignment a) =>
         IrAlignmentAsserts.AssertInvariants(left, right, a);
@@ -54,14 +57,86 @@ public class IrBlockAlignerTests
     [Fact]
     public void Single_text_edit_is_modified()
     {
+        // "beta" → "beta-edited" shares the word "beta", so the lone 1×1 residue force-pairs as
+        // Modified. (Previously "BETA-edited": since the Word-matcher junction calibration the 1×1
+        // residue requires ≥1 shared WORD token — the oracle keeps a FULL paragraph rewrite as
+        // separate ins/del paragraphs ("24" ↔ "1.5 Line Spacing Demo"), and case-sensitive matching
+        // makes "BETA" a full rewrite of "beta". The zero-shared case is pinned by
+        // Full_rewrite_1x1_residue_stays_delete_insert below.)
         var l = Doc("alpha", "beta", "gamma");
-        var r = Doc("alpha", "BETA-edited", "gamma");
+        var r = Doc("alpha", "beta-edited", "gamma");
         var a = Align(l, r);
 
         Assert.Equal(2, Count(a, IrAlignmentKind.Unchanged));
         Assert.Equal(1, Count(a, IrAlignmentKind.Modified));
         Assert.Equal(0, Count(a, IrAlignmentKind.Moved));
         AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Full_rewrite_1x1_residue_stays_delete_insert()
+    {
+        // Word-oracle data point: a replace-gap paragraph with ZERO shared word tokens is NOT paired
+        // by Word's matcher — the corpus oracle for "24" ↔ "1.5 Line Spacing Demo" keeps an
+        // ins-marked paragraph (right pPr) and a separate del-marked paragraph (left pPr). Forcing
+        // the pair would token-interleave two unrelated texts inside one paragraph.
+        var l = Doc("alpha", "twenty-four", "gamma");
+        var r = Doc("alpha", "completely unrelated replacement text", "gamma");
+        var a = Align(l, r);
+
+        Assert.Equal(2, Count(a, IrAlignmentKind.Unchanged));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Inserted));
+        var bodyRewrite = a.Entries.Where(e => e.Kind is IrAlignmentKind.Deleted or IrAlignmentKind.Inserted)
+            .ToList();
+        Assert.Equal(2, bodyRewrite.Count);
+        Assert.NotNull(bodyRewrite[0].BodyFullRewriteGroupId);
+        Assert.Equal(bodyRewrite[0].BodyFullRewriteGroupId, bodyRewrite[1].BodyFullRewriteGroupId);
+
+        // Raw-block callers are nested-scope machinery (cells, notes, headers, textboxes): they use
+        // the identical alignment classifications but never carry the body renderer provenance.
+        var nested = IrBlockAligner.AlignBlocks(l.Body.Blocks, r.Body.Blocks, Default);
+        Assert.All(nested.Entries, e => Assert.Null(e.BodyFullRewriteGroupId));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Tail_full_rewrite_1x1_has_no_separate_paragraph_marker()
+    {
+        // The trailing section-break sentinel is not a body continuation: Word keeps a tail rewrite
+        // as one mixed paragraph, so the explicit renderer provenance must remain absent.
+        var l = Doc("anchor title", "obsolete amber stanza");
+        var r = Doc("anchor title edited", "fresh quantum clause");
+        var a = Align(l, r);
+
+        Assert.Equal(1, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Inserted));
+        Assert.All(a.Entries.Where(e => e.Kind is IrAlignmentKind.Deleted or IrAlignmentKind.Inserted),
+            e => Assert.Null(e.BodyFullRewriteGroupId));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Residue_pairing_respects_case_sensitivity()
+    {
+        // The lexical evidence used for a 1×1 residue must honor the same CaseInsensitive policy as
+        // token MatchKeys. Default comparison treats beta → BETA-edited as a full rewrite; enabling
+        // case-insensitive comparison makes beta the shared lexical evidence and pairs the paragraph.
+        var l = Doc("alpha", "beta", "gamma");
+        var r = Doc("alpha", "BETA-edited", "gamma");
+
+        var sensitive = Align(l, r);
+        Assert.Equal(0, Count(sensitive, IrAlignmentKind.Modified));
+        Assert.Equal(1, Count(sensitive, IrAlignmentKind.Deleted));
+        Assert.Equal(1, Count(sensitive, IrAlignmentKind.Inserted));
+        AssertInvariants(l, r, sensitive);
+
+        var insensitive = Align(l, r, new IrDiffSettings { CaseInsensitive = true });
+        Assert.Equal(1, Count(insensitive, IrAlignmentKind.Modified));
+        Assert.Equal(0, Count(insensitive, IrAlignmentKind.Deleted));
+        Assert.Equal(0, Count(insensitive, IrAlignmentKind.Inserted));
+        AssertInvariants(l, r, insensitive);
     }
 
     // ------------------------------------------------------------------ insert
@@ -395,6 +470,141 @@ public class IrBlockAlignerTests
             e.Kind == IrAlignmentKind.Modified &&
             e.Left is not null && Text(e.Left).Contains("kappa lam sig") &&
             e.Right is not null && Text(e.Right).Contains("kappa lam sig"));
+        AssertInvariants(l, r, a);
+    }
+
+    // --------------------------------------------------- junction pairing (Word-matcher parity)
+
+    [Fact]
+    public void Junction_pairs_titles_on_one_shared_content_word()
+    {
+        // Word-oracle data point: Word Compare pairs the replace-gap titles "Subtitle Style Demo" ↔
+        // "Superscript Demo" into ONE mixed ins+del paragraph on a single shared word ("Demo",
+        // word-Jaccard 0.25 — far below the 0.35 similarity threshold). The junction LCS reproduces
+        // it; the bodies pair via the ordinary similarity pass.
+        var l = Doc("Subtitle Style Demo", "This document demonstrates the Subtitle paragraph style.");
+        var r = Doc("Superscript Demo", "This document demonstrates superscript formatting");
+        var a = Align(l, r);
+
+        Assert.Equal(2, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Inserted));
+        Assert.Contains(a.Entries, e => e.Kind == IrAlignmentKind.Modified &&
+            Text(e.Left!) == "Subtitle Style Demo" && Text(e.Right!) == "Superscript Demo");
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Junction_declines_stopword_grade_overlap()
+    {
+        // Word-oracle data point (header_no_rels ↔ heading_1_bold): despite sharing "with"/"the",
+        // Word keeps EVERY paragraph separate — stopword-grade overlap (word-Jaccard 0.091 for the
+        // closest pair, below the calibrated 0.10 floor) is no pairing evidence. All left paragraphs
+        // delete, all right paragraphs insert; nothing force-pairs (no 1×1 residue in a 3×3 gap).
+        var l = Doc(
+            "header-no-rels",
+            "Second page",
+            "Some content in the second section.... with just an empty p, this section isn't rendered?");
+        var r = Doc(
+            "Heading 1 Bold Demo",
+            "This document shows Heading 1 style with extra bold emphasis.",
+            "Heading 1 with bold creates the strongest document headers.");
+        var a = Align(l, r);
+
+        Assert.Equal(0, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(3, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(3, Count(a, IrAlignmentKind.Inserted));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Junction_growth_extends_below_a_paired_title()
+    {
+        // Word-oracle data point (heading_3 ↔ heading_4_right_italic): the demo titles pair via the
+        // similarity pass; the bodies below them share only "Heading" (word-Jaccard 0.077 — below
+        // any defensible global floor) yet Word still merges them into one mixed paragraph. The
+        // diagonal growth phase reproduces it: a free pair sitting right under an established pair
+        // needs only ≥1 shared word. The third paragraphs share NOTHING, so they stay separate
+        // (the 1×1 residue does not force a zero-shared paragraph pair).
+        var l = Doc(
+            "Heading 3 Style Demo",
+            "Demonstrating Heading 3 paragraph style.",
+            "Section Sub-header");
+        var r = Doc(
+            "Heading 4 Right Italic Demo",
+            "Heading 4 style with right alignment and italic formatting.",
+            "This creates unique stylized subheadings for document sections.");
+        var a = Align(l, r);
+
+        Assert.Equal(2, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Inserted));
+        Assert.Contains(a.Entries, e => e.Kind == IrAlignmentKind.Modified &&
+            Text(e.Left!).StartsWith("Demonstrating") && Text(e.Right!).StartsWith("Heading 4 style"));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Junction_declines_function_word_only_overlap_above_the_floor()
+    {
+        // Word-oracle data point (potpourri ↔ product_roadmap): '2.2 Numbered (with nested)' does
+        // NOT merge into 'Q1: Launch v2.0 with new dashboard' although their word-Jaccard (0.11 on
+        // the shared "with") clears the 0.10 floor — a shared closed-class FUNCTION word is no
+        // pairing evidence. Modeled minimally: same shared-"with" shape, Jaccard above the floor.
+        // (A second unrelated left paragraph keeps this out of the laxer 1×1-residue path — the
+        // corpus shape was a 76×8 replace gap.)
+        var l = Doc("alpha", "Numbered (with nested)", "Second unrelated stanza entirely", "omega");
+        var r = Doc("alpha", "Launch dashboards with telemetry", "omega");
+        var a = Align(l, r);
+
+        Assert.Equal(0, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(2, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Inserted));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Junction_pairs_on_containment_even_for_function_words()
+    {
+        // Word-oracle data point (word_tolerated_duplicate_ppr ↔ word_tolerated_misplaced_link):
+        // Word merges the one-word paragraph "a" into "A) ST_OnOff values for <w:b> on a run:" —
+        // when the shared words cover at least HALF of the smaller side, the paragraph is mostly
+        // CONTAINED in its counterpart (an extension, not a replacement), and even function-word
+        // overlap pairs. NB: the 3×2 gap here also proves this is the junction LCS, not the 1×1
+        // residue.
+        var l = Doc("alpha", "a", "x", "omega");
+        var r = Doc("alpha", "sample on a run", "omega");
+        var a = Align(l, r);
+
+        Assert.Contains(a.Entries, e => e.Kind == IrAlignmentKind.Modified &&
+            Text(e.Left!) == "a" && Text(e.Right!) == "sample on a run");
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Junction_growth_respects_size_parity()
+    {
+        // Word-oracle data point (justify_alignment ↔ large_font_size): the titles pair on "Demo",
+        // but the 30-word justified body does NOT merge into the 7-word "This document demonstrates
+        // large 24pt font size." on the boilerplate "This document demonstrates" — Word deletes it
+        // wholesale. The growth size-parity guard (min ≥ ⅓·max word count) encodes that.
+        var l = Doc(
+            "Justify Alignment Demo",
+            "This document demonstrates justified text alignment which spreads text evenly across " +
+            "the full width of the line, creating clean left and right edges that are perfect for " +
+            "formal documents and publications.");
+        var r = Doc(
+            "Large Font Size Demo",
+            "This document demonstrates large 24pt font size.",
+            "Large fonts are great for titles and presentations.");
+        var a = Align(l, r);
+
+        Assert.Equal(1, Count(a, IrAlignmentKind.Modified));
+        Assert.Equal(1, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(2, Count(a, IrAlignmentKind.Inserted));
+        var modified = a.Entries.Single(e => e.Kind == IrAlignmentKind.Modified);
+        Assert.Equal("Justify Alignment Demo", Text(modified.Left!));
+        Assert.Equal("Large Font Size Demo", Text(modified.Right!));
         AssertInvariants(l, r, a);
     }
 

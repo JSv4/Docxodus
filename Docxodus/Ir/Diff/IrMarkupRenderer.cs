@@ -470,14 +470,17 @@ internal static class IrMarkupRenderer
     {
         var pendingDeletes = new List<IrEditOp>();
         int gapInsertStart = -1;   // sink index where the current gap's inserted elements begin
+        int? lastInsertedBodyFullRewriteGroupId = null;
 
         void FlushGap()
         {
             if (pendingDeletes.Count == 0)
             {
                 gapInsertStart = -1;
+                lastInsertedBodyFullRewriteGroupId = null;
                 return;
             }
+            int? firstDeletedBodyFullRewriteGroupId = pendingDeletes[0].BodyFullRewriteGroupId;
             var delEls = new List<XElement>();
             foreach (var d in pendingDeletes)
                 RenderBlockOp(d, state, delEls);
@@ -494,7 +497,14 @@ internal static class IrMarkupRenderer
             static bool CarriesPageBreak(XElement p) =>
                 p.Element(W.pPr)?.Element(W.pageBreakBefore) is not null ||
                 p.Descendants(W.br).Any(b => (string?)b.Attribute(W.type) == "page");
+            // This is intentionally explicit alignment provenance, never a renderer guess based on
+            // a 1×1 cardinality or textual heuristic. The builder can set it only for a body-level,
+            // non-tail full lexical rewrite, where Word Compare keeps two physical marked paragraphs.
+            // Cell/textbox/note/header/footer ops remain unmarked and retain the normal seam.
+            bool suppressSeam = lastInsertedBodyFullRewriteGroupId is { } groupId &&
+                firstDeletedBodyFullRewriteGroupId == groupId;
             if (lastIns is not null && firstDel is not null &&
+                !suppressSeam &&
                 lastIns.Name == W.p && firstDel.Name == W.p &&
                 lastIns.Element(W.pPr)?.Element(W.sectPr) is null &&
                 firstDel.Element(W.pPr)?.Element(W.sectPr) is null &&
@@ -564,6 +574,7 @@ internal static class IrMarkupRenderer
             }
             sink.AddRange(delEls);
             gapInsertStart = -1;
+            lastInsertedBodyFullRewriteGroupId = null;
         }
 
         foreach (var op in ops)
@@ -571,11 +582,17 @@ internal static class IrMarkupRenderer
             if (op.Kind == IrEditOpKind.DeleteBlock || op.Kind == IrEditOpKind.InsertBlock)
             {
                 if (gapInsertStart < 0)
+                {
                     gapInsertStart = sink.Count;
+                    lastInsertedBodyFullRewriteGroupId = null;
+                }
                 if (op.Kind == IrEditOpKind.DeleteBlock)
                     pendingDeletes.Add(op);       // buffered: renders after the gap's inserts
                 else
+                {
                     RenderBlockOp(op, state, sink); // insert leapfrogs the buffered deletes of its gap
+                    lastInsertedBodyFullRewriteGroupId = op.BodyFullRewriteGroupId;
+                }
                 continue;
             }
             FlushGap();

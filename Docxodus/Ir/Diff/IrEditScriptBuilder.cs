@@ -689,12 +689,14 @@ internal static class IrEditScriptBuilder
 
                 case IrAlignmentKind.Inserted:
                     ops.Add(new IrEditOp(IrEditOpKind.InsertBlock,
-                        null, entry.Right!.Anchor.ToString(), null, null, null));
+                        null, entry.Right!.Anchor.ToString(), null, null, null,
+                        BodyFullRewriteGroupId: entry.BodyFullRewriteGroupId));
                     break;
 
                 case IrAlignmentKind.Deleted:
                     ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
-                        entry.Left!.Anchor.ToString(), null, null, null, null));
+                        entry.Left!.Anchor.ToString(), null, null, null, null,
+                        BodyFullRewriteGroupId: entry.BodyFullRewriteGroupId));
                     break;
 
                 // The detection gate (IrBlockAligner split/merge scan) only ever groups PARAGRAPH

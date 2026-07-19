@@ -73,6 +73,70 @@ internal sealed class IrBlockSimilarity
     /// <summary>Number of <see cref="IrDiffTokenKind.Word"/> tokens in a block (0 for non-paragraphs).</summary>
     public int WordCount(IrBlock block) => block is IrParagraph p ? Bag(p).WordCount : 0;
 
+    /// <summary>The paragraph's WORD-token MatchKey multiset (key → multiplicity). Cached per Align
+    /// call; used by the junction pass's uniqueness discipline.</summary>
+    public IReadOnlyDictionary<string, int> WordKeys(IrParagraph paragraph) => Bag(paragraph).WordCounts;
+
+    /// <summary>
+    /// Should a lone 1×1 gap residue of these two paragraphs force-pair as Modified? True when
+    /// EITHER side has no <see cref="IrDiffTokenKind.Word"/> tokens at all (an atomic-only or empty
+    /// paragraph — textboxes/images carry no lexical evidence to demand, and demoting them to
+    /// Delete+Insert loses the nested textbox/image diff), or when the two sides share at least one
+    /// word by RAW TEXT — punctuation-trimmed and normalized according to
+    /// <see cref="IrDiffSettings.CaseInsensitive"/>, so "This." shares "This", and a
+    /// hyperlink word whose target changed (different MatchKey link suffix) still counts as the
+    /// same word. This is deliberately laxer than <see cref="WordOverlap"/>'s MatchKey grain: the
+    /// residue test asks "is this the same block, edited?", not "do these tokens diff Equal?".
+    /// A full rewrite (zero shared trimmed words, both sides lexical) returns false — the Word
+    /// oracle keeps those as separate ins/del paragraphs ("24" ↔ "1.5 Line Spacing Demo").
+    /// </summary>
+    public bool ResidueForcePair(IrParagraph left, IrParagraph right)
+    {
+        var a = Bag(left);
+        var b = Bag(right);
+        if (a.WordCount == 0 || b.WordCount == 0)
+            return true;
+        // A single word replaced by a single word is "the same short label, edited" — a typo
+        // ("Nested." → "Nexted.", WC043's cell), a renumbering ("Two" → "Two1", RC-0010), a
+        // retargeted link text — WmlComparer pairs these positionally, and demoting them loses the
+        // compat token grain (and turned RC-0010's disjoint-reviewer composition into a false
+        // conflict). The oracle's kept-separate cases are all one-word-vs-MULTI-word ("24" ↔
+        // "1.5 Line Spacing Demo"), which this rule does not touch.
+        if (a.WordCount == 1 && b.WordCount == 1)
+            return true;
+        var (small, large) = a.TrimmedWords.Count <= b.TrimmedWords.Count ? (a, b) : (b, a);
+        foreach (var w in small.TrimmedWords)
+            if (large.TrimmedWords.Contains(w))
+                return true;
+        return false;
+    }
+
+    /// <summary>
+    /// WORD-token overlap statistics for a paragraph pair: the multiset intersection size over
+    /// <see cref="IrDiffTokenKind.Word"/>-kind MatchKeys only, and the Jaccard index over those
+    /// word-only multisets. Separator/punctuation/atomic tokens are EXCLUDED — a shared "." or a
+    /// run of shared whitespace is no evidence two paragraphs correspond (decoded from the
+    /// Word-compare oracle corpus: Word never pairs paragraphs on punctuation-only overlap).
+    /// Empty or whitespace-only paragraphs have zero shared words, so they can never qualify.
+    /// Uses the same per-Align-call bag cache as <see cref="Score"/>.
+    /// </summary>
+    public (int SharedWords, double WordJaccard) WordOverlap(IrParagraph left, IrParagraph right)
+    {
+        var a = Bag(left);
+        var b = Bag(right);
+        if (a.WordCount == 0 || b.WordCount == 0)
+            return (0, 0.0);
+
+        int intersection = 0;
+        var (small, large) = a.WordCounts.Count <= b.WordCounts.Count ? (a, b) : (b, a);
+        foreach (var kv in small.WordCounts)
+            if (large.WordCounts.TryGetValue(kv.Key, out int other))
+                intersection += System.Math.Min(kv.Value, other);
+
+        int union = a.WordCount + b.WordCount - intersection;
+        return (intersection, union == 0 ? 0.0 : (double)intersection / union);
+    }
+
     private MatchKeyBag Bag(IrParagraph paragraph)
     {
         if (_bagCache.TryGetValue(paragraph, out var bag))
@@ -111,16 +175,26 @@ internal sealed class IrBlockSimilarity
         return union == 0 ? 1.0 : (double)intersection / union;
     }
 
-    /// <summary>A token-MatchKey multiset plus the Word-kind token count, built once per block.</summary>
+    /// <summary>A token-MatchKey multiset plus the Word-kind token count (and word-only sub-multiset),
+    /// built once per block.</summary>
     private sealed class MatchKeyBag
     {
+        private static readonly Dictionary<string, int> EmptyCounts = new();
+
+        private static readonly HashSet<string> EmptyWords = new();
+
         public Dictionary<string, int> Counts { get; }
+        public Dictionary<string, int> WordCounts { get; }  // Word-kind tokens only, by MatchKey
+        public HashSet<string> TrimmedWords { get; }        // raw word texts, punct-trimmed + case-folded
         public int Total { get; }      // sum of all multiplicities (every token kind)
         public int WordCount { get; }  // Word-kind tokens only
 
-        private MatchKeyBag(Dictionary<string, int> counts, int total, int wordCount)
+        private MatchKeyBag(Dictionary<string, int> counts, Dictionary<string, int> wordCounts,
+            HashSet<string> trimmedWords, int total, int wordCount)
         {
             Counts = counts;
+            WordCounts = wordCounts;
+            TrimmedWords = trimmedWords;
             Total = total;
             WordCount = wordCount;
         }
@@ -129,14 +203,49 @@ internal sealed class IrBlockSimilarity
         {
             var tokens = IrDiffTokenizer.Tokenize(paragraph, settings);
             var counts = new Dictionary<string, int>();
+            var wordCounts = new Dictionary<string, int>();
+            var trimmedWords = new HashSet<string>();
             int wordCount = 0;
             foreach (var t in tokens)
             {
                 counts[t.MatchKey] = counts.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
                 if (t.Kind == IrDiffTokenKind.Word)
+                {
+                    wordCounts[t.MatchKey] = wordCounts.TryGetValue(t.MatchKey, out int w) ? w + 1 : 1;
                     wordCount++;
+                    AddLexicalPieces(t.Text, trimmedWords, settings);
+                }
             }
-            return new MatchKeyBag(counts, tokens.Count, wordCount);
+            return new MatchKeyBag(counts, wordCounts, trimmedWords, tokens.Count, wordCount);
+        }
+
+        /// <summary>Split a raw word on EVERY non-letter/digit character and add pieces normalized
+        /// under the configured case policy — the lexical identity the 1×1-residue evidence test compares on.
+        /// Word-style boundaries: "This." contributes "this"; "www.ericwhite.com" contributes
+        /// "www"/"ericwhite"/"com", so a hyperlink whose target text changed one segment still
+        /// shares lexical content with its original.</summary>
+        private static void AddLexicalPieces(string raw, HashSet<string> sink, IrDiffSettings settings)
+        {
+            int start = -1;
+            for (int i = 0; i <= raw.Length; i++)
+            {
+                bool wordChar = i < raw.Length && char.IsLetterOrDigit(raw[i]);
+                if (wordChar)
+                {
+                    if (start < 0)
+                        start = i;
+                }
+                else if (start >= 0)
+                {
+                    string piece = raw.Substring(start, i - start);
+                    if (settings.CaseInsensitive)
+                        piece = settings.Culture is { } culture
+                            ? piece.ToLower(culture)
+                            : piece.ToLowerInvariant();
+                    sink.Add(piece);
+                    start = -1;
+                }
+            }
         }
 
         /// <summary>Flatten a table to one MatchKey multiset over EVERY descendant cell paragraph's tokens
@@ -156,7 +265,9 @@ internal sealed class IrBlockSimilarity
                                 if (t.Kind == IrDiffTokenKind.Word)
                                     wordCount++;
                             }
-            return new MatchKeyBag(counts, total, wordCount);
+            // Table bags never feed WordOverlap/ResidueForcePair (junction pairing is
+            // paragraph-only), so the word-only structures are not materialized.
+            return new MatchKeyBag(counts, EmptyCounts, EmptyWords, total, wordCount);
         }
     }
 }

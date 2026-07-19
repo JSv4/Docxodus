@@ -124,6 +124,9 @@ internal enum IrEditOpKind
 /// <item><see cref="IrEditOpKind.MergeBlock"/>: <see cref="RightAnchor"/> set, <see cref="LeftAnchor"/> null;
 /// <see cref="SplitMergeAnchors"/> carries the N≥2 left anchors; <see cref="SegmentDiffs"/> holds one diff
 /// per left block against the corresponding slice of the right token stream; mirror of SplitBlock otherwise.</item>
+/// <item><see cref="BodyFullRewriteGroupId"/>: set only on the matching InsertBlock/DeleteBlock pair
+/// emitted from one BODY-level 1×1 full-lexical-rewrite gap. It is renderer-only provenance; nested
+/// scopes and every other operation leave it null.</item>
 /// </list>
 /// </remarks>
 internal sealed record IrEditOp(
@@ -136,7 +139,8 @@ internal sealed record IrEditOp(
     IrTableDiff? TableDiff = null,
     IrNodeList<IrTextboxDiff>? TextboxDiffs = null,
     IrNodeList<string>? SplitMergeAnchors = null,
-    IrNodeList<IrTokenDiff>? SegmentDiffs = null);
+    IrNodeList<IrTokenDiff>? SegmentDiffs = null,
+    int? BodyFullRewriteGroupId = null);
 
 /// <summary>
 /// The nested inner-block diff of ONE textbox pair inside a Modified paragraph (M2.4 Task 1). A paragraph

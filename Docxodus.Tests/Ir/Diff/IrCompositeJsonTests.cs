@@ -35,6 +35,22 @@ public class IrCompositeJsonTests
     }
 
     [Fact]
+    public void Consolidated_json_omits_script_local_body_full_rewrite_group_ids()
+    {
+        // This is a qualified two-way body rewrite: the normal pairwise script carries the renderer-only
+        // group id, but composite scripts combine reviewer namespaces and the composite renderer dispatches
+        // ops directly rather than through the two-way Word-shaped gap renderer.
+        var b = Docs.Para("Anchor title blue", "obsolete amber stanza", "shared trailing paragraph");
+        var r = Docs.Para("Anchor title bold", "fresh quantum clause", "shared trailing paragraph");
+
+        Assert.Contains("\"bodyFullRewriteGroupId\"", DocxDiff.GetEditScriptJson(b, r));
+
+        var json = DocxDiff.GetConsolidatedEditScriptJson(b,
+            new[] { new DocxDiffReviewer { Document = r, Author = "Bob" } });
+        Assert.DoesNotContain("\"bodyFullRewriteGroupId\"", json);
+    }
+
+    [Fact]
     public void Zero_reviewers_json_is_empty_operations_and_conflicts()
     {
         var b = Docs.Para("alpha one");

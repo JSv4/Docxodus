@@ -42,6 +42,31 @@ public class DocxDiffWordShapeTests
         return new WmlDocument("test.docx", stream.ToArray());
     }
 
+    private static WmlDocument SingleCellTableDoc(params string[] cellParagraphs)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            var cell = new WTableCell(cellParagraphs.Select(t => new Paragraph(new Run(new Text(t)))));
+            var table = new WTable(
+                new TableProperties(new TableBorders(
+                    new TopBorder { Val = BorderValues.Single, Size = 4 },
+                    new BottomBorder { Val = BorderValues.Single, Size = 4 })),
+                new TableGrid(new GridColumn()),
+                new WTableRow(cell));
+            mainPart.Document = new Document(new Body(table, new Paragraph()));
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new DocDefaults(
+                new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                    new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                new ParagraphPropertiesDefault()));
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("table.docx", stream.ToArray());
+    }
+
     private static List<string> BodyTexts(WmlDocument doc)
     {
         using var stream = new MemoryStream(doc.DocumentByteArray);
@@ -393,5 +418,82 @@ public class DocxDiffWordShapeTests
         var rejected = RevisionProcessor.RejectRevisions(result);
         Assert.Equal(BodyTexts(right), BodyTexts(accepted));
         Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
+    public void Interior_full_rewrite_keeps_separate_marked_paragraphs()
+    {
+        // A paired paragraph on either side makes the middle zero-lexical 1×1 residue explicit
+        // body provenance. Word keeps the new and old paragraphs physically separate here.
+        var left = Doc("Anchor title blue", "obsolete amber stanza", "shared trailing paragraph");
+        var right = Doc("Anchor title bold", "fresh quantum clause", "shared trailing paragraph");
+
+        var result = DocxDiff.Compare(left, right);
+        var states = ParagraphStates(result);
+        int ins = states.FindIndex(p => p.State == "ins" && p.Text == "fresh quantum clause");
+        int del = states.FindIndex(p => p.State == "del" && p.Text == "obsolete amber stanza");
+        Assert.True(ins >= 0 && del >= 0 && ins < del,
+            $"expected separate inserted then deleted rewrite paragraphs, got: {string.Join(" | ", states)}");
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
+    public void Head_full_rewrite_before_a_real_body_pair_keeps_separate_marked_paragraphs()
+    {
+        // The common empty body paragraph is a real following paired block (unlike the trailing
+        // section-break sentinel), matching the Word title-before-table family.
+        var left = Doc("old unrelated heading words", "", "shared trailing paragraph");
+        var right = Doc("new quantum report title", "", "shared trailing paragraph");
+
+        var result = DocxDiff.Compare(left, right);
+        var states = ParagraphStates(result);
+        int ins = states.FindIndex(p => p.State == "ins" && p.Text == "new quantum report title");
+        int del = states.FindIndex(p => p.State == "del" && p.Text == "old unrelated heading words");
+        Assert.True(ins >= 0 && del >= 0 && ins < del,
+            $"expected separate head rewrite paragraphs, got: {string.Join(" | ", states)}");
+
+        Assert.Equal(BodyTexts(right), BodyTexts(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal(BodyTexts(left), BodyTexts(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void Tail_full_rewrite_before_section_break_keeps_the_normal_seam()
+    {
+        var left = Doc("Anchor title blue", "obsolete amber stanza");
+        var right = Doc("Anchor title bold", "fresh quantum clause");
+
+        var result = DocxDiff.Compare(left, right);
+        var states = ParagraphStates(result);
+        Assert.Contains(states, p => p.State == "mixed" &&
+            p.Text.Contains("fresh quantum clause") && p.Text.Contains("obsolete amber stanza"));
+        Assert.DoesNotContain(states, p => p.State == "ins" && p.Text == "fresh quantum clause");
+        Assert.DoesNotContain(states, p => p.State == "del" && p.Text == "obsolete amber stanza");
+
+        Assert.Equal(BodyTexts(right), BodyTexts(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal(BodyTexts(left), BodyTexts(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void Cell_full_rewrite_keeps_the_normal_seam()
+    {
+        // Cell alignment calls AlignBlocks, never the body-marking entry point. Even with real
+        // paired neighbors, a cell's full lexical rewrite therefore stays on the established seam.
+        var left = SingleCellTableDoc("Anchor title blue", "obsolete amber stanza", "shared trailing paragraph");
+        var right = SingleCellTableDoc("Anchor title bold", "fresh quantum clause", "shared trailing paragraph");
+
+        var result = DocxDiff.Compare(left, right);
+        using var stream = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var cell = wdoc.MainDocumentPart!.Document.Body!.Descendants<WTableCell>().Single();
+        var target = cell.Elements<Paragraph>().Single(p => p.InnerText.Contains("fresh quantum clause"));
+        Assert.NotEmpty(target.Descendants<InsertedRun>());
+        Assert.NotEmpty(target.Descendants<DeletedRun>());
+
+        Assert.Equal(BodyTexts(right), BodyTexts(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal(BodyTexts(left), BodyTexts(RevisionProcessor.RejectRevisions(result)));
     }
 }
