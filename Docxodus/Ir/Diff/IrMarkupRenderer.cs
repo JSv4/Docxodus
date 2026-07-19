@@ -354,6 +354,10 @@ internal static class IrMarkupRenderer
                 // the style definition. Right-only styles are copied in. Numbering keeps the existing
                 // missing-copy treatment (numId collisions are remapped there, not overwritten).
                 TrackStyleDefinitionChanges(wDoc, wDocRight, state, insertedStyleNormalization, leftHadTheme);
+                // Equal blocks and archived pPr values are cloned verbatim, so neither path passes
+                // through the paired-paragraph style guard. Once the final styles part is known,
+                // discard only paragraph-style references which cannot resolve there.
+                DropDanglingParagraphStyleRefs(main);
                 // The output's surviving body is RIGHT-sourced (equal/inserted/modified blocks emit
                 // the right document's XML) while the numbering part is seeded from the LEFT. When
                 // a numId collides across the sides with different content, the copy renumbers the
@@ -5053,6 +5057,39 @@ internal static class IrMarkupRenderer
         var pStyle = pPr.Element(W.pStyle);
         if (pStyle is not null && (string?)pStyle.Attribute(W.val) is { } id && !known.Contains(id))
             pStyle.Remove();
+    }
+
+    /// <summary>
+    /// Remove paragraph-style references in the rendered main body that cannot resolve against the
+    /// FINAL paragraph-style registry. This closes the verbatim EqualBlock and archived
+    /// <c>w:pPrChange</c> paths, which have no paired-paragraph context in which to invoke
+    /// <see cref="DropUnresolvableStyleRef"/>. Restricting the lookup to paragraph styles is
+    /// intentional: a matching character/table style does not make a <c>w:pStyle</c> valid.
+    /// </summary>
+    private static void DropDanglingParagraphStyleRefs(MainDocumentPart main)
+    {
+        var body = main.GetXDocument().Root?.Element(W.body);
+        if (body is null)
+            return;
+
+        var knownParagraphStyles = main.StyleDefinitionsPart?.GetXDocument().Root?
+            .Elements(W.style)
+            .Where(style => (string?)style.Attribute(W.type) == "paragraph")
+            .Select(style => (string?)style.Attribute(W.styleId))
+            .Where(id => !string.IsNullOrEmpty(id))
+            .Select(id => id!)
+            .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+
+        var dangling = body.Descendants(W.pStyle)
+            .Where(pStyle => (string?)pStyle.Attribute(W.val) is not { } id ||
+                !knownParagraphStyles.Contains(id))
+            .ToList();
+        if (dangling.Count == 0)
+            return;
+
+        foreach (var pStyle in dangling)
+            pStyle.Remove();
+        main.PutXDocument();
     }
 
     /// <summary>Rebind INSERTED paragraphs' <c>w:numId</c> references to the ids their (right-doc)

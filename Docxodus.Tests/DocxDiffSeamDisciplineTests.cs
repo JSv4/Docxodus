@@ -3,6 +3,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using Docxodus;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -23,6 +24,8 @@ namespace Docxodus.Tests;
 /// </summary>
 public class DocxDiffSeamDisciplineTests
 {
+    private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
     private static WmlDocument ParaDoc(bool centered, params string[] texts)
     {
         using var stream = new MemoryStream();
@@ -134,6 +137,96 @@ public class DocxDiffSeamDisciplineTests
                          id.Ancestors<ParagraphPropertiesChange>().FirstOrDefault() is null)
             .ToList();
         Assert.Empty(refs);
+    }
+
+    [Fact]
+    public void DanglingParagraphStyleRefs_AreRemovedFromVerbatimAndArchivedPPr()
+    {
+        // The malformed sources name Title/HeadingN but define only Normal plus one unrelated,
+        // valid paragraph style. The first paragraph is EqualBlock (verbatim clone); the second
+        // changes formatting and therefore archives the left pPr inside pPrChange. Both paths
+        // previously leaked dangling pStyle references into output, unlike Word's repair.
+        static WmlDocument StyledDoc(bool right)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var main = doc.AddMainDocumentPart();
+                Paragraph MakeParagraph(string style, string text, string? before = null)
+                {
+                    var spacing = new SpacingBetweenLines { After = "80", Line = "240" };
+                    if (before is not null)
+                        spacing.Before = before;
+                    return new Paragraph(
+                        new ParagraphProperties(new ParagraphStyleId { Val = style }, spacing),
+                        new Run(new Text(text)));
+                }
+
+                var title = new Paragraph(
+                    new ParagraphProperties(
+                        new ParagraphStyleId { Val = "Title" },
+                        new SpacingBetweenLines { Line = "276" }),
+                    new Run(new Text("Shared title.")));
+                main.Document = new Document(new Body(
+                    title,
+                    MakeParagraph(right ? "Heading3" : "Heading2", "Shared heading.", right ? "320" : "360"),
+                    MakeParagraph("DefinedHeading", "Defined style.")));
+
+                var normal = new Style(new StyleName { Val = "Normal" })
+                {
+                    Type = StyleValues.Paragraph,
+                    StyleId = "Normal",
+                    Default = true,
+                };
+                var defined = new Style(new StyleName { Val = "Defined Heading" })
+                {
+                    Type = StyleValues.Paragraph,
+                    StyleId = "DefinedHeading",
+                };
+                main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles(new DocDefaults(), normal, defined);
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("t.docx", stream.ToArray());
+        }
+
+        static XElement BodyXml(WmlDocument doc)
+        {
+            using var stream = new MemoryStream(doc.DocumentByteArray);
+            using var wdoc = WordprocessingDocument.Open(stream, false);
+            return XDocument.Load(wdoc.MainDocumentPart!.GetStream()).Root!.Element(W + "body")!;
+        }
+
+        static List<string> ParagraphTexts(WmlDocument doc)
+        {
+            using var stream = new MemoryStream(doc.DocumentByteArray);
+            using var wdoc = WordprocessingDocument.Open(stream, false);
+            return wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>()
+                .Select(p => p.InnerText).ToList();
+        }
+
+        var left = StyledDoc(right: false);
+        var right = StyledDoc(right: true);
+        var redline = DocxDiff.Compare(left, right);
+        var body = BodyXml(redline);
+
+        // The only retained pStyle is backed by a final paragraph-style definition.
+        var refs = body.Descendants(W + "pStyle")
+            .Select(pStyle => (string?)pStyle.Attribute(W + "val"))
+            .ToList();
+        Assert.Equal(new[] { "DefinedHeading" }, refs);
+
+        var headingPPr = body.Elements(W + "p")
+            .Single(p => p.Value.Contains("Shared heading.", System.StringComparison.Ordinal))
+            .Element(W + "pPr")!;
+        Assert.Null(headingPPr.Element(W + "pStyle"));
+        Assert.Equal("320", (string?)headingPPr.Element(W + "spacing")?.Attribute(W + "before"));
+        var archivedPPr = headingPPr.Element(W + "pPrChange")!.Element(W + "pPr")!;
+        Assert.Null(archivedPPr.Element(W + "pStyle"));
+        Assert.Equal("360", (string?)archivedPPr.Element(W + "spacing")?.Attribute(W + "before"));
+
+        Assert.Equal(ParagraphTexts(right), ParagraphTexts(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.Equal(ParagraphTexts(left), ParagraphTexts(RevisionProcessor.RejectRevisions(redline)));
     }
 
     private static WmlDocument BlockDoc(params string[] blocks)
