@@ -2050,10 +2050,17 @@ namespace Docxodus
 
                 // find list of runs to surround
                 var runIds = contentControl.Attribute(PT.RunIds).Value.Split(',');
-                var runs = contentControl.Descendants(W.r).Where(r => runIds.Contains(r.Attribute(PT.UniqueId).Value));
-                // find the runs in the new document
-
-                var runsInNewDocument = runs.Select(r => newDocument.Descendants(W.r).First(z => z.Attribute(PT.UniqueId).Value == r.Attribute(PT.UniqueId).Value)).ToList();
+                var runs = contentControl.Descendants(W.r).Where(r => runIds.Contains(r.Attribute(PT.UniqueId)?.Value));
+                // Find the runs in the new document. A recorded run may not SURVIVE accept (its
+                // whole content was deleted/moved) — skip missing ones rather than throw; when no
+                // run survives there is nothing to wrap and the control is dropped with its content.
+                var runsInNewDocument = runs
+                    .Select(r => newDocument.Descendants(W.r)
+                        .FirstOrDefault(z => z.Attribute(PT.UniqueId)?.Value == r.Attribute(PT.UniqueId)?.Value))
+                    .Where(z => z != null)
+                    .ToList();
+                if (runsInNewDocument.Count == 0)
+                    continue;
 
                 // find common ancestor
                 List<XElement> runAncestorIntersection = null;
