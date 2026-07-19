@@ -133,6 +133,29 @@ public class DocxDiffPreserveInputRevisionsTests
     private static DocxDiffSettings Preserve() =>
         new() { PreserveInputRevisions = true, AuthorForRevisions = "TheDiff" };
 
+    /// <summary>Exercise a raw LEFT deletion that is deliberately ineligible for the native source-author
+    /// insertion projection. The accepted RIGHT block must remain an ordinary comparer-authored insertion.
+    /// Every fixture is terminal so its raw/working direct-body ordinal would otherwise be eligible.</summary>
+    private static void AssertLeftDeletionInsertionFallsBack(string sourceInnerXml, string expectedText)
+    {
+        const string author = "Reviewer A";
+        const string deletedMark =
+            "<w:pPr><w:rPr><w:del w:id=\"950\" w:author=\"Reviewer A\" " +
+            "w:date=\"2020-01-01T00:00:00Z\"/></w:rPr></w:pPr>";
+        var left = IrTestDocuments.FromBodyXml(
+            $"<w:p>{R("Common")}</w:p><w:p>{deletedMark}{sourceInnerXml}</w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            $"<w:p>{R("Common")}</w:p><w:p>{R(expectedText)}</w:p>");
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.Empty(RevisionWrappersBy(result, author));
+        Assert.Contains(RevisionWrappersBy(result, "TheDiff"), e => e.Name == W + "ins" &&
+            string.Concat(e.Descendants(W + "t").Select(t => t.Value)) == expectedText);
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+        Assert.Equal(AcceptedBodyText(left), BodyText(RevisionProcessor.RejectRevisions(result)));
+    }
+
     // ----------------------------------------------------------------- 1: equal block, foreign w:ins
 
     [Fact]
@@ -492,6 +515,139 @@ public class DocxDiffPreserveInputRevisionsTests
         Assert.Contains(projected, e => e.Name == W + "del" &&
             string.Concat(e.Descendants(W + "delText").Select(t => t.Value)) == "Later input insertion");
         Assert.DoesNotContain(projected, e => e.Name == W + "ins");
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+        Assert.Equal(AcceptedBodyText(left), BodyText(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void Left_input_deletion_reintroduced_by_compare_keeps_its_insertion_provenance()
+    {
+        // The raw LEFT terminal paragraph was deleted by Reviewer A, so it is absent from LEFT's accepted
+        // working body. RIGHT reintroduces the exact text at the same direct body ordinal. Word preserves the
+        // original author/date as w:ins rather than attributing a fresh whole-block insertion to the comparer.
+        const string author = "Reviewer A";
+        const string date = "2020-01-01T00:00:00Z";
+        const string deletedParagraph =
+            "<w:p><w:pPr><w:rPr><w:del w:id=\"950\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\"/>" +
+            "</w:rPr></w:pPr><w:del w:id=\"951\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:delText>Reintroduced deletion</w:delText></w:r></w:del></w:p>";
+        var left = IrTestDocuments.FromBodyXml($"<w:p>{R("Common")}</w:p>{deletedParagraph}");
+        var right = IrTestDocuments.FromBodyXml(
+            $"<w:p>{R("Common")}</w:p><w:p>{R("Reintroduced deletion")}</w:p>");
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+        var sourceInsertions = RevisionWrappersBy(result, author);
+
+        var content = Assert.Single(sourceInsertions, e => e.Name == W + "ins" &&
+            string.Concat(e.Descendants(W + "t").Select(t => t.Value)) == "Reintroduced deletion");
+        Assert.Equal(date, (string?)content.Attribute(W + "date"));
+        Assert.DoesNotContain(sourceInsertions, e => e.Name == W + "del");
+        Assert.DoesNotContain(RevisionWrappersBy(result, "TheDiff"), e =>
+            string.Concat(e.Descendants(W + "t").Select(t => t.Value)) == "Reintroduced deletion");
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+        Assert.Equal(AcceptedBodyText(left), BodyText(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void Left_deleted_table_reintroduced_by_compare_keeps_its_insertion_provenance()
+    {
+        // The table variant has to preserve both the source row marker and its deletion-wrapped cell text.
+        // Every direct row is deleted, so accepting LEFT removes the table and leaves no p/tbl at ordinal 1.
+        const string author = "Reviewer A";
+        const string date = "2020-01-01T00:00:00Z";
+        const string deletedTable =
+            "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2400\"/></w:tblGrid>" +
+            "<w:tr><w:trPr><w:del w:id=\"960\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\"/>" +
+            "</w:trPr><w:tc><w:tcPr/><w:p><w:del w:id=\"961\" w:author=\"Reviewer A\" " +
+            "w:date=\"2020-01-01T00:00:00Z\"><w:r><w:delText>Reintroduced cell</w:delText></w:r>" +
+            "</w:del></w:p></w:tc></w:tr></w:tbl>";
+        var left = IrTestDocuments.FromBodyXml($"<w:p>{R("Common")}</w:p>{deletedTable}");
+        var right = IrTestDocuments.FromBodyXml(
+            $"<w:p>{R("Common")}</w:p>{Table("Reintroduced cell")}");
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+        var xd = MainXDoc(result);
+
+        Assert.Contains(xd.Descendants(W + "trPr").Elements(W + "ins"), e =>
+            (string?)e.Attribute(W + "author") == author && (string?)e.Attribute(W + "date") == date);
+        Assert.Contains(RevisionWrappersBy(result, author), e => e.Name == W + "ins" &&
+            string.Concat(e.Descendants(W + "t").Select(t => t.Value)) == "Reintroduced cell");
+        Assert.DoesNotContain(RevisionWrappersBy(result, author), e => e.Name == W + "del");
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+        Assert.Equal(AcceptedBodyText(left), BodyText(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void Left_deletion_to_insertion_projection_rejects_fields_moves_properties_mixed_and_bare_content()
+    {
+        // These are all terminal and text-equal to RIGHT, so the direct-body ordinal and accepted-left-absence
+        // guards hold. Each fixture isolates one unsafe raw construct and must fall back to TheDiff's normal
+        // accepted-view insertion instead of carrying Reviewer A's metadata forward.
+        const string author = "Reviewer A";
+        const string date = "2020-01-01T00:00:00Z";
+        const string deleted =
+            "<w:del w:id=\"970\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:delText>Unsafe projection</w:delText></w:r></w:del>";
+
+        AssertLeftDeletionInsertionFallsBack(deleted + "<w:fldSimple w:instr=\"DATE\"/>", "Unsafe projection");
+        AssertLeftDeletionInsertionFallsBack(deleted +
+            $"<w:moveFrom w:id=\"971\" w:author=\"{author}\" w:date=\"{date}\"/>", "Unsafe projection");
+        AssertLeftDeletionInsertionFallsBack(
+            "<w:del w:id=\"972\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:rPr><w:rPrChange w:id=\"973\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:rPr/></w:rPrChange></w:rPr><w:delText>Unsafe projection</w:delText></w:r></w:del>",
+            "Unsafe projection");
+        AssertLeftDeletionInsertionFallsBack(deleted +
+            $"<w:ins w:id=\"974\" w:author=\"{author}\" w:date=\"{date}\"/>", "Unsafe projection");
+        AssertLeftDeletionInsertionFallsBack(deleted + "<w:r><w:tab/></w:r>", "Unsafe projection");
+    }
+
+    [Fact]
+    public void Left_deletion_to_insertion_projection_requires_an_empty_accepted_left_ordinal()
+    {
+        // The raw deleted paragraph is at ordinal 1, but accepting LEFT shifts the trailing ordinary
+        // paragraph into that same ordinal. Even though RIGHT inserts the matching text there, do not guess a
+        // historical relationship across that occupied accepted-left slot.
+        const string author = "Reviewer A";
+        const string deleted =
+            "<w:p><w:pPr><w:rPr><w:del w:id=\"980\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\"/>" +
+            "</w:rPr></w:pPr><w:del w:id=\"981\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:delText>Potentially shifted</w:delText></w:r></w:del></w:p>";
+        var left = IrTestDocuments.FromBodyXml(
+            $"<w:p>{R("Common")}</w:p>{deleted}<w:p>{R("Trailing equal")}</w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            $"<w:p>{R("Common")}</w:p><w:p>{R("Potentially shifted")}</w:p><w:p>{R("Trailing equal")}</w:p>");
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.Empty(RevisionWrappersBy(result, author));
+        Assert.Contains(RevisionWrappersBy(result, "TheDiff"), e => e.Name == W + "ins" &&
+            string.Concat(e.Descendants(W + "t").Select(t => t.Value)) == "Potentially shifted");
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+        Assert.Equal(AcceptedBodyText(left), BodyText(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void Left_deletion_to_insertion_projection_requires_the_exact_direct_body_ordinal()
+    {
+        // The deleted p is the second block in raw LEFT, but a direct comment-range leaf occupies its actual
+        // body ordinal. RIGHT does not have that leaf. A block-only ordinal would incorrectly project Reviewer
+        // A's deletion; the direct-element ordinal must leave the normal TheDiff insertion in place.
+        const string author = "Reviewer A";
+        const string deleted =
+            "<w:p><w:pPr><w:rPr><w:del w:id=\"990\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\"/>" +
+            "</w:rPr></w:pPr><w:del w:id=\"991\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:delText>Ordinal-sensitive</w:delText></w:r></w:del></w:p>";
+        var left = IrTestDocuments.FromBodyXml(
+            $"<w:p>{R("Common")}</w:p><w:commentRangeEnd w:id=\"42\"/>{deleted}");
+        var right = IrTestDocuments.FromBodyXml(
+            $"<w:p>{R("Common")}</w:p><w:p>{R("Ordinal-sensitive")}</w:p>");
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+
+        Assert.Empty(RevisionWrappersBy(result, author));
+        Assert.Contains(RevisionWrappersBy(result, "TheDiff"), e => e.Name == W + "ins" &&
+            string.Concat(e.Descendants(W + "t").Select(t => t.Value)) == "Ordinal-sensitive");
         Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
         Assert.Equal(AcceptedBodyText(left), BodyText(RevisionProcessor.RejectRevisions(result)));
     }

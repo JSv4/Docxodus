@@ -137,7 +137,13 @@ internal static class IrMarkupRenderer
         if (settings.PreserveInputRevisions)
         {
             if (HasTrackedRevisionMarkup(left))
+            {
                 state.LeftPreservedOriginals = BuildPreservedOriginalIndex(irLeft, left);
+                // A raw LEFT deletion can be the historical counterpart of a right-only accepted block.
+                // Do not try to infer this generally: only direct body ordinal matches with a fully deleted
+                // source block are safe enough to project as the source author's insertion.
+                state.LeftDeletedInsertionOriginals = BuildLeftDeletedInsertionIndex(irLeft, irRight, left);
+            }
             else
                 state.PreservedOriginals = BuildPreservedOriginalIndex(irRight, right);
         }
@@ -544,7 +550,12 @@ internal static class IrMarkupRenderer
                 break;
 
             case IrEditOpKind.InsertBlock:
-                EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                // A very narrow dirty-left projection is supported here only. Its raw-left candidate is
+                // keyed to this exact main-body InsertBlock target; other right-side insert emissions (a
+                // replacement half, move destination, split member, note/header block, etc.) must remain on
+                // the normal accepted-view path.
+                EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true,
+                    projectLeftDeletionAsInsertion: true);
                 break;
 
             case IrEditOpKind.DeleteBlock:
@@ -2892,7 +2903,13 @@ internal static class IrMarkupRenderer
     /// the table and marks every paragraph mark — accept/reject still resolve the whole table correctly.
     /// </summary>
     private static void EmitWholeBlock(
-        string? anchor, IrDocument doc, RenderState state, List<XElement> sink, RevKind kind, bool fromRight)
+        string? anchor,
+        IrDocument doc,
+        RenderState state,
+        List<XElement> sink,
+        RevKind kind,
+        bool fromRight,
+        bool projectLeftDeletionAsInsertion = false)
     {
         var src = SourceElement(anchor, doc);
         if (src == null)
@@ -2906,6 +2923,13 @@ internal static class IrMarkupRenderer
         var group = fromRight
             ? state.PreservedGroup(src)
             : IsDeleteGrade(kind) ? state.ProjectableLeftDeletionGroup(src) : null;
+        bool projectsLeftDeletionAsInsertion = false;
+        if (group == null && fromRight && projectLeftDeletionAsInsertion && kind == RevKind.Ins &&
+            state.ProjectableLeftInsertionOriginal(src) is { } leftDeletion)
+        {
+            group = new List<XElement> { leftDeletion };
+            projectsLeftDeletionAsInsertion = true;
+        }
         if (group != null)
         {
             foreach (var member in group)
@@ -2913,7 +2937,13 @@ internal static class IrMarkupRenderer
                 var preserved = NormalizePreservedClone(new XElement(member), state);
                 if (!fromRight)
                     ProjectLeftInsertionsAsDeletions(preserved);
-                EmitOneWholeBlock(preserved, state, sink, kind, fromRight);
+                else if (projectsLeftDeletionAsInsertion)
+                    ProjectLeftDeletionsAsInsertions(preserved);
+
+                // The reverse projection clones a raw LEFT source. Its media relationships already belong to
+                // the output package (which is a clone of LEFT), so it must not enter the RIGHT import path.
+                EmitOneWholeBlock(preserved, state, sink, kind,
+                    fromRight: fromRight && !projectsLeftDeletionAsInsertion);
             }
             return;
         }
@@ -4951,6 +4981,122 @@ internal static class IrMarkupRenderer
         return map.Count == 0 ? null : map;
     }
 
+    /// <summary>
+    /// Find the deliberately tiny inverse of the dirty-left insertion projection: a raw LEFT whole-block
+    /// deletion that Word carries forward as its ORIGINAL insertion when the accepted RIGHT view contains that
+    /// block. This is intentionally not an alignment algorithm. A target must be a direct child of the RIGHT
+    /// working body's exact ordinal, and the raw LEFT child at that SAME ordinal must be a fully deleted
+    /// <c>w:p</c>/<c>w:tbl</c> which has no accepted LEFT block at that ordinal. Matching the block name and
+    /// projected text is the final guard. That shape occurs in Word's own reintroduced-deletion redlines; any
+    /// shifted, nested, mixed, field-bearing, move/property, or partially bare shape remains on the ordinary
+    /// comparer-authored insertion fallback.
+    /// </summary>
+    private static Dictionary<XElement, XElement>? BuildLeftDeletedInsertionIndex(
+        IrDocument irLeft,
+        IrDocument irRight,
+        WmlDocument left)
+    {
+        XElement? WorkingBody(IrDocument ir) =>
+            ir.Sources.Values.Select(xd => xd.Root).FirstOrDefault(r => r?.Name == W.document)?.Element(W.body);
+
+        var acceptedLeftBody = WorkingBody(irLeft);
+        var workingRightBody = WorkingBody(irRight);
+        if (acceptedLeftBody == null || workingRightBody == null)
+            return null;
+
+        using var streamDoc = new OpenXmlMemoryStreamDocument(left);
+        using var wDoc = streamDoc.GetWordprocessingDocument();
+        var rawLeftBody = wDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
+        if (rawLeftBody == null)
+            return null;
+
+        // Ordinals intentionally count EVERY direct body element, including comment/bookmark/range leaves.
+        // The raw and working bodies may have different lengths after accepting revisions; that is precisely
+        // why this is a per-ordinal eligibility check rather than a two-pointer resynchronization walk.
+        var rawLeft = rawLeftBody.Elements().ToList();
+        var acceptedLeft = acceptedLeftBody.Elements().ToList();
+        var workingRight = workingRightBody.Elements().ToList();
+        var map = new Dictionary<XElement, XElement>();
+
+        for (int ordinal = 0; ordinal < workingRight.Count && ordinal < rawLeft.Count; ordinal++)
+        {
+            var target = workingRight[ordinal];
+            var candidate = rawLeft[ordinal];
+            if ((target.Name != W.p && target.Name != W.tbl) || candidate.Name != target.Name)
+                continue;
+
+            // The raw deleted block must not still be represented by an accepted LEFT p/tbl at this position.
+            // We deliberately do not search elsewhere: a shifted match could reattribute an unrelated change.
+            if (ordinal < acceptedLeft.Count &&
+                (acceptedLeft[ordinal].Name == W.p || acceptedLeft[ordinal].Name == W.tbl))
+                continue;
+
+            if (!IsProjectableLeftDeletionAsInsertion(candidate))
+                continue;
+            if (!string.Equals(DeletedProjectionVisibleText(candidate), VisibleText(target), StringComparison.Ordinal))
+                continue;
+
+            map[target] = candidate;
+        }
+
+        return map.Count == 0 ? null : map;
+    }
+
+    /// <summary>Whether one raw LEFT direct body block is safe to turn from native deletion to native insertion.
+    /// The source has to be all-and-only deletion markup: paragraph candidates need a deleted paragraph mark;
+    /// table candidates need every direct row marked deleted. Fields, moves, property revisions, a foreign
+    /// insertion, malformed <c>w:t</c> in deleted content, and every bare paragraph child are rejected.
+    /// </summary>
+    private static bool IsProjectableLeftDeletionAsInsertion(XElement candidate)
+    {
+        if (candidate.Name == W.p)
+        {
+            if (candidate.Element(W.pPr)?.Element(W.rPr)?.Element(W.del) == null)
+                return false;
+        }
+        else if (candidate.Name == W.tbl)
+        {
+            var rows = candidate.Elements(W.tr).ToList();
+            if (rows.Count == 0 || rows.Any(row => row.Element(W.trPr)?.Element(W.del) == null))
+                return false;
+        }
+        else
+        {
+            return false;
+        }
+
+        // A simple/complex field has distinct containment and text-conversion rules. This projection does not
+        // expand or rebuild it, so it is safer to leave it to the proven accepted-view whole-block renderer.
+        if (candidate.DescendantsAndSelf().Any(e =>
+                e.Name == W.fldSimple || e.Name == W.fldChar ||
+                e.Name == W.instrText || e.Name == W.delInstrText))
+            return false;
+
+        var tracked = candidate.DescendantsAndSelf()
+            .Where(e => TrackedRevisionNames.Contains(e.Name))
+            .ToList();
+        if (!tracked.Any(e => e.Name == W.del) ||
+            tracked.Any(e => e.Name != W.del && e.Name != W.delText))
+            return false;
+
+        // `w:delText` is valid only under a deletion wrapper. A raw `w:t` would need a different semantic
+        // conversion and proves the candidate is not wholly deleted.
+        if (candidate.DescendantsAndSelf(W.delText).Any(t => !t.Ancestors(W.del).Any()) ||
+            candidate.DescendantsAndSelf(W.t).Any())
+            return false;
+
+        // At the paragraph level no run-level child may be bare: preserving an arbitrary marker/run alongside
+        // the converted wrappers would make part of an ostensibly deleted block survive the projection.
+        return candidate.DescendantsAndSelf(W.p)
+            .All(p => p.Elements().All(child => child.Name == W.pPr || child.Name == W.del));
+    }
+
+    /// <summary>The visible text a raw deleted block will expose after its <c>w:delText</c> nodes become
+    /// <c>w:t</c>. Called only after <see cref="IsProjectableLeftDeletionAsInsertion"/> verified the strict
+    /// all-deleted shape.</summary>
+    private static string DeletedProjectionVisibleText(XElement candidate) =>
+        string.Concat(candidate.Descendants(W.delText).Select(t => t.Value));
+
     /// <summary>Pair each working note definition with the original of the SAME <c>w:id</c> (note ids are
     /// untouched by the accept normalization) and align their child blocks — the note-scope leg of
     /// <see cref="BuildPreservedOriginalIndex"/>. Null roots (scope absent on either side) are a no-op.</summary>
@@ -5118,6 +5264,18 @@ internal static class IrMarkupRenderer
         }
     }
 
+    /// <summary>Project a raw LEFT whole-block deletion onto the comparison's INSERT side. This is the reverse
+    /// of <see cref="ProjectLeftInsertionsAsDeletions"/> and is called only after the direct-body ordinal and
+    /// strict pure-deletion checks in <see cref="BuildLeftDeletedInsertionIndex"/>. The original author/date
+    /// attributes stay on the native revision wrapper; only its sense and text element names change.</summary>
+    private static void ProjectLeftDeletionsAsInsertions(XElement clone)
+    {
+        foreach (var del in clone.DescendantsAndSelf(W.del).ToList())
+            del.Name = W.ins;
+        foreach (var delText in clone.DescendantsAndSelf(W.delText).ToList())
+            delText.Name = W.t;
+    }
+
     /// <summary>True when a paragraph's MARK is revision-deleted (<c>w:pPr/w:rPr/w:del</c> or
     /// <c>w:moveFrom</c>) — on accept the paragraph merges into the NEXT one (vanishing entirely when its
     /// content is all delete-grade), the one body restructuring the preservation walk models.</summary>
@@ -5225,6 +5383,12 @@ internal static class IrMarkupRenderer
         /// the comparison deletes that block.</summary>
         public Dictionary<XElement, List<XElement>>? LeftPreservedOriginals { get; set; }
 
+        /// <summary>Accepted RIGHT main-body block → raw LEFT whole-block deletion for the narrow inverse
+        /// projection. Entries are populated only for direct-body, same-ordinal, fully deleted p/tbl matches;
+        /// unlike <see cref="PreservedOriginals"/> this map is consulted only by a literal
+        /// <see cref="IrEditOpKind.InsertBlock"/> emission.</summary>
+        public Dictionary<XElement, XElement>? LeftDeletedInsertionOriginals { get; set; }
+
         /// <summary>The ORIGINAL right element group mapped for <paramref name="src"/> under
         /// <c>PreserveInputRevisions</c>, or null (the common case: flag off, a left/composite-sourced
         /// element, or a block with no pre-existing markup).</summary>
@@ -5247,6 +5411,13 @@ internal static class IrMarkupRenderer
                 ? group
                 : null;
         }
+
+        /// <summary>The verified raw LEFT deletion to emit as its native insertion at this accepted RIGHT
+        /// source block, or null when this is not one of the strict direct-body matches.</summary>
+        internal XElement? ProjectableLeftInsertionOriginal(XElement src) =>
+            LeftDeletedInsertionOriginals != null && LeftDeletedInsertionOriginals.TryGetValue(src, out var original)
+                ? original
+                : null;
 
         // Active preserved range ids, shared across emitted clones because one source range can span
         // multiple preserved blocks. The start element name is part of the key: the same malformed input
