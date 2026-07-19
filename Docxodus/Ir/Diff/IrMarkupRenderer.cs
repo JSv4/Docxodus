@@ -129,8 +129,11 @@ internal static class IrMarkupRenderer
         // Word-parity input-revision preservation (PreserveInputRevisions): map each accepted working-copy
         // body block back to its ORIGINAL right element so Equal/Insert emissions can carry the input's own
         // revision markup through verbatim. Null (no preservation) when the flag is off or the original
-        // body cannot be positionally paired with the accepted working body.
-        if (settings.PreserveInputRevisions)
+        // body cannot be positionally paired with the accepted working body. Additionally gated on the
+        // LEFT input being revision-free: v1 flattens left-side foreign markup, and preserving only the
+        // right's half of a two-sided dirty pair renders asymmetric markup Word's output doesn't have
+        // (corpus: two-sided pairs regressed up to −12 while one-sided pairs gained up to +21).
+        if (settings.PreserveInputRevisions && !HasTrackedRevisionMarkup(left))
             state.PreservedOriginals = BuildPreservedOriginalIndex(irRight, right);
 
         // Assemble the new body's block-level children (w:p / w:tbl), in script order with Word's
@@ -4430,6 +4433,29 @@ internal static class IrMarkupRenderer
             nextAbstract++;
         }
         numberingPart.PutXDocument();
+    }
+
+    /// <summary>True when the document's main part carries tracked-revision markup (w:ins/w:del) —
+    /// a cheap byte-level scan used to gate one-sided input-revision preservation.</summary>
+    private static bool HasTrackedRevisionMarkup(WmlDocument doc)
+    {
+        try
+        {
+            using var ms = new MemoryStream(doc.DocumentByteArray, writable: false);
+            using var zip = new System.IO.Compression.ZipArchive(ms, System.IO.Compression.ZipArchiveMode.Read);
+            var entry = zip.GetEntry("word/document.xml");
+            if (entry is null)
+                return false;
+            using var reader = new StreamReader(entry.Open());
+            var text = reader.ReadToEnd();
+            return text.Contains("<w:ins ", StringComparison.Ordinal) ||
+                   text.Contains("<w:del ", StringComparison.Ordinal) ||
+                   text.Contains("<w:moveFrom ", StringComparison.Ordinal);
+        }
+        catch (InvalidDataException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Style ids defined in a document's styles part, read without opening the package
