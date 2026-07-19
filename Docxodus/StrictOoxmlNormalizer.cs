@@ -70,11 +70,27 @@ internal static class StrictOoxmlNormalizer
     /// </summary>
     internal static WmlDocument NormalizeToTransitional(WmlDocument doc)
     {
-        if (!IsStrict(doc))
+        if (!IsStrict(doc.DocumentByteArray))
             return doc;
 
+        return new WmlDocument(doc.FileName, NormalizeStrict(doc.DocumentByteArray));
+    }
+
+    /// <summary>
+    /// Returns the transitional-conformance equivalent of raw DOCX bytes. This avoids constructing
+    /// a <see cref="WmlDocument"/> for the overwhelmingly common transitional case, which matters
+    /// for byte-based rendering entry points.
+    /// </summary>
+    internal static byte[] NormalizeToTransitional(byte[] docxBytes)
+    {
+        ArgumentNullException.ThrowIfNull(docxBytes);
+        return IsStrict(docxBytes) ? NormalizeStrict(docxBytes) : docxBytes;
+    }
+
+    private static byte[] NormalizeStrict(byte[] documentBytes)
+    {
         using var ms = new MemoryStream();
-        ms.Write(doc.DocumentByteArray, 0, doc.DocumentByteArray.Length);
+        ms.Write(documentBytes, 0, documentBytes.Length);
         using (var zip = new ZipArchive(ms, ZipArchiveMode.Update, leaveOpen: true))
         {
             foreach (var entry in zip.Entries.ToList())
@@ -104,7 +120,7 @@ internal static class StrictOoxmlNormalizer
                 writer.Write(rewritten);
             }
         }
-        return new WmlDocument(doc.FileName, ms.ToArray());
+        return ms.ToArray();
     }
 
     private static readonly XNamespace TransitionalWpDrawing =
@@ -184,9 +200,15 @@ internal static class StrictOoxmlNormalizer
     /// </summary>
     internal static bool IsStrict(WmlDocument doc)
     {
+        ArgumentNullException.ThrowIfNull(doc);
+        return IsStrict(doc.DocumentByteArray);
+    }
+
+    private static bool IsStrict(byte[] documentBytes)
+    {
         try
         {
-            using var ms = new MemoryStream(doc.DocumentByteArray, writable: false);
+            using var ms = new MemoryStream(documentBytes, writable: false);
             using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
             var main = FindMainDocumentEntry(zip);
             if (main is null)

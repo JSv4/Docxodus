@@ -60,6 +60,11 @@ internal static class HtmlConversionOps
             throw new ArgumentException("No document data provided", nameof(docxBytes));
         ArgumentNullException.ThrowIfNull(options);
 
+        // WmlToHtmlConverter's XDocument pipeline is transitional-namespace based. Match
+        // DocxDiff's open behavior so Word Strict packages render rather than presenting an
+        // unrecognized purl.oclc.org body to the converter.
+        docxBytes = StrictOoxmlNormalizer.NormalizeToTransitional(docxBytes);
+
         // Writable stream required: WmlToHtmlConverter runs RevisionAccepter internally.
         using var memoryStream = new MemoryStream();
         memoryStream.Write(docxBytes, 0, docxBytes.Length);
@@ -146,6 +151,8 @@ internal static class HtmlConversionOps
         if (string.IsNullOrWhiteSpace(anchorId))
             throw new ArgumentException("No anchor id provided", nameof(anchorId));
         ArgumentNullException.ThrowIfNull(options);
+
+        docxBytes = StrictOoxmlNormalizer.NormalizeToTransitional(docxBytes);
 
         using var sourceStream = new MemoryStream();
         sourceStream.Write(docxBytes, 0, docxBytes.Length);

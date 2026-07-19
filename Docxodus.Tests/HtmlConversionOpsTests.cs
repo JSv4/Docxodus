@@ -1,6 +1,8 @@
 #nullable enable
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Text;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Docxodus.Internal;
@@ -17,6 +19,43 @@ public class HtmlConversionOpsTests
     private static byte[] TourPlanBytes() =>
         File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
             "HC001-5DayTourPlanTemplate.docx"));
+
+    private const string TransitionalMain =
+        "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    private const string StrictMain = "http://purl.oclc.org/ooxml/wordprocessingml/main";
+    private const string TransitionalRels =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    private const string StrictRels =
+        "http://purl.oclc.org/ooxml/officeDocument/relationships";
+
+    private static byte[] StrictDocumentOnlyDocxBytes(string text)
+    {
+        var bytes = DocumentOnlyDocxBytes(text);
+        using var ms = new MemoryStream();
+        ms.Write(bytes, 0, bytes.Length);
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Update, leaveOpen: true))
+        {
+            foreach (var entry in zip.Entries.ToList())
+            {
+                if (!entry.FullName.EndsWith(".xml", System.StringComparison.OrdinalIgnoreCase) &&
+                    !entry.FullName.EndsWith(".rels", System.StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string xml;
+                using (var reader = new StreamReader(entry.Open(), Encoding.UTF8))
+                    xml = reader.ReadToEnd();
+                var strict = xml
+                    .Replace(TransitionalMain, StrictMain, System.StringComparison.Ordinal)
+                    .Replace(TransitionalRels, StrictRels, System.StringComparison.Ordinal);
+                if (strict == xml)
+                    continue;
+                using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+                writer.BaseStream.SetLength(0);
+                writer.Write(strict);
+            }
+        }
+        return ms.ToArray();
+    }
 
     [Fact]
     public void HCO001_ConvertBytes_ProducesHtmlWithPrefix()
@@ -613,5 +652,24 @@ public class HtmlConversionOpsTests
 
         Assert.Contains("HCO066 retained text", html);
         Assert.DoesNotContain("line-height", html);
+    }
+
+    // The viewer's byte-based HTML bridge must open Strict OOXML packages just as DocxDiff does.
+    // Exercise both full-document and anchor-addressed block rendering; before normalization the
+    // converter sees no transitional w:body and throws on these packages.
+    [Fact]
+    public void HCO067_StrictOoxml_NormalizesBeforeFullAndBlockRender()
+    {
+        byte[] strict = StrictDocumentOnlyDocxBytes("HCO067 strict retained text");
+        var options = new HtmlConversionOptions { StampAnchors = true, FabricateCssClasses = false };
+
+        string full = HtmlConversionOps.ConvertToHtml(strict, options);
+        Assert.Contains("HCO067 strict retained text", full);
+        var anchor = System.Xml.Linq.XElement.Parse(full).Descendants()
+            .First(e => (string?)e.Attribute("data-anchor") != null)
+            .Attribute("data-anchor")!.Value;
+
+        string block = HtmlConversionOps.RenderBlockHtml(strict, anchor, options);
+        Assert.Contains("HCO067 strict retained text", block);
     }
 }
