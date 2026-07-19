@@ -120,6 +120,12 @@ public partial class DocumentComparer
             return Array.Empty<byte>();
         }
 
+        // The public byte-array API has no document metadata beyond the package itself. Avoid
+        // marshaling an exact no-op through either comparison engine so callers receive a detached,
+        // byte-for-byte copy of the package they supplied.
+        if (originalBytes.AsSpan().SequenceEqual(modifiedBytes))
+            return (byte[])originalBytes.Clone();
+
         try
         {
             var original = new WmlDocument("original.docx", originalBytes);
@@ -590,6 +596,9 @@ public partial class DocumentComparer
         {
             return Array.Empty<byte>();
         }
+
+        if (originalBytes.AsSpan().SequenceEqual(modifiedBytes))
+            return (byte[])originalBytes.Clone();
 
         try
         {
