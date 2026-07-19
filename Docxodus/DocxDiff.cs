@@ -66,11 +66,28 @@ public static class DocxDiff
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
         var s = settings ?? new DocxDiffSettings();
+        // Exact identity is a no-op even for Strict OOXML or revision-bearing packages. An explicit
+        // accept-all request is an exception: it is an intentional transformation, so carry it out
+        // below. Compatibility gates still run before taking the fast path when callers enabled them.
+        if (DocxCompare.HasIdenticalPackageBytes(left, right) &&
+            !(s.PreAcceptInputRevisions && !s.PreserveInputRevisions))
+        {
+            if (s.OnCompatibilityWarning != null || s.ThrowOnCompatibilityWarning)
+            {
+                var preflightLeft = PreAccept(s, left);
+                var preflightRight = PreAccept(s, right);
+                PreflightCompatibility(s, preflightLeft, preflightRight);
+            }
+
+            return new WmlDocument(left);
+        }
         // Opt-in accept-all pre-flatten (default off → no-op): diff (and clone the output from) the accepted
         // view of both inputs so no pre-existing input revision survives into the result. See the flag's docs.
         left = PreAccept(s, left);
         right = PreAccept(s, right);
         PreflightCompatibility(s, left, right);
+        if (DocxCompare.HasIdenticalPackageBytes(left, right))
+            return new WmlDocument(left);
         var diff = s.ToIrDiffSettings();
         var irLeft = IrReader.Read(left, ReadOpts);
         var irRight = IrReader.Read(right, ReadOpts);

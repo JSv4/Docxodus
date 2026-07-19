@@ -27,7 +27,8 @@ public static class DocxCompare
     /// Compare <paramref name="left"/> against <paramref name="right"/> with the selected
     /// <paramref name="engine"/> and return the redlined document. <see cref="ComparisonEngine.WmlComparer"/>
     /// (the default) delegates directly for transitional documents and normalizes Word Strict inputs first,
-    /// matching Word's open behavior; <see cref="ComparisonEngine.DocxDiff"/> routes to
+    /// matching Word's open behavior; byte-identical inputs instead return a detached exact clone without
+    /// normalization or reserialization; <see cref="ComparisonEngine.DocxDiff"/> routes to
     /// <see cref="DocxDiff.Compare"/> with the mapped settings.
     /// </summary>
     /// <param name="left">The earlier / original document.</param>
@@ -39,12 +40,25 @@ public static class DocxCompare
         WmlDocument right,
         ComparisonEngine engine,
         WmlComparerSettings settings)
-        => engine == ComparisonEngine.DocxDiff
+    {
+        // An exact same-package comparison has no revisions to produce. More importantly, a no-op
+        // must not silently rewrite a valid Strict package or discard unrelated existing revision
+        // markup merely because it passed through the comparison API. Return a detached clone so the
+        // result remains safe for callers to mutate/save independently of the input.
+        if (HasIdenticalPackageBytes(left, right))
+            return new WmlDocument(left);
+
+        return engine == ComparisonEngine.DocxDiff
             ? DocxDiff.Compare(left, right, ToDocxDiffSettings(settings))
             : WmlComparer.Compare(
                 StrictOoxmlNormalizer.NormalizeToTransitional(left),
                 StrictOoxmlNormalizer.NormalizeToTransitional(right),
                 settings);
+    }
+
+    /// <summary>Whether two documents are the exact same package bytes, not merely semantically equal.</summary>
+    internal static bool HasIdenticalPackageBytes(WmlDocument left, WmlDocument right) =>
+        left.DocumentByteArray.AsSpan().SequenceEqual(right.DocumentByteArray);
 
     /// <summary>
     /// Map the option set shared by both engines from <see cref="WmlComparerSettings"/> onto a fresh

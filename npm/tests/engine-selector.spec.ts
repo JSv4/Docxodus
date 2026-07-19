@@ -105,4 +105,16 @@ test.describe('Shared comparison-engine selector (M-B)', () => {
     expect(revisions.error).toBeUndefined();
     expect(revisions.revisions!.length).toBeGreaterThan(0);
   });
+
+  test('byte-identical inputs preserve the exact package for every engine selector', async ({ page }) => {
+    const original = readTestFile(ORIGINAL);
+    const expected = Array.from(original);
+
+    for (const engine of [undefined, 0, 1]) {
+      const result = await compareWithEngine(page, original, original, engine);
+      expect(result.error).toBeUndefined();
+      expectValidDocx(result.docxBytes);
+      expect(result.docxBytes).toEqual(expected);
+    }
+  });
 });

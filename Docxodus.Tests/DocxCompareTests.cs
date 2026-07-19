@@ -84,6 +84,41 @@ public class DocxCompareTests
         Assert.Equal(direct.DocumentByteArray, viaFacade.DocumentByteArray);
     }
 
+    [Theory]
+    [InlineData(ComparisonEngine.WmlComparer)]
+    [InlineData(ComparisonEngine.DocxDiff)]
+    public void ByteIdenticalInputs_ReturnDetachedExactCloneFromFacade(ComparisonEngine engine)
+    {
+        var source = Doc("Unchanged paragraph.");
+        var samePackage = new WmlDocument(source);
+        samePackage.FileName = "right.docx";
+
+        var result = DocxCompare.Compare(source, samePackage, engine, new WmlComparerSettings());
+
+        Assert.NotSame(source, result);
+        Assert.NotSame(source.DocumentByteArray, result.DocumentByteArray);
+        Assert.Equal(source.FileName, result.FileName);
+        Assert.Equal(source.DocumentByteArray, result.DocumentByteArray);
+        result.DocumentByteArray[0] ^= 0x01;
+        Assert.NotEqual(source.DocumentByteArray, result.DocumentByteArray);
+    }
+
+    [Fact]
+    public void ByteIdenticalInputs_ReturnDetachedExactCloneFromDirectWmlComparer()
+    {
+        var source = Doc("Unchanged paragraph.");
+        var samePackage = new WmlDocument(source);
+
+        var result = WmlComparer.Compare(source, samePackage, new WmlComparerSettings());
+
+        Assert.NotSame(source, result);
+        Assert.NotSame(source.DocumentByteArray, result.DocumentByteArray);
+        Assert.Equal(source.FileName, result.FileName);
+        Assert.Equal(source.DocumentByteArray, result.DocumentByteArray);
+        result.DocumentByteArray[0] ^= 0x01;
+        Assert.NotEqual(source.DocumentByteArray, result.DocumentByteArray);
+    }
+
     [Fact]
     public void ToDocxDiffSettings_CarriesCommonFields()
     {

@@ -223,14 +223,23 @@ public class DocxDiffTests
     public void Compare_IdenticalDocuments_HasNoTrackedChanges()
     {
         var doc = Doc("Unchanged paragraph one.", "Unchanged paragraph two.");
+        var samePackage = new WmlDocument(doc);
 
-        var result = DocxDiff.Compare(doc, doc);
+        var result = DocxDiff.Compare(doc, samePackage);
+
+        Assert.NotSame(doc, result);
+        Assert.NotSame(doc.DocumentByteArray, result.DocumentByteArray);
+        Assert.Equal(doc.FileName, result.FileName);
+        Assert.Equal(doc.DocumentByteArray, result.DocumentByteArray);
 
         using var stream = new MemoryStream(result.DocumentByteArray);
         using var wdoc = WordprocessingDocument.Open(stream, false);
         var body = wdoc.MainDocumentPart!.Document.Body!;
         Assert.False(body.Descendants<InsertedRun>().Any());
         Assert.False(body.Descendants<DeletedRun>().Any());
+
+        result.DocumentByteArray[0] ^= 0x01;
+        Assert.NotEqual(doc.DocumentByteArray, result.DocumentByteArray);
     }
 
     // ----------------------------------------------------------------- GetRevisions

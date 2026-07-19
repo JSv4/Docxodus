@@ -175,6 +175,24 @@ public class DocxDiffStrictOoxmlTests
             BodyTexts(rejected));
     }
 
+    [Theory]
+    [InlineData(ComparisonEngine.WmlComparer)]
+    [InlineData(ComparisonEngine.DocxDiff)]
+    public void Compare_StrictSelfCompare_PreservesExactPackageBytes(ComparisonEngine engine)
+    {
+        var strict = ToStrict(Doc("Identity paragraph.", "Another one."));
+        var samePackage = new WmlDocument(strict);
+
+        var result = DocxCompare.Compare(strict, samePackage, engine, new WmlComparerSettings());
+
+        Assert.NotSame(strict, result);
+        Assert.NotSame(strict.DocumentByteArray, result.DocumentByteArray);
+        Assert.Equal(strict.FileName, result.FileName);
+        Assert.Equal(strict.DocumentByteArray, result.DocumentByteArray);
+        result.DocumentByteArray[0] ^= 0x01;
+        Assert.NotEqual(strict.DocumentByteArray, result.DocumentByteArray);
+    }
+
     [Fact]
     public void GetRevisions_StrictSelfCompare_IsEmpty()
     {

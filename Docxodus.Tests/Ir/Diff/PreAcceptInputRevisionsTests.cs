@@ -57,6 +57,36 @@ public class PreAcceptInputRevisionsTests
         Assert.Equal(wrapper.DocumentByteArray, flagOn.DocumentByteArray);
     }
 
+    [Fact]
+    public void Default_identical_revision_bearing_inputs_preserve_the_exact_package()
+    {
+        var input = MultiScopeRevisionDoc(
+            "Body alpha", "PriorAlice", "alpha-ins", "alpha-del", "PriorBob", "hdr-prior", "fn-prior");
+        var samePackage = new WmlDocument(input);
+
+        var result = DocxDiff.Compare(input, samePackage);
+
+        Assert.NotSame(input, result);
+        Assert.NotSame(input.DocumentByteArray, result.DocumentByteArray);
+        Assert.Equal(input.DocumentByteArray, result.DocumentByteArray);
+    }
+
+    [Fact]
+    public void Flag_on_identical_revision_bearing_inputs_returns_the_accepted_clone()
+    {
+        var input = MultiScopeRevisionDoc(
+            "Body alpha", "PriorAlice", "alpha-ins", "alpha-del", "PriorBob", "hdr-prior", "fn-prior");
+        var samePackage = new WmlDocument(input);
+
+        var result = DocxDiff.Compare(input, samePackage,
+            new DocxDiffSettings { PreAcceptInputRevisions = true, AuthorForRevisions = "NewDiff" });
+
+        Assert.NotSame(input, result);
+        Assert.NotEqual(input.DocumentByteArray, result.DocumentByteArray);
+        Assert.Equal(AllScopesText(AcceptAll(input)), AllScopesText(result));
+        Assert.Empty(RevisionAuthorsAllScopes(result));
+    }
+
     // ---- oracle (c): no pre-existing input revision markup leaks into the output ----------------
 
     [Fact]

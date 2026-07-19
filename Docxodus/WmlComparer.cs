@@ -144,6 +144,11 @@ namespace Docxodus
 
         public static WmlDocument Compare(WmlDocument source1, WmlDocument source2, WmlComparerSettings settings)
         {
+            // Preserve an exact self/package comparison byte-for-byte. The regular preprocessing path
+            // intentionally annotates and reserializes both inputs, which is useful for a real diff but
+            // violates the no-change contract for callers that compare a document with itself.
+            if (DocxCompare.HasIdenticalPackageBytes(source1, source2))
+                return new WmlDocument(source1);
             return CompareInternal(source1, source2, settings, true);
         }
 
