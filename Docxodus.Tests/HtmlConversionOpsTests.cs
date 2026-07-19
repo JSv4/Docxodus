@@ -551,4 +551,67 @@ public class HtmlConversionOpsTests
 
         Assert.Contains("HCO064 block text", block);
     }
+
+    // Some producer packages use a VML <v:imagedata> relationship id for a non-image part. The
+    // unsupported VML image is safely omitted, but it must not cast CustomXmlPart to ImagePart and
+    // take down the document conversion (the complex_style_attr benchmark fixtures have this shape).
+    [Fact]
+    public void HCO065_VmlImageDataReferencingCustomXmlPart_DoesNotCrashConverter()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var customXml = main.AddCustomXmlPart(CustomXmlPartType.CustomXml);
+            using (var customWriter = new StreamWriter(customXml.GetStream(FileMode.Create, FileAccess.Write)))
+                customWriter.Write("<payload/>");
+            string relationshipId = main.GetIdOfPart(customXml);
+
+            using (var documentWriter = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                documentWriter.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
+                    "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" " +
+                    "xmlns:v=\"urn:schemas-microsoft-com:vml\"><w:body><w:p><w:r><w:t>" +
+                    "HCO065 retained text</w:t></w:r><w:r><w:pict><v:shape style=\"width:10pt;height:10pt\">" +
+                    $"<v:imagedata r:id=\"{relationshipId}\"/></v:shape></w:pict></w:r></w:p>" +
+                    "<w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
+
+        Assert.Contains("HCO065 retained text", html);
+    }
+
+    // Word tolerates malformed pPr payloads where lineRule is present but the required line value
+    // is absent (including documents with duplicate pPr elements). Treat it as the implicit browser
+    // line-height instead of casting the missing attribute and aborting the complete conversion.
+    [Fact]
+    public void HCO066_AutoLineRuleWithoutLineValue_DoesNotCrashConverter()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var documentWriter = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                documentWriter.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:body><w:p><w:pPr><w:spacing w:lineRule=\"auto\"/></w:pPr><w:pPr/>" +
+                    "<w:r><w:t>HCO066 retained text</w:t></w:r></w:p><w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
+
+        Assert.Contains("HCO066 retained text", html);
+        Assert.DoesNotContain("line-height", html);
+    }
 }

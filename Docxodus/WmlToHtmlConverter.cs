@@ -5331,25 +5331,22 @@ namespace Docxodus
 
             // Per OOXML spec (ISO/IEC 29500), when lineRule is absent the default is "auto"
             var lineRule = (string) spacing.Attribute(W.lineRule) ?? (spacing.Attribute(W.line) != null ? "auto" : null);
-            if (lineRule == "auto")
+            if (lineRule == "auto" && (decimal?)spacing.Attribute(W.line) is { } autoLine)
             {
-                var line = (decimal) spacing.Attribute(W.line);
-                if (line != 240m)
+                if (autoLine != 240m)
                 {
-                    var pct = (line/240m)*100m;
+                    var pct = (autoLine/240m)*100m;
                     style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}%", pct));
                 }
             }
-            if (lineRule == "exact")
+            if (lineRule == "exact" && (decimal?)spacing.Attribute(W.line) is { } exactLine)
             {
-                var line = (decimal) spacing.Attribute(W.line);
-                var points = line/20m;
+                var points = exactLine/20m;
                 style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", points));
             }
-            if (lineRule == "atLeast")
+            if (lineRule == "atLeast" && (decimal?)spacing.Attribute(W.line) is { } atLeastLine)
             {
-                var line = (decimal) spacing.Attribute(W.line);
-                var points = line/20m;
+                var points = atLeastLine/20m;
                 if (points >= 14m)
                     style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", points));
             }
@@ -7998,18 +7995,22 @@ namespace Docxodus
             var pp3 = wordDoc.MainDocumentPart.Parts.FirstOrDefault(pp => pp.RelationshipId == imageRid);
             if (pp3 == null) return null;
 
-            var imagePart = (ImagePart)pp3.OpenXmlPart;
+            // Broken packages can point drawing image markup at any relationship target (for
+            // example custom XML). Treat a non-image target the same as a missing image instead
+            // of allowing a cast failure to abort the whole HTML conversion.
+            var imagePart = pp3.OpenXmlPart as ImagePart;
             if (imagePart == null) return null;
 
             // If the image markup points to a NULL image, then following will throw an ArgumentOutOfRangeException
             try
             {
-                imagePart = (ImagePart)wordDoc.MainDocumentPart.GetPartById(imageRid);
+                imagePart = wordDoc.MainDocumentPart.GetPartById(imageRid) as ImagePart;
             }
             catch (ArgumentOutOfRangeException)
             {
                 return null;
             }
+            if (imagePart == null) return null;
 
             var contentType = imagePart.ContentType;
             if (!ImageContentTypes.Contains(contentType))
@@ -8123,7 +8124,9 @@ namespace Docxodus
                 var pp = wordDoc.MainDocumentPart.Parts.FirstOrDefault(pp2 => pp2.RelationshipId == imageRid);
                 if (pp == null) return null;
 
-                var imagePart = (ImagePart)pp.OpenXmlPart;
+                // VML <v:imagedata> can be malformed in exactly the same way as DrawingML:
+                // tolerate a relationship to a non-image part and simply omit the unusable image.
+                var imagePart = pp.OpenXmlPart as ImagePart;
                 if (imagePart == null) return null;
 
                 var contentType = imagePart.ContentType;
