@@ -672,4 +672,81 @@ public class HtmlConversionOpsTests
         string block = HtmlConversionOps.RenderBlockHtml(strict, anchor, options);
         Assert.Contains("HCO067 strict retained text", block);
     }
+
+    // Word writes one text box twice inside mc:AlternateContent: a modern DrawingML/wps branch
+    // and a VML fallback. The renderer must select the supported modern branch exactly once,
+    // retain the visible text, and not double the logical box in HTML.
+    [Fact]
+    public void HCO068_ModernDrawingMlTextBox_RendersChoiceWithoutVmlDuplicate()
+    {
+        byte[] bytes = TextBoxDocxBytes(
+            "<mc:AlternateContent>" +
+            "<mc:Choice Requires=\"wps\"><w:drawing><wp:inline><wp:extent cx=\"1524000\" cy=\"762000\"/>" +
+            "<a:graphic><a:graphicData><wps:wsp><wps:spPr><a:solidFill><a:srgbClr val=\"FFFFFF\"/>" +
+            "</a:solidFill><a:ln w=\"12700\"><a:solidFill><a:srgbClr val=\"000000\"/>" +
+            "</a:solidFill></a:ln></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r><w:t>" +
+            "HCO068 modern text box</w:t></w:r></w:p></w:txbxContent></wps:txbx>" +
+            "<wps:bodyPr lIns=\"91440\" tIns=\"45720\" rIns=\"91440\" bIns=\"45720\"/>" +
+            "</wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>" +
+            "<mc:Fallback><w:pict><v:shape style=\"width:120pt;height:60pt\"><v:textbox>" +
+            "<w:txbxContent><w:p><w:r><w:t>HCO068 fallback text box</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback>" +
+            "</mc:AlternateContent>");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO068 modern text box", html);
+        Assert.DoesNotContain("HCO068 fallback text box", html);
+        Assert.Contains("width: 120pt", html);
+        Assert.Contains("height: 60pt", html);
+    }
+
+    // Old Office 2008 wps markup is not a namespace this renderer understands. It must select the
+    // VML fallback instead of silently choosing a DrawingML branch whose textbox body cannot be read.
+    [Fact]
+    public void HCO069_LegacyDrawingMlTextBox_UsesVmlFallback()
+    {
+        byte[] bytes = TextBoxDocxBytes(
+            "<mc:AlternateContent>" +
+            "<mc:Choice Requires=\"legacywps\"><w:drawing><wp:inline><wp:extent cx=\"1524000\" cy=\"762000\"/>" +
+            "<a:graphic><a:graphicData><legacywps:wsp/></a:graphicData></a:graphic>" +
+            "</wp:inline></w:drawing></mc:Choice>" +
+            "<mc:Fallback><w:pict><v:shape style=\"width:100pt;height:40pt\"><v:textbox>" +
+            "<w:txbxContent><w:p><w:r><w:t>HCO069 legacy fallback text box</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback>" +
+            "</mc:AlternateContent>");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO069 legacy fallback text box", html);
+        Assert.Contains("width: 100pt", html);
+        Assert.Contains("height: 40pt", html);
+    }
+
+    private static byte[] TextBoxDocxBytes(string runContent)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
+                    "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" " +
+                    "xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+                    "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" " +
+                    "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
+                    "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" " +
+                    "xmlns:legacywps=\"http://schemas.microsoft.com/office/word/2008/6/28/wordprocessingShape\">" +
+                    "<w:body><w:p><w:r>" + runContent + "</w:r></w:p><w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+        return ms.ToArray();
+    }
 }

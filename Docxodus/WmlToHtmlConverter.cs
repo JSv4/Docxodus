@@ -2641,6 +2641,15 @@ namespace Docxodus
                 return ProcessImage(wordDoc, element, settings.ImageHandler, settings);
             }
 
+            // An AlternateContent run carries two representations of the same object (normally a
+            // modern DrawingML choice and a VML fallback). Rendering both duplicates text boxes
+            // and images; rendering neither loses the object altogether. Select the first choice
+            // whose required namespaces this converter understands, otherwise use the fallback.
+            if (element.Name == MC.AlternateContent)
+            {
+                return ProcessAlternateContent(wordDoc, settings, element, currentMarginLeft);
+            }
+
             // Transform content controls.
             if (element.Name == W.sdt)
             {
@@ -7932,24 +7941,251 @@ namespace Docxodus
             "image/png", "image/gif", "image/tiff", "image/jpeg"
         };
 
+        // Keep this deliberately small: it describes namespaces that are meaningful to this HTML
+        // projection, not every namespace Word itself can consume. In particular, an obsolete
+        // pre-release wps namespace must fall through to its VML fallback (as Word does).
+        private static readonly HashSet<string> HtmlSupportedMarkupNamespaces = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "urn:schemas-microsoft-com:vml",
+            "urn:schemas-microsoft-com:office:office",
+            "urn:schemas-microsoft-com:office:word",
+            WPS.wps.NamespaceName,
+            WPG.wpg.NamespaceName,
+            WPC.wpc.NamespaceName,
+            WP14.wp14.NamespaceName,
+            W14.w14.NamespaceName,
+        };
+
+        private static object ProcessAlternateContent(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement alternateContent, decimal currentMarginLeft)
+        {
+            var selected = alternateContent.Elements(MC.Choice)
+                .FirstOrDefault(IsSupportedMarkupChoice)
+                ?? alternateContent.Element(MC.Fallback)
+                ?? alternateContent.Element(MC.Choice);
+
+            return selected == null
+                ? null
+                : selected.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false,
+                    currentMarginLeft));
+        }
+
+        private static bool IsSupportedMarkupChoice(XElement choice)
+        {
+            var requires = (string)choice.Attribute("Requires");
+            if (string.IsNullOrWhiteSpace(requires))
+                return true;
+
+            return requires.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Select(prefix => choice.GetNamespaceOfPrefix(prefix)?.NamespaceName ?? string.Empty)
+                .All(HtmlSupportedMarkupNamespaces.Contains);
+        }
+
 
         public static XElement ProcessImage(WordprocessingDocument wordDoc,
             XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
         {
-            if (imageHandler == null)
-            {
-                return null;
-            }
             if (element.Name == W.drawing)
             {
-                return ProcessDrawing(wordDoc, element, imageHandler, settings);
+                // Preserve established image output for the uncommon shape that carries both an
+                // image and textbox body. A textbox-only drawing falls through when no image can
+                // be resolved (including a malformed/missing relationship).
+                if (imageHandler != null)
+                {
+                    var image = ProcessDrawing(wordDoc, element, imageHandler, settings);
+                    if (image != null)
+                        return image;
+                }
+                return ProcessTextBox(wordDoc, element, settings);
             }
             if (element.Name == W.pict || element.Name == W._object)
             {
-                return ProcessPictureOrObject(wordDoc, element, imageHandler, settings);
+                if (imageHandler != null)
+                {
+                    var image = ProcessPictureOrObject(wordDoc, element, imageHandler, settings);
+                    if (image != null)
+                        return image;
+                }
+                return ProcessTextBox(wordDoc, element, settings);
             }
             return null;
         }
+
+        /// <summary>
+        /// Projects a DrawingML or VML text box into valid inline HTML. Word commonly stores the
+        /// same logical box in an <c>mc:Choice</c> and a VML fallback; callers select one branch
+        /// before reaching here. This models the portable core (dimensions, simple fill/border and
+        /// its Word paragraphs) rather than passing VML's absolute-positioning directives through
+        /// to a browser, where they otherwise escape the document flow.
+        /// </summary>
+        private static XElement ProcessTextBox(WordprocessingDocument wordDoc, XElement element,
+            WmlToHtmlConverterSettings settings)
+        {
+            var textBoxContent = element.Descendants(W.txbxContent).FirstOrDefault();
+            if (textBoxContent == null)
+                return null;
+
+            var wrapper = new XElement(Xhtml.span);
+            var style = new Dictionary<string, string>
+            {
+                { "display", "inline-block" },
+                { "box-sizing", "border-box" },
+                { "vertical-align", "top" },
+                { "overflow", "hidden" },
+            };
+
+            var drawingContainer = element.Elements()
+                .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
+            var vmlShape = element.Descendants(VML.shape).FirstOrDefault();
+            if (drawingContainer != null)
+                AddDrawingTextBoxStyle(style, element, drawingContainer);
+            else if (vmlShape != null)
+                AddVmlTextBoxStyle(style, vmlShape);
+
+            var renderedBlocks = new List<object>();
+            foreach (var child in textBoxContent.Elements())
+            {
+                if (child.Name == W.p)
+                {
+                    var paragraph = ConvertToHtmlTransform(wordDoc, settings, child, false, 0m) as XElement;
+                    if (paragraph == null)
+                        continue;
+
+                    // A span can safely remain inside the containing run. Preserve paragraph
+                    // styling, but turn the inner block into a block-level span so browser HTML
+                    // parsing never closes the outer paragraph around a text box.
+                    paragraph.Name = Xhtml.span;
+                    var paragraphStyle = paragraph.Annotation<Dictionary<string, string>>();
+                    if (paragraphStyle == null)
+                    {
+                        paragraphStyle = new Dictionary<string, string>();
+                        paragraph.AddAnnotation(paragraphStyle);
+                    }
+                    paragraphStyle.AddIfMissing("display", "block");
+                    renderedBlocks.Add(paragraph);
+                    continue;
+                }
+
+                if (child.Name == W.tbl)
+                {
+                    // Tables cannot legally live inside a span. Keep their text visible rather
+                    // than emitting invalid nested block markup; full table projection inside a
+                    // floating text box remains a separate layout feature.
+                    var text = child.Descendants(W.t).Select(t => t.Value).StringConcatenate();
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        var tableText = new XElement(Xhtml.span, new XText(text));
+                        tableText.AddAnnotation(new Dictionary<string, string>
+                        {
+                            { "display", "block" },
+                        });
+                        renderedBlocks.Add(tableText);
+                    }
+                }
+            }
+
+            if (renderedBlocks.Count == 0)
+                return null;
+
+            wrapper.Add(renderedBlocks);
+            wrapper.AddAnnotation(style);
+            return wrapper;
+        }
+
+        private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement drawing,
+            XElement drawingContainer)
+        {
+            var extentCx = (long?)drawingContainer.Elements(WP.extent)
+                .Attributes(NoNamespace.cx).FirstOrDefault();
+            var extentCy = (long?)drawingContainer.Elements(WP.extent)
+                .Attributes(NoNamespace.cy).FirstOrDefault();
+            AddEmuDimensions(style, extentCx, extentCy);
+
+            var horizontalAlign = drawingContainer.Elements(WP.positionH).Elements(WP.align)
+                .Select(e => e.Value).FirstOrDefault();
+            if (horizontalAlign == "center")
+            {
+                style["display"] = "block";
+                style.AddIfMissing("margin-left", "auto");
+                style.AddIfMissing("margin-right", "auto");
+            }
+            else if (horizontalAlign == "right")
+            {
+                style["display"] = "block";
+                style.AddIfMissing("margin-left", "auto");
+            }
+
+            var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
+            if (shapeProperties != null)
+            {
+                var fill = (string)shapeProperties.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                if (IsHexColor(fill))
+                    style.AddIfMissing("background-color", "#" + fill);
+
+                var line = shapeProperties.Element(A.ln);
+                var lineColor = (string)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                if (IsHexColor(lineColor))
+                {
+                    var widthEmu = (long?)line.Attribute("w") ?? 12700L;
+                    style.AddIfMissing("border", string.Format(NumberFormatInfo.InvariantInfo,
+                        "{0:0.##}pt solid #{1}", widthEmu / 12700.0, lineColor));
+                }
+            }
+
+            var bodyProperties = drawing.Descendants(WPS.bodyPr).FirstOrDefault();
+            if (bodyProperties != null)
+            {
+                AddEmuPadding(style, "padding-left", (long?)bodyProperties.Attribute("lIns"));
+                AddEmuPadding(style, "padding-top", (long?)bodyProperties.Attribute("tIns"));
+                AddEmuPadding(style, "padding-right", (long?)bodyProperties.Attribute("rIns"));
+                AddEmuPadding(style, "padding-bottom", (long?)bodyProperties.Attribute("bIns"));
+            }
+        }
+
+        private static void AddVmlTextBoxStyle(Dictionary<string, string> style, XElement shape)
+        {
+            var vmlStyle = (string)shape.Attribute("style");
+            if (!string.IsNullOrEmpty(vmlStyle))
+            {
+                var tokens = vmlStyle.Split(';');
+                var width = WidthInPoints(tokens);
+                var height = HeightInPoints(tokens);
+                if (width != null)
+                    style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.##}pt", width));
+                if (height != null)
+                    style.AddIfMissing("height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.##}pt", height));
+            }
+
+            var fill = (string)shape.Attribute("fillcolor");
+            if (IsCssColor(fill))
+                style.AddIfMissing("background-color", fill);
+            var stroke = (string)shape.Attribute("strokecolor");
+            if (IsCssColor(stroke))
+                style.AddIfMissing("border", "1pt solid " + stroke);
+        }
+
+        private static void AddEmuDimensions(Dictionary<string, string> style, long? widthEmu, long? heightEmu)
+        {
+            if (widthEmu != null)
+                style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo,
+                    "{0:0.##}pt", widthEmu.Value / 12700.0));
+            if (heightEmu != null)
+                style.AddIfMissing("height", string.Format(NumberFormatInfo.InvariantInfo,
+                    "{0:0.##}pt", heightEmu.Value / 12700.0));
+        }
+
+        private static void AddEmuPadding(Dictionary<string, string> style, string cssName, long? emu)
+        {
+            if (emu != null)
+                style.AddIfMissing(cssName, string.Format(NumberFormatInfo.InvariantInfo,
+                    "{0:0.##}pt", emu.Value / 12700.0));
+        }
+
+        private static bool IsHexColor(string color) =>
+            color != null && color.Length == 6 && color.All(Uri.IsHexDigit);
+
+        private static bool IsCssColor(string color) =>
+            !string.IsNullOrWhiteSpace(color) && !string.Equals(color, "none", StringComparison.OrdinalIgnoreCase);
 
         private static XElement ProcessDrawing(WordprocessingDocument wordDoc,
             XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
