@@ -7,6 +7,7 @@ using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
+using Docxodus.Tests.Ir;
 using Xunit;
 using WordType = DocumentFormat.OpenXml.WordprocessingDocumentType;
 
@@ -47,6 +48,11 @@ public class DocxDiffPreserveInputRevisionsTests
     private static string Del(string author, string text, int id = 901) =>
         $"<w:del w:id=\"{id}\" w:author=\"{author}\" w:date=\"2020-01-01T00:00:00Z\">" +
         $"<w:r><w:delText xml:space=\"preserve\">{text}</w:delText></w:r></w:del>";
+
+    private static string Table(string text, bool bidiVisual = false) =>
+        "<w:tbl><w:tblPr>" + (bidiVisual ? "<w:bidiVisual/>" : string.Empty) + "</w:tblPr>" +
+        "<w:tblGrid><w:gridCol w:w=\"2400\"/></w:tblGrid>" +
+        $"<w:tr><w:tc><w:tcPr/><w:p>{R(text)}</w:p></w:tc></w:tr></w:tbl>";
 
     /// <summary>Build a minimal DOCX whose body is the given paragraphs (each an inner-XML string of w:p content).</summary>
     private static WmlDocument BodyDoc(params string[] paragraphInnerXml)
@@ -423,6 +429,89 @@ public class DocxDiffPreserveInputRevisionsTests
 
         Assert.Empty(RevisionWrappersBy(result, "Reviewer B"));
         Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+    }
+
+    [Fact]
+    public void Left_input_insertion_deleted_by_the_compare_keeps_its_deletion_provenance()
+    {
+        // Word projects a left-side pre-existing insertion onto the comparison's DELETE side rather than
+        // flattening it and creating a new deletion under the comparer author. The paragraph mark matters:
+        // accept must remove the paragraph entirely while reject restores the left accepted view.
+        const string author = "Reviewer A";
+        const string insertedMark =
+            "<w:ins w:id=\"910\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\"/>";
+        const string insertedRuns =
+            "<w:ins w:id=\"911\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:t>Removed input </w:t></w:r><w:r><w:t>insertion</w:t></w:r></w:ins>";
+        var left = BodyDoc(
+            R("Common"),
+            $"<w:pPr><w:rPr>{insertedMark}</w:rPr></w:pPr>{insertedRuns}");
+        var right = BodyDoc(R("Common"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+        var xd = MainXDoc(result);
+        var projected = xd.Descendants(W + "del")
+            .Where(e => (string?)e.Attribute(W + "author") == author)
+            .ToList();
+
+        var contentDeletion = Assert.Single(projected, e => e.Descendants(W + "delText").Any());
+        Assert.Equal("Removed input insertion", string.Concat(contentDeletion.Descendants(W + "delText").Select(t => t.Value)));
+        Assert.Equal(2, contentDeletion.Elements(W + "r").Count());
+        Assert.Contains(xd.Descendants(W + "pPr").Elements(W + "rPr").Elements(W + "del"),
+            e => (string?)e.Attribute(W + "author") == author);
+        Assert.DoesNotContain(RevisionWrappersBy(result, author), e => e.Name == W + "ins");
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+        Assert.Equal(AcceptedBodyText(left), BodyText(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Left_input_insertion_after_table_normalization_keeps_its_deletion_provenance(bool secondTableIsBidiVisual)
+    {
+        // RevisionProcessor normalizes adjacent same-bidi tables into one accepted table and discards direct
+        // body leaf markers. The preservation index must resynchronize past both before a later input
+        // insertion; the false case is the comment-heavy benchmark shape, true proves a bidi boundary stays
+        // on the ordinary strict one-to-one path.
+        const string author = "Reviewer A";
+        const string insertion =
+            "<w:p><w:pPr><w:rPr><w:ins w:id=\"930\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\"/>" +
+            "</w:rPr></w:pPr><w:ins w:id=\"931\" w:author=\"Reviewer A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:t>Later input insertion</w:t></w:r></w:ins></w:p>";
+        string tablesAndMarker =
+            $"{Table("First table")}{Table("Second table", secondTableIsBidiVisual)}<w:commentRangeEnd w:id=\"42\"/>";
+        var left = IrTestDocuments.FromBodyXml($"<w:p>{R("Shared")}</w:p>{tablesAndMarker}{insertion}");
+        // Make RIGHT dirty too so both IR reads execute RevisionProcessor's table normalization. Its harmless
+        // foreign insertion is intentionally flattened because LEFT is dirty; it isolates the map behavior.
+        var right = IrTestDocuments.FromBodyXml(
+            $"<w:p>{Ins("Reviewer B", "Shared", 940)}</w:p>{tablesAndMarker}");
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+        var projected = RevisionWrappersBy(result, author);
+
+        Assert.Contains(projected, e => e.Name == W + "del" &&
+            string.Concat(e.Descendants(W + "delText").Select(t => t.Value)) == "Later input insertion");
+        Assert.DoesNotContain(projected, e => e.Name == W + "ins");
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+        Assert.Equal(AcceptedBodyText(left), BodyText(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void Left_mixed_revision_group_falls_back_to_the_accepted_view()
+    {
+        // A pre-existing deletion is invisible in LEFT's accepted working copy. It cannot safely be projected
+        // through the narrow w:ins→w:del path, so the old hidden text must not leak into the comparison delete.
+        var left = BodyDoc(R("Common"), R("Visible left text") + Del("Reviewer A", "Hidden old deletion", 920));
+        var right = BodyDoc(R("Common"));
+
+        var result = DocxDiff.Compare(left, right, Preserve());
+        var xml = MainXDoc(result);
+        var allText = string.Concat(xml.Descendants(W + "t").Concat(xml.Descendants(W + "delText")).Select(t => t.Value));
+
+        Assert.DoesNotContain("Hidden old deletion", allText);
+        Assert.Contains("Visible left text", allText);
+        Assert.Equal(AcceptedBodyText(right), AcceptedBodyText(result));
+        Assert.Equal(AcceptedBodyText(left), BodyText(RevisionProcessor.RejectRevisions(result)));
     }
 
     [Fact]

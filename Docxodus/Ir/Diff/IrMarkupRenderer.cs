@@ -127,14 +127,20 @@ internal static class IrMarkupRenderer
         state.LeftStyleIds = ReadStyleIds(left);
 
         // Word-parity input-revision preservation (PreserveInputRevisions): map each accepted working-copy
-        // body block back to its ORIGINAL right element so Equal/Insert emissions can carry the input's own
-        // revision markup through verbatim. Null (no preservation) when the flag is off or the original
-        // body cannot be positionally paired with the accepted working body. Additionally gated on the
-        // LEFT input being revision-free: v1 flattens left-side foreign markup, and preserving only the
-        // right's half of a two-sided dirty pair renders asymmetric markup Word's output doesn't have
-        // (corpus: two-sided pairs regressed up to −12 while one-sided pairs gained up to +21).
-        if (settings.PreserveInputRevisions && !HasTrackedRevisionMarkup(left))
-            state.PreservedOriginals = BuildPreservedOriginalIndex(irRight, right);
+        // body block back to its ORIGINAL source element. A revision-free LEFT keeps the established path:
+        // right Equal/Insert emissions carry the RIGHT input's foreign markup verbatim. When LEFT itself is
+        // dirty, do NOT preserve the RIGHT half alone (that is asymmetric); instead retain a narrowly safe
+        // LEFT map for delete-side projection. A pre-existing left w:ins that the comparison deletes must be
+        // emitted as deletion-grade markup, not flattened then re-deleted as a fresh unrelated change. More
+        // complex two-sided cases (left moves/property revisions and Modify spans) deliberately stay on the
+        // accepted-view renderer until they have source-provenance-aware handling.
+        if (settings.PreserveInputRevisions)
+        {
+            if (HasTrackedRevisionMarkup(left))
+                state.LeftPreservedOriginals = BuildPreservedOriginalIndex(irLeft, left);
+            else
+                state.PreservedOriginals = BuildPreservedOriginalIndex(irRight, right);
+        }
 
         // Assemble the new body's block-level children (w:p / w:tbl), in script order with Word's
         // replace-gap arrangement (inserted blocks before deleted ones inside each gap).
@@ -2897,10 +2903,18 @@ internal static class IrMarkupRenderer
         // wrapper) and wraps only the plain runs as this diff's insertion; MarkParagraphMark keeps a
         // foreign mark marker (a multi-member group's mark-deleted members vanish again on accept, so
         // the accept round-trip is unchanged).
-        if (state.PreservedGroup(src) is { } group)
+        var group = fromRight
+            ? state.PreservedGroup(src)
+            : IsDeleteGrade(kind) ? state.ProjectableLeftDeletionGroup(src) : null;
+        if (group != null)
         {
             foreach (var member in group)
-                EmitOneWholeBlock(NormalizePreservedClone(new XElement(member), state), state, sink, kind, fromRight);
+            {
+                var preserved = NormalizePreservedClone(new XElement(member), state);
+                if (!fromRight)
+                    ProjectLeftInsertionsAsDeletions(preserved);
+                EmitOneWholeBlock(preserved, state, sink, kind, fromRight);
+            }
             return;
         }
         EmitOneWholeBlock(new XElement(src), state, sink, kind, fromRight);
@@ -4892,13 +4906,14 @@ internal static class IrMarkupRenderer
     /// working copy first (see <see cref="IrReaderOptions.RevisionView"/>), so every retained
     /// <c>Source.Element</c> is revision-free; preserving Word-style requires reaching back to the ORIGINAL
     /// elements. Pairing is an in-order two-pointer walk over the two bodies' child sequences that mirrors
-    /// the document-level accept's ONLY body restructurings — a paragraph whose MARK is deleted merges into
-    /// the NEXT paragraph (a fully-deleted paragraph vanishes the same way) — by growing a GROUP of original
-    /// elements until its last member no longer merge-continues, then requiring the group's accepted visible
+    /// the document-level accept's modeled body restructurings — a paragraph whose MARK is deleted merges into
+    /// the NEXT paragraph (a fully-deleted paragraph vanishes the same way), while adjacent tables with the
+    /// same bidi setting coalesce. A GROUP of original elements grows until its last member no longer
+    /// merge-continues, then its accepted visible
     /// text to equal the working block's text. A verified group maps working → [originals] (one working
     /// block may correspond to SEVERAL originals: the mark-deleted members ride along and vanish again on
-    /// accept, exactly Word's shape). Any unexplained divergence (adjacent-table merges, removed content
-    /// controls, trailing unmatched originals) stops the walk and returns the PARTIAL map — every entry
+    /// accept, exactly Word's shape). Any unexplained divergence (removed content controls, trailing
+    /// unmatched originals) stops the walk and returns the PARTIAL map — every entry
     /// already emitted was verified in order, and unmapped blocks degrade to accepted-view emission rather
     /// than risking a wrong pairing. Only markup-bearing groups are mapped (a clean block's accepted
     /// emission already equals its original content, so mapping it would change nothing but bytes churn).
@@ -4965,11 +4980,23 @@ internal static class IrMarkupRenderer
         int i = 0;
         foreach (var w in working)
         {
+            // AcceptDeletedAndMoveFromParagraphMarks rebuilds body/note containers from p/tbl blocks and
+            // retains only body sectPr. Direct leaf annotations (comment/bookmark/range markers, etc.) are
+            // therefore discarded. Skip only such leaves, and only when the working side does not carry the
+            // same name, so a non-normalized 1:1 marker still has to match exactly.
+            while (i < original.Count && IsAcceptDiscardedLeaf(original[i], w))
+                i++;
             if (i >= original.Count)
                 return;   // originals exhausted early — alignment lost; keep what was verified.
 
-            // Non-block children (trailing sectPr, body-level bookmarks, …): require an exact 1:1
-            // name match to stay aligned; they are never preserved themselves.
+            // AcceptRevisions merges a maximal direct run of clean, same-bidi tables into one table. This is
+            // resynchronization only: the accepted working table is already the correct renderer source, and
+            // mapping several raw tables back to it could later re-emit a structurally different table run.
+            if (TryConsumeCleanTableMerge(w, original, ref i))
+                continue;
+
+            // Any remaining non-block child (not an accept-discarded leaf) requires an exact 1:1 name match
+            // to stay aligned; it is never preserved itself.
             if (w.Name != W.p && w.Name != W.tbl)
             {
                 if (original[i].Name != w.Name)
@@ -4983,6 +5010,10 @@ internal static class IrMarkupRenderer
             var acc = new System.Text.StringBuilder();
             while (true)
             {
+                // Cover a direct leaf that sat between a mark-deleted paragraph and the paragraph it merges
+                // into. The accept transform drops it just like a leaf before an ordinary working block.
+                while (i < original.Count && IsAcceptDiscardedLeaf(original[i], w))
+                    i++;
                 if (i >= original.Count)
                     return;   // ran out of originals mid-group — alignment lost.
                 var o = original[i];
@@ -4994,13 +5025,53 @@ internal static class IrMarkupRenderer
                     continue;
                 // Group boundary: the last member contributes the block identity. Verify.
                 if (o.Name != w.Name || !string.Equals(acc.ToString(), target, StringComparison.Ordinal))
-                    return;   // accept semantics we do not model (table merge, removed sdt, …) — stop.
+                    return;   // accept semantics we do not model (removed sdt, etc.) — stop.
                 break;
             }
 
             if (group.Any(g => g.Descendants().Any(d => TrackedRevisionNames.Contains(d.Name))))
                 map[w] = group;
         }
+    }
+
+    /// <summary>True when the original child is a direct leaf discarded by the accept transform that rebuilds
+    /// body/note block containers. A wrapper with any nested paragraph/table is deliberately NOT skipped: its
+    /// topology needs explicit modeling. The name guard preserves exact matching when the working container
+    /// still carries the same leaf.</summary>
+    private static bool IsAcceptDiscardedLeaf(XElement original, XElement working) =>
+        original.Name != working.Name &&
+        original.Name != W.p && original.Name != W.tbl && original.Name != W.sectPr &&
+        !original.Descendants().Any(e => e.Name == W.p || e.Name == W.tbl);
+
+    /// <summary>Consume exactly the clean table run that
+    /// <see cref="RevisionProcessor.AcceptRevisions"/> coalesces into <paramref name="working"/>. The run is
+    /// never entered into the preservation map: cloning several raw tables for one accepted source would change
+    /// table structure. Failure leaves <paramref name="originalIndex"/> unchanged, so the ordinary strict
+    /// 1:1 walk either verifies a non-merged table or bails conservatively.</summary>
+    private static bool TryConsumeCleanTableMerge(
+        XElement working, IReadOnlyList<XElement> original, ref int originalIndex)
+    {
+        if (working.Name != W.tbl || originalIndex >= original.Count || original[originalIndex].Name != W.tbl)
+            return false;
+
+        bool BidiVisual(XElement table) => table.Element(W.tblPr)?.Element(W.bidiVisual) != null;
+        bool bidiVisual = BidiVisual(original[originalIndex]);
+        int end = originalIndex + 1;
+        while (end < original.Count && original[end].Name == W.tbl && BidiVisual(original[end]) == bidiVisual)
+            end++;
+        if (end - originalIndex < 2)
+            return false;
+
+        var run = original.Skip(originalIndex).Take(end - originalIndex).ToList();
+        if (run.Any(table => table.DescendantsAndSelf().Any(e => TrackedRevisionNames.Contains(e.Name))))
+            return false;
+        if (!string.Equals(VisibleText(working), string.Concat(run.Select(AcceptedVisibleText)), StringComparison.Ordinal))
+            return false;
+        if (working.Elements(W.tr).Count() != run.Sum(table => table.Elements(W.tr).Count()))
+            return false;
+
+        originalIndex = end;
+        return true;
     }
 
     /// <summary>
@@ -5030,6 +5101,21 @@ internal static class IrMarkupRenderer
                 .Remove();
         }
         return clone;
+    }
+
+    /// <summary>Project a raw LEFT input insertion onto the comparison's DELETE side. Word does not nest the
+    /// old <c>w:ins</c> inside a new deletion; it converts that insertion — including a paragraph/row mark —
+    /// to deletion-grade markup in place. This helper is called only for the conservative eligibility slice in
+    /// <see cref="RenderState.ProjectableLeftDeletionGroup"/>: groups whose tracked state is exclusively
+    /// <c>w:ins</c>. That keeps moves/property revisions on the accepted-view fallback until their distinct
+    /// source-history semantics are modeled.</summary>
+    private static void ProjectLeftInsertionsAsDeletions(XElement clone)
+    {
+        foreach (var ins in clone.DescendantsAndSelf(W.ins).ToList())
+        {
+            ins.Name = W.del;
+            ConvertTextToDelText(ins);
+        }
     }
 
     /// <summary>True when a paragraph's MARK is revision-deleted (<c>w:pPr/w:rPr/w:del</c> or
@@ -5133,11 +5219,34 @@ internal static class IrMarkupRenderer
         /// not preserve input revisions in v1) — a null map means zero behavior change.</summary>
         public Dictionary<XElement, List<XElement>>? PreservedOriginals { get; set; }
 
+        /// <summary>Accepted-working-element → ORIGINAL LEFT body element(s) for the narrowly supported
+        /// dirty-left delete projection. Unlike <see cref="PreservedOriginals"/>, this map is never used to
+        /// carry a left block verbatim: its raw <c>w:ins</c> wrappers are converted to delete-grade markup when
+        /// the comparison deletes that block.</summary>
+        public Dictionary<XElement, List<XElement>>? LeftPreservedOriginals { get; set; }
+
         /// <summary>The ORIGINAL right element group mapped for <paramref name="src"/> under
         /// <c>PreserveInputRevisions</c>, or null (the common case: flag off, a left/composite-sourced
         /// element, or a block with no pre-existing markup).</summary>
         public List<XElement>? PreservedGroup(XElement src) =>
             PreservedOriginals != null && PreservedOriginals.TryGetValue(src, out var group) ? group : null;
+
+        /// <summary>Return a raw LEFT group only when it is safe to project it as a whole-block deletion. The
+        /// group may contain ordinary structure (comments/bookmarks/etc.), but every tracked-revision element
+        /// must be a <c>w:ins</c> and it must contain no simple fields (which cannot safely sit in a converted
+        /// <c>w:del</c>). A source move/property-change needs richer provenance than this whole-block slice can
+        /// provide and falls back to the accepted-view renderer.</summary>
+        internal List<XElement>? ProjectableLeftDeletionGroup(XElement src)
+        {
+            if (LeftPreservedOriginals == null || !LeftPreservedOriginals.TryGetValue(src, out var group))
+                return null;
+            return group.All(member => member.DescendantsAndSelf()
+                    .Where(e => TrackedRevisionNames.Contains(e.Name))
+                    .All(e => e.Name == W.ins)) &&
+                !group.Any(member => member.DescendantsAndSelf(W.fldSimple).Any())
+                ? group
+                : null;
+        }
 
         // Active preserved range ids, shared across emitted clones because one source range can span
         // multiple preserved blocks. The start element name is part of the key: the same malformed input
