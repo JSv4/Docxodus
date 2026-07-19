@@ -701,6 +701,7 @@ public class HtmlConversionOpsTests
         Assert.DoesNotContain("HCO068 fallback text box", html);
         Assert.Contains("width: 120pt", html);
         Assert.DoesNotContain("height: 60pt", html);
+        Assert.Contains("margin-bottom: 0", html);
     }
 
     // Old Office 2008 wps markup is not a namespace this renderer understands. The visual oracle
@@ -740,6 +741,48 @@ public class HtmlConversionOpsTests
         Assert.Contains("HCO070 direct VML text box", html);
         Assert.Contains("width: 100pt", html);
         Assert.Contains("height: 40pt", html);
+    }
+
+    // VML theme colour values can append Word palette metadata. Keep the colour itself, but do
+    // not feed the suffix (or arbitrary CSS declarations) through to the generated style string.
+    [Fact]
+    public void HCO071_VmlThemeColors_NormalizeAndRejectStyleInjection()
+    {
+        byte[] themed = TextBoxDocxBytes(
+            "<w:pict><v:shape style=\"width:100pt;height:40pt\" fillcolor=\"#156082 [3204]\" " +
+            "strokecolor=\"white [3212]\"><v:textbox><w:txbxContent><w:p><w:r><w:t>" +
+            "HCO071 themed VML text box</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape>" +
+            "</w:pict>");
+        byte[] unsafeColor = TextBoxDocxBytes(
+            "<w:pict><v:shape style=\"width:100pt;height:40pt\" fillcolor=\"red; color: blue\"><v:textbox>" +
+            "<w:txbxContent><w:p><w:r><w:t>HCO071 unsafe VML text box</w:t></w:r></w:p></w:txbxContent>" +
+            "</v:textbox></v:shape></w:pict>");
+
+        string themedHtml = HtmlConversionOps.ConvertToHtml(themed,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+        string unsafeHtml = HtmlConversionOps.ConvertToHtml(unsafeColor,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("background-color: #156082", themedHtml);
+        Assert.Contains("border: 1pt solid white", themedHtml);
+        Assert.DoesNotContain("3204", themedHtml);
+        Assert.DoesNotContain("color: blue", unsafeHtml);
+    }
+
+    [Fact]
+    public void HCO072_DirectAutoFitVmlTextBox_DropsStoredHeightAndTrailingSpacing()
+    {
+        byte[] bytes = TextBoxDocxBytes(
+            "<w:pict><v:shape style=\"width:100pt;height:40pt\"><v:textbox style=\"mso-fit-shape-to-text:t\">" +
+            "<w:txbxContent><w:p><w:r><w:t>HCO072 auto-fit VML text box</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict>");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO072 auto-fit VML text box", html);
+        Assert.DoesNotContain("height: 40pt", html);
+        Assert.Contains("margin-bottom: 0", html);
     }
 
     private static byte[] TextBoxDocxBytes(string runContent)

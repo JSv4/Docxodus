@@ -8043,6 +8043,7 @@ namespace Docxodus
             var drawingContainer = element.Elements()
                 .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
             var vmlShape = element.Descendants(VML.shape).FirstOrDefault();
+            var autoFit = HasAutoFitTextBox(element);
             if (drawingContainer != null)
                 AddDrawingTextBoxStyle(style, element, drawingContainer);
             else if (vmlShape != null)
@@ -8068,6 +8069,14 @@ namespace Docxodus
                         paragraph.AddAnnotation(paragraphStyle);
                     }
                     paragraphStyle.AddIfMissing("display", "block");
+                    if (autoFit)
+                    {
+                        // In an automatically fitted shape, LibreOffice sizes the box to the
+                        // text line and its insets, not the document style's trailing paragraph
+                        // spacing. Keeping Normal's usual 10pt after-spacing makes the box
+                        // visibly too tall.
+                        paragraphStyle["margin-bottom"] = "0";
+                    }
                     renderedBlocks.Add(paragraph);
                     continue;
                 }
@@ -8167,17 +8176,26 @@ namespace Docxodus
                     style.AddIfMissing("height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.##}pt", height));
             }
 
-            var fill = (string)shape.Attribute("fillcolor");
-            if (IsCssColor(fill))
+            var fill = NormalizeVmlCssColor((string)shape.Attribute("fillcolor"));
+            if (fill != null)
                 style.AddIfMissing("background-color", fill);
-            var stroke = (string)shape.Attribute("strokecolor");
-            if (IsCssColor(stroke))
+            var stroke = NormalizeVmlCssColor((string)shape.Attribute("strokecolor"));
+            if (stroke != null)
                 style.AddIfMissing("border", "1pt solid " + stroke);
 
-            var textBoxStyle = (string)shape.Element(VML.textbox)?.Attribute("style");
-            if (textBoxStyle?.IndexOf("mso-fit-shape-to-text:t", StringComparison.OrdinalIgnoreCase) >= 0)
+            if (HasVmlTextBoxAutoFit(shape))
                 style.Remove("height");
         }
+
+        private static bool HasAutoFitTextBox(XElement element) =>
+            element.Descendants(WPS.bodyPr).Elements(A.spAutoFit).Any() ||
+            HasVmlTextBoxAutoFit(element);
+
+        private static bool HasVmlTextBoxAutoFit(XElement element) =>
+            element.Descendants(VML.textbox)
+                .Select(textBox => (string)textBox.Attribute("style"))
+                .Any(style => style?.IndexOf("mso-fit-shape-to-text:t",
+                    StringComparison.OrdinalIgnoreCase) >= 0);
 
         private static void AddEmuDimensions(Dictionary<string, string> style, long? widthEmu, long? heightEmu)
         {
@@ -8199,8 +8217,26 @@ namespace Docxodus
         private static bool IsHexColor(string color) =>
             color != null && color.Length == 6 && color.All(Uri.IsHexDigit);
 
-        private static bool IsCssColor(string color) =>
-            !string.IsNullOrWhiteSpace(color) && !string.Equals(color, "none", StringComparison.OrdinalIgnoreCase);
+        private static string NormalizeVmlCssColor(string color)
+        {
+            if (string.IsNullOrWhiteSpace(color))
+                return null;
+
+            // VML theme colors can carry a Word-specific palette suffix, e.g.
+            // "#156082 [3204]" or "white [3212]". Retain only the actual colour token;
+            // accepting the complete attribute would both yield invalid CSS and allow a
+            // malformed document to inject additional style declarations.
+            var token = color.Trim().Split(' ')[0];
+            if (token.Length > 1 && token[0] == '#' &&
+                (token.Length == 4 || token.Length == 7 || token.Length == 9) &&
+                token.Skip(1).All(Uri.IsHexDigit))
+                return token;
+
+            return token.All(char.IsLetter) &&
+                   !string.Equals(token, "none", StringComparison.OrdinalIgnoreCase)
+                ? token
+                : null;
+        }
 
         private static XElement ProcessDrawing(WordprocessingDocument wordDoc,
             XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
