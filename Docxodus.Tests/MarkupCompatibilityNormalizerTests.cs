@@ -27,11 +27,11 @@ public class MarkupCompatibilityNormalizerTests
     private const string Wps2010 = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape";
     private const string Wps2008Draft = "http://schemas.microsoft.com/office/word/2008/6/28/wordprocessingShape";
 
-    private static byte[] DocWithBodyXml(string runInnerXml)
+    private static byte[] DocWithBodyXml(string runInnerXml, string anchorText = "anchor text")
     {
         return DocWithParagraphXml(
             "<w:r>" + runInnerXml + "</w:r>" +
-            "<w:r><w:t>anchor text</w:t></w:r>");
+            "<w:r><w:t>" + anchorText + "</w:t></w:r>");
     }
 
     private static byte[] DocWithParagraphXml(string paragraphInnerXml)
@@ -126,7 +126,8 @@ public class MarkupCompatibilityNormalizerTests
         var right = new WmlDocument("r.docx", DocWithBodyXml(
             "<mc:AlternateContent><mc:Choice Requires=\"v\">" +
             "<w:pict><v:shape id=\"s1\" style=\"width:10pt;height:10pt\"/></w:pict>" +
-            "</mc:Choice><mc:Fallback/></mc:AlternateContent>"));
+            "</mc:Choice><mc:Fallback/></mc:AlternateContent>",
+            "changed anchor text"));
 
         var result = DocxDiff.Compare(left, right);
 
@@ -212,7 +213,7 @@ public class MarkupCompatibilityNormalizerTests
             "<w:pPr><w:numPr><w:numId w:val=\"42\"/></w:numPr></w:pPr>"));
         var right = new WmlDocument("r.docx", DocWithParagraphXml(
             "<w:pPr><w:spacing w:after=\"0\"/></w:pPr>" +
-            "<w:r><w:t>anchor text</w:t></w:r>" +
+            "<w:r><w:t>changed anchor text</w:t></w:r>" +
             "<w:pPr><w:numPr><w:numId w:val=\"42\"/></w:numPr></w:pPr>"));
 
         var result = DocxDiff.Compare(left, right);
