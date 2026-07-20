@@ -847,6 +847,45 @@ public class HtmlConversionOpsTests
         Assert.Contains("margin-bottom: 0", html);
     }
 
+    // The clean-view fast path must recognize every revision family the accepter handles. A cell
+    // deletion has no w:ins/w:del wrapper, so the former body-only detector skipped acceptance and
+    // leaked its text into the supposedly accepted HTML.
+    [Fact]
+    public void HCO073_CleanView_AcceptsCellDeletionRevision()
+    {
+        string html = HtmlConversionOps.ConvertToHtml(CellDeletionTableDocxBytes(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO073 retained cell", html);
+        Assert.DoesNotContain("HCO073 deleted cell", html);
+    }
+
+    private static byte[] CellDeletionTableDocxBytes()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:body><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2400\"/><w:gridCol w:w=\"2400\"/>" +
+                    "</w:tblGrid><w:tr>" +
+                    "<w:tc><w:tcPr><w:tcW w:w=\"2400\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>" +
+                    "HCO073 retained cell</w:t></w:r></w:p></w:tc>" +
+                    "<w:tc><w:tcPr><w:tcW w:w=\"2400\" w:type=\"dxa\"/><w:cellDel w:id=\"1\" " +
+                    "w:author=\"Test\" w:date=\"2026-01-01T00:00:00Z\"/></w:tcPr><w:p><w:r><w:t>" +
+                    "HCO073 deleted cell</w:t></w:r></w:p></w:tc>" +
+                    "</w:tr></w:tbl><w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+        return ms.ToArray();
+    }
+
     private static byte[] TextBoxDocxBytes(string runContent)
     {
         using var ms = new MemoryStream();

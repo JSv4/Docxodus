@@ -858,7 +858,7 @@ namespace Docxodus
         {
             // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
             // This optimization saves ~9% of conversion time for documents without revisions
-            if (!htmlConverterSettings.RenderTrackedChanges && HasTrackedChanges(wordDoc))
+            if (!htmlConverterSettings.RenderTrackedChanges && RevisionAccepter.HasTrackedRevisions(wordDoc))
             {
                 RevisionAccepter.AcceptRevisions(wordDoc);
             }
@@ -968,34 +968,6 @@ namespace Docxodus
             // must do it correctly, or entities will not be serialized properly.
 
             return xhtml;
-        }
-
-        /// <summary>
-        /// Quickly checks if a document contains any tracked changes (revisions).
-        /// This is used to skip the expensive AcceptRevisions call when not needed.
-        /// </summary>
-        /// <param name="wordDoc">The Word document to check</param>
-        /// <returns>True if the document has any tracked changes</returns>
-        private static bool HasTrackedChanges(WordprocessingDocument wordDoc)
-        {
-            var mainPart = wordDoc.MainDocumentPart;
-            if (mainPart == null) return false;
-
-            var xDoc = mainPart.GetXDocument();
-            var body = xDoc.Root?.Element(W.body);
-            if (body == null) return false;
-
-            // Check for any revision elements - this is a fast descendant scan
-            return body.Descendants().Any(e =>
-                e.Name == W.ins ||
-                e.Name == W.del ||
-                e.Name == W.moveFrom ||
-                e.Name == W.moveTo ||
-                e.Name == W.rPrChange ||
-                e.Name == W.pPrChange ||
-                e.Name == W.tblPrChange ||
-                e.Name == W.tcPrChange ||
-                e.Name == W.sectPrChange);
         }
 
         /// <summary>
