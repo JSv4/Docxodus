@@ -67,7 +67,7 @@ public class IrFormatComparisonTests
         {
             var alignment = Align(left, right, comparison);
             Assert.Equal(IrAlignmentKind.FormatOnly, alignment.Entries.Single().Kind);
-            IrAlignmentAsserts.AssertInvariants(left, right,
+            IrAlignmentAsserts.AssertInvariants(left, right, alignment,
                 new IrDiffSettings { FormatComparison = comparison });
         }
     }
