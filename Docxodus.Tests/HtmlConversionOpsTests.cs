@@ -96,19 +96,34 @@ public class HtmlConversionOpsTests
         Assert.Contains("@page", paginated);
         Assert.Contains("size: 8.27in 11.69in;", paginated);
         Assert.Contains("margin: 0;", paginated);
+        Assert.DoesNotContain("@page docxodus-section-", paginated);
         Assert.DoesNotContain("@page", standalone);
     }
 
     [Fact]
-    public void HCO077_MixedPaginatedSections_DoNotReceiveOneGlobalPageSize()
+    public void HCO077_MixedPaginatedSections_UseNamedPrintPages()
     {
-        // CSS needs named pages before it can faithfully represent different section sizes.
-        // Until then, avoid applying one section's size to every printed paginator page.
+        // The staging and final paginator page boxes retain their data-section-index. Named
+        // pages let Chromium print each section at its own physical size without relying on a
+        // caller to customize page.pdf options.
         string html = HtmlConversionOps.ConvertToHtml(MixedPageSizedDocxBytes(),
             new HtmlConversionOptions { PaginationMode = (int)PaginationMode.Paginated });
 
-        Assert.DoesNotContain("@page", html);
-        Assert.Contains("data-page-width", html);
+        Assert.Contains("@page docxodus-section-0", html);
+        Assert.Contains("size: 8.27in 11.69in;", html);
+        Assert.Contains("@page docxodus-section-1", html);
+        Assert.Contains("size: 11.00in 8.50in;", html);
+        Assert.Contains(".page-box[data-section-index=\"0\"]", html);
+        Assert.Contains("page: docxodus-section-0;", html);
+        Assert.Contains(".page-box[data-section-index=\"1\"]", html);
+        Assert.Contains("page: docxodus-section-1;", html);
+        Assert.DoesNotContain("@page {", html);
+        Assert.Contains("data-section-index=\"0\"", html);
+        Assert.Contains("data-page-width=\"595.3\"", html);
+        Assert.Contains("data-page-height=\"841.9\"", html);
+        Assert.Contains("data-section-index=\"1\"", html);
+        Assert.Contains("data-page-width=\"792.0\"", html);
+        Assert.Contains("data-page-height=\"612.0\"", html);
     }
 
     [Fact]
@@ -861,10 +876,11 @@ public class HtmlConversionOpsTests
         Assert.Contains("width: 120pt", html);
     }
 
-    // Old Office 2008 wps markup is not a namespace this renderer understands. The visual oracle
-    // (LibreOffice) leaves this AlternateContent shape blank, so do not promote its VML fallback.
+    // Old Office 2008 wps markup is not a namespace this renderer understands. Markup
+    // Compatibility requires selecting its portable VML fallback rather than dropping the
+    // entire logical text box.
     [Fact]
-    public void HCO069_LegacyDrawingMlTextBox_DoesNotPromoteVmlFallback()
+    public void HCO069_LegacyDrawingMlTextBox_RendersVmlFallback()
     {
         byte[] bytes = TextBoxDocxBytes(
             "<mc:AlternateContent>" +
@@ -879,7 +895,9 @@ public class HtmlConversionOpsTests
         string html = HtmlConversionOps.ConvertToHtml(bytes,
             new HtmlConversionOptions { FabricateCssClasses = false });
 
-        Assert.DoesNotContain("HCO069 legacy fallback text box", html);
+        Assert.Contains("HCO069 legacy fallback text box", html);
+        Assert.Contains("width: 100pt", html);
+        Assert.Contains("height: 40pt", html);
     }
 
     // A direct VML text box is not an AlternateContent compatibility fallback and remains a

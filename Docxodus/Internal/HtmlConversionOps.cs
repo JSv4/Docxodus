@@ -101,9 +101,10 @@ internal static class HtmlConversionOps
             CommentCssClassPrefix = options.CommentCssClassPrefix,
             IncludeCommentMetadata = true,
             RenderPagination = (PaginationMode)options.PaginationMode,
-            // Paginated output is printed from fixed-size page boxes. Emit one global page-size
-            // rule only when the document's main-story sections are uniform.
-            GeneratePageCss = renderPagination && WmlToHtmlConverter.HasUniformMainStoryPageSize(wordDoc),
+            // Paginated output is printed from fixed-size page boxes. Emit physical page CSS for
+            // every paginated document: uniform sections use one global rule; mixed sections use
+            // named rules selected by each rendered page box.
+            GeneratePageCss = renderPagination,
             PaginationScale = options.PaginationScale > 0 ? options.PaginationScale : 1.0,
             PaginationCssClassPrefix = options.PaginationCssClassPrefix,
             RenderAnnotations = options.RenderAnnotations,

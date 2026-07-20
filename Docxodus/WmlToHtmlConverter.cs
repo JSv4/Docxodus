@@ -2127,8 +2127,8 @@ namespace Docxodus
             // The viewer uses a flex column and scaled boxes on screen. Those layout
             // affordances can introduce blank physical pages when the paginated view is
             // captured with a browser's print/PDF path, so restore document-page layout
-            // only for print. The WASM bridge enables GeneratePageCss for uniform paginated
-            // documents so Chromium also receives the document's physical page size.
+            // only for print. The conversion bridge enables GeneratePageCss for paginated
+            // documents so Chromium also receives each document section's physical page size.
             sb.AppendLine("@media print {");
             sb.AppendLine($"    .{prefix}container {{");
             sb.AppendLine("        display: block;");
@@ -2165,6 +2165,16 @@ namespace Docxodus
             var body = wordDoc.MainDocumentPart?.GetXDocument()?.Root?.Element(W.body);
             if (body == null)
                 return string.Empty;
+
+            // A paginated document already has one fixed-size page box per logical page. The
+            // browser can switch physical paper only through named @page rules, selected by the
+            // page box's section index. Keep the existing single global rule for the common
+            // uniform-size case, but do not force a portrait page onto a landscape section.
+            if (settings.RenderPagination == PaginationMode.Paginated &&
+                !HasUniformMainStoryPageSize(wordDoc))
+            {
+                return GenerateNamedPaginatedPageCss(body, settings);
+            }
 
             // Find section properties (body-level sectPr or last paragraph's sectPr)
             var sectPr = body.Element(W.sectPr) ??
@@ -2204,6 +2214,47 @@ namespace Docxodus
                     marginTopIn, marginRightIn, marginBottomIn, marginLeftIn));
             }
 
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        /// <summary>
+        /// Emits one named physical page per main-story section and attaches it to the matching
+        /// page-box class. The TypeScript paginator copies the section index from its staging
+        /// container to every final page box, so a sequence such as portrait → landscape →
+        /// portrait becomes three correctly sized PDF page groups in Chromium.
+        /// </summary>
+        private static string GenerateNamedPaginatedPageCss(XElement body,
+            WmlToHtmlConverterSettings settings)
+        {
+            var sectionDimensions = CollectSectionData(body)
+                .Select(section => ExtractPageDimensions(section.sectPr))
+                .ToList();
+            var prefix = settings.PaginationCssClassPrefix ?? "page-";
+            var sb = new StringBuilder();
+
+            sb.AppendLine();
+            sb.AppendLine("/* Named page CSS for mixed-size paginated sections */");
+            for (int sectionIndex = 0; sectionIndex < sectionDimensions.Count; sectionIndex++)
+            {
+                var dims = sectionDimensions[sectionIndex];
+                sb.AppendLine($"@page docxodus-section-{sectionIndex} {{");
+                sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
+                    "    size: {0:0.00}in {1:0.00}in;",
+                    dims.PageWidthPt / 72.0, dims.PageHeightPt / 72.0));
+                // Section margins are already represented inside each fixed page box.
+                sb.AppendLine("    margin: 0;");
+                sb.AppendLine("}");
+            }
+
+            sb.AppendLine("@media print {");
+            for (int sectionIndex = 0; sectionIndex < sectionDimensions.Count; sectionIndex++)
+            {
+                sb.AppendLine($"    .{prefix}box[data-section-index=\"{sectionIndex}\"] {{");
+                sb.AppendLine($"        page: docxodus-section-{sectionIndex};");
+                sb.AppendLine("    }");
+            }
             sb.AppendLine("}");
 
             return sb.ToString();
@@ -7999,14 +8050,12 @@ namespace Docxodus
         private static object ProcessAlternateContent(WordprocessingDocument wordDoc,
             WmlToHtmlConverterSettings settings, XElement alternateContent, decimal currentMarginLeft)
         {
-            var choices = alternateContent.Elements(MC.Choice).ToList();
-            var selected = choices.FirstOrDefault(IsSupportedMarkupChoice);
-            if (selected == null && choices.Count != 0)
-                return null;
-
-            // A malformed AlternateContent wrapper can omit all Choice nodes. In that narrow
-            // case, retain the fallback's direct, independently-renderable content.
-            selected ??= alternateContent.Element(MC.Fallback);
+            // Markup Compatibility requires readers to use the Fallback whenever none of the
+            // available Choice branches advertises only namespaces they understand. This also
+            // gives older draft DrawingML shapes a portable VML representation instead of
+            // silently dropping the entire logical object.
+            var selected = alternateContent.Elements(MC.Choice).FirstOrDefault(IsSupportedMarkupChoice)
+                ?? alternateContent.Element(MC.Fallback);
 
             return selected == null
                 ? null
