@@ -83,6 +83,45 @@ public class HtmlConversionOpsTests
     }
 
     [Fact]
+    public void HCO076_PaginatedHtml_UsesDocumentPageSizeWithoutOuterPrintMargin()
+    {
+        // The paginator has already applied the Word margins within each page box. Its capture
+        // path must advertise the paper size to Chromium without applying those margins again.
+        string paginated = HtmlConversionOps.ConvertToHtml(
+            PageSizedDocxBytes(width: 11906, height: 16838),
+            new HtmlConversionOptions { PaginationMode = (int)PaginationMode.Paginated });
+        string standalone = HtmlConversionOps.ConvertToHtml(
+            PageSizedDocxBytes(width: 11906, height: 16838), new HtmlConversionOptions());
+
+        Assert.Contains("@page", paginated);
+        Assert.Contains("size: 8.27in 11.69in;", paginated);
+        Assert.Contains("margin: 0;", paginated);
+        Assert.DoesNotContain("@page", standalone);
+    }
+
+    [Fact]
+    public void HCO077_MixedPaginatedSections_DoNotReceiveOneGlobalPageSize()
+    {
+        // CSS needs named pages before it can faithfully represent different section sizes.
+        // Until then, avoid applying one section's size to every printed paginator page.
+        string html = HtmlConversionOps.ConvertToHtml(MixedPageSizedDocxBytes(),
+            new HtmlConversionOptions { PaginationMode = (int)PaginationMode.Paginated });
+
+        Assert.DoesNotContain("@page", html);
+        Assert.Contains("data-page-width", html);
+    }
+
+    [Fact]
+    public void HCO078_PaginatedHtml_WithoutSectionProperties_UsesLetterPageSize()
+    {
+        string html = HtmlConversionOps.ConvertToHtml(DocumentOnlyDocxBytes("No section properties"),
+            new HtmlConversionOptions { PaginationMode = (int)PaginationMode.Paginated });
+
+        Assert.Contains("size: 8.50in 11.00in;", html);
+        Assert.Contains("margin: 0;", html);
+    }
+
+    [Fact]
     public void HCO020_BulletListMarker_RendersUnicodeBullet()
     {
         // A bullet list item carries the Symbol-font glyph U+F0B7, which renders as a blank box in a
@@ -540,6 +579,46 @@ public class HtmlConversionOpsTests
         using (var reopen = WordprocessingDocument.Open(ms, false))
         {
             Assert.Null(reopen.MainDocumentPart!.StyleDefinitionsPart);
+        }
+        return ms.ToArray();
+    }
+
+    private static byte[] PageSizedDocxBytes(uint width, uint height)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(new Wp.Run(new Wp.Text("Page-sized test content"))),
+                    new Wp.SectionProperties(
+                        new Wp.PageSize { Width = width, Height = height },
+                        new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })));
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
+    private static byte[] MixedPageSizedDocxBytes()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.ParagraphProperties(
+                            new Wp.SectionProperties(
+                                new Wp.PageSize { Width = 11906, Height = 16838 },
+                                new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })),
+                        new Wp.Run(new Wp.Text("A4 section"))),
+                    new Wp.Paragraph(new Wp.Run(new Wp.Text("Landscape section"))),
+                    new Wp.SectionProperties(
+                        new Wp.PageSize { Width = 15840, Height = 12240 },
+                        new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })));
+            main.Document.Save();
         }
         return ms.ToArray();
     }

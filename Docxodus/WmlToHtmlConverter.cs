@@ -2127,8 +2127,8 @@ namespace Docxodus
             // The viewer uses a flex column and scaled boxes on screen. Those layout
             // affordances can introduce blank physical pages when the paginated view is
             // captured with a browser's print/PDF path, so restore document-page layout
-            // only for print. Do not set @page size or margins here: that remains an
-            // explicit caller choice through GeneratePageCss.
+            // only for print. The WASM bridge enables GeneratePageCss for uniform paginated
+            // documents so Chromium also receives the document's physical page size.
             sb.AppendLine("@media print {");
             sb.AppendLine($"    .{prefix}container {{");
             sb.AppendLine("        display: block;");
@@ -2153,8 +2153,8 @@ namespace Docxodus
         }
 
         /// <summary>
-        /// Generates @page CSS rule with document page dimensions and margins.
-        /// Uses the first section's settings for page size and margins.
+        /// Generates @page CSS rule with document page dimensions and margins. Paginated output
+        /// uses zero outer margin because its fixed page boxes already apply section margins.
         /// </summary>
         private static string GeneratePageCss(WmlToHtmlConverterSettings settings, WordprocessingDocument wordDoc)
         {
@@ -2184,18 +2184,46 @@ namespace Docxodus
             sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
                 "    size: {0:0.00}in {1:0.00}in;", widthIn, heightIn));
 
-            // Generate margin (top right bottom left)
-            double marginTopIn = dims.MarginTopPt / 72.0;
-            double marginRightIn = dims.MarginRightPt / 72.0;
-            double marginBottomIn = dims.MarginBottomPt / 72.0;
-            double marginLeftIn = dims.MarginLeftPt / 72.0;
-            sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
-                "    margin: {0:0.00}in {1:0.00}in {2:0.00}in {3:0.00}in;",
-                marginTopIn, marginRightIn, marginBottomIn, marginLeftIn));
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                // The paginator has already positioned content within each page box using the
+                // Word section margins. Reapplying them to the physical print page shrinks the
+                // box and can spill an A4 page onto an extra Letter-sized PDF page.
+                sb.AppendLine("    margin: 0;");
+            }
+            else
+            {
+                // Generate margin (top right bottom left) for continuous HTML, where the
+                // browser's physical page margin is the only representation of section margins.
+                double marginTopIn = dims.MarginTopPt / 72.0;
+                double marginRightIn = dims.MarginRightPt / 72.0;
+                double marginBottomIn = dims.MarginBottomPt / 72.0;
+                double marginLeftIn = dims.MarginLeftPt / 72.0;
+                sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
+                    "    margin: {0:0.00}in {1:0.00}in {2:0.00}in {3:0.00}in;",
+                    marginTopIn, marginRightIn, marginBottomIn, marginLeftIn));
+            }
 
             sb.AppendLine("}");
 
             return sb.ToString();
+        }
+
+        internal static bool HasUniformMainStoryPageSize(WordprocessingDocument wordDoc)
+        {
+            var body = wordDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
+            if (body == null)
+                return false;
+
+            // Match pagination's main-story traversal: it recognizes section breaks inside
+            // tables but intentionally excludes floating text-box stories.
+            var sectionDimensions = CollectSectionData(body)
+                .Select(section => ExtractPageDimensions(section.sectPr))
+                .ToList();
+            var first = sectionDimensions[0];
+            return sectionDimensions.Skip(1).All(section =>
+                section.PageWidthPt == first.PageWidthPt &&
+                section.PageHeightPt == first.PageHeightPt);
         }
 
         private static string GenerateAnnotationCss(WmlToHtmlConverterSettings settings)
