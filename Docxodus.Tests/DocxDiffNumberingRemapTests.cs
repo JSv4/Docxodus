@@ -62,6 +62,31 @@ public class DocxDiffNumberingRemapTests
         return new WmlDocument("d.docx", stream.ToArray());
     }
 
+    /// <summary>Add a right-only paragraph style which owns the numbering reference itself, rather
+    /// than putting <c>w:numPr</c> directly on the paragraph.</summary>
+    private static WmlDocument AddStyleOwnedNumberedParagraph(WmlDocument source, string styleId, string text)
+    {
+        using var streamDoc = new OpenXmlMemoryStreamDocument(source);
+        using (var doc = streamDoc.GetWordprocessingDocument())
+        {
+            var mainPart = doc.MainDocumentPart!;
+            mainPart.Document!.Body!.Append(new Paragraph(
+                new ParagraphProperties(new ParagraphStyleId { Val = styleId }),
+                new Run(new Text(text))));
+            mainPart.StyleDefinitionsPart!.Styles!.Append(new Style(
+                new StyleName { Val = styleId },
+                new ParagraphProperties(new NumberingProperties(
+                    new NumberingLevelReference { Val = 0 },
+                    new NumberingId { Val = 1 })))
+            {
+                Type = StyleValues.Paragraph,
+                StyleId = styleId,
+            });
+            doc.Save();
+        }
+        return streamDoc.GetModifiedWmlDocument();
+    }
+
     private static (XDocument Main, XDocument Numbering) OpenParts(WmlDocument result)
     {
         using var s = new MemoryStream(result.DocumentByteArray);
@@ -70,6 +95,14 @@ public class DocxDiffNumberingRemapTests
         using var mr = new StreamReader(main.GetStream());
         using var nr = new StreamReader(main.NumberingDefinitionsPart!.GetStream());
         return (XDocument.Parse(mr.ReadToEnd()), XDocument.Parse(nr.ReadToEnd()));
+    }
+
+    private static XDocument OpenStyles(WmlDocument result)
+    {
+        using var s = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(s, false);
+        using var reader = new StreamReader(wdoc.MainDocumentPart!.StyleDefinitionsPart!.GetStream());
+        return XDocument.Parse(reader.ReadToEnd());
     }
 
     /// <summary>Resolve the numFmt a paragraph's numId reference lands on in the output package.</summary>
@@ -111,6 +144,37 @@ public class DocxDiffNumberingRemapTests
             Assert.Equal("decimal", ResolveNumFmt(numbering, id!));
         foreach (var id in equal)
             Assert.Equal("bullet", ResolveNumFmt(numbering, id!));
+    }
+
+    [Fact]
+    public void CollidingNumId_RightOnlyStyleOwnedListRebindsToRightDefinition()
+    {
+        // The right-only paragraph has no direct numPr: its pStyle owns numId 1.  Because the
+        // left's #1 is a bullet and the right's #1 is decimal, the copied right definition gets a
+        // fresh id.  The copied STYLE must follow that new id without changing left-owned styles.
+        const string importedStyleId = "ImportedDecimalList";
+        var left = NumberedDoc("bullet", "alpha item one", "beta item two", "gamma item three");
+        var right = AddStyleOwnedNumberedParagraph(
+            NumberedDoc("decimal", "alpha item one", "beta item two", "gamma item three"),
+            importedStyleId, "delta style-owned item entirely new");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var (main, numbering) = OpenParts(result);
+        var styles = OpenStyles(result);
+        var styledParagraph = Assert.Single(main.Descendants(W + "p").Where(p =>
+            (string?)p.Element(W + "pPr")?.Element(W + "pStyle")?.Attribute(W + "val") == importedStyleId));
+        Assert.Null(styledParagraph.Element(W + "pPr")?.Element(W + "numPr"));
+
+        var importedStyle = Assert.Single(styles.Root!.Elements(W + "style").Where(style =>
+            (string?)style.Attribute(W + "type") == "paragraph" &&
+            (string?)style.Attribute(W + "styleId") == importedStyleId));
+        var styleNumId = (string?)importedStyle.Element(W + "pPr")?.Element(W + "numPr")?
+            .Element(W + "numId")?.Attribute(W + "val");
+        Assert.NotNull(styleNumId);
+        Assert.NotEqual("1", styleNumId);
+        Assert.Equal("decimal", ResolveNumFmt(numbering, styleNumId!));
+        Assert.Equal("bullet", ResolveNumFmt(numbering, "1"));
     }
 
     [Fact]

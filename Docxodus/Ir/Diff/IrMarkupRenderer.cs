@@ -101,6 +101,10 @@ internal static class IrMarkupRenderer
     /// removed explicitly before output regardless.</summary>
     private static readonly XName SourceLinkTarget = PtOpenXml.pt + "SourceLinkTarget";
 
+    /// <summary>Identifies a style definition independently of the source <see cref="XElement"/>.
+    /// Style ids are typed in OOXML, so the type participates in right-import provenance.</summary>
+    private readonly record struct StyleIdentity(string Type, string Id);
+
     // Mirrors the tail of DocxSession.PPrChildOrder after w:spacing. When a right-only style
     // delegates paragraph spacing to defaults, the materialized w:spacing must precede the first
     // present CT_PPrBase child in this set (for example w:ind or w:jc), not merely w:outlineLvl.
@@ -296,7 +300,7 @@ internal static class IrMarkupRenderer
                 // ops (same dispatch as the body — anchors resolve in the shared AnchorIndex) so accept/reject
                 // round-trips note content too. Done BEFORE PutXDocument of the note parts.
                 if (script.NoteOps is { Count: > 0 })
-                    RenderNoteScopes(script.NoteOps, state, wDoc, main, wDocRight, settings);
+                    RenderNoteScopes(script.NoteOps, state, main, wDocRight, settings, streamDoc, rightStream);
 
                 // Header/footer story markup (2026-07-03 campaign): apply each changed story's edit ops
                 // INSIDE its header/footer part (the output package carries the LEFT parts; a changed
@@ -363,7 +367,8 @@ internal static class IrMarkupRenderer
                 // with the left's effective payload archived in a tracked rPrChange/pPrChange INSIDE
                 // the style definition. Right-only styles are copied in. Numbering keeps the existing
                 // missing-copy treatment (numId collisions are remapped there, not overwritten).
-                TrackStyleDefinitionChanges(wDoc, wDocRight, state, insertedStyleNormalization, leftHadTheme);
+                var rightImportedStyles = TrackStyleDefinitionChanges(
+                    wDoc, wDocRight, state, insertedStyleNormalization, leftHadTheme);
                 // Equal blocks and archived pPr values are cloned verbatim, so neither path passes
                 // through the paired-paragraph style guard. Once the final styles part is known,
                 // discard only paragraph-style references which cannot resolve there.
@@ -378,6 +383,8 @@ internal static class IrMarkupRenderer
                 // left properties inside *Change elements.
                 var numIdMap = WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRight, wDoc);
                 RebindRightNumberingReferences(main, numIdMap);
+                RebindRightImportedStyleNumberingReferences(
+                    main.StyleDefinitionsPart, rightImportedStyles, numIdMap);
                 // Word-parity repair: a body numPr referencing a numId with NO definition (tool-made
                 // corpus inputs ship this) renders as a plain paragraph in LibreOffice, while Word
                 // synthesizes a decimal multilevel definition on open — its compare oracle carries
@@ -1596,8 +1603,9 @@ internal static class IrMarkupRenderer
     /// body still round-trips).
     /// </summary>
     private static void RenderNoteScopes(
-        IReadOnlyList<IrNoteDiff> noteOps, RenderState state, WordprocessingDocument wDoc, MainDocumentPart main,
-        WordprocessingDocument? wDocRight, IrDiffSettings settings)
+        IReadOnlyList<IrNoteDiff> noteOps, RenderState state, MainDocumentPart main,
+        WordprocessingDocument? wDocRight, IrDiffSettings settings,
+        OpenXmlMemoryStreamDocument leftStreamDoc, OpenXmlMemoryStreamDocument rightStreamDoc)
     {
         // Group note diffs by their target part so each part is loaded/saved once.
         var footnoteDiffs = noteOps.Where(n => n.Kind == IrNoteKind.Footnote).ToList();
@@ -1605,9 +1613,9 @@ internal static class IrMarkupRenderer
 
         var rightMain = wDocRight?.MainDocumentPart;
         ApplyNoteDiffsToPart(footnoteDiffs, EnsureNotePart(main, isFootnote: true, rightMain),
-            rightMain?.FootnotesPart, W.footnote, W.footnotes, state, settings);
+            rightMain?.FootnotesPart, W.footnote, W.footnotes, state, settings, leftStreamDoc, rightStreamDoc);
         ApplyNoteDiffsToPart(endnoteDiffs, EnsureNotePart(main, isFootnote: false, rightMain),
-            rightMain?.EndnotesPart, W.endnote, W.endnotes, state, settings);
+            rightMain?.EndnotesPart, W.endnote, W.endnotes, state, settings, leftStreamDoc, rightStreamDoc);
     }
 
     /// <summary>Return the output's footnotes/endnotes part, creating an EMPTY one (with the right part's
@@ -1647,7 +1655,8 @@ internal static class IrMarkupRenderer
 
     private static void ApplyNoteDiffsToPart(
         List<IrNoteDiff> diffs, OpenXmlPart? part, OpenXmlPart? rightPart, XName noteName, XName rootName,
-        RenderState state, IrDiffSettings settings)
+        RenderState state, IrDiffSettings settings, OpenXmlMemoryStreamDocument leftStreamDoc,
+        OpenXmlMemoryStreamDocument rightStreamDoc)
     {
         if (diffs.Count == 0 || part == null)
             return;
@@ -1657,6 +1666,10 @@ internal static class IrMarkupRenderer
             return;
         var rightRoot = rightPart?.GetXDocument().Root;
 
+        // The registry is shared by body, notes, and stories. Take a per-note-part watermark so the
+        // relationships for clones rendered below are imported from THIS right note part, rather than the
+        // main document part (OOXML relationship ids are part-scoped).
+        int clonesBefore = state.RightSourcedClones.Count;
         bool changed = false;
         foreach (var diff in diffs)
         {
@@ -1712,12 +1725,40 @@ internal static class IrMarkupRenderer
 
         if (changed)
         {
+            ImportNoteSourcedRelationships(state, clonesBefore, part, rightPart,
+                leftStreamDoc, rightStreamDoc);
+
             // A note part should never carry pt bookkeeping in the output.
             foreach (var attr in root.DescendantsAndSelf().Attributes()
                          .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
                 attr.Remove();
             part.PutXDocument();
         }
+    }
+
+    /// <summary>
+    /// Import media parts plus hyperlink/external relationships referenced by clones registered while one
+    /// footnote/endnote part was rendered. The body import cannot serve these clones: relationship ids are
+    /// scoped to the note part that owns them.
+    /// </summary>
+    private static void ImportNoteSourcedRelationships(
+        RenderState state, int clonesBefore, OpenXmlPart outputPart, OpenXmlPart? rightPart,
+        OpenXmlMemoryStreamDocument leftStreamDoc, OpenXmlMemoryStreamDocument rightStreamDoc)
+    {
+        if (rightPart is null)
+            return;
+        var noteClones = state.RightSourcedClones.Skip(clonesBefore).ToList();
+        if (noteClones.Count == 0)
+            return;
+
+        ImportHyperlinkAndExternalRelationships(noteClones, outputPart, rightPart);
+
+        var outPkgPart = leftStreamDoc.GetPackage().GetPart(outputPart.Uri);
+        var rightPkgPart = rightStreamDoc.GetPackage().GetPart(rightPart.Uri);
+        foreach (var clone in noteClones)
+            WmlComparer.MoveRelatedPartsToDestination(
+                rightPkgPart, outPkgPart, clone, skipDanglingRelationships: true,
+                skipHeaderFooterReferences: true);
     }
 
     // ----------------------------------------------------------------- header/footer story markup (2026-07-03)
@@ -5058,17 +5099,18 @@ internal static class IrMarkupRenderer
     /// so the redline renders with the revised document's look and the change history carries the
     /// original. No-ops gracefully when either side lacks a styles part.
     /// </summary>
-    private static void TrackStyleDefinitionChanges(
+    private static HashSet<StyleIdentity> TrackStyleDefinitionChanges(
         WordprocessingDocument wDoc, WordprocessingDocument wDocRight, RenderState state,
         InsertedStyleNormalization? insertedStyleNormalization, bool leftHadTheme)
     {
+        var rightImportedStyles = new HashSet<StyleIdentity>();
         if (wDoc.MainDocumentPart?.StyleDefinitionsPart is not { } leftStyles ||
             wDocRight.MainDocumentPart?.StyleDefinitionsPart is not { } rightStyles)
-            return;
+            return rightImportedStyles;
 
         var outXDoc = leftStyles.GetXDocument();
         if (outXDoc.Root is not { } root || rightStyles.GetXDocument().Root is not { } rightRoot)
-            return;
+            return rightImportedStyles;
         var leftOriginalRoot = new XElement(root);   // frozen snapshot for left-effective resolution
         var stockDocDefaults = insertedStyleNormalization is null
             ? null
@@ -5106,6 +5148,8 @@ internal static class IrMarkupRenderer
                     cloned.Attribute(W._default)?.Remove();
                 }
                 root.Add(cloned);
+                if (type is not null && styleId is not null)
+                    rightImportedStyles.Add(new StyleIdentity(type, styleId));
                 continue;
             }
             if (styleId is null || StyleDefinitionPayloadsEqual(leftStyle, rightStyle))
@@ -5145,6 +5189,7 @@ internal static class IrMarkupRenderer
             }
         }
         leftStyles.PutXDocument();
+        return rightImportedStyles;
     }
 
     private static bool HasStylePropertyRevisions(XElement style) =>
@@ -5505,6 +5550,53 @@ internal static class IrMarkupRenderer
             if (changed)
                 part.PutXDocument();
         }
+    }
+
+    /// <summary>
+    /// Rebind numbering references owned by styles copied from the RIGHT package.  This deliberately
+    /// receives the import-provenance set from <see cref="TrackStyleDefinitionChanges"/> instead of
+    /// walking every output style: pre-existing LEFT styles, including archived property histories,
+    /// must keep resolving through the LEFT numbering definitions.  Property-change archives within
+    /// a copied style are likewise left untouched.
+    /// </summary>
+    private static void RebindRightImportedStyleNumberingReferences(
+        StyleDefinitionsPart? stylesPart, IReadOnlySet<StyleIdentity> rightImportedStyles,
+        Dictionary<int, int> numIdMap)
+    {
+        if (stylesPart is null || rightImportedStyles.Count == 0 || numIdMap.Count == 0)
+            return;
+
+        var root = stylesPart.GetXDocument().Root;
+        if (root is null)
+            return;
+
+        var changed = false;
+        foreach (var style in root.Elements(W.style))
+        {
+            var type = (string?)style.Attribute(W.type);
+            var styleId = (string?)style.Attribute(W.styleId);
+            if (type is null || styleId is null ||
+                !rightImportedStyles.Contains(new StyleIdentity(type, styleId)))
+                continue;
+
+            // A style can carry paragraph properties directly or in a table-style conditional
+            // payload.  Rebind either current payload, but never an archived *Change payload.
+            foreach (var numIdEl in style.Descendants(W.numPr).Elements(W.numId).ToList())
+            {
+                if (numIdEl.Ancestors().Any(a =>
+                        a.Name.LocalName.EndsWith("Change", StringComparison.Ordinal)))
+                    continue;
+                if (int.TryParse((string?)numIdEl.Attribute(W.val), out var id) &&
+                    numIdMap.TryGetValue(id, out var mapped))
+                {
+                    numIdEl.SetAttributeValue(W.val, mapped);
+                    changed = true;
+                }
+            }
+        }
+
+        if (changed)
+            stylesPart.PutXDocument();
     }
 
     /// <summary>A paragraph that exists only in the right document: inserted pilcrow
