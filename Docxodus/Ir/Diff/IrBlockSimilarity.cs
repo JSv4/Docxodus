@@ -90,17 +90,6 @@ internal sealed class IrBlockSimilarity
     public int PairingWordCount(IrParagraph paragraph) => Bag(paragraph).PairingWordCount;
 
     /// <summary>
-    /// The weak junction matcher admits lexical words plus a deliberately narrow semantic-numeric
-    /// category: four-digit calendar years. A year carries enough meaning to preserve Word's
-    /// date↔heading pairing, unlike a list ordinal such as <c>17</c>; the stricter
-    /// <see cref="PairingWordKeys"/> gate remains unchanged for similarity pairing.
-    /// </summary>
-    public IReadOnlyDictionary<string, int> JunctionWordKeys(IrParagraph paragraph) => Bag(paragraph).JunctionWordCounts;
-
-    /// <summary>Number of lexical-or-year tokens used by the weak junction matcher.</summary>
-    public int JunctionWordCount(IrParagraph paragraph) => Bag(paragraph).JunctionWordCount;
-
-    /// <summary>
     /// Should a lone 1×1 gap residue of these two paragraphs force-pair as Modified? True when
     /// EITHER side has no <see cref="IrDiffTokenKind.Word"/> tokens at all (an atomic-only or empty
     /// paragraph — textboxes/images carry no lexical evidence to demand, and demoting them to
@@ -184,9 +173,9 @@ internal sealed class IrBlockSimilarity
     }
 
     /// <summary>
-    /// Junction-only overlap over lexical word tokens plus four-digit calendar years. This preserves
-    /// the numeric-ordinal protection for the general similarity pass while allowing Word's known
-    /// date-bearing weak pairing behavior to participate in the junction LCS.
+    /// Overlap over lexical word tokens plus four-digit calendar years. The regular junction pass
+    /// remains lexical-only; this score is used only by the explicit labeled-date bridge in
+    /// <see cref="IsLabeledCalendarDateBridge"/>.
     /// </summary>
     public (int SharedWords, double WordJaccard) JunctionWordOverlap(IrParagraph left, IrParagraph right)
     {
@@ -204,6 +193,121 @@ internal sealed class IrBlockSimilarity
         int union = a.JunctionWordCount + b.JunctionWordCount - intersection;
         return (intersection, union == 0 ? 0.0 : (double)intersection / union);
     }
+
+    /// <summary>
+    /// Returns true only for Word's observed date-heading bridge: a year-suffixed title versus a
+    /// labeled English calendar date that share exactly one calendar year and no lexical MatchKey.
+    /// This is intentionally a narrow LCS fallback, not generic numeric pairing evidence.
+    /// </summary>
+    public bool IsLabeledCalendarDateBridge(IrParagraph left, IrParagraph right)
+    {
+        if (PairingWordOverlap(left, right).SharedWords != 0)
+            return false;
+
+        var a = Bag(left);
+        var b = Bag(right);
+        if (!TryGetSingleSharedCalendarYear(a, b, out string year))
+            return false;
+
+        return (IsLabeledCalendarDate(a, year) && IsYearSuffixedTitle(b, year)) ||
+            (IsLabeledCalendarDate(b, year) && IsYearSuffixedTitle(a, year));
+    }
+
+    private static bool TryGetSingleSharedCalendarYear(
+        MatchKeyBag left, MatchKeyBag right, out string sharedYear)
+    {
+        string? candidate = null;
+        foreach (string year in left.CalendarYears)
+        {
+            if (!right.CalendarYears.Contains(year))
+                continue;
+            if (candidate is not null)
+            {
+                sharedYear = string.Empty;
+                return false;
+            }
+            candidate = year;
+        }
+        sharedYear = candidate ?? string.Empty;
+        return candidate is not null;
+    }
+
+    private static bool IsLabeledCalendarDate(MatchKeyBag bag, string year)
+    {
+        int firstWord = -1;
+        for (int i = 0; i < bag.Tokens.Count; i++)
+        {
+            if (bag.Tokens[i].Kind == IrDiffTokenKind.Word)
+            {
+                firstWord = i;
+                break;
+            }
+        }
+        if (firstWord < 0)
+            return false;
+
+        string label = bag.Tokens[firstWord].Text;
+        bool hasLabelColon = string.Equals(label, "Date:", System.StringComparison.OrdinalIgnoreCase);
+        if (!hasLabelColon && !string.Equals(label, "Date", System.StringComparison.OrdinalIgnoreCase))
+            return false;
+        for (int i = firstWord + 1; !hasLabelColon && i < bag.Tokens.Count; i++)
+        {
+            var token = bag.Tokens[i];
+            if (token.Kind == IrDiffTokenKind.Word)
+                break;
+            if (token.Kind == IrDiffTokenKind.Separator && token.Text == ":")
+            {
+                hasLabelColon = true;
+                break;
+            }
+        }
+        if (!hasLabelColon)
+            return false;
+
+        bool hasMonth = false, hasDay = false, hasYear = false;
+        foreach (var token in bag.Tokens)
+        {
+            if (token.Kind != IrDiffTokenKind.Word)
+                continue;
+            hasMonth |= MonthNames.Contains(token.Text);
+            hasDay |= IsDayOfMonth(token.Text);
+            hasYear |= token.Text == year;
+        }
+        return hasMonth && hasDay && hasYear;
+    }
+
+    private static bool IsYearSuffixedTitle(MatchKeyBag bag, string year)
+    {
+        if (bag.PairingWordCount < 2)
+            return false;
+        for (int i = bag.Tokens.Count - 1; i >= 0; i--)
+            if (bag.Tokens[i].Kind == IrDiffTokenKind.Word)
+                return bag.Tokens[i].Text == year;
+        return false;
+    }
+
+    private static bool IsDayOfMonth(string value)
+    {
+        if (value.Length > 1 && value[^1] is ',' or '.')
+            value = value[..^1];
+        if (value.Length is < 1 or > 2)
+            return false;
+        int day = 0;
+        foreach (char c in value)
+        {
+            if (c < '0' || c > '9')
+                return false;
+            day = day * 10 + (c - '0');
+        }
+        return day is >= 1 and <= 31;
+    }
+
+    private static readonly HashSet<string> MonthNames = new(System.StringComparer.OrdinalIgnoreCase)
+    {
+        "January", "Jan", "February", "Feb", "March", "Mar", "April", "Apr", "May",
+        "June", "Jun", "July", "Jul", "August", "Aug", "September", "Sep", "Sept",
+        "October", "Oct", "November", "Nov", "December", "Dec",
+    };
 
     private MatchKeyBag Bag(IrParagraph paragraph)
     {
@@ -255,6 +359,8 @@ internal sealed class IrBlockSimilarity
         public Dictionary<string, int> WordCounts { get; }  // Word-kind tokens only, by MatchKey
         public Dictionary<string, int> PairingWordCounts { get; } // Word keys containing at least one letter
         public Dictionary<string, int> JunctionWordCounts { get; } // lexical keys plus year-like values
+        public IReadOnlyList<IrDiffToken> Tokens { get; }
+        public HashSet<string> CalendarYears { get; }
         public HashSet<string> TrimmedWords { get; }        // raw word texts, punct-trimmed + case-folded
         public int Total { get; }      // sum of all multiplicities (every token kind)
         public int WordCount { get; }  // Word-kind tokens only
@@ -263,13 +369,15 @@ internal sealed class IrBlockSimilarity
 
         private MatchKeyBag(Dictionary<string, int> counts, Dictionary<string, int> wordCounts,
             Dictionary<string, int> pairingWordCounts, Dictionary<string, int> junctionWordCounts,
-            HashSet<string> trimmedWords, int total, int wordCount, int pairingWordCount,
-            int junctionWordCount)
+            IReadOnlyList<IrDiffToken> tokens, HashSet<string> calendarYears, HashSet<string> trimmedWords,
+            int total, int wordCount, int pairingWordCount, int junctionWordCount)
         {
             Counts = counts;
             WordCounts = wordCounts;
             PairingWordCounts = pairingWordCounts;
             JunctionWordCounts = junctionWordCounts;
+            Tokens = tokens;
+            CalendarYears = calendarYears;
             TrimmedWords = trimmedWords;
             Total = total;
             WordCount = wordCount;
@@ -284,6 +392,7 @@ internal sealed class IrBlockSimilarity
             var wordCounts = new Dictionary<string, int>();
             var pairingWordCounts = new Dictionary<string, int>();
             var junctionWordCounts = new Dictionary<string, int>();
+            var calendarYears = new HashSet<string>(System.StringComparer.Ordinal);
             var trimmedWords = new HashSet<string>();
             int wordCount = 0, pairingWordCount = 0, junctionWordCount = 0;
             foreach (var t in tokens)
@@ -303,11 +412,13 @@ internal sealed class IrBlockSimilarity
                         junctionWordCounts[t.MatchKey] = junctionWordCounts.TryGetValue(t.MatchKey, out int j) ? j + 1 : 1;
                         junctionWordCount++;
                     }
+                    if (IsCalendarYear(t.Text))
+                        calendarYears.Add(t.Text);
                     AddLexicalPieces(t.Text, trimmedWords, settings);
                 }
             }
             return new MatchKeyBag(
-                counts, wordCounts, pairingWordCounts, junctionWordCounts, trimmedWords, tokens.Count,
+                counts, wordCounts, pairingWordCounts, junctionWordCounts, tokens, calendarYears, trimmedWords, tokens.Count,
                 wordCount, pairingWordCount, junctionWordCount);
         }
 
@@ -382,7 +493,8 @@ internal sealed class IrBlockSimilarity
             // Table bags never feed WordOverlap/ResidueForcePair (junction pairing is
             // paragraph-only), so the word-only structures are not materialized.
             return new MatchKeyBag(
-                counts, EmptyCounts, EmptyCounts, EmptyCounts, EmptyWords, total, wordCount, 0, 0);
+                counts, EmptyCounts, EmptyCounts, EmptyCounts, System.Array.Empty<IrDiffToken>(), EmptyWords,
+                EmptyWords, total, wordCount, 0, 0);
         }
     }
 }

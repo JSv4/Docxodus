@@ -744,8 +744,9 @@ internal static class IrBlockAligner
     // (+4.34), + diagonal growth (+5.65), + conditional 1×1 (+5.71), + growth size-parity (+6.00,
     // ZERO docs regressed >2pts — the shipped configuration).
 
-    /// <summary>A junction pair must share at least this many WORD tokens — zero-shared paragraphs
-    /// never pair (oracle: "Support Tickets" ↔ "Test 1 – Fixed Width Table" stayed separate).</summary>
+    /// <summary>A regular junction pair must share at least this many lexical WORD tokens —
+    /// zero-shared paragraphs never pair (oracle: "Support Tickets" ↔ "Test 1 – Fixed Width Table"
+    /// stayed separate). The labeled calendar-date bridge is a separately bounded LCS fallback.</summary>
     private const int JunctionMinSharedWords = 1;
 
     /// <summary>Word-token Jaccard floor of the junction LCS. 0.10 splits the decoded oracle
@@ -777,8 +778,9 @@ internal static class IrBlockAligner
     /// parity — see the call-site comment in <see cref="FillOneGap"/>). Computes the maximum
     /// weighted longest-common-subsequence over the (still-ordered) leftover paragraph lists where a
     /// pair is admissible iff it (a) does not cross an already-formed non-Moved pair of this gap,
-    /// (b) shares at least <see cref="JunctionMinSharedWords"/> WORD tokens (punctuation/whitespace
-    /// overlap is no evidence — Word never pairs on it), and (c) clears the displacement-scaled
+    /// (b) shares at least <see cref="JunctionMinSharedWords"/> lexical WORD tokens
+    /// (punctuation/whitespace/numeric-ordinal overlap is no evidence — Word never pairs on it), or
+    /// is the bounded labeled calendar-date bridge, and (c) clears the displacement-scaled
     /// word-Jaccard floor <see cref="JunctionMinWordJaccard"/> + <see cref="JunctionDispLambda"/>·disp.
     /// Chosen pairs become <see cref="IrAlignmentKind.Modified"/> (rendered as Word's single mixed
     /// ins+del paragraph); the rest fall through to Deleted/Inserted exactly as before. LCS
@@ -845,11 +847,11 @@ internal static class IrBlockAligner
         // mostly-contained paragraph is an extension, not a replacement).
         bool HasPairingEvidence(IrParagraph lp, IrParagraph rp, int sharedWords)
         {
-            int minWords = Math.Min(similarity.JunctionWordCount(lp), similarity.JunctionWordCount(rp));
+            int minWords = Math.Min(similarity.PairingWordCount(lp), similarity.PairingWordCount(rp));
             if (minWords > 0 && sharedWords * 2 >= minWords)
                 return true;
-            var a = similarity.JunctionWordKeys(lp);
-            var b = similarity.JunctionWordKeys(rp);
+            var a = similarity.PairingWordKeys(lp);
+            var b = similarity.PairingWordKeys(rp);
             var (small, large) = a.Count <= b.Count ? (a, b) : (b, a);
             foreach (var kv in small)
                 if (large.ContainsKey(kv.Key) && !FunctionWords.Contains(kv.Key))
@@ -866,17 +868,25 @@ internal static class IrBlockAligner
                 return 0;
             var lp = (IrParagraph)leftBlocks[li];
             var rp = (IrParagraph)rightBlocks[rj];
-            var (shared, jaccard) = similarity.JunctionWordOverlap(lp, rp);
-            if (shared < JunctionMinSharedWords)
-                return 0;
+            var (shared, jaccard) = similarity.PairingWordOverlap(lp, rp);
             double posL = m == 1 ? 0 : (double)i / (m - 1);
             double posR = n == 1 ? 0 : (double)j / (n - 1);
             double disp = Math.Abs(posL - posR);
-            if (jaccard < JunctionMinWordJaccard + JunctionDispLambda * disp)
+            double floor = JunctionMinWordJaccard + JunctionDispLambda * disp;
+            if (shared >= JunctionMinSharedWords)
+            {
+                if (jaccard < floor || !HasPairingEvidence(lp, rp, shared))
+                    return 0;
+                return jaccard;
+            }
+
+            // Word's product-roadmap oracle has a single semantic exception: a short title ending
+            // in a year pairs with a labeled Date: Month day, year paragraph. Do not promote a
+            // generic year into weak evidence or diagonal-growth fuel.
+            if (!similarity.IsLabeledCalendarDateBridge(lp, rp))
                 return 0;
-            if (!HasPairingEvidence(lp, rp, shared))
-                return 0;
-            return jaccard;
+            var (bridgeShared, bridgeJaccard) = similarity.JunctionWordOverlap(lp, rp);
+            return bridgeShared >= JunctionMinSharedWords && bridgeJaccard >= floor ? bridgeJaccard : 0;
         }
 
         var weight = new double[m, n];
@@ -985,12 +995,12 @@ internal static class IrBlockAligner
                         continue;
                     if (leftBlocks[nl] is not IrParagraph lp || rightBlocks[nr] is not IrParagraph rp)
                         continue;
-                    var (shared, _) = similarity.JunctionWordOverlap(lp, rp);
+                    var (shared, _) = similarity.PairingWordOverlap(lp, rp);
                     if (shared < JunctionMinSharedWords)
                         continue;
                     // Size-parity guard: on shared-word-only evidence a paragraph does not pair
                     // with one several times its word count (see JunctionGrowRatio).
-                    int wl = similarity.JunctionWordCount(lp), wr = similarity.JunctionWordCount(rp);
+                    int wl = similarity.PairingWordCount(lp), wr = similarity.PairingWordCount(rp);
                     if (Math.Min(wl, wr) < JunctionGrowRatio * Math.Max(wl, wr))
                         continue;
                     // Pairing-evidence discipline (same as the LCS): adjacency to a pair plus
