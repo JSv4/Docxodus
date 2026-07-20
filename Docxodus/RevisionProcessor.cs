@@ -2593,10 +2593,14 @@ namespace Docxodus
                     // would otherwise count the shell itself as content and keep an empty paragraph
                     // alive — visible when rejecting an inserted trailing hyperlink paragraph).
                     element.Name == W.hyperlink)
-                    return element.Elements();
+                    // Recurse while collapsing. Inline wrappers can nest (for example,
+                    // w:hyperlink > w:ins > w:r); returning only the immediate children would
+                    // leave w:ins at paragraph level, where AllParaContentIsDeleted cannot
+                    // classify it as run content.
+                    return element.Nodes().Select(n => CollapseTransform(n));
 
                 if (element.Name == W.sdt)
-                    return element.Elements(W.sdtContent).Elements();
+                    return element.Elements(W.sdtContent).Nodes().Select(n => CollapseTransform(n));
 
                 if (element.Name == W.pPr)
                     return null;
