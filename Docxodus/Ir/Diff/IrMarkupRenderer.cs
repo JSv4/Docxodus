@@ -1008,6 +1008,15 @@ internal static class IrMarkupRenderer
         if (rightTbl == null || leftTbl == null || rightTbl.Name != W.tbl || leftTbl.Name != W.tbl)
             return false;
 
+        // A right-only cell is reversible in place only when the renderer can also emit tblGridChange /
+        // tcPrChange histories. With table-format tracking disabled, cloning the accepted (right) grid and
+        // merely marking the cell w:cellIns would make Reject remove the cell but retain the widened grid and
+        // widths. Bail before touching render state so the caller emits the conservative whole-table pair.
+        if (!state.Settings.TrackTableFormatChanges && tableDiff.RowOps.Any(row =>
+                row.Kind == IrRowOpKind.ModifyRow && row.CellOps is { } cells &&
+                cells.Any(cell => cell.LeftCellAnchor == null || cell.RightCellAnchor == null)))
+            return false;
+
         // Index the source rows by anchor so a row op resolves to its source w:tr.
         var leftRowsByAnchor = IndexRows(ResolveBlock(op.LeftAnchor, state.Left) as IrTable);
         var rightRowsByAnchor = IndexRows(ResolveBlock(op.RightAnchor, state.RightSource) as IrTable);
@@ -1105,37 +1114,28 @@ internal static class IrMarkupRenderer
         }
 
         var rightCells = rightRowSrc.Elements(W.tc).ToList();
-        // Tail column additions have unpaired right cells. They can round-trip in-place: start from the
-        // accepted (right) table grid, mark the new cells with w:cellIns, and let the table-grid property
-        // revision restore the old grid on reject. Restrict this path to a contiguous tail: accepting an
-        // unpaired cell in the middle would silently render a non-tail column insertion with the wrong
-        // geometry. A left-only cell still uses the conservative fallback here.
-        if (rowOp.CellOps.Count != rightCells.Count || rowOp.CellOps.Any(c => c.RightCellAnchor == null))
+        var leftCells = leftRowSrc?.Elements(W.tc).ToList();
+        // A monotone cell-op sequence is renderable whenever every output (right) cell is represented once
+        // and no left-only deletion is present.  This includes an ordinary-grid insertion at the head or in
+        // the middle: build from the accepted right grid, mark only the right-only cell w:cellIns, and let
+        // tblGridChange restore the old grid on reject.  Left-only cells remain a conservative whole-table
+        // fallback until the delete/merge topology path is made grid-aware.
+        if (rowOp.CellOps.Count(c => c.RightCellAnchor != null) != rightCells.Count ||
+            rowOp.CellOps.Any(c => c.RightCellAnchor == null) ||
+            (leftCells != null && rowOp.CellOps.Count(c => c.LeftCellAnchor != null) != leftCells.Count))
             return false;
-
-        var inRightOnlyTail = false;
-        foreach (var cellOp in rowOp.CellOps)
-        {
-            if (cellOp.LeftCellAnchor == null)
-            {
-                inRightOnlyTail = true;
-                continue;
-            }
-
-            if (inRightOnlyTail)
-                return false;
-        }
 
         var newRow = new XElement(W.tr);
         foreach (var pre in rightRowSrc.Elements().Where(e => e.Name != W.tc))
             newRow.Add(StripUnids(new XElement(pre)));
 
-        int ci = 0;
+        int rightIndex = 0;
+        int leftIndex = 0;
         foreach (var cellOp in rowOp.CellOps)
         {
-            if (ci >= rightCells.Count)
+            if (rightIndex >= rightCells.Count)
                 return false;
-            var cellSrc = rightCells[ci++];
+            var cellSrc = rightCells[rightIndex++];
             if (cellOp.LeftCellAnchor == null)
             {
                 var insertedCell = StripUnids(new XElement(cellSrc));
@@ -1144,6 +1144,15 @@ internal static class IrMarkupRenderer
                 newRow.Add(insertedCell);
                 continue;
             }
+
+            XElement? leftCellSrc = null;
+            if (leftCells != null)
+            {
+                if (leftIndex >= leftCells.Count)
+                    return false;
+                leftCellSrc = leftCells[leftIndex++];
+            }
+
             var newCell = new XElement(W.tc);
             foreach (var pre in cellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
                 newCell.Add(StripUnids(new XElement(pre)));
@@ -1165,12 +1174,16 @@ internal static class IrMarkupRenderer
                 foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
                     newCell.Add(StripUnids(new XElement(b)));
             }
+            // Do not compare by output ordinal: a middle cellIns shifts every later right cell.  The
+            // monotone differ guarantees leftCellSrc is exactly this paired operation's source cell.
+            if (leftCellSrc != null)
+                ApplyPairedCellShellChange(newCell, leftCellSrc, state);
             newRow.Add(newCell);
         }
         state.RegisterMediaReferences(newRow);
-        // Track this row's trPr + each cell's tcPr shell change against the accepted-state left row.
+        // The paired tcPr histories were applied per cell above; row shells remain one per row.
         if (leftRowSrc != null)
-            ApplyRowAndCellShellChanges(newRow, leftRowSrc, state);
+            ApplyRowShellChanges(newRow, leftRowSrc, state);
         newTbl.Add(newRow);
         return true;
     }
@@ -4501,20 +4514,42 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>Stamp a row's <c>w:trPrChange</c> and each of its cells' <c>w:tcPrChange</c> (cells paired
-    /// positionally against the left row) where the emitted right shells differ from the left. No-op when
-    /// block-format tracking is off.</summary>
+    /// positionally against the left row) where the emitted right shells differ from the left.  This helper
+    /// remains for content-equal/legacy positional rows; ordinary-grid ModifyRow rendering calls the row and
+    /// cell halves separately so an interior cellIns cannot shift tcPr history pairing.</summary>
     private static void ApplyRowAndCellShellChanges(XElement newRow, XElement leftRow, RenderState state)
+    {
+        ApplyRowShellChanges(newRow, leftRow, state);
+        if (!state.Settings.TrackTableFormatChanges)
+            return;
+
+        var leftCells = leftRow.Elements(W.tc).ToList();
+        var newCells = newRow.Elements(W.tc).ToList();
+        for (int c = 0; c < newCells.Count && c < leftCells.Count; c++)
+            ApplyPairedCellShellChange(newCells[c], leftCells[c], state);
+    }
+
+    /// <summary>Apply only the paired row-level shell histories.</summary>
+    private static void ApplyRowShellChanges(XElement newRow, XElement leftRow, RenderState state)
     {
         if (!state.Settings.TrackTableFormatChanges)
             return;
 
         ApplyShellChange(newRow, W.trPr, W.trPrChange, leftRow.Element(W.trPr), state, idOnly: false, TrPrInnerExclude);
         ApplyShellChange(newRow, W.tblPrEx, W.tblPrExChange, leftRow.Element(W.tblPrEx), state, idOnly: false, TblPrExInnerExclude);
+    }
 
-        var leftCells = leftRow.Elements(W.tc).ToList();
-        var newCells = newRow.Elements(W.tc).ToList();
-        for (int c = 0; c < newCells.Count && c < leftCells.Count; c++)
-            ApplyShellChange(newCells[c], W.tcPr, W.tcPrChange, leftCells[c].Element(W.tcPr), state, idOnly: false, TcPrInnerExclude);
+    /// <summary>
+    /// Apply a tcPr history for one explicitly paired cell.  A right-only cell insertion deliberately never
+    /// calls this: its <c>w:cellIns</c> is its complete revision history, and borrowing a shifted left tcPr
+    /// would corrupt rejection.
+    /// </summary>
+    private static void ApplyPairedCellShellChange(XElement newCell, XElement leftCell, RenderState state)
+    {
+        if (!state.Settings.TrackTableFormatChanges)
+            return;
+        ApplyShellChange(newCell, W.tcPr, W.tcPrChange, leftCell.Element(W.tcPr), state,
+            idOnly: false, TcPrInnerExclude);
     }
 
     /// <summary>Apply ONE composed block-format shell across reviewers (Consolidate B2): swap the winning

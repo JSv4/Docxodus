@@ -282,6 +282,30 @@ public class IrRevisionRendererTests
         Assert.Contains(revs, x => x.Type == IrRevisionType.Inserted && x.Text.Contains("new"));
     }
 
+    [Fact]
+    public void TableDiff_middle_column_insert_projects_one_granular_cell_revision()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(c => Cell(c, width))) + "</w:tr>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr/><w:tblGrid>" +
+            string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", columns)) +
+            "</w:tblGrid>" + string.Concat(rows) + "</w:tbl>";
+
+        var left = FromXml(Table(2000, 3, Row(2000, "A", "B", "C")));
+        var right = FromXml(Table(1500, 4, Row(1500, "A", "NEW", "B", "C")));
+        var revisions = Render(left, right).ToList();
+
+        var inserted = Assert.Single(revisions, r => r.Type == IrRevisionType.Inserted);
+        Assert.Equal("NEW", inserted.Text);
+        Assert.Null(inserted.LeftAnchor);
+        Assert.NotNull(inserted.RightAnchor);
+        Assert.DoesNotContain(revisions, r => r.Type == IrRevisionType.Deleted);
+    }
+
     // ------------------------------------------------------------------ equal blocks emit nothing
 
     [Fact]

@@ -240,6 +240,12 @@ internal static class IrDiagnosticJson
             writer.WriteString("anchor", row.Anchor.ToString());
             writer.WriteString("contentHash", row.ContentHash.ToHex());
             writer.WriteString("trPrDigest", row.TrPrDigest.ToHex());
+            // Keep common direct-row diagnostics byte-stable; offsets only surface when they carry
+            // real grid geometry that a consumer needs to inspect.
+            if (row.GridBefore != 0)
+                writer.WriteNumber("gridBefore", row.GridBefore);
+            if (row.GridAfter != 0)
+                writer.WriteNumber("gridAfter", row.GridAfter);
             writer.WriteStartArray("cells");
             foreach (var cell in row.Cells)
             {

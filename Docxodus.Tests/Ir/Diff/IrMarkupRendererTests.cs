@@ -460,6 +460,102 @@ public class IrMarkupRendererTests
         AssertRoundTrip(left, right, label: "table-tail-column-add");
     }
 
+    /// <summary>
+    /// A column inserted between retained columns must keep those later columns paired with their actual
+    /// left-side cells, not merely append a tail <c>w:cellIns</c>. Every retained cell changes width here, so
+    /// the differ has to find its spine from the tcPr-free cell body key.
+    /// </summary>
+    [Fact]
+    public void Render_table_middle_column_add_stays_one_table_and_round_trips()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(c => Cell(c, width))) + "</w:tr>";
+        static string Grid(int width, int count) =>
+            "<w:tblGrid>" + string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", count)) + "</w:tblGrid>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr><w:tblW w:w=\"6000\" w:type=\"dxa\"/></w:tblPr>" +
+            Grid(width, columns) + string.Concat(rows) + "</w:tbl>";
+
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>lead</w:t></w:r></w:p>" +
+            Table(2000, 3,
+                Row(2000, "A1", "B1", "C1"),
+                Row(2000, "A2", "B2", "C2"),
+                Row(2000, "A3", "B3", "C3")));
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>lead</w:t></w:r></w:p>" +
+            Table(1500, 4,
+                Row(1500, "A1", "NEW-1", "B1", "C1"),
+                Row(1500, "A2", "NEW-2", "B2", "C2"),
+                Row(1500, "A3", "NEW-3", "B3", "C3")));
+
+        var rendered = RenderMarkup(left, right);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var table = Assert.Single(body.Elements(W.tbl)); // not the conservative whole-table fallback
+        var rows = table.Elements(W.tr).ToList();
+        Assert.Equal(3, rows.Count);
+        Assert.All(rows, row =>
+        {
+            var cells = row.Elements(W.tc).ToList();
+            Assert.Equal(4, cells.Count);
+            Assert.NotEmpty(cells[1].Descendants(W.cellIns));
+            Assert.All(cells.Where((_, index) => index != 1), cell =>
+                Assert.Empty(cell.Descendants(W.cellIns)));
+            // The inserted shell is new; only explicitly paired cells receive tcPr history.
+            Assert.Empty(cells[1].Descendants(W.tcPrChange));
+        });
+        Assert.Equal(3, table.Descendants(W.cellIns).Count());
+        Assert.Empty(table.Descendants(W.cellDel));
+        Assert.Single(table.Descendants(W.tblGridChange));
+        Assert.Equal(9, table.Descendants(W.tcPrChange).Count());
+        Assert.Equal(0, SchemaErrorCount(rendered));
+
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "table-middle-column-add");
+    }
+
+    /// <summary>
+    /// Native <c>w:cellIns</c> needs a matching <c>w:tblGridChange</c> to remove the accepted-side widened
+    /// grid on reject. The table-shell opt-out therefore chooses the reversible whole-table fallback instead
+    /// of emitting an apparently fine-grained but one-way result.
+    /// </summary>
+    [Fact]
+    public void Render_table_column_add_with_table_shell_tracking_off_uses_whole_table_fallback()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(c => Cell(c, width))) + "</w:tr>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr/><w:tblGrid>" +
+            string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", columns)) +
+            "</w:tblGrid>" + string.Concat(rows) + "</w:tbl>";
+
+        var left = IrTestDocuments.FromBodyXml(Table(3000, 2, Row(3000, "A", "B")));
+        var right = IrTestDocuments.FromBodyXml(Table(2000, 3, Row(2000, "A", "NEW", "B")));
+        var settings = new IrDiffSettings { TrackTableFormatChanges = false };
+
+        var rendered = RenderMarkup(left, right, settings);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        Assert.Equal(2, body.Elements(W.tbl).Count());
+        Assert.Empty(body.Descendants(W.cellIns));
+        Assert.NotEmpty(body.Descendants(W.del));
+        Assert.NotEmpty(body.Descendants(W.ins));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        AssertRoundTrip(left, right, settings, "table-column-add-table-format-off");
+    }
+
     [Fact]
     public void Render_split_run_fragment_with_boundary_whitespace_carries_xml_space_preserve()
     {

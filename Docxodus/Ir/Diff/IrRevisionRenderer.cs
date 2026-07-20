@@ -572,11 +572,10 @@ internal static class IrRevisionRenderer
     {
         if (op.TableDiff is { } tableDiff)
         {
-            // A column add/remove bails the MARKUP renderer to a whole-table del(left)+ins(right) fallback
-            // (IrMarkupRenderer.RenderModifyRow returns false on an unpaired/surplus cell). Mirror it here so
-            // GetRevisions REPORTS the change — a Deleted + Inserted pair, matching the WmlComparer oracle —
-            // instead of silently dropping it (the per-cell RenderTableDiff path is column-count-stable in v1).
-            if (TableDiffNeedsWholeTableFallback(tableDiff))
+            // A left-only cell (remove/merge topology) still bails the markup renderer to a whole-table
+            // del(left)+ins(right) fallback. A right-only ordinary-grid insertion stays granular only while
+            // table-shell tracking is enabled: tblGridChange is what makes its widened geometry reversible.
+            if (TableDiffNeedsWholeTableFallback(tableDiff, ctx.Settings.TrackTableFormatChanges))
             {
                 if (op.LeftAnchor is { } la)
                     sink.Add(new IrRevision(IrRevisionType.Deleted, BlockText(la, ctx.Left, ctx.Settings),
@@ -1457,14 +1456,14 @@ internal static class IrRevisionRenderer
     // ------------------------------------------------------------------ table recursion
 
     /// <summary>
-    /// A table diff requires the whole-table del+ins fallback when a ModifyRow's cell-op list carries an
-    /// UNPAIRED cell (a column add/remove — <c>IrTableDiffer</c> emits a cell op missing its left or right
-    /// anchor for a surplus column). This mirrors <c>IrMarkupRenderer.RenderModifyRow</c>'s bail so the
-    /// revision projection agrees with the produced markup (and the WmlComparer oracle's del+ins pair).
+    /// A table diff requires the whole-table del+ins fallback when a ModifyRow carries a LEFT-only cell.
+    /// Right-only cells are native <c>w:cellIns</c> insertions only while <c>w:tblGridChange</c> is enabled;
+    /// without table-shell tracking their accepted grid would not be reversible on reject.
     /// </summary>
-    private static bool TableDiffNeedsWholeTableFallback(IrTableDiff td) =>
+    private static bool TableDiffNeedsWholeTableFallback(IrTableDiff td, bool trackTableFormatChanges) =>
         td.RowOps.Any(r => r.Kind == IrRowOpKind.ModifyRow && r.CellOps is { } cells
-            && cells.Any(c => c.LeftCellAnchor == null || c.RightCellAnchor == null));
+            && cells.Any(c => c.RightCellAnchor == null ||
+                (!trackTableFormatChanges && c.LeftCellAnchor == null)));
 
     private static void RenderTableDiff(IrTableDiff tableDiff, in Context ctx, List<IrRevision> sink)
     {
@@ -1511,7 +1510,11 @@ internal static class IrRevisionRenderer
                 case IrRowOpKind.ModifyRow:
                     if (rowOp.CellOps is { } cellOps)
                         foreach (var cellOp in cellOps)
-                            if (cellOp.BlockOps is { } blockOps)
+                            if (cellOp.LeftCellAnchor == null && cellOp.RightCellAnchor is { } insertedAnchor)
+                                sink.Add(new IrRevision(IrRevisionType.Inserted,
+                                    CellText(insertedAnchor, ctx.Right, ctx.Settings), ctx.Author, ctx.Date,
+                                    RightAnchor: insertedAnchor));
+                            else if (cellOp.BlockOps is { } blockOps)
                                 RenderBlockOpList(blockOps, ctx, sink);
                     break;
             }
@@ -1544,7 +1547,7 @@ internal static class IrRevisionRenderer
 
         int rn = System.Math.Min(left.Rows.Count, right.Rows.Count);
         for (int i = 0; i < rn; i++)
-            EmitRowAndCellShellRevisions(left.Rows[i], right.Rows[i], ctx, sink);
+            EmitRowAndCellShellRevisions(left.Rows[i], right.Rows[i], null, ctx, sink);
     }
 
     /// <summary>Report shell changes for a Modified table pair: tblPr/tblGrid at the table, then trPr/tcPr for
@@ -1565,7 +1568,7 @@ internal static class IrRevisionRenderer
                 continue;
             if (rowOp.LeftRowAnchor is { } la && rowOp.RightRowAnchor is { } ra
                 && leftRows.TryGetValue(la, out var lr) && rightRows.TryGetValue(ra, out var rr))
-                EmitRowAndCellShellRevisions(lr, rr, ctx, sink);
+                EmitRowAndCellShellRevisions(lr, rr, rowOp.CellOps, ctx, sink);
         }
     }
 
@@ -1579,7 +1582,13 @@ internal static class IrRevisionRenderer
                 left.Anchor.ToString(), right.Anchor.ToString(), ctx));
     }
 
-    private static void EmitRowAndCellShellRevisions(IrRow left, IrRow right, in Context ctx, List<IrRevision> sink)
+    /// <summary>
+    /// Emit row-shell changes plus paired-cell shell changes.  A null <paramref name="cellOps"/> is the
+    /// content-equal positional case; a ModifyRow supplies its explicit monotone cell pairing so a right-only
+    /// insertion cannot shift later tcPr revisions onto the wrong cell.
+    /// </summary>
+    private static void EmitRowAndCellShellRevisions(
+        IrRow left, IrRow right, IrNodeList<IrCellOp>? cellOps, in Context ctx, List<IrRevision> sink)
     {
         // Compare the flattened trackable projections (w:trPr children only, empty ≡ absent) — the exact
         // subset the markup's w:trPrChange/w:tcPrChange attribution uses — so GetRevisions and Compare agree
@@ -1593,11 +1602,30 @@ internal static class IrRevisionRenderer
             sink.Add(TableShellRevision(IrFormatChangeScope.TableRow, "tblPrEx",
                 left.Anchor.ToString(), right.Anchor.ToString(), ctx));
 
-        int cn = System.Math.Min(left.Cells.Count, right.Cells.Count);
-        for (int c = 0; c < cn; c++)
-            if (!left.Cells[c].TcPrShellDigest.Equals(right.Cells[c].TcPrShellDigest))
-                sink.Add(TableShellRevision(IrFormatChangeScope.TableCell, "shell",
-                    left.Cells[c].Anchor.ToString(), right.Cells[c].Anchor.ToString(), ctx));
+        if (cellOps is null)
+        {
+            int cn = System.Math.Min(left.Cells.Count, right.Cells.Count);
+            for (int c = 0; c < cn; c++)
+                EmitCellShellRevisionIfChanged(left.Cells[c], right.Cells[c], ctx, sink);
+            return;
+        }
+
+        var leftCells = new Dictionary<string, IrCell>(System.StringComparer.Ordinal);
+        foreach (var cell in left.Cells) leftCells[cell.Anchor.ToString()] = cell;
+        var rightCells = new Dictionary<string, IrCell>(System.StringComparer.Ordinal);
+        foreach (var cell in right.Cells) rightCells[cell.Anchor.ToString()] = cell;
+
+        foreach (var cellOp in cellOps)
+            if (cellOp.LeftCellAnchor is { } la && cellOp.RightCellAnchor is { } ra &&
+                leftCells.TryGetValue(la, out var lc) && rightCells.TryGetValue(ra, out var rc))
+                EmitCellShellRevisionIfChanged(lc, rc, ctx, sink);
+    }
+
+    private static void EmitCellShellRevisionIfChanged(IrCell left, IrCell right, in Context ctx, List<IrRevision> sink)
+    {
+        if (!left.TcPrShellDigest.Equals(right.TcPrShellDigest))
+            sink.Add(TableShellRevision(IrFormatChangeScope.TableCell, "shell",
+                left.Anchor.ToString(), right.Anchor.ToString(), ctx));
     }
 
     // ------------------------------------------------------------------ text + token helpers
@@ -1670,6 +1698,59 @@ internal static class IrRevisionRenderer
             if (RowTextInBlocks(anchor, hf.Scope.Blocks, settings) is { } t)
                 return t;
         return string.Empty;
+    }
+
+    /// <summary>
+    /// Resolve a cell anchor by scanning table structure.  Cells, like rows, deliberately are not entries in
+    /// <see cref="IrDocument.AnchorIndex"/>; a right-only cell insertion therefore needs this scoped walk to
+    /// surface its text as one granular Inserted revision.
+    /// </summary>
+    private static string CellText(string? anchor, IrDocument doc, IrDiffSettings settings)
+    {
+        if (anchor is null)
+            return string.Empty;
+        if (CellTextInBlocks(anchor, doc.Body.Blocks, settings) is { } bodyText)
+            return bodyText;
+        foreach (var scope in doc.Footnotes.Notes.Values)
+            if (CellTextInBlocks(anchor, scope.Blocks, settings) is { } t)
+                return t;
+        foreach (var scope in doc.Endnotes.Notes.Values)
+            if (CellTextInBlocks(anchor, scope.Blocks, settings) is { } t)
+                return t;
+        foreach (var hf in doc.Headers.Concat(doc.Footers))
+            if (CellTextInBlocks(anchor, hf.Scope.Blocks, settings) is { } t)
+                return t;
+        return string.Empty;
+    }
+
+    private static string? CellTextInBlocks(string anchor, IrNodeList<IrBlock> blocks, IrDiffSettings settings)
+    {
+        foreach (var block in blocks)
+            if (block is IrTable table && CellTextInTable(anchor, table, settings) is { } text)
+                return text;
+        return null;
+    }
+
+    private static string? CellTextInTable(string anchor, IrTable table, IrDiffSettings settings)
+    {
+        foreach (var row in table.Rows)
+            foreach (var cell in row.Cells)
+            {
+                if (cell.Anchor.ToString() == anchor)
+                    return CellTextOf(cell, settings);
+                foreach (var block in cell.Blocks)
+                    if (block is IrTable nested && CellTextInTable(anchor, nested, settings) is { } nestedText)
+                        return nestedText;
+            }
+        return null;
+    }
+
+    private static string CellTextOf(IrCell cell, IrDiffSettings settings)
+    {
+        var sb = new StringBuilder();
+        foreach (var block in cell.Blocks)
+            sb.Append(BlockTextOf(block, settings));
+        return sb.ToString();
     }
 
     private static string? RowTextInBlocks(string anchor, IrNodeList<IrBlock> blocks, IrDiffSettings settings)

@@ -308,12 +308,14 @@ internal sealed record IrDiffSettings
 
     /// <summary>
     /// DIFF-TIME setting (Consolidate sub-project B2). The TABLE-SHELL slice of
-    /// <see cref="TrackBlockFormatChanges"/>: gates ONLY the table-shell property-revision markup
+    /// <see cref="TrackBlockFormatChanges"/>: gates the table-shell property-revision markup
     /// (<c>w:tcPrChange</c>/<c>w:trPrChange</c>/<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/<c>w:tblPrExChange</c>),
     /// NOT the paragraph or section variants. Defaults equal to <see cref="TrackBlockFormatChanges"/> (so every
     /// two-way call behaves byte-identically — the split is invisible outside the composite). The composite
     /// merger + renderers set this TRUE while forcing <see cref="TrackBlockFormatChanges"/> FALSE, so
-    /// <c>Consolidate</c> merges reviewers' table-shell changes (B2) with per-element attribution.
+    /// <c>Consolidate</c> merges reviewers' table-shell changes (B2) with per-element attribution. A
+    /// right-only table-cell insertion also needs <c>w:tblGridChange</c> to be reversible; when this is
+    /// false, that shape intentionally falls back to a whole-table revision.
     /// </summary>
     public bool TrackTableFormatChanges { get; init; } = true;
 

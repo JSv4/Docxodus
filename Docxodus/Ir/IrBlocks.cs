@@ -142,6 +142,20 @@ internal sealed record IrRow(IrAnchor Anchor, IrNodeList<IrCell> Cells, IrHash C
     public IrProvenance Source { get; init; } = new();
 
     /// <summary>
+    /// The number of leading table-grid columns omitted by this row's cells
+    /// (<c>w:trPr/w:gridBefore</c>).  Zero means the first cell starts at grid column zero.
+    /// This is equality-participating table geometry, not merely source provenance.
+    /// </summary>
+    public int GridBefore { get; init; }
+
+    /// <summary>
+    /// The number of trailing table-grid columns omitted by this row's cells
+    /// (<c>w:trPr/w:gridAfter</c>).  Zero means the last cell reaches the row's declared grid extent.
+    /// This is equality-participating table geometry, not merely source provenance.
+    /// </summary>
+    public int GridAfter { get; init; }
+
+    /// <summary>
     /// Canonical hash of the row's SHELL — all non-`w:tc`/non-`w:sdt` row children (the `w:trPr` element
     /// plus any `w:tblPrEx`/stray markup). Folded into the table's <see cref="IrBlock.FormatFingerprint"/>
     /// (not <see cref="IrBlock.ContentHash"/>) so a row-property-only change classifies FormatOnly. The markup

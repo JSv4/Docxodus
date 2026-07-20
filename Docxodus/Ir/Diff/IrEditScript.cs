@@ -241,7 +241,8 @@ internal enum IrRowOpKind
 
 /// <summary>
 /// One row-level operation in a table diff. For <see cref="IrRowOpKind.ModifyRow"/>,
-/// <see cref="CellOps"/> carries the positional per-cell diff; all other kinds carry a null
+/// <see cref="CellOps"/> carries the per-cell diff (ordinary unit-span grids may use a monotone body-key
+/// alignment; complex topology retains positional pairing); all other kinds carry a null
 /// <see cref="CellOps"/>. <see cref="MoveGroupId"/> links a <see cref="IrRowOpKind.MovedRow"/> source
 /// and destination (one row op per side, like the block-level move convention).
 /// </summary>
@@ -254,8 +255,9 @@ internal sealed record IrRowOp(
     bool? IsMoveSource = null);
 
 /// <summary>
-/// One cell-level operation inside a <see cref="IrRowOpKind.ModifyRow"/>. Cells pair POSITIONALLY within
-/// the row (grid-aware pairing — gridSpan/vMerge-aware — is M2.3+; documented). A paired cell's
+/// One cell-level operation inside a <see cref="IrRowOpKind.ModifyRow"/>. Ordinary, direct unit-span rows
+/// can pair stable cells by a monotone body-hash spine across a right-only insertion; all other shapes pair
+/// positionally (gridSpan/vMerge topology remains a later capability). A paired cell's
 /// paragraph blocks are aligned with the same block machinery and each Modified paragraph pair carries a
 /// token diff in <see cref="BlockOps"/>, so a cell-text edit surfaces as a token diff IN THE CELL rather
 /// than a whole-table blob. An unpaired cell (column count differs) carries one anchor and a null

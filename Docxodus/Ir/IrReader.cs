@@ -2026,6 +2026,13 @@ internal static class IrReader
             rowBuilder.AppendHash(cell.ContentHash);
         }
 
+        var trPr = tr.Element(W + "trPr");
+        // Row grid offsets are needed by table-cell alignment even though this phase deliberately gates
+        // nonzero offsets out of its ordinary rectangular-table path.  Preserve them explicitly rather
+        // than inferring them from provenance, which is unavailable on retention-off IR reads.
+        int gridBefore = IntAttr(trPr?.Element(W + "gridBefore"), W + "val") ?? 0;
+        int gridAfter = IntAttr(trPr?.Element(W + "gridAfter"), W + "val") ?? 0;
+
         // Row shell digest: the FLATTENED children of every non-tc/non-sdt row shell (w:trPr + w:tblPrEx +
         // stray). Folded into the table's format fingerprint by BuildTable, and consulted per-element by the
         // markup renderer for w:trPrChange attribution. Flattening the wrapper's children (rather than hashing
@@ -2033,7 +2040,6 @@ internal static class IrReader
         // left by a render→reject cycle is not a spurious change (matching the renderer's CleanShell rule).
         var trPrDigest = ShellChildrenDigest(tr.Elements().Where(e => e.Name != W + "tc" && e.Name != W + "sdt"));
         // The trackable subset the markup + revision surfaces agree on: w:trPr children ONLY (no tblPrEx).
-        var trPr = tr.Element(W + "trPr");
         var trPrShellDigest = ShellChildrenDigest(trPr != null ? new[] { trPr } : System.Array.Empty<XElement>());
         // Row-level table property exceptions (w:tblPrEx), tracked independently of w:trPr.
         var trPrExDigest = ShellChildrenDigest(tr.Elements(W + "tblPrEx"));
@@ -2041,6 +2047,8 @@ internal static class IrReader
         var row = new IrRow(AnchorFor(IrAnchorKind.Tr, tr, ctx), IrNodeList.From(cells), rowBuilder.Build())
         {
             Source = ctx.Provenance(tr),
+            GridBefore = gridBefore,
+            GridAfter = gridAfter,
             TrPrDigest = trPrDigest,
             TrPrShellDigest = trPrShellDigest,
             TrPrExDigest = trPrExDigest,
