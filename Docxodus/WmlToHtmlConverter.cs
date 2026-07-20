@@ -2118,6 +2118,31 @@ namespace Docxodus
             sb.AppendLine("    display: none;");
             sb.AppendLine("}");
 
+            // The viewer uses a flex column and scaled boxes on screen. Those layout
+            // affordances can introduce blank physical pages when the paginated view is
+            // captured with a browser's print/PDF path, so restore document-page layout
+            // only for print. Do not set @page size or margins here: that remains an
+            // explicit caller choice through GeneratePageCss.
+            sb.AppendLine("@media print {");
+            sb.AppendLine($"    .{prefix}container {{");
+            sb.AppendLine("        display: block;");
+            sb.AppendLine("        gap: 0;");
+            sb.AppendLine("        padding: 0;");
+            sb.AppendLine("        background: transparent;");
+            sb.AppendLine("        min-height: 0;");
+            sb.AppendLine("    }");
+            sb.AppendLine($"    .{prefix}box {{");
+            sb.AppendLine("        zoom: 1 !important;");
+            sb.AppendLine("        transform: none !important;");
+            sb.AppendLine("        margin: 0 !important;");
+            sb.AppendLine("        box-shadow: none;");
+            sb.AppendLine("    }");
+            sb.AppendLine($"    .{prefix}box + .{prefix}box {{");
+            sb.AppendLine("        break-before: page;");
+            sb.AppendLine("        page-break-before: always;");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+
             return sb.ToString();
         }
 
