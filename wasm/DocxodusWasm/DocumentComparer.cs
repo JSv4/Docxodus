@@ -65,7 +65,7 @@ public partial class DocumentComparer
         }
         catch (Exception ex)
         {
-            // The act of calling WmlComparer.Compare above has already forced
+            // The act of calling DocxCompare.Compare above has already forced
             // the assemblies to load even if the comparison itself threw, so
             // warmup has still served its purpose. Report the failure so a
             // caller can surface it, but do not throw.
@@ -395,8 +395,10 @@ public partial class DocumentComparer
     }
 
     /// <summary>
-    /// Compare two DOCX documents with logging enabled.
+    /// Compare two DOCX documents with logging enabled, using the default DocxDiff engine.
     /// Returns both the redlined document and a log of any warnings/errors encountered.
+    /// The response retains the legacy log shape, though DocxDiff does not emit
+    /// WmlComparer-specific recovery entries through <see cref="WmlComparerSettings.Log"/>.
     /// </summary>
     /// <param name="originalBytes">The original DOCX file as a byte array</param>
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
@@ -438,7 +440,7 @@ public partial class DocumentComparer
                 Log = log
             };
 
-            var result = WmlComparer.Compare(original, modified, settings);
+            var result = DocxCompare.Compare(original, modified, ComparisonEngine.DocxDiff, settings);
 
             return JsonSerializer.Serialize(new CompareDocumentsWithLogResponse
             {
@@ -463,8 +465,10 @@ public partial class DocumentComparer
     }
 
     /// <summary>
-    /// Compare two DOCX documents to HTML with logging enabled.
+    /// Compare two DOCX documents to HTML with logging enabled, using the default DocxDiff engine.
     /// Returns both the HTML output and a log of any warnings/errors encountered.
+    /// The response retains the legacy log shape, though DocxDiff does not emit
+    /// WmlComparer-specific recovery entries through <see cref="WmlComparerSettings.Log"/>.
     /// </summary>
     /// <param name="originalBytes">The original DOCX file as a byte array</param>
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
@@ -508,7 +512,7 @@ public partial class DocumentComparer
                 Log = log
             };
 
-            var result = WmlComparer.Compare(original, modified, comparerSettings);
+            var result = DocxCompare.Compare(original, modified, ComparisonEngine.DocxDiff, comparerSettings);
 
             // Convert the redlined document to HTML
             using var memoryStream = new MemoryStream();

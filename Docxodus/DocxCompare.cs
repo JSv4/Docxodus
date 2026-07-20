@@ -41,12 +41,18 @@ public static class DocxCompare
     /// <param name="right">The later / revised document.</param>
     /// <param name="engine">Which comparison engine to use.</param>
     /// <param name="settings">Comparison settings (the same <see cref="WmlComparerSettings"/> shape both engines accept via mapping).</param>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="engine"/> is not a defined <see cref="ComparisonEngine"/> value.</exception>
     public static WmlDocument Compare(
         WmlDocument left,
         WmlDocument right,
         ComparisonEngine engine,
         WmlComparerSettings settings)
     {
+        // The selector crosses the WASM boundary as an int. Never let an unknown value
+        // silently become the legacy branch (the old two-way conditional did exactly that).
+        if (engine is not ComparisonEngine.WmlComparer and not ComparisonEngine.DocxDiff)
+            throw new ArgumentOutOfRangeException(nameof(engine), engine, "Unknown comparison engine.");
+
         // An exact same-package comparison has no revisions to produce. More importantly, a no-op
         // must not silently rewrite a valid Strict package or discard unrelated existing revision
         // markup merely because it passed through the comparison API. Return a detached clone so the
@@ -54,12 +60,15 @@ public static class DocxCompare
         if (CanReturnExactNoOp(left, right))
             return new WmlDocument(left);
 
-        return engine == ComparisonEngine.DocxDiff
-            ? DocxDiff.Compare(left, right, ToDocxDiffSettings(settings))
-            : WmlComparer.Compare(
+        return engine switch
+        {
+            ComparisonEngine.DocxDiff => DocxDiff.Compare(left, right, ToDocxDiffSettings(settings)),
+            ComparisonEngine.WmlComparer => WmlComparer.Compare(
                 StrictOoxmlNormalizer.NormalizeToTransitional(left),
                 StrictOoxmlNormalizer.NormalizeToTransitional(right),
-                settings);
+                settings),
+            _ => throw new ArgumentOutOfRangeException(nameof(engine), engine, "Unknown comparison engine."),
+        };
     }
 
     /// <summary>Whether two documents are the exact same package bytes, not merely semantically equal.</summary>

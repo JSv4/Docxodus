@@ -65,6 +65,21 @@ public class DocxCompareTests
         Assert.Equal(1, (int)ComparisonEngine.DocxDiff);
     }
 
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(2)]
+    public void InvalidEngine_IsRejectedBeforeTheNoOpShortcut(int rawEngine)
+    {
+        var source = Doc("Unchanged paragraph.");
+        var identical = new WmlDocument(source);
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            DocxCompare.Compare(source, identical, (ComparisonEngine)rawEngine,
+                new WmlComparerSettings()));
+
+        Assert.Equal("engine", exception.ParamName);
+    }
+
     [Fact]
     public void WmlComparerBranch_ProducesSameRevisionsAsDirectWmlComparer()
     {
