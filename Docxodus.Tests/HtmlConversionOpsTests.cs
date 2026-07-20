@@ -766,6 +766,22 @@ public class HtmlConversionOpsTests
         Assert.Contains("margin-bottom: 0", html);
     }
 
+    // Some legacy Word documents keep the modern DrawingML text-box body in a related XML
+    // part. The synthetic package deliberately uses a distinct VML fallback so this verifies
+    // that the supported choice gains its external body without rendering both copies.
+    [Fact]
+    public void HCO075_ExternalDrawingMlTextBox_RendersChoiceWithoutVmlDuplicate()
+    {
+        byte[] bytes = ExternalTextBoxDocxBytes();
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO075 external textbox text", html);
+        Assert.DoesNotContain("HCO075 fallback text box", html);
+        Assert.Contains("width: 120pt", html);
+    }
+
     // Old Office 2008 wps markup is not a namespace this renderer understands. The visual oracle
     // (LibreOffice) leaves this AlternateContent shape blank, so do not promote its VML fallback.
     [Fact]
@@ -903,6 +919,51 @@ public class HtmlConversionOpsTests
                     "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" " +
                     "xmlns:legacywps=\"http://schemas.microsoft.com/office/word/2008/6/28/wordprocessingShape\">" +
                     "<w:body><w:p><w:r>" + runContent + "</w:r></w:p><w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+        return ms.ToArray();
+    }
+
+    private static byte[] ExternalTextBoxDocxBytes()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var externalTextBox = main.AddExtendedPart(
+                "http://schemas.microsoft.com/office/2006/relationships/txbx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.txbx+xml",
+                ".xml",
+                "rIdExternal");
+            using (var writer = new StreamWriter(externalTextBox.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w14:txbx xmlns:w14=\"http://schemas.microsoft.com/office/word/2008/9/12/wordml\" " +
+                    "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:p><w:r><w:t>HCO075 external textbox text</w:t></w:r></w:p></w14:txbx>");
+            }
+
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
+                    "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" " +
+                    "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" " +
+                    "xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+                    "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" " +
+                    "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
+                    "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">" +
+                    "<w:body><w:p><w:r><mc:AlternateContent>" +
+                    "<mc:Choice Requires=\"wps\"><w:drawing><wp:inline><wp:extent cx=\"1524000\" cy=\"762000\"/>" +
+                    "<a:graphic><a:graphicData><wps:wsp><wps:txbx r:txbx=\"rIdExternal\"/>" +
+                    "</wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>" +
+                    "<mc:Fallback><w:pict><v:shape style=\"width:120pt;height:60pt\"><v:textbox>" +
+                    "<w:txbxContent><w:p><w:r><w:t>HCO075 fallback text box</w:t></w:r></w:p>" +
+                    "</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback>" +
+                    "</mc:AlternateContent></w:r></w:p><w:sectPr/></w:body></w:document>");
             }
             main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
             main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();

@@ -856,6 +856,12 @@ namespace Docxodus
 
         public static XElement ConvertToHtml(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings htmlConverterSettings)
         {
+            // Some older Word producers store a DrawingML textbox's body in a related XML part
+            // instead of the inline w:txbxContent normally expected by wps:txbx. Bring that
+            // body into its owning content part before the normal simplification and formatting
+            // pipeline, so it receives the same revision/style processing as inline textboxes.
+            InlineExternalTextBoxBodies(wordDoc);
+
             // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
             // This optimization saves ~9% of conversion time for documents without revisions
             if (!htmlConverterSettings.RenderTrackedChanges && RevisionAccepter.HasTrackedRevisions(wordDoc))
@@ -8109,6 +8115,101 @@ namespace Docxodus
             wrapper.Add(renderedBlocks);
             wrapper.AddAnnotation(style);
             return wrapper;
+        }
+
+        // Word 2008's external textbox part uses this namespace rather than the W14 namespace
+        // used elsewhere in the document. Keep it local because the namespace only exists to
+        // normalize this compatibility representation into standard w:txbxContent markup.
+        private static readonly XName LegacyExternalTextBox = XName.Get("txbx",
+            "http://schemas.microsoft.com/office/word/2008/9/12/wordml");
+
+        private static readonly XName ExternalTextBoxRelationshipId = R.r + "txbx";
+
+        private static void InlineExternalTextBoxBodies(WordprocessingDocument wordDoc)
+        {
+            foreach (var ownerPart in wordDoc.ContentParts())
+            {
+                var ownerDocument = ownerPart.GetXDocument();
+                var textBoxes = ownerDocument.Descendants(WPS.txbx)
+                    .Where(textBox => !textBox.Descendants(W.txbxContent).Any())
+                    .ToList();
+                var changed = false;
+
+                foreach (var textBox in textBoxes)
+                {
+                    var relationshipId = (string)textBox.Attribute(ExternalTextBoxRelationshipId);
+                    if (string.IsNullOrWhiteSpace(relationshipId))
+                        continue;
+
+                    var relatedPart = ownerPart.Parts
+                        .Where(pair => pair.RelationshipId == relationshipId)
+                        .Select(pair => pair.OpenXmlPart)
+                        .FirstOrDefault();
+                    if (relatedPart == null || !IsXmlPart(relatedPart))
+                        continue;
+
+                    try
+                    {
+                        var textBoxContent = GetExternalTextBoxContent(relatedPart);
+                        if (textBoxContent == null)
+                            continue;
+
+                        textBox.Add(textBoxContent);
+                        changed = true;
+                    }
+                    catch (System.Xml.XmlException)
+                    {
+                        // A broken compatibility part must not prevent the rest of the document
+                        // from rendering. Leave the selected Choice empty rather than promoting
+                        // its VML fallback.
+                    }
+                    catch (System.IO.IOException)
+                    {
+                        // Treat unreadable related parts like missing textbox content.
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Some malformed package relationships cannot provide a readable part.
+                    }
+                }
+
+                if (changed)
+                    ownerPart.PutXDocument();
+            }
+        }
+
+        private static bool IsXmlPart(OpenXmlPart part)
+        {
+            var contentType = part.ContentType;
+            return contentType.EndsWith("+xml", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(contentType, "application/xml", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(contentType, "text/xml", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static XElement GetExternalTextBoxContent(OpenXmlPart part)
+        {
+            var root = part.GetXDocument().Root;
+            if (root == null)
+                return null;
+
+            // Be tolerant of a producer that writes normal inline textbox markup into the
+            // relationship target.
+            var inlineContent = root.Name == W.txbxContent
+                ? root
+                : root.Descendants(W.txbxContent).FirstOrDefault();
+            if (inlineContent != null)
+                return new XElement(inlineContent);
+
+            // Legacy external textbox parts place paragraphs/tables directly under w14:txbx.
+            // Wrap those cloned blocks in the standard inline container expected downstream.
+            if (root.Name != LegacyExternalTextBox && root.Name != W14.w14 + "txbx")
+                return null;
+
+            var blocks = root.Elements()
+                .Where(element => element.Name == W.p || element.Name == W.tbl)
+                .Select(element => new XElement(element))
+                .ToList();
+            return blocks.Count == 0 ? null : new XElement(W.txbxContent, blocks);
         }
 
         private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement drawing,
