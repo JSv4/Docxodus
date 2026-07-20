@@ -1153,7 +1153,9 @@ export class PaginationEngine {
     }
 
     const finishPage = () => {
-      if (currentContent.length === 0 && !currentContinuation) return;
+      const hasCurrentContinuation =
+        (currentContinuation?.remainingElements.length ?? 0) > 0;
+      if (currentContent.length === 0 && !hasCurrentContinuation) return;
 
       const page = this.createPage(
         dims,
@@ -1319,10 +1321,12 @@ export class PaginationEngine {
                     footnoteId,
                     fittingElements: fits
                   });
-                  nextPageContinuation = {
-                    footnoteId,
-                    remainingElements: overflow
-                  };
+                  if (overflow.length > 0) {
+                    nextPageContinuation = {
+                      footnoteId,
+                      remainingElements: overflow
+                    };
+                  }
                   currentFootnoteHeight = availableForFootnotes;
                 } else {
                   // Nothing fits, entire footnote continues to next page
