@@ -397,6 +397,83 @@ export class PaginationEngine {
   }
 
   /**
+   * Returns the contiguous keep-with-next chain beginning at a block.
+   *
+   * A hard page break or a page-break-before directive is stronger than a
+   * keep-with-next directive, so it terminates the chain. The caller only
+   * keeps a chain together when the whole chain can fit on a fresh page.
+   */
+  private getKeepWithNextChain(blocks: MeasuredBlock[], startIndex: number): MeasuredBlock[] {
+    const firstBlock = blocks[startIndex];
+    if (!firstBlock) return [];
+
+    const chain = [firstBlock];
+    let lastIndex = startIndex;
+
+    while (blocks[lastIndex].keepWithNext) {
+      const nextBlock = blocks[lastIndex + 1];
+      if (!nextBlock || nextBlock.isPageBreak || nextBlock.pageBreakBefore) {
+        break;
+      }
+
+      chain.push(nextBlock);
+      lastIndex++;
+    }
+
+    return chain;
+  }
+
+  /**
+   * Measures the visible body height of a keep-with-next chain using the same
+   * collapsed-margin rules as normal block placement. The trailing margin is
+   * intentionally excluded, matching the individual block fit check.
+   */
+  private measureKeepWithNextChainBodyHeight(
+    chain: MeasuredBlock[],
+    previousMarginBottomPt: number,
+    isFirstOnPage: boolean
+  ): number {
+    const firstBlock = chain[0];
+    if (!firstBlock) return 0;
+
+    const firstMarginTop = isFirstOnPage
+      ? firstBlock.marginTopPt
+      : Math.max(firstBlock.marginTopPt, previousMarginBottomPt) - previousMarginBottomPt;
+    let bodyHeight = firstMarginTop + firstBlock.heightPt;
+
+    for (let index = 1; index < chain.length; index++) {
+      const previousBlock = chain[index - 1];
+      const block = chain[index];
+      bodyHeight += Math.max(previousBlock.marginBottomPt, block.marginTopPt) + block.heightPt;
+    }
+
+    return bodyHeight;
+  }
+
+  /**
+   * Finds footnote references introduced by a sequence of blocks, preserving
+   * document order and excluding references already assigned to the page.
+   */
+  private collectNewFootnoteIds(
+    blocks: MeasuredBlock[],
+    existingFootnoteIds: string[]
+  ): string[] {
+    const knownIds = new Set(existingFootnoteIds);
+    const newIds: string[] = [];
+
+    for (const block of blocks) {
+      for (const id of this.extractFootnoteRefs(block.element)) {
+        if (!knownIds.has(id)) {
+          knownIds.add(id);
+          newIds.push(id);
+        }
+      }
+    }
+
+    return newIds;
+  }
+
+  /**
    * The shortest body available to a section's first, default, or even page.
    * A row fragment must fit every variant, otherwise a later header/footer could
    * send it through the oversized-block fallback again.
@@ -1197,7 +1274,6 @@ export class PaginationEngine {
 
     for (let i = 0; i < blocks.length; i++) {
       const block = blocks[i];
-      const nextBlock = blocks[i + 1];
 
       // Handle explicit page breaks
       if (block.isPageBreak) {
@@ -1210,10 +1286,85 @@ export class PaginationEngine {
         finishPage();
       }
 
+      // A series of keep-with-next blocks is one indivisible placement unit
+      // when it can fit a new page. The former one-block lookahead was never
+      // applied to the placement decision, and it could not preserve a chain of
+      // headings/paragraphs. Do not force an oversized chain to a fresh page:
+      // its members retain the established greedy/overflow behavior instead.
+      const previousBlock = blocks[i - 1];
+      const startsKeepChain =
+        !previousBlock ||
+        !previousBlock.keepWithNext ||
+        previousBlock.isPageBreak ||
+        block.pageBreakBefore;
+      // A footnote continuation also occupies this page even when its body has
+      // no blocks yet. In that case a feasible chain may need to move past the
+      // continuation as a unit.
+      const pageHasOccupiedSpace = currentContent.length > 0 || currentFootnoteHeight > 0;
+      if (pageHasOccupiedSpace && block.keepWithNext && startsKeepChain) {
+        const keepChain = this.getKeepWithNextChain(blocks, i);
+        if (keepChain.length > 1) {
+          const newChainFootnoteIds = this.collectNewFootnoteIds(
+            keepChain,
+            currentFootnoteIds
+          );
+          let additionalChainFootnoteHeight = 0;
+          if (newChainFootnoteIds.length > 0 && this.footnoteRegistry.size > 0) {
+            const totalChainFootnoteHeight = this.measureFootnotesHeight(
+              [...currentFootnoteIds, ...newChainFootnoteIds],
+              dims.contentWidth,
+              currentContinuation
+            );
+            additionalChainFootnoteHeight = Math.max(
+              0,
+              totalChainFootnoteHeight - currentFootnoteHeight
+            );
+          }
+
+          const currentChainHeight =
+            this.measureKeepWithNextChainBodyHeight(
+              keepChain,
+              prevMarginBottomPt,
+              currentContent.length === 0
+            ) +
+            additionalChainFootnoteHeight;
+          const currentAvailableHeight = remainingHeight - currentFootnoteHeight;
+
+          if (currentChainHeight > currentAvailableHeight) {
+            const nextPageHeights = this.getEffectiveHeights(
+              dims,
+              sectionIndex,
+              pageInSection + 1,
+              pageNumber + 1
+            );
+            const freshChainBodyHeight = this.measureKeepWithNextChainBodyHeight(
+              keepChain,
+              0,
+              true
+            );
+            // finishPage transfers this continuation to the new page's
+            // currentContinuation state, so include it in the destination
+            // page's footnote reservation before deciding to move the chain.
+            const freshChainFootnoteHeight = this.measureFootnotesHeight(
+              newChainFootnoteIds,
+              dims.contentWidth,
+              nextPageContinuation
+            );
+
+            if (
+              freshChainBodyHeight + freshChainFootnoteHeight <=
+              nextPageHeights.contentHeight
+            ) {
+              finishPage();
+            }
+          }
+        }
+      }
+
       // Extract footnote references from this block
-      const blockFootnoteIds = this.extractFootnoteRefs(block.element);
+      const allBlockFootnoteIds = this.extractFootnoteRefs(block.element);
       // Only count new footnotes (not already on this page)
-      const newFootnoteIds = blockFootnoteIds.filter(id => !currentFootnoteIds.includes(id));
+      const newFootnoteIds = this.collectNewFootnoteIds([block], currentFootnoteIds);
 
       // Calculate additional footnote height if this block is added
       let additionalFootnoteHeight = 0;
@@ -1242,15 +1393,6 @@ export class PaginationEngine {
       // bottom margin extends beyond the content area and is clipped by overflow:hidden.
       // It is still tracked in remainingHeight for correct margin collapsing with the next block.
       const blockSpace = effectiveMarginTop + block.heightPt + additionalFootnoteHeight;
-
-      // Calculate needed height (including keepWithNext)
-      let neededHeight = blockSpace;
-      if (block.keepWithNext && nextBlock && !nextBlock.isPageBreak) {
-        // For keepWithNext, include the next block with collapsed margins
-        const collapsedMargin = Math.max(block.marginBottomPt, nextBlock.marginTopPt);
-        neededHeight = effectiveMarginTop + block.heightPt + collapsedMargin +
-                       nextBlock.heightPt + additionalFootnoteHeight;
-      }
 
       // Effective remaining height (content area minus footnotes already on page)
       const effectiveRemainingHeight = remainingHeight - currentFootnoteHeight;
@@ -1371,14 +1513,14 @@ export class PaginationEngine {
           } else {
             // Still doesn't fit - start new page
             finishPage();
-            const newPageFootnoteHeight = blockFootnoteIds.length > 0
-              ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth, currentContinuation)
+            const newPageFootnoteHeight = allBlockFootnoteIds.length > 0
+              ? this.measureFootnotesHeight(allBlockFootnoteIds, dims.contentWidth, currentContinuation)
               : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
             const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
             currentContent.push(block.element.cloneNode(true) as HTMLElement);
             remainingHeight = effectiveContentHeight - newPageSpace;
             prevMarginBottomPt = block.marginBottomPt;
-            currentFootnoteIds = [...blockFootnoteIds];
+            currentFootnoteIds = [...allBlockFootnoteIds];
             currentFootnoteHeight = newPageFootnoteHeight;
           }
         } else {
@@ -1386,15 +1528,15 @@ export class PaginationEngine {
           finishPage();
           // On new page, recalculate footnote height for just this block's footnotes
           // (plus any continuation from previous page)
-          const newPageFootnoteHeight = blockFootnoteIds.length > 0
-            ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth, currentContinuation)
+          const newPageFootnoteHeight = allBlockFootnoteIds.length > 0
+            ? this.measureFootnotesHeight(allBlockFootnoteIds, dims.contentWidth, currentContinuation)
             : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
           // Include full top margin
           const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
           currentContent.push(block.element.cloneNode(true) as HTMLElement);
           remainingHeight = effectiveContentHeight - newPageSpace;
           prevMarginBottomPt = block.marginBottomPt;
-          currentFootnoteIds = [...blockFootnoteIds];
+          currentFootnoteIds = [...allBlockFootnoteIds];
           currentFootnoteHeight = newPageFootnoteHeight;
         }
       } else {
@@ -1417,7 +1559,7 @@ export class PaginationEngine {
           finishPage();
         }
         currentContent.push(block.element.cloneNode(true) as HTMLElement);
-        currentFootnoteIds = [...blockFootnoteIds];
+        currentFootnoteIds = [...allBlockFootnoteIds];
         finishPage();
       }
     }
