@@ -79,11 +79,11 @@ test.describe('Shared comparison-engine selector (M-B)', () => {
     expect(revisions.revisions!.length).toBeGreaterThan(0);
   });
 
-  test('explicit WmlComparer engine (0) matches the default path', async ({ page }) => {
+  test('explicit DocxDiff engine (1) matches the default path', async ({ page }) => {
     const original = readTestFile(ORIGINAL);
     const modified = readTestFile(MODIFIED);
 
-    const result = await compareWithEngine(page, original, modified, 0);
+    const result = await compareWithEngine(page, original, modified, 1);
     expect(result.error).toBeUndefined();
     expectValidDocx(result.docxBytes);
 

@@ -220,7 +220,7 @@ function handleCompare(
 
   try {
     let result: Uint8Array;
-    const engine = options?.engine ?? ComparisonEngine.WmlComparer;
+    const engine = options?.engine ?? ComparisonEngine.DocxDiff;
 
     if (options?.detailThreshold !== undefined || options?.caseInsensitive) {
       result = exports.DocumentComparer.CompareDocumentsWithOptions(
@@ -261,7 +261,7 @@ function handleCompareToHtml(
 
   try {
     const renderTrackedChanges = options?.renderTrackedChanges ?? true;
-    const engine = options?.engine ?? ComparisonEngine.WmlComparer;
+    const engine = options?.engine ?? ComparisonEngine.DocxDiff;
 
     const result = exports.DocumentComparer.CompareDocumentsToHtmlWithOptions(
       request.originalBytes,

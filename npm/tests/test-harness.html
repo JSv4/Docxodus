@@ -59,8 +59,8 @@
                 }
             },
 
-            // Compare two documents. engine: 0 = WmlComparer (default), 1 = DocxDiff.
-            compareDocuments: function(originalBytes, modifiedBytes, authorName = 'Test', engine = 0) {
+            // Compare two documents. engine: 0 = WmlComparer, 1 = DocxDiff (default).
+            compareDocuments: function(originalBytes, modifiedBytes, authorName = 'Test', engine = 1) {
                 try {
                     const result = window.Docxodus.DocumentComparer.CompareDocuments(
                         originalBytes, modifiedBytes, authorName, engine
@@ -89,8 +89,8 @@
                 }
             },
 
-            // Compare and get HTML with options. engine: 0 = WmlComparer (default), 1 = DocxDiff.
-            compareToHtmlWithOptions: function(originalBytes, modifiedBytes, authorName = 'Test', renderTrackedChanges = true, engine = 0) {
+            // Compare and get HTML with options. engine: 0 = WmlComparer, 1 = DocxDiff (default).
+            compareToHtmlWithOptions: function(originalBytes, modifiedBytes, authorName = 'Test', renderTrackedChanges = true, engine = 1) {
                 try {
                     const result = window.Docxodus.DocumentComparer.CompareDocumentsToHtmlWithOptions(
                         originalBytes, modifiedBytes, authorName, renderTrackedChanges, engine

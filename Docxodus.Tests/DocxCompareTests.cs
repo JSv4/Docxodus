@@ -16,8 +16,8 @@ namespace Docxodus.Tests;
 /// M-B — the shared comparison-engine selector. <see cref="DocxCompare"/> owns the sole
 /// <c>WmlComparer</c>-vs-<c>DocxDiff</c> branch that the CLI / WASM / npm surfaces route through.
 /// These tests pin: (1) the <see cref="ComparisonEngine"/> integer contract the byte-level surfaces
-/// rely on, (2) that the default engine reproduces <see cref="WmlComparer"/> exactly (no behavior
-/// change), (3) that the opt-in <c>DocxDiff</c> branch equals a direct <see cref="DocxDiff.Compare"/>,
+/// rely on, (2) that the legacy wire value remains stable, (3) that the default
+/// <c>DocxDiff</c> branch equals a direct <see cref="DocxDiff.Compare"/>,
 /// (4) that the settings map carries the common option set, and (5) the uniform revision-count
 /// assumption redline relies on.
 /// </summary>
@@ -58,7 +58,7 @@ public class DocxCompareTests
     }
 
     [Fact]
-    public void DefaultEngine_IsWmlComparer()
+    public void EngineWireValues_PreserveLegacyWmlComparerAtZero()
     {
         Assert.Equal(ComparisonEngine.WmlComparer, default(ComparisonEngine));
         Assert.Equal(ComparisonEngine.WmlComparer, (ComparisonEngine)0);
@@ -186,10 +186,10 @@ public class DocxCompareTests
     [InlineData("bogus")]
     [InlineData("")]
     [InlineData(null)]
-    public void TryParseEngine_RejectsUnknown_DefaultsToWmlComparer(string? value)
+    public void TryParseEngine_RejectsUnknown_DefaultsToDocxDiff(string? value)
     {
         Assert.False(DocxCompare.TryParseEngine(value, out var engine));
-        Assert.Equal(ComparisonEngine.WmlComparer, engine);
+        Assert.Equal(ComparisonEngine.DocxDiff, engine);
     }
 
     [Fact]

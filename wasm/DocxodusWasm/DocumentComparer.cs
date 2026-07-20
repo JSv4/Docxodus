@@ -25,7 +25,8 @@ public partial class DocumentComparer
     ///
     /// <para>This method runs a complete comparison against two tiny seed
     /// documents constructed in-memory, exercising the exact code path
-    /// <see cref="CompareDocuments"/> uses (<see cref="WmlComparer.Compare"/>).
+    /// <see cref="CompareDocuments"/> uses (<see cref="DocxCompare.Compare"/> through
+    /// <see cref="ComparisonEngine.DocxDiff"/>).
     /// That resolves and JIT-compiles everything the engine touches, so a
     /// subsequent real comparison runs at steady-state speed and triggers no
     /// further <c>.wasm</c> fetches.</para>
@@ -42,8 +43,8 @@ public partial class DocumentComparer
         try
         {
             // Two minimal in-memory documents that differ by a single word, so
-            // the comparer produces a real insertion/deletion and walks the
-            // full LCS + markup path rather than an empty fast-exit.
+            // DocxDiff produces a real insertion/deletion and walks its full
+            // alignment + markup path rather than an empty fast-exit.
             var original = new WmlDocument("warmup-original.docx", BuildSeedDocx("warmup original"));
             var modified = new WmlDocument("warmup-modified.docx", BuildSeedDocx("warmup modified"));
 
@@ -54,7 +55,7 @@ public partial class DocumentComparer
                 DetailThreshold = 0.15
             };
 
-            var result = WmlComparer.Compare(original, modified, settings);
+            var result = DocxCompare.Compare(original, modified, ComparisonEngine.DocxDiff, settings);
 
             // Touch the revision-extraction path too, since callers that warm
             // the compare path almost always read revisions next.
@@ -104,7 +105,7 @@ public partial class DocumentComparer
     /// <param name="originalBytes">The original DOCX file as a byte array</param>
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
     /// <param name="authorName">Author name for tracked changes</param>
-    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer default, 1 = DocxDiff)</param>
+    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer, 1 = DocxDiff)</param>
     /// <returns>Redlined DOCX as byte array, or empty array on error</returns>
     [JSExport]
     public static byte[] CompareDocuments(
@@ -163,8 +164,9 @@ public partial class DocumentComparer
         byte[] modifiedBytes,
         string authorName)
     {
-        // Default: show tracked changes visually, WmlComparer engine (0).
-        return CompareDocumentsToHtmlWithOptions(originalBytes, modifiedBytes, authorName, renderTrackedChanges: true, engine: 0);
+        // Default: show tracked changes visually through the DocxDiff engine.
+        return CompareDocumentsToHtmlWithOptions(originalBytes, modifiedBytes, authorName, renderTrackedChanges: true,
+            engine: (int)ComparisonEngine.DocxDiff);
     }
 
     /// <summary>
@@ -174,7 +176,7 @@ public partial class DocumentComparer
     /// <param name="modifiedBytes">The modified DOCX file as a byte array</param>
     /// <param name="authorName">Author name for tracked changes</param>
     /// <param name="renderTrackedChanges">If true, show insertions/deletions visually. If false, accept all changes (clean output).</param>
-    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer default, 1 = DocxDiff)</param>
+    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer, 1 = DocxDiff)</param>
     /// <returns>HTML string, or JSON error object</returns>
     [JSExport]
     public static string CompareDocumentsToHtmlWithOptions(
@@ -323,7 +325,7 @@ public partial class DocumentComparer
     /// <param name="detailThreshold">Detail threshold (0.0 to 1.0, default 0.15)</param>
     /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
     /// <param name="renderTrackedChanges">If true, show insertions/deletions visually. If false, accept all changes (clean output).</param>
-    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer default, 1 = DocxDiff)</param>
+    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer, 1 = DocxDiff)</param>
     /// <returns>HTML string, or JSON error object</returns>
     [JSExport]
     public static string CompareDocumentsToHtmlFull(
@@ -580,7 +582,7 @@ public partial class DocumentComparer
     /// <param name="authorName">Author name for tracked changes</param>
     /// <param name="detailThreshold">Detail threshold (0.0 to 1.0, default 0.15)</param>
     /// <param name="caseInsensitive">Whether comparison is case-insensitive</param>
-    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer default, 1 = DocxDiff)</param>
+    /// <param name="engine">Comparison engine (<see cref="ComparisonEngine"/> as int; 0 = WmlComparer, 1 = DocxDiff)</param>
     /// <returns>Redlined DOCX as byte array</returns>
     [JSExport]
     public static byte[] CompareDocumentsWithOptions(

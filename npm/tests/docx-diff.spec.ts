@@ -4,8 +4,8 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 // Minimal browser/WASM smoke for the DocxDiff (IR diff engine) bridge — the
-// NEW comparison surface exposed alongside the default WmlComparer-backed
-// compareDocuments/getRevisions. Mirrors the WC comparison specs in
+// Specialized DocxDiff bridge surface for anchor-addressed revisions and edit
+// scripts. Mirrors the primary comparison specs in
 // docxodus.spec.ts: load the harness, run each of the three entry points
 // against two real fixtures, assert the shape the npm wrappers depend on.
 

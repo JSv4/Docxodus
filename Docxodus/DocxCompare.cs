@@ -32,11 +32,10 @@ public static class DocxCompare
     /// <summary>
     /// Compare <paramref name="left"/> against <paramref name="right"/> with the selected
     /// <paramref name="engine"/> and return the redlined document. <see cref="ComparisonEngine.WmlComparer"/>
-    /// (the default) delegates directly for transitional documents and normalizes Word Strict inputs first,
-    /// matching Word's open behavior; byte-identical inputs instead return a detached exact clone without
-    /// normalization or reserialization when the legacy comparer need not repair malformed math revision
-    /// markup; <see cref="ComparisonEngine.DocxDiff"/> routes to
-    /// <see cref="DocxDiff.Compare"/> with the mapped settings.
+    /// delegates directly for transitional documents and normalizes Word Strict inputs first; byte-identical
+    /// inputs instead return a detached exact clone without normalization or reserialization when the legacy
+    /// comparer need not repair malformed math revision markup; <see cref="ComparisonEngine.DocxDiff"/>
+    /// routes to <see cref="DocxDiff.Compare"/> with the mapped settings.
     /// </summary>
     /// <param name="left">The earlier / original document.</param>
     /// <param name="right">The later / revised document.</param>
@@ -130,7 +129,7 @@ public static class DocxCompare
     /// Parse a case-insensitive engine name — <c>wmlcomparer</c> or <c>docxdiff</c> — as accepted by the
     /// redline CLI's <c>--engine=</c> flag. Surrounding whitespace is trimmed. Returns <c>false</c> for an
     /// unrecognized value, in which case <paramref name="engine"/> is set to the default
-    /// <see cref="ComparisonEngine.WmlComparer"/>.
+    /// <see cref="ComparisonEngine.DocxDiff"/>.
     /// </summary>
     public static bool TryParseEngine(string? value, out ComparisonEngine engine)
     {
@@ -143,7 +142,7 @@ public static class DocxCompare
                 engine = ComparisonEngine.DocxDiff;
                 return true;
             default:
-                engine = ComparisonEngine.WmlComparer;
+                engine = ComparisonEngine.DocxDiff;
                 return false;
         }
     }
