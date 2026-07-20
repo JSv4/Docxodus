@@ -42,6 +42,119 @@ public class DocxDiffWordShapeTests
         return new WmlDocument("test.docx", stream.ToArray());
     }
 
+    private static WmlDocument OneRunFormattedDoc(bool underline, string text)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            var rPr = underline
+                ? new RunProperties(new Underline { Val = UnderlineValues.Single })
+                : new RunProperties(new Bold(), new Italic());
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new Run(rPr, new Text(text) { Space = SpaceProcessingModeValues.Preserve }))));
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new DocDefaults(
+                new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                    new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                new ParagraphPropertiesDefault()));
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("formatted.docx", stream.ToArray());
+    }
+
+    private static WmlDocument SplitFormattedDoc(string first, string second)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new Run(new RunProperties(new Bold()), new Text(first) { Space = SpaceProcessingModeValues.Preserve }),
+                new Run(new RunProperties(new Italic()), new Text(second) { Space = SpaceProcessingModeValues.Preserve }))));
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new DocDefaults(
+                new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                    new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                new ParagraphPropertiesDefault()));
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("split-formatted.docx", stream.ToArray());
+    }
+
+    private static WmlDocument ComplexFieldDoc(string prefix, string fieldResult, string suffix)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new Run(new Text(prefix) { Space = SpaceProcessingModeValues.Preserve }),
+                new Run(new FieldChar { FieldCharType = FieldCharValues.Begin }),
+                new Run(new FieldCode(" DATE ") { Space = SpaceProcessingModeValues.Preserve }),
+                new Run(new FieldChar { FieldCharType = FieldCharValues.Separate }),
+                new Run(new Text(fieldResult) { Space = SpaceProcessingModeValues.Preserve }),
+                new Run(new FieldChar { FieldCharType = FieldCharValues.End }),
+                new Run(new Text(suffix) { Space = SpaceProcessingModeValues.Preserve }))));
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new DocDefaults(
+                new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                    new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                new ParagraphPropertiesDefault()));
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("complex-field.docx", stream.ToArray());
+    }
+
+    private static WmlDocument InlineSdtDoc(string prefix, string sdtText, string suffix)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var mainPart = doc.AddMainDocumentPart();
+            var sdt = new SdtRun(
+                new SdtProperties(new SdtId { Val = 9001 }),
+                new SdtContentRun(new Run(new Text(sdtText) { Space = SpaceProcessingModeValues.Preserve })));
+            mainPart.Document = new Document(new Body(new Paragraph(
+                new Run(new Text(prefix) { Space = SpaceProcessingModeValues.Preserve }),
+                sdt,
+                new Run(new Text(suffix) { Space = SpaceProcessingModeValues.Preserve }))));
+            var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+            stylesPart.Styles = new Styles(new DocDefaults(
+                new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                    new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                new ParagraphPropertiesDefault()));
+            mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("inline-sdt.docx", stream.ToArray());
+    }
+
+    private static List<(string Kind, string Text)> DirectRevisionRegions(Paragraph para)
+    {
+        var regions = new List<(string, string)>();
+        foreach (var child in para.ChildElements)
+        {
+            var (kind, text) = child switch
+            {
+                InsertedRun ins => ("ins", ins.InnerText),
+                DeletedRun del => ("del", del.InnerText),
+                Run run => ("plain", run.InnerText),
+                _ => ("", ""),
+            };
+            if (kind == "")
+                continue;
+            if (regions.Count > 0 && regions[^1].Kind == kind)
+                regions[^1] = (kind, regions[^1].Text + text);
+            else
+                regions.Add((kind, text));
+        }
+        return regions;
+    }
+
     private static WmlDocument SingleCellTableDoc(params string[] cellParagraphs)
     {
         using var stream = new MemoryStream();
@@ -288,6 +401,173 @@ public class DocxDiffWordShapeTests
         var rejected = RevisionProcessor.RejectRevisions(result);
         Assert.Equal(BodyTexts(right), BodyTexts(accepted));
         Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
+    public void IntraParagraphReplace_ReanchorsAmbiguousWhitespaceToFormattedSharedSuffix()
+    {
+        // Myers may initially pair the first repeated space in these strings.  Word instead attaches the
+        // retained separator to the shared suffix, producing a property-change run for " Demo …" rather
+        // than a synthetic inserted/deleted space pair.  The whole paragraph changes formatting so the
+        // retained suffix is explicitly a FormatChanged span, not merely an Equal span.
+        const string suffix = " Demo shared suffix words";
+        var left = OneRunFormattedDoc(false, "Subtitle Style" + suffix);
+        var right = OneRunFormattedDoc(true, "Superscript" + suffix);
+
+        var result = DocxDiff.Compare(left, right);
+
+        using (var stream = new MemoryStream(result.DocumentByteArray))
+        using (var wdoc = WordprocessingDocument.Open(stream, false))
+        {
+            var para = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>().Single();
+            Assert.Equal(
+                new List<(string, string)>
+                {
+                    ("ins", "Superscript"),
+                    ("del", "Subtitle Style"),
+                    ("plain", suffix),
+                },
+                DirectRevisionRegions(para));
+            Assert.DoesNotContain(para.Elements<InsertedRun>(), run => string.IsNullOrWhiteSpace(run.InnerText));
+            Assert.DoesNotContain(para.Elements<DeletedRun>(), run => string.IsNullOrWhiteSpace(run.InnerText));
+
+            var suffixRun = para.Elements<Run>().Single(run => run.InnerText == suffix.TrimStart());
+            Assert.NotNull(suffixRun.RunProperties?.GetFirstChild<Underline>());
+            Assert.Contains(suffixRun.RunProperties!.ChildElements, child => child.LocalName == "rPrChange");
+        }
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
+    public void IntraParagraphReplace_ReanchorsMirrorAmbiguousWhitespaceToFormattedSharedSuffix()
+    {
+        // The opposite asymmetric form has right-only tokens between the incorrectly matched space and the
+        // shared suffix.  It must make the same renderer-only re-anchoring without changing accept/reject.
+        const string suffix = " Demo shared suffix words";
+        var left = OneRunFormattedDoc(false, "Superscript" + suffix);
+        var right = OneRunFormattedDoc(true, "Subtitle Style" + suffix);
+
+        var result = DocxDiff.Compare(left, right);
+
+        using (var stream = new MemoryStream(result.DocumentByteArray))
+        using (var wdoc = WordprocessingDocument.Open(stream, false))
+        {
+            var para = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>().Single();
+            Assert.Equal(
+                new List<(string, string)>
+                {
+                    ("ins", "Subtitle Style"),
+                    ("del", "Superscript"),
+                    ("plain", suffix),
+                },
+                DirectRevisionRegions(para));
+            Assert.DoesNotContain(para.Elements<InsertedRun>(), run => string.IsNullOrWhiteSpace(run.InnerText));
+            Assert.DoesNotContain(para.Elements<DeletedRun>(), run => string.IsNullOrWhiteSpace(run.InnerText));
+
+            var suffixRun = para.Elements<Run>().Single(run => run.InnerText == suffix.TrimStart());
+            Assert.NotNull(suffixRun.RunProperties?.GetFirstChild<Underline>());
+            Assert.Contains(suffixRun.RunProperties!.ChildElements, child => child.LocalName == "rPrChange");
+        }
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+    }
+
+    [Fact]
+    public void IntraParagraphReplace_ReanchoringPreservesRejectFormatAcrossSourceRunBoundary()
+    {
+        // The re-paired separator belongs to the bold source run, while the retained suffix word belongs
+        // to the following italic run. They must remain separate FormatChanged spans: one rPrChange cannot
+        // restore both old formats after reject.
+        const string suffix = "Demo shared suffix words";
+        var left = SplitFormattedDoc("Subtitle Style ", suffix);
+        var right = OneRunFormattedDoc(true, "Superscript " + suffix);
+
+        var result = DocxDiff.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+
+        using var stream = new MemoryStream(rejected.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var runs = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>().Single().Elements<Run>().ToList();
+        var suffixRun = Assert.Single(runs, run => run.InnerText == suffix);
+        Assert.NotNull(suffixRun.RunProperties?.GetFirstChild<Italic>());
+        Assert.Null(suffixRun.RunProperties?.GetFirstChild<Bold>());
+    }
+
+    [Fact]
+    public void IntraParagraphReplace_ReanchoringMirrorPreservesRejectFormatAcrossSourceRunBoundary()
+    {
+        // Mirror the source-run boundary case: the right-only words precede the retained suffix, but the
+        // suffix still has to recover the italic left run after reject.
+        const string suffix = "Demo shared suffix words";
+        var left = SplitFormattedDoc("Superscript ", suffix);
+        var right = OneRunFormattedDoc(true, "Subtitle Style " + suffix);
+
+        var result = DocxDiff.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+
+        using var stream = new MemoryStream(rejected.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var runs = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>().Single().Elements<Run>().ToList();
+        var suffixRun = Assert.Single(runs, run => run.InnerText == suffix);
+        Assert.NotNull(suffixRun.RunProperties?.GetFirstChild<Italic>());
+        Assert.Null(suffixRun.RunProperties?.GetFirstChild<Bold>());
+    }
+
+    [Fact]
+    public void IntraParagraphReplace_ReanchoringSkipsComplexFieldParagraph()
+    {
+        var left = ComplexFieldDoc("Subtitle ", "Style ", "Demo shared suffix words");
+        var right = OneRunFormattedDoc(true, "Superscript Demo shared suffix words");
+
+        var result = DocxDiff.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+
+        using var acceptedStream = new MemoryStream(accepted.DocumentByteArray);
+        using var acceptedDoc = WordprocessingDocument.Open(acceptedStream, false);
+        var acceptedBody = acceptedDoc.MainDocumentPart!.Document.Body!;
+        Assert.Empty(acceptedBody.Descendants<FieldChar>());
+        Assert.Empty(acceptedBody.Descendants<FieldCode>());
+
+        using var rejectedStream = new MemoryStream(rejected.DocumentByteArray);
+        using var rejectedDoc = WordprocessingDocument.Open(rejectedStream, false);
+        Assert.NotEmpty(rejectedDoc.MainDocumentPart!.Document.Body!.Descendants<FieldChar>());
+    }
+
+    [Fact]
+    public void IntraParagraphReplace_ReanchoringSkipsInlineContentControlParagraph()
+    {
+        var left = InlineSdtDoc("Subtitle ", "Style ", "Demo shared suffix words");
+        var right = OneRunFormattedDoc(true, "Superscript Demo shared suffix words");
+
+        var result = DocxDiff.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+
+        using var acceptedStream = new MemoryStream(accepted.DocumentByteArray);
+        using var acceptedDoc = WordprocessingDocument.Open(acceptedStream, false);
+        Assert.Empty(acceptedDoc.MainDocumentPart!.Document.Body!.Descendants<SdtRun>());
+
+        using var rejectedStream = new MemoryStream(rejected.DocumentByteArray);
+        using var rejectedDoc = WordprocessingDocument.Open(rejectedStream, false);
+        Assert.NotEmpty(rejectedDoc.MainDocumentPart!.Document.Body!.Descendants<SdtRun>());
     }
 
     [Fact]

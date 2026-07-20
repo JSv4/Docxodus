@@ -3597,7 +3597,8 @@ internal static class IrMarkupRenderer
     /// paragraph's char positions) composes with the full paragraph's <see cref="SourceRunModel"/> unchanged.
     /// </summary>
     /// <summary>
-    /// Rearrange a paragraph's token ops into Word's replace-region grammar (the token-level analogue
+    /// Re-anchor a narrowly provable ambiguous whitespace match, then rearrange a paragraph's token ops into
+    /// Word's replace-region grammar (the token-level analogue
     /// of <see cref="RenderBlockOpsWordShaped"/>): a maximal run of Insert/Delete ops separated only by
     /// WHITESPACE Equal ops renders as ONE inserted region (all right-side tokens, interior whitespace
     /// included) followed by ONE deleted region (all left-side tokens likewise) — Word writes
@@ -3606,13 +3607,32 @@ internal static class IrMarkupRenderer
     /// over their left span, so accept still yields exactly the right bytes and reject the left bytes
     /// (each side's raw text is emitted from its own source; per-side span tiling is preserved — the
     /// converted ops carry an empty span on the opposite side). Pure-insert or pure-delete runs, and
-    /// any Equal that is non-whitespace, zero-width, or FormatChanged, pass through untouched. A pure
-    /// projection change: the edit script keeps its token grain.
+    /// any Equal that is non-whitespace or zero-width passes through untouched. A format-changing separator
+    /// normally acts as interior glue too. Before that grouping, however, a bounded normalization repairs the
+    /// one ambiguous shape in which Myers matched the WRONG repeated whitespace token: an isolated space is
+    /// paired before left- or right-only text even though an identical space immediately precedes the next
+    /// retained word on both sides. The normalizer moves that match to the retained-word boundary, so it becomes
+    /// a format change instead of a synthetic insertion/deletion. The caller additionally restricts this to
+    /// paragraphs made solely of direct text runs, so a transparent field/container boundary cannot be moved.
+    /// This is intentionally render-only: it never changes the edit script, token differ, or revision-list
+    /// projection.
     /// </summary>
     private static List<IrTokenOp> CoalesceTokenOpsWordShaped(
         IReadOnlyList<IrTokenOp> ops,
-        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens)
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        IrFormatComparison formatComparison,
+        SourceRunModel leftRuns, SourceRunModel rightRuns)
     {
+        // Re-pairing an otherwise transparent token match is safe only when both source paragraphs
+        // are ordinary direct text runs. Fields, content controls, hyperlinks, revision containers,
+        // and zero-width inline plumbing are deliberately transparent to the tokenizer, but their
+        // source ownership cannot be reconstructed from token provenance after moving a boundary.
+        // Keep those paragraphs on the normal projection path.
+        IReadOnlyList<IrTokenOp> projectedOps =
+            leftRuns.SupportsWhitespaceReanchoring && rightRuns.SupportsWhitespaceReanchoring
+                ? ReanchorAmbiguousWhitespaceMatches(ops, leftTokens, rightTokens, formatComparison)
+                : ops;
+
         // Interior separator: an Equal OR FormatChanged span whose raw text is pure whitespace on
         // both sides. FormatChanged qualifies because when the two sides' run formats differ (a
         // formatting-change rewrite), every separator space between replaced words is a
@@ -3629,27 +3649,27 @@ internal static class IrMarkupRenderer
                    string.IsNullOrWhiteSpace(l) && string.IsNullOrWhiteSpace(r);
         }
 
-        var result = new List<IrTokenOp>(ops.Count);
+        var result = new List<IrTokenOp>(projectedOps.Count);
         int i = 0;
-        while (i < ops.Count)
+        while (i < projectedOps.Count)
         {
-            if (ops[i].Kind != IrTokenOpKind.Insert && ops[i].Kind != IrTokenOpKind.Delete)
+            if (projectedOps[i].Kind != IrTokenOpKind.Insert && projectedOps[i].Kind != IrTokenOpKind.Delete)
             {
-                result.Add(ops[i]);
+                result.Add(projectedOps[i]);
                 i++;
                 continue;
             }
             // Grow the window over changed ops and interior whitespace Equals; it must END changed.
             int lastChanged = i;
             int j = i + 1;
-            while (j < ops.Count)
+            while (j < projectedOps.Count)
             {
-                if (ops[j].Kind is IrTokenOpKind.Insert or IrTokenOpKind.Delete)
+                if (projectedOps[j].Kind is IrTokenOpKind.Insert or IrTokenOpKind.Delete)
                 {
                     lastChanged = j;
                     j++;
                 }
-                else if (IsInteriorWhitespaceSeparator(ops[j]))
+                else if (IsInteriorWhitespaceSeparator(projectedOps[j]))
                 {
                     j++;   // tentatively interior; trimmed below if nothing changed follows
                 }
@@ -3660,7 +3680,7 @@ internal static class IrMarkupRenderer
             }
             var group = new List<IrTokenOp>();
             for (int k = i; k <= lastChanged; k++)
-                group.Add(ops[k]);
+                group.Add(projectedOps[k]);
             i = lastChanged + 1;
 
             var hasIns = group.Any(g => g.Kind == IrTokenOpKind.Insert);
@@ -3688,13 +3708,213 @@ internal static class IrMarkupRenderer
         return result;
     }
 
+    /// <summary>
+    /// Normalizes the one whitespace-alignment ambiguity which is visible in Word-compare output.  The tokenizer
+    /// intentionally represents every separator as its own token; when a replacement has no shared prefix,
+    /// Myers may therefore match its first repeated space instead of the space immediately before a retained
+    /// suffix word.  For example, it can pair the first spaces in
+    /// <c>"Subtitle Style Demo"</c> / <c>"Superscript Demo"</c>, leaving the second left space deleted.  Word
+    /// instead retains <c>" Demo"</c>.  That difference matters when formatting changes: grouping the early
+    /// <c>FormatChanged</c> space below otherwise creates a visible inserted+deleted space pair.
+    ///
+    /// The proof gate is deliberately strict: exactly one ASCII-space separator must be matched;
+    /// only unilateral delete (or mirror insert) ops may lie before the next raw-identical WORD anchor; and an
+    /// identical separator must sit immediately before that anchor on the unilateral side.  Thus the operation
+    /// re-tiles the same left/right token ranges without changing their text, and it cannot cross a hyperlink,
+    /// NBSP-vs-space normalization, punctuation, or zero-width atom boundary.  This is a markup-projection
+    /// normalization only; <see cref="IrTokenDiffer"/> and the persisted edit script remain byte-for-byte as
+    /// produced by the diff engine.
+    /// </summary>
+    private static List<IrTokenOp> ReanchorAmbiguousWhitespaceMatches(
+        IReadOnlyList<IrTokenOp> ops,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        IrFormatComparison formatComparison)
+    {
+        var normalized = new List<IrTokenOp>(ops.Count);
+        for (int i = 0; i < ops.Count; i++)
+        {
+            if (TryReanchorWhitespaceToFollowingWordOnLeft(
+                    ops, i, leftTokens, rightTokens, formatComparison,
+                    out var consumedThrough, out var replacement) ||
+                TryReanchorWhitespaceToFollowingWordOnRight(
+                    ops, i, leftTokens, rightTokens, formatComparison,
+                    out consumedThrough, out replacement))
+            {
+                normalized.AddRange(replacement);
+                i = consumedThrough;
+                continue;
+            }
+
+            normalized.Add(ops[i]);
+        }
+        return normalized;
+    }
+
+    /// <summary>
+    /// Left-side form of the ambiguity: a whitespace match is followed only by deleted left tokens before the
+    /// next retained word.  Re-pair the right whitespace with the identical left whitespace directly before
+    /// that word, and fold the former left whitespace into the deletion range.
+    /// </summary>
+    private static bool TryReanchorWhitespaceToFollowingWordOnLeft(
+        IReadOnlyList<IrTokenOp> ops, int matchIndex,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        IrFormatComparison formatComparison,
+        out int consumedThrough, out List<IrTokenOp> replacement)
+    {
+        consumedThrough = -1;
+        replacement = new List<IrTokenOp>();
+        var match = ops[matchIndex];
+        if (!IsSingleRawWhitespaceMatch(match, leftTokens, rightTokens))
+            return false;
+
+        int leftCursor = match.LeftEnd;
+        int rightCursor = match.RightEnd;
+        int anchorIndex = matchIndex + 1;
+        while (anchorIndex < ops.Count && ops[anchorIndex].Kind == IrTokenOpKind.Delete)
+        {
+            var deleted = ops[anchorIndex];
+            if (deleted.LeftStart != leftCursor || deleted.RightStart != rightCursor ||
+                deleted.RightEnd != rightCursor)
+                return false;
+            leftCursor = deleted.LeftEnd;
+            anchorIndex++;
+        }
+
+        if (anchorIndex == matchIndex + 1 || anchorIndex >= ops.Count)
+            return false;
+        var anchor = ops[anchorIndex];
+        if (anchor.LeftStart != leftCursor || anchor.RightStart != rightCursor ||
+            !IsRawEqualWordAnchor(anchor, leftTokens, rightTokens))
+            return false;
+
+        int retainedLeftSpace = anchor.LeftStart - 1;
+        if (retainedLeftSpace < match.LeftEnd ||
+            !SameRawWhitespaceToken(leftTokens[retainedLeftSpace], rightTokens[match.RightStart]))
+            return false;
+
+        // The old left match plus its intervening deleted content become one deletion; the whitespace directly
+        // before the retained suffix becomes a freshly classified Equal/FormatChanged span.
+        replacement.Add(new IrTokenOp(IrTokenOpKind.Delete,
+            match.LeftStart, retainedLeftSpace, match.RightStart, match.RightStart));
+        AppendReclassifiedWhitespaceAndAnchor(replacement,
+            retainedLeftSpace, match.RightStart, anchor,
+            leftTokens, rightTokens, formatComparison);
+        consumedThrough = anchorIndex;
+        return true;
+    }
+
+    /// <summary>
+    /// Mirror of <see cref="TryReanchorWhitespaceToFollowingWordOnLeft"/>: a whitespace match is followed only
+    /// by inserted right tokens before the next retained word.  Re-pair the left whitespace with the identical
+    /// right whitespace directly before that word and fold the former right whitespace into the insertion.
+    /// </summary>
+    private static bool TryReanchorWhitespaceToFollowingWordOnRight(
+        IReadOnlyList<IrTokenOp> ops, int matchIndex,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        IrFormatComparison formatComparison,
+        out int consumedThrough, out List<IrTokenOp> replacement)
+    {
+        consumedThrough = -1;
+        replacement = new List<IrTokenOp>();
+        var match = ops[matchIndex];
+        if (!IsSingleRawWhitespaceMatch(match, leftTokens, rightTokens))
+            return false;
+
+        int leftCursor = match.LeftEnd;
+        int rightCursor = match.RightEnd;
+        int anchorIndex = matchIndex + 1;
+        while (anchorIndex < ops.Count && ops[anchorIndex].Kind == IrTokenOpKind.Insert)
+        {
+            var inserted = ops[anchorIndex];
+            if (inserted.LeftStart != leftCursor || inserted.LeftEnd != leftCursor ||
+                inserted.RightStart != rightCursor)
+                return false;
+            rightCursor = inserted.RightEnd;
+            anchorIndex++;
+        }
+
+        if (anchorIndex == matchIndex + 1 || anchorIndex >= ops.Count)
+            return false;
+        var anchor = ops[anchorIndex];
+        if (anchor.LeftStart != leftCursor || anchor.RightStart != rightCursor ||
+            !IsRawEqualWordAnchor(anchor, leftTokens, rightTokens))
+            return false;
+
+        int retainedRightSpace = anchor.RightStart - 1;
+        if (retainedRightSpace < match.RightEnd ||
+            !SameRawWhitespaceToken(leftTokens[match.LeftStart], rightTokens[retainedRightSpace]))
+            return false;
+
+        replacement.Add(new IrTokenOp(IrTokenOpKind.Insert,
+            match.LeftStart, match.LeftStart, match.RightStart, retainedRightSpace));
+        AppendReclassifiedWhitespaceAndAnchor(replacement,
+            match.LeftStart, retainedRightSpace, anchor,
+            leftTokens, rightTokens, formatComparison);
+        consumedThrough = anchorIndex;
+        return true;
+    }
+
+    /// <summary>Add the re-paired whitespace under the engine's normal format policy, then retain the original
+    /// word anchor as a separate span.  Keeping the source boundary is essential: a re-paired whitespace token
+    /// can have different old/new run properties from the following retained word, and a single rPrChange cannot
+    /// represent both reject-side formats.</summary>
+    private static void AppendReclassifiedWhitespaceAndAnchor(
+        List<IrTokenOp> sink, int leftSpace, int rightSpace, IrTokenOp anchor,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        IrFormatComparison formatComparison)
+    {
+        var whitespaceKind = IrModeledFormat.RunFormatEqual(
+            leftTokens[leftSpace].Format, rightTokens[rightSpace].Format, formatComparison)
+            ? IrTokenOpKind.Equal
+            : IrTokenOpKind.FormatChanged;
+        var whitespace = new IrTokenOp(whitespaceKind,
+            leftSpace, leftSpace + 1, rightSpace, rightSpace + 1);
+        sink.Add(whitespace);
+
+        sink.Add(anchor);
+    }
+
+    private static bool IsSingleRawWhitespaceMatch(
+        IrTokenOp op, IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens) =>
+        (op.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged) &&
+        op.LeftEnd == op.LeftStart + 1 && op.RightEnd == op.RightStart + 1 &&
+        SameRawWhitespaceToken(leftTokens[op.LeftStart], rightTokens[op.RightStart]);
+
+    /// <summary>The following retained anchor must be a raw-identical lexical word, rather than a punctuation,
+    /// normalized NBSP/case match, hyperlink-context mismatch, or zero-width atom.  Those cases stay on the
+    /// original engine projection.</summary>
+    private static bool IsRawEqualWordAnchor(
+        IrTokenOp op, IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens)
+    {
+        if (op.Kind is not (IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged) ||
+            op.LeftStart >= op.LeftEnd || op.RightStart >= op.RightEnd)
+            return false;
+        var left = leftTokens[op.LeftStart];
+        var right = rightTokens[op.RightStart];
+        return left.Kind == IrDiffTokenKind.Word && right.Kind == IrDiffTokenKind.Word &&
+               left.MatchKey == right.MatchKey &&
+               string.Equals(left.Text, right.Text, StringComparison.Ordinal) &&
+               string.Equals(
+                   RawSpanText(leftTokens, op.LeftStart, op.LeftEnd),
+                   RawSpanText(rightTokens, op.RightStart, op.RightEnd),
+                   StringComparison.Ordinal);
+    }
+
+    private static bool SameRawWhitespaceToken(IrDiffToken left, IrDiffToken right) =>
+        left.Kind == IrDiffTokenKind.Separator && right.Kind == IrDiffTokenKind.Separator &&
+        left.Text == " " && right.Text == " " &&
+        left.MatchKey == right.MatchKey &&
+        string.Equals(left.Text, right.Text, StringComparison.Ordinal);
+
     private static List<XElement> BuildTokenOpContent(
         IrTokenDiff tokenDiff,
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
         SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state)
     {
         var content = new List<XElement>();
-        foreach (var tokenOp in CoalesceTokenOpsWordShaped(tokenDiff.Ops, leftTokens, rightTokens))
+        foreach (var tokenOp in CoalesceTokenOpsWordShaped(
+                     tokenDiff.Ops, leftTokens, rightTokens, state.Settings.FormatComparison,
+                     leftRuns, rightRuns))
         {
             switch (tokenOp.Kind)
             {
@@ -6239,12 +6459,30 @@ internal static class IrMarkupRenderer
         /// fully-replaced single link (same target both sides) while keeping a genuine retarget (WC019) split.</summary>
         private readonly Dictionary<XElement, string?> _hyperlinkTarget = new(ReferenceEqualityComparer.Instance);
 
+        /// <summary>
+        /// Whether this paragraph has no source structure which is transparent to diff tokens. The whitespace
+        /// re-anchoring projection may move a token boundary, so it is allowed only for direct <c>w:r</c> children
+        /// containing ordinary text (and optional run properties). This excludes fields, hyperlinks, SDTs, smart
+        /// tags, revision wrappers, bookmarks, tabs/breaks/drawings, and pre-existing run-format revisions.
+        /// </summary>
+        public bool SupportsWhitespaceReanchoring { get; }
+
         public SourceRunModel(XElement para)
         {
+            SupportsWhitespaceReanchoring = para.Elements()
+                .Where(e => e.Name != W.pPr)
+                .All(IsPlainDirectTextRun);
+
             int charOffset = 0;
             foreach (var child in para.Elements().Where(e => e.Name != W.pPr))
                 WalkRunLevel(child, ref charOffset, ContainerChain.Empty);
         }
+
+        private static bool IsPlainDirectTextRun(XElement element) =>
+            element.Name == W.r &&
+            element.Elements().All(child =>
+                child.Name == W.t ||
+                (child.Name == W.rPr && !child.Descendants(W.rPrChange).Any()));
 
         private void WalkRunLevel(XElement runLevel, ref int charOffset, ContainerChain chain)
         {
