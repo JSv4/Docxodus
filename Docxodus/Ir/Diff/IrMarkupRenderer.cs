@@ -230,11 +230,11 @@ internal static class IrMarkupRenderer
                 // the body is assembled below, the output deliberately contains clones from both
                 // sides and can no longer serve as evidence that a font list was shared by the
                 // original inputs.
-                var sharedUnquotedCssFontStacks = DirectUnquotedCssFontStacks(main);
+                var sharedCssFontStacks = DirectCssFontStacks(main);
                 if (wDocRight.MainDocumentPart is { } rightMainForFontStacks)
-                    sharedUnquotedCssFontStacks.IntersectWith(DirectUnquotedCssFontStacks(rightMainForFontStacks));
+                    sharedCssFontStacks.IntersectWith(DirectCssFontStacks(rightMainForFontStacks));
                 else
-                    sharedUnquotedCssFontStacks.Clear();
+                    sharedCssFontStacks.Clear();
 
                 // A very narrow malformed-input compatibility shape: a complete body replacement can
                 // introduce an entirely new paragraph-style universe into a left package that has no
@@ -418,24 +418,26 @@ internal static class IrMarkupRenderer
                 // (for example "Roboto, sans-serif").  Word's comparison output keeps that raw
                 // string, but LibreOffice does not apply Word's fallback behavior when rendering a
                 // tracked document.  A tightly-scoped compatibility projection is warranted only
-                // when BOTH original documents carry the identical unquoted list in direct run
+                // when BOTH original documents carry the identical CSS-shaped list in direct run
                 // formatting AND it is not archived by a tracked run-format change: together,
-                // those prove it is shared formatting rather than one side's actual edit.  Quoted
-                // lists intentionally stay untouched -- Word's behavior for those is not CSS-like
-                // -- as do styles, themes, east-Asian fonts, and one-sided lists.
-                ProjectSharedUnquotedCssFontStacks(main, sharedUnquotedCssFontStacks);
+                // those prove it is shared formatting rather than one side's actual edit.  The
+                // recognized syntax is either an unquoted comma-bearing list or one quoted primary
+                // followed only by the CSS generic <c>sans-serif</c>; quoted lists with a concrete
+                // fallback remain untouched because that fallback is semantically meaningful.  As
+                // before, styles, themes, east-Asian fonts, and one-sided lists are excluded.
+                ProjectSharedCssFontStacks(main, sharedCssFontStacks);
             }
             return streamDoc.GetModifiedWmlDocument();
         }
     }
 
     /// <summary>
-    /// Projects the narrowly malformed, shared CSS-like direct font-list shape described at the
+    /// Projects the narrowly malformed, shared CSS-like direct font-list shapes described at the
     /// call site to LibreOffice's reliable sans-serif fallback.  This runs after all renderer
     /// package work has completed so it cannot influence edit alignment, source provenance, or
     /// style/numbering reconciliation.
     /// </summary>
-    private static void ProjectSharedUnquotedCssFontStacks(
+    private static void ProjectSharedCssFontStacks(
         MainDocumentPart outputMain,
         HashSet<string> sharedStacks)
     {
@@ -475,10 +477,11 @@ internal static class IrMarkupRenderer
             outputMain.PutXDocument();
     }
 
-    /// <summary>Returns exact direct-run font triplets that are unquoted comma-bearing CSS-like
-    /// lists.  Exact matching is deliberate: different capitalization, fallback ordering, or a
-    /// one-sided occurrence must not opt a document into the renderer compatibility projection.</summary>
-    private static HashSet<string> DirectUnquotedCssFontStacks(MainDocumentPart main)
+    /// <summary>Returns exact direct-run font triplets that use one of the narrowly supported
+    /// CSS-like font-list syntaxes. Exact matching is deliberate: different fallback ordering,
+    /// a concrete fallback after a quoted primary, or a one-sided occurrence must not opt a
+    /// document into the renderer compatibility projection.</summary>
+    private static HashSet<string> DirectCssFontStacks(MainDocumentPart main)
     {
         var stacks = new HashSet<string>(StringComparer.Ordinal);
         foreach (var run in main.GetXDocument().Descendants(W.r))
@@ -486,7 +489,7 @@ internal static class IrMarkupRenderer
             var fonts = run.Element(W.rPr)?.Element(W.rFonts);
             var ascii = (string?)fonts?.Attribute(W.ascii);
             if (ascii is not null && fonts is not null && IsExactFontTriplet(fonts, ascii) &&
-                IsUnquotedCssFontStack(ascii))
+                IsCssFontStackWithArialFallback(ascii))
                 stacks.Add(ascii);
         }
         return stacks;
@@ -502,6 +505,34 @@ internal static class IrMarkupRenderer
         var first = value.TrimStart();
         return first.Length > 1 && first.IndexOf(',') > 0 && first[0] is not '\'' and not '\"';
     }
+
+    /// <summary>
+    /// Recognizes the one quoted CSS-family shape that has no concrete fallback to preserve:
+    /// <c>"Primary", sans-serif</c> (or its single-quoted equivalent).  It deliberately declines
+    /// multiple quoted names, explicit secondary faces such as <c>"Calibri", Arial, sans-serif</c>,
+    /// malformed quoting, and non-sans generic families.  Those are not interchangeable with the
+    /// renderer's Arial/Liberation Sans compatibility fallback.
+    /// </summary>
+    private static bool IsQuotedPrimaryWithOnlyGenericSansFallback(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length < 5 || trimmed[0] is not '\'' and not '\"')
+            return false;
+
+        var quote = trimmed[0];
+        int closingQuote = trimmed.IndexOf(quote, 1);
+        if (closingQuote <= 1)
+            return false;
+
+        var remainder = trimmed[(closingQuote + 1)..].TrimStart();
+        if (!remainder.StartsWith(",", StringComparison.Ordinal))
+            return false;
+
+        return string.Equals(remainder[1..].Trim(), "sans-serif", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCssFontStackWithArialFallback(string value)
+        => IsUnquotedCssFontStack(value) || IsQuotedPrimaryWithOnlyGenericSansFallback(value);
 
     /// <summary>
     /// Import media (and hyperlink/external relationships) referenced by RIGHT-sourced clones into the output's

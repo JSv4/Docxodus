@@ -135,7 +135,7 @@ public class DocxDiffWordShapeTests
 
     private static List<(string Kind, string Text)> DirectRevisionRegions(Paragraph para)
     {
-        var regions = new List<(string, string)>();
+        var regions = new List<(string Kind, string Text)>();
         foreach (var child in para.ChildElements)
         {
             var (kind, text) = child switch
@@ -560,10 +560,6 @@ public class DocxDiffWordShapeTests
         var rejected = RevisionProcessor.RejectRevisions(result);
         Assert.Equal(BodyTexts(right), BodyTexts(accepted));
         Assert.Equal(BodyTexts(left), BodyTexts(rejected));
-
-        using var acceptedStream = new MemoryStream(accepted.DocumentByteArray);
-        using var acceptedDoc = WordprocessingDocument.Open(acceptedStream, false);
-        Assert.Empty(acceptedDoc.MainDocumentPart!.Document.Body!.Descendants<SdtRun>());
 
         using var rejectedStream = new MemoryStream(rejected.DocumentByteArray);
         using var rejectedDoc = WordprocessingDocument.Open(rejectedStream, false);

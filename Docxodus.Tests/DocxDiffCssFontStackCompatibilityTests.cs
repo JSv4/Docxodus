@@ -15,7 +15,8 @@ namespace Docxodus.Tests;
 /// <summary>
 /// Regression guards for the final-output compatibility projection for malformed CSS font-family
 /// lists.  The guard intentionally requires the exact list on direct runs in BOTH input packages;
-/// it must not turn into a general font resolver or rewrite quoted / one-sided values.
+/// it must not turn into a general font resolver or rewrite one-sided values / quoted lists with
+/// a concrete fallback face.
 /// </summary>
 public class DocxDiffCssFontStackCompatibilityTests
 {
@@ -42,9 +43,41 @@ public class DocxDiffCssFontStackCompatibilityTests
     }
 
     [Fact]
-    public void SharedQuotedCssFontStack_IsNotProjected()
+    public void SharedQuotedPrimaryWithOnlyGenericSansFallback_ProjectsDirectOutputRunsToArial()
     {
         const string stack = "\"Open Sans\", sans-serif";
+        var result = DocxDiff.Compare(Doc("old", stack), Doc("new", stack));
+
+        var fonts = DirectRunFonts(result).ToList();
+
+        Assert.NotEmpty(fonts);
+        Assert.All(fonts, f =>
+        {
+            Assert.Equal("Arial", (string?)f.Attribute(W + "ascii"));
+            Assert.Equal("Arial", (string?)f.Attribute(W + "hAnsi"));
+            Assert.Equal("Arial", (string?)f.Attribute(W + "cs"));
+        });
+        Assert.Equal("new", BodyText(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal("old", BodyText(RevisionProcessor.RejectRevisions(result)));
+        Assert.Empty(SchemaErrors(result));
+    }
+
+    [Fact]
+    public void SharedQuotedCssFontStackWithConcreteFallback_IsNotProjected()
+    {
+        const string stack = "\"Calibri\", Arial, sans-serif";
+        var result = DocxDiff.Compare(Doc("old", stack), Doc("new", stack));
+
+        var fonts = DirectRunFonts(result).ToList();
+
+        Assert.NotEmpty(fonts);
+        Assert.All(fonts, f => Assert.Equal(stack, (string?)f.Attribute(W + "ascii")));
+    }
+
+    [Fact]
+    public void SharedQuotedPrimaryWithNonSansGenericFallback_IsNotProjected()
+    {
+        const string stack = "\"Open Sans\", serif";
         var result = DocxDiff.Compare(Doc("old", stack), Doc("new", stack));
 
         var fonts = DirectRunFonts(result).ToList();
