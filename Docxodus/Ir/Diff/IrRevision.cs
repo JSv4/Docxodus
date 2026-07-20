@@ -40,7 +40,7 @@ internal enum IrRevisionType
 /// </summary>
 /// <remarks>
 /// <para><b>Modeled-only, by design.</b> The dictionaries enumerate ONLY the modeled
-/// <see cref="IrRunFormat"/> fields (Bold/Italic/Underline/Size/Color/… — never the unmodeled rPr
+/// <see cref="IrRunFormat"/> fields (Bold/Italic/Underline/Size/Color/Shading/… — never the unmodeled rPr
 /// digest), keyed by WmlComparer-friendly property names (<c>bold</c>, <c>italic</c>, <c>fontSize</c>,
 /// <c>color</c>, …; see <c>WmlComparer.GetFriendlyPropertyName</c>). This is exactly what a
 /// <c>w:rPrChange</c>-grade report can describe; an unmodeled-only flip is not a format change here, by

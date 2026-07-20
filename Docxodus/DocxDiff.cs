@@ -522,20 +522,19 @@ public enum DocxDiffRevisionGranularity
 public enum DocxDiffFormatComparison
 {
     /// <summary>
-    /// Compare only the MODELED run-format fields (bold, italic, underline, size, color, sub/superscript,
-    /// strike, caps, highlight, …) — the default. A format change is reported only when a modeled field
-    /// differs. <b>Trade-off:</b> a visible but UNMODELED rPr difference (e.g. <c>w:shd</c> run shading,
-    /// complex-script toggles, secondary font faces, <c>w:lang</c>) reads as Unchanged — a false negative.
-    /// This default exists because a <c>w:rPrChange</c>-grade report can only ever DESCRIBE modeled fields,
-    /// so reporting an undescribable unmodeled-only flip is noise; comparing modeled fields collapses that
-    /// noise without losing any delta a format-change report could express.
+    /// Compare only the MODELED run-format fields (bold, italic, underline, size, color, shading,
+    /// sub/superscript, strike, caps, highlight, …) — the default. A format change is reported only when a
+    /// modeled field differs. <b>Trade-off:</b> a visible but residual rPr difference (e.g. <c>w:bdr</c>,
+    /// complex-script toggles, secondary font faces) or a metadata flip such as <c>w:lang</c> reads as
+    /// Unchanged — a false negative. This default filters known residual-format churn while native revision
+    /// markup preserves the complete source <c>w:rPr</c> for every change it does detect.
     /// </summary>
     ModeledOnly,
 
     /// <summary>
-    /// Compare the FULL run format including the unmodeled rPr digest — every rPr difference (lang,
-    /// complex-script toggles, secondary font faces, shading) is significant. Choose this for byte-fidelity
-    /// consumers that must DETECT (even if they cannot fully describe) every formatting difference. The
+    /// Compare the FULL run format including the residual rPr digest — every remaining rPr difference (lang,
+    /// complex-script toggles, secondary font faces, borders) is significant. Choose this for byte-fidelity
+    /// consumers that must DETECT every formatting difference. The
     /// trade-off is the inverse of <see cref="ModeledOnly"/>: format-change noise from cosmetic rPr churn
     /// (e.g. editing tools rewriting <c>w:lang</c>/<c>w:bCs</c>) is reported.
     /// </summary>

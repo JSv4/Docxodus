@@ -263,6 +263,7 @@ public class IrHasherTests
             ("SizeHalfPoints", baseline with { SizeHalfPoints = 24 }),
             ("ColorHex", baseline with { ColorHex = "FF0000" }),
             ("Highlight", baseline with { Highlight = "yellow" }),
+            ("Shading", baseline with { Shading = new IrShading("<w:shd w:fill=\"FFFF00\"/>") }),
             ("Caps", baseline with { Caps = true }),
             ("SmallCaps", baseline with { SmallCaps = true }),
             ("Vanish", baseline with { Vanish = true }),
@@ -293,6 +294,7 @@ public class IrHasherTests
             ("KeepNext", baseline with { KeepNext = true }),
             ("KeepLines", baseline with { KeepLines = true }),
             ("PageBreakBefore", baseline with { PageBreakBefore = true }),
+            ("Shading", baseline with { Shading = new IrShading("<w:shd w:fill=\"FFFF00\"/>") }),
         };
 
         AssertPairwiseDistinctFromBaseline(

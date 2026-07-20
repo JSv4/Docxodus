@@ -12,7 +12,7 @@ namespace Docxodus.Ir.Diff;
 internal enum IrFormatComparison
 {
     /// <summary>
-    /// Compare only the MODELED run-format fields (Bold/Italic/Underline/Size/Color/… — the
+    /// Compare only the MODELED run-format fields (Bold/Italic/Underline/Size/Color/Shading/… — the
     /// <see cref="IrRunFormat"/> record EXCLUDING its <see cref="IrRunFormat.UnmodeledDigest"/>). The
     /// DEFAULT.
     /// <para><b>Why default.</b> The WC-BodyBookmarks diagnosis (M2.2 Task 4, sub-task B) showed the
@@ -20,13 +20,12 @@ internal enum IrFormatComparison
     /// ONLY format difference is unmodeled rPr leftovers — <c>w:lang</c> (4597), <c>w:iCs</c> (1328),
     /// <c>w:bCs</c> (550), <c>w:rFonts</c> hAnsi/cs faces (33), <c>w:szCs</c>/<c>w:rtl</c> — with every
     /// MODELED field byte-identical. Those are legitimate IR facts but pure noise for diff purposes:
-    /// a <c>w:rPrChange</c>-grade format-change report can only ever DESCRIBE modeled fields anyway, so
-    /// reporting a format change driven by an undescribable unmodeled-digest flip is a false positive.
-    /// Comparing modeled fields only collapses that noise (FormatOnly → Unchanged) without losing any
-    /// format delta a <c>w:rPrChange</c>-grade report could DESCRIBE. The honest trade-off: a visible
-    /// but UNMODELED format change (e.g. <c>w:shd</c> run shading) is a false NEGATIVE under this
-    /// default — it reads as Unchanged. Consumers needing to detect (if not describe) such changes use
-    /// <see cref="Full"/>.</para>
+    /// reporting a format change driven by a residual-digest flip is a false positive. Comparing modeled
+    /// fields only collapses that noise (FormatOnly → Unchanged). The honest trade-off: a remaining visible
+    /// but UNMODELED format change (e.g. <c>w:bdr</c> run borders) is a false NEGATIVE under this default —
+    /// it reads as Unchanged. Consumers needing to detect every residual change use <see cref="Full"/>.
+    /// Direct <c>w:shd</c> is intentionally modeled: its full canonical XML participates in the default
+    /// comparison and native revision markup archives the original raw property.</para>
     /// </summary>
     ModeledOnly,
 

@@ -181,6 +181,7 @@ internal static class IrHasher
         AppendField(sb, "SizeHalfPoints", f.SizeHalfPoints);
         AppendField(sb, "ColorHex", f.ColorHex);
         AppendField(sb, "Highlight", f.Highlight);
+        AppendField(sb, "Shading", f.Shading?.CanonicalXml);
         AppendField(sb, "Caps", f.Caps);
         AppendField(sb, "SmallCaps", f.SmallCaps);
         AppendField(sb, "Vanish", f.Vanish);
@@ -203,6 +204,7 @@ internal static class IrHasher
         AppendField(sb, "KeepNext", f.KeepNext);
         AppendField(sb, "KeepLines", f.KeepLines);
         AppendField(sb, "PageBreakBefore", f.PageBreakBefore);
+        AppendField(sb, "Shading", f.Shading?.CanonicalXml);
         AppendField(sb, "NumId", f.NumId);
         AppendField(sb, "Ilvl", f.Ilvl);
         return HashFields(sb, f.UnmodeledDigest);

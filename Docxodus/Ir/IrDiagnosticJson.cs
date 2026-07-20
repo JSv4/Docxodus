@@ -359,6 +359,7 @@ internal static class IrDiagnosticJson
         if (f.SizeHalfPoints is { } size) writer.WriteNumber("sizeHalfPoints", size);
         if (f.ColorHex is { } colorHex2) writer.WriteString("colorHex", colorHex2);
         if (f.Highlight is { } highlight) writer.WriteString("highlight", highlight);
+        if (f.Shading is { } shading) writer.WriteString("shading", shading.CanonicalXml);
         if (f.Caps is { } caps) writer.WriteBoolean("caps", caps);
         if (f.SmallCaps is { } smallCaps) writer.WriteBoolean("smallCaps", smallCaps);
         if (f.Vanish is { } vanish) writer.WriteBoolean("vanish", vanish);
@@ -386,6 +387,7 @@ internal static class IrDiagnosticJson
         if (f.KeepNext is { } keepNext) writer.WriteBoolean("keepNext", keepNext);
         if (f.KeepLines is { } keepLines) writer.WriteBoolean("keepLines", keepLines);
         if (f.PageBreakBefore is { } pageBreak) writer.WriteBoolean("pageBreakBefore", pageBreak);
+        if (f.Shading is { } shading) writer.WriteString("shading", shading.CanonicalXml);
         writer.WriteEndObject();
     }
 

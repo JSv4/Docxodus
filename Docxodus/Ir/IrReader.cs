@@ -48,7 +48,7 @@ internal static class IrReader
     private static readonly HashSet<XName> PPrConsumed = new()
     {
         W + "pStyle", W + "jc", W + "ind", W + "spacing", W + "outlineLvl",
-        W + "keepNext", W + "keepLines", W + "pageBreakBefore", W + "numPr",
+        W + "keepNext", W + "keepLines", W + "pageBreakBefore", W + "numPr", W + "shd",
     };
 
     // The always-consumed rPr children. w:vertAlign is consumed conditionally (only when it maps
@@ -57,6 +57,7 @@ internal static class IrReader
     {
         W + "rStyle", W + "b", W + "i", W + "strike", W + "dstrike", W + "caps",
         W + "smallCaps", W + "vanish", W + "u", W + "sz", W + "color", W + "highlight",
+        W + "shd",
     };
 
     private static readonly HashSet<XName> SectPrConsumed = new()
@@ -1686,6 +1687,7 @@ internal static class IrReader
         bool? keepNext = Toggle(pPr.Element(W + "keepNext"));
         bool? keepLines = Toggle(pPr.Element(W + "keepLines"));
         bool? pageBreakBefore = Toggle(pPr.Element(W + "pageBreakBefore"));
+        var shading = MapShading(pPr.Element(W + "shd"));
 
         // Direct numbering facts (block-format-change family, 2026-07-03): numId/ilvl are MODELED
         // so a diff-time modeled-only comparison can detect a list-membership change (w:pPrChange).
@@ -1713,6 +1715,7 @@ internal static class IrReader
             KeepNext = keepNext,
             KeepLines = keepLines,
             PageBreakBefore = pageBreakBefore,
+            Shading = shading,
             NumId = numId,
             Ilvl = ilvl,
             UnmodeledDigest = digest,
@@ -1845,6 +1848,7 @@ internal static class IrReader
         int? size = IntAttr(rPr.Element(W + "sz"), W + "val");
         string? colorHex = AttrVal(rPr.Element(W + "color"));
         string? highlight = AttrVal(rPr.Element(W + "highlight"));
+        var shading = MapShading(rPr.Element(W + "shd"));
 
         // Consumed rPr children come from the static RPrConsumed set. w:rFonts is only partially
         // consumed (ascii); keep it in the unmodeled digest so its other faces (hAnsi/cs/eastAsia)
@@ -1867,6 +1871,7 @@ internal static class IrReader
             SizeHalfPoints = size,
             ColorHex = colorHex,
             Highlight = highlight,
+            Shading = shading,
             Caps = caps,
             SmallCaps = smallCaps,
             Vanish = vanish,
@@ -1894,6 +1899,15 @@ internal static class IrReader
         var color = (string?)u.Attribute(W + "color");
         return new IrUnderline(kind, color);
     }
+
+    /// <summary>
+    /// Preserve a shading property's full canonical OOXML rather than reducing it to a fill color: Word's
+    /// `w:shd` has pattern, foreground/background, and theme variants, all of which are visible.  Keeping the
+    /// canonical payload also makes unknown future attributes comparison-significant without rebuilding source
+    /// XML at render time.
+    /// </summary>
+    private static IrShading? MapShading(XElement? shd) =>
+        shd is null ? null : new IrShading(Encoding.UTF8.GetString(IrHasher.Canonicalize(shd)));
 
     // --- table ------------------------------------------------------------
 

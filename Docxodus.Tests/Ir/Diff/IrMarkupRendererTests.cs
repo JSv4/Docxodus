@@ -514,10 +514,10 @@ public class IrMarkupRendererTests
     }
 
     [Fact]
-    public void Render_preserves_unmodeled_run_properties_on_modified_paragraph()
+    public void Render_preserves_run_shading_on_modified_paragraph()
     {
-        // A run carrying an UNMODELED rPr child (w:shd) on an EQUAL portion must survive into the output —
-        // proving provenance-clone (not IrRunFormat rebuild) preserves unmodeled formatting.
+        // A shaded run on an EQUAL portion must survive into the output — proving provenance-clone (not
+        // IrRunFormat rebuild) preserves direct formatting while another span is revised.
         var left = IrTestDocuments.FromBodyXml(
             "<w:p><w:r><w:rPr><w:shd w:val=\"clear\" w:fill=\"FFFF00\"/></w:rPr><w:t>highlight one two</w:t></w:r></w:p>");
         var right = IrTestDocuments.FromBodyXml(
@@ -527,8 +527,8 @@ public class IrMarkupRendererTests
         using var ms = new MemoryStream(rendered.DocumentByteArray);
         using var wd = WordprocessingDocument.Open(ms, false);
         var shdCount = wd.MainDocumentPart!.GetXDocument().Descendants(W.shd).Count();
-        Assert.True(shdCount > 0, "unmodeled w:shd run property must be preserved through the split");
-        AssertRoundTrip(left, right, label: "unmodeled-shd");
+        Assert.True(shdCount > 0, "w:shd run property must be preserved through the split");
+        AssertRoundTrip(left, right, label: "run-shading");
     }
 
     [Fact]
