@@ -13,6 +13,8 @@ public class IrHasherTests
 {
     private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
     private static readonly XNamespace Pt = "http://powertools.codeplex.com/2011";
+    private static readonly XNamespace Wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+    private static readonly XNamespace Wp14 = "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing";
 
     // --- Canonicalization -------------------------------------------------
 
@@ -45,6 +47,29 @@ public class IrHasherTests
             new XElement(W + "r", new XElement(W + "t", "hello")));
 
         Assert.Equal(IrHasher.CanonicalHash(bare), IrHasher.CanonicalHash(noisy));
+    }
+
+    [Fact]
+    public void Canonicalize_DrawingAnchorAndEditIds_Stripped()
+    {
+        XElement Drawing(string? anchorId, string? editId, string docPrId, string cx = "100")
+        {
+            var inline = new XElement(Wp + "inline");
+            if (anchorId is not null)
+                inline.Add(new XAttribute(Wp14 + "anchorId", anchorId));
+            if (editId is not null)
+                inline.Add(new XAttribute(Wp14 + "editId", editId));
+            inline.Add(
+                new XElement(Wp + "docPr", new XAttribute("id", docPrId), new XAttribute("name", "Picture")),
+                new XElement(Wp + "extent", new XAttribute("cx", cx), new XAttribute("cy", "200")));
+            return new XElement(W + "drawing", inline);
+        }
+
+        var bare = Drawing(anchorId: null, editId: null, docPrId: "99");
+        Assert.Equal(IrHasher.CanonicalHash(Drawing("5FC16A89", null, "1")), IrHasher.CanonicalHash(bare));
+        Assert.Equal(IrHasher.CanonicalHash(Drawing(null, "1A20F538", "1")), IrHasher.CanonicalHash(bare));
+        Assert.Equal(IrHasher.CanonicalHash(Drawing("5FC16A89", "1A20F538", "1")), IrHasher.CanonicalHash(bare));
+        Assert.NotEqual(IrHasher.CanonicalHash(bare), IrHasher.CanonicalHash(Drawing(null, null, "99", cx: "101")));
     }
 
     [Fact]

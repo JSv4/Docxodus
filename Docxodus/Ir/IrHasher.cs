@@ -33,6 +33,13 @@ internal static class IrHasher
     private static readonly XName WpDocPr =
         (XNamespace)"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" + "docPr";
 
+    // Word 2010's drawing anchor/edit ids are likewise opaque per-edit identifiers rather than presentation
+    // state. They are frequently added/removed by Word around an otherwise unchanged inline image.
+    private static readonly XNamespace Wp14 =
+        "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing";
+    private static readonly XName Wp14AnchorId = Wp14 + "anchorId";
+    private static readonly XName Wp14EditId = Wp14 + "editId";
+
     // PowerTools bookkeeping namespaces (Unid/StyleName/etc.) — declared via the "pt14"
     // prefix in the codebase. Stripped from canonical form so it survives Unid churn.
     private static readonly string PtNamespace = "http://powertools.codeplex.com/2011";
@@ -73,7 +80,8 @@ internal static class IrHasher
     /// internal media, the URI for external/hyperlink rels, a sentinel for dangling/xml-part rels) so a
     /// renumbered-but-content-identical drawing/image/diagram canonicalizes identically. When null, rel
     /// values pass through unchanged (the legacy, rel-numbering-sensitive behavior). Either way the
-    /// renumber-prone <c>wp:docPr/@id</c> is stripped (it is a non-content drawing-object id).
+    /// renumber-prone <c>wp:docPr/@id</c> and <c>wp14:anchorId</c>/<c>editId</c> are stripped (they are
+    /// non-content drawing-object identifiers).
     /// </summary>
     public static byte[] Canonicalize(XElement element, IrRelResolver? resolver)
     {
@@ -151,6 +159,11 @@ internal static class IrHasher
         // CloneBlockLevelContentForHashing dropping wp:docPr/@id). Two otherwise-identical drawings whose
         // docPr ids differ (the WC-1940 / WC052-SmartArt case) must canonicalize equal.
         if (attribute.Name == "id" && attribute.Parent?.Name == WpDocPr)
+            return true;
+
+        // Word's 2010 drawing anchor/edit IDs are transient object/edit identifiers. Retaining them would turn
+        // harmless editor churn around an otherwise identical image/presentation into a false replacement.
+        if (attribute.Name == Wp14AnchorId || attribute.Name == Wp14EditId)
             return true;
 
         return false;
