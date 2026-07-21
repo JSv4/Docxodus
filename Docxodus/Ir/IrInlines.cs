@@ -74,15 +74,19 @@ internal sealed record IrFieldRun(string Instruction, IrNodeList<IrInline> Cache
 internal sealed record IrNoteRef(IrNoteKind Kind, string NoteId) : IrInline;
 
 /// <summary>
-/// An inline image: the image part, a hash of its bytes, EMU dimensions, alt text, and the
-/// addressable <see cref="Unid"/> of the source <c>w:drawing</c> (its <c>pt:Unid</c>, captured by the
-/// reader; null when the drawing carried none). The Unid is the IR's <c>img</c>-anchor identity for
-/// the markdown projection (M1.4-T2). It is equality-neutral metadata: two images with identical
-/// bytes/extent/alt but different Unids are still the same VALUE for diff/hash purposes, so it is
-/// excluded from record equality (the reader feeds image equality off bytes/extent/alt, not position).
+/// An inline image: the image part, a hash of its bytes, modeled dimensions/alt text, and a
+/// relationship-id-stable digest of the complete <c>w:drawing</c> presentation. The drawing digest
+/// covers layout that the compact fields do not model (anchor/wrap/crop/rotation/secondary media), so
+/// a same-byte visual change cannot be classified Equal and leak the right drawing through Reject.
+/// The addressable <see cref="Unid"/> of the source <c>w:drawing</c> is equality-neutral metadata: it
+/// is the markdown projection's <c>img</c>-anchor identity, not image content.
 /// </summary>
 internal sealed record IrInlineImage(Uri PartUri, IrHash ImageBytesHash, long WidthEmu, long HeightEmu, string? AltText) : IrInline
 {
+    /// <summary>Resolver-aware canonical hash of the source <c>w:drawing</c>, including its presentation
+    /// XML but with relationship ids and nonvisual <c>wp:docPr/@id</c> churn normalized.</summary>
+    public IrHash DrawingDigest { get; init; }
+
     /// <summary>The source <c>w:drawing</c>'s <c>pt:Unid</c>, or null when absent. Equality-neutral
     /// (see type remarks): does not participate in the record's structural equality.</summary>
     public string? Unid { get; init; }
@@ -93,10 +97,11 @@ internal sealed record IrInlineImage(Uri PartUri, IrHash ImageBytesHash, long Wi
         && ImageBytesHash == other.ImageBytesHash
         && WidthEmu == other.WidthEmu
         && HeightEmu == other.HeightEmu
-        && AltText == other.AltText;
+        && AltText == other.AltText
+        && DrawingDigest == other.DrawingDigest;
 
     public override int GetHashCode() =>
-        HashCode.Combine(PartUri, ImageBytesHash, WidthEmu, HeightEmu, AltText);
+        HashCode.Combine(PartUri, ImageBytesHash, WidthEmu, HeightEmu, AltText, DrawingDigest);
 }
 
 /// <summary>

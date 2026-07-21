@@ -285,7 +285,11 @@ internal static class IrDiffTokenizer
 
                 case IrInlineImage image:
                     tokens.Add(new IrDiffToken(
-                        IrDiffTokenKind.Image, "", AtomicKey("img:" + image.ImageBytesHash.ToHex()),
+                        // The drawing digest carries zero-width presentation state (extent/anchor/crop/wrap/
+                        // alt/secondary relationships). It must participate in the atomic key: otherwise a
+                        // content-hash-different image pair can still token-diff Equal, and the fine renderer
+                        // emits the RIGHT drawing bare so Reject fails to restore the LEFT layout.
+                        IrDiffTokenKind.Image, "", AtomicKey("img:" + image.ImageBytesHash.ToHex() + ":" + image.DrawingDigest.ToHex()),
                         charOffset, charOffset, null));
                     break;
 

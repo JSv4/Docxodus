@@ -28,9 +28,9 @@ public class IrNoteImageSdtTests
 
     // A drawing element wrapping an inline picture whose a:blip references the given embed rel id.
     private static string Drawing(string embedId, long cx = 100, long cy = 200,
-        string? name = null, string? descr = null)
+        string? name = null, string? descr = null, int docPrId = 1)
     {
-        var docPrAttrs = $"id=\"1\" name=\"{name ?? "Picture 1"}\"" +
+        var docPrAttrs = $"id=\"{docPrId}\" name=\"{name ?? "Picture 1"}\"" +
                          (descr is null ? "" : $" descr=\"{descr}\"");
         return
             "<w:drawing>" +
@@ -148,6 +148,47 @@ public class IrNoteImageSdtTests
             .Inlines.OfType<IrInlineImage>().Single();
 
         Assert.Equal(imgA.ImageBytesHash, imgB.ImageBytesHash);
+        Assert.Equal(imgA.DrawingDigest, imgB.DrawingDigest);
+    }
+
+    [Fact]
+    public void Read_ImageDrawingDigest_IgnoresNonvisualDocPrIdRenumbering()
+    {
+        var docA = IrTestDocuments.FromBodyXmlWithImageParts(
+            $"<w:p><w:r>{Drawing("rId1", docPrId: 1)}</w:r></w:p>",
+            ("rId1", IrTestDocuments.TinyPng));
+        var docB = IrTestDocuments.FromBodyXmlWithImageParts(
+            $"<w:p><w:r>{Drawing("rId1", docPrId: 99)}</w:r></w:p>",
+            ("rId1", IrTestDocuments.TinyPng));
+
+        var imageA = IrReader.Read(docA).Body.Blocks.OfType<IrParagraph>().Single()
+            .Inlines.OfType<IrInlineImage>().Single();
+        var imageB = IrReader.Read(docB).Body.Blocks.OfType<IrParagraph>().Single()
+            .Inlines.OfType<IrInlineImage>().Single();
+
+        Assert.Equal(imageA.DrawingDigest, imageB.DrawingDigest);
+    }
+
+    [Fact]
+    public void Compare_ImageResizeWithSameBytes_RoundTripsBothDrawingLayouts()
+    {
+        var left = IrTestDocuments.FromBodyXmlWithImageParts(
+            $"<w:p><w:r>{Drawing("rIdImage", cx: 100, cy: 200)}</w:r></w:p>",
+            ("rIdImage", IrTestDocuments.TinyPng));
+        var right = IrTestDocuments.FromBodyXmlWithImageParts(
+            $"<w:p><w:r>{Drawing("rIdImage", cx: 300, cy: 200)}</w:r></w:p>",
+            ("rIdImage", IrTestDocuments.TinyPng));
+
+        var leftParagraph = IrReader.Read(left).Body.Blocks.OfType<IrParagraph>().Single();
+        var rightParagraph = IrReader.Read(right).Body.Blocks.OfType<IrParagraph>().Single();
+        Assert.NotEqual(leftParagraph.ContentHash, rightParagraph.ContentHash);
+
+        var redline = DocxDiff.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(redline);
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+
+        Assert.Equal(300, MainImage(accepted).WidthEmu);
+        Assert.Equal(100, MainImage(rejected).WidthEmu);
     }
 
     [Fact]
@@ -275,6 +316,10 @@ public class IrNoteImageSdtTests
         using var writer = new StreamWriter(stream);
         writer.Write(xml);
     }
+
+    private static IrInlineImage MainImage(WmlDocument document) =>
+        IrReader.Read(document).Body.Blocks.OfType<IrParagraph>().Single()
+            .Inlines.OfType<IrInlineImage>().Single();
 
     [Fact]
     public void Read_OpaqueRel_DifferentRelId_SamePartBytes_SameOpaqueHash()

@@ -1297,6 +1297,11 @@ internal static class IrReader
 
                 sink.Add(new IrInlineImage(image.PartUri, image.BytesHash, cx, cy, altText)
                 {
+                    // Image bytes alone are insufficient identity: a resize, crop, anchor/wrap change,
+                    // rotation, alt update, or secondary drawing relationship must remain reversible on
+                    // accept/reject. Canonicalization normalizes rel ids against this story's owning part
+                    // and strips wp:docPr/@id, so harmless id renumbering does not produce false edits.
+                    DrawingDigest = IrHasher.CanonicalHash(drawing, ctx.RelResolver),
                     Unid = drawingUnid,
                 });
                 promotedImage = true;
@@ -1614,14 +1619,13 @@ internal static class IrReader
                         : IrContentHashBuilder.SentinelEndnoteRef);
                     break;
                 case IrInlineImage img:
-                    // Sentinel + the image part's bytes hash (spec §6.1). Extent and alt text do NOT
-                    // affect ContentHash (they are not text); they also do not currently affect the
-                    // FormatFingerprint — the image carries no run format, so a resize is invisible to
-                    // both hashes today.
-                    // TODO(M2): the diff engine may want extent/alt changes surfaced (e.g. as a
-                    // format-grade change) so a resized-but-same-bytes image reads as "changed".
+                    // Sentinel + image bytes + resolver-aware drawing presentation. A drawing is zero-width
+                    // in textual coordinates, but dimensions/anchor/crop/wrap/alternate media still affect
+                    // the accepted visual document. Folding its canonical presentation digest into content
+                    // identity makes those changes a normal atomic image replacement rather than Equal.
                     builder.AppendSentinel(IrContentHashBuilder.SentinelImage);
                     builder.AppendHash(img.ImageBytesHash);
+                    builder.AppendHash(img.DrawingDigest);
                     break;
                 case IrTextbox tb:
                     // Sentinel + each inner block's ContentHash in order (spec §6.1 M1.5 addendum).

@@ -325,6 +325,7 @@ internal static class IrDiagnosticJson
                 // filesystem path may leak into the diagnostic output.
                 writer.WriteString("partUri", img.PartUri.ToString());
                 writer.WriteString("imageBytesHash", img.ImageBytesHash.ToHex());
+                writer.WriteString("drawingDigest", img.DrawingDigest.ToHex());
                 writer.WriteNumber("widthEmu", img.WidthEmu);
                 writer.WriteNumber("heightEmu", img.HeightEmu);
                 if (img.AltText is { } altText) writer.WriteString("altText", altText);
