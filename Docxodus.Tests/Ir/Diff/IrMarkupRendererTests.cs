@@ -1229,6 +1229,32 @@ public class IrMarkupRendererTests
         AssertRoundTrip(left, right, settings, label: "move-modify");
     }
 
+    /// <summary>
+    /// Two paragraphs can be both edited and reordered inside one unmatched gap.  Their strong lexical
+    /// correspondence crosses document order, so treating either pair as an in-place ModifyBlock is unsafe:
+    /// the right-ordered renderer then keeps the left text in the right order when revisions are rejected.
+    /// Such correspondence must lower to move or delete/insert semantics, both of which restore the original
+    /// left order on reject.
+    /// </summary>
+    [Fact]
+    public void Render_crossed_edited_paragraphs_restore_left_order_on_reject()
+    {
+        const string leftBody =
+            "<w:p><w:r><w:t>anchor-start</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>red green blue orange</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>cat dog mouse horse</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>anchor-end</w:t></w:r></w:p>";
+        const string rightBody =
+            "<w:p><w:r><w:t>anchor-start</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>cat dog mouse zebra</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>red green blue purple</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>anchor-end</w:t></w:r></w:p>";
+        var left = IrTestDocuments.FromBodyXml(leftBody);
+        var right = IrTestDocuments.FromBodyXml(rightBody);
+
+        AssertRoundTrip(left, right, label: "crossed-edited-paragraphs");
+    }
+
     [Fact]
     public void Render_move_with_DetectMoves_off_demotes_to_ins_del()
     {

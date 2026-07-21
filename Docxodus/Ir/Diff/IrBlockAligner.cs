@@ -151,6 +151,14 @@ internal static class IrBlockAligner
             leftBodyFullRewriteGroups, rightBodyFullRewriteGroups, markBodyFullRewriteGaps,
             ref nextBodyFullRewriteGroupId);
 
+        // A renderer emits paired in-place blocks in RIGHT order.  Therefore every such pairing must be
+        // monotone: crossed Modified pairs accept to the right sequence, but reject leaves their LEFT content
+        // in that same right order. SimilarityPair intentionally considers correspondence by content rather
+        // than position, so normalize any crossed fuzzy pair back to Delete+Insert before move detection. The
+        // global move pass can then promote sufficiently strong correspondence to MovedModified; weaker cases
+        // stay conservative and, crucially, reversible.
+        ReleaseCrossingModifiedPairs(leftKind, rightKind, leftMatch, rightMatch);
+
         // --- Cross-gap fuzzy moves: over the GLOBAL leftover Deleted × Inserted sets (after all gap
         // fill), re-pair similar blocks as Moved / MovedModified. Runs AFTER gap fill so it sees the
         // final Deleted/Inserted leftovers, never blocks already consumed in-place.
@@ -1540,6 +1548,64 @@ internal static class IrBlockAligner
             leftMatch[bestLeft] = bestRight;
             rightMatch[bestRight] = bestLeft;
         }
+    }
+
+    /// <summary>
+    /// Release every in-place <see cref="IrAlignmentKind.Modified"/> pair that participates in a crossing.
+    /// Exact anchors and the order-preserving refinement passes are already monotone; only greedy similarity
+    /// pairing can produce an inversion. Both endpoints of an inversion must be released — retaining just one
+    /// crossed edit would still put its old content at the wrong physical paragraph when revisions are rejected.
+    /// The prefix/suffix extrema identify every modified pair in an inversion in O(n), including permutations
+    /// larger than a simple adjacent swap.
+    /// </summary>
+    private static void ReleaseCrossingModifiedPairs(
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
+        int[] leftMatch, int[] rightMatch)
+    {
+        int n = leftMatch.Length;
+        var maxRightBefore = new int[n];
+        int maxRight = int.MinValue;
+        for (int li = 0; li < n; li++)
+        {
+            maxRightBefore[li] = maxRight;
+            if (IsOneToOneInPlace(leftKind[li], leftMatch[li]))
+                maxRight = Math.Max(maxRight, leftMatch[li]);
+        }
+
+        var minRightAfter = new int[n];
+        int minRight = int.MaxValue;
+        for (int li = n - 1; li >= 0; li--)
+        {
+            minRightAfter[li] = minRight;
+            if (IsOneToOneInPlace(leftKind[li], leftMatch[li]))
+                minRight = Math.Min(minRight, leftMatch[li]);
+        }
+
+        var release = new List<int>();
+        for (int li = 0; li < n; li++)
+        {
+            int rj = leftMatch[li];
+            if (leftKind[li] != IrAlignmentKind.Modified || rj < 0)
+                continue;
+            if (rj < maxRightBefore[li] || rj > minRightAfter[li])
+                release.Add(li);
+        }
+
+        foreach (int li in release)
+        {
+            int rj = leftMatch[li];
+            // A Modified pair is necessarily one-to-one. Be defensive in case a future alignment kind reuses
+            // this normalization path with a partially released counterpart.
+            if (rj < 0 || rightMatch[rj] != li || rightKind[rj] != IrAlignmentKind.Modified)
+                continue;
+            leftKind[li] = IrAlignmentKind.Deleted;
+            rightKind[rj] = IrAlignmentKind.Inserted;
+            leftMatch[li] = -1;
+            rightMatch[rj] = -1;
+        }
+
+        static bool IsOneToOneInPlace(IrAlignmentKind? kind, int rightIndex) =>
+            rightIndex >= 0 && kind is IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly or IrAlignmentKind.Modified;
     }
 
     // ------------------------------------------------------------------ emit

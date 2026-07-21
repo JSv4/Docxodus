@@ -759,14 +759,14 @@ public class IrBlockAlignerTests
     }
 
     [Fact]
-    public void In_gap_cross_positioned_edit_pairs_as_modified()
+    public void In_gap_cross_positioned_edits_lower_to_reversible_moves()
     {
-        // Two paragraphs are edited AND swapped WITHIN a single spine gap (between alpha and omega). M2.1's
-        // blind positional pairing would have paired them by position — pairing edited-P1 with edited-P2's
-        // slot and vice-versa, producing two low-quality Modified pairs. M2.2's in-gap similarity pairing
-        // matches each edited paragraph to its true counterpart by score, so both surface as faithful
-        // Modified pairs (each ≥ 0.5 similarity to its real original, far above its similarity to the
-        // other). This is the upgrade of the M2.1 gap-positional limitation.
+        // Two paragraphs are edited AND swapped WITHIN a single spine gap (between alpha and omega). Their
+        // true lexical correspondence crosses document order. Rendering crossed pairs as in-place Modified
+        // blocks accepts correctly but rejects to the right-side order, so the normalizer must release BOTH
+        // pairs. These long, near-identical paragraphs clear the default fuzzy-move threshold after release,
+        // so the global move pass restores their true correspondence as two MovedModified pairs rather than
+        // leaving them as conservative delete+insert pairs.
         var l = Doc(
             "alpha",
             "the quick brown fox jumps high",
@@ -779,17 +779,11 @@ public class IrBlockAlignerTests
             "omega");
         var a = Align(l, r);
 
-        Assert.Equal(2, Count(a, IrAlignmentKind.Modified));
         Assert.Equal(2, Count(a, IrAlignmentKind.Unchanged));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Modified));
         Assert.Equal(0, Count(a, IrAlignmentKind.Deleted));
         Assert.Equal(0, Count(a, IrAlignmentKind.Inserted));
-
-        // Each Modified pair joins an edited paragraph to its TRUE original (by content), not its slot-mate.
-        var modifies = a.Entries.Where(e => e.Kind == IrAlignmentKind.Modified).ToList();
-        Assert.Contains(modifies, e =>
-            Text(e.Left!).Contains("quick brown fox") && Text(e.Right!).Contains("quick brown fox"));
-        Assert.Contains(modifies, e =>
-            Text(e.Left!).Contains("lazy sleepy dog") && Text(e.Right!).Contains("lazy sleepy dog"));
+        Assert.Equal(2, Count(a, IrAlignmentKind.MovedModified));
         AssertInvariants(l, r, a);
     }
 
