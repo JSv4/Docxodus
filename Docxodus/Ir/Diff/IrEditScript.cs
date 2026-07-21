@@ -128,9 +128,9 @@ internal enum IrEditOpKind
 /// emitted from one BODY-level 1×1 full-lexical-rewrite gap. It is renderer-only provenance; nested
 /// scopes and every other operation leave it null.</item>
 /// <item><see cref="RequiresWholeParagraphReplace"/>: set only on a paired paragraph operation whose
-/// inline structural carrier differs. Its token diff remains available for apply/diagnostics, but renderers
-/// must emit whole old/new paragraphs so an atomic inline <c>w:sdt</c>/<c>w:smartTag</c> wrapper never leaks
-/// through Accept or Reject.</item>
+/// non-tokenizable structural carrier differs (an inline <c>w:sdt</c>/<c>w:smartTag</c> envelope or a
+/// non-hyperlink field code/state carrier). Its token diff remains available for apply/diagnostics, but renderers
+/// must emit whole old/new paragraphs so the original carrier never leaks through Accept or Reject.</item>
 /// </list>
 /// </remarks>
 internal sealed record IrEditOp(

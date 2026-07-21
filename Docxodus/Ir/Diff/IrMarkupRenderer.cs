@@ -394,8 +394,9 @@ internal static class IrMarkupRenderer
                 // boundaries (AlwaysKeep) so a REF/PAGEREF field is never orphaned, but a boundary may leave the
                 // plumbing in the wrong revision wrapper (e.g. a begin/separate run wrapped in w:ins after the
                 // text before the field was edited — the field would then vanish on reject). Re-home each field's
-                // plumbing to the field's own context: bare for an unchanged or result-edited field (survives
-                // accept AND reject), left in w:del/w:ins for a wholly deleted/inserted field.
+                // plumbing to the field's own context in every rendered story (body, headers/footers, and notes):
+                // bare for an unchanged or result-edited field (survives accept AND reject), left in w:del/w:ins
+                // for a wholly deleted/inserted field.
                 NormalizeFields(main);
 
                 // Style-definition provenance (decoded from the Word-compare oracle corpus): the result
@@ -831,8 +832,8 @@ internal static class IrMarkupRenderer
 
             case IrEditOpKind.MoveBlock:
             case IrEditOpKind.MoveModifyBlock:
-                // An inline SDT/smartTag carrier change is structurally inseparable from its paragraph.
-                // Do not disguise it as a native move whose destination can slice the wrapper: a full
+                // An inline envelope or non-hyperlink field carrier change is structurally inseparable from its
+                // paragraph. Do not disguise it as a native move whose destination can slice the carrier: a full
                 // delete/insert pair is the only representation that makes both Accept and Reject exact.
                 if (op.RequiresWholeParagraphReplace)
                 {
@@ -2946,7 +2947,16 @@ internal static class IrMarkupRenderer
     private static bool IsInWholeBlockRevisedParagraph(XElement marker)
     {
         var p = marker.Ancestors(W.p).FirstOrDefault();
-        var mark = p?.Element(W.pPr)?.Element(W.rPr);
+        return p != null && IsWholeBlockRevisedParagraph(p);
+    }
+
+    /// <summary>True for a paragraph emitted as one complete insertion/deletion (or whole move) rather than a
+    /// fine token-level revision. Its field plumbing already has the same revision context as its carrier and
+    /// must never be lifted bare by <see cref="NormalizeFields"/> — an instruction-only field has no result run
+    /// from which that normalizer could infer its context.</summary>
+    private static bool IsWholeBlockRevisedParagraph(XElement paragraph)
+    {
+        var mark = paragraph.Element(W.pPr)?.Element(W.rPr);
         return mark != null && (mark.Element(W.del) != null || mark.Element(W.ins) != null);
     }
 
@@ -3028,15 +3038,38 @@ internal static class IrMarkupRenderer
     /// </summary>
     private static void NormalizeFields(MainDocumentPart main)
     {
-        var body = main.GetXDocument().Root?.Element(W.body);
-        if (body == null)
-            return;
+        // The body is not the only renderer that emits fine-grained field revisions: note and header/footer
+        // scope diffs share the same token renderer. Normalize each live story root after all scopes have been
+        // rebuilt, otherwise a field boundary in a header or footnote can still vanish on one revision view.
+        var parts = new List<OpenXmlPart> { main };
+        parts.AddRange(main.HeaderParts);
+        parts.AddRange(main.FooterParts);
+        if (main.FootnotesPart is not null)
+            parts.Add(main.FootnotesPart);
+        if (main.EndnotesPart is not null)
+            parts.Add(main.EndnotesPart);
 
+        foreach (var part in parts.Distinct())
+        {
+            var root = part.GetXDocument().Root;
+            if (root is not null && NormalizeFieldsInRoot(root))
+                part.PutXDocument();
+        }
+    }
+
+    private static bool NormalizeFieldsInRoot(XElement root)
+    {
         static bool IsBareRun(XElement r) => !r.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del);
 
         bool changed = false;
-        foreach (var p in body.Descendants(W.p))
+        foreach (var p in root.Descendants(W.p))
         {
+            // A whole paired paragraph is already a complete w:del/w:ins carrier. Do not infer field context
+            // from its result runs: instruction-only and empty-result fields have none, and lifting their begin /
+            // instruction / end plumbing bare would make BOTH codes survive Accept and Reject.
+            if (IsWholeBlockRevisedParagraph(p))
+                continue;
+
             // Walk this paragraph's runs in document order, grouping each top-level fldChar field (begin..end)
             // into its plumbing runs (fldChar / instrText) and result runs (the visible display between separate
             // and end). Nested fields fold into the enclosing one (their plumbing is still field plumbing).
@@ -3087,8 +3120,7 @@ internal static class IrMarkupRenderer
             }
         }
 
-        if (changed)
-            main.PutXDocument();
+        return changed;
     }
 
     /// <summary>Lift a run out of its sole-child <c>w:ins</c>/<c>w:del</c> wrapper to bare. A run lifted out of a
@@ -3615,18 +3647,22 @@ internal static class IrMarkupRenderer
     /// <see cref="RevisionProcessor"/> reject did not strip it — the content leaked through, breaking the
     /// <c>reject ≡ left</c> contract. Structural children (<c>w:sdtPr</c>, …) pass through untouched.
     /// </summary>
-    private static XElement WrapContainerChild(XElement child, RevKind kind, RenderState state)
+    private static IEnumerable<XElement> WrapContainerChild(XElement child, RevKind kind, RenderState state)
     {
+        // A nested fldSimple is just as illegal inside w:ins/w:del as a top-level one. Expand it before
+        // wrapping, preserving its result position inside the enclosing hyperlink/SDT/smartTag container.
+        if (child.Name == W.fldSimple)
+            return WrapFieldAware(child, kind, state);
         if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.smartTag || child.Name == W.sdt)
-            return WrapRunLevel(child, kind, state);
+            return new[] { WrapRunLevel(child, kind, state) };
         if (child.Name == W.sdtContent)
         {
             var content = new XElement(child.Name, child.Attributes());
             foreach (var inner in child.Elements())
                 content.Add(WrapContainerChild(inner, kind, state));
-            return content;
+            return new[] { content };
         }
-        return new XElement(child);
+        return new[] { new XElement(child) };
     }
 
     /// <summary>Mark a paragraph's end-of-paragraph mark inserted/deleted: an EMPTY <c>w:ins</c>/<c>w:del</c>
@@ -4562,7 +4598,9 @@ internal static class IrMarkupRenderer
     /// deleted — the field code survives with no content). Expand it to the equivalent <c>fldChar</c> run
     /// sequence (begin / instrText / separate / cached result / end) so the WHOLE field — code and result —
     /// rides in revision-wrappable runs and toggles cleanly: accept of a deletion drops the entire field,
-    /// reject restores it live. Any non-field run-level element is yielded unchanged.
+    /// reject restores it live. The simple field's <c>w:dirty</c>/<c>w:fldLock</c> state and <c>w:fldData</c>
+    /// move to the generated begin <c>w:fldChar</c>, preserving field semantics even though a direct simple-field
+    /// serialization itself cannot live inside a revision. Any non-field run-level element is yielded unchanged.
     /// </summary>
     private static IEnumerable<XElement> ExpandFieldForRevision(XElement runLevel)
     {
@@ -4572,12 +4610,22 @@ internal static class IrMarkupRenderer
             yield break;
         }
         var instr = (string?)runLevel.Attribute(W.instr) ?? "";
-        yield return new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin")));
+        var begin = new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"));
+        foreach (var attribute in runLevel.Attributes().Where(attribute =>
+                     attribute.Name == W.dirty || attribute.Name == W.fldLock))
+            begin.Add(new XAttribute(attribute));
+        foreach (var fieldData in runLevel.Elements(W.fldData))
+            begin.Add(new XElement(fieldData));
+        yield return new XElement(W.r, begin);
         yield return new XElement(W.r,
             new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), instr));
         yield return new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate")));
-        foreach (var child in runLevel.Elements())   // the cached result (display) content
-            yield return new XElement(child);
+        foreach (var child in runLevel.Elements().Where(child => child.Name != W.fldData))
+            // A simple field may legally contain another simple field. Flatten nested fields to their equivalent
+            // fldChar run sequence before revisions are applied; otherwise the inner fldSimple would become an
+            // invalid direct child of w:ins/w:del.
+            foreach (var expanded in ExpandFieldForRevision(child))
+                yield return expanded;
         yield return new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end")));
     }
 
@@ -7217,16 +7265,26 @@ internal static class IrMarkupRenderer
                     _segments.Add(new Segment(runLevel, charOffset, charOffset, SegmentKind.ZeroWidth) { Chain = childChain });
             }
             else if (runLevel.Name == W.ins || runLevel.Name == W.del ||
-                     runLevel.Name == W.sdt || runLevel.Name == W.smartTag)
+                     runLevel.Name == W.sdt || runLevel.Name == W.smartTag || runLevel.Name == W.fldSimple)
             {
-                // Non-hyperlink container (sdt/smartTag/accepted ins-del wrapper): one ATOMIC segment spanning its
-                // full inner text, emitted whole. Its char span is the sum of its descendant w:t lengths
-                // (mirroring the tokenizer's transparent recursion). Claim-tracked in Slice so multiple
-                // overlapping ops emit it once.
+                // Non-hyperlink container (sdt/smartTag/accepted ins-del wrapper/direct simple field): one ATOMIC
+                // segment spanning its full inner text, emitted whole. A changed fldSimple is always marked as a
+                // whole-paragraph structural replacement by FieldEnvelopeDigest; this branch only needs to carry
+                // an unchanged simple field once while adjacent token edits use the correct text offset. Its char
+                // span mirrors the reader/tokenizer's transparent recursion, including the special hyphens and
+                // valid w:sym glyphs that each contribute one visible character. Counting only descendant w:t
+                // nodes makes a suffix edit start one character early after a direct simple field containing one
+                // of those run children, so the source slicer can drop or misplace the field/result.
                 int start = charOffset;
-                foreach (var t in runLevel.Descendants(W.t))
-                    charOffset += t.Value.Length;
-                _segments.Add(new Segment(runLevel, start, charOffset, SegmentKind.Container) { Chain = chain });
+                charOffset += VisibleTextLength(runLevel);
+                _segments.Add(new Segment(runLevel, start, charOffset, SegmentKind.Container)
+                {
+                    Chain = chain,
+                    // A result-less direct field has no diff token to claim it at an adjacent edit boundary.
+                    // Keep it exactly once just like a structural marker; otherwise an unchanged REF/PAGE field
+                    // can disappear merely because following prose changed.
+                    AlwaysKeep = runLevel.Name == W.fldSimple && start == charOffset,
+                });
             }
             else
             {
@@ -7310,6 +7368,78 @@ internal static class IrMarkupRenderer
 
         private static bool IsContainer(XName n) =>
             n == W.hyperlink || n == W.ins || n == W.del || n == W.sdt || n == W.smartTag;
+
+        /// <summary>
+        /// Visible character length of an atomic source container. This intentionally mirrors the reader's
+        /// <see cref="IrReader.InlineWalker"/> / <see cref="IrReader.EmitRunChild"/> topology instead of simply
+        /// summing descendant <c>w:t</c> nodes: textbox bodies and opaque containers can contain text in their
+        /// raw XML yet are zero-width in the tokenizer's coordinate space. Literal text contributes its UTF-16
+        /// length, the two special hyphen elements each contribute one character, and only a valid BMP
+        /// <c>w:sym/@w:char</c> contributes one. An invalid symbol is modeled as zero-width opaque content and
+        /// must not move a source-slice boundary.
+        /// </summary>
+        private static int VisibleTextLength(XElement container) => VisibleRunLevelTextLength(container, 0);
+
+        private static int VisibleRunLevelTextLength(XElement element, int sdtDepth)
+        {
+            if (element.Name == W.r)
+            {
+                int length = 0;
+                foreach (var child in element.Elements())
+                    if (child.Name != W.rPr)
+                        length += VisibleRunChildTextLength(child);
+                return length;
+            }
+
+            if (element.Name == W.hyperlink || element.Name == W.ins || element.Name == W.del)
+                return element.Elements().Sum(child => VisibleRunLevelTextLength(child, sdtDepth));
+
+            if (element.Name == W.fldSimple)
+                return element.Elements().Where(child => child.Name != W.fldData)
+                    .Sum(child => VisibleRunLevelTextLength(child, sdtDepth));
+
+            // Keep this depth cap aligned with IrReader.MaxSdtDepth. At the cap the reader preserves an inline
+            // content-control envelope opaquely, so none of its descendant raw text has a tokenizer coordinate.
+            if (element.Name == W.sdt)
+            {
+                if (sdtDepth >= 64)
+                    return 0;
+                var content = element.Element(W.sdtContent);
+                return content is null
+                    ? 0
+                    : content.Elements().Sum(child => VisibleRunLevelTextLength(child, sdtDepth + 1));
+            }
+
+            if (element.Name == W.smartTag)
+            {
+                if (sdtDepth >= 64)
+                    return 0;
+                return element.Elements().Where(child => child.Name != W.smartTagPr)
+                    .Sum(child => VisibleRunLevelTextLength(child, sdtDepth + 1));
+            }
+
+            // Non-run-level elements are either reader-dropped or modeled as one zero-width atomic inline:
+            // drawing/pict/textbox, tabs/breaks/note refs, field plumbing, and arbitrary opaque XML all land here.
+            return 0;
+        }
+
+        private static int VisibleRunChildTextLength(XElement child)
+        {
+            if (child.Name == W.t)
+                return child.Value.Length;
+            if (child.Name == W.noBreakHyphen || child.Name == W.softHyphen)
+                return 1;
+            return child.Name == W.sym && IsVisibleSym(child) ? 1 : 0;
+        }
+
+        private static bool IsVisibleSym(XElement sym)
+        {
+            var raw = (string?)sym.Attribute(W.w + "char");
+            return raw is not null
+                && int.TryParse(raw, System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture, out var code)
+                && code is >= 0x20 and <= 0xFFFF;
+        }
 
         /// <summary>Resolve a source <c>w:hyperlink</c>'s target, mirroring <c>IrReader.BuildHyperlink</c>: an
         /// <c>@r:id</c> resolves against the owning part's hyperlink relationships to the external URI (the part is

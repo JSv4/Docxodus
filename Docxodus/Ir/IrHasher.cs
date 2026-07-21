@@ -476,6 +476,11 @@ internal sealed class IrContentHashBuilder
     public const byte StructureRow = 0x10;
     public const byte StructureCell = 0x11;
     public const byte StructureSdt = 0x12;
+    // A paragraph's inline carrier digests deliberately stay outside its own visible-content hash. When that
+    // paragraph is nested in a table cell, these distinct markers roll the carrier into the container identity so
+    // a code/wrapper-only edit cannot make the entire table align Equal.
+    public const byte StructureInlineCarrier = 0x13;
+    public const byte StructureFieldCarrier = 0x14;
 
     private const byte SentinelLead = 0x01;
     private const byte StructureLead = 0x02;

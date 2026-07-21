@@ -420,16 +420,21 @@ internal static class IrTableDiffer
     }
 
     /// <summary>
-    /// Canonical identity of a cell's block body, deliberately omitting its tcPr shell.  This mirrors the
-    /// reader's ContentHash framing so a nested table/image/opaque child remains distinguishable, while a
-    /// pure width/gridSpan/shading change cannot destroy an otherwise stable cell anchor.
+    /// Canonical identity of a cell's block body, deliberately omitting its tcPr shell. This mirrors the
+    /// reader's ContentHash framing so a nested table/image/opaque child remains distinguishable, while a pure
+    /// width/gridSpan/shading change cannot destroy an otherwise stable cell anchor. Paragraph-local inline/field
+    /// carriers are rolled in too: they are transparent in the paragraph's visible-content hash but must prevent
+    /// an edited cell from being anchored as structurally equal.
     /// </summary>
     private static IrHash CellBodyHash(IrCell cell)
     {
         var builder = new IrContentHashBuilder();
         builder.AppendStructure(IrContentHashBuilder.StructureCell);
         foreach (var block in cell.Blocks)
+        {
             builder.AppendHash(block.ContentHash);
+            IrReader.AppendNestedStructuralCarrierHash(block, builder);
+        }
         return builder.Build();
     }
 

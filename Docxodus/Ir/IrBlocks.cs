@@ -112,6 +112,17 @@ internal sealed record IrParagraph : IrBlock
     public IrHash InlineEnvelopeDigest { get; init; }
 
     /// <summary>
+    /// Canonical digest of the non-hyperlink fields carried by this paragraph: field-code instruction, simple
+    /// versus complex representation, inline position, and source scaffolding that normal content/token hashes
+    /// intentionally omit. It is deliberately separate from <see cref="IrBlock.ContentHash"/> so a run-based
+    /// field result still aligns like its visible text, while a code/state-only change (or any direct simple-field
+    /// mutation) is lowered to a reversible whole paragraph replacement instead of leaking the right field into
+    /// Reject.
+    /// <para><c>default(IrHash)</c> means no non-hyperlink field occurs in the modeled inline tree.</para>
+    /// </summary>
+    public IrHash FieldEnvelopeDigest { get; init; }
+
+    /// <summary>
     /// The oracle's <c>WmlToMarkdownConverter.IsListItem</c> verdict for this paragraph: a purely
     /// <em>structural</em> predicate — true iff a <c>w:numPr</c> is present inline (<c>w:pPr/w:numPr</c>)
     /// OR anywhere up the <c>pStyle → basedOn</c> chain, <b>regardless of whether that numPr carries a

@@ -1425,15 +1425,15 @@ internal static class IrCompositeMerger
         if (touched.Any(e => e.Op.Kind != kind))
             return false;
 
-        // A flagged paragraph carries an inline SDT/smartTag envelope delta. Text-only equivalence would
-        // falsely collapse distinct tags, bindings, or wrapper topology, so permit consensus only when every
-        // toucher is flagged and their whole structural paragraph signatures agree. Everything else falls to
-        // the block-conflict path rather than token-span composition.
+        // A flagged paragraph carries an inline envelope or non-hyperlink field-carrier delta. Text-only
+        // equivalence would falsely collapse distinct tags, bindings, field codes, or field state, so permit
+        // consensus only when every toucher is flagged and their whole structural paragraph signatures agree.
+        // Everything else falls to the block-conflict path rather than token-span composition.
         if (touched.Any(e => e.Op.RequiresWholeParagraphReplace))
         {
             if (kind != IrEditOpKind.ModifyBlock || touched.Any(e => !e.Op.RequiresWholeParagraphReplace))
                 return false;
-            return StructuralInlineEnvelopeResultsEqual(touched, reviewers, settings);
+            return StructuralCarrierResultsEqual(touched, reviewers, settings);
         }
 
         if (kind == IrEditOpKind.DeleteBlock)
@@ -1460,7 +1460,7 @@ internal static class IrCompositeMerger
         return false;
     }
 
-    private static bool StructuralInlineEnvelopeResultsEqual(
+    private static bool StructuralCarrierResultsEqual(
         List<(int Reviewer, IrEditOp Op)> touched,
         IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
         IrDiffSettings settings)
@@ -1483,6 +1483,7 @@ internal static class IrCompositeMerger
                 paragraph.FormatFingerprint == first.FormatFingerprint &&
                 paragraph.PPrDigest == first.PPrDigest &&
                 paragraph.InlineEnvelopeDigest == first.InlineEnvelopeDigest &&
+                paragraph.FieldEnvelopeDigest == first.FieldEnvelopeDigest &&
                 BlockResultText(entry.Op, reviewers[entry.Reviewer].Ir, settings) == firstText;
         });
     }

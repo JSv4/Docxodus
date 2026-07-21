@@ -50,7 +50,38 @@ internal sealed record IrBreak(IrBreakKind Kind) : IrInline;
 /// A hyperlink (`w:hyperlink`). Exactly one of <paramref name="Target"/> (external URI) or
 /// <paramref name="InternalTarget"/> (in-document anchor) is expected to be set.
 /// </summary>
-internal sealed record IrHyperlink(string? Target, IrAnchor? InternalTarget, IrNodeList<IrInline> Inlines) : IrInline;
+internal sealed record IrHyperlink(string? Target, IrAnchor? InternalTarget, IrNodeList<IrInline> Inlines) : IrInline
+{
+    /// <summary>
+    /// True when this link originated as a <c>HYPERLINK</c> field rather than a <c>w:hyperlink</c> element.
+    /// This provenance is equality-neutral: a clean field and element form intentionally canonicalize to the
+    /// same link value. The revision planner nevertheless needs it because field plumbing cannot always be
+    /// token-sliced safely, especially for direct <c>w:fldSimple</c> carriers.
+    /// </summary>
+    public bool IsFieldHyperlink { get; init; }
+
+    /// <summary>
+    /// True when <see cref="IsFieldHyperlink"/> came from a direct <c>w:fldSimple</c>. Equality-neutral;
+    /// retained for diagnostics and revision-safety decisions only.
+    /// </summary>
+    public bool IsSimpleField { get; init; }
+
+    /// <summary>
+    /// Digest of field-only hyperlink state that is not represented by <see cref="Target"/> or the display
+    /// inlines: field dirty/lock/data state and noncanonical instruction switches such as <c>\o</c>/<c>\t</c>.
+    /// It is equality-neutral so a clean HYPERLINK field remains canonicalized with <c>w:hyperlink</c>; the
+    /// enclosing paragraph's separate structural-carrier digest consumes it when present.
+    /// </summary>
+    public IrHash FieldMetadataDigest { get; init; }
+
+    public bool Equals(IrHyperlink? other) =>
+        other is not null
+        && Target == other.Target
+        && EqualityComparer<IrAnchor?>.Default.Equals(InternalTarget, other.InternalTarget)
+        && EqualityComparer<IrNodeList<IrInline>>.Default.Equals(Inlines, other.Inlines);
+
+    public override int GetHashCode() => HashCode.Combine(Target, InternalTarget, Inlines);
+}
 
 /// <summary>
 /// A field (`w:fldSimple` or the run-based field machinery), modeled as its instruction string
@@ -68,6 +99,16 @@ internal sealed record IrFieldRun(string Instruction, IrNodeList<IrInline> Cache
 {
     /// <summary>True for a <c>w:fldSimple</c>; false for the run-based <c>w:fldChar</c> machinery.</summary>
     public bool IsSimpleField { get; init; }
+
+    /// <summary>
+    /// Resolver-aware digest of the field representation that the transparent content hash deliberately omits.
+    /// For a simple field this is the complete <c>w:fldSimple</c> carrier (which cannot be safely token-sliced);
+    /// for a run-based field it is the sequence of raw <c>w:fldChar</c> scaffolding, including begin-state
+    /// attributes and <c>w:fldData</c>. The containing paragraph combines this with the instruction and inline
+    /// position into its separate structural-carrier digest. Run-based fields leave cached-result edits on the
+    /// normal token path; any direct simple-field mutation intentionally takes the whole-carrier fallback.
+    /// </summary>
+    public IrHash ScaffoldDigest { get; init; }
 }
 
 /// <summary>A footnote/endnote reference (`w:footnoteReference`/`w:endnoteReference`).</summary>

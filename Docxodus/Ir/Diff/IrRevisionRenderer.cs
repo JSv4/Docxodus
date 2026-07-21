@@ -570,9 +570,9 @@ internal static class IrRevisionRenderer
 
     private static void RenderModifyBlock(IrEditOp op, in Context ctx, List<IrRevision> sink)
     {
-        // Inline SDT/smartTag carriers are not token-sliceable. Even when visible text is identical, the
-        // markup renderer emits a whole old/new paragraph pair so the wrapper itself is reversible; surface
-        // the same pair here instead of silently reporting no text-level revision.
+        // Inline SDT/smartTag envelopes and non-hyperlink field code/state carriers are not token-sliceable.
+        // Even when visible text is identical, the markup renderer emits a whole old/new paragraph pair so the
+        // carrier itself is reversible; surface the same pair here instead of silently reporting no revision.
         if (op.RequiresWholeParagraphReplace)
         {
             if (op.LeftAnchor is { } wholeLeft)

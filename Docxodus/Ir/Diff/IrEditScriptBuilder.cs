@@ -666,7 +666,10 @@ internal static class IrEditScriptBuilder
                     ? IrEditOpKind.MoveModifyBlock
                     : IrEditOpKind.MoveBlock;
                 moves[li] = new MoveInfo(nextGroup++, entry.Left!, opKind,
-                    InlineEnvelopeDiffers(entry.Left!, entry.Right!));
+                    StructuralCarrierDiffers(entry.Left!, entry.Right!) ||
+                    (entry.Kind == IrAlignmentKind.MovedModified &&
+                     entry.Left is IrParagraph movedLeft && entry.Right is IrParagraph movedRight &&
+                     HasUnsliceableFieldCarrier(movedLeft, movedRight)));
             }
         }
 
@@ -697,7 +700,7 @@ internal static class IrEditScriptBuilder
             switch (entry.Kind)
             {
                 case IrAlignmentKind.Unchanged:
-                    if (InlineEnvelopeDiffers(entry.Left!, entry.Right!))
+                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
                         ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
                     else
                         ops.Add(new IrEditOp(IrEditOpKind.EqualBlock,
@@ -706,7 +709,7 @@ internal static class IrEditScriptBuilder
                     break;
 
                 case IrAlignmentKind.FormatOnly:
-                    if (InlineEnvelopeDiffers(entry.Left!, entry.Right!))
+                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
                         ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
                     else
                         ops.Add(new IrEditOp(IrEditOpKind.FormatOnlyBlock,
@@ -736,10 +739,10 @@ internal static class IrEditScriptBuilder
                 {
                     var lp = (IrParagraph)entry.Left!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
-                    if (HasInlineEnvelope(lp) || members.Any(HasInlineEnvelope))
+                    if (HasStructuralCarrier(lp) || members.Any(HasStructuralCarrier))
                     {
-                        // A split has no one-to-one paragraph shell in which to place an atomic inline
-                        // carrier revision. Lower this rare structural shape to the existing whole-block pair.
+                        // A split has no one-to-one paragraph shell in which to place an atomic inline carrier
+                        // or a non-tokenizable field carrier. Lower it to the existing whole-block pair.
                         ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
                             lp.Anchor.ToString(), null, null, null, null));
                         foreach (var member in members)
@@ -758,7 +761,7 @@ internal static class IrEditScriptBuilder
                 {
                     var rp = (IrParagraph)entry.Right!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
-                    if (HasInlineEnvelope(rp) || members.Any(HasInlineEnvelope))
+                    if (HasStructuralCarrier(rp) || members.Any(HasStructuralCarrier))
                     {
                         foreach (var member in members)
                             ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
@@ -900,18 +903,119 @@ internal static class IrEditScriptBuilder
             lp.Anchor.ToString(), rp.Anchor.ToString(),
             tokenDiff, null, null, null,
             nest ? IrNodeList.From(textboxDiffs!) : null,
-            RequiresWholeParagraphReplace: InlineEnvelopeDiffers(lp, rp));
+            RequiresWholeParagraphReplace: StructuralCarrierDiffers(lp, rp) ||
+                HasUnsliceableFieldCarrier(lp, rp));
     }
 
-    /// <summary>Inline SDT/smartTag wrappers are deliberately transparent to ordinary token alignment, but a
-    /// wrapper-only delta cannot be represented by slicing their atomic source containers. Keep the alignment
-    /// stable and mark the paired op for a reversible whole-paragraph replacement instead.</summary>
-    private static bool InlineEnvelopeDiffers(IrBlock left, IrBlock right) =>
+    /// <summary>
+    /// Inline SDT/smartTag wrappers and non-hyperlink field code/state are deliberately transparent to ordinary
+    /// token alignment, but either carrier can be corrupted by slicing its source around a revision. Keep the
+    /// alignment stable and mark a differing paired paragraph for a reversible whole-paragraph replacement.
+    /// </summary>
+    private static bool StructuralCarrierDiffers(IrBlock left, IrBlock right) =>
         left is IrParagraph lp && right is IrParagraph rp &&
-        lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest;
+        (lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest ||
+         lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest);
 
-    private static bool HasInlineEnvelope(IrParagraph paragraph) =>
-        paragraph.InlineEnvelopeDigest != default;
+    private static bool HasStructuralCarrier(IrParagraph paragraph) =>
+        paragraph.InlineEnvelopeDigest != default ||
+        paragraph.FieldEnvelopeDigest != default ||
+        ContainsFieldCarrier(paragraph.Inlines);
+
+    /// <summary>
+    /// A field with no visible text has no character span in the token stream. Fine source slicing cannot assign
+    /// it deterministically when adjacent prose is replaced (there may be no Equal token to own the carrier), so
+    /// a modified paired paragraph containing one is rendered as one reversible old/new paragraph pair. Direct
+    /// simple fields with a tab/image/textbox-only result are included: all are zero-width to the tokenizer.
+    /// Textbox-contained fields are included too because the owning drawing is itself zero-width in the outer
+    /// paragraph's source coordinates. A canonicalized HYPERLINK field is included regardless of result width:
+    /// its field origin is equality-neutral in the IR, but its raw simple/complex plumbing cannot be assigned to
+    /// a token slice without risking a bare right-side field surviving Reject.
+    /// </summary>
+    private static bool HasUnsliceableFieldCarrier(IrParagraph left, IrParagraph right) =>
+        HasUnsliceableFieldCarrier(left.Inlines) || HasUnsliceableFieldCarrier(right.Inlines);
+
+    private static bool HasUnsliceableFieldCarrier(IReadOnlyList<IrInline> inlines)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrFieldRun field:
+                    if (VisibleTextLength(field.CachedResult) == 0 || HasUnsliceableFieldCarrier(field.CachedResult))
+                        return true;
+                    break;
+                case IrHyperlink hyperlink:
+                    if (hyperlink.IsFieldHyperlink || HasUnsliceableFieldCarrier(hyperlink.Inlines))
+                        return true;
+                    break;
+                case IrTextbox textbox when ContainsFieldCarrier(textbox.Blocks):
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static int VisibleTextLength(IReadOnlyList<IrInline> inlines)
+    {
+        int length = 0;
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrTextRun text:
+                    length += text.Text.Length;
+                    break;
+                case IrFieldRun field:
+                    length += VisibleTextLength(field.CachedResult);
+                    break;
+                case IrHyperlink hyperlink:
+                    length += VisibleTextLength(hyperlink.Inlines);
+                    break;
+            }
+        }
+        return length;
+    }
+
+    private static bool ContainsFieldCarrier(IReadOnlyList<IrBlock> blocks)
+    {
+        foreach (var block in blocks)
+        {
+            switch (block)
+            {
+                case IrParagraph paragraph when ContainsFieldCarrier(paragraph.Inlines):
+                    return true;
+                case IrTable table:
+                    foreach (var row in table.Rows)
+                        foreach (var cell in row.Cells)
+                            if (ContainsFieldCarrier(cell.Blocks))
+                                return true;
+                    break;
+                case IrSdtBlock sdt when ContainsFieldCarrier(sdt.Blocks):
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool ContainsFieldCarrier(IReadOnlyList<IrInline> inlines)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrFieldRun:
+                    return true;
+                case IrHyperlink hyperlink:
+                    if (hyperlink.IsFieldHyperlink || ContainsFieldCarrier(hyperlink.Inlines))
+                        return true;
+                    break;
+                case IrTextbox textbox when ContainsFieldCarrier(textbox.Blocks):
+                    return true;
+            }
+        }
+        return false;
+    }
 
     // ------------------------------------------------------------------ textbox interiors (M2.4 Task 1)
 

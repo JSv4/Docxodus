@@ -690,7 +690,12 @@ internal static class IrReader
         // Inline SDT/smartTag carriers are intentionally transparent to the modeled inline stream, but their
         // wrapper topology cannot be reconstructed safely by a token-level redline. Keep a separate canonical
         // envelope digest so the edit builder can lower a carrier change to a reversible whole paragraph pair.
-        var inlineEnvelopeDigest = InlineEnvelopeDigest(p, ctx);
+        var inlineEnvelopeDigest = InlineEnvelopeDigestFor(p, processed, ctx);
+
+        // A non-hyperlink field's code and begin-state are deliberately transparent to content/token alignment:
+        // the cached result is what is visible. Keep their independent structural carrier digest so a same-result
+        // PAGE→NUMPAGES/REF retarget (or dirty/locked state change) is still reversible on Accept and Reject.
+        var fieldEnvelopeDigest = FieldEnvelopeDigestFor(processed, ctx);
 
         // Resolve the auto-number marker against the LIVE package while we have it (see
         // IrParagraph.ResolvedListMarker for the rationale). RetrieveListItem returns null for
@@ -708,6 +713,7 @@ internal static class IrReader
             InlineSectionFormat = inlineSectionFormat,
             PPrDigest = pPrDigest,
             InlineEnvelopeDigest = inlineEnvelopeDigest,
+            FieldEnvelopeDigest = fieldEnvelopeDigest,
             ResolvedListMarker = resolvedMarker,
             // The oracle's structural IsListItem verdict (numPr present inline or via the style chain,
             // numId-agnostic) — drives the emitter's trailing-blank rule for heading/Subtitle styles
@@ -721,20 +727,20 @@ internal static class IrReader
     }
 
     /// <summary>
-    /// Hash the OUTERMOST inline <c>w:sdt</c>/<c>w:smartTag</c> carriers rooted in one paragraph. Each
+    /// Hash the OUTERMOST inline <c>w:sdt</c>/<c>w:smartTag</c> carriers rooted in one paragraph. Each direct
     /// carrier contributes its entire resolver-aware canonical XML plus a stable element path from the paragraph,
     /// so adding/removing metadata, changing contained content, or moving a carrier relative to other inline
-    /// children changes the digest. Nested carriers ride inside their outer carrier's canonical payload once;
-    /// a carrier inside a nested textbox paragraph belongs to that paragraph, not this one.
+    /// children changes the digest. A carrier in a nested textbox paragraph contributes that paragraph's already
+    /// modeled carrier digest at the owning textbox path: textbox text is zero-width in the outer token stream,
+    /// but a wrapper-only change there must still prevent the outer source drawing from aligning Equal.
     /// </summary>
-    private static IrHash InlineEnvelopeDigest(XElement paragraph, ReadContext ctx)
+    private static IrHash InlineEnvelopeDigestFor(
+        XElement paragraph, IReadOnlyList<IrInline> inlines, ReadContext ctx)
     {
         var envelopes = paragraph.Descendants()
             .Where(element => (element.Name == W + "sdt" || element.Name == W + "smartTag") &&
                 IsOutermostInlineEnvelope(paragraph, element))
             .ToList();
-        if (envelopes.Count == 0)
-            return default;
 
         var stream = new XElement("inlineEnvelopes");
         foreach (var envelope in envelopes)
@@ -743,6 +749,9 @@ internal static class IrReader
                 new XAttribute("path", InlineElementPath(paragraph, envelope)),
                 new XElement(envelope)));
         }
+        AppendTextboxInlineEnvelopeEntries(inlines, "", stream);
+        if (!stream.Elements().Any())
+            return default;
         return IrHasher.CanonicalHash(stream, ctx.RelResolver);
     }
 
@@ -750,6 +759,167 @@ internal static class IrReader
         envelope.Ancestors(W + "p").FirstOrDefault() == paragraph &&
         !envelope.Ancestors().TakeWhile(ancestor => ancestor != paragraph).Any(ancestor =>
             ancestor.Name == W + "sdt" || ancestor.Name == W + "smartTag");
+
+    private static void AppendTextboxInlineEnvelopeEntries(
+        IReadOnlyList<IrInline> inlines, string prefix, XElement stream)
+    {
+        for (int i = 0; i < inlines.Count; i++)
+        {
+            string path = prefix.Length == 0
+                ? i.ToString(CultureInfo.InvariantCulture)
+                : prefix + "/" + i.ToString(CultureInfo.InvariantCulture);
+            switch (inlines[i])
+            {
+                case IrTextbox textbox:
+                    AppendTextboxInlineEnvelopeEntries(textbox.Blocks, path + "/textbox", stream);
+                    break;
+                case IrFieldRun field:
+                    AppendTextboxInlineEnvelopeEntries(field.CachedResult, path + "/result", stream);
+                    break;
+                case IrHyperlink hyperlink:
+                    AppendTextboxInlineEnvelopeEntries(hyperlink.Inlines, path + "/link", stream);
+                    break;
+            }
+        }
+    }
+
+    private static void AppendTextboxInlineEnvelopeEntries(
+        IReadOnlyList<IrBlock> blocks, string prefix, XElement stream)
+    {
+        for (int i = 0; i < blocks.Count; i++)
+        {
+            string path = prefix + "/" + i.ToString(CultureInfo.InvariantCulture);
+            switch (blocks[i])
+            {
+                case IrParagraph paragraph when paragraph.InlineEnvelopeDigest != default:
+                    stream.Add(new XElement("textboxParagraph",
+                        new XAttribute("path", path),
+                        new XAttribute("inlineDigest", paragraph.InlineEnvelopeDigest.ToHex())));
+                    break;
+                case IrTable table:
+                    for (int row = 0; row < table.Rows.Count; row++)
+                        for (int cell = 0; cell < table.Rows[row].Cells.Count; cell++)
+                            AppendTextboxInlineEnvelopeEntries(
+                                table.Rows[row].Cells[cell].Blocks,
+                                path + "/table/" + row.ToString(CultureInfo.InvariantCulture) + "/" +
+                                cell.ToString(CultureInfo.InvariantCulture),
+                                stream);
+                    break;
+                case IrSdtBlock sdt:
+                    AppendTextboxInlineEnvelopeEntries(sdt.Blocks, path + "/sdt", stream);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Hash the non-hyperlink field carriers embedded in one modeled inline tree. Field instructions are excluded
+    /// from ordinary content/token identity on purpose, and run-based field plumbing is zero-width; recording
+    /// both here gives the edit builder a precise structural signal without making a run-based cached-result edit
+    /// look like a whole-paragraph change. A simple field contributes its full source carrier through
+    /// <see cref="IrFieldRun.ScaffoldDigest"/> because <c>w:fldSimple</c> cannot be safely sliced into revisions;
+    /// any direct simple-field mutation therefore uses the whole-carrier path.
+    /// </summary>
+    private static IrHash FieldEnvelopeDigestFor(IReadOnlyList<IrInline> inlines, ReadContext ctx)
+    {
+        var fields = new List<XElement>();
+        AppendFieldEnvelopeEntries(inlines, "", fields);
+        return fields.Count == 0
+            ? default
+            : IrHasher.CanonicalHash(new XElement("fieldEnvelopes", fields), ctx.RelResolver);
+    }
+
+    /// <summary>
+    /// Fold paragraph-local structural carriers into a containing cell's identity. A paragraph keeps these facts
+    /// outside its own visible-content hash so normal prose alignment stays stable; a cell/table must include
+    /// them, otherwise an inline-envelope or field-code-only change can make every enclosing container align
+    /// Equal and leak the accepted/right source into Reject. Nested tables already carry the same rollup through
+    /// their cell content hashes, and block SDTs carry their complete envelope in <see cref="IrBlock.ContentHash"/>.
+    /// </summary>
+    internal static void AppendNestedStructuralCarrierHash(IrBlock block, IrContentHashBuilder builder)
+    {
+        if (block is not IrParagraph paragraph)
+            return;
+        if (paragraph.InlineEnvelopeDigest != default)
+        {
+            builder.AppendStructure(IrContentHashBuilder.StructureInlineCarrier);
+            builder.AppendHash(paragraph.InlineEnvelopeDigest);
+        }
+        if (paragraph.FieldEnvelopeDigest != default)
+        {
+            builder.AppendStructure(IrContentHashBuilder.StructureFieldCarrier);
+            builder.AppendHash(paragraph.FieldEnvelopeDigest);
+        }
+    }
+
+    private static void AppendFieldEnvelopeEntries(
+        IReadOnlyList<IrInline> inlines, string prefix, List<XElement> fields)
+    {
+        for (int i = 0; i < inlines.Count; i++)
+        {
+            string path = prefix.Length == 0
+                ? i.ToString(CultureInfo.InvariantCulture)
+                : prefix + "/" + i.ToString(CultureInfo.InvariantCulture);
+            switch (inlines[i])
+            {
+                case IrFieldRun field:
+                    fields.Add(new XElement("field",
+                        new XAttribute("path", path),
+                        new XAttribute("instruction", field.Instruction),
+                        new XAttribute("simple", field.IsSimpleField),
+                        new XAttribute("scaffold", field.ScaffoldDigest.ToHex())));
+                    AppendFieldEnvelopeEntries(field.CachedResult, path + "/result", fields);
+                    break;
+                case IrHyperlink hyperlink:
+                    // A clean HYPERLINK field intentionally canonicalizes with w:hyperlink when target and
+                    // display text are equal. Field-only state (dirty/lock/fldData or unmodeled instruction
+                    // switches) still needs a structural carrier so Reject never inherits the right state.
+                    if (hyperlink.IsFieldHyperlink && hyperlink.FieldMetadataDigest != default)
+                    {
+                        fields.Add(new XElement("hyperlinkField",
+                            new XAttribute("path", path),
+                            new XAttribute("metadata", hyperlink.FieldMetadataDigest.ToHex())));
+                    }
+                    AppendFieldEnvelopeEntries(hyperlink.Inlines, path + "/link", fields);
+                    break;
+                case IrTextbox textbox:
+                    // A textbox owns separate inner paragraphs. Do not raw-scan its OOXML into this paragraph;
+                    // instead propagate each inner paragraph's already-modeled field-carrier summary so a
+                    // code/state-only change there still reaches the outer renderer's whole-block fallback.
+                    AppendTextboxFieldEnvelopeEntries(textbox.Blocks, path + "/textbox", fields);
+                    break;
+            }
+        }
+    }
+
+    private static void AppendTextboxFieldEnvelopeEntries(
+        IReadOnlyList<IrBlock> blocks, string prefix, List<XElement> fields)
+    {
+        for (int i = 0; i < blocks.Count; i++)
+        {
+            string path = prefix + "/" + i.ToString(CultureInfo.InvariantCulture);
+            switch (blocks[i])
+            {
+                case IrParagraph paragraph when paragraph.FieldEnvelopeDigest != default:
+                    fields.Add(new XElement("textboxParagraph",
+                        new XAttribute("path", path),
+                        new XAttribute("fieldDigest", paragraph.FieldEnvelopeDigest.ToHex())));
+                    break;
+                case IrTable table:
+                    for (int row = 0; row < table.Rows.Count; row++)
+                        for (int cell = 0; cell < table.Rows[row].Cells.Count; cell++)
+                            AppendTextboxFieldEnvelopeEntries(
+                                table.Rows[row].Cells[cell].Blocks,
+                                path + "/table/" + row.ToString(CultureInfo.InvariantCulture) + "/" +
+                                cell.ToString(CultureInfo.InvariantCulture),
+                                fields);
+                    break;
+                case IrSdtBlock sdt:
+                    AppendTextboxFieldEnvelopeEntries(sdt.Blocks, path + "/sdt", fields);
+                    break;
+            }
+        }
+    }
 
     /// <summary>Path segments include the actual sibling index, not merely the wrapper ordinal: moving one
     /// carrier past a plain run is structural even if the carrier XML itself is byte-identical.</summary>
@@ -834,6 +1004,10 @@ internal static class IrReader
         private bool _inResult;                 // true once the (outermost) field hit "separate".
         private readonly StringBuilder _instruction = new();
         private readonly List<IrInline> _result = new();
+        // Raw fldChar nodes are zero-width in the token stream, but carry the begin-state (dirty/lock/fldData)
+        // needed to distinguish same-visible non-hyperlink fields. Nested field scaffolding intentionally rides
+        // with the flattened outer field, matching the walker's existing nested-field representation.
+        private readonly List<XElement> _fieldScaffold = new();
         // Raw captured elements, kept so an unterminated field can fall back to opaque losslessly.
         private readonly List<XElement> _captured = new();
 
@@ -853,6 +1027,11 @@ internal static class IrReader
             }
             else if (child.Name == W + "fldSimple")
             {
+                // A simple field nested in a complex field is structurally atomic too. The walker may model its
+                // result transparently (or as opaque plumbing in an outer result), so retain its raw carrier on
+                // the owning complex field's scaffold to force the safe whole-paragraph path when it changes.
+                if (_fieldDepth > 0)
+                    _fieldScaffold.Add(new XElement(child));
                 EmitInline(BuildFldSimple(child, _ctx), child);
             }
             else if (depth >= MaxSdtDepth && (child.Name == W + "sdt" || child.Name == W + "smartTag"))
@@ -956,6 +1135,12 @@ internal static class IrReader
                 if (_fieldDepth > 0)
                 {
                     _captured.Add(child);
+                    // Field instruction plumbing is zero-width and, for a nested field appearing after the outer
+                    // separate, is not part of the outer Instruction string. Preserve it in the raw scaffold so
+                    // PAGE→NUMPAGES cannot slip through a text-only alignment as a bare plumbing edit.
+                    if (child.Name == W + "instrText" || child.Name == W + "delInstrText" ||
+                        child.Name == W + "fldSimple")
+                        _fieldScaffold.Add(new XElement(child));
                     if (!_inResult)
                     {
                         // Pre-separate: accumulate instruction text (w:instrText / w:delInstrText).
@@ -1004,6 +1189,12 @@ internal static class IrReader
             switch (type)
             {
                 case "begin":
+                    // Starting a new outer field resets its source scaffold before recording the begin node.
+                    // The clone retains only field plumbing itself (not the containing run's visual properties),
+                    // which keeps a result-format change on the normal fine-grained path.
+                    if (_fieldDepth == 0)
+                        _fieldScaffold.Clear();
+                    _fieldScaffold.Add(FieldScaffoldNode(fldChar));
                     _fieldDepth++;
                     // Inner begins flatten into the outer field (depth-counted), so only the
                     // outermost begin resets the capture buffers.
@@ -1016,6 +1207,8 @@ internal static class IrReader
                     }
                     break;
                 case "separate":
+                    if (_fieldDepth > 0)
+                        _fieldScaffold.Add(FieldScaffoldNode(fldChar));
                     // Only the outermost separate flips us into result-capture. Inner separates
                     // are swallowed (their result content flattens into the outer result).
                     if (_fieldDepth == 1)
@@ -1024,17 +1217,22 @@ internal static class IrReader
                 case "end":
                     if (_fieldDepth == 0)
                         break; // stray end with no begin: ignore (totality).
+                    _fieldScaffold.Add(FieldScaffoldNode(fldChar));
                     _fieldDepth--;
                     if (_fieldDepth == 0)
                     {
                         // Outermost field closed: emit one field inline (a HYPERLINK instruction
                         // canonicalizes to IrHyperlink — see CanonicalizeField). CachedResult is
                         // empty for instruction-only fields (no separate seen).
+                        var instruction = _instruction.ToString();
                         EmitInline(CanonicalizeField(
-                            _instruction.ToString(),
-                            IrNodeList.From(new List<IrInline>(_result))));
+                            instruction,
+                            IrNodeList.From(new List<IrInline>(_result)),
+                            scaffoldDigest: CurrentFieldScaffoldDigest(),
+                            hyperlinkFieldMetadataDigest: CurrentHyperlinkFieldMetadataDigest(instruction)));
                         _inResult = false;
                         _result.Clear();
+                        _fieldScaffold.Clear();
                         _captured.Clear();
                     }
                     break;
@@ -1072,9 +1270,12 @@ internal static class IrReader
                     // to _output. The result text now reaches both the rendered markdown and the
                     // TextPreview, matching the oracle's raw Descendants(w:t) view.
                     _fieldDepth = 0;
+                    var instruction = _instruction.ToString();
                     EmitInline(CanonicalizeField(
-                        _instruction.ToString(),
-                        IrNodeList.From(new List<IrInline>(_result))));
+                        instruction,
+                        IrNodeList.From(new List<IrInline>(_result)),
+                        scaffoldDigest: CurrentFieldScaffoldDigest(),
+                        hyperlinkFieldMetadataDigest: CurrentHyperlinkFieldMetadataDigest(instruction)));
                 }
                 else
                 {
@@ -1086,9 +1287,32 @@ internal static class IrReader
                 }
                 _inResult = false;
                 _result.Clear();
+                _fieldScaffold.Clear();
                 _captured.Clear();
             }
             return _output;
+        }
+
+        private IrHash CurrentFieldScaffoldDigest()
+        {
+            var scaffold = new XElement("fieldScaffold", _fieldScaffold.Select(element => new XElement(element)));
+            return IrHasher.CanonicalHash(scaffold, _ctx.RelResolver);
+        }
+
+        private IrHash CurrentHyperlinkFieldMetadataDigest(string instruction) =>
+            HyperlinkFieldMetadataDigest(instruction, _fieldScaffold, _ctx);
+
+        private static XElement FieldScaffoldNode(XElement fldChar)
+        {
+            // Field state is modeled from the fldChar's direct attributes/metadata. numberingChange is revision
+            // history rather than live field state; default reader views normalize it away, and excluding it keeps
+            // this digest stable even for the strict FailIfPresent inspection mode.
+            var projection = new XElement(
+                fldChar.Name,
+                fldChar.Attributes().Select(attribute => new XAttribute(attribute)));
+            foreach (var child in fldChar.Elements().Where(child => child.Name != W + "numberingChange"))
+                projection.Add(new XElement(child));
+            return projection;
         }
 
         /// <summary>
@@ -1437,8 +1661,18 @@ internal static class IrReader
     private static IrInline BuildFldSimple(XElement fldSimple, ReadContext ctx)
     {
         var instruction = (string?)fldSimple.Attribute(W + "instr") ?? "";
-        var result = WalkInlines(fldSimple.Elements(), ctx);
-        return CanonicalizeField(instruction, IrNodeList.From(result), isSimpleField: true);
+        // fldData is field metadata, not cached display content. It is retained by the structural carrier digest
+        // and by revision expansion, but must not become a visible opaque inline or perturb result-token offsets.
+        var result = WalkInlines(fldSimple.Elements().Where(element => element.Name != W + "fldData"), ctx);
+        // A direct fldSimple cannot be placed directly inside w:ins/w:del. Preserve its full carrier
+        // separately so any field mutation can take the proven whole-paragraph path. Its cached-result text still
+        // participates in the ordinary content hash, but the complete carrier remains the safe revision boundary.
+        return CanonicalizeField(
+            instruction,
+            IrNodeList.From(result),
+            isSimpleField: true,
+            scaffoldDigest: IrHasher.CanonicalHash(fldSimple, ctx.RelResolver),
+            hyperlinkFieldMetadataDigest: HyperlinkFieldMetadataDigestForSimple(instruction, fldSimple, ctx));
     }
 
     /// <summary>
@@ -1450,11 +1684,188 @@ internal static class IrReader
     /// target-only change on the FIELD form becomes detectable at all (the instruction is otherwise
     /// never tokenized). Every other instruction stays an <see cref="IrFieldRun"/>.
     /// </summary>
-    private static IrInline CanonicalizeField(string instruction, IrNodeList<IrInline> result, bool isSimpleField = false)
+    private static IrInline CanonicalizeField(
+        string instruction,
+        IrNodeList<IrInline> result,
+        bool isSimpleField = false,
+        IrHash scaffoldDigest = default,
+        IrHash hyperlinkFieldMetadataDigest = default)
     {
         if (TryParseHyperlinkInstruction(instruction, out var target))
-            return new IrHyperlink(target, InternalTarget: null, result);
-        return new IrFieldRun(instruction, result) { IsSimpleField = isSimpleField };
+        {
+            return new IrHyperlink(target, InternalTarget: null, result)
+            {
+                // Preserve the intentionally equality-neutral field origin. A clean HYPERLINK field still
+                // canonicalizes with w:hyperlink, while the revision planner can refuse unsafe source slicing.
+                IsFieldHyperlink = true,
+                IsSimpleField = isSimpleField,
+                FieldMetadataDigest = hyperlinkFieldMetadataDigest,
+            };
+        }
+        return new IrFieldRun(instruction, result)
+        {
+            IsSimpleField = isSimpleField,
+            ScaffoldDigest = scaffoldDigest,
+        };
+    }
+
+    /// <summary>
+    /// Return only the field-only state that a canonical <c>IrHyperlink</c> would otherwise erase for a direct
+    /// <c>w:fldSimple</c>. The instruction's URL and <c>\l</c> anchor are already modeled as Target; clean
+    /// HYPERLINK field/elements must therefore leave this digest default. Noncanonical switches and live field
+    /// state are retained separately so they can drive a reversible whole-carrier replacement when changed.
+    /// </summary>
+    private static IrHash HyperlinkFieldMetadataDigestForSimple(
+        string instruction, XElement fldSimple, ReadContext ctx)
+    {
+        if (!TryParseHyperlinkInstruction(instruction, out _))
+            return default;
+
+        var metadata = new XElement("hyperlinkFieldMetadata");
+        AppendHyperlinkInstructionMetadata(metadata, instruction);
+
+        var state = new XElement("simple");
+        foreach (var attribute in fldSimple.Attributes().Where(attribute =>
+                     attribute.Name != W + "instr" &&
+                     attribute.Name.Namespace != PtOpenXml.Unid.Namespace))
+            state.Add(new XAttribute(attribute));
+        foreach (var fieldData in fldSimple.Elements(W + "fldData"))
+            state.Add(new XElement(fieldData));
+        if (state.HasAttributes || state.HasElements)
+            metadata.Add(state);
+
+        // Nested simple fields are raw carrier structure within the outer result. They have no equivalent
+        // w:hyperlink representation, so retain their complete digest only when present; ordinary result runs
+        // remain transparent and do not turn a clean outer HYPERLINK into a structural carrier.
+        var nestedFields = fldSimple.Descendants(W + "fldSimple").ToList();
+        if (nestedFields.Count != 0)
+        {
+            metadata.Add(new XElement("nestedSimpleFields",
+                nestedFields.Select((field, index) => new XElement("field",
+                    new XAttribute("index", index),
+                    new XAttribute("digest", IrHasher.CanonicalHash(field, ctx.RelResolver).ToHex())))));
+        }
+
+        return metadata.HasElements
+            ? IrHasher.CanonicalHash(metadata, ctx.RelResolver)
+            : default;
+    }
+
+    /// <summary>
+    /// The complex-field walker keeps only fldChar scaffolding (and nested field carrier fragments) outside the
+    /// visible result. Project its live state without making the ordinary begin/instruction/separate/end sequence
+    /// equality-participating: a clean complex HYPERLINK still intentionally matches a w:hyperlink element.
+    /// </summary>
+    private static IrHash HyperlinkFieldMetadataDigest(
+        string instruction, IReadOnlyList<XElement> fieldScaffold, ReadContext ctx)
+    {
+        if (!TryParseHyperlinkInstruction(instruction, out _))
+            return default;
+
+        var metadata = new XElement("hyperlinkFieldMetadata");
+        AppendHyperlinkInstructionMetadata(metadata, instruction);
+
+        int beginCount = 0;
+        bool hasNestedSimpleField = false;
+        for (int i = 0; i < fieldScaffold.Count; i++)
+        {
+            var source = fieldScaffold[i];
+            if (source.Name == W + "fldChar")
+            {
+                if ((string?)source.Attribute(W + "fldCharType") == "begin")
+                    beginCount++;
+
+                var state = new XElement("fldChar", new XAttribute("index", i));
+                var type = (string?)source.Attribute(W + "fldCharType");
+                if (type is not null)
+                    state.Add(new XAttribute("type", type));
+                var stateAttributes = source.Attributes()
+                    .Where(attribute => attribute.Name != W + "fldCharType" &&
+                        attribute.Name.Namespace != PtOpenXml.Unid.Namespace).ToList();
+                var stateChildren = source.Elements()
+                    .Where(child => child.Name != W + "numberingChange").ToList();
+                foreach (var attribute in stateAttributes)
+                    state.Add(new XAttribute(attribute));
+                foreach (var child in stateChildren)
+                    state.Add(new XElement(child));
+                if (stateAttributes.Count != 0 || stateChildren.Count != 0)
+                    metadata.Add(state);
+            }
+            else if (source.Name == W + "fldSimple")
+            {
+                hasNestedSimpleField = true;
+            }
+        }
+
+        // The normal outer HYPERLINK scaffold is begin/instruction/separate/end. If the walker observed a nested
+        // field, retain the complete scaffolding so a code-only mutation inside that nested carrier cannot align
+        // Equal and leak the right source through Reject.
+        if (beginCount > 1 || hasNestedSimpleField)
+        {
+            metadata.Add(new XElement("nestedFieldScaffold",
+                fieldScaffold.Select((source, index) => new XElement("entry",
+                    new XAttribute("index", index),
+                    new XAttribute("digest", IrHasher.CanonicalHash(source, ctx.RelResolver).ToHex())))));
+        }
+
+        return metadata.HasElements
+            ? IrHasher.CanonicalHash(metadata, ctx.RelResolver)
+            : default;
+    }
+
+    private static void AppendHyperlinkInstructionMetadata(XElement metadata, string instruction)
+    {
+        if (HasNonCanonicalHyperlinkInstructionState(instruction))
+            metadata.Add(new XElement("instruction", instruction));
+    }
+
+    /// <summary>
+    /// Detect HYPERLINK switches whose semantics are not represented by Target. <c>\l</c> is folded into Target
+    /// and <c>\h</c> is a long-standing harmless field-form convention, so neither creates a carrier. Every
+    /// other switch (including <c>\o</c>, <c>\t</c>, <c>\m</c>, <c>\n</c>, and unknown extensions) is kept as
+    /// metadata. Scan only token-leading backslashes outside quotes so a local-path URL is not mistaken for a
+    /// switch.
+    /// </summary>
+    private static bool HasNonCanonicalHyperlinkInstructionState(string instruction)
+    {
+        var trimmed = instruction.TrimStart();
+        if (!trimmed.StartsWith("HYPERLINK", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        bool quoted = false;
+        bool atTokenStart = true;
+        for (int i = "HYPERLINK".Length; i < trimmed.Length; i++)
+        {
+            char current = trimmed[i];
+            if (current == '"')
+            {
+                quoted = !quoted;
+                atTokenStart = false;
+                continue;
+            }
+            if (quoted)
+                continue;
+            if (char.IsWhiteSpace(current))
+            {
+                atTokenStart = true;
+                continue;
+            }
+            if (atTokenStart && current == '\\')
+            {
+                int end = i + 1;
+                while (end < trimmed.Length && !char.IsWhiteSpace(trimmed[end]) && trimmed[end] != '"')
+                    end++;
+                var name = trimmed.Substring(i + 1, end - i - 1);
+                if (!name.Equals("l", StringComparison.OrdinalIgnoreCase) &&
+                    !name.Equals("h", StringComparison.OrdinalIgnoreCase))
+                    return true;
+                i = end - 1;
+                atTokenStart = false;
+                continue;
+            }
+            atTokenStart = false;
+        }
+        return false;
     }
 
     /// <summary>
@@ -2228,6 +2639,7 @@ internal static class IrReader
             for (int i = before; i < blocks.Count; i++)
             {
                 cellBuilder.AppendHash(blocks[i].ContentHash);
+                AppendNestedStructuralCarrierHash(blocks[i], cellBuilder);
                 fingerprints.Add(blocks[i].FormatFingerprint);
             }
         }
