@@ -1258,7 +1258,7 @@ internal static class IrReader
 
     /// <summary>
     /// Promote a <c>w:drawing</c> whose descendant <c>a:blip</c> has an <c>@r:embed</c> resolving to
-    /// an image part on the main document part into an <see cref="IrInlineImage"/>. Extent comes from
+/// an image part on the owning document story part into an <see cref="IrInlineImage"/>. Extent comes from
     /// the first descendant <c>wp:extent</c> (<c>@cx</c>/<c>@cy</c>, 0 when absent); alt text from
     /// <c>wp:docPr/@descr</c> falling back to <c>@name</c>, else null. The image part's bytes are
     /// read fully and SHA-256'd (cached per embed rel id within one <see cref="Read"/> so a reused
@@ -1333,7 +1333,10 @@ internal static class IrReader
 
         try
         {
-            var part = ctx.Main.GetPartById(embedId);
+            // Relationship ids are scoped to the part that owns the drawing. Header/footer/note/comment
+            // parts routinely reuse ids such as rId1 that name an entirely different main-document part;
+            // resolving through Main would silently promote the wrong bytes (or suppress a real story edit).
+            var part = ctx.OwningPart.GetPartById(embedId);
             if (part is not ImagePart imagePart)
                 return null;
 

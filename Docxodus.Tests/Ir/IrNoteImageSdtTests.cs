@@ -1,6 +1,11 @@
 #nullable enable
 
+using System.IO;
 using System.Linq;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using Docxodus;
 using Docxodus.Ir;
 using Xunit;
 
@@ -186,6 +191,24 @@ public class IrNoteImageSdtTests
         Assert.NotEqual(p1.ContentHash, p2.ContentHash);
     }
 
+    [Fact]
+    public void Read_HeaderImage_ResolvesItsOwnRelationshipWhenRelIdsCollideWithMainDocument()
+    {
+        // r:ids are scoped to their owning part. Deliberately reuse rIdImage in the main document and
+        // header, but point them at different image bytes: resolving through Main would return the wrong
+        // image for the header story and make a header-only image edit invisible to the diff.
+        var mainBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x01 };
+        var headerBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x02 };
+        var doc = DocumentWithMainAndHeaderImageAtSameRelId(mainBytes, headerBytes);
+
+        var header = Assert.Single(IrReader.Read(doc).Headers);
+        var paragraph = Assert.Single(header.Scope.Blocks.OfType<IrParagraph>());
+        var image = Assert.Single(paragraph.Inlines.OfType<IrInlineImage>());
+
+        Assert.Equal(IrHash.Compute(headerBytes), image.ImageBytesHash);
+        Assert.NotEqual(IrHash.Compute(mainBytes), image.ImageBytesHash);
+    }
+
     // --- M2.4b Workstream A: relationship-id-stable opaque hashing -------
     //
     // The headline guard. An OPAQUE element that carries a relationship id (here a VML w:pict /
@@ -209,6 +232,48 @@ public class IrNoteImageSdtTests
             $"<w:p><w:r>{VmlPict(relId)}</w:r></w:p>", parts);
         var p = IrReader.Read(doc).Body.Blocks.OfType<IrParagraph>().Single();
         return p.Inlines.OfType<IrOpaqueInline>().Single();
+    }
+
+    private static WmlDocument DocumentWithMainAndHeaderImageAtSameRelId(byte[] mainBytes, byte[] headerBytes)
+    {
+        const string w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        const string r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        const string a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        const string wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var mainImage = main.AddNewPart<ImagePart>("image/png", "rIdImage");
+            using (var imageStream = mainImage.GetStream(FileMode.Create, FileAccess.Write))
+                imageStream.Write(mainBytes, 0, mainBytes.Length);
+
+            var header = main.AddNewPart<HeaderPart>("rIdHeader");
+            var headerImage = header.AddNewPart<ImagePart>("image/png", "rIdImage");
+            using (var imageStream = headerImage.GetStream(FileMode.Create, FileAccess.Write))
+                imageStream.Write(headerBytes, 0, headerBytes.Length);
+
+            WritePartXml(header,
+                $"<w:hdr xmlns:w=\"{w}\" xmlns:r=\"{r}\" xmlns:a=\"{a}\" xmlns:wp=\"{wp}\">" +
+                $"<w:p><w:r>{Drawing("rIdImage")}</w:r></w:p></w:hdr>");
+            WritePartXml(main,
+                $"<w:document xmlns:w=\"{w}\" xmlns:r=\"{r}\"><w:body>" +
+                "<w:p><w:r><w:t>body</w:t></w:r></w:p>" +
+                "<w:sectPr><w:headerReference w:type=\"default\" r:id=\"rIdHeader\"/></w:sectPr>" +
+                "</w:body></w:document>");
+        }
+        return new WmlDocument("ir-test.docx", stream.ToArray());
+    }
+
+    private static void WritePartXml(OpenXmlPart part, string xml)
+    {
+        using var stream = part.GetStream(FileMode.Create, FileAccess.Write);
+        using var writer = new StreamWriter(stream);
+        writer.Write(xml);
     }
 
     [Fact]
