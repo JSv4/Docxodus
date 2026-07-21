@@ -14,26 +14,31 @@ using Xunit;
 namespace Docxodus.Tests;
 
 /// <summary>
-/// Style-definition provenance of <see cref="DocxDiff.Compare"/> output, decoded from the
-/// Word-compare oracle corpus: the result's styles part is the ORIGINAL (left) document's —
-/// docDefaults byte-identical to the left — while each style whose RAW definition formatting
-/// differs between the sides has its CURRENT payload updated to the RIGHT document's EFFECTIVE
-/// formatting (docDefaults + basedOn chain + own definition resolved), with the left's effective
-/// payload archived in a tracked <c>w:rPrChange</c>/<c>w:pPrChange</c> INSIDE the style definition.
-/// Styles whose definitions agree (modulo rsid noise) are untouched, even when the two documents'
-/// docDefaults differ. Right-only styles are copied; left-only styles survive for deleted content.
+/// Style-definition provenance of <see cref="DocxDiff.Compare"/> output. The result's styles part keeps the
+/// ORIGINAL (left) document-level defaults, while each shared,
+/// presentation-eligible style whose effective formatting differs has its CURRENT payload updated to the
+/// RIGHT effective formatting (docDefaults + basedOn chain + own definition resolved), with the left's
+/// effective payload archived in a tracked <c>w:rPrChange</c>/<c>w:pPrChange</c> inside the definition.
+/// This makes otherwise invisible docDefaults changes reversible without copying an untrackable package part.
+/// Right-only styles are copied; left-only styles survive for deleted content.
 /// </summary>
 public class DocxDiffStyleProvenanceTests
 {
     private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
-    private static WmlDocument Doc(string ddFont, string? normalFont, string text)
+    private static WmlDocument Doc(
+        string ddFont, string? normalFont, string text,
+        bool includeGlossary = false, bool includeNumbering = false)
     {
         using var stream = new MemoryStream();
         using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
         {
             var mainPart = doc.AddMainDocumentPart();
-            mainPart.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+            var paragraph = new Paragraph(new Run(new Text(text)));
+            if (includeNumbering)
+                paragraph.PrependChild(new ParagraphProperties(new NumberingProperties(
+                    new NumberingLevelReference { Val = 0 }, new NumberingId { Val = 1 })));
+            mainPart.Document = new Document(new Body(paragraph));
             var normal = normalFont is null
                 ? new Style(new StyleName { Val = "Normal" })
                 : new Style(new StyleName { Val = "Normal" },
@@ -45,12 +50,163 @@ public class DocxDiffStyleProvenanceTests
                 new DocDefaults(
                     new RunPropertiesDefault(new RunPropertiesBaseStyle(
                         new RunFonts { Ascii = ddFont, HighAnsi = ddFont }, new FontSize { Val = "22" })),
-                    new ParagraphPropertiesDefault()),
+                new ParagraphPropertiesDefault()),
                 normal);
+            if (includeNumbering)
+            {
+                var numbering = mainPart.AddNewPart<NumberingDefinitionsPart>();
+                using var writer = new StreamWriter(numbering.GetStream(FileMode.Create, FileAccess.Write));
+                writer.Write($"<w:numbering xmlns:w=\"{W.NamespaceName}\">" +
+                    "<w:abstractNum w:abstractNumId=\"0\"><w:lvl w:ilvl=\"0\"><w:start w:val=\"1\"/>" +
+                    "<w:numFmt w:val=\"decimal\"/><w:lvlText w:val=\"%1.\"/></w:lvl></w:abstractNum>" +
+                    "<w:num w:numId=\"1\"><w:abstractNumId w:val=\"0\"/></w:num></w:numbering>");
+            }
+            if (includeGlossary)
+            {
+                var glossary = mainPart.AddNewPart<GlossaryDocumentPart>();
+                using var writer = new StreamWriter(glossary.GetStream(FileMode.Create, FileAccess.Write));
+                writer.Write($"<w:glossaryDocument xmlns:w=\"{W.NamespaceName}\"><w:docParts/></w:glossaryDocument>");
+            }
             mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
             doc.Save();
         }
         return new WmlDocument("doc.docx", stream.ToArray());
+    }
+
+    private static WmlDocument DocWithStyledBreak(string defaultFont)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(
+                new RunProperties(new RunStyle { Val = "BreakStyle" }), new Break()))));
+            var styles = main.AddNewPart<StyleDefinitionsPart>();
+            using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">" +
+                    "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                    $"<w:rFonts w:ascii=\"{defaultFont}\" w:hAnsi=\"{defaultFont}\"/>" +
+                    "</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>" +
+                    "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>" +
+                    "<w:style w:type=\"character\" w:styleId=\"BreakStyle\"><w:name w:val=\"BreakStyle\"/></w:style>" +
+                    "</w:styles>");
+            }
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("styled-break.docx", stream.ToArray());
+    }
+
+    private static WmlDocument DocWithInputStyleRevision(string defaultFont)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text("Shared line.")))));
+            var styles = main.AddNewPart<StyleDefinitionsPart>();
+            using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">" +
+                    "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                    $"<w:rFonts w:ascii=\"{defaultFont}\" w:hAnsi=\"{defaultFont}\"/>" +
+                    "</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>" +
+                    "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/>" +
+                    "<w:rPr><w:rFonts w:ascii=\"Legacy\" w:hAnsi=\"Legacy\"/>" +
+                    "<w:rPrChange w:id=\"4\" w:author=\"Input Reviewer\" w:date=\"2001-01-01T00:00:00Z\">" +
+                    "<w:rPr><w:rFonts w:ascii=\"Archived\" w:hAnsi=\"Archived\"/></w:rPr></w:rPrChange>" +
+                    "</w:rPr></w:style></w:styles>");
+            }
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("input-style-revision.docx", stream.ToArray());
+    }
+
+    private static WmlDocument DocWithLiteralDefaults(string font, string size, string line, string text)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+            var styles = main.AddNewPart<StyleDefinitionsPart>();
+            using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">" +
+                    "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                    $"<w:rFonts w:ascii=\"{font}\" w:hAnsi=\"{font}\"/><w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/>" +
+                    "</w:rPr></w:rPrDefault><w:pPrDefault><w:pPr>" +
+                    $"<w:spacing w:line=\"{line}\" w:lineRule=\"auto\"/>" +
+                    "</w:pPr></w:pPrDefault></w:docDefaults>" +
+                    "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">" +
+                    "<w:name w:val=\"Normal\"/></w:style></w:styles>");
+            }
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("literal-defaults.docx", stream.ToArray());
+    }
+
+    private static WmlDocument DocWithThemeDefault(string size)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text("Shared line.")))));
+            var styles = main.AddNewPart<StyleDefinitionsPart>();
+            using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">" +
+                    "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                    $"<w:rFonts w:asciiTheme=\"minorHAnsi\"/><w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/>" +
+                    "</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>" +
+                    "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\">" +
+                    "<w:name w:val=\"Normal\"/></w:style></w:styles>");
+            }
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("theme-default.docx", stream.ToArray());
+    }
+
+    private static WmlDocument DocWithHeaderOnlyStyle(string defaultFont)
+    {
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var header = main.AddNewPart<HeaderPart>();
+            header.Header = new Header(new Paragraph(
+                new ParagraphProperties(new ParagraphStyleId { Val = "HeaderText" }),
+                new Run(new Text("Stable header."))));
+            main.Document = new Document(new Body(
+                new Paragraph(new ParagraphProperties(new ParagraphStyleId { Val = "BodyText" }),
+                    new Run(new Text("Stable body."))),
+                new SectionProperties(new HeaderReference
+                {
+                    Id = main.GetIdOfPart(header),
+                    Type = HeaderFooterValues.Default,
+                })));
+
+            var styles = main.AddNewPart<StyleDefinitionsPart>();
+            using (var writer = new StreamWriter(styles.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write($"<w:styles xmlns:w=\"{W.NamespaceName}\">" +
+                    "<w:docDefaults><w:rPrDefault><w:rPr>" +
+                    $"<w:rFonts w:ascii=\"{defaultFont}\" w:hAnsi=\"{defaultFont}\"/>" +
+                    "</w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>" +
+                    "<w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>" +
+                    "<w:style w:type=\"paragraph\" w:styleId=\"BodyText\"><w:name w:val=\"BodyText\"/></w:style>" +
+                    "<w:style w:type=\"paragraph\" w:styleId=\"HeaderText\"><w:name w:val=\"HeaderText\"/></w:style>" +
+                    "</w:styles>");
+            }
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            doc.Save();
+        }
+        return new WmlDocument("header-style.docx", stream.ToArray());
     }
 
     private static XDocument StylesOf(WmlDocument doc)
@@ -311,17 +467,150 @@ public class DocxDiffStyleProvenanceTests
     }
 
     [Fact]
-    public void SharedStyleWithEqualDefinitions_IsUntouched_EvenWhenDocDefaultsDiffer()
+    public void SharedStyleWithEqualDefinitions_ProjectsEffectiveRunFormatting_WhenDocDefaultsDiffer()
     {
-        // Both Normals are formatting-empty; only docDefaults differ → Word records NO style change.
+        // Both Normals are formatting-empty. The style-level projection keeps the output docDefaults
+        // left-owned, then makes Normal's current rPr right-effective and archives the left-effective rPr.
         var left = Doc("Courier New", null, "Shared line.");
         var right = Doc("Arial", null, "Shared line.");
 
         var result = DocxDiff.Compare(left, right);
 
         var normal = StyleOf(StylesOf(result), "Normal");
-        Assert.Null(normal.Element(W + "rPr")?.Element(W + "rPrChange"));
-        Assert.Null(normal.Element(W + "rPr")?.Element(W + "rFonts"));
+        var rPr = normal.Element(W + "rPr");
+        Assert.Equal("Arial", (string?)rPr?.Element(W + "rFonts")?.Attribute(W + "ascii"));
+        Assert.Equal("Courier New", (string?)rPr?.Element(W + "rPrChange")?.Element(W + "rPr")
+            ?.Element(W + "rFonts")?.Attribute(W + "ascii"));
+    }
+
+    [Fact]
+    public void DocDefaultsOnly_SharedNormalProjectsRightPresentation_AndRoundTrips()
+    {
+        var left = DocWithLiteralDefaults("Courier New", "22", "240", "Shared line.");
+        var right = DocWithLiteralDefaults("Arial", "28", "360", "Shared line.");
+
+        var result = DocxDiff.Compare(left, right);
+        AssertStylesSchemaValid(result);
+
+        // The package-level defaults deliberately remain left-owned: revisions cannot switch a package part.
+        var outputDefaults = StylesOf(result).Root!.Element(W + "docDefaults")!;
+        Assert.Equal("Courier New", (string?)outputDefaults.Element(W + "rPrDefault")?.Element(W + "rPr")
+            ?.Element(W + "rFonts")?.Attribute(W + "ascii"));
+        Assert.Equal("240", (string?)outputDefaults.Element(W + "pPrDefault")?.Element(W + "pPr")
+            ?.Element(W + "spacing")?.Attribute(W + "line"));
+
+        var normal = StyleOf(StylesOf(result), "Normal");
+        var currentPPr = normal.Element(W + "pPr")!;
+        var currentRPr = normal.Element(W + "rPr")!;
+        Assert.Equal("360", (string?)currentPPr.Element(W + "spacing")?.Attribute(W + "line"));
+        Assert.Equal("240", (string?)currentPPr.Element(W + "pPrChange")?.Element(W + "pPr")
+            ?.Element(W + "spacing")?.Attribute(W + "line"));
+        Assert.Equal("Arial", (string?)currentRPr.Element(W + "rFonts")?.Attribute(W + "ascii"));
+        Assert.Equal("28", (string?)currentRPr.Element(W + "sz")?.Attribute(W + "val"));
+        Assert.Equal("Courier New", (string?)currentRPr.Element(W + "rPrChange")?.Element(W + "rPr")
+            ?.Element(W + "rFonts")?.Attribute(W + "ascii"));
+        Assert.Equal("22", (string?)currentRPr.Element(W + "rPrChange")?.Element(W + "rPr")
+            ?.Element(W + "sz")?.Attribute(W + "val"));
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Equal(BodyTexts(right), BodyTexts(accepted));
+        Assert.Equal(BodyTexts(left), BodyTexts(rejected));
+
+        var acceptedNormal = StyleOf(StylesOf(accepted), "Normal");
+        var rejectedNormal = StyleOf(StylesOf(rejected), "Normal");
+        Assert.Equal("360", (string?)acceptedNormal.Element(W + "pPr")?.Element(W + "spacing")?.Attribute(W + "line"));
+        Assert.Equal("Arial", (string?)acceptedNormal.Element(W + "rPr")?.Element(W + "rFonts")?.Attribute(W + "ascii"));
+        Assert.Equal("28", (string?)acceptedNormal.Element(W + "rPr")?.Element(W + "sz")?.Attribute(W + "val"));
+        Assert.Equal("240", (string?)rejectedNormal.Element(W + "pPr")?.Element(W + "spacing")?.Attribute(W + "line"));
+        Assert.Equal("Courier New", (string?)rejectedNormal.Element(W + "rPr")?.Element(W + "rFonts")?.Attribute(W + "ascii"));
+        Assert.Equal("22", (string?)rejectedNormal.Element(W + "rPr")?.Element(W + "sz")?.Attribute(W + "val"));
+    }
+
+    [Fact]
+    public void DocDefaultsProjection_DeclinesThemeReferences_WithoutCopyingPackagePresentation()
+    {
+        var left = DocWithThemeDefault("22");
+        var right = DocWithThemeDefault("28");
+
+        var result = DocxDiff.Compare(left, right);
+
+        var normal = StyleOf(StylesOf(result), "Normal");
+        Assert.Null(normal.Element(W + "rPr"));
+        var defaults = StylesOf(result).Root!.Element(W + "docDefaults")!;
+        Assert.Equal("22", (string?)defaults.Element(W + "rPrDefault")?.Element(W + "rPr")
+            ?.Element(W + "sz")?.Attribute(W + "val"));
+    }
+
+    [Fact]
+    public void DocDefaultsProjection_TracksAStyleUsedOnlyByAnUnchangedHeader()
+    {
+        var left = DocWithHeaderOnlyStyle("Courier New");
+        var right = DocWithHeaderOnlyStyle("Arial");
+
+        var result = DocxDiff.Compare(left, right);
+        var headerStyle = StyleOf(StylesOf(result), "HeaderText");
+
+        Assert.Equal("Arial", (string?)headerStyle.Element(W + "rPr")?.Element(W + "rFonts")
+            ?.Attribute(W + "ascii"));
+        Assert.Equal("Courier New", (string?)headerStyle.Element(W + "rPr")?.Element(W + "rPrChange")
+            ?.Element(W + "rPr")?.Element(W + "rFonts")?.Attribute(W + "ascii"));
+    }
+
+    [Fact]
+    public void DocDefaultsProjection_TracksCharacterStyleOnBreakOnlyRun()
+    {
+        // IrBreak has no IrFormat, but its source w:r can still have an active w:rStyle. The projection
+        // must find that style reference so the accepted break paragraph does not retain left defaults.
+        var left = DocWithStyledBreak("Courier New");
+        var right = DocWithStyledBreak("Arial");
+
+        var result = DocxDiff.Compare(left, right);
+        var breakStyle = StyleOf(StylesOf(result), "BreakStyle");
+
+        Assert.Equal("Arial", (string?)breakStyle.Element(W + "rPr")?.Element(W + "rFonts")
+            ?.Attribute(W + "ascii"));
+        Assert.Equal("Courier New", (string?)breakStyle.Element(W + "rPr")?.Element(W + "rPrChange")
+            ?.Element(W + "rPr")?.Element(W + "rFonts")?.Attribute(W + "ascii"));
+    }
+
+    [Fact]
+    public void DocDefaultsProjection_PreservesInputStylePropertyRevisions()
+    {
+        // Equal raw payloads intentionally ignore rPrChange, so the projection must decline rather than
+        // replacing the entire style rPr and silently dropping existing review history.
+        var left = DocWithInputStyleRevision("Courier New");
+        var right = DocWithInputStyleRevision("Arial");
+
+        var result = DocxDiff.Compare(left, right);
+        var normalRPr = StyleOf(StylesOf(result), "Normal").Element(W + "rPr")!;
+
+        Assert.Equal("Legacy", (string?)normalRPr.Element(W + "rFonts")?.Attribute(W + "ascii"));
+        Assert.Equal("Input Reviewer", (string?)normalRPr.Element(W + "rPrChange")?.Attribute(W + "author"));
+        Assert.Equal("Archived", (string?)normalRPr.Element(W + "rPrChange")?.Element(W + "rPr")
+            ?.Element(W + "rFonts")?.Attribute(W + "ascii"));
+    }
+
+    [Fact]
+    public void DocDefaultsProjection_DeclinesListsWhoseLabelsCanInheritDefaults()
+    {
+        var left = Doc("Courier New", null, "One", includeNumbering: true);
+        var right = Doc("Arial", null, "One", includeNumbering: true);
+
+        var result = DocxDiff.Compare(left, right);
+
+        Assert.Null(StyleOf(StylesOf(result), "Normal").Element(W + "rPr"));
+    }
+
+    [Fact]
+    public void DocDefaultsProjection_DeclinesWhenLeftOwnsAGlossary()
+    {
+        var left = Doc("Courier New", null, "Shared line.", includeGlossary: true);
+        var right = Doc("Arial", null, "Shared line.");
+
+        var result = DocxDiff.Compare(left, right);
+
+        Assert.Null(StyleOf(StylesOf(result), "Normal").Element(W + "rPr"));
     }
 
     [Fact]

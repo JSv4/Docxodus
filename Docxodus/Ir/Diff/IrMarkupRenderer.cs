@@ -105,6 +105,19 @@ internal static class IrMarkupRenderer
     /// Style ids are typed in OOXML, so the type participates in right-import provenance.</summary>
     private readonly record struct StyleIdentity(string Type, string Id);
 
+    /// <summary>
+    /// A deliberately scoped, reversible package-presentation plan. OOXML has no native tracked revision for
+    /// <c>docDefaults</c>, theme, numbering, or settings parts, so the output keeps the left package parts and
+    /// materializes only a proven docDefaults-only delta into the CURRENT payload of shared style definitions.
+    /// The old effective payload is carried by the standard style-level pPrChange/rPrChange markers, making
+    /// accept/reject switch presentation without a hidden package swap.
+    /// </summary>
+    private sealed record DocDefaultsStyleProjection(HashSet<StyleIdentity> Styles)
+    {
+        public bool Includes(string? type, string? id) =>
+            type is not null && id is not null && Styles.Contains(new StyleIdentity(type, id));
+    }
+
     // Mirrors the tail of DocxSession.PPrChildOrder after w:spacing. When a right-only style
     // delegates paragraph spacing to defaults, the materialized w:spacing must precede the first
     // present CT_PPrBase child in this set (for example w:ind or w:jc), not merely w:outlineLvl.
@@ -153,6 +166,30 @@ internal static class IrMarkupRenderer
         W.eastAsianLayout,
         W.specVanish,
         W.oMath,
+    };
+
+    // Schema order for the properties produced by the reversible docDefaults projection. Effective formatting
+    // is assembled from several cascade layers, so a later override can otherwise be appended after an earlier
+    // property with a higher schema position (for example an inherited w:rFonts after w:b). Keep unknown/
+    // extension children stable at the tail; the v1 projection admits only literal WordprocessingML properties.
+    private static readonly string[] StylePPrChildOrder =
+    {
+        "pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl", "numPr",
+        "suppressLineNumbers", "pBdr", "shd", "tabs", "suppressAutoHyphens", "kinsoku", "wordWrap",
+        "overflowPunct", "topLinePunct", "autoSpaceDE", "autoSpaceDN", "bidi", "adjustRightInd",
+        "snapToGrid", "spacing", "ind", "contextualSpacing", "mirrorIndents", "suppressOverlap", "jc",
+        "textDirection", "textAlignment", "textboxTightWrap", "outlineLvl", "divId", "cnfStyle", "rPr",
+        "sectPr", "pPrChange",
+    };
+
+    private static readonly string[] StyleRPrChildOrder =
+    {
+        "moveFrom", "moveTo", "ins", "del", "rStyle", "rFonts", "b", "bCs", "i", "iCs", "caps",
+        "smallCaps", "strike", "dstrike", "outline", "shadow", "emboss", "imprint", "noProof",
+        "snapToGrid", "vanish", "webHidden", "color", "spacing", "w", "kern", "position", "sz",
+        "wShadow", "wTextOutline", "wTextFill", "wScene3d", "wProps3d", "szCs", "highlight", "u",
+        "effect", "bdr", "shd", "fitText", "vertAlign", "rtl", "cs", "em", "lang", "eastAsianLayout",
+        "specVanish", "oMath", "rPrChange",
     };
 
     /// <summary>
@@ -250,6 +287,7 @@ internal static class IrMarkupRenderer
                 var leftHadTheme = main.ThemePart is not null;
                 var insertedStyleNormalization = TryCreateInsertedStyleNormalization(
                     script, state, main, wDocRight.MainDocumentPart);
+                var docDefaultsStyleProjection = TryCreateDocDefaultsStyleProjection(wDoc, wDocRight, state);
 
                 // Preserve the trailing top-level sectPr (a direct child of w:body that is NOT inside a pPr).
                 var trailingSectPr = bodyEl.Elements(W.sectPr).LastOrDefault();
@@ -365,10 +403,12 @@ internal static class IrMarkupRenderer
                 // to the left — while each style whose RAW definition formatting differs between the
                 // sides has its CURRENT payload updated to the RIGHT document's EFFECTIVE formatting,
                 // with the left's effective payload archived in a tracked rPrChange/pPrChange INSIDE
-                // the style definition. Right-only styles are copied in. Numbering keeps the existing
-                // missing-copy treatment (numId collisions are remapped there, not overwritten).
+                // the style definition. Eligible raw-equal styles also receive a reversible projection
+                // when a literal docDefaults delta is the only safe presentation difference. Right-only
+                // styles are copied in. Numbering keeps the existing missing-copy treatment (numId
+                // collisions are remapped there, not overwritten).
                 var rightImportedStyles = TrackStyleDefinitionChanges(
-                    wDoc, wDocRight, state, insertedStyleNormalization, leftHadTheme);
+                    wDoc, wDocRight, state, insertedStyleNormalization, leftHadTheme, docDefaultsStyleProjection);
                 // Equal blocks and archived pPr values are cloned verbatim, so neither path passes
                 // through the paired-paragraph style guard. Once the final styles part is known,
                 // discard only paragraph-style references which cannot resolve there.
@@ -5038,6 +5078,168 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>
+    /// Build the first reversible document-presentation plan. It intentionally admits only literal docDefaults
+    /// changes in a simple story universe: package parts remain left-owned, and no theme/numbering/settings,
+    /// glossary, pre-existing style history, or complex consumer can be mistaken for a style-revision problem.
+    /// Unsupported presentation changes stay visible as the left package rather than being silently copied into
+    /// both accept and reject views.
+    /// </summary>
+    private static DocDefaultsStyleProjection? TryCreateDocDefaultsStyleProjection(
+        WordprocessingDocument leftDocument, WordprocessingDocument rightDocument, RenderState state)
+    {
+        if (state.Settings.PreserveInputRevisions)
+            return null;
+
+        var leftMain = leftDocument.MainDocumentPart;
+        var rightMain = rightDocument.MainDocumentPart;
+        var leftStyles = leftMain?.StyleDefinitionsPart?.GetXDocument().Root;
+        var rightStyles = rightMain?.StyleDefinitionsPart?.GetXDocument().Root;
+        if (leftMain is null || rightMain is null || leftStyles is null || rightStyles is null ||
+            leftMain.GlossaryDocumentPart is not null ||
+            DocDefaultsPayloadsEqual(leftStyles, rightStyles) ||
+            !PartsEqual(leftMain.ThemePart, rightMain.ThemePart) ||
+            !PartsEqual(leftMain.NumberingDefinitionsPart, rightMain.NumberingDefinitionsPart) ||
+            !PartsEqual(leftMain.DocumentSettingsPart, rightMain.DocumentSettingsPart) ||
+            HasThemeReference(leftStyles) || HasThemeReference(rightStyles) ||
+            HasUnsafePresentationConsumer(state.Left) || HasUnsafePresentationConsumer(state.Right))
+            return null;
+
+        var candidates = CollectUsedStyleIdentities(state.Left);
+        candidates.UnionWith(CollectUsedStyleIdentities(state.Right));
+        candidates.RemoveWhere(identity => !StyleChainIsSharedAndResolvable(leftStyles, rightStyles, identity));
+        return candidates.Count == 0 ? null : new DocDefaultsStyleProjection(candidates);
+    }
+
+    private static bool DocDefaultsPayloadsEqual(XElement leftStyles, XElement rightStyles)
+    {
+        XElement Payload(XElement styles) => new XElement(W.docDefaults,
+            new XElement(W.pPrDefault,
+                new XElement(W.pPr, styles.Element(W.docDefaults)?.Element(W.pPrDefault)?.Element(W.pPr)?.Elements())),
+            new XElement(W.rPrDefault,
+                new XElement(W.rPr, styles.Element(W.docDefaults)?.Element(W.rPrDefault)?.Element(W.rPr)?.Elements())));
+        var left = Payload(leftStyles);
+        var right = Payload(rightStyles);
+        StripStyleNoise(left);
+        StripStyleNoise(right);
+        return XNode.DeepEquals(left, right);
+    }
+
+    private static bool PartsEqual(OpenXmlPart? left, OpenXmlPart? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+        using var leftStream = left.GetStream(FileMode.Open, FileAccess.Read);
+        using var rightStream = right.GetStream(FileMode.Open, FileAccess.Read);
+        while (true)
+        {
+            int a = leftStream.ReadByte();
+            int b = rightStream.ReadByte();
+            if (a != b)
+                return false;
+            if (a < 0)
+                return true;
+        }
+    }
+
+    private static bool HasThemeReference(XElement root) => root.DescendantsAndSelf().Attributes()
+        .Any(attribute => attribute.Name.LocalName.IndexOf("theme", StringComparison.OrdinalIgnoreCase) >= 0);
+
+    private static bool HasUnsafePresentationConsumer(IrDocument document)
+    {
+        // This first style-level slice deliberately avoids shapes whose effective appearance includes a higher
+        // precedence layer (table conditional styles and list labels), an independent package graph (drawing),
+        // or an envelope that needs its own structural revision. Later presentation-plan phases can support each
+        // explicitly.
+        var unsafeNames = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "tbl", "numPr", "drawing", "pict", "txbxContent", "fldSimple", "fldChar", "instrText", "delInstrText",
+            "sdt", "smartTag",
+        };
+        return document.Sources.Values.Any(source => source.Root?.DescendantsAndSelf().Any(element =>
+            element.Name.Namespace == W.w && unsafeNames.Contains(element.Name.LocalName)) == true) ||
+            document.Sources.Values.Any(source => source.Root is not null && HasThemeReference(source.Root));
+    }
+
+    private static HashSet<StyleIdentity> CollectUsedStyleIdentities(IrDocument document)
+    {
+        var identities = new HashSet<StyleIdentity>();
+        foreach (var paragraph in document.AnchorIndex.Values.OfType<IrParagraph>())
+        {
+            var paragraphStyle = paragraph.Format.StyleId ?? document.Styles.DefaultParagraphStyleId;
+            if (!string.IsNullOrEmpty(paragraphStyle))
+                identities.Add(new StyleIdentity("paragraph", paragraphStyle));
+            CollectInlineCharacterStyles(paragraph.Inlines, identities);
+        }
+
+        // Most run-like IR nodes preserve their character style through IrFormat, but a break or note-reference
+        // run can legally own w:rStyle without carrying an IrFormat. Source XML is retained by the renderer and
+        // represents the accepted view, so supplement the IR scan with its direct live style references rather
+        // than overlooking a visible consumer of the projected defaults.
+        foreach (var source in document.Sources.Values)
+        foreach (var styleRef in source.Descendants().Where(element =>
+                     element.Name == W.pStyle || element.Name == W.rStyle))
+        {
+            if (styleRef.Ancestors().Any(ancestor =>
+                    ancestor.Name == W.pPrChange || ancestor.Name == W.rPrChange))
+                continue;
+            var styleId = (string?)styleRef.Attribute(W.val);
+            if (!string.IsNullOrEmpty(styleId))
+                identities.Add(new StyleIdentity(styleRef.Name == W.pStyle ? "paragraph" : "character", styleId));
+        }
+        return identities;
+    }
+
+    private static void CollectInlineCharacterStyles(IEnumerable<IrInline> inlines, HashSet<StyleIdentity> identities)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrTextRun text when !string.IsNullOrEmpty(text.Format.StyleId):
+                    identities.Add(new StyleIdentity("character", text.Format.StyleId));
+                    break;
+                case IrTab tab when !string.IsNullOrEmpty(tab.Format.StyleId):
+                    identities.Add(new StyleIdentity("character", tab.Format.StyleId));
+                    break;
+                case IrHyperlink hyperlink:
+                    CollectInlineCharacterStyles(hyperlink.Inlines, identities);
+                    break;
+                case IrFieldRun field:
+                    CollectInlineCharacterStyles(field.CachedResult, identities);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Prove that a used style and every same-type ancestor can be safely materialized. Existing
+    /// property history must remain verbatim, and numbered styles need their own label-level revision model,
+    /// so either condition deliberately excludes the chain from this first projection slice.</summary>
+    private static bool StyleChainIsSharedAndResolvable(
+        XElement leftStyles, XElement rightStyles, StyleIdentity identity)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        string? current = identity.Id;
+        for (int depth = 0; current is not null && depth < 16; depth++)
+        {
+            if (!seen.Add(current))
+                return false;
+            var left = leftStyles.Elements(W.style).Where(style =>
+                string.Equals((string?)style.Attribute(W.type), identity.Type, StringComparison.Ordinal) &&
+                string.Equals((string?)style.Attribute(W.styleId), current, StringComparison.Ordinal)).ToList();
+            var right = rightStyles.Elements(W.style).Where(style =>
+                string.Equals((string?)style.Attribute(W.type), identity.Type, StringComparison.Ordinal) &&
+                string.Equals((string?)style.Attribute(W.styleId), current, StringComparison.Ordinal)).ToList();
+            if (left.Count != 1 || right.Count != 1 ||
+                !StyleCascadeMetadataEqual(left[0], right[0]) ||
+                HasStylePropertyRevisions(left[0]) || HasStylePropertyRevisions(right[0]) ||
+                left[0].Descendants(W.numPr).Any() || right[0].Descendants(W.numPr).Any())
+                return false;
+            current = (string?)left[0].Element(W.basedOn)?.Attribute(W.val);
+        }
+        return current is null;
+    }
+
+    /// <summary>
     /// Return the special Word-style provenance mode only when the comparison is a literal full
     /// replacement of the main body, the LEFT has neither docDefaults nor a default paragraph style,
     /// and every paragraph in every LEFT story names a fully resolvable LEFT paragraph-style chain.
@@ -5300,16 +5502,18 @@ internal static class IrMarkupRenderer
     /// <summary>
     /// Mirror Word compare's style-definition treatment into the LEFT-based output package (decoded
     /// from the Word-compare oracle corpus — see DocxDiffStyleProvenanceTests): keep the left styles
-    /// part (docDefaults et al.), copy right-only styles, and for every shared style whose RAW
-    /// definition formatting differs (rsid noise ignored), rewrite the CURRENT payload to the right's
-    /// EFFECTIVE formatting (docDefaults + basedOn chain + own definition) while archiving the left's
-    /// effective payload in a tracked <c>w:rPrChange</c>/<c>w:pPrChange</c> inside the definition —
-    /// so the redline renders with the revised document's look and the change history carries the
-    /// original. No-ops gracefully when either side lacks a styles part.
+    /// part (docDefaults et al.), copy right-only styles, and rewrite every shared style whose RAW
+    /// definition formatting differs (rsid noise ignored) to the right's EFFECTIVE formatting
+    /// (docDefaults + basedOn chain + own definition), with the left effective payload archived in a
+    /// tracked <c>w:rPrChange</c>/<c>w:pPrChange</c>. A narrowly proven docDefaults-only plan applies
+    /// the same reversible projection to eligible raw-equal styles. This lets the redline render with
+    /// the revised look while Reject restores the original, without copying an untrackable package
+    /// part. No-ops gracefully when either side lacks a styles part.
     /// </summary>
     private static HashSet<StyleIdentity> TrackStyleDefinitionChanges(
         WordprocessingDocument wDoc, WordprocessingDocument wDocRight, RenderState state,
-        InsertedStyleNormalization? insertedStyleNormalization, bool leftHadTheme)
+        InsertedStyleNormalization? insertedStyleNormalization, bool leftHadTheme,
+        DocDefaultsStyleProjection? docDefaultsStyleProjection)
     {
         var rightImportedStyles = new HashSet<StyleIdentity>();
         if (wDoc.MainDocumentPart?.StyleDefinitionsPart is not { } leftStyles ||
@@ -5360,8 +5564,16 @@ internal static class IrMarkupRenderer
                     rightImportedStyles.Add(new StyleIdentity(type, styleId));
                 continue;
             }
-            if (styleId is null || StyleDefinitionPayloadsEqual(leftStyle, rightStyle))
+            if (styleId is null)
                 continue;
+
+            if (StyleDefinitionPayloadsEqual(leftStyle, rightStyle))
+            {
+                if (docDefaultsStyleProjection?.Includes(type, styleId) == true &&
+                    StyleCascadeMetadataEqual(leftStyle, rightStyle))
+                    ApplyDocDefaultsStyleProjection(leftStyle, leftOriginalRoot, rightRoot, type, styleId, state);
+                continue;
+            }
 
             // Payload provenance decoded from the oracle: the PARAGRAPH side stays at RAW definition
             // payloads — Word's updated Normal carries an EMPTY current pPr (docDefaults spacing is
@@ -5399,6 +5611,101 @@ internal static class IrMarkupRenderer
         leftStyles.PutXDocument();
         return rightImportedStyles;
     }
+
+    /// <summary>
+    /// Materialize a docDefaults-only presentation delta into one shared style definition. The package still
+    /// carries LEFT docDefaults, so the current effective properties must be made direct on the style for the
+    /// accepted view; the LEFT effective properties inside the native property-change marker restore Reject.
+    /// Character styles can own run properties only, while paragraph styles safely own both slices.
+    /// </summary>
+    private static void ApplyDocDefaultsStyleProjection(
+        XElement outputStyle, XElement leftStylesRoot, XElement rightStylesRoot,
+        string? type, string styleId, RenderState state)
+    {
+        var (leftPPr, leftRPr) = ResolveEffectiveStyleFormatting(leftStylesRoot, type, styleId);
+        var (rightPPr, rightRPr) = ResolveEffectiveStyleFormatting(rightStylesRoot, type, styleId);
+        NormalizeStylePropertyOrder(leftPPr, StylePPrChildOrder);
+        NormalizeStylePropertyOrder(rightPPr, StylePPrChildOrder);
+        NormalizeStylePropertyOrder(leftRPr, StyleRPrChildOrder);
+        NormalizeStylePropertyOrder(rightRPr, StyleRPrChildOrder);
+
+        bool projectPPr = string.Equals(type, "paragraph", StringComparison.Ordinal) &&
+            !XNode.DeepEquals(leftPPr, rightPPr);
+        bool projectRPr = (string.Equals(type, "paragraph", StringComparison.Ordinal) ||
+                           string.Equals(type, "character", StringComparison.Ordinal)) &&
+            !XNode.DeepEquals(leftRPr, rightRPr);
+        if (!projectPPr && !projectRPr)
+            return;
+
+        XElement? currentPPr = null;
+        if (projectPPr)
+        {
+            currentPPr = new XElement(rightPPr);
+            currentPPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), new XElement(leftPPr)));
+        }
+
+        XElement? currentRPr = null;
+        if (projectRPr)
+        {
+            currentRPr = new XElement(rightRPr);
+            currentRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), new XElement(leftRPr)));
+        }
+
+        ReplaceStyleProperties(outputStyle, currentPPr, currentRPr);
+    }
+
+    /// <summary>Replace only the style property slices supplied by a presentation projection, preserving the
+    /// style metadata and the schema-required pPr → rPr → table-property ordering.</summary>
+    private static void ReplaceStyleProperties(XElement style, XElement? pPr, XElement? rPr)
+    {
+        if (pPr is not null)
+            style.Elements(W.pPr).Remove();
+        if (rPr is not null)
+            style.Elements(W.rPr).Remove();
+
+        if (pPr is not null)
+        {
+            var pPrAnchor = style.Elements().FirstOrDefault(e =>
+                e.Name == W.rPr || e.Name == W.tblPr || e.Name == W.trPr || e.Name == W.tcPr ||
+                e.Name == W.tblStylePr);
+            if (pPrAnchor is null)
+                style.Add(pPr);
+            else
+                pPrAnchor.AddBeforeSelf(pPr);
+        }
+
+        if (rPr is not null)
+        {
+            var rPrAnchor = style.Elements().FirstOrDefault(e =>
+                e.Name == W.tblPr || e.Name == W.trPr || e.Name == W.tcPr || e.Name == W.tblStylePr);
+            if (rPrAnchor is null)
+                style.Add(rPr);
+            else
+                rPrAnchor.AddBeforeSelf(rPr);
+        }
+    }
+
+    private static void NormalizeStylePropertyOrder(XElement props, string[] order)
+    {
+        var children = props.Elements().Select((element, index) => new
+        {
+            Element = element,
+            Index = index,
+            Rank = element.Name.Namespace == W.w
+                ? System.Array.IndexOf(order, element.Name.LocalName)
+                : -1,
+        }).OrderBy(item => item.Rank >= 0 ? item.Rank : 10_000 + item.Index).ToList();
+        foreach (var child in children)
+            child.Element.Remove();
+        props.Add(children.Select(child => child.Element));
+    }
+
+    /// <summary>Raw-equivalent pPr/rPr payloads are not enough to prove a docDefaults-only change: a changed
+    /// basedOn edge would also change effective formatting but needs its own semantic style diff. The first
+    /// presentation slice requires the cascade edge to be identical on both sides.</summary>
+    private static bool StyleCascadeMetadataEqual(XElement leftStyle, XElement rightStyle) =>
+        string.Equals((string?)leftStyle.Element(W.basedOn)?.Attribute(W.val),
+            (string?)rightStyle.Element(W.basedOn)?.Attribute(W.val), StringComparison.Ordinal);
 
     private static bool HasStylePropertyRevisions(XElement style) =>
         style.Descendants(W.pPrChange).Any() || style.Descendants(W.rPrChange).Any();
@@ -5873,8 +6180,9 @@ internal static class IrMarkupRenderer
         return clone;
     }
 
-    /// <summary>Two styles with equal raw payloads are the same definition for compare purposes even
-    /// when the documents' docDefaults differ — Word records no style change for them.</summary>
+    /// <summary>Compare raw style formatting while deliberately ignoring property-history and rsid noise.
+    /// A raw match usually needs no style revision; the separate, tightly guarded docDefaults projection
+    /// may still materialize a reversible effective-format delta for a used style.</summary>
     private static bool StyleDefinitionPayloadsEqual(XElement a, XElement b)
         => XNode.DeepEquals(RawStylePayload(W.pPr, a), RawStylePayload(W.pPr, b)) &&
            XNode.DeepEquals(RawStylePayload(W.rPr, a), RawStylePayload(W.rPr, b));
