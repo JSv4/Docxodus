@@ -339,7 +339,7 @@ internal static class IrMarkupRenderer
                 // reference. Then reconcile the body's markers to unique ids, 1:1 range pairing, and exactly-one
                 // resolved definition per reference — collapsing an unchanged comment to a single bare range
                 // (survives accept AND reject) and renumber-deduping a rewritten comment's del/ins copies.
-                MergeRightCommentDefinitions(main, wDocRight.MainDocumentPart);
+                MergeRightCommentDefinitions(main, wDocRight.MainDocumentPart, streamDoc, rightStream);
                 NormalizeComments(main, BodyCommentIds(state.Left), BodyCommentIds(state.RightSource), state);
 
                 // Bookmark normalization pass: an edit straddling a bookmark range endpoint, or a dense
@@ -2333,9 +2333,14 @@ internal static class IrMarkupRenderer
     /// none), then carry its threading metadata so a right-added reply still links to its parent. No-op when the
     /// right has no comments part or every referenced comment already resolves.
     /// </summary>
-    internal static void MergeRightCommentDefinitions(MainDocumentPart main, MainDocumentPart? rightMain)
+    internal static void MergeRightCommentDefinitions(
+        MainDocumentPart main,
+        MainDocumentPart? rightMain,
+        OpenXmlMemoryStreamDocument outputStream,
+        OpenXmlMemoryStreamDocument rightStream)
     {
-        var rightRoot = rightMain?.WordprocessingCommentsPart?.GetXDocument().Root;
+        var rightComments = rightMain?.WordprocessingCommentsPart;
+        var rightRoot = rightComments?.GetXDocument().Root;
         if (rightRoot == null)
             return;
         var body = main.GetXDocument().Root?.Element(W.body);
@@ -2355,13 +2360,32 @@ internal static class IrMarkupRenderer
             return;
 
         var outRoot = EnsureCommentsRoot(main);
+        var outputComments = main.WordprocessingCommentsPart!;
+        var addedDefinitions = new List<XElement>(toAdd.Count);
         var addedParaIds = new HashSet<string>();
         foreach (var def in toAdd)
         {
-            outRoot.Add(new XElement(def));
+            // Keep the live clone: relationship import rewrites its r:embed/r:id attributes in place.
+            // Comment definitions live in comments.xml, not document.xml, so the ordinary body media import
+            // cannot repair these references after the XML has been copied into the left-based package.
+            var clone = new XElement(def);
+            outRoot.Add(clone);
+            addedDefinitions.Add(clone);
             foreach (var pid in def.Descendants().Attributes((W14ns + "paraId")))
                 if ((string?)pid is { Length: > 0 } v) addedParaIds.Add(v);
         }
+
+        // Import relationships against their OWNERS: both r:embed media and w:hyperlink r:ids in a
+        // comment resolve from comments.xml. The left comments part may already own the same rId for a
+        // different image/target, so the shared import routines remap the live clone to a fresh output id.
+        ImportHyperlinkAndExternalRelationships(addedDefinitions, outputComments, rightComments!);
+        var outputPackagePart = outputStream.GetPackage().GetPart(outputComments.Uri);
+        var rightPackagePart = rightStream.GetPackage().GetPart(rightComments!.Uri);
+        foreach (var clone in addedDefinitions)
+            WmlComparer.MoveRelatedPartsToDestination(
+                rightPackagePart, outputPackagePart, clone, skipDanglingRelationships: true,
+                skipHeaderFooterReferences: true);
+
         main.WordprocessingCommentsPart!.PutXDocument();
 
         // Carry threading metadata for the merged comments (paraId-keyed), so a right-added reply keeps its link.
