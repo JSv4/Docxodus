@@ -175,11 +175,11 @@ public class IrTableDifferTests
     }
 
     [Fact]
-    public void Ordinary_grid_mixed_middle_insert_and_edit_keeps_conservative_positional_pairs()
+    public void Ordinary_grid_mixed_middle_insert_and_edit_aligns_insert_before_edited_retained_cell()
     {
-        // B is edited while X is inserted before it. Anchoring only A/C and then positionally filling the
-        // free gap would falsely call B2 a right-only cell insertion. Phase 1 therefore requires EVERY left
-        // cell to be on the body-hash/LIS spine and declines this mixed shape to the established fallback.
+        // B is edited while X is inserted before it. A/C are exact body anchors, leaving B versus X/B2 in
+        // one free gap. The costed monotone fill must prefer B→B2 and identify X as the real inserted cell;
+        // positional pairing would instead shift B onto X and call C an inserted tail cell.
         var left = FromXml(GridTable(2000, 3,
             Row(Cell("A", 2000), Cell("B", 2000), Cell("C", 2000))));
         var right = FromXml(GridTable(1500, 4,
@@ -190,17 +190,48 @@ public class IrTableDifferTests
         var rightTable = Assert.IsType<IrTable>(right.Body.Blocks.Single());
         var cells = Assert.Single(op.TableDiff!.RowOps, r => r.Kind == IrRowOpKind.ModifyRow).CellOps!;
 
-        // Positional fallback: B→X and C→B2 are paired edits; C is the surplus right tail. In particular,
-        // B2 must not be emitted as the apparently inserted middle cell that the pure-insertion path uses.
+        // A/A, +X, B/B2, C/C. The edited retained cell remains paired so its paragraph diff is available;
+        // only the actual X cell is emitted as a right-only native cell insertion.
         Assert.Equal(4, cells.Count);
         Assert.Equal(leftTable.Rows[0].Cells[0].Anchor.ToString(), cells[0].LeftCellAnchor);
         Assert.Equal(rightTable.Rows[0].Cells[0].Anchor.ToString(), cells[0].RightCellAnchor);
-        Assert.Equal(leftTable.Rows[0].Cells[1].Anchor.ToString(), cells[1].LeftCellAnchor);
+        Assert.Null(cells[1].LeftCellAnchor);
         Assert.Equal(rightTable.Rows[0].Cells[1].Anchor.ToString(), cells[1].RightCellAnchor);
-        Assert.Equal(leftTable.Rows[0].Cells[2].Anchor.ToString(), cells[2].LeftCellAnchor);
+        Assert.Equal(leftTable.Rows[0].Cells[1].Anchor.ToString(), cells[2].LeftCellAnchor);
         Assert.Equal(rightTable.Rows[0].Cells[2].Anchor.ToString(), cells[2].RightCellAnchor);
-        Assert.Null(cells[3].LeftCellAnchor);
+        Assert.NotNull(cells[2].BlockOps);
+        Assert.Equal(leftTable.Rows[0].Cells[2].Anchor.ToString(), cells[3].LeftCellAnchor);
         Assert.Equal(rightTable.Rows[0].Cells[3].Anchor.ToString(), cells[3].RightCellAnchor);
+        Assert.DoesNotContain(cells, cell => cell.RightCellAnchor is null);
+    }
+
+    [Fact]
+    public void Ordinary_rows_mixed_middle_insert_and_edit_align_insert_before_edited_retained_row()
+    {
+        // The row analogue of the cell case above. The row renderer natively supports both insertions and
+        // deletions, so the same bounded alignment can always surface an inserted row plus a paired edit.
+        var left = FromXml(Table(Row(Cell("A")), Row(Cell("B")), Row(Cell("C"))));
+        var right = FromXml(Table(Row(Cell("A")), Row(Cell("X")), Row(Cell("B2")), Row(Cell("C"))));
+
+        var op = TableOp(left, right);
+        var leftTable = Assert.IsType<IrTable>(left.Body.Blocks.Single());
+        var rightTable = Assert.IsType<IrTable>(right.Body.Blocks.Single());
+        var rows = op.TableDiff!.RowOps;
+
+        Assert.Equal(4, rows.Count);
+        Assert.Equal(IrRowOpKind.EqualRow, rows[0].Kind);
+        Assert.Equal(leftTable.Rows[0].Anchor.ToString(), rows[0].LeftRowAnchor);
+        Assert.Equal(rightTable.Rows[0].Anchor.ToString(), rows[0].RightRowAnchor);
+        Assert.Equal(IrRowOpKind.InsertRow, rows[1].Kind);
+        Assert.Null(rows[1].LeftRowAnchor);
+        Assert.Equal(rightTable.Rows[1].Anchor.ToString(), rows[1].RightRowAnchor);
+        Assert.Equal(IrRowOpKind.ModifyRow, rows[2].Kind);
+        Assert.Equal(leftTable.Rows[1].Anchor.ToString(), rows[2].LeftRowAnchor);
+        Assert.Equal(rightTable.Rows[2].Anchor.ToString(), rows[2].RightRowAnchor);
+        Assert.NotNull(rows[2].CellOps);
+        Assert.Equal(IrRowOpKind.EqualRow, rows[3].Kind);
+        Assert.Equal(leftTable.Rows[2].Anchor.ToString(), rows[3].LeftRowAnchor);
+        Assert.Equal(rightTable.Rows[3].Anchor.ToString(), rows[3].RightRowAnchor);
     }
 
     [Fact]

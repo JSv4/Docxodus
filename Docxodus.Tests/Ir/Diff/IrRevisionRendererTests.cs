@@ -338,6 +338,33 @@ public class IrRevisionRendererTests
         Assert.DoesNotContain(revisions, r => r.Type == IrRevisionType.Deleted);
     }
 
+    [Fact]
+    public void TableDiff_mixed_middle_column_insert_and_edit_keeps_the_retained_cell_token_granular()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(cell => Cell(cell, width))) + "</w:tr>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr/><w:tblGrid>" +
+            string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", columns)) +
+            "</w:tblGrid>" + string.Concat(rows) + "</w:tbl>";
+
+        var left = FromXml(Table(2000, 3, Row(2000, "A", "B", "C")));
+        var right = FromXml(Table(1500, 4, Row(1500, "A", "X", "B2", "C")));
+        var revisions = Render(left, right).ToList();
+
+        var insertedCell = Assert.Single(revisions,
+            revision => revision.Type == IrRevisionType.Inserted && revision.Text == "X");
+        Assert.Null(insertedCell.LeftAnchor);
+        Assert.NotNull(insertedCell.RightAnchor);
+        Assert.Contains(revisions, revision => revision.Type == IrRevisionType.Deleted && revision.Text == "B");
+        Assert.Contains(revisions, revision => revision.Type == IrRevisionType.Inserted && revision.Text == "B2" &&
+            revision.LeftAnchor is not null);
+        Assert.DoesNotContain(revisions, revision => revision.Type == IrRevisionType.Deleted && revision.Text == "C");
+    }
+
     // ------------------------------------------------------------------ equal blocks emit nothing
 
     [Fact]

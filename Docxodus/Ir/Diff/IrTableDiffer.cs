@@ -3,40 +3,44 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using Docxodus.Ir;
 
 namespace Docxodus.Ir.Diff;
 
 /// <summary>
 /// Structural row/cell diff of a Modified table pair (M2.2 Task 4). Produces an <see cref="IrTableDiff"/>:
-/// rows aligned by <c>ContentHash</c>, cells aligned through a conservative ordinary-grid path when
-/// possible (otherwise positionally), and each paired cell's paragraph blocks recursed through the SAME
-/// block alignment + token diff machinery — so a cell-text edit surfaces as a token diff inside that cell
-/// rather than a whole-table blob.
+/// rows anchored by <c>ContentHash</c> and cost-aligned in ordinary gaps, cells aligned through a conservative
+/// ordinary-grid path when possible (otherwise positionally), and each paired cell's paragraph blocks recursed
+/// through the SAME block alignment + token diff machinery — so a cell-text edit surfaces as a token diff
+/// inside that cell rather than a whole-table blob.
 /// </summary>
 /// <remarks>
-/// <para><b>Row alignment — self-contained unique-hash + LIS + positional gap fill.</b> Rows carry a
+/// <para><b>Row alignment — self-contained unique-hash + LIS + costed gap fill.</b> Rows carry a
 /// <c>ContentHash</c> but no <c>FormatFingerprint</c>, and an <see cref="IrRow"/> is not an
 /// <see cref="IrBlock"/>, so the body block aligner's <see cref="IrBlock"/>/fingerprint-keyed machinery
 /// does not apply directly. Rather than refactor that aligner around a hash-provider interface (large
 /// churn for little reuse), this is a focused row aligner that mirrors the SAME design at row grain:
 /// (1) anchor rows whose <c>ContentHash</c> is unique on each side; (2) take the LIS over the anchored
 /// pairs by (leftIndex, rightIndex) as the in-order spine = EqualRow; anchored pairs off the spine =
-/// MovedRow; (3) gap-fill the remainder positionally — paired rows are ModifyRow, surplus left rows are
-/// DeleteRow, surplus right rows InsertRow. Deterministic throughout (integer-indexed, no dictionary
-/// enumeration for output).</para>
+/// MovedRow; (3) cost-fill ordinary-grid gaps with a bounded monotone dynamic program. The program first
+/// minimizes unpaired rows, then maximizes a cached content affinity, so an inserted row plus an edited
+/// retained row does not shift every following pairing. Complex topology and oversized gaps retain the
+/// established positional fallback. Deterministic throughout (integer-indexed, no dictionary enumeration
+/// for output).</para>
 /// <para><b>Moved rows are "free only".</b> A row is MovedRow exactly when it is an off-spine exact-hash
 /// anchor — the same by-construction move the block aligner gets from anchoring. We do NOT run fuzzy
 /// cross-gap row moves (that is block-level Task 3 territory; rows rarely relocate-and-edit, and the
 /// added cost/false-positive surface is not worth it for M2.2). Documented limitation.</para>
 /// <para><b>Ordinary-grid cell alignment.</b> For direct, unit-span, non-vertically-merged rows with no
-/// <c>gridBefore</c>/<c>gridAfter</c> offset, a unique body-hash + LIS spine preserves stable cells across a
-/// right-only cell insertion. The body hash intentionally omits <c>w:tcPr</c>, so a table-grid or width
-/// change does not destroy an otherwise stable cell anchor. Every left cell must be on that spine: no
-/// positional gap pairing is mixed into this phase, avoiding a false pairing between an edited cell and an
-/// adjacent inserted cell. Any unspined left cell, horizontal span, vertical merge, row offset, or
-/// SDT-delivered cell retains the conservative positional path. Full gridSpan/vMerge topology is deliberately
-/// a later capability.</para>
+/// <c>gridBefore</c>/<c>gridAfter</c> offset, a unique body-hash + LIS spine plus the same bounded gap DP
+/// preserves stable cells across a right-only insertion even when a retained cell was edited. The body hash
+/// intentionally omits <c>w:tcPr</c>, so a table-grid or width change does not destroy an otherwise stable
+/// cell anchor. The path is admitted only when every left cell is represented and at least one right-only
+/// cell remains: native <c>w:cellIns</c> is reversible, while generic left-only <c>w:cellDel</c> topology is
+/// not. Any horizontal span, vertical merge, row offset, SDT-delivered cell, left-only result, or oversized
+/// gap retains the conservative positional path. Full gridSpan/vMerge topology is deliberately a later
+/// capability.</para>
 /// </remarks>
 internal static class IrTableDiffer
 {
@@ -77,8 +81,8 @@ internal static class IrTableDiffer
             .OrderBy(p => p.Left)
             .ToList();
 
-        // --- Gap fill: positional pairing of the remaining free rows between spine pairs.
-        FillRowGaps(leftRows, rightRows, spinePairs, leftKind, rightKind, leftMatch, rightMatch);
+        // --- Gap fill: costed monotone pairing for ordinary rows; positional fallback otherwise.
+        FillRowGaps(leftRows, rightRows, spinePairs, leftKind, rightKind, leftMatch, rightMatch, settings);
 
         // --- Emit row ops in right order with left-anchored deletion interleave (+ a move group id pass).
         return new IrTableDiff(IrNodeList.From(
@@ -169,26 +173,31 @@ internal static class IrTableDiffer
     private static void FillRowGaps(
         IrNodeList<IrRow> leftRows, IrNodeList<IrRow> rightRows,
         List<(int Left, int Right)> spinePairs,
-        IrRowOpKind?[] leftKind, IrRowOpKind?[] rightKind, int[] leftMatch, int[] rightMatch)
+        IrRowOpKind?[] leftKind, IrRowOpKind?[] rightKind, int[] leftMatch, int[] rightMatch,
+        IrDiffSettings settings)
     {
         int prevLeft = -1, prevRight = -1;
         foreach (var (sl, sr) in spinePairs)
         {
-            FillOneRowGap(prevLeft + 1, sl, prevRight + 1, sr, leftKind, rightKind, leftMatch, rightMatch);
+            FillOneRowGap(leftRows, rightRows, prevLeft + 1, sl, prevRight + 1, sr,
+                leftKind, rightKind, leftMatch, rightMatch, settings);
             prevLeft = sl;
             prevRight = sr;
         }
-        FillOneRowGap(prevLeft + 1, leftRows.Count, prevRight + 1, rightRows.Count,
-            leftKind, rightKind, leftMatch, rightMatch);
+        FillOneRowGap(leftRows, rightRows, prevLeft + 1, leftRows.Count, prevRight + 1, rightRows.Count,
+            leftKind, rightKind, leftMatch, rightMatch, settings);
     }
 
     /// <summary>
-    /// Positional gap fill: free left rows in [leftFrom,leftTo) pair in order with free right rows in
-    /// [rightFrom,rightTo) → ModifyRow; the surplus left → DeleteRow, surplus right → InsertRow.
+    /// Cost-fill free rows in one LIS-bounded gap. Direct, unit-span rows use the bounded monotone alignment;
+    /// all other shapes preserve positional pairing. The latter is intentionally retained for table topology
+    /// the renderer cannot reason about from physical-cell order alone.
     /// </summary>
     private static void FillOneRowGap(
+        IrNodeList<IrRow> leftRows, IrNodeList<IrRow> rightRows,
         int leftFrom, int leftTo, int rightFrom, int rightTo,
-        IrRowOpKind?[] leftKind, IrRowOpKind?[] rightKind, int[] leftMatch, int[] rightMatch)
+        IrRowOpKind?[] leftKind, IrRowOpKind?[] rightKind, int[] leftMatch, int[] rightMatch,
+        IrDiffSettings settings)
     {
         var freeLeft = new List<int>();
         for (int i = leftFrom; i < leftTo; i++)
@@ -198,6 +207,36 @@ internal static class IrTableDiffer
         for (int j = rightFrom; j < rightTo; j++)
             if (rightMatch[j] == -1)
                 freeRight.Add(j);
+
+        if (TryAlignOrdinaryRowGap(leftRows, rightRows, freeLeft, freeRight, settings, out var alignment))
+        {
+            foreach (var step in alignment)
+            {
+                switch (step.Kind)
+                {
+                    case MonotoneStepKind.Pair:
+                    {
+                        int li = freeLeft[step.LeftIndex];
+                        int rj = freeRight[step.RightIndex];
+                        var kind = leftRows[li].ContentHash.Equals(rightRows[rj].ContentHash)
+                            ? IrRowOpKind.EqualRow
+                            : IrRowOpKind.ModifyRow;
+                        leftKind[li] = kind;
+                        rightKind[rj] = kind;
+                        leftMatch[li] = rj;
+                        rightMatch[rj] = li;
+                        break;
+                    }
+                    case MonotoneStepKind.Delete:
+                        leftKind[freeLeft[step.LeftIndex]] = IrRowOpKind.DeleteRow;
+                        break;
+                    case MonotoneStepKind.Insert:
+                        rightKind[freeRight[step.RightIndex]] = IrRowOpKind.InsertRow;
+                        break;
+                }
+            }
+            return;
+        }
 
         int paired = Math.Min(freeLeft.Count, freeRight.Count);
         for (int k = 0; k < paired; k++)
@@ -212,6 +251,323 @@ internal static class IrTableDiffer
             leftKind[freeLeft[k]] = IrRowOpKind.DeleteRow;
         for (int k = paired; k < freeRight.Count; k++)
             rightKind[freeRight[k]] = IrRowOpKind.InsertRow;
+    }
+
+    /// <summary>
+    /// Direct, unit-span rows have a physical-cell order that is safe to align independently of the table
+    /// shell.  The renderer can represent every row-level insert/delete, so unlike cells this alignment may
+    /// legitimately produce unmatched units on either side.
+    /// </summary>
+    private static bool TryAlignOrdinaryRowGap(
+        IrNodeList<IrRow> leftRows, IrNodeList<IrRow> rightRows,
+        List<int> freeLeft, List<int> freeRight, IrDiffSettings settings,
+        out List<MonotoneStep> alignment)
+    {
+        alignment = new List<MonotoneStep>();
+        if (freeLeft.Count == 0 || freeRight.Count == 0 ||
+            !FitsDpBudget(freeLeft.Count, freeRight.Count))
+            return false;
+
+        foreach (int index in freeLeft)
+            if (!CanUseOrdinaryRowAlignment(leftRows[index]))
+                return false;
+        foreach (int index in freeRight)
+            if (!CanUseOrdinaryRowAlignment(rightRows[index]))
+                return false;
+
+        var leftBodies = new IrHash[freeLeft.Count];
+        var rightBodies = new IrHash[freeRight.Count];
+        var leftSignatures = new AlignmentSignature[freeLeft.Count];
+        var rightSignatures = new AlignmentSignature[freeRight.Count];
+        for (int i = 0; i < freeLeft.Count; i++)
+        {
+            var row = leftRows[freeLeft[i]];
+            leftBodies[i] = RowBodyHash(row);
+            leftSignatures[i] = RowSignature(row, settings);
+        }
+        for (int j = 0; j < freeRight.Count; j++)
+        {
+            var row = rightRows[freeRight[j]];
+            rightBodies[j] = RowBodyHash(row);
+            rightSignatures[j] = RowSignature(row, settings);
+        }
+
+        alignment = BuildMonotoneAlignment(freeLeft.Count, freeRight.Count,
+            (i, j) => BodyAffinity(leftBodies[i], rightBodies[j], leftSignatures[i], rightSignatures[j]));
+        return true;
+    }
+
+    private static bool CanUseOrdinaryRowAlignment(IrRow row)
+    {
+        if (row.FromTableSdt || row.GridBefore != 0 || row.GridAfter != 0)
+            return false;
+        foreach (var cell in row.Cells)
+            if (cell.GridSpan != 1 || cell.VMerge != IrVMerge.None || cell.FromRowSdt)
+                return false;
+        return true;
+    }
+
+    // ------------------------------------------------------------------ bounded monotone gap alignment
+
+    // The cap keeps both individual dimensions and the O(gap²) affinity work bounded. Larger gaps retain the
+    // old linear positional path instead of turning a malformed or extremely wide table into a throughput cliff.
+    private const int MaxDpMatrixCells = 16_384;
+    private const int MaxDpGapUnits = 127;
+    private const int MaxAffinity = 1_000;
+    private const int SignatureEdgeChars = 128;
+
+    private enum MonotoneStepKind : byte
+    {
+        Pair,
+        Delete,
+        Insert,
+    }
+
+    private readonly record struct MonotoneStep(MonotoneStepKind Kind, int LeftIndex, int RightIndex);
+
+    /// <summary>
+    /// Lexicographic score for a gap path.  Unpaired units dominate: this preserves the established
+    /// in-place replacement behavior for a genuine rewrite.  Among equally paired paths, the affinity
+    /// penalty selects the correspondence that best preserves nearby edited content around an insertion.
+    /// </summary>
+    private readonly record struct AlignmentScore(int Unpaired, int AffinityPenalty)
+    {
+        public bool IsStrictlyBetterThan(AlignmentScore other) =>
+            Unpaired < other.Unpaired || (Unpaired == other.Unpaired && AffinityPenalty < other.AffinityPenalty);
+    }
+
+    private static bool FitsDpBudget(int leftCount, int rightCount) =>
+        leftCount <= MaxDpGapUnits && rightCount <= MaxDpGapUnits &&
+        (long)(leftCount + 1) * (rightCount + 1) <= MaxDpMatrixCells;
+
+    /// <summary>
+    /// Build a deterministic monotone edit alignment.  Pair takes precedence over delete, then insert when
+    /// full scores tie; this keeps ambiguous equal-affinity cases stable and closest to historical positional
+    /// behavior while still allowing a stronger affinity to move an insertion to its actual position.
+    /// </summary>
+    private static List<MonotoneStep> BuildMonotoneAlignment(
+        int leftCount, int rightCount, Func<int, int, int> affinity)
+    {
+        int width = rightCount + 1;
+        var scores = new AlignmentScore[(leftCount + 1) * width];
+        var steps = new MonotoneStepKind[scores.Length];
+
+        for (int i = 1; i <= leftCount; i++)
+        {
+            scores[i * width] = new AlignmentScore(i, 0);
+            steps[i * width] = MonotoneStepKind.Delete;
+        }
+        for (int j = 1; j <= rightCount; j++)
+        {
+            scores[j] = new AlignmentScore(j, 0);
+            steps[j] = MonotoneStepKind.Insert;
+        }
+
+        for (int i = 1; i <= leftCount; i++)
+        {
+            for (int j = 1; j <= rightCount; j++)
+            {
+                int affinityScore = affinity(i - 1, j - 1);
+                var best = scores[(i - 1) * width + j - 1] with
+                {
+                    AffinityPenalty = scores[(i - 1) * width + j - 1].AffinityPenalty + (MaxAffinity - affinityScore)
+                };
+                var bestKind = MonotoneStepKind.Pair;
+
+                var delete = scores[(i - 1) * width + j] with
+                {
+                    Unpaired = scores[(i - 1) * width + j].Unpaired + 1
+                };
+                if (delete.IsStrictlyBetterThan(best))
+                {
+                    best = delete;
+                    bestKind = MonotoneStepKind.Delete;
+                }
+
+                var insert = scores[i * width + j - 1] with
+                {
+                    Unpaired = scores[i * width + j - 1].Unpaired + 1
+                };
+                if (insert.IsStrictlyBetterThan(best))
+                {
+                    best = insert;
+                    bestKind = MonotoneStepKind.Insert;
+                }
+
+                scores[i * width + j] = best;
+                steps[i * width + j] = bestKind;
+            }
+        }
+
+        var result = new List<MonotoneStep>(Math.Max(leftCount, rightCount));
+        for (int i = leftCount, j = rightCount; i != 0 || j != 0;)
+        {
+            switch (steps[i * width + j])
+            {
+                case MonotoneStepKind.Pair:
+                    result.Add(new MonotoneStep(MonotoneStepKind.Pair, i - 1, j - 1));
+                    i--;
+                    j--;
+                    break;
+                case MonotoneStepKind.Delete:
+                    result.Add(new MonotoneStep(MonotoneStepKind.Delete, i - 1, -1));
+                    i--;
+                    break;
+                case MonotoneStepKind.Insert:
+                    result.Add(new MonotoneStep(MonotoneStepKind.Insert, -1, j - 1));
+                    j--;
+                    break;
+                default:
+                    throw new DocxodusException("Invalid table-gap alignment backpointer.");
+            }
+        }
+        result.Reverse();
+        return result;
+    }
+
+    /// <summary>
+    /// Compact token signature retaining only its leading and trailing material.  This makes affinity
+    /// inexpensive for the bounded DP while keeping an insertion/deletion near either edge distinguishable.
+    /// Match keys are used rather than display text so the heuristic follows the diff engine's own identity
+    /// rules for case folding, links and inline atoms.
+    /// </summary>
+    private sealed class AlignmentSignature
+    {
+        private readonly StringBuilder _prefix = new(SignatureEdgeChars);
+        private readonly StringBuilder _suffix = new(SignatureEdgeChars);
+        private string? _prefixText;
+        private string? _suffixText;
+
+        public int Length { get; private set; }
+
+        public void Append(string value)
+        {
+            if (value.Length == 0)
+                return;
+
+            _prefixText = null;
+            _suffixText = null;
+            Length = value.Length > int.MaxValue - Length ? int.MaxValue : Length + value.Length;
+            if (_prefix.Length < SignatureEdgeChars)
+            {
+                int count = Math.Min(SignatureEdgeChars - _prefix.Length, value.Length);
+                _prefix.Append(value, 0, count);
+            }
+
+            if (value.Length >= SignatureEdgeChars)
+            {
+                _suffix.Clear();
+                _suffix.Append(value, value.Length - SignatureEdgeChars, SignatureEdgeChars);
+            }
+            else
+            {
+                _suffix.Append(value);
+                if (_suffix.Length > SignatureEdgeChars)
+                    _suffix.Remove(0, _suffix.Length - SignatureEdgeChars);
+            }
+        }
+
+        public void AppendMarker(char marker)
+        {
+            _prefixText = null;
+            _suffixText = null;
+            if (Length != int.MaxValue)
+                Length++;
+            if (_prefix.Length < SignatureEdgeChars)
+                _prefix.Append(marker);
+            _suffix.Append(marker);
+            if (_suffix.Length > SignatureEdgeChars)
+                _suffix.Remove(0, _suffix.Length - SignatureEdgeChars);
+        }
+
+        public int AffinityTo(AlignmentSignature other)
+        {
+            if (Length == 0 || other.Length == 0)
+                return 0;
+
+            string leftPrefix = _prefixText ??= _prefix.ToString();
+            string rightPrefix = other._prefixText ??= other._prefix.ToString();
+            string leftSuffix = _suffixText ??= _suffix.ToString();
+            string rightSuffix = other._suffixText ??= other._suffix.ToString();
+            int shared = CommonPrefixLength(leftPrefix, rightPrefix) + CommonSuffixLength(leftSuffix, rightSuffix);
+            shared = Math.Min(shared, Math.Min(Length, other.Length));
+            return (int)Math.Min(MaxAffinity,
+                (long)MaxAffinity * 2 * shared / ((long)Length + other.Length));
+        }
+    }
+
+    private static int CommonPrefixLength(string left, string right)
+    {
+        int length = Math.Min(left.Length, right.Length);
+        int index = 0;
+        while (index < length && left[index] == right[index])
+            index++;
+        return index;
+    }
+
+    private static int CommonSuffixLength(string left, string right)
+    {
+        int leftIndex = left.Length - 1;
+        int rightIndex = right.Length - 1;
+        int count = 0;
+        while (leftIndex >= 0 && rightIndex >= 0 && left[leftIndex] == right[rightIndex])
+        {
+            leftIndex--;
+            rightIndex--;
+            count++;
+        }
+        return count;
+    }
+
+    private static int BodyAffinity(
+        IrHash leftBody, IrHash rightBody, AlignmentSignature left, AlignmentSignature right) =>
+        leftBody.Equals(rightBody) ? MaxAffinity : left.AffinityTo(right);
+
+    private static AlignmentSignature RowSignature(IrRow row, IrDiffSettings settings)
+    {
+        var signature = new AlignmentSignature();
+        foreach (var cell in row.Cells)
+            AppendCellSignature(cell, signature, settings);
+        return signature;
+    }
+
+    private static AlignmentSignature CellSignature(IrCell cell, IrDiffSettings settings)
+    {
+        var signature = new AlignmentSignature();
+        AppendCellSignature(cell, signature, settings);
+        return signature;
+    }
+
+    private static void AppendCellSignature(IrCell cell, AlignmentSignature signature, IrDiffSettings settings)
+    {
+        signature.AppendMarker('\u0002'); // cell boundary (not legal XML text, so it cannot alias a MatchKey)
+        foreach (var block in cell.Blocks)
+        {
+            signature.AppendMarker('\u0003'); // block boundary
+            if (block is IrParagraph paragraph)
+            {
+                foreach (var token in IrDiffTokenizer.Tokenize(paragraph, settings))
+                {
+                    signature.Append(token.MatchKey);
+                    signature.AppendMarker('\u0004'); // token boundary
+                }
+            }
+            else
+            {
+                // A nested table/opaque/SDT has no cheap flat token stream at this grain. Its content hash
+                // keeps it distinguishable without recursively launching another table alignment.
+                signature.Append(block.ContentHash.ToHex());
+            }
+        }
+    }
+
+    private static IrHash RowBodyHash(IrRow row)
+    {
+        var builder = new IrContentHashBuilder();
+        builder.AppendStructure(IrContentHashBuilder.StructureRow);
+        foreach (var cell in row.Cells)
+            builder.AppendHash(CellBodyHash(cell));
+        return builder.Build();
     }
 
     // ------------------------------------------------------------------ emit
@@ -301,8 +657,8 @@ internal static class IrTableDiffer
 
     /// <summary>
     /// Diff the cells of two ModifyRow rows.  Ordinary rectangular rows first receive a body-key/LIS
-    /// alignment that can preserve cells after a right-only insertion; every other shape keeps the
-    /// established positional pairing.
+    /// alignment plus bounded monotone gap fill that can preserve cells after a right-only insertion;
+    /// every other shape keeps the established positional pairing.
     /// </summary>
     private static List<IrCellOp> DiffCells(IrRow left, IrRow right, IrDiffSettings settings)
     {
@@ -321,28 +677,17 @@ internal static class IrTableDiffer
     /// </summary>
     private static bool CanUseOrdinaryGridAlignment(IrRow left, IrRow right)
     {
-        if (left.FromTableSdt || right.FromTableSdt ||
-            left.GridBefore != 0 || left.GridAfter != 0 ||
-            right.GridBefore != 0 || right.GridAfter != 0)
-            return false;
-
-        foreach (var cell in left.Cells)
-            if (cell.GridSpan != 1 || cell.VMerge != IrVMerge.None || cell.FromRowSdt)
-                return false;
-        foreach (var cell in right.Cells)
-            if (cell.GridSpan != 1 || cell.VMerge != IrVMerge.None || cell.FromRowSdt)
-                return false;
-        return true;
+        return CanUseOrdinaryRowAlignment(left) && CanUseOrdinaryRowAlignment(right);
     }
 
     /// <summary>
-    /// Align only safe right-only insertion shapes.  The anchors are unique CELL-BODY hashes (not full
+    /// Align safe right-only insertion shapes.  The anchors are unique CELL-BODY hashes (not full
     /// <see cref="IrCell.ContentHash"/>): full hashes deliberately include tcPr, but a column insertion often
     /// changes tcW/table-grid geometry for every otherwise unchanged cell. LIS keeps the anchor spine
-    /// monotone, and every left cell must be represented by that spine before any unmatched right cells are
-    /// admitted as insertions. This intentionally declines mixed insertion-plus-edit gaps rather than
-    /// positionally guessing which right cell is new. A left-only cell remains unsupported by the two-way
-    /// renderer, so this method declines the alignment and lets the old conservative path handle it.
+    /// monotone, and a bounded monotone DP cost-fills each free gap by content affinity. This admits a mixed
+    /// insertion-plus-edit (for example <c>A/B/C → A/X/B2/C</c>) without shifting B onto X. A left-only cell
+    /// remains unsupported by the two-way renderer, so any such result declines this path and lets the old
+    /// conservative positional path handle it.
     /// </summary>
     private static bool TryAlignOrdinaryCellInsertions(
         IrRow left, IrRow right, IrDiffSettings settings, out List<IrCellOp> cellOps)
@@ -364,10 +709,19 @@ internal static class IrTableDiffer
             rightMatch[rj] = li;
         }
 
-        // Pure insertion-only admission: each source cell must be a unique, in-order body anchor. If one
-        // source cell was edited or ambiguous, positional gap filling could pair it with a newly inserted
-        // right cell (for example A/B/C → A/X/B2/C), producing misleading cellIns topology. Preserve the
-        // established conservative path until a topology-aware matcher can prove that case.
+        var spinePairs = onSpine
+            .Select(c => (candidates[c].Left, candidates[c].Right))
+            .OrderBy(pair => pair.Left)
+            .ToList();
+        if (!TryFillOrdinaryCellGaps(leftCells, rightCells, spinePairs, leftMatch, rightMatch, settings))
+        {
+            cellOps = new List<IrCellOp>();
+            return false;
+        }
+
+        // Native cell insertion is reversible with tblGridChange; generic cell deletion is not. Require every
+        // left cell to have a source pair, then admit only a real right-growth result. Count-stable ordinary
+        // rows retain their historical positional path until move/topology semantics are designed explicitly.
         if (leftMatch.Any(match => match < 0))
         {
             cellOps = new List<IrCellOp>();
@@ -380,6 +734,79 @@ internal static class IrTableDiffer
         // new renderable shape; without one the aligned output is no more capable than positional pairing.
         return cellOps.Any(c => c.LeftCellAnchor == null) &&
                !cellOps.Any(c => c.RightCellAnchor == null);
+    }
+
+    private static bool TryFillOrdinaryCellGaps(
+        IrNodeList<IrCell> leftCells, IrNodeList<IrCell> rightCells,
+        List<(int Left, int Right)> spinePairs, int[] leftMatch, int[] rightMatch,
+        IrDiffSettings settings)
+    {
+        int prevLeft = -1;
+        int prevRight = -1;
+        foreach (var (left, right) in spinePairs)
+        {
+            if (!TryFillOneOrdinaryCellGap(leftCells, rightCells, prevLeft + 1, left,
+                    prevRight + 1, right, leftMatch, rightMatch, settings))
+                return false;
+            prevLeft = left;
+            prevRight = right;
+        }
+        return TryFillOneOrdinaryCellGap(leftCells, rightCells, prevLeft + 1, leftCells.Count,
+            prevRight + 1, rightCells.Count, leftMatch, rightMatch, settings);
+    }
+
+    /// <summary>
+    /// Fill one free cell gap.  Empty-sided gaps are already unambiguous; nonempty two-sided gaps use the
+    /// shared bounded DP.  A matrix beyond the budget deliberately returns false so callers retain the
+    /// established positional behavior rather than paying quadratic cost on an adversarially wide row.
+    /// </summary>
+    private static bool TryFillOneOrdinaryCellGap(
+        IrNodeList<IrCell> leftCells, IrNodeList<IrCell> rightCells,
+        int leftFrom, int leftTo, int rightFrom, int rightTo, int[] leftMatch, int[] rightMatch,
+        IrDiffSettings settings)
+    {
+        var freeLeft = new List<int>();
+        for (int i = leftFrom; i < leftTo; i++)
+            if (leftMatch[i] == -1)
+                freeLeft.Add(i);
+        var freeRight = new List<int>();
+        for (int j = rightFrom; j < rightTo; j++)
+            if (rightMatch[j] == -1)
+                freeRight.Add(j);
+
+        if (freeLeft.Count == 0 || freeRight.Count == 0)
+            return true;
+        if (!FitsDpBudget(freeLeft.Count, freeRight.Count))
+            return false;
+
+        var leftBodies = new IrHash[freeLeft.Count];
+        var rightBodies = new IrHash[freeRight.Count];
+        var leftSignatures = new AlignmentSignature[freeLeft.Count];
+        var rightSignatures = new AlignmentSignature[freeRight.Count];
+        for (int i = 0; i < freeLeft.Count; i++)
+        {
+            var cell = leftCells[freeLeft[i]];
+            leftBodies[i] = CellBodyHash(cell);
+            leftSignatures[i] = CellSignature(cell, settings);
+        }
+        for (int j = 0; j < freeRight.Count; j++)
+        {
+            var cell = rightCells[freeRight[j]];
+            rightBodies[j] = CellBodyHash(cell);
+            rightSignatures[j] = CellSignature(cell, settings);
+        }
+
+        foreach (var step in BuildMonotoneAlignment(freeLeft.Count, freeRight.Count,
+                     (i, j) => BodyAffinity(leftBodies[i], rightBodies[j], leftSignatures[i], rightSignatures[j])))
+        {
+            if (step.Kind != MonotoneStepKind.Pair)
+                continue;
+            int li = freeLeft[step.LeftIndex];
+            int rj = freeRight[step.RightIndex];
+            leftMatch[li] = rj;
+            rightMatch[rj] = li;
+        }
+        return true;
     }
 
     /// <summary>Unique body-hash anchors for cells; tcPr differences are intentionally ignored.</summary>

@@ -569,6 +569,53 @@ public class IrMarkupRendererTests
     }
 
     /// <summary>
+    /// A middle cell insertion must remain fine-grained when the retained cell immediately after it is also
+    /// edited. The costed gap alignment identifies X as <c>w:cellIns</c> and renders B→B2 as an ordinary
+    /// token edit; the former positional pairing shifted B onto X and made the real retained cell look new.
+    /// </summary>
+    [Fact]
+    public void Render_table_mixed_middle_column_insert_and_edit_stays_granular_and_round_trips()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(cell => Cell(cell, width))) + "</w:tr>";
+        static string Grid(int width, int count) =>
+            "<w:tblGrid>" + string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", count)) + "</w:tblGrid>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr><w:tblW w:w=\"6000\" w:type=\"dxa\"/></w:tblPr>" +
+            Grid(width, columns) + string.Concat(rows) + "</w:tbl>";
+
+        var left = IrTestDocuments.FromBodyXml(Table(2000, 3, Row(2000, "A", "B", "C")));
+        var right = IrTestDocuments.FromBodyXml(Table(1500, 4, Row(1500, "A", "X", "B2", "C")));
+
+        var rendered = RenderMarkup(left, right);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var table = Assert.Single(body.Elements(W.tbl));
+        var cells = Assert.Single(table.Elements(W.tr)).Elements(W.tc).ToList();
+        Assert.Equal(4, cells.Count);
+        Assert.Empty(cells[0].Descendants(W.cellIns));
+        Assert.NotEmpty(cells[1].Descendants(W.cellIns));
+        Assert.Empty(cells[2].Descendants(W.cellIns));
+        Assert.NotEmpty(cells[2].Descendants(W.ins));
+        Assert.NotEmpty(cells[2].Descendants(W.del));
+        Assert.Empty(cells[3].Descendants(W.cellIns));
+        Assert.Single(table.Descendants(W.cellIns));
+        Assert.Empty(table.Descendants(W.cellDel));
+        Assert.Single(table.Descendants(W.tblGridChange));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "table-mixed-middle-column-insert-edit");
+    }
+
+    /// <summary>
     /// Native <c>w:cellIns</c> needs a matching <c>w:tblGridChange</c> to remove the accepted-side widened
     /// grid on reject. The table-shell opt-out therefore chooses the reversible whole-table fallback instead
     /// of emitting an apparently fine-grained but one-way result.
