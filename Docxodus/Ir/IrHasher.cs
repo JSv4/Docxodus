@@ -98,7 +98,25 @@ internal static class IrHasher
     public static IrHash CanonicalHash(XElement element, IrRelResolver? resolver) =>
         IrHash.Compute(Canonicalize(element, resolver));
 
-    private static void Clean(XElement element, IrRelResolver? resolver)
+    /// <summary>
+    /// Canonical SHA-256 with a caller-supplied attribute rewriter. This keeps the shared XML-noise
+    /// normalization rules while allowing a narrowly scoped owner (currently the drawing relationship-graph
+    /// hasher) to replace relationship values with a richer identity than <see cref="IrRelResolver"/>'s
+    /// legacy tokens. The callback receives attributes from the canonicalizer's private clone, so it may
+    /// safely return the original attribute when no rewrite is required.
+    /// </summary>
+    internal static IrHash CanonicalHashWithAttributeRewrite(
+        XElement element, Func<XAttribute, XAttribute> attributeRewrite)
+    {
+        ArgumentNullException.ThrowIfNull(attributeRewrite);
+        var clone = new XElement(element);
+        Clean(clone, resolver: null, attributeRewrite: attributeRewrite);
+        return IrHash.Compute(Encoding.UTF8.GetBytes(clone.ToString(SaveOptions.DisableFormatting)));
+    }
+
+    private static void Clean(
+        XElement element, IrRelResolver? resolver,
+        Func<XAttribute, XAttribute>? attributeRewrite = null)
     {
         // Remove noise child elements first (proofErr/noProof, anywhere in the subtree).
         var toRemove = element
@@ -109,16 +127,21 @@ internal static class IrHasher
             d.Remove();
 
         foreach (var el in element.DescendantsAndSelf())
-            CleanAttributes(el, resolver);
+            CleanAttributes(el, resolver, attributeRewrite);
     }
 
-    private static void CleanAttributes(XElement element, IrRelResolver? resolver)
+    private static void CleanAttributes(
+        XElement element, IrRelResolver? resolver,
+        Func<XAttribute, XAttribute>? attributeRewrite)
     {
         var kept = element.Attributes()
             .Where(a => !ShouldStripAttribute(a))
-            .Select(a => RewriteRelAttribute(a, resolver))
             .OrderBy(a => a.Name.NamespaceName, StringComparer.Ordinal)
             .ThenBy(a => a.Name.LocalName, StringComparer.Ordinal)
+            // Run graph-aware rewrites only after ordering the original attributes. A rewrite can recursively
+            // inspect relationship targets; canonical attribute order keeps that traversal independent of how a
+            // malformed-but-equivalent source happened to order its XML attributes.
+            .Select(a => attributeRewrite is null ? RewriteRelAttribute(a, resolver) : attributeRewrite(a))
             .ToList();
 
         element.RemoveAttributes();

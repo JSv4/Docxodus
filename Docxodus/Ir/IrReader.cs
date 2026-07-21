@@ -79,6 +79,12 @@ internal static class IrReader
 
         // 2. Normalize tracked revisions (rule N13).
         working = ApplyRevisionView(working, options.RevisionView);
+        // Only a graph that exceeds its normal inspection budget needs this package-level fallback. Keep the
+        // SHA lazy so ordinary documents pay no whole-package hashing cost; when a cutoff occurs it prevents an
+        // uninspected nested chart/SmartArt target from comparing Equal across distinct source packages.
+        var normalizedDocumentBytes = working.DocumentByteArray;
+        var drawingGraphFallbackDocumentHash =
+            new Lazy<IrHash>(() => IrHash.Compute(normalizedDocumentBytes));
 
         // 3. Open the copy, assign deterministic Unids, and walk the body.
         using var stream = new OpenXmlMemoryStreamDocument(working);
@@ -123,7 +129,7 @@ internal static class IrReader
             ? new CommentTracker()
             : null;
         var bodyCtx = new ReadContext(partUri, main, styles, numbering, "body", commentTracker,
-            retainSources: retain);
+            retainSources: retain, drawingGraphFallbackDocumentHash: drawingGraphFallbackDocumentHash);
 
         var body = root.Element(W + "body")
             ?? throw new DocxodusException("Document has no w:body element.");
@@ -150,9 +156,11 @@ internal static class IrReader
         if (options.Scopes.HasFlag(IrScopes.HeadersFooters))
         {
             headers = ReadHeaderFooterScopes(main, body, styles, numbering, sources, anchorIndex,
-                main.HeaderParts.Cast<OpenXmlPart>(), "hdr", W + "headerReference", retain);
+                main.HeaderParts.Cast<OpenXmlPart>(), "hdr", W + "headerReference", retain,
+                drawingGraphFallbackDocumentHash);
             footers = ReadHeaderFooterScopes(main, body, styles, numbering, sources, anchorIndex,
-                main.FooterParts.Cast<OpenXmlPart>(), "ftr", W + "footerReference", retain);
+                main.FooterParts.Cast<OpenXmlPart>(), "ftr", W + "footerReference", retain,
+                drawingGraphFallbackDocumentHash);
         }
 
         // --- footnote / endnote scopes (rule M1.3) ----------------------------------------------
@@ -161,16 +169,16 @@ internal static class IrReader
         if (options.Scopes.HasFlag(IrScopes.Notes))
         {
             footnotes = ReadNoteStore(main, main.FootnotesPart, styles, numbering, sources,
-                anchorIndex, "fn", W + "footnote", retain);
+                anchorIndex, "fn", W + "footnote", retain, drawingGraphFallbackDocumentHash);
             endnotes = ReadNoteStore(main, main.EndnotesPart, styles, numbering, sources,
-                anchorIndex, "en", W + "endnote", retain);
+                anchorIndex, "en", W + "endnote", retain, drawingGraphFallbackDocumentHash);
         }
 
         // --- comment scope (rule M1.3 + N15 record-half) ----------------------------------------
         var comments = IrCommentStore.Empty;
         if (options.Scopes.HasFlag(IrScopes.Comments))
             comments = ReadCommentStore(main, styles, numbering, sources, anchorIndex, commentTracker!,
-                retain);
+                retain, drawingGraphFallbackDocumentHash);
 
         return new IrDocument
         {
@@ -198,7 +206,8 @@ internal static class IrReader
         public ReadContext(Uri partUri, MainDocumentPart main,
             IrStyleRegistry styles, IrNumberingRegistry numbering,
             string scope, CommentTracker? commentTracker = null, int textboxDepth = 0,
-            bool retainSources = true, OpenXmlPart? owningPart = null)
+            bool retainSources = true, OpenXmlPart? owningPart = null,
+            Lazy<IrHash>? drawingGraphFallbackDocumentHash = null)
         {
             PartUri = partUri;
             Main = main;
@@ -212,6 +221,8 @@ internal static class IrReader
             // Defaults to the main part (the body scope); header/footer/note scopes pass their own part so a
             // drawing's r:embed resolves against the relationships that actually own it.
             OwningPart = owningPart ?? main;
+            DrawingGraphFallbackDocumentHash = drawingGraphFallbackDocumentHash
+                ?? throw new ArgumentNullException(nameof(drawingGraphFallbackDocumentHash));
         }
 
         // Whether per-node provenance pins the source XElement (IrReaderOptions.RetainSources). When
@@ -230,10 +241,16 @@ internal static class IrReader
         /// anchors, and the body-scope comment-range offset bookkeeping (which counts visible text in
         /// document order against the CURRENT block) has no defined meaning across a textbox boundary —
         /// matching the reader's existing "no offsets inside a field" stance.</summary>
-        public ReadContext IntoTextbox() =>
-            new(PartUri, Main, Styles, Numbering, Scope, commentTracker: null, TextboxDepth + 1,
-                RetainSources, OwningPart)
-            { RelResolver = RelResolver };
+        public ReadContext IntoTextbox()
+        {
+            var child = new ReadContext(PartUri, Main, Styles, Numbering, Scope, commentTracker: null,
+                textboxDepth: TextboxDepth + 1, retainSources: RetainSources, owningPart: OwningPart,
+                drawingGraphFallbackDocumentHash: DrawingGraphFallbackDocumentHash);
+            // Preserve laziness while sharing per-story resolver/hash caches when one has already been created.
+            child._relResolver = _relResolver;
+            child._drawingGraphHasher = _drawingGraphHasher;
+            return child;
+        }
 
         public Uri PartUri { get; }
 
@@ -241,6 +258,9 @@ internal static class IrReader
 
         // The part whose relationships own this scope's drawing/image/diagram rel ids.
         public OpenXmlPart OwningPart { get; }
+
+        // Shared lazily across all scope-specific graph hashers for one normalized source document.
+        private Lazy<IrHash> DrawingGraphFallbackDocumentHash { get; }
 
         // Opaque-canonicalization relationship resolver (rel id → stable content-identity token), lazily
         // built over OwningPart and shared down through IntoTextbox so the per-part byte-hash cache is hit
@@ -251,6 +271,13 @@ internal static class IrReader
             get => _relResolver ??= new IrRelResolver(OwningPart);
             init => _relResolver = value;
         }
+
+        // Drawing-only graph identity: unlike the broad opaque resolver, it recursively models chart and
+        // SmartArt XML targets reachable from a w:drawing. Kept separate so changing a chart does not alter
+        // canonicalization policy for arbitrary XML-bearing OOXML elements.
+        private IrDrawingGraphHasher? _drawingGraphHasher;
+        public IrDrawingGraphHasher DrawingGraphHasher =>
+            _drawingGraphHasher ??= new IrDrawingGraphHasher(OwningPart, DrawingGraphFallbackDocumentHash);
 
         // The IR scope name carried into every anchor produced under this context ("body", "hdr1",
         // "ftr1", "fn", "en", "cmt"). Threaded so header/note/comment blocks get scope-tagged anchors
@@ -749,6 +776,7 @@ internal static class IrReader
                 new XAttribute("path", InlineElementPath(paragraph, envelope)),
                 new XElement(envelope)));
         }
+        AppendTextboxGraphCarrierEntries(paragraph, ctx, stream);
         AppendTextboxInlineEnvelopeEntries(inlines, "", stream);
         if (!stream.Elements().Any())
             return default;
@@ -759,6 +787,49 @@ internal static class IrReader
         envelope.Ancestors(W + "p").FirstOrDefault() == paragraph &&
         !envelope.Ancestors().TakeWhile(ancestor => ancestor != paragraph).Any(ancestor =>
             ancestor.Name == W + "sdt" || ancestor.Name == W + "smartTag");
+
+    /// <summary>
+    /// A run-level carrier with a textbox is modeled as inner blocks, so its outer DrawingML normally has no
+    /// inline token of its own. When that carrier starts an XML relationship graph (chart/SmartArt/etc.), retain
+    /// a structural carrier with textbox BODY contents removed. This covers direct <c>w:drawing</c> and Word's
+    /// <c>mc:AlternateContent</c> Choice/Fallback wrapper alike, keeping a graph-only edit from aligning Equal
+    /// and leaking the right drawing on Reject without turning an ordinary textbox-text edit into a second
+    /// independent opaque change.
+    /// </summary>
+    private static void AppendTextboxGraphCarrierEntries(
+        XElement paragraph, ReadContext ctx, XElement stream)
+    {
+        foreach (var carrier in paragraph.Descendants()
+                     .Where(element => element.Parent?.Name == W + "r" &&
+                         element.Ancestors(W + "p").FirstOrDefault() == paragraph))
+        {
+            if (!carrier.DescendantsAndSelf(WTxbxContent).Any() ||
+                !ctx.DrawingGraphHasher.HasReachableXmlGraph(carrier) ||
+                // A direct drawing with a promoted image already carries the graph-aware DrawingDigest. A
+                // wrapper such as mc:AlternateContent does not go through AppendDrawing, so retain its carrier
+                // even when a Choice branch has a blip.
+                (carrier.Name == W + "drawing" && HasPromotedImage(carrier, ctx)))
+            {
+                continue;
+            }
+
+            // Preserve the complete run-child shell/path/relationships but deliberately remove the already-modeled
+            // textbox bodies. Their block hashes and nested textbox diffs remain the sole identity for text edits.
+            var shell = new XElement(carrier);
+            foreach (var textboxContent in shell.DescendantsAndSelf(WTxbxContent))
+                textboxContent.RemoveNodes();
+
+            stream.Add(new XElement("textboxDrawing",
+                new XAttribute("path", InlineElementPath(paragraph, carrier)),
+                new XAttribute("digest", ctx.DrawingGraphHasher.Hash(shell).ToHex())));
+        }
+    }
+
+    private static bool HasPromotedImage(XElement drawing, ReadContext ctx)
+    {
+        var embedId = (string?)drawing.Descendants(ABlip).FirstOrDefault()?.Attribute(REmbed);
+        return embedId is not null && ResolveImagePart(ctx, embedId) is not null;
+    }
 
     private static void AppendTextboxInlineEnvelopeEntries(
         IReadOnlyList<IrInline> inlines, string prefix, XElement stream)
@@ -1406,6 +1477,11 @@ internal static class IrReader
             // spot). A w:drawing carrying ONLY a textbox (no resolvable blip) reaches here too — it is
             // NOT promoted to an image by AppendDrawing (that branch is above), so it lands here.
             AppendTextboxes(child, ctx, sink);
+        else if (ctx.DrawingGraphHasher.HasReachableXmlGraph(child))
+            // A graph-bearing run child can be an mc:AlternateContent wrapper rather than a direct w:drawing.
+            // Give that opaque wrapper the same relationship-graph identity so a Choice-chart edit is not
+            // collapsed to IrRelResolver's legacy "xml-part" token.
+            sink.Add(new IrOpaqueInline(child.Name, ctx.DrawingGraphHasher.Hash(child)));
         else
             sink.Add(new IrOpaqueInline(child.Name, IrHasher.CanonicalHash(child, ctx.RelResolver)));
     }
@@ -1575,10 +1651,10 @@ internal static class IrReader
                 sink.Add(new IrInlineImage(image.PartUri, image.BytesHash, cx, cy, altText)
                 {
                     // Image bytes alone are insufficient identity: a resize, crop, anchor/wrap change,
-                    // rotation, alt update, or secondary drawing relationship must remain reversible on
-                    // accept/reject. Canonicalization normalizes rel ids against this story's owning part
-                    // and strips wp:docPr/@id, so harmless id renumbering does not produce false edits.
-                    DrawingDigest = IrHasher.CanonicalHash(drawing, ctx.RelResolver),
+                    // rotation, alt update, or chart/diagram relationship graph change must remain reversible
+                    // on accept/reject. The drawing-local graph hash normalizes ids against this story's owning
+                    // part while following supported XML targets, so harmless id renumbering remains neutral.
+                    DrawingDigest = ctx.DrawingGraphHasher.Hash(drawing),
                     Unid = drawingUnid,
                 });
                 promotedImage = true;
@@ -1598,7 +1674,7 @@ internal static class IrReader
 
         // No resolvable embedded image and no textbox (missing rel, unmodeled shape, etc.): preserve
         // the whole drawing opaquely so nothing is lost (totality).
-        sink.Add(new IrOpaqueInline(drawing.Name, IrHasher.CanonicalHash(drawing, ctx.RelResolver)));
+        sink.Add(new IrOpaqueInline(drawing.Name, ctx.DrawingGraphHasher.Hash(drawing)));
     }
 
     /// <summary>
@@ -2766,7 +2842,8 @@ internal static class IrReader
     private static IrNodeList<IrHeaderFooter> ReadHeaderFooterScopes(
         MainDocumentPart main, XElement body, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        IEnumerable<OpenXmlPart> parts, string scopePrefix, XName referenceName, bool retain)
+        IEnumerable<OpenXmlPart> parts, string scopePrefix, XName referenceName, bool retain,
+        Lazy<IrHash> drawingGraphFallbackDocumentHash)
     {
         var result = new List<IrHeaderFooter>();
         int i = 1;
@@ -2780,7 +2857,8 @@ internal static class IrReader
                     continue;
 
                 var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName,
-                    retainSources: retain, owningPart: part);
+                    retainSources: retain, owningPart: part,
+                    drawingGraphFallbackDocumentHash: drawingGraphFallbackDocumentHash);
                 var blocks = new List<IrBlock>();
                 foreach (var child in root.Elements())
                     AppendBlocks(child, ctx, blocks);
@@ -2848,7 +2926,7 @@ internal static class IrReader
     private static IrNoteStore ReadNoteStore(
         MainDocumentPart main, OpenXmlPart? part, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        string scopeName, XName noteName, bool retain)
+        string scopeName, XName noteName, bool retain, Lazy<IrHash> drawingGraphFallbackDocumentHash)
     {
         if (part is null)
             return IrNoteStore.Empty;
@@ -2860,7 +2938,8 @@ internal static class IrReader
                 return IrNoteStore.Empty;
 
             var ctx = new ReadContext(part.Uri, main, styles, numbering, scopeName,
-                retainSources: retain, owningPart: part);
+                retainSources: retain, owningPart: part,
+                drawingGraphFallbackDocumentHash: drawingGraphFallbackDocumentHash);
             var notes = new Dictionary<string, IrScope>(StringComparer.Ordinal);
             // Insertion-ordered map id → the note element's own pt:Unid (the projection's label source).
             var noteUnids = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -2905,7 +2984,7 @@ internal static class IrReader
     private static IrCommentStore ReadCommentStore(
         MainDocumentPart main, IrStyleRegistry styles, IrNumberingRegistry numbering,
         Dictionary<Uri, XDocument> sources, Dictionary<string, IrBlock> anchorIndex,
-        CommentTracker tracker, bool retain)
+        CommentTracker tracker, bool retain, Lazy<IrHash> drawingGraphFallbackDocumentHash)
     {
         var part = main.WordprocessingCommentsPart;
         if (part is null)
@@ -2918,7 +2997,8 @@ internal static class IrReader
                 return IrCommentStore.Empty;
 
             var ctx = new ReadContext(part.Uri, main, styles, numbering, "cmt",
-                retainSources: retain, owningPart: part);
+                retainSources: retain, owningPart: part,
+                drawingGraphFallbackDocumentHash: drawingGraphFallbackDocumentHash);
             var comments = new List<IrComment>();
 
             foreach (var commentEl in root.Elements(W + "comment"))
