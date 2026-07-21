@@ -70,11 +70,11 @@ internal static class IrEditScriptBuilder
     /// kind. Scope names (<c>hdr1</c>…) are per-document positional labels over part-enumeration order —
     /// NOT stable across two documents — so pairing walks the effective story grid instead: for each
     /// section ordinal and kind, resolve each side's effective story (explicit reference, else inherited
-    /// carry-forward), pair the two cells, then de-duplicate to distinct (left part, right part) pairs so
-    /// an inherited story referenced by several sections is diffed once, at its first cell. A left part
-    /// that would pair with two DIFFERENT right parts keeps its first pairing (a part can only be rebuilt
-    /// once); a right part reused across cells is fine — each left part rebuilds to that story and the
-    /// per-cell text equivalence holds.</para>
+    /// carry-forward), then de-duplicate to distinct (left part, right part) pairs. An inherited story used
+    /// by several cells is therefore diffed once. When one LEFT part maps to several different RIGHT stories,
+    /// one plan retains the original left part and every additional plan starts from a cloned left-part graph;
+    /// explicit per-section bindings select the intended output part and may include a topology-only rejoin
+    /// back to the primary part. This preserves an independently reversible story for every output branch.</para>
     ///
     /// <para><b>Ops.</b> A matched pair runs the block aligner over the two stories' block lists exactly
     /// like a note or a cell (a header-text edit surfaces as a ModifyBlock token diff); an all-Equal pair
@@ -89,8 +89,8 @@ internal static class IrEditScriptBuilder
             return null;
 
         var diffs = new List<IrHeaderFooterDiff>();
-        BuildOneHeaderFooterScope(left.Headers, right.Headers, isHeader: true, settings, diffs);
-        BuildOneHeaderFooterScope(left.Footers, right.Footers, isHeader: false, settings, diffs);
+        BuildOneHeaderFooterScope(left, right, left.Headers, right.Headers, isHeader: true, settings, diffs);
+        BuildOneHeaderFooterScope(left, right, left.Footers, right.Footers, isHeader: false, settings, diffs);
         return diffs.Count == 0 ? null : IrNodeList.From(diffs);
     }
 
@@ -98,63 +98,165 @@ internal static class IrEditScriptBuilder
         { IrHeaderFooterKind.Default, IrHeaderFooterKind.First, IrHeaderFooterKind.Even };
 
     private static void BuildOneHeaderFooterScope(
+        IrDocument leftDocument, IrDocument rightDocument,
         IrNodeList<IrHeaderFooter> leftParts, IrNodeList<IrHeaderFooter> rightParts,
         bool isHeader, IrDiffSettings settings, List<IrHeaderFooterDiff> diffs)
     {
-        // The grid spans every section either side references; a tail section with no references of a
-        // kind inherits (carry-forward), so it needs no explicit cell of its own beyond the dedup below.
-        int sectionCount = 0;
+        // Pair stories on the effective section × kind grid, but retain the explicit-left grid too: a static
+        // rebind must compensate for an explicit left reference that would otherwise override a preceding clone.
+        // The body supplies the authoritative section topology; refs only extend that count for malformed input.
+        int sectionCount = Math.Max(SectionCount(leftDocument), SectionCount(rightDocument));
         foreach (var hf in leftParts.Concat(rightParts))
-            foreach (var r in hf.References)
-                sectionCount = Math.Max(sectionCount, r.SectionIndex + 1);
+            foreach (var reference in hf.References)
+                sectionCount = Math.Max(sectionCount, reference.SectionIndex + 1);
 
-        var leftGrid = EffectiveStoryGrid(leftParts, sectionCount);
-        var rightGrid = EffectiveStoryGrid(rightParts, sectionCount);
+        var leftExplicit = ExplicitStoryGrid(leftParts);
+        var rightExplicit = ExplicitStoryGrid(rightParts);
+        var leftGrid = EffectiveStoryGrid(leftExplicit, sectionCount);
+        var rightGrid = EffectiveStoryGrid(rightExplicit, sectionCount);
 
-        var seenPairs = new HashSet<(Uri?, Uri?)>();
-        var usedLeftParts = new HashSet<Uri>();
+        // Distinct physical story pairs are rendered once. Unlike the former "first pairing wins" rule, retain
+        // every pair: a later pair of the same LEFT part receives a cloned left part, letting its redline reject
+        // independently without changing an earlier section that still points at the original.
+        var plans = new List<HeaderFooterPairPlan>();
+        var plansByPair = new Dictionary<(Uri? Left, Uri? Right), HeaderFooterPairPlan>();
+        var plansByCell = new Dictionary<(int Section, IrHeaderFooterKind Kind), HeaderFooterPairPlan>();
         for (int s = 0; s < sectionCount; s++)
         {
             foreach (var kind in HeaderFooterKinds)
             {
-                leftGrid.TryGetValue((s, kind), out var l);
-                rightGrid.TryGetValue((s, kind), out var r);
-                if (l is null && r is null)
+                leftGrid.TryGetValue((s, kind), out var leftStory);
+                rightGrid.TryGetValue((s, kind), out var rightStory);
+                if (leftStory is null && rightStory is null)
                     continue;
-                if (!seenPairs.Add((l?.Scope.PartUri, r?.Scope.PartUri)))
-                    continue; // this exact story pair already diffed at an earlier cell
-                if (l?.Scope.PartUri is { } leftUri && !usedLeftParts.Add(leftUri))
-                    continue; // left part already rebuilt against another right story — first pairing wins
 
-                List<IrEditOp> ops;
-                if (l is not null && r is not null)
+                var pair = (leftStory?.Scope.PartUri, rightStory?.Scope.PartUri);
+                if (!plansByPair.TryGetValue(pair, out var plan))
                 {
-                    var alignment = IrBlockAligner.AlignBlocks(l.Scope.Blocks, r.Scope.Blocks, settings);
-                    ops = ProjectAlignment(l.Scope.Blocks, alignment, settings);
-                    if (!ops.Any(o => o.Kind is not IrEditOpKind.EqualBlock))
-                        continue; // unchanged story — keep the verbatim part carry-over
+                    plan = new HeaderFooterPairPlan(leftStory, rightStory);
+                    plansByPair.Add(pair, plan);
+                    plans.Add(plan);
                 }
-                else if (r is not null)
-                {
-                    ops = r.Scope.Blocks
-                        .Select(b => new IrEditOp(IrEditOpKind.InsertBlock, null, b.Anchor.ToString(), null, null, null))
-                        .ToList();
-                }
-                else
-                {
-                    ops = l!.Scope.Blocks
-                        .Select(b => new IrEditOp(IrEditOpKind.DeleteBlock, b.Anchor.ToString(), null, null, null, null))
-                        .ToList();
-                }
-                if (ops.Count == 0)
-                    continue; // an empty story on one side only — nothing to render or report
-
-                diffs.Add(new IrHeaderFooterDiff(isHeader, kind, s,
-                    ScopeName: (r ?? l)!.ScopeName, LeftScopeName: l?.ScopeName,
-                    LeftPartUri: l?.Scope.PartUri, RightPartUri: r?.Scope.PartUri,
-                    IrNodeList.From(ops)));
+                plan.Cells.Add((s, kind));
+                plansByCell.Add((s, kind), plan);
             }
         }
+
+        foreach (var plan in plans)
+            plan.Ops = BuildHeaderFooterStoryOps(plan.Left, plan.Right, settings);
+
+        // One physical left part can safely be rewritten once. Prefer an unchanged pair as its primary output
+        // (preserving the left part byte-for-byte), otherwise use the first effective cell deterministically;
+        // every other right target gets a separate clone of that same left source.
+        foreach (var group in plans.Where(p => p.LeftPartUri is not null).GroupBy(p => p.LeftPartUri!))
+        {
+            var primary = group
+                .OrderBy(p => p.Ops.Count == 0 ? 0 : 1)
+                .ThenBy(p => p.FirstSectionIndex)
+                .ThenBy(p => p.FirstKind)
+                .First();
+            foreach (var plan in group)
+                plan.CloneLeftPart = !ReferenceEquals(plan, primary);
+        }
+
+        // Plan static references over each kind's output timeline. An explicitly referenced RIGHT cell whose plan
+        // actually changes content or output identity gets an exact binding: the body renderer can carry its raw
+        // right rId, and a right part may map to different left-derived outputs in different sections. Pure A/A
+        // unchanged stories remain absent as before. We also bind at output-part transitions and when an explicit
+        // left reference would override an inherited clone even though the desired output part stays the same.
+        // This produces the crucial clone→primary rejoin record with empty Ops when needed.
+        foreach (var kind in HeaderFooterKinds)
+        {
+            object? previousOutput = null;
+            bool hasPreviousOutput = false;
+            for (int s = 0; s < sectionCount; s++)
+            {
+                if (!plansByCell.TryGetValue((s, kind), out var plan))
+                {
+                    previousOutput = null;
+                    hasPreviousOutput = false;
+                    continue;
+                }
+
+                object desiredOutput = plan.OutputIdentity;
+                leftExplicit.TryGetValue((s, kind), out var explicitLeftStory);
+                rightExplicit.TryGetValue((s, kind), out var explicitRightStory);
+                bool explicitAlreadySelectsDesired = desiredOutput is Uri desiredLeftUri &&
+                    explicitLeftStory?.Scope.PartUri == desiredLeftUri;
+                bool explicitWouldOverrideDesired = explicitLeftStory is not null && !explicitAlreadySelectsDesired;
+                bool rightExplicitNeedsBinding = explicitRightStory is not null &&
+                    (plan.Ops.Count > 0 || plan.CloneLeftPart || plan.LeftPartUri is null);
+                bool needsBinding = rightExplicitNeedsBinding || (hasPreviousOutput
+                    ? !Equals(previousOutput, desiredOutput) || explicitWouldOverrideDesired
+                    : !explicitAlreadySelectsDesired);
+                if (needsBinding)
+                    plan.ReferenceBindings.Add(new IrHeaderFooterBinding(s, kind));
+
+                previousOutput = desiredOutput;
+                hasPreviousOutput = true;
+            }
+        }
+
+        foreach (var plan in plans.OrderBy(p => p.FirstSectionIndex).ThenBy(p => p.FirstKind))
+        {
+            // A topology-only record is meaningful: it rebinds a later section back to the original primary part
+            // after an earlier cloned story. Purely unchanged/no-topology pairs still remain absent as before.
+            if (plan.Ops.Count == 0 && plan.ReferenceBindings.Count == 0)
+                continue;
+
+            var (sectionIndex, kind) = plan.Cells[0];
+            diffs.Add(new IrHeaderFooterDiff(isHeader, kind, sectionIndex,
+                ScopeName: (plan.Right ?? plan.Left)!.ScopeName, LeftScopeName: plan.Left?.ScopeName,
+                LeftPartUri: plan.LeftPartUri, RightPartUri: plan.RightPartUri,
+                IrNodeList.From(plan.Ops), plan.CloneLeftPart,
+                plan.ReferenceBindings.Count == 0 ? null : IrNodeList.From(plan.ReferenceBindings)));
+        }
+    }
+
+    private sealed class HeaderFooterPairPlan
+    {
+        public HeaderFooterPairPlan(IrHeaderFooter? left, IrHeaderFooter? right)
+        {
+            Left = left;
+            Right = right;
+        }
+
+        public IrHeaderFooter? Left { get; }
+        public IrHeaderFooter? Right { get; }
+        public Uri? LeftPartUri => Left?.Scope.PartUri;
+        public Uri? RightPartUri => Right?.Scope.PartUri;
+        public List<(int SectionIndex, IrHeaderFooterKind Kind)> Cells { get; } = new();
+        public List<IrEditOp> Ops { get; set; } = new();
+        public bool CloneLeftPart { get; set; }
+        public List<IrHeaderFooterBinding> ReferenceBindings { get; } = new();
+        public int FirstSectionIndex => Cells[0].SectionIndex;
+        public IrHeaderFooterKind FirstKind => Cells[0].Kind;
+
+        // Original left parts use their URI as a shared identity. Clones and right-only stories use the plan
+        // object itself, so physically distinct output parts never collapse merely because they share a right URI.
+        public object OutputIdentity => !CloneLeftPart && LeftPartUri is { } leftUri ? leftUri : this;
+    }
+
+    private static int SectionCount(IrDocument document) =>
+        Math.Max(1, document.Body.Blocks.OfType<IrParagraph>()
+            .Count(paragraph => paragraph.InlineSectionBreakAnchor is not null) + 1);
+
+    private static List<IrEditOp> BuildHeaderFooterStoryOps(
+        IrHeaderFooter? left, IrHeaderFooter? right, IrDiffSettings settings)
+    {
+        if (left is not null && right is not null)
+        {
+            var alignment = IrBlockAligner.AlignBlocks(left.Scope.Blocks, right.Scope.Blocks, settings);
+            var ops = ProjectAlignment(left.Scope.Blocks, alignment, settings);
+            return ops.Any(op => op.Kind is not IrEditOpKind.EqualBlock) ? ops : new List<IrEditOp>();
+        }
+        if (right is not null)
+            return right.Scope.Blocks
+                .Select(block => new IrEditOp(IrEditOpKind.InsertBlock, null, block.Anchor.ToString(), null, null, null))
+                .ToList();
+        return left!.Scope.Blocks
+            .Select(block => new IrEditOp(IrEditOpKind.DeleteBlock, block.Anchor.ToString(), null, null, null, null))
+            .ToList();
     }
 
     /// <summary>
@@ -163,8 +265,8 @@ internal static class IrEditScriptBuilder
     /// effective story carries forward (Word's inheritance rule); the first section with no reference
     /// has no story. Deterministic — built from the reader's document-ordered reference lists.
     /// </summary>
-    private static Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> EffectiveStoryGrid(
-        IrNodeList<IrHeaderFooter> parts, int sectionCount)
+    private static Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> ExplicitStoryGrid(
+        IrNodeList<IrHeaderFooter> parts)
     {
         var explicitCells = new Dictionary<(int, IrHeaderFooterKind), IrHeaderFooter>();
         foreach (var hf in parts)
@@ -172,6 +274,13 @@ internal static class IrEditScriptBuilder
                 if (!explicitCells.ContainsKey((r.SectionIndex, r.Kind)))
                     explicitCells[(r.SectionIndex, r.Kind)] = hf;
 
+        return explicitCells;
+    }
+
+    private static Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> EffectiveStoryGrid(
+        IReadOnlyDictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> explicitCells,
+        int sectionCount)
+    {
         var grid = new Dictionary<(int, IrHeaderFooterKind), IrHeaderFooter>();
         foreach (var kind in HeaderFooterKinds)
         {

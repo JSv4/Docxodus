@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Packaging;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
@@ -1926,24 +1927,116 @@ internal static class IrMarkupRenderer
         MainDocumentPart? rightMain, IrDiffSettings settings,
         OpenXmlMemoryStreamDocument leftStreamDoc, OpenXmlMemoryStreamDocument rightStreamDoc)
     {
-        foreach (var diff in hfOps)
+        // A left story can feed several independently revised output stories. Materialize every clone BEFORE
+        // rendering any primary story: otherwise a primary A→B rewrite would become the accidental source for a
+        // later A→C clone and rejecting that clone would restore B rather than the real left A.
+        var outputParts = new Dictionary<int, OpenXmlPart>();
+        for (int index = 0; index < hfOps.Count; index++)
         {
+            var diff = hfOps[index];
+            if (!diff.CloneLeftPart || diff.LeftPartUri is not { } leftUri)
+                continue;
+            var sourcePart = FindHeaderFooterPart(main, diff.IsHeader, leftUri);
+            var clone = sourcePart is null
+                ? null
+                : CloneHeaderFooterPart(sourcePart, diff.IsHeader, main, leftStreamDoc);
+            if (clone is not null)
+                outputParts[index] = clone;
+        }
+
+        for (int index = 0; index < hfOps.Count; index++)
+        {
+            var diff = hfOps[index];
             if (diff.LeftPartUri is { } leftUri)
             {
                 // Matched (rebuild with token-level markup) or deleted-only (all content marked w:del —
                 // the part and its reference stay; accept leaves an empty story, Word's own behavior).
-                var part = FindHeaderFooterPart(main, diff.IsHeader, leftUri);
+                OpenXmlPart? part = diff.CloneLeftPart
+                    ? outputParts.TryGetValue(index, out var clonedPart) ? clonedPart : null
+                    : FindHeaderFooterPart(main, diff.IsHeader, leftUri);
                 if (part is null)
                     continue; // left part vanished (malformed input) — keep the carry-over
+                outputParts[index] = part;
                 if (diff.RightPartUri is { } rightUri)
                     state.StoryOutputParts[rightUri] = part;
-                ApplyHeaderFooterDiffToPart(diff, part, state, settings, rightMain, leftStreamDoc, rightStreamDoc);
-                EnsureStoryReference(diff, part, main);
+                // A topology-only record rebinds an inherited reference without changing the story's content.
+                if (diff.Ops.Count > 0)
+                    ApplyHeaderFooterDiffToPart(diff, part, state, settings, rightMain, leftStreamDoc, rightStreamDoc);
+                if (diff.ReferenceBindings is not { Count: > 0 })
+                    EnsureStoryReference(diff, part, main);
             }
             else
             {
-                InsertHeaderFooterStory(diff, state, main, rightMain, settings, leftStreamDoc, rightStreamDoc);
+                var part = InsertHeaderFooterStory(
+                    diff, state, main, rightMain, settings, leftStreamDoc, rightStreamDoc);
+                if (part is not null)
+                    outputParts[index] = part;
             }
+        }
+
+        ApplyHeaderFooterReferenceBindings(hfOps, outputParts, main, rightMain);
+    }
+
+    /// <summary>
+    /// Create a fresh header/footer part from a pristine LEFT story root before any redline rendering. The
+    /// rebuilt story may contain deleted or moved LEFT content, so its original rIds must remain valid in the
+    /// clone; connect the clone to the existing left-package targets under the SAME local relationship ids.
+    /// RIGHT-sourced content receives fresh, isolated relationship ids during the normal story import below.
+    /// </summary>
+    private static OpenXmlPart? CloneHeaderFooterPart(
+        OpenXmlPart sourcePart, bool isHeader, MainDocumentPart main,
+        OpenXmlMemoryStreamDocument leftStreamDoc)
+    {
+        var sourceRoot = sourcePart.GetXDocument().Root;
+        if (sourceRoot is null)
+            return null;
+
+        OpenXmlPart clonePart = isHeader
+            ? main.AddNewPart<HeaderPart>()
+            : main.AddNewPart<FooterPart>();
+        var cloneRoot = new XElement(sourceRoot);
+        var cloneXDoc = clonePart.GetXDocument();
+        if (cloneXDoc.Root is null)
+            cloneXDoc.Add(cloneRoot);
+        else
+            cloneXDoc.Root.ReplaceWith(cloneRoot);
+
+        var sourcePackagePart = leftStreamDoc.GetPackage().GetPart(sourcePart.Uri);
+        var clonePackagePart = leftStreamDoc.GetPackage().GetPart(clonePart.Uri);
+        CopyStoryRelationshipsWithOriginalIds(sourcePackagePart, clonePackagePart);
+        clonePart.PutXDocument();
+        return clonePart;
+    }
+
+    /// <summary>
+    /// Give a cloned story the LEFT source's relationship graph without changing its rIds. Header/footer parts
+    /// live in the same package as their source, so their existing targets can be shared safely; the renderer
+    /// never mutates those targets. This deliberately differs from cross-document imports, which must create
+    /// isolated parts and rewrite only RIGHT-sourced XML.
+    /// </summary>
+    private static void CopyStoryRelationshipsWithOriginalIds(PackagePart sourcePart, PackagePart destinationPart)
+    {
+        foreach (var relationship in sourcePart.GetRelationships())
+        {
+            if (destinationPart.RelationshipExists(relationship.Id))
+                continue;
+
+            Uri targetUri = relationship.TargetUri;
+            if (relationship.TargetMode == TargetMode.Internal)
+            {
+                try
+                {
+                    targetUri = PackUriHelper.ResolvePartUri(sourcePart.Uri, relationship.TargetUri);
+                }
+                catch (ArgumentException)
+                {
+                    // Preserve a malformed/dangling target verbatim. It was already present on the left source,
+                    // and retaining its local rId is safer than silently rebinding it to an unrelated target.
+                }
+            }
+
+            destinationPart.CreateRelationship(
+                targetUri, relationship.TargetMode, relationship.RelationshipType, relationship.Id);
         }
     }
 
@@ -1957,17 +2050,17 @@ internal static class IrMarkupRenderer
     /// keeps the inserted content; reject strips it, leaving an EMPTY story — text-level ≡ the left's
     /// absent story, matching Word's own reject behavior for an inserted header.
     /// </summary>
-    private static void InsertHeaderFooterStory(
+    private static OpenXmlPart? InsertHeaderFooterStory(
         IrHeaderFooterDiff diff, RenderState state, MainDocumentPart main, MainDocumentPart? rightMain,
         IrDiffSettings settings, OpenXmlMemoryStreamDocument leftStreamDoc,
         OpenXmlMemoryStreamDocument rightStreamDoc)
     {
         if (rightMain is null || diff.RightPartUri is null)
-            return;
+            return null;
         var rightPart = FindHeaderFooterPart(rightMain, diff.IsHeader, diff.RightPartUri);
         var rightRoot = rightPart?.GetXDocument().Root;
         if (rightRoot is null)
-            return;
+            return null;
 
         // Locate the target sectPr FIRST — a story that cannot attach must not create an orphan part.
         // Document-order sectPr enumeration matches the reader's section ordinals. A section ordinal the
@@ -1976,15 +2069,14 @@ internal static class IrMarkupRenderer
         var mainXDoc = main.GetXDocument();
         var body = mainXDoc.Root?.Element(W.body);
         if (body is null)
-            return;
+            return null;
         // A w:sectPrChange's inner sectPr is change history, not a section — counting it mis-indexes
         // multi-section outputs.
         var sectPrs = body.Descendants(W.sectPr)
             .Where(s => s.Parent?.Name != W.sectPrChange)
             .ToList();
         if (diff.SectionIndex >= sectPrs.Count)
-            return;
-        var sectPr = sectPrs[diff.SectionIndex];
+            return null;
 
         OpenXmlPart newPart = diff.IsHeader
             ? main.AddNewPart<HeaderPart>()
@@ -2013,29 +2105,13 @@ internal static class IrMarkupRenderer
             attr.Remove();
         newPart.PutXDocument();
 
-        // Attach the reference (header/footer references lead the CT_SectPr sequence, so AddFirst is
-        // always schema-ordered — the DocumentBuilder convention) and ensure the visibility flag.
-        var refName = diff.IsHeader ? W.headerReference : W.footerReference;
-        string typeValue = diff.Kind switch
+        if (diff.ReferenceBindings is not { Count: > 0 })
         {
-            IrHeaderFooterKind.First => "first",
-            IrHeaderFooterKind.Even => "even",
-            _ => "default",
-        };
-        sectPr.AddFirst(new XElement(refName,
-            new XAttribute(W.type, typeValue),
-            new XAttribute(R.id, main.GetIdOfPart(newPart))));
-        // Activate the story's visibility flag ONLY when the right document itself activates it —
-        // a latent First/Even reference (ref present, flag absent) must stay latent, exactly as the
-        // Word oracle carries it; forcing titlePg/evenAndOddHeaders re-routes page 1 / even pages to
-        // an EMPTY inserted story and blanks them (accept ≢ right at the render level).
-        if (diff.Kind == IrHeaderFooterKind.First && sectPr.Element(W.titlePg) is null &&
-            RightSectionHasTitlePg(rightMain, diff.SectionIndex))
-            InsertIntoSectPr(sectPr, new XElement(W.titlePg));
-        if (diff.Kind == IrHeaderFooterKind.Even &&
-            rightMain.DocumentSettingsPart?.GetXDocument().Root?.Element(W.evenAndOddHeaders) is not null)
-            WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
-        main.PutXDocument();
+            // Legacy/single-cell shape: attach directly. Refined topology records attach all cells together
+            // after every output part exists, so a clone can safely rejoin the original at a later section.
+            BindHeaderFooterReference(diff.IsHeader, diff.Kind, diff.SectionIndex, newPart, main, rightMain);
+        }
+        return newPart;
     }
 
     /// <summary>Whether the right document's <paramref name="sectionIndex"/>-th section activates
@@ -2049,6 +2125,95 @@ internal static class IrMarkupRenderer
             .Where(s => s.Parent?.Name != W.sectPrChange)
             .ToList();
         return sectionIndex < sectPrs.Count && sectPrs[sectionIndex].Element(W.titlePg) is not null;
+    }
+
+    /// <summary>
+    /// Apply the static refined topology emitted by the builder. References themselves have no native revision
+    /// representation, so each binding deliberately changes the output's section map while the bound story part
+    /// contains the normal reversible content redline. A binding replaces an explicit same-kind ref when present
+    /// (rather than appending a duplicate) and is otherwise inserted in schema order.
+    /// </summary>
+    private static void ApplyHeaderFooterReferenceBindings(
+        IReadOnlyList<IrHeaderFooterDiff> hfOps, IReadOnlyDictionary<int, OpenXmlPart> outputParts,
+        MainDocumentPart main, MainDocumentPart? rightMain)
+    {
+        for (int index = 0; index < hfOps.Count; index++)
+        {
+            var diff = hfOps[index];
+            if (diff.ReferenceBindings is not { Count: > 0 } bindings ||
+                !outputParts.TryGetValue(index, out var part))
+                continue;
+            foreach (var binding in bindings)
+                BindHeaderFooterReference(diff.IsHeader, binding.Kind, binding.SectionIndex, part, main, rightMain);
+        }
+    }
+
+    private static void BindHeaderFooterReference(
+        bool isHeader, IrHeaderFooterKind kind, int sectionIndex, OpenXmlPart part,
+        MainDocumentPart main, MainDocumentPart? rightMain)
+    {
+        var body = main.GetXDocument().Root?.Element(W.body);
+        if (body is null)
+            return;
+        var sectPrs = body.Descendants(W.sectPr)
+            .Where(s => s.Parent?.Name != W.sectPrChange)
+            .ToList();
+        if (sectionIndex < 0 || sectionIndex >= sectPrs.Count)
+            return;
+
+        var sectPr = sectPrs[sectionIndex];
+        var refName = isHeader ? W.headerReference : W.footerReference;
+        string typeValue = kind switch
+        {
+            IrHeaderFooterKind.First => "first",
+            IrHeaderFooterKind.Even => "even",
+            _ => "default",
+        };
+        string relationshipId = main.GetIdOfPart(part);
+        var existing = sectPr.Elements(refName)
+            .Where(reference => (string?)reference.Attribute(W.type) == typeValue)
+            .ToList();
+        if (existing.Count > 0)
+        {
+            existing[0].SetAttributeValue(R.id, relationshipId);
+            foreach (var duplicate in existing.Skip(1))
+                duplicate.Remove();
+        }
+        else
+        {
+            var newReference = new XElement(refName,
+                new XAttribute(W.type, typeValue), new XAttribute(R.id, relationshipId));
+            // CT_SectPr orders all headers before all footers. Insert a header before the first footer;
+            // insert a footer after the final header (or before an existing footer when no headers exist).
+            if (isHeader)
+            {
+                var firstFooter = sectPr.Element(W.footerReference);
+                if (firstFooter is null)
+                    sectPr.AddFirst(newReference);
+                else
+                    firstFooter.AddBeforeSelf(newReference);
+            }
+            else
+            {
+                var lastHeader = sectPr.Elements(W.headerReference).LastOrDefault();
+                if (lastHeader is not null)
+                    lastHeader.AddAfterSelf(newReference);
+                else if (sectPr.Element(W.footerReference) is { } firstFooter)
+                    firstFooter.AddBeforeSelf(newReference);
+                else
+                    sectPr.AddFirst(newReference);
+            }
+        }
+
+        // Activate only the visibility flags genuinely active on the right. A latent First/Even ref must stay
+        // latent; forcing a flag routes pages through an otherwise invisible, empty story.
+        if (rightMain is not null && kind == IrHeaderFooterKind.First && sectPr.Element(W.titlePg) is null &&
+            RightSectionHasTitlePg(rightMain, sectionIndex))
+            InsertIntoSectPr(sectPr, new XElement(W.titlePg));
+        if (rightMain?.DocumentSettingsPart?.GetXDocument().Root?.Element(W.evenAndOddHeaders) is not null &&
+            kind == IrHeaderFooterKind.Even)
+            WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
+        main.PutXDocument();
     }
 
     /// <summary>

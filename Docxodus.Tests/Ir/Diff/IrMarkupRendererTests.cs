@@ -55,6 +55,34 @@ public class IrMarkupRendererTests
         return main.HeaderParts.Count() + main.FooterParts.Count();
     }
 
+    /// <summary>Assert every image relationship used by one explicitly bound header part resolves locally.</summary>
+    private static void AssertHeaderImageEmbedsResolve(WmlDocument doc, int sectionIndex, int expectedEmbedCount)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var wordDoc = WordprocessingDocument.Open(ms, false);
+        var main = wordDoc.MainDocumentPart!;
+        var body = main.GetXDocument().Root!.Element(W.body)!;
+        var sectPr = body.Descendants(W.sectPr)
+            .Where(candidate => candidate.Parent?.Name != W.sectPrChange)
+            .ElementAt(sectionIndex);
+        var reference = sectPr.Element(W.headerReference)!;
+        var header = (HeaderPart)main.GetPartById((string)reference.Attribute(R.id)!);
+        XNamespace a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        var embeds = header.GetXDocument().Root!.Descendants(a + "blip")
+            .Select(blip => (string?)blip.Attribute(R.r + "embed"))
+            .Where(id => id is not null)
+            .Cast<string>()
+            .ToList();
+        Assert.Equal(expectedEmbedCount, embeds.Count);
+        var partRelationships = header.Parts.ToDictionary(pair => pair.RelationshipId, pair => pair.OpenXmlPart);
+        foreach (var embed in embeds)
+        {
+            Assert.True(partRelationships.TryGetValue(embed, out var imagePart),
+                $"Header clone has r:embed '{embed}' but only [{string.Join(", ", partRelationships.Keys)}].");
+            Assert.IsType<ImagePart>(imagePart);
+        }
+    }
+
     // ----------------------------------------------------------------- header/footer part hygiene
 
     /// <summary>
@@ -193,9 +221,11 @@ public class IrMarkupRendererTests
             case IrParagraph p:
                 sink.Add("pf:" + IrModeledFormat.BlockSignature(p, settings));
                 // A3: an inline (in-pPr) sectPr's modeled page setup must round-trip too (accept≡right,
-                // reject≡left) — it is folded into the fingerprint but not the BlockSignature.
+                // reject≡left). Compare only the modeled section key: its raw unmodeled digest contains
+                // header/footer refs, which a correct refined story topology may intentionally rebind to a
+                // cloned part while preserving the same effective story grid.
                 if (p.InlineSectionFormat is { } isf)
-                    sink.Add("psec:" + IrHasher.FingerprintSectionFormat(isf).ToHex());
+                    sink.Add("psec:" + IrModeledFormat.SectionKey(isf));
                 break;
             case IrTable t:
                 // Include the SHELL digests (block-format-change family): tblPr/tblGrid are in the
@@ -302,10 +332,11 @@ public class IrMarkupRendererTests
     }
 
     /// <summary>
-    /// The referenced header/footer STORY content-hash projection (2026-07-03 campaign): for every
-    /// explicit body reference cell (section ordinal × kind, headers then footers, deterministic order),
-    /// the story's per-block ContentHashes — skipping stories with no visible text (an empty story ≡ an
-    /// absent story: the round-trip's reject-of-inserted / accept-of-deleted leaves an empty part).
+    /// The effective header/footer STORY content-hash projection (2026-07-03 campaign): resolve every
+    /// section ordinal × kind by Word's carry-forward inheritance, then collect the visible story's per-block
+    /// ContentHashes (headers then footers, deterministic order). This intentionally compares presentation
+    /// semantics rather than raw explicit refs: a correct refined topology can add a clone ref at section 1
+    /// while Reject still resolves to the same A/A effective header grid as the original inherited left side.
     /// </summary>
     private static List<string> StoryContentHashes(WmlDocument doc)
     {
@@ -313,17 +344,32 @@ public class IrMarkupRendererTests
         var result = new List<string>();
         foreach (var (tag, stories) in new[] { ("hdr", ir.Headers), ("ftr", ir.Footers) })
         {
-            var cells = new List<(int Section, IrHeaderFooterKind Kind, IrHeaderFooter Story)>();
+            var explicitCells = new Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter>();
             foreach (var hf in stories)
                 foreach (var r in hf.References)
-                    cells.Add((r.SectionIndex, r.Kind, hf));
-            foreach (var (section, kind, story) in cells.OrderBy(c => c.Section).ThenBy(c => c.Kind))
+                    if (!explicitCells.ContainsKey((r.SectionIndex, r.Kind)))
+                        explicitCells[(r.SectionIndex, r.Kind)] = hf;
+
+            int sectionCount = Math.Max(1, ir.Body.Blocks.OfType<IrParagraph>()
+                .Count(paragraph => paragraph.InlineSectionBreakAnchor is not null) + 1);
+            var currentByKind = new Dictionary<IrHeaderFooterKind, IrHeaderFooter?>();
+            foreach (var kind in new[]
+                     { IrHeaderFooterKind.Default, IrHeaderFooterKind.First, IrHeaderFooterKind.Even })
+                currentByKind[kind] = null;
+            for (int section = 0; section < sectionCount; section++)
             {
-                if (!story.Scope.Blocks.Any(BlockHasVisibleText))
-                    continue;
-                result.Add($"{tag}@s{section}:{kind}");
-                foreach (var b in story.Scope.Blocks)
-                    CollectHashes(b, result);
+                foreach (var kind in new[]
+                         { IrHeaderFooterKind.Default, IrHeaderFooterKind.First, IrHeaderFooterKind.Even })
+                {
+                    if (explicitCells.TryGetValue((section, kind), out var explicitStory))
+                        currentByKind[kind] = explicitStory;
+                    var current = currentByKind[kind];
+                    if (current is null || !current.Scope.Blocks.Any(BlockHasVisibleText))
+                        continue;
+                    result.Add($"{tag}@s{section}:{kind}");
+                    foreach (var block in current.Scope.Blocks)
+                        CollectHashes(block, result);
+                }
             }
         }
         return result;
@@ -1752,6 +1798,216 @@ public class IrMarkupRendererTests
         Assert.Equal("CONFIDENTIAL Draft 1",
             Assert.Single(HeaderFooterFixtures.StoryTexts(RevisionProcessor.RejectRevisions(rendered))));
         Assert.Equal(0, SchemaErrorCount(rendered));
+    }
+
+    [Fact]
+    public void Render_reassigned_inherited_header_clones_only_the_later_section()
+    {
+        // A is shared by both left sections. The right document keeps A in section 0 but assigns B at section 1.
+        // The output cannot rewrite A in place: it needs an A→B clone bound at section 1, while section 0 remains A.
+        var left = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+            },
+            headerParts: new Dictionary<string, string[]> { ["rIdA"] = new[] { "Header A" } });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdB") }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A" },
+                ["rIdB"] = new[] { "Header B" },
+            });
+
+        var rendered = RenderMarkup(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+
+        Assert.Equal(2, HeaderFooterPartCount(rendered));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rendered, true, 0, "default"));
+        Assert.Equal("Header B", HeaderFooterFixtures.ReferencedStoryText(rendered, true, 1, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 0, "default"));
+        Assert.Equal("Header B", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 1, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 0, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 1, "default"));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "header-reassign-inherited");
+    }
+
+    [Fact]
+    public void Render_reassigned_header_rejoins_the_primary_story_after_the_clone()
+    {
+        // The refined topology must explicitly rebind from the cloned B story back to primary A at section 1.
+        // Otherwise A's inherited successor would incorrectly keep B all the way through section 2.
+        var left = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+                new HeaderFooterFixtures.Section(new[] { "section 2" }),
+            },
+            headerParts: new Dictionary<string, string[]> { ["rIdA"] = new[] { "Header A" } });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdB") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 2" }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A" },
+                ["rIdB"] = new[] { "Header B" },
+            });
+
+        var rendered = RenderMarkup(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+
+        Assert.Equal(2, HeaderFooterPartCount(rendered));
+        Assert.Equal("Header B", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 0, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 1, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 2, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 0, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 1, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 2, "default"));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "header-clone-rejoin");
+    }
+
+    [Fact]
+    public void Render_reassigned_header_clone_preserves_left_and_imports_right_media_relationships()
+    {
+        // The cloned A→B story keeps an equal left image and gains an inserted right image. Both relationship
+        // graphs are part-owned: copying XML alone would leave one or both r:embed ids dangling.
+        var left = HeaderFooterFixtures.WithImageInHeaderPart(HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A", HeaderFooterFixtures.ImageParagraphXml("rIdOld") },
+            }), headerIndex: 0, relId: "rIdOld");
+        // Relationship IDs are scoped to their owning header part. The same rIdOld is therefore attached
+        // separately to A and B; B also owns its new image relationship.
+        var right = HeaderFooterFixtures.WithImageInHeaderPart(
+            HeaderFooterFixtures.WithImageInHeaderPart(
+                HeaderFooterFixtures.WithImageInHeaderPart(HeaderFooterFixtures.Build(
+                    new[]
+                    {
+                        new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                        new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdB") }),
+                    },
+                    headerParts: new Dictionary<string, string[]>
+                    {
+                        ["rIdA"] = new[] { "Header A", HeaderFooterFixtures.ImageParagraphXml("rIdOld") },
+                        ["rIdB"] = new[]
+                        {
+                            "Header B",
+                            HeaderFooterFixtures.ImageParagraphXml("rIdOld"),
+                            HeaderFooterFixtures.ImageParagraphXml("rIdNew"),
+                        },
+                    }), headerIndex: 0, relId: "rIdOld"), headerIndex: 1, relId: "rIdOld"),
+            headerIndex: 1, relId: "rIdNew");
+
+        var rendered = RenderMarkup(left, right);
+        AssertHeaderImageEmbedsResolve(rendered, sectionIndex: 1, expectedEmbedCount: 2);
+
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "header-clone-media");
+    }
+
+    [Fact]
+    public void Render_reassigned_header_clone_keeps_left_media_relationships_for_deleted_content()
+    {
+        // Rebuilding the clone emits the deleted LEFT image from its original source XML. Its rId must resolve
+        // from the clone itself, even though no right-side image is imported into the B story.
+        var left = HeaderFooterFixtures.WithImageInHeaderPart(HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A", HeaderFooterFixtures.ImageParagraphXml("rIdOld") },
+            }), headerIndex: 0, relId: "rIdOld");
+        var right = HeaderFooterFixtures.WithImageInHeaderPart(HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdB") }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A", HeaderFooterFixtures.ImageParagraphXml("rIdOld") },
+                ["rIdB"] = new[] { "Header B" },
+            }), headerIndex: 0, relId: "rIdOld");
+
+        var rendered = RenderMarkup(left, right);
+        AssertHeaderImageEmbedsResolve(rendered, sectionIndex: 1, expectedEmbedCount: 1);
+
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        AssertHeaderImageEmbedsResolve(rejected, sectionIndex: 1, expectedEmbedCount: 1);
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "header-clone-left-media");
+    }
+
+    [Fact]
+    public void Render_reused_right_header_keeps_each_left_story_independently_rejectable()
+    {
+        // The physical right B story is reused in both sections. Each section must bind to its own A→B/C→B
+        // output part; a flat right-URI map would make both references target the last C→B part on rebind.
+        var left = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdC") }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A" },
+                ["rIdC"] = new[] { "Header C" },
+            });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdB") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdB") }),
+            },
+            headerParts: new Dictionary<string, string[]> { ["rIdB"] = new[] { "Header B" } });
+
+        var rendered = RenderMarkup(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+
+        Assert.Equal(2, HeaderFooterPartCount(rendered));
+        Assert.Equal("Header B", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 0, "default"));
+        Assert.Equal("Header B", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 1, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 0, "default"));
+        Assert.Equal("Header C", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 1, "default"));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "header-reused-right-part");
     }
 
     [Fact]

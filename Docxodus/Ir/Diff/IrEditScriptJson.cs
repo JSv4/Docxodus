@@ -148,6 +148,19 @@ internal static class IrEditScriptJson
         // consumer can identify the story's part and Read(Write(s)) stays exactly record-equal.
         if (diff.LeftPartUri is { } leftUri) writer.WriteString("leftPartUri", leftUri.ToString());
         if (diff.RightPartUri is { } rightUri) writer.WriteString("rightPartUri", rightUri.ToString());
+        if (diff.CloneLeftPart) writer.WriteBoolean("cloneLeftPart", true);
+        if (diff.ReferenceBindings is { Count: > 0 } bindings)
+        {
+            writer.WriteStartArray("referenceBindings");
+            foreach (var binding in bindings)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("sectionIndex", binding.SectionIndex);
+                writer.WriteString("kind", binding.Kind.ToString());
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
         writer.WriteStartArray("ops");
         foreach (var op in diff.Ops)
             WriteOp(writer, op);
@@ -281,11 +294,26 @@ internal static class IrEditScriptJson
             ? new Uri(lu.GetString()!, UriKind.RelativeOrAbsolute) : null;
         Uri? rightPartUri = element.TryGetProperty("rightPartUri", out var ru)
             ? new Uri(ru.GetString()!, UriKind.RelativeOrAbsolute) : null;
+        bool cloneLeftPart = element.TryGetProperty("cloneLeftPart", out var clp) && clp.GetBoolean();
+        IrNodeList<IrHeaderFooterBinding>? referenceBindings = null;
+        if (element.TryGetProperty("referenceBindings", out var bindingsElement))
+        {
+            var bindings = new List<IrHeaderFooterBinding>();
+            foreach (var bindingElement in bindingsElement.EnumerateArray())
+            {
+                int bindingSectionIndex = bindingElement.GetProperty("sectionIndex").GetInt32();
+                var bindingKind = Enum.Parse<Docxodus.Ir.IrHeaderFooterKind>(
+                    bindingElement.GetProperty("kind").GetString()!);
+                bindings.Add(new IrHeaderFooterBinding(bindingSectionIndex, bindingKind));
+            }
+            if (bindings.Count > 0)
+                referenceBindings = IrNodeList.From(bindings);
+        }
         var ops = new List<IrEditOp>();
         foreach (var opElement in element.GetProperty("ops").EnumerateArray())
             ops.Add(ReadOp(opElement));
         return new IrHeaderFooterDiff(isHeader, kind, sectionIndex, scope, leftScope,
-            leftPartUri, rightPartUri, IrNodeList.From(ops));
+            leftPartUri, rightPartUri, IrNodeList.From(ops), cloneLeftPart, referenceBindings);
     }
 
     private static IrNoteDiff ReadNoteDiff(JsonElement element)

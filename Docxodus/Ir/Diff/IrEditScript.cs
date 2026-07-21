@@ -193,7 +193,11 @@ internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrE
 /// A story is the effective header (or footer) of one occurrence kind for one body section; stories pair
 /// across documents by (section ordinal, kind) with Word's previous-section inheritance rule, then
 /// de-duplicate to distinct (left part, right part) pairs — an inherited story referenced by several
-/// sections is diffed once, at its first cell.
+/// sections is diffed once, at its first cell. When one LEFT part is paired with multiple RIGHT
+/// stories, a later pair is rendered into a clone of the left part and <see cref="ReferenceBindings"/>
+/// describes the static section topology that selects it. OOXML cannot revision-track a
+/// <c>w:headerReference</c>/<c>w:footerReference</c>, so this refined topology is the only shape that
+/// accepts to the right story and rejects to the left story without mutating an earlier shared section.
 /// </summary>
 /// <remarks>
 /// <para><b>Naming convention (the <see cref="IrNoteDiff"/> convention).</b> <see cref="ScopeName"/> is
@@ -209,8 +213,12 @@ internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrE
 /// <para><b>Part URIs.</b> <see cref="LeftPartUri"/>/<see cref="RightPartUri"/> are the source part URIs
 /// (<see cref="Docxodus.Ir.IrScope.PartUri"/>) — the markup renderer locates the output part (a clone of
 /// the left package) by <see cref="LeftPartUri"/> and clones an inserted story's shell/relationships from
-/// <see cref="RightPartUri"/>.</para>
+/// <see cref="RightPartUri"/>. <see cref="CloneLeftPart"/> requests a fresh copy of the left part before
+/// its content is redlined; <see cref="ReferenceBindings"/> then attaches that copy to the exact
+/// section/kind cells that require it.</para>
 /// </remarks>
+internal readonly record struct IrHeaderFooterBinding(int SectionIndex, IrHeaderFooterKind Kind);
+
 internal sealed record IrHeaderFooterDiff(
     bool IsHeader,
     IrHeaderFooterKind Kind,
@@ -219,7 +227,9 @@ internal sealed record IrHeaderFooterDiff(
     string? LeftScopeName,
     Uri? LeftPartUri,
     Uri? RightPartUri,
-    IrNodeList<IrEditOp> Ops);
+    IrNodeList<IrEditOp> Ops,
+    bool CloneLeftPart = false,
+    IrNodeList<IrHeaderFooterBinding>? ReferenceBindings = null);
 
 /// <summary>
 /// The kind of a row-level operation in an <see cref="IrTableDiff"/> (M2.2 Task 4). Rows carry a
