@@ -90,6 +90,23 @@ public class IrEditScriptTests
     }
 
     [Fact]
+    public void InlineEnvelopeChange_ProducesWholeParagraphModify_AndJsonRoundTrips()
+    {
+        var left = FromXml("<w:p><w:r><w:t>controlled</w:t></w:r></w:p>");
+        var right = FromXml(
+            "<w:p><w:sdt><w:sdtPr><w:tag w:val=\"new\"/></w:sdtPr>" +
+            "<w:sdtContent><w:r><w:t>controlled</w:t></w:r></w:sdtContent></w:sdt></w:p>");
+
+        var script = BuildVerified(left, right);
+        var op = Assert.Single(script.Operations);
+
+        Assert.Equal(IrEditOpKind.ModifyBlock, op.Kind);
+        Assert.True(op.RequiresWholeParagraphReplace);
+        Assert.NotNull(op.TokenDiff); // Content stays transparent; the flag is what carries the structure.
+        Assert.Contains("\"requiresWholeParagraphReplace\"", IrEditScriptJson.Write(script));
+    }
+
+    [Fact]
     public void Interior_full_rewrite_carries_matching_body_group_through_json()
     {
         // The preceding paragraph pairs as a normal edit and the following paragraph is equal, so

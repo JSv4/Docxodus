@@ -570,6 +570,20 @@ internal static class IrRevisionRenderer
 
     private static void RenderModifyBlock(IrEditOp op, in Context ctx, List<IrRevision> sink)
     {
+        // Inline SDT/smartTag carriers are not token-sliceable. Even when visible text is identical, the
+        // markup renderer emits a whole old/new paragraph pair so the wrapper itself is reversible; surface
+        // the same pair here instead of silently reporting no text-level revision.
+        if (op.RequiresWholeParagraphReplace)
+        {
+            if (op.LeftAnchor is { } wholeLeft)
+                sink.Add(new IrRevision(IrRevisionType.Deleted, BlockText(wholeLeft, ctx.Left, ctx.Settings),
+                    ctx.Author, ctx.Date, LeftAnchor: wholeLeft, RightAnchor: op.RightAnchor));
+            if (op.RightAnchor is { } wholeRight)
+                sink.Add(new IrRevision(IrRevisionType.Inserted, BlockText(wholeRight, ctx.Right, ctx.Settings),
+                    ctx.Author, ctx.Date, LeftAnchor: op.LeftAnchor, RightAnchor: wholeRight));
+            return;
+        }
+
         // Block-level SDTs are deliberately atomic: metadata, wrapper topology and nested controls belong to
         // the envelope, not to an independently token-diffable paragraph. Surface an explicit old/new pair
         // (even for a metadata-only change whose visible text happens to be identical) so GetRevisions agrees
@@ -797,7 +811,8 @@ internal static class IrRevisionRenderer
         // WmlComparer requires for a move (very short text is excluded to avoid false positives). The IR
         // aligner's exact off-spine anchoring catches a short exact relocation as a move regardless of the
         // minimum (that gates only the fuzzy similarity pass), so the minimum is enforced here at render time.
-        bool demoteToInsDel = !ctx.Settings.RenderMoves || BelowMoveMinimum(text, ctx.Settings);
+        bool demoteToInsDel = op.RequiresWholeParagraphReplace ||
+            !ctx.Settings.RenderMoves || BelowMoveMinimum(text, ctx.Settings);
         if (demoteToInsDel)
         {
             // The engine still ALIGNED this as a move; we only change how it is reported. A MoveModify

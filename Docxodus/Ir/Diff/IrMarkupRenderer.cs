@@ -831,6 +831,17 @@ internal static class IrMarkupRenderer
 
             case IrEditOpKind.MoveBlock:
             case IrEditOpKind.MoveModifyBlock:
+                // An inline SDT/smartTag carrier change is structurally inseparable from its paragraph.
+                // Do not disguise it as a native move whose destination can slice the wrapper: a full
+                // delete/insert pair is the only representation that makes both Accept and Reject exact.
+                if (op.RequiresWholeParagraphReplace)
+                {
+                    if (op.IsMoveSource == true)
+                        EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                    else
+                        EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                    break;
+                }
                 // When move rendering is OFF (the DetectMoves=false analogue), a move is projected as a plain
                 // delete-here + insert-there pair: the SOURCE op (left anchor) emits a whole-block del, the
                 // DESTINATION op (right anchor) a whole-block ins. With move rendering ON, emit NATIVE move
@@ -1069,7 +1080,7 @@ internal static class IrMarkupRenderer
         bool leftIsPara = ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph;
         bool rightIsPara = ResolveBlock(op.RightAnchor, state.RightSource) is IrParagraph;
 
-        if (op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
+        if (!op.RequiresWholeParagraphReplace && op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
             op.TextboxDiffs is null)             // textbox-interior diffs are not finely rendered in Task 3
         {
             // Commented paragraphs render finely too: comment range markers + the commentReference run ride
@@ -3141,7 +3152,8 @@ internal static class IrMarkupRenderer
         }
         string moveName = state.MoveName(gid);
 
-        if (op.Kind == IrEditOpKind.MoveModifyBlock && op.TokenDiff is { } tokenDiff &&
+        if (!op.RequiresWholeParagraphReplace &&
+            op.Kind == IrEditOpKind.MoveModifyBlock && op.TokenDiff is { } tokenDiff &&
             op.TextboxDiffs is null && ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph)
         {
             // Build the destination paragraph from the token diff, like RenderModifiedParagraph, but with the
@@ -3437,8 +3449,9 @@ internal static class IrMarkupRenderer
     /// <summary>
     /// Mark payload carried by a block-level SDT without losing legal intermediate containers.  Paragraphs and
     /// tables own the established whole-block revision shapes; nested SDTs receive their own envelope ranges.
-    /// Any other transparent block container is descended so customXml/smartTag wrappers do not leave visible
-    /// paragraphs unmarked after an enclosing delete-range acceptance.
+    /// Inline SDT payloads can be direct runs, so they are wrapped at run granularity too. Any other transparent
+    /// block container is descended so customXml/smartTag wrappers do not leave visible paragraphs unmarked after
+    /// an enclosing delete-range acceptance.
     /// </summary>
     private static void MarkWholeSdtContentChild(XElement child, RevKind kind, RenderState state)
     {
@@ -3457,6 +3470,13 @@ internal static class IrMarkupRenderer
             var boundaries = MarkWholeSdtEnvelope(child, kind, state);
             child.AddBeforeSelf(boundaries.Before);
             child.AddAfterSelf(boundaries.After);
+            return;
+        }
+
+        if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.smartTag)
+        {
+            var replacement = WrapFieldAware(child, kind, state).Cast<object>().ToArray();
+            child.ReplaceWith(replacement);
             return;
         }
 
@@ -3518,6 +3538,18 @@ internal static class IrMarkupRenderer
         var wrapped = new List<XElement>();
         foreach (var child in runChildren)
         {
+            // A content-control wrapper has native custom-XML range revisions that make the envelope itself
+            // reversible. Ordinary w:del/w:ins can only toggle its runs, leaving an empty w:sdt behind in the
+            // opposite view. Mark the full envelope here, then retain its range boundaries as paragraph-level
+            // siblings while the payload receives run revisions inside MarkWholeSdtEnvelope.
+            if (child.Name == W.sdt && child.Element(W.sdtContent) is not null)
+            {
+                var boundaries = MarkWholeSdtEnvelope(child, kind, state);
+                wrapped.Add(boundaries.Before);
+                wrapped.Add(child);
+                wrapped.Add(boundaries.After);
+                continue;
+            }
             // PreserveInputRevisions: a preserved ORIGINAL block may carry foreign revision wrappers as
             // paragraph children. Leave them exactly as-is — their content is already revision-marked
             // (foreign ins stays inserted, foreign del/moveFrom stays deleted-grade), and re-wrapping

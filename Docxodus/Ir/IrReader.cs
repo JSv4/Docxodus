@@ -687,6 +687,11 @@ internal static class IrReader
         // minus the mark rPr / inline sectPr / pPrChange marker, flattened so empty ≡ absent.
         var pPrDigest = PPrPropsDigest(pPr);
 
+        // Inline SDT/smartTag carriers are intentionally transparent to the modeled inline stream, but their
+        // wrapper topology cannot be reconstructed safely by a token-level redline. Keep a separate canonical
+        // envelope digest so the edit builder can lower a carrier change to a reversible whole paragraph pair.
+        var inlineEnvelopeDigest = InlineEnvelopeDigest(p, ctx);
+
         // Resolve the auto-number marker against the LIVE package while we have it (see
         // IrParagraph.ResolvedListMarker for the rationale). RetrieveListItem returns null for
         // non-list-items; it is the exact string the markdown projection consumes. Tolerance-wrapped
@@ -702,6 +707,7 @@ internal static class IrReader
             InlineSectionBreakAnchor = inlineSectAnchor,
             InlineSectionFormat = inlineSectionFormat,
             PPrDigest = pPrDigest,
+            InlineEnvelopeDigest = inlineEnvelopeDigest,
             ResolvedListMarker = resolvedMarker,
             // The oracle's structural IsListItem verdict (numPr present inline or via the style chain,
             // numId-agnostic) — drives the emitter's trailing-blank rule for heading/Subtitle styles
@@ -712,6 +718,53 @@ internal static class IrReader
             FormatFingerprint = formatFingerprint,
             Source = ctx.Provenance(p),
         };
+    }
+
+    /// <summary>
+    /// Hash the OUTERMOST inline <c>w:sdt</c>/<c>w:smartTag</c> carriers rooted in one paragraph. Each
+    /// carrier contributes its entire resolver-aware canonical XML plus a stable element path from the paragraph,
+    /// so adding/removing metadata, changing contained content, or moving a carrier relative to other inline
+    /// children changes the digest. Nested carriers ride inside their outer carrier's canonical payload once;
+    /// a carrier inside a nested textbox paragraph belongs to that paragraph, not this one.
+    /// </summary>
+    private static IrHash InlineEnvelopeDigest(XElement paragraph, ReadContext ctx)
+    {
+        var envelopes = paragraph.Descendants()
+            .Where(element => (element.Name == W + "sdt" || element.Name == W + "smartTag") &&
+                IsOutermostInlineEnvelope(paragraph, element))
+            .ToList();
+        if (envelopes.Count == 0)
+            return default;
+
+        var stream = new XElement("inlineEnvelopes");
+        foreach (var envelope in envelopes)
+        {
+            stream.Add(new XElement("carrier",
+                new XAttribute("path", InlineElementPath(paragraph, envelope)),
+                new XElement(envelope)));
+        }
+        return IrHasher.CanonicalHash(stream, ctx.RelResolver);
+    }
+
+    private static bool IsOutermostInlineEnvelope(XElement paragraph, XElement envelope) =>
+        envelope.Ancestors(W + "p").FirstOrDefault() == paragraph &&
+        !envelope.Ancestors().TakeWhile(ancestor => ancestor != paragraph).Any(ancestor =>
+            ancestor.Name == W + "sdt" || ancestor.Name == W + "smartTag");
+
+    /// <summary>Path segments include the actual sibling index, not merely the wrapper ordinal: moving one
+    /// carrier past a plain run is structural even if the carrier XML itself is byte-identical.</summary>
+    private static string InlineElementPath(XElement paragraph, XElement element)
+    {
+        var segments = new Stack<string>();
+        for (XElement? current = element; current is not null && current != paragraph;
+             current = current.Parent as XElement)
+        {
+            if (current.Parent is not XElement)
+                return string.Join("/", segments);
+            int siblingIndex = current.ElementsBeforeSelf().Count();
+            segments.Push($"{current.Name.NamespaceName}:{current.Name.LocalName}[{siblingIndex}]");
+        }
+        return string.Join("/", segments);
     }
 
     /// <summary>

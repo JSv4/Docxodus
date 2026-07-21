@@ -1099,7 +1099,8 @@ internal static class IrCompositeMerger
             ops.Add(EmitOp(op, reviewers[rev].Author, rev));
             return;
         }
-        if (touched.All(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TokenDiff != null)
+        if (touched.All(e => e.Op.Kind == IrEditOpKind.ModifyBlock && e.Op.TokenDiff != null &&
+                             !e.Op.RequiresWholeParagraphReplace)
             && touched.All(e => ParagraphPropsUnchanged(e.Op, baseIr, reviewers[e.Reviewer].Ir)))
         {
             // TOKEN-SPAN COMPOSITION
@@ -1424,6 +1425,17 @@ internal static class IrCompositeMerger
         if (touched.Any(e => e.Op.Kind != kind))
             return false;
 
+        // A flagged paragraph carries an inline SDT/smartTag envelope delta. Text-only equivalence would
+        // falsely collapse distinct tags, bindings, or wrapper topology, so permit consensus only when every
+        // toucher is flagged and their whole structural paragraph signatures agree. Everything else falls to
+        // the block-conflict path rather than token-span composition.
+        if (touched.Any(e => e.Op.RequiresWholeParagraphReplace))
+        {
+            if (kind != IrEditOpKind.ModifyBlock || touched.Any(e => !e.Op.RequiresWholeParagraphReplace))
+                return false;
+            return StructuralInlineEnvelopeResultsEqual(touched, reviewers, settings);
+        }
+
         if (kind == IrEditOpKind.DeleteBlock)
             return true;
 
@@ -1446,6 +1458,33 @@ internal static class IrCompositeMerger
         }
 
         return false;
+    }
+
+    private static bool StructuralInlineEnvelopeResultsEqual(
+        List<(int Reviewer, IrEditOp Op)> touched,
+        IReadOnlyList<(string Author, IrDocument Ir)> reviewers,
+        IrDiffSettings settings)
+    {
+        IrParagraph? First((int Reviewer, IrEditOp Op) entry) =>
+            entry.Op.RightAnchor is { } anchor &&
+            reviewers[entry.Reviewer].Ir.AnchorIndex.TryGetValue(anchor, out var block)
+                ? block as IrParagraph
+                : null;
+
+        var first = First(touched[0]);
+        if (first is null)
+            return false;
+        var firstText = BlockResultText(touched[0].Op, reviewers[touched[0].Reviewer].Ir, settings);
+        return touched.All(entry =>
+        {
+            var paragraph = First(entry);
+            return paragraph is not null &&
+                paragraph.ContentHash == first.ContentHash &&
+                paragraph.FormatFingerprint == first.FormatFingerprint &&
+                paragraph.PPrDigest == first.PPrDigest &&
+                paragraph.InlineEnvelopeDigest == first.InlineEnvelopeDigest &&
+                BlockResultText(entry.Op, reviewers[entry.Reviewer].Ir, settings) == firstText;
+        });
     }
 
     /// <summary>

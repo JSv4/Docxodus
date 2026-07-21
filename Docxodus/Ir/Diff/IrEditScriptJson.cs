@@ -76,6 +76,8 @@ internal static class IrEditScriptJson
         if (op.IsMoveSource is { } source) writer.WriteBoolean("isMoveSource", source);
         if (op.BodyFullRewriteGroupId is { } rewriteGroup)
             writer.WriteNumber("bodyFullRewriteGroupId", rewriteGroup);
+        if (op.RequiresWholeParagraphReplace)
+            writer.WriteBoolean("requiresWholeParagraphReplace", true);
         if (op.TokenDiff is { } diff)
         {
             writer.WritePropertyName("tokenDiff");
@@ -306,6 +308,8 @@ internal static class IrEditScriptJson
         bool? isMoveSource = element.TryGetProperty("isMoveSource", out var s) ? s.GetBoolean() : null;
         int? bodyFullRewriteGroupId = element.TryGetProperty("bodyFullRewriteGroupId", out var brg)
             ? brg.GetInt32() : null;
+        bool requiresWholeParagraphReplace = element.TryGetProperty("requiresWholeParagraphReplace", out var whp)
+            && whp.GetBoolean();
         IrTokenDiff? tokenDiff = element.TryGetProperty("tokenDiff", out var t) ? ReadTokenDiff(t) : null;
         IrTableDiff? tableDiff = element.TryGetProperty("tableDiff", out var td) ? ReadTableDiff(td) : null;
         IrNodeList<IrTextboxDiff>? textboxDiffs = null;
@@ -338,7 +342,8 @@ internal static class IrEditScriptJson
             segmentDiffs = IrNodeList.From(list);
         }
         return new IrEditOp(kind, leftAnchor, rightAnchor, tokenDiff, moveGroupId, isMoveSource,
-            tableDiff, textboxDiffs, splitMergeAnchors, segmentDiffs, bodyFullRewriteGroupId);
+            tableDiff, textboxDiffs, splitMergeAnchors, segmentDiffs, bodyFullRewriteGroupId,
+            requiresWholeParagraphReplace);
     }
 
     private static IrTableDiff ReadTableDiff(JsonElement element)

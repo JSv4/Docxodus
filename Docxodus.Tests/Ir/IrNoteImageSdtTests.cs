@@ -446,6 +446,27 @@ public class IrNoteImageSdtTests
     }
 
     [Fact]
+    public void Read_InlineEnvelopeDigest_DistinguishesWrapperAndMetadata_WhileContentStaysTransparent()
+    {
+        var plain = Para("<w:p><w:r><w:t>controlled</w:t></w:r></w:p>");
+        var oldTag = Para(
+            "<w:p><w:sdt><w:sdtPr><w:tag w:val=\"old\"/></w:sdtPr>" +
+            "<w:sdtContent><w:r><w:t>controlled</w:t></w:r></w:sdtContent></w:sdt></w:p>");
+        var newTag = Para(
+            "<w:p><w:sdt><w:sdtPr><w:tag w:val=\"new\"/></w:sdtPr>" +
+            "<w:sdtContent><w:r><w:t>controlled</w:t></w:r></w:sdtContent></w:sdt></w:p>");
+
+        Assert.Equal(plain.ContentHash, oldTag.ContentHash);
+        Assert.Equal(oldTag.ContentHash, newTag.ContentHash);
+        Assert.NotEqual(plain.InlineEnvelopeDigest, oldTag.InlineEnvelopeDigest);
+        Assert.NotEqual(oldTag.InlineEnvelopeDigest, newTag.InlineEnvelopeDigest);
+        Assert.Equal(oldTag.InlineEnvelopeDigest, Para(
+            "<w:p><w:sdt><w:sdtPr><w:tag w:val=\"old\"/></w:sdtPr>" +
+            "<w:sdtContent><w:r><w:t>controlled</w:t></w:r></w:sdtContent></w:sdt></w:p>")
+            .InlineEnvelopeDigest);
+    }
+
+    [Fact]
     public void Read_NestedSmartTag_Spliced()
     {
         var wrapped = Para(

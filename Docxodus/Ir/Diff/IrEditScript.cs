@@ -127,6 +127,10 @@ internal enum IrEditOpKind
 /// <item><see cref="BodyFullRewriteGroupId"/>: set only on the matching InsertBlock/DeleteBlock pair
 /// emitted from one BODY-level 1×1 full-lexical-rewrite gap. It is renderer-only provenance; nested
 /// scopes and every other operation leave it null.</item>
+/// <item><see cref="RequiresWholeParagraphReplace"/>: set only on a paired paragraph operation whose
+/// inline structural carrier differs. Its token diff remains available for apply/diagnostics, but renderers
+/// must emit whole old/new paragraphs so an atomic inline <c>w:sdt</c>/<c>w:smartTag</c> wrapper never leaks
+/// through Accept or Reject.</item>
 /// </list>
 /// </remarks>
 internal sealed record IrEditOp(
@@ -140,7 +144,8 @@ internal sealed record IrEditOp(
     IrNodeList<IrTextboxDiff>? TextboxDiffs = null,
     IrNodeList<string>? SplitMergeAnchors = null,
     IrNodeList<IrTokenDiff>? SegmentDiffs = null,
-    int? BodyFullRewriteGroupId = null);
+    int? BodyFullRewriteGroupId = null,
+    bool RequiresWholeParagraphReplace = false);
 
 /// <summary>
 /// The nested inner-block diff of ONE textbox pair inside a Modified paragraph (M2.4 Task 1). A paragraph

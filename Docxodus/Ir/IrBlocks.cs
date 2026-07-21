@@ -99,6 +99,19 @@ internal sealed record IrParagraph : IrBlock
     public IrHash PPrDigest { get; init; }
 
     /// <summary>
+    /// Resolver-aware canonical digest of this paragraph's outer inline <c>w:sdt</c>/<c>w:smartTag</c>
+    /// carriers, including their metadata, full contained OOXML, and position in the inline tree. The reader
+    /// deliberately splices those wrappers from <see cref="Inlines"/> to preserve the markdown projection,
+    /// so this separate structural fact lets the diff/render paths recognize a carrier-only change and avoid
+    /// slicing an atomic wrapper into incompatible revisions. It is intentionally separate from
+    /// <see cref="IrBlock.ContentHash"/>: ordinary text alignment remains stable, while a paired edit whose
+    /// envelope digest differs is explicitly lowered to a whole-paragraph replacement.
+    /// <para><c>default(IrHash)</c> means the paragraph contains no inline carrier; non-empty carrier streams
+    /// always have a canonical SHA-256 digest.</para>
+    /// </summary>
+    public IrHash InlineEnvelopeDigest { get; init; }
+
+    /// <summary>
     /// The oracle's <c>WmlToMarkdownConverter.IsListItem</c> verdict for this paragraph: a purely
     /// <em>structural</em> predicate — true iff a <c>w:numPr</c> is present inline (<c>w:pPr/w:numPr</c>)
     /// OR anywhere up the <c>pStyle → basedOn</c> chain, <b>regardless of whether that numPr carries a

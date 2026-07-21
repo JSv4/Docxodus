@@ -39,7 +39,8 @@ namespace Docxodus.Ir.Diff;
 internal static class IrEditScriptBuilder
 {
     /// <summary>The left side of a move (source), keyed by the moved left block's body index.</summary>
-    private readonly record struct MoveInfo(int GroupId, IrBlock LeftBlock, IrEditOpKind OpKind);
+    private readonly record struct MoveInfo(
+        int GroupId, IrBlock LeftBlock, IrEditOpKind OpKind, bool RequiresWholeParagraphReplace);
 
     public static IrEditScript Build(IrDocument left, IrDocument right, IrDiffSettings settings)
     {
@@ -664,7 +665,8 @@ internal static class IrEditScriptBuilder
                 var opKind = entry.Kind == IrAlignmentKind.MovedModified
                     ? IrEditOpKind.MoveModifyBlock
                     : IrEditOpKind.MoveBlock;
-                moves[li] = new MoveInfo(nextGroup++, entry.Left!, opKind);
+                moves[li] = new MoveInfo(nextGroup++, entry.Left!, opKind,
+                    InlineEnvelopeDiffers(entry.Left!, entry.Right!));
             }
         }
 
@@ -695,15 +697,21 @@ internal static class IrEditScriptBuilder
             switch (entry.Kind)
             {
                 case IrAlignmentKind.Unchanged:
-                    ops.Add(new IrEditOp(IrEditOpKind.EqualBlock,
-                        entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
-                        null, null, null));
+                    if (InlineEnvelopeDiffers(entry.Left!, entry.Right!))
+                        ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
+                    else
+                        ops.Add(new IrEditOp(IrEditOpKind.EqualBlock,
+                            entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
+                            null, null, null));
                     break;
 
                 case IrAlignmentKind.FormatOnly:
-                    ops.Add(new IrEditOp(IrEditOpKind.FormatOnlyBlock,
-                        entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
-                        null, null, null));
+                    if (InlineEnvelopeDiffers(entry.Left!, entry.Right!))
+                        ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
+                    else
+                        ops.Add(new IrEditOp(IrEditOpKind.FormatOnlyBlock,
+                            entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
+                            null, null, null));
                     break;
 
                 case IrAlignmentKind.Modified:
@@ -728,6 +736,17 @@ internal static class IrEditScriptBuilder
                 {
                     var lp = (IrParagraph)entry.Left!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
+                    if (HasInlineEnvelope(lp) || members.Any(HasInlineEnvelope))
+                    {
+                        // A split has no one-to-one paragraph shell in which to place an atomic inline
+                        // carrier revision. Lower this rare structural shape to the existing whole-block pair.
+                        ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
+                            lp.Anchor.ToString(), null, null, null, null));
+                        foreach (var member in members)
+                            ops.Add(new IrEditOp(IrEditOpKind.InsertBlock,
+                                null, member.Anchor.ToString(), null, null, null));
+                        break;
+                    }
                     ops.Add(new IrEditOp(IrEditOpKind.SplitBlock,
                         lp.Anchor.ToString(), null, null, null, null, null, null,
                         IrNodeList.From(members.Select(m => m.Anchor.ToString()).ToList()),
@@ -739,6 +758,15 @@ internal static class IrEditScriptBuilder
                 {
                     var rp = (IrParagraph)entry.Right!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
+                    if (HasInlineEnvelope(rp) || members.Any(HasInlineEnvelope))
+                    {
+                        foreach (var member in members)
+                            ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
+                                member.Anchor.ToString(), null, null, null, null));
+                        ops.Add(new IrEditOp(IrEditOpKind.InsertBlock,
+                            null, rp.Anchor.ToString(), null, null, null));
+                        break;
+                    }
                     // Segment diffs are computed singular-vs-members (rp sliced against each left
                     // member) then MIRRORED so each stored diff reads left-member → right-slice,
                     // keeping the universal "left = left document" orientation for every consumer.
@@ -763,7 +791,8 @@ internal static class IrEditScriptBuilder
                         : null;
                     ops.Add(new IrEditOp(
                         move.OpKind, null, entry.Right!.Anchor.ToString(),
-                        tokenDiff, move.GroupId, IsMoveSource: false));
+                        tokenDiff, move.GroupId, IsMoveSource: false,
+                        RequiresWholeParagraphReplace: move.RequiresWholeParagraphReplace));
                     break;
                 }
             }
@@ -810,7 +839,8 @@ internal static class IrEditScriptBuilder
             var move = moves[pendingSources[n]];
             // The source op mirrors the destination's kind; the token diff lives only on the destination.
             ops.Add(new IrEditOp(
-                move.OpKind, move.LeftBlock.Anchor.ToString(), null, null, move.GroupId, IsMoveSource: true));
+                move.OpKind, move.LeftBlock.Anchor.ToString(), null, null, move.GroupId, IsMoveSource: true,
+                RequiresWholeParagraphReplace: move.RequiresWholeParagraphReplace));
             n++;
         }
         pendingSources.RemoveRange(0, n);
@@ -869,8 +899,19 @@ internal static class IrEditScriptBuilder
         return new IrEditOp(IrEditOpKind.ModifyBlock,
             lp.Anchor.ToString(), rp.Anchor.ToString(),
             tokenDiff, null, null, null,
-            nest ? IrNodeList.From(textboxDiffs!) : null);
+            nest ? IrNodeList.From(textboxDiffs!) : null,
+            RequiresWholeParagraphReplace: InlineEnvelopeDiffers(lp, rp));
     }
+
+    /// <summary>Inline SDT/smartTag wrappers are deliberately transparent to ordinary token alignment, but a
+    /// wrapper-only delta cannot be represented by slicing their atomic source containers. Keep the alignment
+    /// stable and mark the paired op for a reversible whole-paragraph replacement instead.</summary>
+    private static bool InlineEnvelopeDiffers(IrBlock left, IrBlock right) =>
+        left is IrParagraph lp && right is IrParagraph rp &&
+        lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest;
+
+    private static bool HasInlineEnvelope(IrParagraph paragraph) =>
+        paragraph.InlineEnvelopeDigest != default;
 
     // ------------------------------------------------------------------ textbox interiors (M2.4 Task 1)
 
