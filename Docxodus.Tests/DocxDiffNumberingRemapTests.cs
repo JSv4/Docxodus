@@ -117,12 +117,11 @@ public class DocxDiffNumberingRemapTests
     }
 
     [Fact]
-    public void CollidingNumId_InsertedListRebindsToRightDefinition_EqualKeepsLeft()
+    public void CollidingNumId_InsertedListRebindsToRightDefinition_EqualRoundTripsDefinitions()
     {
-        // Same numId 1 on both sides, different definitions: left bullet, right decimal. Word does
-        // not compare numbering definitions — EQUAL paragraphs keep the left's id (bullet), but a
-        // paragraph INSERTED from the right must resolve to the right's renumbered definition
-        // (decimal), not silently rebind onto the left's colliding id.
+        // Same numId 1 on both sides, different definitions: left bullet, right decimal.  The current
+        // redline view must resolve every surviving right-sourced paragraph (including text-equal ones)
+        // through the imported decimal definition, while pPrChange preserves bullet for Reject.
         var left = NumberedDoc("bullet", "alpha item one", "beta item two", "gamma item three");
         var right = NumberedDoc("decimal", "alpha item one", "beta item two", "gamma item three",
             "delta item four entirely new");
@@ -143,7 +142,17 @@ public class DocxDiffNumberingRemapTests
         foreach (var id in inserted)
             Assert.Equal("decimal", ResolveNumFmt(numbering, id!));
         foreach (var id in equal)
-            Assert.Equal("bullet", ResolveNumFmt(numbering, id!));
+            Assert.Equal("decimal", ResolveNumFmt(numbering, id!));
+
+        var (acceptedMain, acceptedNumbering) = OpenParts(RevisionProcessor.AcceptRevisions(result));
+        var acceptedIds = acceptedMain.Descendants(W + "p").Select(NumIdOf).Where(id => id is not null).ToList();
+        Assert.Equal(4, acceptedIds.Count);
+        Assert.All(acceptedIds, id => Assert.Equal("decimal", ResolveNumFmt(acceptedNumbering, id!)));
+
+        var (rejectedMain, rejectedNumbering) = OpenParts(RevisionProcessor.RejectRevisions(result));
+        var rejectedIds = rejectedMain.Descendants(W + "p").Select(NumIdOf).Where(id => id is not null).ToList();
+        Assert.Equal(3, rejectedIds.Count);
+        Assert.All(rejectedIds, id => Assert.Equal("bullet", ResolveNumFmt(rejectedNumbering, id!)));
     }
 
     [Fact]
