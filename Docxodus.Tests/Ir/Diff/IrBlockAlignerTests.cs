@@ -74,6 +74,36 @@ public class IrBlockAlignerTests
     }
 
     [Fact]
+    public void Moved_content_equal_paragraph_with_format_delta_is_moved_modified()
+    {
+        // The relocation is text-equal but gains bold formatting. It must still retain a token diff so the
+        // renderer can place the old rPr in the move destination; classifying this as a plain move hides the
+        // format change and makes Reject keep the right formatting.
+        const string anchor = "Anchor paragraph holds the document spine steady.";
+        const string moved = "Moved paragraph contains enough distinct words for move detection today.";
+        const string trailing = "Trailing paragraph also has enough words to stabilize matching.";
+        const string trailing2 = "Final paragraph provides another stable matching anchor here.";
+        var l = FromXml(
+            $"<w:p><w:r><w:t>{anchor}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{moved}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing2}</w:t></w:r></w:p>");
+        var r = FromXml(
+            $"<w:p><w:r><w:t>{anchor}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing2}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>{moved}</w:t></w:r></w:p>");
+
+        var a = Align(l, r);
+
+        var movedModified = Assert.Single(a.Entries, e => e.Kind == IrAlignmentKind.MovedModified);
+        Assert.Equal(moved, Text(movedModified.Left!));
+        Assert.Equal(moved, Text(movedModified.Right!));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Moved));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
     public void Block_sdt_metadata_change_is_one_atomic_modified_pair()
     {
         const string content = "<w:sdtContent><w:p><w:r><w:t>controlled body</w:t></w:r></w:p></w:sdtContent>";

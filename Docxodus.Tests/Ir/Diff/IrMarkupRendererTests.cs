@@ -1218,15 +1218,54 @@ public class IrMarkupRendererTests
         using var ms = new MemoryStream(rendered.DocumentByteArray);
         using var wd = WordprocessingDocument.Open(ms, false);
         var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
-        // If the aligner classified this as a MoveModify, the moveTo range exists and carries nested ins/del.
-        // (If the similarity pass instead classified it as Move + separate edits, the round-trip still holds —
-        // so we assert the contract, the round-trip, and only check nesting WHEN moveTo is present.)
-        if (body.Descendants(W.moveTo).Any())
-        {
-            var moveToRangeStart = body.Descendants(W.moveToRangeStart).FirstOrDefault();
-            Assert.NotNull(moveToRangeStart);
-        }
+        // The destination's move range contains the relocated unchanged spans plus the separate in-move edit
+        // revisions.  A plain right-side moveTo clone would accept/reject correctly but hide this edit.
+        var destination = Assert.Single(body.Elements(W.p),
+            p => p.Descendants(W.moveToRangeStart).Any());
+        Assert.NotEmpty(destination.Descendants(W.moveTo));
+        Assert.NotEmpty(destination.Descendants(W.ins));
+        Assert.NotEmpty(destination.Descendants(W.del));
         AssertRoundTrip(left, right, settings, label: "move-modify");
+    }
+
+    [Fact]
+    public void Render_moved_format_change_is_tracked_at_destination()
+    {
+        // Exact text relocation with a bold change is a MoveModify: its destination must carry both the native
+        // move wrapper and the old run formatting. Without that projection, reviewers see only a move and reject
+        // cannot reconstruct the left formatting.
+        const string anchor = "Anchor paragraph holds the document spine steady.";
+        const string moved = "Moved paragraph contains enough distinct words for move detection today.";
+        const string trailing = "Trailing paragraph also has enough words to stabilize matching.";
+        const string trailing2 = "Final paragraph provides another stable matching anchor here.";
+        var left = IrTestDocuments.FromBodyXml(
+            $"<w:p><w:r><w:t>{anchor}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{moved}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing2}</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            $"<w:p><w:r><w:t>{anchor}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing2}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>{moved}</w:t></w:r></w:p>");
+        var settings = new IrDiffSettings { MoveSimilarityThreshold = 0.6, MoveMinimumTokenCount = 3 };
+
+        var script = IrEditScriptBuilder.Build(IrReader.Read(left), IrReader.Read(right), settings);
+        var destinationOp = Assert.Single(script.Operations,
+            op => op.Kind == IrEditOpKind.MoveModifyBlock && op.IsMoveSource == false);
+        Assert.Contains(destinationOp.TokenDiff!.Ops, op => op.Kind == IrTokenOpKind.FormatChanged);
+
+        var rendered = RenderMarkup(left, right, settings);
+
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var destination = Assert.Single(body.Elements(W.p),
+            p => p.Descendants(W.moveToRangeStart).Any());
+        Assert.NotEmpty(destination.Descendants(W.moveTo));
+        var oldRunFormat = Assert.Single(destination.Descendants(W.rPrChange));
+        Assert.Null(oldRunFormat.Element(W.rPr)!.Element(W.b));
+        AssertRoundTrip(left, right, settings, label: "move-format");
     }
 
     /// <summary>

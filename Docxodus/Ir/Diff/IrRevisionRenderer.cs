@@ -838,6 +838,12 @@ internal static class IrRevisionRenderer
             // anchor via the pre-pass MoveGroupId map so Delete spans can recover left-token text.
             string? sourceAnchor = op.MoveGroupId is { } gid && ctx.MoveSourceAnchor.TryGetValue(gid, out var sa)
                 ? sa : null;
+            // A moved-and-reformatted paragraph uses the same pPr / inline-sect and run-format semantics as a
+            // normal ModifyBlock. The destination op intentionally has no LeftAnchor, so restore its paired
+            // source anchor only for these projections; the public Moved revision itself remains one-sided.
+            var pairedMove = op with { LeftAnchor = sourceAnchor };
+            EmitParagraphScopeFormatChanged(pairedMove, ctx, sink);
+            EmitInlineSectionFormatChanged(pairedMove, ctx, sink);
             var leftTokens = ParagraphTokens(sourceAnchor, ctx.Left, ctx.Settings);
             var rightTokens = ParagraphTokens(op.RightAnchor, ctx.Right, ctx.Settings);
             RenderTokenOps(tokenDiff, leftTokens, rightTokens, sourceAnchor, op.RightAnchor, ctx, sink);

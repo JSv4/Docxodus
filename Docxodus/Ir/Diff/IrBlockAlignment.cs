@@ -9,18 +9,10 @@ namespace Docxodus.Ir.Diff;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b><see cref="MovedModified"/> is reserved for M2.2 and is NEVER produced in M2.1.</b> M2.1 move
-/// detection is exact-content-hash only: a block can only be classified <see cref="Moved"/> when its
-/// <c>ContentHash</c> matches an off-spine anchor exactly, so a "moved AND its text was edited" block
-/// cannot be recognized as a move at all in M2.1 (it falls out as a Deleted+Inserted, or as a
-/// positional Modified inside a gap). Similarity-based move detection that would surface
-/// <see cref="MovedModified"/> is M2.2 territory (intra-block token diff + fuzzy move matching). The
-/// kind is declared now so the enum is stable across the M2.1→M2.2 surface bump.
-/// </para>
-/// <para>
-/// Conversely a block whose content hash matches an off-spine anchor but whose
-/// <c>FormatFingerprint</c> differs (moved AND reformatted, same text) IS still classified plain
-/// <see cref="Moved"/> in M2.1 — format equality does not refine the move kind here.
+/// <see cref="MovedModified"/> covers both fuzzy lexical move-and-edit matches and content-equal paragraph
+/// moves with a modeled format delta. In either form the destination carries a token diff: lexical changes
+/// become insert/delete spans and formatting changes become FormatChanged spans with native property history.
+/// Structural blocks remain plain moves until they have an equivalent in-move format projection.
 /// </para>
 /// </remarks>
 internal enum IrAlignmentKind
@@ -34,10 +26,10 @@ internal enum IrAlignmentKind
     /// <summary>Both sides present but neither hash-paired: an in-gap positional pairing whose token diff M2.2 runs.</summary>
     Modified,
 
-    /// <summary>Exact-content match that is off the in-order spine (relocated). <c>ContentHash</c> equal; format may differ.</summary>
+    /// <summary>Relocated block without a projected in-move token change.</summary>
     Moved,
 
-    /// <summary>RESERVED for M2.2 (fuzzy moved+edited). Never produced in M2.1 — see type remarks.</summary>
+    /// <summary>Relocated paragraph with lexical and/or modeled formatting changes.</summary>
     MovedModified,
 
     /// <summary>Right-only block (no left counterpart): <c>Left</c> is null.</summary>

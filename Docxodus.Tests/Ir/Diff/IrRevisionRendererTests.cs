@@ -248,6 +248,38 @@ public class IrRevisionRendererTests
         Assert.Contains(after, x => x.Type == IrRevisionType.Deleted && !string.IsNullOrEmpty(x.Text));
     }
 
+    [Fact]
+    public void MoveModify_format_delta_emits_format_revision_after_destination()
+    {
+        // Exact text relocation plus bold formatting is still an in-move change. The revision surface must agree
+        // with the edit script and OOXML: Moved first, then the run-level FormatChanged with both source anchors.
+        const string anchor = "Anchor paragraph holds the document spine steady.";
+        const string moved = "Moved paragraph contains enough distinct words for move detection today.";
+        const string trailing = "Trailing paragraph also has enough words to stabilize matching.";
+        const string trailing2 = "Final paragraph provides another stable matching anchor here.";
+        var l = FromXml(
+            $"<w:p><w:r><w:t>{anchor}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{moved}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing2}</w:t></w:r></w:p>");
+        var r = FromXml(
+            $"<w:p><w:r><w:t>{anchor}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing2}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>{moved}</w:t></w:r></w:p>");
+
+        var revs = Render(l, r).ToList();
+        var destination = Assert.Single(revs, revision =>
+            revision.Type == IrRevisionType.Moved && revision.IsMoveSource == false);
+        var format = Assert.Single(revs, revision =>
+            revision.Type == IrRevisionType.FormatChanged && revision.Text == moved);
+
+        Assert.True(revs.IndexOf(format) > revs.IndexOf(destination));
+        Assert.Contains("bold", format.FormatChange!.ChangedPropertyNames);
+        Assert.NotNull(format.LeftAnchor);
+        Assert.NotNull(format.RightAnchor);
+    }
+
     // ------------------------------------------------------------------ table recursion
 
     [Fact]

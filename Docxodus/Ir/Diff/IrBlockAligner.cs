@@ -81,7 +81,8 @@ internal static class IrBlockAligner
             leftMatch, rightMatch, candidates, settings);
 
         // --- Spine: longest increasing subsequence over candidates (sorted by left index) by right
-        // index. On-spine candidates keep their anchor kind (Unchanged/FormatOnly); off-spine become Moved.
+        // index. On-spine candidates keep their anchor kind (Unchanged/FormatOnly); off-spine become a
+        // plain move when format-equal, or a move-and-modify when the content-equal pair has a format delta.
         candidates.Sort((a, b) => a.LeftIndex.CompareTo(b.LeftIndex));
         var onSpine = LongestIncreasingSubsequence(candidates);
 
@@ -115,10 +116,17 @@ internal static class IrBlockAligner
             }
             else
             {
-                // Off-spine exact/content anchor = relocated. Format equality does not refine the
-                // kind in M2.1: a moved+reformatted exact-content block is still plain Moved.
-                leftKind[cand.LeftIndex] = IrAlignmentKind.Moved;
-                rightKind[cand.RightIndex] = IrAlignmentKind.Moved;
+                // Off-spine content anchor = relocated. A content-equal PARAGRAPH pair can nevertheless carry
+                // a modeled format delta (for example, a paragraph moved and made bold). It needs the same
+                // in-move token projection as a lexical move-and-edit so the destination can retain the right
+                // formatting while rPrChange restores the left formatting on reject. Structural blocks remain
+                // plain moves until they have an equivalent reversible format projection.
+                var kind = cand.AnchorKind == IrAlignmentKind.FormatOnly &&
+                    leftBlocks[cand.LeftIndex] is IrParagraph && rightBlocks[cand.RightIndex] is IrParagraph
+                    ? IrAlignmentKind.MovedModified
+                    : IrAlignmentKind.Moved;
+                leftKind[cand.LeftIndex] = kind;
+                rightKind[cand.RightIndex] = kind;
             }
         }
 
@@ -1468,10 +1476,11 @@ internal static class IrBlockAligner
     /// <para><b>Move vs MovedModified.</b> A qualifying pair is normally <see cref="IrAlignmentKind.MovedModified"/>
     /// — the edit script re-token-diffs it (move + nested edits, the capability WmlComparer cannot
     /// express). A score of exactly 1.0 means the token multisets are identical; if additionally the
-    /// ContentHashes are equal the blocks are exact-content relocations, which must classify as plain
-    /// <see cref="IrAlignmentKind.Moved"/> (a MovedModified with an all-Equal token diff would be a lie
-    /// about there being an edit). In practice exact-content moves are already caught by off-spine
-    /// anchoring and never reach here, but the guard makes the classification correct regardless.</para>
+    /// ContentHashes are equal <em>and their formats compare equal</em> the blocks are exact relocations,
+    /// which classify as plain <see cref="IrAlignmentKind.Moved"/>. A content-equal paragraph format delta
+    /// still needs <see cref="IrAlignmentKind.MovedModified"/> so its FormatChanged token spans are rendered.
+    /// In practice exact moves are already caught by off-spine anchoring, but the guard keeps this fallback
+    /// consistent.</para>
     /// <para><b>Cost.</b> Bounded by the global leftover counts D × I, not the document size: the
     /// dominant boilerplate / clean-edit cases leave few leftovers. Tokenization is cached (shared with
     /// in-gap pairing), so each leftover block is tokenized at most once across both passes.</para>
@@ -1536,11 +1545,16 @@ internal static class IrBlockAligner
             if (!found)
                 return;
 
-            // Exact-content relocation (score 1.0 + equal ContentHash) is plain Moved, not MovedModified:
-            // there is genuinely no edit to re-diff. Everything else is MovedModified (the edit script
-            // re-token-diffs it).
-            bool exact = bestScore >= 1.0 &&
-                leftBlocks[bestLeft].ContentHash.Equals(rightBlocks[bestRight].ContentHash);
+            // A paragraph plain move needs BOTH exact content and format equality. Exact paragraph text with a
+            // formatting delta still needs a token diff (FormatChanged spans) so the markup can carry rPrChange
+            // at the moved destination and restore the old formatting on reject. Structural blocks do not yet
+            // have an equivalent in-move format projection, so retain their existing plain-move behavior.
+            var leftBlock = leftBlocks[bestLeft];
+            var rightBlock = rightBlocks[bestRight];
+            bool needsParagraphFormatProjection = leftBlock is IrParagraph && rightBlock is IrParagraph &&
+                !FormatEqual(leftBlock, rightBlock, settings);
+            bool exact = bestScore >= 1.0 && leftBlock.ContentHash.Equals(rightBlock.ContentHash) &&
+                !needsParagraphFormatProjection;
             var kind = exact ? IrAlignmentKind.Moved : IrAlignmentKind.MovedModified;
 
             leftKind[bestLeft] = kind;

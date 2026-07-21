@@ -642,6 +642,21 @@ internal static class IrMarkupRenderer
     internal static void RenderBlockOpsWordShaped(
         IEnumerable<IrEditOp> ops, RenderState state, List<XElement> sink)
     {
+        // A MoveModify destination deliberately owns only its RIGHT anchor: its paired LEFT anchor lives on
+        // the separately emitted source op.  Resolve that pairing for THIS operation list before rendering.
+        // Scoping matters because note/header/cell projections allocate move-group ids locally; a nested cell
+        // render must not replace the body scope's source lookup once it returns.
+        var opList = ops as IReadOnlyList<IrEditOp> ?? ops.ToList();
+        var previousMoveSources = state.ActiveMoveSourceAnchors;
+        var moveSources = new Dictionary<int, string>();
+        foreach (var candidate in opList)
+            if (candidate.IsMoveSource == true && candidate.MoveGroupId is { } groupId &&
+                candidate.LeftAnchor is { } leftAnchor)
+                moveSources[groupId] = leftAnchor;
+        state.ActiveMoveSourceAnchors = moveSources;
+
+        try
+        {
         var pendingDeletes = new List<IrEditOp>();
         int gapInsertStart = -1;   // sink index where the current gap's inserted elements begin
         int? lastInsertedBodyFullRewriteGroupId = null;
@@ -751,7 +766,7 @@ internal static class IrMarkupRenderer
             lastInsertedBodyFullRewriteGroupId = null;
         }
 
-        foreach (var op in ops)
+        foreach (var op in opList)
         {
             if (op.Kind == IrEditOpKind.DeleteBlock || op.Kind == IrEditOpKind.InsertBlock)
             {
@@ -773,6 +788,11 @@ internal static class IrMarkupRenderer
             RenderBlockOp(op, state, sink);
         }
         FlushGap();
+        }
+        finally
+        {
+            state.ActiveMoveSourceAnchors = previousMoveSources;
+        }
     }
 
     internal static void RenderBlockOp(IrEditOp op, RenderState state, List<XElement> sink)
@@ -3183,15 +3203,17 @@ internal static class IrMarkupRenderer
             return;
         }
         string moveName = state.MoveName(gid);
+        string? leftAnchor = state.MoveSourceAnchor(gid);
+        var leftMovedPara = SourceElement(leftAnchor, state.Left);
 
         if (!op.RequiresWholeParagraphReplace &&
             op.Kind == IrEditOpKind.MoveModifyBlock && op.TokenDiff is { } tokenDiff &&
-            op.TextboxDiffs is null && ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph)
+            op.TextboxDiffs is null && leftMovedPara?.Name == W.p && leftAnchor is not null)
         {
             // Build the destination paragraph from the token diff, like RenderModifiedParagraph, but with the
             // moved-and-equal spans wrapped in w:moveTo (instead of left unwrapped) so the whole relocated
             // content vanishes on reject and appears on accept. Insert spans → w:ins, Delete spans → w:del.
-            var para = BuildMoveModifyDestination(op, tokenDiff, state);
+            var para = BuildMoveModifyDestination(op, tokenDiff, leftAnchor, state);
             if (para != null)
             {
                 MarkParagraphMark(para, RevKind.MoveTo, state);
@@ -3205,7 +3227,7 @@ internal static class IrMarkupRenderer
         state.RegisterMediaReferences(dest);
         // A moved paragraph whose pPr also changed tracks the property change at the DESTINATION
         // (Word's own shape: moveTo content + pPrChange). Source/reject keeps the left paragraph verbatim.
-        if (SourceElement(op.LeftAnchor, state.Left) is { } leftMovedPara && leftMovedPara.Name == W.p)
+        if (leftMovedPara?.Name == W.p)
             ApplyBlockFormatChanges(dest, leftMovedPara, src, state);
         MarkWholeParagraphAs(dest, RevKind.MoveTo, state);
         BracketParagraphWithMoveRange(dest, isFrom: false, moveName, state);
@@ -3216,16 +3238,17 @@ internal static class IrMarkupRenderer
     /// <c>w:moveTo</c> (moved-and-unchanged), Insert spans → <c>w:ins</c>, Delete spans → <c>w:del</c>. Returns
     /// null if the source elements are unexpectedly missing (caller falls back to a plain whole-paragraph
     /// moveTo).</summary>
-    private static XElement? BuildMoveModifyDestination(IrEditOp op, IrTokenDiff tokenDiff, RenderState state)
+    private static XElement? BuildMoveModifyDestination(
+        IrEditOp op, IrTokenDiff tokenDiff, string leftAnchor, RenderState state)
     {
-        var leftPara = SourceElement(op.LeftAnchor, state.Left);
+        var leftPara = SourceElement(leftAnchor, state.Left);
         var rightPara = SourceElement(op.RightAnchor, state.RightSource);
         if (leftPara == null || rightPara == null)
             return null;
 
         var leftRuns = new SourceRunModel(leftPara);
         var rightRuns = new SourceRunModel(rightPara);
-        var leftTokens = ParagraphTokens(op.LeftAnchor, state.Left, state.Settings);
+        var leftTokens = ParagraphTokens(leftAnchor, state.Left, state.Settings);
         var rightTokens = ParagraphTokens(op.RightAnchor, state.RightSource, state.Settings);
 
         var newPara = new XElement(W.p);
@@ -3234,39 +3257,11 @@ internal static class IrMarkupRenderer
             newPara.Add(StripUnids(new XElement(rightPPr)));
         ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
 
-        var content = new List<XElement>();
-        foreach (var tokenOp in tokenDiff.Ops)
-        {
-            switch (tokenOp.Kind)
-            {
-                case IrTokenOpKind.Equal:
-                case IrTokenOpKind.FormatChanged:
-                {
-                    var (rs, re) = RightSpanChars(rightTokens, tokenOp);
-                    var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
-                    foreach (var r in rightRuns.Slice(rs, re, zs, ze))
-                        content.AddRange(WrapFieldAware(r, RevKind.MoveTo, state));   // moved-and-unchanged
-                    break;
-                }
-                case IrTokenOpKind.Insert:
-                {
-                    var (s, e) = RightSpanChars(rightTokens, tokenOp);
-                    var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
-                    foreach (var r in rightRuns.Slice(s, e, zs, ze))
-                        content.AddRange(WrapFieldAware(r, RevKind.Ins, state));
-                    break;
-                }
-                case IrTokenOpKind.Delete:
-                {
-                    var (s, e) = LeftSpanChars(leftTokens, tokenOp);
-                    var (zs, ze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
-                    foreach (var r in leftRuns.Slice(s, e, zs, ze))
-                        content.AddRange(WrapFieldAware(r, RevKind.Del, state));
-                    break;
-                }
-            }
-        }
-        newPara.Add(CoalesceAdjacentHyperlinks(content));
+        // The regular fine renderer already knows how to produce both FormatChanged rPrChange markers and
+        // the field-safe insert/delete projection. Its optional stable-span wrapper gives this move destination
+        // the one additional shape it needs: unchanged and format-changed right spans live in w:moveTo.
+        newPara.Add(BuildTokenOpContent(tokenDiff, leftTokens, rightTokens, leftRuns, rightRuns, state,
+            stableSpanKind: RevKind.MoveTo));
         return newPara;
     }
 
@@ -4275,9 +4270,23 @@ internal static class IrMarkupRenderer
     private static List<XElement> BuildTokenOpContent(
         IrTokenDiff tokenDiff,
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
-        SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state)
+        SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state,
+        RevKind? stableSpanKind = null)
     {
         var content = new List<XElement>();
+
+        // Fine paragraph changes normally leave equal/format-changed spans bare. A MoveModify destination
+        // supplies MoveTo here instead: the spans still receive their ordinary rPrChange history first, then
+        // the resulting run-level element is wrapped as relocated content.
+        void AddStableSpan(XElement runLevel)
+        {
+            state.RegisterMediaReferences(runLevel);
+            if (stableSpanKind is { } kind)
+                content.AddRange(WrapFieldAware(runLevel, kind, state));
+            else
+                content.Add(runLevel);
+        }
+
         foreach (var tokenOp in CoalesceTokenOpsWordShaped(
                      tokenDiff.Ops, leftTokens, rightTokens, state.Settings.FormatComparison,
                      leftRuns, rightRuns))
@@ -4321,7 +4330,6 @@ internal static class IrMarkupRenderer
                         int cursor = rs;
                         foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
                         {
-                            state.RegisterMediaReferences(r);
                             // Only a w:r carries run formatting — bookmarks/zero-width markers pass through
                             // untouched (stamping an rPr onto them is schema-invalid). A w:hyperlink wrapper holds
                             // its w:r(s) one level down, so stamp each contained run at its aligned left char and
@@ -4333,16 +4341,13 @@ internal static class IrMarkupRenderer
                                 ApplyRPrChange(innerRun, oldRPr, state);
                                 cursor += RunTextLength(innerRun);
                             }
-                            content.Add(r);
+                            AddStableSpan(r);
                         }
                     }
                     else
                     {
                         foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
-                        {
-                            state.RegisterMediaReferences(r);
-                            content.Add(r);
-                        }
+                            AddStableSpan(r);
                     }
                     break;
                 }
@@ -6985,6 +6990,16 @@ internal static class IrMarkupRenderer
         public IrDocument Left { get; }
         public IrDocument Right { get; }
         public IrDiffSettings Settings { get; }
+
+        /// <summary>LEFT source anchor by move-group id for the operation list currently being rendered.
+        /// Move destinations intentionally carry only their RIGHT anchor; nested render scopes replace this
+        /// map temporarily because cell, note, and header projections each use local move-group ids.</summary>
+        public IReadOnlyDictionary<int, string> ActiveMoveSourceAnchors { get; set; } =
+            new Dictionary<int, string>();
+
+        /// <summary>Resolve the LEFT source anchor for the active move-group scope, if present.</summary>
+        public string? MoveSourceAnchor(int moveGroupId) =>
+            ActiveMoveSourceAnchors.TryGetValue(moveGroupId, out var anchor) ? anchor : null;
 
         /// <summary>The document the CURRENTLY-emitting op draws inserted/modified ("right-side") block elements
         /// and token text from. In a two-way render this is always <see cref="Right"/> (set once in the ctor and
