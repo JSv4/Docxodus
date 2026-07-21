@@ -279,17 +279,20 @@ internal static class IrTableDiffer
         var rightBodies = new IrHash[freeRight.Count];
         var leftSignatures = new AlignmentSignature[freeLeft.Count];
         var rightSignatures = new AlignmentSignature[freeRight.Count];
+        int signatureInputBudget = MaxSignatureInputUnits;
         for (int i = 0; i < freeLeft.Count; i++)
         {
             var row = leftRows[freeLeft[i]];
             leftBodies[i] = RowBodyHash(row);
-            leftSignatures[i] = RowSignature(row, settings);
+            if (!TryRowSignature(row, settings, ref signatureInputBudget, out leftSignatures[i]))
+                return false;
         }
         for (int j = 0; j < freeRight.Count; j++)
         {
             var row = rightRows[freeRight[j]];
             rightBodies[j] = RowBodyHash(row);
-            rightSignatures[j] = RowSignature(row, settings);
+            if (!TryRowSignature(row, settings, ref signatureInputBudget, out rightSignatures[j]))
+                return false;
         }
 
         alignment = BuildMonotoneAlignment(freeLeft.Count, freeRight.Count,
@@ -313,6 +316,7 @@ internal static class IrTableDiffer
     // old linear positional path instead of turning a malformed or extremely wide table into a throughput cliff.
     private const int MaxDpMatrixCells = 16_384;
     private const int MaxDpGapUnits = 127;
+    private const int MaxSignatureInputUnits = 32_768;
     private const int MaxAffinity = 1_000;
     private const int SignatureEdgeChars = 128;
 
@@ -523,29 +527,44 @@ internal static class IrTableDiffer
         IrHash leftBody, IrHash rightBody, AlignmentSignature left, AlignmentSignature right) =>
         leftBody.Equals(rightBody) ? MaxAffinity : left.AffinityTo(right);
 
-    private static AlignmentSignature RowSignature(IrRow row, IrDiffSettings settings)
+    private static bool TryRowSignature(
+        IrRow row, IrDiffSettings settings, ref int inputBudget, out AlignmentSignature signature)
     {
-        var signature = new AlignmentSignature();
+        signature = new AlignmentSignature();
         foreach (var cell in row.Cells)
-            AppendCellSignature(cell, signature, settings);
-        return signature;
+            if (!TryAppendCellSignature(cell, signature, settings, ref inputBudget))
+                return false;
+        return true;
     }
 
-    private static AlignmentSignature CellSignature(IrCell cell, IrDiffSettings settings)
+    private static bool TryCellSignature(
+        IrCell cell, IrDiffSettings settings, ref int inputBudget, out AlignmentSignature signature)
     {
-        var signature = new AlignmentSignature();
-        AppendCellSignature(cell, signature, settings);
-        return signature;
+        signature = new AlignmentSignature();
+        return TryAppendCellSignature(cell, signature, settings, ref inputBudget);
     }
 
-    private static void AppendCellSignature(IrCell cell, AlignmentSignature signature, IrDiffSettings settings)
+    /// <summary>
+    /// Append a token signature only while the caller's aggregate input budget remains.  The signature itself
+    /// retains a fixed number of edge characters, but <see cref="IrDiffTokenizer"/> necessarily allocates its
+    /// token list first; this preflight keeps a large changed table from turning that bounded DP into an
+    /// unbounded tokenization pass. Returning false deliberately selects the older positional path.
+    /// </summary>
+    private static bool TryAppendCellSignature(
+        IrCell cell, AlignmentSignature signature, IrDiffSettings settings, ref int inputBudget)
     {
+        if (!TryReserveSignatureInput(1, ref inputBudget))
+            return false;
         signature.AppendMarker('\u0002'); // cell boundary (not legal XML text, so it cannot alias a MatchKey)
         foreach (var block in cell.Blocks)
         {
+            if (!TryReserveSignatureInput(1, ref inputBudget))
+                return false;
             signature.AppendMarker('\u0003'); // block boundary
             if (block is IrParagraph paragraph)
             {
+                if (!TryReserveInlineSignatureInput(paragraph.Inlines, ref inputBudget))
+                    return false;
                 foreach (var token in IrDiffTokenizer.Tokenize(paragraph, settings))
                 {
                     signature.Append(token.MatchKey);
@@ -556,9 +575,52 @@ internal static class IrTableDiffer
             {
                 // A nested table/opaque/SDT has no cheap flat token stream at this grain. Its content hash
                 // keeps it distinguishable without recursively launching another table alignment.
+                if (!TryReserveSignatureInput(64, ref inputBudget))
+                    return false;
                 signature.Append(block.ContentHash.ToHex());
             }
         }
+        return true;
+    }
+
+    private static bool TryReserveInlineSignatureInput(IReadOnlyList<IrInline> inlines, ref int inputBudget)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrTextRun text:
+                    if (!TryReserveSignatureInput(text.Text.Length, ref inputBudget))
+                        return false;
+                    break;
+                case IrHyperlink link:
+                    // Link targets are concatenated into tokenizer MatchKeys, so include their source length in
+                    // the preflight as well as their visible child runs.
+                    if (!TryReserveSignatureInput(link.Target?.Length ?? 0, ref inputBudget) ||
+                        !TryReserveInlineSignatureInput(link.Inlines, ref inputBudget))
+                        return false;
+                    break;
+                case IrFieldRun field:
+                    if (!TryReserveInlineSignatureInput(field.CachedResult, ref inputBudget))
+                        return false;
+                    break;
+                default:
+                    // Atomic token keys are fixed-size except for their already-hashed identity; charge a small
+                    // unit so a pathological zero-width-atom stream is bounded too.
+                    if (!TryReserveSignatureInput(1, ref inputBudget))
+                        return false;
+                    break;
+            }
+        }
+        return true;
+    }
+
+    private static bool TryReserveSignatureInput(int units, ref int inputBudget)
+    {
+        if (units > inputBudget)
+            return false;
+        inputBudget -= units;
+        return true;
     }
 
     private static IrHash RowBodyHash(IrRow row)
@@ -783,17 +845,20 @@ internal static class IrTableDiffer
         var rightBodies = new IrHash[freeRight.Count];
         var leftSignatures = new AlignmentSignature[freeLeft.Count];
         var rightSignatures = new AlignmentSignature[freeRight.Count];
+        int signatureInputBudget = MaxSignatureInputUnits;
         for (int i = 0; i < freeLeft.Count; i++)
         {
             var cell = leftCells[freeLeft[i]];
             leftBodies[i] = CellBodyHash(cell);
-            leftSignatures[i] = CellSignature(cell, settings);
+            if (!TryCellSignature(cell, settings, ref signatureInputBudget, out leftSignatures[i]))
+                return false;
         }
         for (int j = 0; j < freeRight.Count; j++)
         {
             var cell = rightCells[freeRight[j]];
             rightBodies[j] = CellBodyHash(cell);
-            rightSignatures[j] = CellSignature(cell, settings);
+            if (!TryCellSignature(cell, settings, ref signatureInputBudget, out rightSignatures[j]))
+                return false;
         }
 
         foreach (var step in BuildMonotoneAlignment(freeLeft.Count, freeRight.Count,
