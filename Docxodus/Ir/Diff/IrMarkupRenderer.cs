@@ -422,7 +422,7 @@ internal static class IrMarkupRenderer
                 // whose paragraph mark carries w:del — keep the left id untouched, as do archived
                 // left properties inside *Change elements.
                 var numIdMap = WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRight, wDoc);
-                RebindRightNumberingReferences(main, numIdMap);
+                RebindRightNumberingReferences(main, numIdMap, state);
                 RebindRightImportedStyleNumberingReferences(
                     main.StyleDefinitionsPart, rightImportedStyles, numIdMap);
                 // Word-parity repair: a body numPr referencing a numId with NO definition (tool-made
@@ -6062,37 +6062,57 @@ internal static class IrMarkupRenderer
         main.PutXDocument();
     }
 
-    /// <summary>Rebind INSERTED paragraphs' <c>w:numId</c> references to the ids their (right-doc)
-    /// definitions were renumbered to by the numbering copy's collision handling. Word does not
-    /// compare numbering definitions, so equal and deleted paragraphs keep the left's id — only
-    /// content that exists solely in the right document must follow the right's definition (or it
-    /// silently renders with the left's colliding list format). Archived properties inside
-    /// <c>*Change</c> elements are never touched. Covers the main document and every header/footer
-    /// story part.</summary>
-    private static void RebindRightNumberingReferences(MainDocumentPart main, Dictionary<int, int> numIdMap)
+    /// <summary>
+    /// Rebind live RIGHT-sourced paragraph numbering to definitions that collision handling imported under a
+    /// fresh id.  An equal paragraph can still be semantically changed when its shared <c>w:numId</c> resolves
+    /// through a different numbering definition, so its current properties take the imported id and its left
+    /// properties are preserved in <c>w:pPrChange</c>.  Accept therefore resolves the right definition and
+    /// reject restores the left definition.  Deleted/move-from paragraphs and archived <c>*Change</c> payloads
+    /// remain left-sourced.  Covers the main document, headers, footers, footnotes, and endnotes.
+    /// </summary>
+    private static void RebindRightNumberingReferences(
+        MainDocumentPart main, Dictionary<int, int> numIdMap, RenderState state)
     {
         if (numIdMap.Count == 0)
             return;
         var parts = new List<OpenXmlPart> { main };
         parts.AddRange(main.HeaderParts);
         parts.AddRange(main.FooterParts);
+        if (main.FootnotesPart is not null)
+            parts.Add(main.FootnotesPart);
+        if (main.EndnotesPart is not null)
+            parts.Add(main.EndnotesPart);
         foreach (var part in parts)
         {
             var xDoc = part.GetXDocument();
             var changed = false;
-            foreach (var numIdEl in xDoc.Descendants(W.numPr).Elements(W.numId).ToList())
+            foreach (var paragraph in xDoc.Descendants(W.p).ToList())
             {
-                if (numIdEl.Ancestors().Any(a => a.Name.LocalName.EndsWith("Change", StringComparison.Ordinal)))
+                if (IsDeletedParagraph(paragraph))
                     continue;
-                var paragraph = numIdEl.Ancestors(W.p).FirstOrDefault();
-                if (paragraph is null || !IsInsertedParagraph(paragraph))
+                var pPr = paragraph.Element(W.pPr);
+                var numIdEl = pPr?.Element(W.numPr)?.Element(W.numId);
+                if (numIdEl is null ||
+                    !int.TryParse((string?)numIdEl.Attribute(W.val), out var id) ||
+                    !numIdMap.TryGetValue(id, out var mapped))
                     continue;
-                if (int.TryParse((string)numIdEl.Attribute(W.val), out var id) &&
-                    numIdMap.TryGetValue(id, out var mapped))
+
+                // An inserted/move-to paragraph disappears on reject.  Every other live paragraph needs a
+                // standard pPr history unless another formatting pass already supplied one; in that case its
+                // archived pPr is the left payload and must retain the original numId.
+                XElement? oldPPr = null;
+                if (state.Settings.TrackParagraphFormatChanges &&
+                    !IsInsertedParagraph(paragraph) &&
+                    pPr!.Element(W.pPrChange) is null)
                 {
-                    numIdEl.SetAttributeValue(W.val, mapped);
-                    changed = true;
+                    oldPPr = StripUnids(new XElement(W.pPr, pPr.Attributes(),
+                        pPr.Elements().Where(e => e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange)));
                 }
+
+                numIdEl.SetAttributeValue(W.val, mapped);
+                if (oldPPr is not null)
+                    pPr!.Add(new XElement(W.pPrChange, state.RevisionAttributes(), oldPPr));
+                changed = true;
             }
             if (changed)
                 part.PutXDocument();
@@ -6163,6 +6183,12 @@ internal static class IrMarkupRenderer
         }
         return hasIns;
     }
+
+    /// <summary>A paragraph whose mark is deleted (including a move-from encoded as a deleted mark) belongs to
+    /// the left/reject state and must continue resolving through the left numbering definition.</summary>
+    private static bool IsDeletedParagraph(XElement paragraph) =>
+        paragraph.Element(W.pPr)?.Element(W.rPr)?.Elements().Any(e =>
+            e.Name == W.del || e.Name == W.moveFrom) == true;
 
     /// <summary>When the output styles part lacks <c>w:docDefaults</c> (or the whole part is
     /// missing), insert Word's stock docDefaults (<see cref="WordStockDocDefaults"/>) — the era
