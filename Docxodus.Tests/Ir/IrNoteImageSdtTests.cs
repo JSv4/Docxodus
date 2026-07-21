@@ -9,9 +9,9 @@ namespace Docxodus.Tests.Ir;
 /// <summary>
 /// M1.2 Task 3 tests: note references (<c>w:footnoteReference</c>/<c>w:endnoteReference</c> →
 /// <see cref="IrNoteRef"/>), inline images (<c>w:drawing</c> with an embedded <c>a:blip</c> →
-/// <see cref="IrInlineImage"/>), and N12 SDT/smartTag unwrapping. Covers the content-hash semantics
-/// from spec §6.1: note refs hash by kind sentinel only (no id), images by sentinel + image-bytes
-/// hash, and SDT/smartTag unwrap is content-transparent.
+/// <see cref="IrInlineImage"/>), and SDT/smartTag handling. Covers the content-hash semantics from
+/// spec §6.1: note refs hash by kind sentinel only (no id), images by sentinel + image-bytes hash,
+/// inline SDTs/smartTags splice transparently, and block SDTs retain their complete envelope.
 /// </summary>
 public class IrNoteImageSdtTests
 {
@@ -245,10 +245,10 @@ public class IrNoteImageSdtTests
         Assert.Equal(a.CanonicalHash, b.CanonicalHash);
     }
 
-    // --- N12: SDT / smartTag unwrap --------------------------------------
+    // --- SDT / smartTag ---------------------------------------------------
 
     [Fact]
-    public void Read_BlockSdt_Unwrapped()
+    public void Read_BlockSdt_PreservedAsEnvelope()
     {
         var doc = Read(
             "<w:sdt><w:sdtPr/><w:sdtContent>" +
@@ -256,7 +256,12 @@ public class IrNoteImageSdtTests
               "<w:p><w:r><w:t>second</w:t></w:r></w:p>" +
             "</w:sdtContent></w:sdt>");
 
-        var paras = doc.Body.Blocks.OfType<IrParagraph>().ToList();
+        var sdt = Assert.IsType<IrSdtBlock>(Assert.Single(doc.Body.Blocks));
+        Assert.Equal(IrAnchorKind.Sdt, sdt.Anchor.Kind);
+        Assert.Same(sdt, doc.FindByAnchor(sdt.Anchor));
+        Assert.Equal("sdt", sdt.Source.Element?.Name.LocalName);
+
+        var paras = sdt.Blocks.OfType<IrParagraph>().ToList();
         Assert.Equal(2, paras.Count);
         Assert.Empty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
 
@@ -266,15 +271,45 @@ public class IrNoteImageSdtTests
     }
 
     [Fact]
-    public void Read_BlockSdt_WithTable_Unwrapped()
+    public void Read_BlockSdt_WithTable_PreservesEnvelope()
     {
         var doc = Read(
             "<w:sdt><w:sdtContent>" +
               "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
             "</w:sdtContent></w:sdt>");
 
-        Assert.Single(doc.Body.Blocks.OfType<IrTable>());
+        var sdt = Assert.IsType<IrSdtBlock>(Assert.Single(doc.Body.Blocks));
+        var table = Assert.IsType<IrTable>(Assert.Single(sdt.Blocks));
+        Assert.Same(table, doc.FindByAnchor(table.Anchor));
         Assert.Empty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
+    }
+
+    [Fact]
+    public void Read_BlockSdt_EnvelopeMetadataParticipatesInIdentity()
+    {
+        var left = Assert.IsType<IrSdtBlock>(Assert.Single(Read(
+            "<w:sdt><w:sdtPr><w:tag w:val=\"left\"/></w:sdtPr>" +
+            "<w:sdtContent><w:p><w:r><w:t>same</w:t></w:r></w:p></w:sdtContent></w:sdt>")
+            .Body.Blocks));
+        var right = Assert.IsType<IrSdtBlock>(Assert.Single(Read(
+            "<w:sdt><w:sdtPr><w:tag w:val=\"right\"/></w:sdtPr>" +
+            "<w:sdtContent><w:p><w:r><w:t>same</w:t></w:r></w:p></w:sdtContent></w:sdt>")
+            .Body.Blocks));
+
+        // The direct child structure/text is identical, but wrapper metadata is part of the outer
+        // canonical envelope and therefore must force an atomic SDT identity change.
+        Assert.Equal(left.Blocks.Single().ContentHash, right.Blocks.Single().ContentHash);
+        Assert.NotEqual(left.EnvelopeDigest, right.EnvelopeDigest);
+        Assert.NotEqual(left.ContentHash, right.ContentHash);
+    }
+
+    [Fact]
+    public void Read_BlockSdtWithoutContent_FallsBackToOpaque()
+    {
+        var doc = Read("<w:sdt><w:sdtPr><w:tag w:val=\"broken\"/></w:sdtPr></w:sdt>");
+
+        var opaque = Assert.IsType<IrOpaqueBlock>(Assert.Single(doc.Body.Blocks));
+        Assert.Equal("sdt", opaque.ElementName.LocalName);
     }
 
     [Fact]
@@ -313,9 +348,9 @@ public class IrNoteImageSdtTests
     }
 
     [Fact]
-    public void Read_NestedBlockSdt_Unwrapped()
+    public void Read_NestedBlockSdt_PreservesNestedEnvelopes()
     {
-        // sdt-in-sdt, 2 deep: the inner paragraph must surface correctly (no opaque fallback).
+        // sdt-in-sdt, 2 deep: both wrappers stay addressable and the inner paragraph remains reachable.
         var doc = Read(
             "<w:sdt><w:sdtContent>" +
               "<w:sdt><w:sdtContent>" +
@@ -323,9 +358,14 @@ public class IrNoteImageSdtTests
               "</w:sdtContent></w:sdt>" +
             "</w:sdtContent></w:sdt>");
 
-        var para = Assert.Single(doc.Body.Blocks.OfType<IrParagraph>());
+        var outer = Assert.IsType<IrSdtBlock>(Assert.Single(doc.Body.Blocks));
+        var inner = Assert.IsType<IrSdtBlock>(Assert.Single(outer.Blocks));
+        var para = Assert.IsType<IrParagraph>(Assert.Single(inner.Blocks));
         Assert.Empty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
         Assert.Equal("inner", string.Concat(para.Inlines.OfType<IrTextRun>().Select(r => r.Text)));
+        Assert.Same(outer, doc.FindByAnchor(outer.Anchor));
+        Assert.Same(inner, doc.FindByAnchor(inner.Anchor));
+        Assert.Same(para, doc.FindByAnchor(para.Anchor));
     }
 
     [Fact]
@@ -343,9 +383,25 @@ public class IrNoteImageSdtTests
 
         var doc = Read(sb.ToString());
 
-        // No throw, and the cap produced an opaque fallback (the deeply nested sdt is preserved
-        // opaquely rather than fully unwrapped to a paragraph).
-        Assert.NotEmpty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
+        // No throw, and the cap produced an opaque fallback BELOW the preserved outer envelopes.
+        Assert.Contains(FlattenBlocks(doc.Body.Blocks), b => b is IrOpaqueBlock);
+    }
+
+    [Fact]
+    public void Read_BlockSdtInCell_PreservesEnvelopeAndCellText()
+    {
+        var doc = Read(
+            "<w:tbl><w:tr><w:tc>" +
+            "<w:sdt><w:sdtPr><w:tag w:val=\"cell-control\"/></w:sdtPr>" +
+            "<w:sdtContent><w:p><w:r><w:t>inside cell</w:t></w:r></w:p></w:sdtContent></w:sdt>" +
+            "</w:tc></w:tr></w:tbl>");
+
+        var cell = Assert.Single(Assert.Single(doc.Body.Blocks.OfType<IrTable>()).Rows).Cells.Single();
+        var sdt = Assert.IsType<IrSdtBlock>(Assert.Single(cell.Blocks));
+        var para = Assert.IsType<IrParagraph>(Assert.Single(sdt.Blocks));
+        Assert.Equal("inside cell", CellText(cell));
+        Assert.Same(sdt, doc.FindByAnchor(sdt.Anchor));
+        Assert.Same(para, doc.FindByAnchor(para.Anchor));
     }
 
     // --- row-level SDT cell unwrap (M1.4-T3 content-loss fix) -------------------------------------
@@ -401,7 +457,28 @@ public class IrNoteImageSdtTests
         Assert.Equal("deep", CellText(cell));
     }
 
-    private static string CellText(IrCell cell) =>
-        string.Concat(cell.Blocks.OfType<IrParagraph>()
-            .SelectMany(p => p.Inlines.OfType<IrTextRun>()).Select(r => r.Text));
+    private static string CellText(IrCell cell) => string.Concat(cell.Blocks.Select(BlockText));
+
+    private static string BlockText(IrBlock block) => block switch
+    {
+        IrParagraph p => string.Concat(p.Inlines.OfType<IrTextRun>().Select(r => r.Text)),
+        IrSdtBlock sdt => string.Concat(sdt.Blocks.Select(BlockText)),
+        IrTable table => string.Concat(table.Rows.SelectMany(r => r.Cells).Select(CellText)),
+        _ => string.Empty,
+    };
+
+    private static IEnumerable<IrBlock> FlattenBlocks(IrNodeList<IrBlock> blocks)
+    {
+        foreach (var block in blocks)
+        {
+            yield return block;
+            if (block is IrSdtBlock sdt)
+                foreach (var child in FlattenBlocks(sdt.Blocks))
+                    yield return child;
+            else if (block is IrTable table)
+                foreach (var cell in table.Rows.SelectMany(r => r.Cells))
+                    foreach (var child in FlattenBlocks(cell.Blocks))
+                        yield return child;
+        }
+    }
 }

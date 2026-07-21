@@ -302,7 +302,7 @@ internal static class IrEditScriptBuilder
 
     // ------------------------------------------------------------------ note correspondence (M2.5 Task 3)
 
-    /// <summary>Walk the body in document order (recursing into tables, textboxes, fields, and hyperlinks the
+    /// <summary>Walk the body in document order (recursing into block SDTs, tables, textboxes, fields, and hyperlinks the
     /// same way the reader/tokenizer do) and return the <see cref="IrNoteRef.NoteId"/> of every reference of
     /// <paramref name="kind"/>, in encounter order — the oracle's note-correspondence axis.</summary>
     private static List<string> CollectNoteReferenceOrder(IrDocument doc, IrNoteKind kind)
@@ -325,6 +325,9 @@ internal static class IrEditScriptBuilder
                     foreach (var row in t.Rows)
                         foreach (var cell in row.Cells)
                             WalkBlocksForNoteRefs(cell.Blocks, kind, sink);
+                    break;
+                case IrSdtBlock sdt:
+                    WalkBlocksForNoteRefs(sdt.Blocks, kind, sink);
                     break;
             }
         }
@@ -517,24 +520,44 @@ internal static class IrEditScriptBuilder
     }
 
     /// <summary>Build (and cache) a note scope's whole-content WORD multiset — the <see cref="IrDiffTokenKind.Word"/>
-    /// tokens of every paragraph block concatenated in document order, keyed by <see cref="IrDiffToken.MatchKey"/>.
+    /// tokens of direct paragraph blocks and paragraphs nested beneath block SDTs, concatenated in document order,
+    /// keyed by <see cref="IrDiffToken.MatchKey"/>.
     /// Whitespace, separators, note-ref/opaque markers and other non-word tokens are EXCLUDED: they are shared
     /// near-uniformly across notes (every note opens with the same note-ref marker and is mostly spaces) and
-    /// would otherwise dominate a Jaccard score, pairing notes by length rather than by content. Non-paragraph
-    /// blocks contribute nothing. The residue similarity is a coarse content-overlap heuristic — it disambiguates
+    /// would otherwise dominate a Jaccard score, pairing notes by length rather than by content. Block SDTs
+    /// contribute their descendant paragraphs; other non-paragraph blocks contribute nothing. The residue
+    /// similarity is a coarse content-overlap heuristic — it disambiguates
     /// which reference a leftover note corresponds to, never gating a forced lone-left/lone-right pair.</summary>
     private static Dictionary<string, int> NoteTokenBag(
         Dictionary<string, Dictionary<string, int>> cache, string cacheKey, IrScope scope, IrDiffSettings settings)
     {
         if (cache.TryGetValue(cacheKey, out var bag)) return bag;
         bag = new Dictionary<string, int>();
-        foreach (var block in scope.Blocks)
-            if (block is IrParagraph p)
-                foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
-                    if (t.Kind == IrDiffTokenKind.Word)
-                        bag[t.MatchKey] = bag.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
+        AddNoteTokens(scope.Blocks, bag, settings);
         cache[cacheKey] = bag;
         return bag;
+    }
+
+    /// <summary>Add word tokens from direct paragraph blocks and paragraph descendants of block SDTs in a note.
+    /// This is deliberately a bookkeeping projection only: it does not make a block SDT token-diffable or alter
+    /// block alignment, which continues to treat its envelope as atomic.</summary>
+    private static void AddNoteTokens(
+        IReadOnlyList<IrBlock> blocks, Dictionary<string, int> bag, IrDiffSettings settings)
+    {
+        foreach (var block in blocks)
+        {
+            switch (block)
+            {
+                case IrParagraph p:
+                    foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+                        if (t.Kind == IrDiffTokenKind.Word)
+                            bag[t.MatchKey] = bag.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
+                    break;
+                case IrSdtBlock sdt:
+                    AddNoteTokens(sdt.Blocks, bag, settings);
+                    break;
+            }
+        }
     }
 
     /// <summary>Jaccard index over two token multisets (sum of per-key min counts / sum of per-key max counts).

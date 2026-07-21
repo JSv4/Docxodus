@@ -2095,6 +2095,60 @@ namespace Docxodus
         /// the paragraph nodes when adding content, thereby preserving custom XML and content
         /// controls.
 
+        /// <summary>
+        /// True when <paramref name="candidate"/> is one block unit in
+        /// <paramref name="contentContainer"/>'s paragraph-mark stream. A block-level content control is a
+        /// boundary in that stream: its descendants must be processed inside its own <c>w:sdtContent</c>, never
+        /// paired with a deleted paragraph immediately outside the control. Treating the wrapper as transparent
+        /// turns a block SDT into an inline <c>w:p/w:sdt</c> during accept/reject (and drops <c>w:sdtPr</c>
+        /// ownership metadata).
+        /// </summary>
+        private static bool IsBlockContentElement(XElement candidate, XElement contentContainer) =>
+            candidate.Name == W.p || candidate.Name == W.tbl ||
+            (candidate.Name == W.sdt && candidate.Parent == contentContainer &&
+             IsBlockSdt(candidate));
+
+        /// <summary>
+        /// True for an SDT that occupies a block stream (body/cell/header/footer/note), including a nested
+        /// block SDT. Inline controls are children of a paragraph/run container and deliberately return false.
+        /// </summary>
+        private static bool IsBlockSdt(XElement sdt)
+        {
+            if (sdt.Name != W.sdt || sdt.Parent is not XElement parent)
+                return false;
+            if (W.BlockLevelContentContainers.Contains(parent.Name))
+                return true;
+            return parent.Name == W.sdtContent && parent.Parent is XElement outer && IsBlockSdt(outer);
+        }
+
+        /// <summary>
+        /// Whether an SDT content container carries BLOCK children rather than inline run content. The recursive
+        /// check distinguishes an outer block SDT whose only direct child is another block SDT from an inline
+        /// nested control whose content ultimately contains runs. Paragraph-mark processing must never rebuild the
+        /// latter as a block container.
+        /// </summary>
+        private static bool IsBlockSdtContent(XElement content)
+        {
+            foreach (var child in content.Elements())
+            {
+                if (child.Name == W.p || child.Name == W.tbl)
+                    return true;
+                if (child.Name == W.sdt && child.Element(W.sdtContent) is { } nested &&
+                    IsBlockSdtContent(nested))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// A block-level <c>w:sdtContent</c> needs the same deleted-paragraph-mark processing as a body/cell,
+        /// while an inline SDT's content contains runs and must remain on the ordinary identity-clone path.
+        /// </summary>
+        private static bool IsParagraphMarkContentContainer(XElement element) =>
+            W.BlockLevelContentContainers.Contains(element.Name) ||
+            (element.Name == W.sdtContent && element.Parent is XElement owner &&
+             IsBlockSdt(owner) && IsBlockSdtContent(element));
+
         private static void AnnotateBlockContentElements(XElement contentContainer)
         {
             // For convenience, there is a ParagraphInfo annotation on the contentContainer.
@@ -2105,7 +2159,7 @@ namespace Docxodus
             XElement firstContentElement = contentContainer
                 .Elements()
                 .DescendantsAndSelf()
-                .FirstOrDefault(e => e.Name == W.p || e.Name == W.tbl);
+                .FirstOrDefault(e => IsBlockContentElement(e, contentContainer));
             if (firstContentElement == null)
                 return;
 
@@ -2129,7 +2183,7 @@ namespace Docxodus
                     nextContentElement = current
                         .ElementsAfterSelf()
                         .DescendantsAndSelf()
-                        .FirstOrDefault(e => e.Name == W.p || e.Name == W.tbl);
+                        .FirstOrDefault(e => IsBlockContentElement(e, contentContainer));
                     if (nextContentElement != null)
                     {
                         currentContentInfo.NextBlockContentElement = nextContentElement;
@@ -2371,7 +2425,7 @@ namespace Docxodus
             XElement element = node as XElement;
             if (element != null)
             {
-                if (W.BlockLevelContentContainers.Contains(element.Name))
+                if (IsParagraphMarkContentContainer(element))
                 {
                     XElement bodySectPr = null;
                     if (element.Name == W.body)
@@ -2468,7 +2522,9 @@ namespace Docxodus
                                 continue;
                             }
                         }
-                        else if (c.ThisBlockContentElement.Name == W.tbl || c.ThisBlockContentElement.Name.Namespace == M.m)
+                        else if (c.ThisBlockContentElement.Name == W.tbl ||
+                                 c.ThisBlockContentElement.Name == W.sdt ||
+                                 c.ThisBlockContentElement.Name.Namespace == M.m)
                         {
                             currentKey += 1;
                             deletedParagraphGroupingInfo.Add(
@@ -2527,7 +2583,8 @@ namespace Docxodus
                                 if (allIsDeleted &&
                                     g.Last().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr).Elements(W.rPr).Elements(W.del).Any() &&
                                     (g.Last().BlockLevelContent.NextBlockContentElement == null ||
-                                     g.Last().BlockLevelContent.NextBlockContentElement.Name == W.tbl))
+                                     g.Last().BlockLevelContent.NextBlockContentElement.Name == W.tbl ||
+                                     g.Last().BlockLevelContent.NextBlockContentElement.Name == W.sdt))
                                     return null;
 
                                 return (object)newParagraph;

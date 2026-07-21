@@ -472,9 +472,10 @@ internal sealed class IrContentHashBuilder
 
     public const byte SentinelOpaque = 0x0F;
 
-    // Structure markers (written after a 0x02 lead byte) — table structure.
+    // Structure markers (written after a 0x02 lead byte) — block/tree structure.
     public const byte StructureRow = 0x10;
     public const byte StructureCell = 0x11;
+    public const byte StructureSdt = 0x12;
 
     private const byte SentinelLead = 0x01;
     private const byte StructureLead = 0x02;

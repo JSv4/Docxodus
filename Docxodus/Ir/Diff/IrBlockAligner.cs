@@ -13,9 +13,10 @@ namespace Docxodus.Ir.Diff;
 /// longest-increasing-subsequence spine, with moves falling out of the anchoring by construction.
 /// </summary>
 /// <remarks>
-/// <para><b>Granularity.</b> Tables, section breaks and opaque blocks align as WHOLE units — keyed on
-/// their <c>ContentHash</c>/<c>FormatFingerprint</c> like any other block. Row/cell-level table
-/// alignment is M2.2+.</para>
+/// <para><b>Granularity.</b> Tables, section breaks, block-level content controls, and opaque blocks align as
+/// WHOLE units — keyed on their <c>ContentHash</c>/<c>FormatFingerprint</c> like any other block. Row/cell-level
+/// table alignment is M2.2+; block content controls deliberately remain atomic so their OOXML envelope is never
+/// reconstructed from independently aligned descendants.</para>
 /// <para><b>Settings.</b> <see cref="IrDiffSettings"/> is accepted for surface stability /
 /// future-proofing; M2.1 alignment keys purely on the reader-computed hashes and does not consult
 /// the settings. (The token diff that M2.2 runs inside <see cref="IrAlignmentKind.Modified"/> gaps
@@ -102,6 +103,15 @@ internal static class IrBlockAligner
             {
                 leftKind[cand.LeftIndex] = cand.AnchorKind;
                 rightKind[cand.RightIndex] = cand.AnchorKind;
+            }
+            else if (leftBlocks[cand.LeftIndex] is IrSdtBlock || rightBlocks[cand.RightIndex] is IrSdtBlock)
+            {
+                // A block-level content control that relocated must lower to a delete+insert pair, rather
+                // than native move markup. Its envelope owns non-run metadata and can only round-trip when
+                // rendered as one whole control at each side.  Release the exact-content candidate so the
+                // ordinary gap logic emits the two structural operations in their proper locations.
+                leftMatch[cand.LeftIndex] = -1;
+                rightMatch[cand.RightIndex] = -1;
             }
             else
             {
@@ -582,9 +592,13 @@ internal static class IrBlockAligner
         {
             int li = leftoverLeft[0];
             int rj = leftoverRight[0];
-            bool forcePair =
-                leftBlocks[li] is not IrParagraph lp || rightBlocks[rj] is not IrParagraph rp ||
-                similarity.ResidueForcePair(lp, rp);
+            // An SDT envelope may pair atomically only with another SDT envelope. Pairing it with a
+            // paragraph/table merely because it is the lone residue would hand the renderer two incompatible
+            // ownership topologies and lose the content-control wrapper on one accept/reject path.
+            bool sdtTopologyMismatch = (leftBlocks[li] is IrSdtBlock) != (rightBlocks[rj] is IrSdtBlock);
+            bool forcePair = !sdtTopologyMismatch &&
+                (leftBlocks[li] is not IrParagraph lp || rightBlocks[rj] is not IrParagraph rp ||
+                 similarity.ResidueForcePair(lp, rp));
             if (forcePair)
             {
                 leftKind[li] = IrAlignmentKind.Modified;
@@ -1485,11 +1499,18 @@ internal static class IrBlockAligner
             {
                 if (leftMatch[li] != -1)
                     continue;
+                // A block-level content control owns an OOXML envelope that cannot be expressed with
+                // native move markup. Even if a future similarity model assigns it text/word counts,
+                // keep it as the reversible delete+insert pair established above.
+                if (leftBlocks[li] is IrSdtBlock)
+                    continue;
                 if (similarity.WordCount(leftBlocks[li]) < minTokens)
                     continue; // too short to be a reliable move (mirrors MoveMinimumWordCount)
                 foreach (int rj in inserted)
                 {
                     if (rightMatch[rj] != -1)
+                        continue;
+                    if (rightBlocks[rj] is IrSdtBlock)
                         continue;
                     if (similarity.WordCount(rightBlocks[rj]) < minTokens)
                         continue;

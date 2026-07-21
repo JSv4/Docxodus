@@ -171,6 +171,15 @@ internal static class IrDiagnosticJson
                 WriteHashes(writer, t);
                 WriteTableBody(writer, t);
                 break;
+            case IrSdtBlock sdt:
+                writer.WriteString("type", "sdt");
+                WriteHashes(writer, sdt);
+                writer.WriteString("envelopeDigest", sdt.EnvelopeDigest.ToHex());
+                writer.WriteStartArray("blocks");
+                foreach (var child in sdt.Blocks)
+                    WriteBlock(writer, child);
+                writer.WriteEndArray();
+                break;
             case IrSectionBreak s:
                 writer.WriteString("type", "sectionBreak");
                 WriteHashes(writer, s);

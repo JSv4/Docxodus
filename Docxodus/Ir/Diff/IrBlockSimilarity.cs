@@ -39,7 +39,8 @@ internal sealed class IrBlockSimilarity
         new(ReferenceEqualityComparer.Instance);
 
     // Per-Align-call table-bag cache (M2.4b Workstream C): a table is tokenized to a flattened multiset of
-    // ALL its descendant cell-paragraph tokens at most once, even though it is scored against many candidates.
+    // its cell-paragraph tokens (including those inside block SDTs) at most once, even though it is scored
+    // against many candidates.
     private readonly Dictionary<IrTable, MatchKeyBag> _tableBagCache =
         new(ReferenceEqualityComparer.Instance);
 
@@ -57,8 +58,8 @@ internal sealed class IrBlockSimilarity
 
         // Table-aware similarity (M2.4b Workstream C): score a TABLE pair by the Jaccard index over their
         // CONCATENATED cell-paragraph token multisets — the same token model paragraphs use, flattened over
-        // every descendant cell paragraph. This lets the in-gap pairing classify two structurally-similar
-        // tables (e.g. the two endnote tables of WC-1750/1760, which differ only in a couple of cell words) as
+        // every cell paragraph (including block-SDT children). This lets the in-gap pairing classify two
+        // structurally-similar tables (e.g. the two endnote tables of WC-1750/1760, which differ only in a couple of cell words) as
         // a Modified pair, so IrTableDiffer can produce row/cell-granular edits instead of a whole-table
         // delete+insert. Exact-content tables still score 1.0 (their token multisets are identical), so this
         // never demotes an exact relocation. NB: this is an ALIGNMENT capability addition — it runs in BOTH
@@ -473,28 +474,46 @@ internal sealed class IrBlockSimilarity
             }
         }
 
-        /// <summary>Flatten a table to one MatchKey multiset over EVERY descendant cell paragraph's tokens
-        /// (document order), so two structurally-similar tables score by shared cell content.</summary>
+        /// <summary>Flatten a table to one MatchKey multiset over its cell-paragraph tokens (including
+        /// block-SDT children) in document order, so structurally-similar tables score by shared cell content.</summary>
         public static MatchKeyBag BuildTable(IrTable table, IrDiffSettings settings)
         {
             var counts = new Dictionary<string, int>();
             int total = 0, wordCount = 0;
             foreach (var row in table.Rows)
                 foreach (var cell in row.Cells)
-                    foreach (var block in cell.Blocks)
-                        if (block is IrParagraph p)
-                            foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
-                            {
-                                counts[t.MatchKey] = counts.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
-                                total++;
-                                if (t.Kind == IrDiffTokenKind.Word)
-                                    wordCount++;
-                            }
+                    AddTableBlockTokens(cell.Blocks, settings, counts, ref total, ref wordCount);
             // Table bags never feed WordOverlap/ResidueForcePair (junction pairing is
             // paragraph-only), so the word-only structures are not materialized.
             return new MatchKeyBag(
                 counts, EmptyCounts, EmptyCounts, EmptyCounts, System.Array.Empty<IrDiffToken>(), EmptyWords,
                 EmptyWords, total, wordCount, 0, 0);
+        }
+
+        /// <summary>Add token keys from direct paragraphs and those reachable through block SDTs in a table cell.
+        /// Block SDTs stay atomic to the aligner; this only supplies the table's content-summary heuristic.</summary>
+        private static void AddTableBlockTokens(
+            IReadOnlyList<IrBlock> blocks, IrDiffSettings settings, Dictionary<string, int> counts,
+            ref int total, ref int wordCount)
+        {
+            foreach (var block in blocks)
+            {
+                switch (block)
+                {
+                    case IrParagraph p:
+                        foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+                        {
+                            counts[t.MatchKey] = counts.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
+                            total++;
+                            if (t.Kind == IrDiffTokenKind.Word)
+                                wordCount++;
+                        }
+                        break;
+                    case IrSdtBlock sdt:
+                        AddTableBlockTokens(sdt.Blocks, settings, counts, ref total, ref wordCount);
+                        break;
+                }
+            }
         }
     }
 }

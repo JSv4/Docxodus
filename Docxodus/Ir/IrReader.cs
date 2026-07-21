@@ -542,13 +542,11 @@ internal static class IrReader
     // --- block dispatch ---------------------------------------------------
 
     /// <summary>
-    /// Append the IR block(s) produced by a single body/cell child element to <paramref name="sink"/>.
-    /// Almost every element yields exactly one block; the exception is N12: a block-level
-    /// <c>w:sdt</c> (content control) contributes nothing itself — its <c>w:sdtContent</c> children
-    /// are walked through the normal block walker so each inner <c>w:p</c>/<c>w:tbl</c> gets its own
-    /// anchor from its own <c>pt:Unid</c>. The SDT wrapper is recoverable via the inner blocks'
-    /// provenance ancestors. Multiple or zero content children are handled naturally (we walk
-    /// whatever is there). SDTs can nest, so this recurses.
+    /// Append the IR block produced by a single body/cell child element to <paramref name="sink"/>.
+    /// A legal block-level <c>w:sdt</c> becomes one <see cref="IrSdtBlock"/> envelope whose direct
+    /// <c>w:sdtContent</c> children are recursively parsed into its <see cref="IrSdtBlock.Blocks"/>.
+    /// This keeps the control's wrapper and metadata addressable without flattening it into the parent
+    /// block list. SDTs can nest; malformed wrappers and pathological depth fall back to opaque blocks.
     /// </summary>
     private static void AppendBlocks(XElement el, ReadContext ctx, List<IrBlock> sink, int depth = 0)
     {
@@ -574,31 +572,15 @@ internal static class IrReader
                 sink.Add(BuildOpaqueBlock(el, ctx));
                 return;
             }
-            var content = el.Element(W + "sdtContent");
-            if (content is not null)
-            {
-                var before = sink.Count;
-                foreach (var inner in content.Elements())
-                    AppendBlocks(inner, ctx, sink, depth + 1);
-                // Mark every block this SDT delivered (transitively) so the markdown emitter can mirror
-                // the oracle's EmitBlocks, which skips SDT wrappers and thus never renders these blocks
-                // (they remain present + indexed, matching the oracle's Descendants-based index).
-                for (int i = before; i < sink.Count; i++)
-                    sink[i] = MarkFromBlockSdt(sink[i]);
-            }
+            if (el.Element(W + "sdtContent") is { } content)
+                sink.Add(BuildSdtBlock(el, content, ctx, depth));
+            else
+                // An SDT without its mandatory content container cannot be represented safely as an
+                // envelope. Preserve the original subtree instead of silently dropping it.
+                sink.Add(BuildOpaqueBlock(el, ctx));
             return;
         }
         sink.Add(BuildBlock(el, ctx));
-    }
-
-    /// <summary>Return <paramref name="block"/> with its provenance's <c>FromBlockSdt</c> set, preserving
-    /// the original source element/part. Equality-neutral (provenance is excluded from record equality),
-    /// so this never perturbs the block's value/hash.</summary>
-    private static IrBlock MarkFromBlockSdt(IrBlock block)
-    {
-        var src = block.Source;
-        var marked = new IrProvenance { Element = src.Element, PartUri = src.PartUri, FromBlockSdt = true };
-        return block with { Source = marked };
     }
 
     /// <summary>
@@ -624,6 +606,37 @@ internal static class IrReader
         if (el.Name == W + "sectPr")
             return BuildSectionBreak(el, ctx);
         return BuildOpaqueBlock(el, ctx);
+    }
+
+    /// <summary>
+    /// Build one block-level content-control envelope. Its content hash is explicitly framed with an
+    /// SDT structure marker plus the resolver-aware canonical hash of the WHOLE outer wrapper, so it
+    /// cannot collide structurally with a paragraph/table and every wrapper-level change participates.
+    /// The parsed children support recursive anchor and flat-text traversal; they do not flatten the
+    /// envelope into its containing body/cell scope.
+    /// </summary>
+    private static IrSdtBlock BuildSdtBlock(XElement sdt, XElement content, ReadContext ctx, int depth)
+    {
+        var children = new List<IrBlock>();
+        foreach (var child in content.Elements())
+            AppendBlocks(child, ctx, children, depth + 1);
+
+        var envelopeDigest = IrHasher.CanonicalHash(sdt, ctx.RelResolver);
+        var contentBuilder = new IrContentHashBuilder();
+        contentBuilder.AppendStructure(IrContentHashBuilder.StructureSdt);
+        contentBuilder.AppendHash(envelopeDigest);
+
+        return new IrSdtBlock
+        {
+            Anchor = AnchorFor(IrAnchorKind.Sdt, sdt, ctx),
+            Blocks = IrNodeList.From(children),
+            EnvelopeDigest = envelopeDigest,
+            ContentHash = contentBuilder.Build(),
+            // Phase 1 deliberately treats every envelope change as structural content, never a
+            // format-only update: there is no safe pPr-like native marker for arbitrary sdt metadata.
+            FormatFingerprint = EmptyUnmodeledDigest,
+            Source = ctx.Provenance(sdt),
+        };
     }
 
     private static string Unid(XElement el) => (string?)el.Attribute(PtOpenXml.Unid) ?? "";
@@ -2147,7 +2160,9 @@ internal static class IrReader
         {
             if (child.Name == W + "tcPr")
                 continue;
-            // N12: a block-level w:sdt inside a cell unwraps to its content blocks, same as in body.
+            // A block-level w:sdt inside a cell remains one envelope block, with its direct content
+            // children nested beneath it. This preserves the control shell while keeping cell hashing
+            // and flat-text traversal recursive.
             var before = blocks.Count;
             AppendBlocks(child, ctx, blocks);
             for (int i = before; i < blocks.Count; i++)
@@ -2702,7 +2717,10 @@ internal static class IrReader
         if (!index.TryAdd(key, block))
             throw new DocxodusException($"Duplicate IR anchor '{key}' (invariant violation).");
 
-        if (block is IrTable table)
+        if (block is IrSdtBlock sdt)
+            foreach (var child in sdt.Blocks)
+                IndexBlock(child, index);
+        else if (block is IrTable table)
             foreach (var row in table.Rows)
                 foreach (var cell in row.Cells)
                     foreach (var child in cell.Blocks)

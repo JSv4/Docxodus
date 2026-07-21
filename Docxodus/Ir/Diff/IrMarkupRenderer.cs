@@ -736,6 +736,15 @@ internal static class IrMarkupRenderer
 
     internal static void RenderBlockOp(IrEditOp op, RenderState state, List<XElement> sink)
     {
+        // A block-level content control owns a non-run OOXML envelope (`w:sdtPr`, `w:sdtEndPr`, nesting,
+        // bindings, locks, etc.). It cannot be reconstructed safely from independent paragraph/table ops.
+        // Route every operation through the atomic envelope renderer before the generic block dispatch.
+        if (IsBlockSdtOp(op, state))
+        {
+            RenderBlockSdtOp(op, state, sink);
+            return;
+        }
+
         // A standalone trailing section-break block (a `sec:` anchor, an IrSectionBreak) is last-section page
         // METADATA, not body content. Its `w:sectPr` is a direct w:body child that must be the LAST element —
         // we preserve the LEFT package's own trailing sectPr separately, so emitting this block here would put
@@ -812,6 +821,60 @@ internal static class IrMarkupRenderer
             case IrEditOpKind.MergeBlock:
                 RenderMergeBlock(op, state, sink);
                 break;
+        }
+    }
+
+    /// <summary>Whether either side of an operation resolves to an atomic block-level content control.</summary>
+    private static bool IsBlockSdtOp(IrEditOp op, RenderState state) =>
+        (op.LeftAnchor is { } left && ResolveBlock(left, state.Left) is IrSdtBlock) ||
+        (op.RightAnchor is { } right && ResolveBlock(right, state.RightSource) is IrSdtBlock);
+
+    /// <summary>
+    /// Render a block-level <c>w:sdt</c> as a single ownership unit.  Native content-control range revisions
+    /// toggle the wrapper itself, while normal whole-block run/paragraph/table marking toggles its payload.
+    /// Both layers are required: Word's custom-XML deletion range accepts by COLLAPSING an SDT to its content,
+    /// not by deleting that content, so a range-only representation would leak a deleted control's text.
+    /// </summary>
+    private static void RenderBlockSdtOp(IrEditOp op, RenderState state, List<XElement> sink)
+    {
+        switch (op.Kind)
+        {
+            case IrEditOpKind.EqualBlock:
+            case IrEditOpKind.FormatOnlyBlock:
+                EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true);
+                return;
+
+            case IrEditOpKind.InsertBlock:
+                EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                return;
+
+            case IrEditOpKind.DeleteBlock:
+                EmitWholeSdt(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                return;
+
+            case IrEditOpKind.ModifyBlock:
+                EmitWholeSdt(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                return;
+
+            case IrEditOpKind.MoveBlock:
+            case IrEditOpKind.MoveModifyBlock:
+                // The aligner deliberately lowers SDT relocations to delete+insert. Keep this defensive
+                // projection too so an old/corrupt script can never emit a native move around an SDT envelope.
+                if (op.IsMoveSource == true)
+                    EmitWholeSdt(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                else
+                    EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                return;
+
+            default:
+                // Split/merge operations are paragraph-only by construction. A malformed SDT-bearing op
+                // degrades to the same reversible old/new envelope pair as a generic structural replacement.
+                if (op.LeftAnchor is not null)
+                    EmitWholeSdt(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                if (op.RightAnchor is not null)
+                    EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                return;
         }
     }
 
@@ -1154,7 +1217,7 @@ internal static class IrMarkupRenderer
             }
 
             var newCell = new XElement(W.tc);
-            foreach (var pre in cellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+            foreach (var pre in cellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt))
                 newCell.Add(StripUnids(new XElement(pre)));
 
             if (cellOp.BlockOps != null)
@@ -1165,13 +1228,13 @@ internal static class IrMarkupRenderer
                 // A cell must contain at least one block-level child; if the ops produced none, keep the right
                 // cell's content verbatim so the table stays schema-valid.
                 if (cellSink.Count == 0)
-                    foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+                    foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
                         cellSink.Add(StripUnids(new XElement(b)));
                 newCell.Add(cellSink);
             }
             else
             {
-                foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+                foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
                     newCell.Add(StripUnids(new XElement(b)));
             }
             // Do not compare by output ordinal: a middle cellIns shifts every later right cell.  The
@@ -1516,7 +1579,7 @@ internal static class IrMarkupRenderer
             }
 
             var newCell = new XElement(W.tc);
-            foreach (var pre in shellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+            foreach (var pre in shellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt))
                 newCell.Add(StripUnids(new XElement(pre)));
 
             // The winner's shell was swapped in above; stamp a native w:tcPrChange (inner = BASE tcPr)
@@ -1538,14 +1601,14 @@ internal static class IrMarkupRenderer
                 foreach (var cellBlock in blockOps)
                     renderOneCompositeBlock(cellBlock, baseIr, reviewerIrs, state, cellSink);
                 if (cellSink.Count == 0)
-                    foreach (var b in baseCellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+                    foreach (var b in baseCellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
                         cellSink.Add(StripUnids(new XElement(b)));
                 newCell.Add(cellSink);
             }
             else
             {
                 // Base passthrough: the base cell's content verbatim.
-                foreach (var b in baseCellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+                foreach (var b in baseCellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
                     newCell.Add(StripUnids(new XElement(b)));
             }
             newRow.Add(newCell);
@@ -1702,7 +1765,7 @@ internal static class IrMarkupRenderer
                 if (rightNote == null)
                     continue;
                 noteEl = new XElement(noteName, rightNote.Attributes());
-                foreach (var pre in rightNote.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+                foreach (var pre in rightNote.Elements().Where(e => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt))
                     noteEl.Add(StripUnids(new XElement(pre)));
                 root.Add(noteEl);
             }
@@ -1718,8 +1781,8 @@ internal static class IrMarkupRenderer
             foreach (var b in noteBlocks)
                 StripUnids(b);
 
-            // Replace the note's block-level children (w:p / w:tbl), keeping any non-block prelude.
-            noteEl.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).Remove();
+            // Replace the note's block-level children (w:p / w:tbl / w:sdt), keeping any non-block prelude.
+            noteEl.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt).Remove();
             noteEl.Add(noteBlocks);
 
             // Re-id a MATCHED note's definition to its RIGHT/scope id so the definition shares an id space with
@@ -1998,7 +2061,7 @@ internal static class IrMarkupRenderer
             foreach (var b in blocks)
                 SimplifyMoveMarkup(b);
 
-        root.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).Remove();
+        root.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt).Remove();
         root.Add(blocks);
 
         ImportStorySourcedRelationships(diff, state, clonesBefore, part, rightMain,
@@ -3251,6 +3314,92 @@ internal static class IrMarkupRenderer
             // schema-safe. (Reject/accept leave it in place either way; the invariant ignores it.)
             sink.Add(clone);
         }
+    }
+
+    /// <summary>
+    /// Emit one whole block-level content control.  OOXML does not permit a bare <c>w:ins</c>/<c>w:del</c>
+    /// around the control envelope: its property/binding shell would then survive the opposite revision view.
+    /// Word represents an inserted/deleted control with two paired custom-XML range boundaries: one crosses the
+    /// opening <c>w:sdt</c> tag and one crosses its closing tag.  The range layer toggles the wrapper; the
+    /// recursively marked payload toggles the content after a delete-range accept collapses that wrapper.
+    /// </summary>
+    private static void EmitWholeSdt(
+        string? anchor, IrDocument doc, RenderState state, List<XElement> sink, RevKind kind, bool fromRight)
+    {
+        var src = SourceElement(anchor, doc);
+        if (src == null || src.Name != W.sdt || src.Element(W.sdtContent) is null)
+            return;
+
+        var sdt = StripUnids(new XElement(src));
+        if (fromRight)
+            state.RegisterMediaReferences(sdt);
+
+        var boundaries = MarkWholeSdtEnvelope(sdt, kind, state);
+        sink.Add(boundaries.Before);
+        sink.Add(sdt);
+        sink.Add(boundaries.After);
+    }
+
+    /// <summary>
+    /// Mark a control envelope and all of its block payload.  For a nested control the returned boundaries are
+    /// inserted as siblings in its parent's <c>w:sdtContent</c>; for the outer control they are emitted by
+    /// <see cref="EmitWholeSdt"/> around the cloned <c>w:sdt</c>.  The two range IDs are intentionally
+    /// distinct: the first captures the SDT's start tag and the second its end tag, which is the pairing shape
+    /// <see cref="RevisionProcessor"/> recognizes when accepting a deleted control.
+    /// </summary>
+    private static (XElement Before, XElement After) MarkWholeSdtEnvelope(XElement sdt, RevKind kind, RenderState state)
+    {
+        var content = sdt.Element(W.sdtContent)!;
+        foreach (var child in content.Elements().ToList())
+            MarkWholeSdtContentChild(child, kind, state);
+
+        var startName = IsDeleteGrade(kind) ? W.customXmlDelRangeStart : W.customXmlInsRangeStart;
+        var endName = IsDeleteGrade(kind) ? W.customXmlDelRangeEnd : W.customXmlInsRangeEnd;
+
+        // Range A begins immediately before the control and ends as the first sdtContent child, so it contains
+        // the opening tag. Range B begins as the last sdtContent child and ends immediately after the control,
+        // so it contains the closing tag. AcceptDeletedAndMovedFromContentControls intersects those two sets.
+        var before = new XElement(startName, state.RevisionAttributes());
+        var beforeId = (string?)before.Attribute(W.id) ?? "";
+        content.AddFirst(new XElement(endName, new XAttribute(W.id, beforeId)));
+
+        var afterStart = new XElement(startName, state.RevisionAttributes());
+        var afterId = (string?)afterStart.Attribute(W.id) ?? "";
+        content.Add(afterStart);
+        var after = new XElement(endName, new XAttribute(W.id, afterId));
+        return (before, after);
+    }
+
+    /// <summary>
+    /// Mark payload carried by a block-level SDT without losing legal intermediate containers.  Paragraphs and
+    /// tables own the established whole-block revision shapes; nested SDTs receive their own envelope ranges.
+    /// Any other transparent block container is descended so customXml/smartTag wrappers do not leave visible
+    /// paragraphs unmarked after an enclosing delete-range acceptance.
+    /// </summary>
+    private static void MarkWholeSdtContentChild(XElement child, RevKind kind, RenderState state)
+    {
+        if (child.Name == W.p)
+        {
+            MarkWholeParagraph(child, kind, state);
+            return;
+        }
+        if (child.Name == W.tbl)
+        {
+            MarkWholeTable(child, kind, state);
+            return;
+        }
+        if (child.Name == W.sdt && child.Element(W.sdtContent) is not null)
+        {
+            var boundaries = MarkWholeSdtEnvelope(child, kind, state);
+            child.AddBeforeSelf(boundaries.Before);
+            child.AddAfterSelf(boundaries.After);
+            return;
+        }
+
+        // Content controls can legally carry transparent block containers such as w:customXml. Preserve their
+        // shell verbatim but descend into their block-bearing children; raw leaf metadata has no visible payload.
+        foreach (var nested in child.Elements().ToList())
+            MarkWholeSdtContentChild(nested, kind, state);
     }
 
     /// <summary>

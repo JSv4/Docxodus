@@ -22,9 +22,7 @@ internal abstract record IrBlock
     public required IrHash FormatFingerprint { get; init; }
 
     /// <summary>
-    /// Back-reference to source OOXML; equality-neutral (does not affect record equality). Also carries
-    /// the <see cref="IrProvenance.FromBlockSdt"/> flag (see there) which the markdown emitter uses to
-    /// mirror the oracle's block-level-SDT skip without perturbing block value equality.
+    /// Back-reference to source OOXML; equality-neutral (does not affect record equality).
     /// </summary>
     public IrProvenance Source { get; init; } = new();
 }
@@ -134,6 +132,26 @@ internal sealed record IrTable : IrBlock
     /// <summary>Canonical hash of the table's `w:tblGrid` (empty-container hash when absent). Folded into
     /// <see cref="IrBlock.FormatFingerprint"/>; drives `w:tblGridChange` attribution.</summary>
     public required IrHash TblGridDigest { get; init; }
+}
+
+/// <summary>
+/// A block-level <c>w:sdt</c> content-control envelope. The control remains one structural block so
+/// its wrapper, metadata, and child ordering are never lost; <see cref="Blocks"/> is retained for
+/// recursive anchor/flat-text traversal rather than flattening the control into its parent scope.
+/// </summary>
+/// <remarks>
+/// <see cref="EnvelopeDigest"/> is the resolver-aware canonical hash of the OUTER <c>w:sdt</c>, not
+/// merely <c>w:sdtPr</c>. Thus the modeled identity includes its properties, end properties, nested
+/// wrappers, and exact content-tree shape. The parsed child blocks remain equality-participating too,
+/// while source provenance remains equality-neutral.
+/// </remarks>
+internal sealed record IrSdtBlock : IrBlock
+{
+    /// <summary>Direct block children of <c>w:sdtContent</c>, in document order.</summary>
+    public required IrNodeList<IrBlock> Blocks { get; init; }
+
+    /// <summary>Resolver-aware canonical digest of the complete outer <c>w:sdt</c> envelope.</summary>
+    public required IrHash EnvelopeDigest { get; init; }
 }
 
 /// <summary>A table row. <paramref name="Source"/> is equality-neutral provenance.</summary>

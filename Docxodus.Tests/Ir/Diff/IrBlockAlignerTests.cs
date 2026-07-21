@@ -74,6 +74,37 @@ public class IrBlockAlignerTests
     }
 
     [Fact]
+    public void Block_sdt_metadata_change_is_one_atomic_modified_pair()
+    {
+        const string content = "<w:sdtContent><w:p><w:r><w:t>controlled body</w:t></w:r></w:p></w:sdtContent>";
+        var l = FromXml("<w:sdt><w:sdtPr><w:tag w:val=\"old-tag\"/></w:sdtPr>" + content + "</w:sdt>");
+        var r = FromXml("<w:sdt><w:sdtPr><w:tag w:val=\"new-tag\"/></w:sdtPr>" + content + "</w:sdt>");
+
+        var a = Align(l, r);
+        var changed = Assert.Single(a.Entries.Where(e => e.Left is IrSdtBlock || e.Right is IrSdtBlock));
+
+        Assert.Equal(IrAlignmentKind.Modified, changed.Kind);
+        Assert.IsType<IrSdtBlock>(changed.Left);
+        Assert.IsType<IrSdtBlock>(changed.Right);
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Block_sdt_never_force_pairs_with_plain_paragraph()
+    {
+        var l = FromXml("<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>same text</w:t></w:r></w:p></w:sdtContent></w:sdt>");
+        var r = FromXml("<w:p><w:r><w:t>same text</w:t></w:r></w:p>");
+
+        var a = Align(l, r);
+
+        Assert.DoesNotContain(a.Entries, e => e.Kind == IrAlignmentKind.Modified &&
+            ((e.Left is IrSdtBlock) != (e.Right is IrSdtBlock)));
+        Assert.Contains(a.Entries, e => e.Kind == IrAlignmentKind.Deleted && e.Left is IrSdtBlock);
+        Assert.Contains(a.Entries, e => e.Kind == IrAlignmentKind.Inserted && e.Right is IrParagraph);
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
     public void Full_rewrite_1x1_residue_stays_delete_insert()
     {
         // Word-oracle data point: a replace-gap paragraph with ZERO shared word tokens is NOT paired

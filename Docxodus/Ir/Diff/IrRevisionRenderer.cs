@@ -570,6 +570,22 @@ internal static class IrRevisionRenderer
 
     private static void RenderModifyBlock(IrEditOp op, in Context ctx, List<IrRevision> sink)
     {
+        // Block-level SDTs are deliberately atomic: metadata, wrapper topology and nested controls belong to
+        // the envelope, not to an independently token-diffable paragraph. Surface an explicit old/new pair
+        // (even for a metadata-only change whose visible text happens to be identical) so GetRevisions agrees
+        // with the markup renderer's whole-control replacement.
+        if ((op.LeftAnchor is { } sdtLeftAnchor && ctx.Left.AnchorIndex.TryGetValue(sdtLeftAnchor, out var leftBlock) && leftBlock is IrSdtBlock) ||
+            (op.RightAnchor is { } sdtRightAnchor && ctx.Right.AnchorIndex.TryGetValue(sdtRightAnchor, out var rightBlock) && rightBlock is IrSdtBlock))
+        {
+            if (op.LeftAnchor is { } leftAnchor)
+                sink.Add(new IrRevision(IrRevisionType.Deleted, BlockText(leftAnchor, ctx.Left, ctx.Settings),
+                    ctx.Author, ctx.Date, LeftAnchor: leftAnchor, RightAnchor: op.RightAnchor));
+            if (op.RightAnchor is { } rightAnchor)
+                sink.Add(new IrRevision(IrRevisionType.Inserted, BlockText(rightAnchor, ctx.Right, ctx.Settings),
+                    ctx.Author, ctx.Date, LeftAnchor: op.LeftAnchor, RightAnchor: rightAnchor));
+            return;
+        }
+
         if (op.TableDiff is { } tableDiff)
         {
             // A left-only cell (remove/merge topology) still bails the markup renderer to a whole-table
@@ -762,6 +778,19 @@ internal static class IrRevisionRenderer
         string text = isSource
             ? BlockText(op.LeftAnchor, ctx.Left, ctx.Settings)
             : BlockText(op.RightAnchor, ctx.Right, ctx.Settings);
+
+        // SDT moves are structurally lowered to delete+insert by the aligner. Keep this defensive projection
+        // in lockstep with the markup renderer if a pre-existing script still reaches this path.
+        var moveDoc = isSource ? ctx.Left : ctx.Right;
+        var moveAnchor = isSource ? op.LeftAnchor : op.RightAnchor;
+        if (moveAnchor is not null && moveDoc.AnchorIndex.TryGetValue(moveAnchor, out var moveBlock) &&
+            moveBlock is IrSdtBlock)
+        {
+            sink.Add(isSource
+                ? new IrRevision(IrRevisionType.Deleted, text, ctx.Author, ctx.Date, LeftAnchor: op.LeftAnchor)
+                : new IrRevision(IrRevisionType.Inserted, text, ctx.Author, ctx.Date, RightAnchor: op.RightAnchor));
+            return;
+        }
 
         // A move is RELABELLED as Inserted+Deleted (not Moved) when either move rendering is off
         // (DetectMoves=false) OR — in compatible mode — the moved block is BELOW the minimum word count
@@ -1660,6 +1689,13 @@ internal static class IrRevisionRenderer
                 var sb = new StringBuilder();
                 foreach (var row in t.Rows)
                     AppendRowText(sb, row, settings);
+                return sb.ToString();
+            }
+            case IrSdtBlock sdt:
+            {
+                var sb = new StringBuilder();
+                foreach (var child in sdt.Blocks)
+                    sb.Append(BlockTextOf(child, settings));
                 return sb.ToString();
             }
             default:
