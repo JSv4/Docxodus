@@ -126,6 +126,12 @@ export interface PaginationOptions {
   showPageNumbers?: boolean;
   /** Gap between pages in pixels. Default: 20 */
   pageGap?: number;
+  /**
+   * Whether ordinary paragraphs may be fragmented across page boundaries.
+   * Defaults to false for direct PaginationEngine callers; read-only viewer
+   * entry points opt in explicitly.
+   */
+  fragmentParagraphs?: boolean;
 }
 
 // Default letter size in points (612 x 792 = 8.5" x 11")
@@ -222,6 +228,7 @@ export class PaginationEngine {
   private cssPrefix: string;
   private showPageNumbers: boolean;
   private pageGap: number;
+  private fragmentParagraphs: boolean;
   private hfRegistry: HeaderFooterRegistry;
   private footnoteRegistry: FootnoteRegistry;
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
@@ -258,6 +265,7 @@ export class PaginationEngine {
     this.cssPrefix = options.cssPrefix ?? "page-";
     this.showPageNumbers = options.showPageNumbers ?? true;
     this.pageGap = options.pageGap ?? 20;
+    this.fragmentParagraphs = options.fragmentParagraphs ?? false;
     this.hfRegistry = new Map();
     this.footnoteRegistry = new Map();
   }
@@ -647,6 +655,266 @@ export class PaginationEngine {
     }
 
     return fragments;
+  }
+
+  /**
+   * A DOM endpoint that can finish a paragraph fragment. Endpoints are chosen
+   * after whitespace or at a run boundary so the paginator never deliberately
+   * cuts through an ordinary word merely to fill a little more of a page.
+   */
+  private paragraphFragmentEndpoints(paragraph: HTMLElement): Array<{ node: Text; offset: number }> {
+    const endpoints: Array<{ node: Text; offset: number }> = [];
+    const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+    let textNode: Text | null;
+
+    while ((textNode = walker.nextNode() as Text | null)) {
+      const text = textNode.data;
+      if (text.length === 0) continue;
+
+      // A whitespace boundary preserves normal word wrapping. Always retain the
+      // end of a run too: adjacent runs can change formatting without containing
+      // a whitespace character between them.
+      const whitespace = /\s+/g;
+      let match: RegExpExecArray | null;
+      while ((match = whitespace.exec(text)) !== null) {
+        endpoints.push({ node: textNode, offset: match.index + match[0].length });
+      }
+      if (endpoints.length === 0 || endpoints[endpoints.length - 1].node !== textNode ||
+          endpoints[endpoints.length - 1].offset !== text.length) {
+        endpoints.push({ node: textNode, offset: text.length });
+      }
+    }
+
+    return endpoints;
+  }
+
+  /**
+   * Whether a range contains visible text after ignoring bidi/zero-width marks.
+   * Paragraph fragmentation deliberately excludes non-textual descendants, so
+   * this is enough to reject empty head or tail fragments.
+   */
+  private hasVisibleFragmentText(fragment: DocumentFragment): boolean {
+    return (fragment.textContent || "")
+      .replace(/[\u200B-\u200F\uFEFF]/g, "")
+      .trim()
+      .length > 0;
+  }
+
+  /**
+   * Phase one only handles text-like paragraph descendants. Objects, explicit
+   * line breaks, list markers, notes, and out-of-flow/inline-block content all
+   * require their own line-layout rules and retain the established whole-block
+   * fallback instead of risking broken content or duplicate anchors.
+   */
+  private canFragmentParagraph(block: MeasuredBlock): boolean {
+    if (!this.fragmentParagraphs || block.element.tagName !== "P") {
+      return false;
+    }
+
+    const paragraph = block.element;
+    if (
+      block.keepWithNext ||
+      block.keepLines ||
+      block.pageBreakBefore ||
+      block.isPageBreak ||
+      paragraph.dataset.widowControl === "true" ||
+      paragraph.hasAttribute("contenteditable")
+    ) {
+      return false;
+    }
+
+    // The outer paragraph may carry its source identity. Descendant identities
+    // are not safe to duplicate in a continuation fragment, so reject them.
+    const unsupportedDescendants = [
+      "br",
+      "img",
+      "picture",
+      "svg",
+      "math",
+      "canvas",
+      "video",
+      "audio",
+      "iframe",
+      "object",
+      "embed",
+      "input",
+      "button",
+      "select",
+      "textarea",
+      "table",
+      "ol",
+      "ul",
+      "li",
+      "dl",
+      "div",
+      "p",
+      "section",
+      "article",
+      "aside",
+      "figure",
+      "fieldset",
+      "details",
+      "[data-footnote-id]",
+      "[data-list-marker]",
+      "[data-anchor]",
+      "[id]",
+      "[contenteditable]",
+    ].join(", ");
+    if (paragraph.querySelector(unsupportedDescendants)) {
+      return false;
+    }
+
+    const paragraphStyle = window.getComputedStyle(paragraph);
+    if (
+      paragraphStyle.display !== "block" ||
+      paragraphStyle.position !== "static" ||
+      paragraphStyle.float !== "none" ||
+      paragraphStyle.whiteSpace !== "normal" ||
+      paragraphStyle.breakBefore !== "auto" ||
+      paragraphStyle.breakAfter !== "auto" ||
+      paragraphStyle.breakInside === "avoid" ||
+      paragraphStyle.pageBreakBefore !== "auto" ||
+      paragraphStyle.pageBreakAfter !== "auto" ||
+      paragraphStyle.pageBreakInside === "avoid"
+    ) {
+      return false;
+    }
+
+    // A range clone preserves nested inline formatting exactly. Anything that
+    // establishes its own box/layout context is intentionally deferred until a
+    // future fragmenter can model it accurately.
+    for (const descendant of Array.from(paragraph.querySelectorAll<HTMLElement>("*"))) {
+      const style = window.getComputedStyle(descendant);
+      if (
+        style.display !== "inline" ||
+        style.position !== "static" ||
+        style.float !== "none" ||
+        style.whiteSpace !== "normal"
+      ) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Builds one range-cloned paragraph fragment. Only the leading fragment keeps
+   * the source paragraph's addressability; continuations must not duplicate an
+   * id/data-anchor in the rendered document.
+   */
+  private createParagraphFragment(
+    paragraph: HTMLElement,
+    range: Range,
+    retainSourceIdentity: boolean,
+    isFinalFragment: boolean
+  ): HTMLElement {
+    const fragment = paragraph.cloneNode(false) as HTMLElement;
+    const contents = range.cloneContents();
+    fragment.appendChild(contents);
+
+    if (!retainSourceIdentity) {
+      fragment.removeAttribute("id");
+      fragment.removeAttribute("data-anchor");
+      // A continuation starts with a normal line rather than repeating a first-
+      // line/hanging indent. Keep the side margin so paragraph alignment remains.
+      fragment.style.setProperty("margin-top", "0", "important");
+      fragment.style.setProperty("text-indent", "0", "important");
+    }
+    if (!isFinalFragment) {
+      // The original bottom spacing belongs after the complete paragraph, not
+      // between synthetic page fragments.
+      fragment.style.setProperty("margin-bottom", "0", "important");
+    }
+
+    return fragment;
+  }
+
+  /**
+   * Splits a simple paragraph at the largest DOM Range endpoint that fits the
+   * currently available body space. The caller then processes the tail normally,
+   * allowing it to fragment again on later pages when necessary.
+   */
+  private tryFragmentParagraph(
+    block: MeasuredBlock,
+    dims: PageDimensions,
+    availableHeightPt: number,
+    effectiveMarginTopPt: number
+  ): MeasuredBlock[] | null {
+    if (!this.canFragmentParagraph(block) || availableHeightPt <= effectiveMarginTopPt) {
+      return null;
+    }
+
+    const paragraph = block.element;
+    const endpoints = this.paragraphFragmentEndpoints(paragraph);
+    // The final endpoint is the full paragraph and cannot leave a tail. A
+    // single text run with no earlier whitespace remains an overflow fallback.
+    if (endpoints.length < 2) {
+      return null;
+    }
+
+    let low = 0;
+    let high = endpoints.length - 2;
+    let best: { endpoint: { node: Text; offset: number }; element: HTMLElement; measured: MeasuredBlock } | null = null;
+
+    // Fragment height is monotonic for the deliberately narrow eligible subset,
+    // so binary search avoids measuring every word in long body paragraphs.
+    while (low <= high) {
+      const middle = Math.floor((low + high) / 2);
+      const endpoint = endpoints[middle];
+      const headRange = document.createRange();
+      headRange.setStart(paragraph, 0);
+      headRange.setEnd(endpoint.node, endpoint.offset);
+      const headContents = headRange.cloneContents();
+
+      if (!this.hasVisibleFragmentText(headContents)) {
+        low = middle + 1;
+        continue;
+      }
+
+      const head = this.createParagraphFragment(paragraph, headRange, true, false);
+      const measured = this.measureElement(head, dims);
+      if (effectiveMarginTopPt + measured.heightPt <= availableHeightPt) {
+        best = { endpoint, element: head, measured };
+        low = middle + 1;
+      } else {
+        high = middle - 1;
+      }
+    }
+
+    if (!best) {
+      return null;
+    }
+
+    const tailRange = document.createRange();
+    tailRange.setStart(best.endpoint.node, best.endpoint.offset);
+    tailRange.setEnd(paragraph, paragraph.childNodes.length);
+    const tailContents = tailRange.cloneContents();
+    if (!this.hasVisibleFragmentText(tailContents)) {
+      return null;
+    }
+
+    const tail = this.createParagraphFragment(paragraph, tailRange, false, true);
+    const tailMeasured = this.measureElement(tail, dims);
+
+    return [
+      {
+        ...best.measured,
+        element: best.element,
+        keepWithNext: false,
+        keepLines: false,
+        pageBreakBefore: false,
+        isPageBreak: false,
+      },
+      {
+        ...tailMeasured,
+        element: tail,
+        keepWithNext: false,
+        keepLines: false,
+        pageBreakBefore: false,
+        isPageBreak: false,
+      },
+    ];
   }
 
   /**
@@ -1402,6 +1670,24 @@ export class PaginationEngine {
       const maxFootnoteArea = effectiveContentHeight * MAX_FOOTNOTE_AREA_RATIO;
       const maxFootnoteExpansion = Math.max(0, maxFootnoteArea - currentFootnoteHeight);
 
+      // A paragraph that cannot fit as a whole may still have a simple text-only
+      // prefix that fits this page. Fragment before the ordinary next-page or
+      // oversized fallback so the cloned head participates in the same margin
+      // and footnote accounting as every other block.
+      if (blockSpace > effectiveRemainingHeight) {
+        const paragraphFragments = this.tryFragmentParagraph(
+          block,
+          dims,
+          effectiveRemainingHeight,
+          effectiveMarginTop
+        );
+        if (paragraphFragments) {
+          blocks.splice(i, 1, ...paragraphFragments);
+          i--;
+          continue;
+        }
+      }
+
       // Check if block fits on current page (including its footnotes)
       if (blockSpace <= effectiveRemainingHeight) {
         // Block fits with current footnote allocation
@@ -1776,6 +2062,12 @@ export function paginateHtml(
     throw new Error("Pagination container element not found");
   }
 
-  const engine = new PaginationEngine(staging, pageContainer, options);
+  // This convenience function is the read-only HTML viewer path. Keep the
+  // lower-level engine conservative by default, while enabling paragraph
+  // fragmentation here unless a caller deliberately opts out.
+  const engine = new PaginationEngine(staging, pageContainer, {
+    ...options,
+    fragmentParagraphs: options.fragmentParagraphs ?? true,
+  });
   return engine.paginate();
 }
