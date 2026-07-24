@@ -320,6 +320,11 @@ internal static class IrTableDiffer
     private const int MaxAffinity = 1_000;
     private const int SignatureEdgeChars = 128;
 
+    /// <summary>Per-column-of-displacement affinity nudge that breaks otherwise-tied cell-gap pairings toward
+    /// the same column (keeping a rewritten row's base cells in place). Tiny relative to <see cref="MaxAffinity"/>
+    /// so genuine body affinity always dominates.</summary>
+    private const int CellPositionalTieBreak = 100;
+
     private enum MonotoneStepKind : byte
     {
         Pair,
@@ -861,8 +866,15 @@ internal static class IrTableDiffer
                 return false;
         }
 
+        // Positional tie-break: when cell bodies carry little/no mutual affinity (a wholly rewritten row),
+        // prefer pairing cells in the SAME column over shifting base cells sideways to make room for an
+        // inserted column. Word keeps a rewritten row's original cells in their columns and clean-inserts the
+        // new one; our affinity-only fill would otherwise insert at the front and slide every base cell right,
+        // scattering the deleted content into the wrong columns. The bias is tiny (a few affinity units per
+        // column of displacement) so any real body affinity still wins — it only decides otherwise-tied gaps.
         foreach (var step in BuildMonotoneAlignment(freeLeft.Count, freeRight.Count,
-                     (i, j) => BodyAffinity(leftBodies[i], rightBodies[j], leftSignatures[i], rightSignatures[j])))
+                     (i, j) => BodyAffinity(leftBodies[i], rightBodies[j], leftSignatures[i], rightSignatures[j])
+                               - CellPositionalTieBreak * Math.Abs(i - j)))
         {
             if (step.Kind != MonotoneStepKind.Pair)
                 continue;

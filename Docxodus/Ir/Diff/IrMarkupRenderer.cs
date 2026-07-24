@@ -252,6 +252,11 @@ internal static class IrMarkupRenderer
             foreach (var block in bodyBlocks)
                 SimplifyMoveMarkup(block);
 
+        // Reproduce Word's compare-output normalization of fixed-width tables (materialize the hairline
+        // cell-margin/table-indent inset Word backfills), so rendered tables land where Word's do instead
+        // of shifting under the renderer's own default cell margin. See WordCompareTableNormalizer.
+        WordCompareTableNormalizer.NormalizeAll(bodyBlocks);
+
         // Drop the assembled blocks into a clone of the LEFT package, preserving its trailing top-level
         // w:sectPr (last-section metadata). Copy the RIGHT document's missing styles/numbering for continuity
         // (mirrors WmlComparer: right-only styles/legal numbering must survive in the merged output).
@@ -380,6 +385,11 @@ internal static class IrMarkupRenderer
                 // (survives accept AND reject) and renumber-deduping a rewritten comment's del/ins copies.
                 MergeRightCommentDefinitions(main, wDocRight.MainDocumentPart, streamDoc, rightStream);
                 NormalizeComments(main, BodyCommentIds(state.Left), BodyCommentIds(state.RightSource), state);
+                // The output's comments part is cloned from the LEFT/original, so a LEFT comment whose
+                // annotated content the diff fully replaced — leaving no marker anywhere — leaves its
+                // w:comment definition dangling. Word's compare output never emits such an orphan; prune them
+                // (and their threading metadata). See PruneOrphanedComments.
+                PruneOrphanedComments(main);
 
                 // Bookmark normalization pass: an edit straddling a bookmark range endpoint, or a dense
                 // overlapping content-region layout, can leave the rendered body with a duplicate bookmark id
@@ -400,7 +410,7 @@ internal static class IrMarkupRenderer
                 // for a wholly deleted/inserted field.
                 NormalizeFields(main);
 
-                // Style-definition provenance (decoded from the Word-compare oracle corpus): the result
+                // Style-definition provenance (decoded from Word's compare output): the result
                 // keeps the LEFT document's styles part — docDefaults/theme/latentStyles byte-identical
                 // to the left — while each style whose RAW definition formatting differs between the
                 // sides has its CURRENT payload updated to the RIGHT document's EFFECTIVE formatting,
@@ -444,6 +454,13 @@ internal static class IrMarkupRenderer
                         new XElement(W.defaultTabStop, new XAttribute(W.val, 720))));
                     settingsPart.PutXDocument();
                 }
+                // settings.xml canonical-children backfill (same provenance rule as theme/docDefaults/
+                // fontTable): Word's compare output synthesizes compat/compatibilityMode + a small set of
+                // canonical settings for every document even when the source carries an empty stub. Only
+                // compatibilityMode is rendering-relevant — it selects LibreOffice's layout-engine emulation,
+                // so an output missing it lays out under a different engine than Word's redline (which always
+                // carries one) and a rendered redline diverges from Word's compare output. See WordCompareSettingsBackfill.
+                WordCompareSettingsBackfill.Backfill(main, wDocRight.MainDocumentPart);
                 // Theme backfill: without a theme part, LibreOffice resolves scheme colors
                 // (bg1/tx1/accentN) to BLACK — right-sourced charts and shapes render as black
                 // boxes. Word's compare output always carries a theme, and when the ORIGINAL (left)
@@ -463,6 +480,15 @@ internal static class IrMarkupRenderer
                 // (two byte-identical groups keyed exactly on theme presence).
                 BackfillStockDocDefaults(main, leftHadTheme);
 
+                // fontTable/webSettings backfill (same provenance rule as theme/docDefaults): Word's
+                // compare output SYNTHESIZES word/fontTable.xml + word/webSettings.xml for every document
+                // even when the inputs carry neither. The fontTable's per-font panose/family metrics steer
+                // LibreOffice's substitution of absent fonts (Aptos/Calibri/CSS stacks); without it our
+                // output substitutes those fonts DIFFERENTLY from Word's redline (which always carries one),
+                // so a rendered redline diverges from Word's compare output even on a byte-identical body.
+                // See WordCompareFontTableBackfill.
+                WordCompareFontTableBackfill.Backfill(main);
+
                 // Some HTML-to-DOCX producers write CSS font-family lists directly into w:rFonts
                 // (for example "Roboto, sans-serif").  Word's comparison output keeps that raw
                 // string, but LibreOffice does not apply Word's fallback behavior when rendering a
@@ -474,10 +500,90 @@ internal static class IrMarkupRenderer
                 // followed only by the CSS generic <c>sans-serif</c>; quoted lists with a concrete
                 // fallback remain untouched because that fallback is semantically meaningful.  As
                 // before, styles, themes, east-Asian fonts, and one-sided lists are excluded.
-                ProjectSharedCssFontStacks(main, sharedCssFontStacks);
+                // Rewriting a shared CSS font stack to Arial DIVERGES from Word (which keeps the raw stack
+                // verbatim), so our runs render a different font than Word's redline. Now that
+                // WordCompareFontTableBackfill declares each raw stack with Word's own altName descriptor
+                // (the primary family LibreOffice resolves for substitution), the stack rides through
+                // unchanged and both sides substitute it identically — the faithful behavior.
+                _ = sharedCssFontStacks;
             }
-            return streamDoc.GetModifiedWmlDocument();
+            var rendered = streamDoc.GetModifiedWmlDocument();
+            return settings.NormalizeRevisionAuthors
+                ? NormalizeRevisionAuthors(rendered, settings.AuthorForRevisions)
+                : rendered;
         }
+    }
+
+    /// <summary>
+    /// Stamp <paramref name="author"/> onto the <c>w:author</c> of every tracked-revision element in every
+    /// XML part of <paramref name="doc"/>, collapsing the output to a single revision author. Renderers that
+    /// color tracked changes by author (LibreOffice) then show one color, matching Word's single-author
+    /// compare output — instead of a second color leaking from input revisions preserved under their
+    /// original author (<see cref="IrDiffSettings.PreserveInputRevisions"/>). Comment authors
+    /// (<c>w:comment</c>) are deliberately left untouched — a comment is not a tracked change. A pure
+    /// byte→byte package rewrite that never touches revision STRUCTURE, so the accept ≡ right / reject ≡ left
+    /// contract is unaffected (author is presentation metadata).
+    /// </summary>
+    private static WmlDocument NormalizeRevisionAuthors(WmlDocument doc, string author)
+    {
+        using var streamDoc = new OpenXmlMemoryStreamDocument(doc);
+        using (var wDoc = streamDoc.GetWordprocessingDocument())
+        {
+            var main = wDoc.MainDocumentPart;
+            if (main is null)
+                return doc;
+            foreach (var part in RevisionBearingParts(main))
+            {
+                XDocument xdoc;
+                try
+                {
+                    xdoc = part.GetXDocument();
+                }
+                catch (System.Xml.XmlException)
+                {
+                    continue;   // a malformed auxiliary part carries no revision authors — skip it
+                }
+                if (xdoc.Root is null)
+                    continue;
+                bool touched = false;
+                foreach (var el in xdoc.Descendants())
+                {
+                    if (el.Name == W.comment)
+                        continue;
+                    var attr = el.Attribute(W.author);
+                    if (attr != null && attr.Value != author)
+                    {
+                        // Every WML element carrying a w:author attribute IS a tracked-change / range /
+                        // property-change marker except w:comment (excluded above), so an unconditional set
+                        // over these story parts is correct and complete.
+                        attr.Value = author;
+                        touched = true;
+                    }
+                }
+                if (touched)
+                    part.PutXDocument();
+            }
+        }
+        return streamDoc.GetModifiedWmlDocument();
+    }
+
+    /// <summary>The wordprocessing STORY parts that can carry tracked-revision <c>w:author</c> markup — the
+    /// main document plus its headers, footers, footnotes, endnotes, and comments — each once. Chart,
+    /// customXml, SmartArt, and embedding parts are deliberately excluded (no revision authors, and some are
+    /// not plain XML the reader can parse).</summary>
+    private static IEnumerable<OpenXmlPart> RevisionBearingParts(MainDocumentPart main)
+    {
+        yield return main;
+        foreach (var h in main.HeaderParts)
+            yield return h;
+        foreach (var f in main.FooterParts)
+            yield return f;
+        if (main.FootnotesPart is { } fn)
+            yield return fn;
+        if (main.EndnotesPart is { } en)
+            yield return en;
+        if (main.WordprocessingCommentsPart is { } cm)
+            yield return cm;
     }
 
     /// <summary>
@@ -746,7 +852,7 @@ internal static class IrMarkupRenderer
                 }
                 terminator.Element(W.pPr)?.Element(W.rPr)?.Elements(W.del).Remove();
 
-                // Word's seam-terminator shape (decoded across the oracle corpus): the surviving
+                // Word's seam-terminator shape (decoded across Word's compare output): the surviving
                 // paragraph carries the INS side's DIRECT props — real spacing/indent survive —
                 // but never a style reference the left universe can't resolve (a Title/Heading on
                 // the right renders plain in Word's own compare output when the left lacks the
@@ -2855,6 +2961,79 @@ internal static class IrMarkupRenderer
             main.PutXDocument();
     }
 
+    /// <summary>
+    /// Remove comment DEFINITIONS referenced by no live marker in any story — the inverse of
+    /// <see cref="NormalizeComments"/> step (C), which drops markers with no definition. The output's comments
+    /// part is cloned from the LEFT/original document, so a LEFT comment whose annotated content the diff fully
+    /// replaced — leaving no <c>commentRangeStart</c>/<c>commentReference</c> anywhere, not even inside a
+    /// preserved <c>w:del</c> — leaves its <c>w:comment</c> definition dangling. Word's compare output never
+    /// emits such an orphan (verified against Word's compare output). Their <c>commentsExtended</c>/
+    /// <c>commentsIds</c> threading entries (keyed by the comment paragraph's <c>w14:paraId</c>) are pruned in
+    /// turn so those don't dangle either. Safe for the round trip: a definition is removed only when NO marker
+    /// references it, so neither accept nor reject can resurface the reference — the accept ≡ right / reject ≡
+    /// left body contract is untouched (only orphaned <c>comments.xml</c> entries are affected).
+    /// </summary>
+    internal static void PruneOrphanedComments(MainDocumentPart main)
+    {
+        var commentsPart = main.WordprocessingCommentsPart;
+        var commentsRoot = commentsPart?.GetXDocument().Root;
+        if (commentsRoot == null)
+            return;
+
+        // A comment referenced in ANY story (body + headers + footers) must be kept.
+        var referenced = new HashSet<string>();
+        void Collect(XElement? root)
+        {
+            if (root == null)
+                return;
+            foreach (var m in root.Descendants()
+                         .Where(e => e.Name == W.commentRangeStart || e.Name == W.commentReference))
+                if ((string?)m.Attribute(W.id) is { Length: > 0 } id)
+                    referenced.Add(id);
+        }
+        Collect(main.GetXDocument().Root);
+        foreach (var h in main.HeaderParts)
+            Collect(h.GetXDocument().Root);
+        foreach (var f in main.FooterParts)
+            Collect(f.GetXDocument().Root);
+
+        var orphans = commentsRoot.Elements(W.comment)
+            .Where(c => (string?)c.Attribute(W.id) is { Length: > 0 } id && !referenced.Contains(id))
+            .ToList();
+        if (orphans.Count == 0)
+            return;
+
+        // Threading keys (w14:paraId of the comment's paragraphs) so their commentsExtended/commentsIds
+        // entries are pruned in turn.
+        var orphanParaIds = orphans
+            .SelectMany(c => c.Descendants().Attributes(W14ns + "paraId"))
+            .Select(a => a.Value).Where(v => v.Length > 0).ToHashSet();
+
+        foreach (var o in orphans)
+            o.Remove();
+        commentsPart!.PutXDocument();
+
+        if (orphanParaIds.Count == 0)
+            return;
+        PruneThreadingEntriesByParaId(main.WordprocessingCommentsExPart, W15ns + "commentEx", W15ns + "paraId", orphanParaIds);
+        PruneThreadingEntriesByParaId(main.WordprocessingCommentsIdsPart, W16cidNs + "commentId", W16cidNs + "paraId", orphanParaIds);
+    }
+
+    private static void PruneThreadingEntriesByParaId(OpenXmlPart? part, XName entryName, XName paraIdAttr,
+        HashSet<string> paraIds)
+    {
+        var root = part?.GetXDocument().Root;
+        if (root == null)
+            return;
+        var gone = root.Elements(entryName)
+            .Where(e => (string?)e.Attribute(paraIdAttr) is { } p && paraIds.Contains(p)).ToList();
+        if (gone.Count == 0)
+            return;
+        foreach (var e in gone)
+            e.Remove();
+        part!.PutXDocument();
+    }
+
     /// <summary>True iff the comment marker sits at the paragraph/body run level (its ancestors up to the
     /// enclosing <c>w:p</c>/<c>w:body</c>/<c>w:tc</c> are only run-level wrappers — including the <c>w:r</c> that
     /// hosts a <c>w:commentReference</c>). A marker reached through opaque content (math, drawing, textbox) is
@@ -4486,27 +4665,42 @@ internal static class IrMarkupRenderer
                         // Text-equal, FORMAT-differing: emit the RIGHT runs (accepted-state formatting) and stamp
                         // each with a w:rPrChange carrying the LEFT (old) modeled rPr. Accept drops the rPrChange
                         // (keeps right format); reject swaps the run's rPr to the rPrChange's inner rPr (restores
-                        // the left format). The old rPr is rebuilt from the LEFT token's modeled IrRunFormat at
-                        // the aligned position, so the modeled-only block format signature round-trips.
-                        // rawLeft == rawRight here, so the left/right char spans carry identical text and the
-                        // left char at offset k matches the right char at offset k. For each emitted right run
-                        // covering right chars [cursor, cursor+len), clone the LEFT run's rPr at the aligned left
-                        // char (ls + (cursor-rs)) as the old formatting, preserving modeled AND unmodeled left rPr.
-                        int cursor = rs;
-                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
+                        // the left format). The old rPr is rebuilt from the LEFT run's rPr at the aligned position,
+                        // preserving modeled AND unmodeled left rPr. rawLeft == rawRight here, so the left/right
+                        // char spans carry identical text and left char lc aligns to right char rs + (lc - ls).
+                        //
+                        // The LEFT span may cross SOURCE-RUN boundaries whose formatting DIFFERS (e.g. a bold run
+                        // then an italic run) while the RIGHT is a single run. Stamping ONE rPrChange over the whole
+                        // span would restore only the FIRST left format on reject, silently losing the rest. So
+                        // split the right span at the LEFT-format boundaries: each sub-span carries one uniform old
+                        // rPr, so reject restores EVERY left region's original formatting. A left boundary at left
+                        // char lc maps to the right cut rs + (lc - ls). An empty boundary set (single left run, or
+                        // several runs with identical rPr) yields exactly one Slice(rs,re,rzs,rze) call stamped with
+                        // the constant left rPr — byte-identical to the pre-split renderer.
+                        var boundaries = leftRuns.FormatBoundaries(ls, le);
+                        int subStart = rs;
+                        for (int bi = 0; bi <= boundaries.Count; bi++)
                         {
-                            // Only a w:r carries run formatting — bookmarks/zero-width markers pass through
-                            // untouched (stamping an rPr onto them is schema-invalid). A w:hyperlink wrapper holds
-                            // its w:r(s) one level down, so stamp each contained run at its aligned left char and
-                            // advance the cursor per-run (descending into the wrapper preserves char alignment).
-                            foreach (var innerRun in RunsForFormatStamp(r))
+                            int subEnd = bi < boundaries.Count ? rs + (boundaries[bi] - ls) : re;
+                            // Zero-width ownership: the first sub-span owns the span's leading zero-width (per the
+                            // op's boundary flag), the last owns the trailing one. An interior cut was strictly
+                            // interior to the whole span, so the sub-span STARTING there claims its zero-width
+                            // (includeStart = true) and the previous one does not (includeEnd = false) — reproducing
+                            // the single-slice ownership exactly (claim-dedup guarantees each is emitted once).
+                            bool subStartZw = bi == 0 ? rzs : true;
+                            bool subEndZw = bi == boundaries.Count ? rze : false;
+                            // Left format is uniform across the sub-span, so one RPrAtChar at its start suffices.
+                            var oldRPr = leftRuns.RPrAtChar(ls + (subStart - rs));
+                            foreach (var r in rightRuns.Slice(subStart, subEnd, subStartZw, subEndZw))
                             {
-                                int leftChar = ls + (cursor - rs);
-                                var oldRPr = leftRuns.RPrAtChar(leftChar);
-                                ApplyRPrChange(innerRun, oldRPr, state);
-                                cursor += RunTextLength(innerRun);
+                                // Only a w:r carries run formatting — bookmarks/zero-width markers pass through
+                                // untouched (stamping an rPr onto them is schema-invalid). A w:hyperlink wrapper
+                                // holds its w:r(s) one level down; stamp each contained run.
+                                foreach (var innerRun in RunsForFormatStamp(r))
+                                    ApplyRPrChange(innerRun, oldRPr, state);
+                                AddStableSpan(r);
                             }
-                            AddStableSpan(r);
+                            subStart = subEnd;
                         }
                     }
                     else
@@ -5751,7 +5945,7 @@ internal static class IrMarkupRenderer
 
     /// <summary>
     /// Mirror Word compare's style-definition treatment into the LEFT-based output package (decoded
-    /// from the Word-compare oracle corpus — see DocxDiffStyleProvenanceTests): keep the left styles
+    /// from Word's compare output — see DocxDiffStyleProvenanceTests): keep the left styles
     /// part (docDefaults et al.), copy right-only styles, and rewrite every shared style whose RAW
     /// definition formatting differs (rsid noise ignored) to the right's EFFECTIVE formatting
     /// (docDefaults + basedOn chain + own definition), with the left effective payload archived in a
@@ -7850,6 +8044,46 @@ internal static class IrMarkupRenderer
             var rPr = hit?.Element.Element(W.rPr);
             return rPr != null ? new XElement(rPr) : null;
         }
+
+        /// <summary>Char positions STRICTLY inside <c>(start,end)</c> where the covering source run's old-rPr —
+        /// as it would be stamped by <c>ApplyRPrChange</c> (StripUnids-normalized) — CHANGES value: the LEFT
+        /// source-run FORMAT boundaries a FormatChanged span must be split at. A single-format span (one run, or
+        /// several runs with identical rPr) yields none, so the emitted markup is byte-identical to the pre-split
+        /// renderer; a heterogeneous span (e.g. a bold run then an italic run) yields one cut per format change so
+        /// each emitted sub-run carries the correct old formatting for its region and reject restores EVERY left
+        /// format. Boundaries are ascending. Comparison is on the RAW StripUnids(rPr) — the exact value the
+        /// rPrChange restores — so an unmodeled-only difference still cuts (reject ≡ left is a property-byte
+        /// invariant here, not modeled-only).</summary>
+        public IReadOnlyList<int> FormatBoundaries(int start, int end)
+        {
+            var cuts = new List<int>();
+            XElement? prev = null;
+            bool have = false;
+            foreach (var seg in _segments)
+            {
+                if (seg.Kind != SegmentKind.RunText || seg.End <= start || seg.Start >= end)
+                    continue;
+                var rPr = seg.Element.Element(W.rPr);
+                // seg.Start is the boundary between this run's text region and the previous one. Only an INTERIOR
+                // boundary that lands a genuine format change is a cut; a boundary at (or before) `start` is the
+                // span start, not a cut. Consecutive segments of the SAME run share an rPr ⇒ never cut.
+                if (have && seg.Start > start && seg.Start < end && !SameStampedRPr(prev, rPr))
+                    cuts.Add(seg.Start);
+                prev = rPr;
+                have = true;
+            }
+            return cuts;
+        }
+
+        /// <summary>Whether two source-run <c>w:rPr</c> would stamp an IDENTICAL <c>w:rPrChange</c> inner —
+        /// compared exactly as <c>ApplyRPrChange</c> builds it (StripUnids over a clone; absent ⇒ empty rPr).</summary>
+        private static bool SameStampedRPr(XElement? a, XElement? b) =>
+            XNode.DeepEquals(NormalizedStampedRPr(a), NormalizedStampedRPr(b));
+
+        private static XElement NormalizedStampedRPr(XElement? rPr) =>
+            rPr != null
+                ? StripUnids(new XElement(W.rPr, rPr.Attributes(), rPr.Elements()))
+                : new XElement(W.rPr);
 
         private static bool PreserveSpace(string s) =>
             s.Length > 0 && (char.IsWhiteSpace(s[0]) || char.IsWhiteSpace(s[^1]));

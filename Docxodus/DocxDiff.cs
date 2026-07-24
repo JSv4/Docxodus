@@ -740,6 +740,18 @@ public sealed class DocxDiffSettings
     public bool PreserveInputRevisions { get; set; }
 
     /// <summary>
+    /// When true, every tracked-revision element in the output has its <c>w:author</c> stamped to
+    /// <see cref="AuthorForRevisions"/>, collapsing the output to a SINGLE revision author (default false).
+    /// This matches how author-coloring renderers (LibreOffice) display Word's single-author compare output:
+    /// with <see cref="PreserveInputRevisions"/> on, the inputs' own revisions ride through under their
+    /// ORIGINAL authors, so a document whose source carried foreign-authored suggestions renders in TWO
+    /// colors while Word's oracle is one. This normalizes the render, not the markup semantics — comment
+    /// authors are untouched, and it does not affect Consolidate/N-way outputs (per-reviewer authors are
+    /// intended there). See <c>docs/ooxml_corner_cases.md</c>.
+    /// </summary>
+    public bool NormalizeRevisionAuthors { get; set; }
+
+    /// <summary>
     /// When true (the DEFAULT — matching Word Compare's "Headers and footers" comparison setting, which
     /// is also on by default), header/footer stories are compared: each section's effective
     /// default/first/even header and footer stories pair across the two documents (Word's
@@ -814,6 +826,7 @@ public sealed class DocxDiffSettings
                 : IrFormatComparison.ModeledOnly,
             CompareHeadersFooters = CompareHeadersFooters,
             PreserveInputRevisions = PreserveInputRevisions,
+            NormalizeRevisionAuthors = NormalizeRevisionAuthors,
             TrackBlockFormatChanges = TrackBlockFormatChanges,
             // The three slices default equal to the block flag (two-way behaves identically) — so the public
             // opt-out cascades to all of them. Only the composite diverges them (all slices on, umbrella off)

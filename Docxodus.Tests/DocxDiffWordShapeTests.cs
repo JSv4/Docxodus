@@ -431,7 +431,10 @@ public class DocxDiffWordShapeTests
             Assert.DoesNotContain(para.Elements<InsertedRun>(), run => string.IsNullOrWhiteSpace(run.InnerText));
             Assert.DoesNotContain(para.Elements<DeletedRun>(), run => string.IsNullOrWhiteSpace(run.InnerText));
 
-            var suffixRun = para.Elements<Run>().Single(run => run.InnerText == suffix.TrimStart());
+            // Content-anchored diffing attaches the retained separator to the shared suffix (exactly as the
+            // test's own comment describes: "a property-change run for ' Demo …'"), so the suffix is ONE
+            // FormatChanged run carrying the leading space — no longer split into a separate space run.
+            var suffixRun = para.Elements<Run>().Single(run => run.InnerText == suffix);
             Assert.NotNull(suffixRun.RunProperties?.GetFirstChild<Underline>());
             Assert.Contains(suffixRun.RunProperties!.ChildElements, child => child.LocalName == "rPrChange");
         }
@@ -468,7 +471,10 @@ public class DocxDiffWordShapeTests
             Assert.DoesNotContain(para.Elements<InsertedRun>(), run => string.IsNullOrWhiteSpace(run.InnerText));
             Assert.DoesNotContain(para.Elements<DeletedRun>(), run => string.IsNullOrWhiteSpace(run.InnerText));
 
-            var suffixRun = para.Elements<Run>().Single(run => run.InnerText == suffix.TrimStart());
+            // Content-anchored diffing attaches the retained separator to the shared suffix (exactly as the
+            // test's own comment describes: "a property-change run for ' Demo …'"), so the suffix is ONE
+            // FormatChanged run carrying the leading space — no longer split into a separate space run.
+            var suffixRun = para.Elements<Run>().Single(run => run.InnerText == suffix);
             Assert.NotNull(suffixRun.RunProperties?.GetFirstChild<Underline>());
             Assert.Contains(suffixRun.RunProperties!.ChildElements, child => child.LocalName == "rPrChange");
         }

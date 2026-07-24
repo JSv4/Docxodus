@@ -192,7 +192,7 @@ internal sealed record IrDiffSettings
     /// <b>Why 0.35.</b> Word's own compare pairs paragraphs well below half token-overlap — e.g. a
     /// sentence rewrite keeping only a trailing clause (Jaccard ≈ 0.375) renders in Word's redline as ONE
     /// paragraph with interleaved ins/del runs, not as a deleted + an inserted paragraph. 0.35 was
-    /// calibrated against a 200-document Word-compare oracle corpus: it captures those rewrites (raising
+    /// calibrated against Word's compare output: it captures those rewrites (raising
     /// pixel fidelity vs Word's arrangement measurably) while still refusing junk pairings — at even
     /// lower floors (≈0.15) the pairing starts claiming unrelated paragraphs are revisions of each other,
     /// which misleads review UIs and measurably WORSENS fidelity on rewritten documents. This is the
@@ -256,6 +256,46 @@ internal sealed record IrDiffSettings
     public int SplitMaxRunLength { get; init; } = 8;
 
     /// <summary>
+    /// DIFF-TIME setting (Word-parity: added-text merges/splits, 2026-07-22). When true (the DEFAULT),
+    /// a split/merge may fire even when the SINGULAR side's LCS coverage is below
+    /// <see cref="SplitCoverageThreshold"/> — i.e. the merged/split paragraph ADDS new text — PROVIDED
+    /// the RUN side is genuinely retained (foreign slack ≤ <see cref="SplitAddedTextMaxSlack"/>), the
+    /// singular is still substantially explained (coverage ≥ <see cref="SplitAddedTextMinCoverage"/>),
+    /// and every content member carries ≥2 matched phrase words. Word merges "A." + "B." →
+    /// "A. which C. B extended." reporting B's words as retained anchors in B's paragraph slot; requiring
+    /// 90% singular coverage vetoed that exact shape (the merged paragraph's new text lowers coverage
+    /// even though the base paragraphs are absorbed in order — e.g. the corpus <c>justify_alignment</c>
+    /// merge). Set false for the pre-2026-07 coverage-only gate.
+    /// <para><b>Why the slack bound stays strict (not loosened to catch every messy merge).</b> Pushing
+    /// slack past ~0.35 admits "messy" merges/splits where a base member keeps one contiguous anchor but
+    /// drops most of its text. Two problems appear there: (1) local coverage/slack/member-word scores can
+    /// no longer separate a genuine Word split (<c>right_aligned_italic</c>) from a false one Word keeps
+    /// positional (<c>center_bold</c> → <c>clear_formatting</c>) — that is Word's GLOBAL minimal-edit
+    /// tie-break, not a local predicate; and (2) even when detection is right, the SPLIT paragraph-property
+    /// (jc/pPrChange/pilcrow-placement) rendering is not yet Word-faithful, so the render is pixel-neutral
+    /// or worse despite a matching word stream. Both are tracked follow-ups; until then this path is
+    /// scoped to the clean low-slack merges it can reproduce faithfully.</para>
+    /// </summary>
+    public bool MergeSplitAllowAddedText { get; init; } = true;
+
+    /// <summary>
+    /// DIFF-TIME setting. For the added-text merge/split path (<see cref="MergeSplitAllowAddedText"/>),
+    /// the maximum foreign slack (fraction of the RUN's content tokens NOT matched). Kept at the same
+    /// strictness as <see cref="SplitForeignSlack"/> (the added-text path relaxes only the SINGULAR
+    /// coverage requirement, not run retention) — see <see cref="MergeSplitAllowAddedText"/> for why
+    /// looser slack is deferred. Default 0.34.
+    /// </summary>
+    public double SplitAddedTextMaxSlack { get; init; } = 0.34;
+
+    /// <summary>
+    /// DIFF-TIME setting. For the added-text merge/split path, the MINIMUM in-order LCS coverage of the
+    /// singular by the run — the containment floor that keeps the path from gluing paragraphs that merely
+    /// SHARE A FEW WORDS. A merged/split paragraph only, say, 19% explained by the base is new content
+    /// coincidentally overlapping, not a merge. Default 0.30.
+    /// </summary>
+    public double SplitAddedTextMinCoverage { get; init; } = 0.30;
+
+    /// <summary>
     /// DIFF-TIME setting (header/footer campaign, 2026-07-03). When true (the DEFAULT — Word's own
     /// Compare "Headers and footers" granularity default), <see cref="IrEditScriptBuilder"/> diffs the
     /// header/footer stories (paired per section ordinal × occurrence kind, with Word's
@@ -280,6 +320,19 @@ internal sealed record IrDiffSettings
     /// contract: accept ≡ accept(right) holds; reject ≠ left where foreign markup exists).
     /// </summary>
     public bool PreserveInputRevisions { get; init; }
+
+    /// <summary>
+    /// RENDER-TIME setting. When true, every tracked-revision element in the output (across all parts —
+    /// body, headers/footers, footnotes/endnotes) has its <c>w:author</c> stamped to
+    /// <see cref="AuthorForRevisions"/>, collapsing the output to a SINGLE revision author. Default false.
+    /// Public mirror: <see cref="DocxDiffSettings.NormalizeRevisionAuthors"/>. This targets renderers that
+    /// color tracked changes BY AUTHOR (LibreOffice): with <see cref="PreserveInputRevisions"/> on, the
+    /// inputs' own revisions ride through under their ORIGINAL authors, so a doc whose source carried
+    /// foreign-authored suggestions renders in two colors while Word's single-author compare output is one
+    /// — a rendering (not markup) divergence. Comment authors (<c>w:comment</c>) are left untouched, as are
+    /// Consolidate/N-way outputs (their per-reviewer authors are intended).
+    /// </summary>
+    public bool NormalizeRevisionAuthors { get; init; }
 
     /// <summary>
     /// DIFF-TIME setting (block-format-change family, 2026-07-03). When true (the DEFAULT), paragraph-and-above

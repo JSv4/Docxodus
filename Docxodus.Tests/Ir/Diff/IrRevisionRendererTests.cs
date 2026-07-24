@@ -466,9 +466,11 @@ public class IrRevisionRendererTests
     }
 
     /// <summary>
-    /// Compatible mode coalesces a paragraph's alternating per-word del/ins token ops into ONE Deleted + ONE
-    /// Inserted contiguous region (separators between changed words bridged), where Fine mode emits one
-    /// revision per word. Same content, different atomization — the WmlComparer-grade projection.
+    /// A no-shared-word replacement inside a paragraph renders as ONE Deleted + ONE Inserted contiguous
+    /// region in BOTH granularities. Content-anchoring (the intra-paragraph diff anchors on shared content
+    /// words, not whitespace) already emits a clean whole-segment replace in Fine mode — the pre-anchor
+    /// per-word del/ins alternation was the whitespace-crowding artifact this pass removes. Compatible mode
+    /// keeps producing the same WmlComparer-grade contiguous region.
     /// </summary>
     [Fact]
     public void Compatible_mode_coalesces_adjacent_word_ops_into_one_del_one_ins()
@@ -479,14 +481,14 @@ public class IrRevisionRendererTests
         var fine = Render(l, r, Default).ToList();
         var compat = Render(l, r, Compatible).ToList();
 
-        // Fine: one Deleted + one Inserted per changed word (three each here).
-        Assert.True(fine.Count(x => x.Type == IrRevisionType.Deleted) >= 3);
-
-        // Compatible: a single contiguous Deleted + single Inserted region.
-        Assert.Equal(1, compat.Count(x => x.Type == IrRevisionType.Deleted));
-        Assert.Equal(1, compat.Count(x => x.Type == IrRevisionType.Inserted));
-        Assert.Equal("now foo bar baz", compat.Single(x => x.Type == IrRevisionType.Deleted).Text);
-        Assert.Equal("what are the chances", compat.Single(x => x.Type == IrRevisionType.Inserted).Text);
+        // Both granularities: a single contiguous Deleted + single Inserted region ("This is" retained).
+        foreach (var revs in new[] { fine, compat })
+        {
+            Assert.Equal(1, revs.Count(x => x.Type == IrRevisionType.Deleted));
+            Assert.Equal(1, revs.Count(x => x.Type == IrRevisionType.Inserted));
+            Assert.Equal("now foo bar baz", revs.Single(x => x.Type == IrRevisionType.Deleted).Text);
+            Assert.Equal("what are the chances", revs.Single(x => x.Type == IrRevisionType.Inserted).Text);
+        }
     }
 
     /// <summary>

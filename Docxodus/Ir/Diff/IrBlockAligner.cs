@@ -165,7 +165,7 @@ internal static class IrBlockAligner
         // than position, so normalize any crossed fuzzy pair back to Delete+Insert before move detection. The
         // global move pass can then promote sufficiently strong correspondence to MovedModified; weaker cases
         // stay conservative and, crucially, reversible.
-        ReleaseCrossingModifiedPairs(leftKind, rightKind, leftMatch, rightMatch);
+        ReleaseCrossingModifiedPairs(leftBlocks, rightBlocks, similarity, leftKind, rightKind, leftMatch, rightMatch);
 
         // --- Cross-gap fuzzy moves: over the GLOBAL leftover Deleted × Inserted sets (after all gap
         // fill), re-pair similar blocks as Moved / MovedModified. Runs AFTER gap fill so it sees the
@@ -574,7 +574,7 @@ internal static class IrBlockAligner
                 IrAlignmentKind.Merge, mergeGroups, settings);
         }
 
-        // Word-matcher junction pairing (calibrated against the Word-compare oracle corpus). Word's
+        // Word-matcher junction pairing (calibrated against Word's compare output). Word's
         // replace-gap arrangement pairs old/new paragraphs by ITS OWN matcher first and only then
         // merges each pair into a single mixed ins+del paragraph; unpaired paragraphs stay separate.
         // The similarity pass above (Jaccard ≥ BlockSimilarityThreshold + locality) reproduces the
@@ -675,7 +675,7 @@ internal static class IrBlockAligner
         int[] leftMatch, int[] rightMatch,
         IrBlockSimilarity similarity, double threshold)
     {
-        // Locality prior (calibrated against the Word-compare oracle corpus): Word's stream diff
+        // Locality prior (calibrated against Word's compare output): Word's stream diff
         // anchors an insertion next to its matched neighbors and deletes distant old content
         // WHOLESALE — it never pairs a paragraph with a weakly-similar counterpart at the far end of
         // a large gap (the result renders as interleaved "word salad" inside an unrelated
@@ -713,6 +713,7 @@ internal static class IrBlockAligner
                         // having the same separator skeleton (especially numbered lists).  Weak
                         // in-gap pairing needs actual lexical evidence; the dedicated 1×1 residue
                         // rule below still handles unambiguous labels and atomic-only paragraphs.
+                        //
                         if (similarity.PairingWordOverlap(leftParagraph, rightParagraph).SharedWords == 0)
                             continue;
                     }
@@ -766,7 +767,7 @@ internal static class IrBlockAligner
 
     // ------------------------------------------------------------------ junction pairing (Word matcher parity)
 
-    // Calibrated constants (empirically fitted against the Word-compare oracle corpus, 2026-07;
+    // Calibrated constants (empirically fitted against Word's compare output, 2026-07;
     // per-variant subset means and the decoded oracle data points are recorded in the commit
     // message / CHANGELOG). Candidate predicates measured: ≥1 shared word (mean +5.13, 3 docs
     // regressed >2pts), ≥2 shared words (−0.68), shared word + hard displacement cap (+4.61,
@@ -1182,6 +1183,12 @@ internal static class IrBlockAligner
     /// so the group claims no more blocks than the evidence supports (a longer window can only add
     /// slack, never coverage the smaller one lacked at the same start).
     /// </summary>
+    /// <summary>Minimum LCS-matched Word tokens a member must carry to count as a phrase fragment
+    /// (see <see cref="TrimAndGate"/> Gate 1) — a split/merge needs ≥2 such members, not isolated
+    /// retained tokens. Also floors the added-text prefilter so a strongly-retained smaller run is
+    /// still scored.</summary>
+    private const int MinMatchedWordsPerSplitFragment = 2;
+
     private static List<int>? FindQualifyingRun(
         IrParagraph singular, int partner,
         IrNodeList<IrBlock> pluralBlocks, int pluralFrom, int pluralTo,
@@ -1198,9 +1205,29 @@ internal static class IrBlockAligner
         // a window that only passes POST-trim is re-admitted because the trimmed window is itself
         // enumerated as a smaller (a,b) candidate by the ascending scan.
         int singularContent = ContentTokenCount(singular, settings);
-        double maxWindowContent = singularContent / (1.0 - settings.SplitForeignSlack);
+        // The added-text path admits messier merges/splits than the coverage path (see TrimAndGate):
+        // its surviving paragraph may ADD text (run smaller than singular → drop the coverage-derived
+        // lower floor) AND its members may DROP text (run BIGGER than singular → widen the slack-derived
+        // upper bound to SplitAddedTextMaxSlack). The ≥2-phrase-member + slack gates in TrimAndGate do
+        // the real filtering; these bounds only prune windows that cannot possibly qualify (perf).
+        double effectiveSlack = settings.MergeSplitAllowAddedText
+            ? Math.Max(settings.SplitForeignSlack, settings.SplitAddedTextMaxSlack)
+            : settings.SplitForeignSlack;
+        double maxWindowContent = singularContent / (1.0 - effectiveSlack);
         double minWindowContent = settings.SplitCoverageThreshold * singularContent;
+        if (settings.MergeSplitAllowAddedText)
+            minWindowContent = Math.Min(minWindowContent, 2 * MinMatchedWordsPerSplitFragment);
 
+        // A COVERAGE-path window is returned immediately (shortest-qualifying-first, ascending a then b —
+        // the pre-2026-07 behavior: the smallest window already clearing the coverage bar is complete, so
+        // absorbing more members only adds foreign content). An ADDED-TEXT-path window (coverage waived)
+        // is NOT returned eagerly: because its coverage floor is far below 1.0, a truncated prefix of a
+        // genuine multi-member merge/split would qualify first (a full-coverage 3-way split's 2-member
+        // prefix covers ~0.67 ≥ SplitAddedTextMinCoverage). Instead the highest-coverage added-text window
+        // is remembered and returned only if NO coverage-path window qualifies anywhere — so a clean split
+        // still fires at its complete member count while an added-text merge fires at its best window.
+        List<int>? bestAddedText = null;
+        double bestAddedTextCoverage = -1.0;
         for (int a = pluralFrom; a < pluralTo; a++)
         {
             if (!Eligible(a))
@@ -1215,13 +1242,21 @@ internal static class IrBlockAligner
                     break; // adding members only grows content — no longer window from this start qualifies
                 if (windowContent < minWindowContent)
                     continue; // too little content to cover the singular side yet — extend the window
-                var trimmed = TrimAndGate(singular, partner, a, b, pluralBlocks, pluralMatch, settings);
-                if (trimmed is not null)
+                var trimmed = TrimAndGate(singular, partner, a, b, pluralBlocks, pluralMatch, settings,
+                    out bool viaCoveragePath, out double coverage);
+                if (trimmed is null)
+                    continue;
+                if (viaCoveragePath)
                     return trimmed;
+                if (coverage > bestAddedTextCoverage)
+                {
+                    bestAddedTextCoverage = coverage;
+                    bestAddedText = trimmed;
+                }
             }
         }
 
-        return null;
+        return bestAddedText;
     }
 
     /// <summary>Content-token count of a paragraph (non-Separator, non-Textbox — the scoring rule).</summary>
@@ -1249,8 +1284,11 @@ internal static class IrBlockAligner
     /// </remarks>
     private static List<int>? TrimAndGate(
         IrParagraph singular, int partner, int a, int b,
-        IrNodeList<IrBlock> pluralBlocks, int[] pluralMatch, IrDiffSettings settings)
+        IrNodeList<IrBlock> pluralBlocks, int[] pluralMatch, IrDiffSettings settings,
+        out bool viaCoveragePath, out double coverage)
     {
+        viaCoveragePath = false;
+        coverage = 0.0;
         var window = new List<int>(b - a + 1);
         for (int pj = a; pj <= b; pj++)
             window.Add(pj);
@@ -1283,7 +1321,6 @@ internal static class IrBlockAligner
         // indistinguishable to the raw LCS from a true split, yet Word treats it as one deleted
         // paragraph plus one coalesced inserted region (WC-1840). The genuine corpus splits and
         // the public split model both carry multiple inherited Word tokens in each textual half.
-        const int MinMatchedWordsPerSplitFragment = 2;
         int phraseMembers = score.MemberMatchedWords.Count(n => n >= MinMatchedWordsPerSplitFragment);
         if (phraseMembers < 2)
             return null;
@@ -1303,12 +1340,24 @@ internal static class IrBlockAligner
                 return null;
         }
 
-        // Gates 3+4: containment thresholds on the trimmed run.
-        if (score.Coverage < settings.SplitCoverageThreshold)
-            return null;
-        if (score.ForeignSlack > settings.SplitForeignSlack)
+        // Gates 3+4: containment thresholds on the trimmed run. Two acceptance paths:
+        //   (a) COVERAGE path (original): the singular is ≥ SplitCoverageThreshold explained by the run
+        //       AND the run drops ≤ SplitForeignSlack — a clean merge/split with little net-new text.
+        //   (b) ADDED-TEXT path (Word-parity): the singular ADDS new text (coverage below threshold),
+        //       but the run is STRONGLY retained (slack ≤ the stricter SplitAddedTextMaxSlack). Word
+        //       merges "A." + "B." → "A. which C. B extended." keeping B's words as retained anchors in
+        //       B's slot; requiring 90% singular coverage vetoed those. Run retention (not singular
+        //       coverage) is the containment evidence here; the ≥2-phrase-member gate above still holds.
+        bool coveragePath = score.Coverage >= settings.SplitCoverageThreshold
+                            && score.ForeignSlack <= settings.SplitForeignSlack;
+        bool addedTextPath = settings.MergeSplitAllowAddedText
+                             && score.Coverage >= settings.SplitAddedTextMinCoverage
+                             && score.ForeignSlack <= settings.SplitAddedTextMaxSlack;
+        if (!coveragePath && !addedTextPath)
             return null;
 
+        viaCoveragePath = coveragePath;
+        coverage = score.Coverage;
         return window;
     }
 
@@ -1571,30 +1620,54 @@ internal static class IrBlockAligner
     /// crossed edit would still put its old content at the wrong physical paragraph when revisions are rejected.
     /// The prefix/suffix extrema identify every modified pair in an inversion in O(n), including permutations
     /// larger than a simple adjacent swap.
+    /// <para>
+    /// <b>Weight-aware crossing (blank-spacer demotion).</b> A FUNGIBLE blank-spacer paragraph (empty or
+    /// whitespace-only — see <see cref="IrBlockSimilarity.IsBlankSpacer"/>) is interchangeable, so an
+    /// asymmetric leading/trailing count around a table pairs one blank ACROSS the table. Treating that
+    /// blank as an immovable landmark forced the heavier Modified table to release into a whole-deleted +
+    /// whole-inserted table pair (two <c>w:tbl</c> where Word emits ONE with native per-row markup). Instead we
+    /// compute the crossing bounds from NON-fungible landmarks only: a Modified pair releases solely when it
+    /// crosses genuine CONTENT (another Modified pair or a content-bearing anchor — a real reorder), never
+    /// merely because a blank sits on the wrong side. Any fungible blank pair that then crosses the retained
+    /// monotone set is itself demoted to Deleted+Inserted (it renders as a separate ins/del blank, exactly as
+    /// Word does), keeping the table on its already-round-tripping Modified path. Deliberately NARROW: only
+    /// true blank spacers are demotable; a light CONTENT paragraph legitimately crossing a Modified pair still
+    /// releases the Modified pair as before. When no blank-spacer pair is present the logic is byte-identical
+    /// to the original single-bound pass (fast path).
+    /// </para>
     /// </summary>
     private static void ReleaseCrossingModifiedPairs(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks, IrBlockSimilarity similarity,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
         int[] leftMatch, int[] rightMatch)
     {
         int n = leftMatch.Length;
-        var maxRightBefore = new int[n];
-        int maxRight = int.MinValue;
+
+        // Classify each in-place LEFT pair as a fungible blank-spacer pair. Both sides of an
+        // Unchanged/FormatOnly pair are content-equal, so it suffices that the LEFT block is a blank spacer.
+        // Non-fungible landmarks = every in-place pair that is NOT a fungible blank (all Modified pairs,
+        // plus content-bearing Unchanged/FormatOnly anchors).
+        var isFungibleBlank = new bool[n];
+        bool anyFungibleBlank = false;
         for (int li = 0; li < n; li++)
         {
-            maxRightBefore[li] = maxRight;
-            if (IsOneToOneInPlace(leftKind[li], leftMatch[li]))
-                maxRight = Math.Max(maxRight, leftMatch[li]);
+            if (leftMatch[li] >= 0 &&
+                leftKind[li] is IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly &&
+                similarity.IsBlankSpacer(leftBlocks[li]))
+            {
+                isFungibleBlank[li] = true;
+                anyFungibleBlank = true;
+            }
         }
 
-        var minRightAfter = new int[n];
-        int minRight = int.MaxValue;
-        for (int li = n - 1; li >= 0; li--)
-        {
-            minRightAfter[li] = minRight;
-            if (IsOneToOneInPlace(leftKind[li], leftMatch[li]))
-                minRight = Math.Min(minRight, leftMatch[li]);
-        }
+        // Fast path: with no fungible blank pairs the non-fungible landmark set == the full in-place set,
+        // so this reproduces the original behavior exactly (byte-identical for every blank-free document).
+        bool NonFungibleLandmark(int li) =>
+            IsOneToOneInPlace(leftKind[li], leftMatch[li]) && !(anyFungibleBlank && isFungibleBlank[li]);
 
+        var (maxRightBefore, minRightAfter) = MonotoneBounds(n, leftMatch, NonFungibleLandmark);
+
+        // A Modified pair releases only when it crosses a NON-fungible landmark (genuine content reorder).
         var release = new List<int>();
         for (int li = 0; li < n; li++)
         {
@@ -1618,8 +1691,62 @@ internal static class IrBlockAligner
             rightMatch[rj] = -1;
         }
 
+        // Second pass — demote any fungible blank pair that crosses the RETAINED non-fungible monotone set
+        // (kept Modified pairs + content anchors). Blank spacers never cross each other (the in-order
+        // refinement pairs them monotonically), so checking each against the non-fungible landmarks alone
+        // is sufficient. Skipped entirely on the fast path.
+        if (!anyFungibleBlank)
+            return;
+
+        var (retainedMaxBefore, retainedMinAfter) = MonotoneBounds(n, leftMatch, NonFungibleLandmark);
+        for (int li = 0; li < n; li++)
+        {
+            if (!isFungibleBlank[li])
+                continue;
+            int rj = leftMatch[li];
+            if (rj < 0 || rightMatch[rj] != li)
+                continue;
+            if (rj < retainedMaxBefore[li] || rj > retainedMinAfter[li])
+            {
+                leftKind[li] = IrAlignmentKind.Deleted;
+                rightKind[rj] = IrAlignmentKind.Inserted;
+                leftMatch[li] = -1;
+                rightMatch[rj] = -1;
+            }
+        }
+
         static bool IsOneToOneInPlace(IrAlignmentKind? kind, int rightIndex) =>
             rightIndex >= 0 && kind is IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly or IrAlignmentKind.Modified;
+    }
+
+    /// <summary>
+    /// Prefix-max / suffix-min of the right index over the LEFT pairs that <paramref name="isLandmark"/>
+    /// selects. <c>maxRightBefore[li]</c> = the greatest landmark right index strictly before <c>li</c>
+    /// (<see cref="int.MinValue"/> if none); <c>minRightAfter[li]</c> = the least landmark right index
+    /// strictly after (<see cref="int.MaxValue"/> if none). A pair at (li, rj) crosses the landmark set iff
+    /// <c>rj &lt; maxRightBefore[li]</c> or <c>rj &gt; minRightAfter[li]</c>.
+    /// </summary>
+    private static (int[] MaxRightBefore, int[] MinRightAfter) MonotoneBounds(
+        int n, int[] leftMatch, Func<int, bool> isLandmark)
+    {
+        var maxRightBefore = new int[n];
+        int maxRight = int.MinValue;
+        for (int li = 0; li < n; li++)
+        {
+            maxRightBefore[li] = maxRight;
+            if (isLandmark(li))
+                maxRight = Math.Max(maxRight, leftMatch[li]);
+        }
+
+        var minRightAfter = new int[n];
+        int minRight = int.MaxValue;
+        for (int li = n - 1; li >= 0; li--)
+        {
+            minRightAfter[li] = minRight;
+            if (isLandmark(li))
+                minRight = Math.Min(minRight, leftMatch[li]);
+        }
+        return (maxRightBefore, minRightAfter);
     }
 
     // ------------------------------------------------------------------ emit

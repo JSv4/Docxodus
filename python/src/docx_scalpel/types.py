@@ -795,6 +795,10 @@ class DocxDiffSettings:
     #: Preserve the inputs' existing tracked revisions Word-style (default False).
     #: This takes precedence over ``pre_accept_input_revisions``.
     preserve_input_revisions: bool = False
+    #: Collapse every tracked-revision author in the output to ``author_for_revisions`` (default False).
+    #: Matches how author-coloring renderers (LibreOffice) display Word's single-author compare output
+    #: when input revisions preserved under their original author would otherwise render in a second color.
+    normalize_revision_authors: bool = False
     case_insensitive: bool = False
     culture: str | None = None
     conflate_breaking_and_nonbreaking_spaces: bool = True
@@ -828,6 +832,8 @@ class DocxDiffSettings:
             wire["preAcceptInputRevisions"] = True
         if self.preserve_input_revisions:
             wire["preserveInputRevisions"] = True
+        if self.normalize_revision_authors:
+            wire["normalizeRevisionAuthors"] = True
         if self.case_insensitive:
             wire["caseInsensitive"] = True
         if self.culture is not None:

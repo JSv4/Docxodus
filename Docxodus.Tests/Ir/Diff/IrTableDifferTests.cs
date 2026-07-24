@@ -206,6 +206,36 @@ public class IrTableDifferTests
     }
 
     [Fact]
+    public void Wholly_rewritten_row_that_gains_a_column_keeps_base_cells_in_their_columns()
+    {
+        // A row rewritten cell-for-cell (no shared cell body to anchor on) that also grows by one column.
+        // With nothing to anchor, affinity-only fill would insert the new cell at the FRONT and slide every
+        // base cell one column right — scattering the deleted content into the wrong columns. Microsoft Word
+        // keeps a rewritten row's base cells in their original columns and clean-inserts the new one; the
+        // positional tie-break makes the fill do the same (base 0/1/2 pair right 0/1/2, the new cell is the
+        // right-only tail at column 3). Real body affinity, when present, still overrides this (see the
+        // mixed-insert-and-edit case above, where B pairs B2 rather than the inserted X).
+        var left = FromXml(GridTable(3000, 3,
+            Row(Cell("Region", 3000), Cell("Revenue", 3000), Cell("Target", 3000))));
+        var right = FromXml(GridTable(2340, 4,
+            Row(Cell("Metric", 2340), Cell("Q1", 2340), Cell("Q2", 2340), Cell("Q3", 2340))));
+
+        var op = TableOp(left, right);
+        var leftTable = Assert.IsType<IrTable>(left.Body.Blocks.Single());
+        var rightTable = Assert.IsType<IrTable>(right.Body.Blocks.Single());
+        var cells = Assert.Single(op.TableDiff!.RowOps, r => r.Kind == IrRowOpKind.ModifyRow).CellOps!;
+
+        Assert.Equal(4, cells.Count);
+        for (int k = 0; k < 3; k++)
+        {
+            Assert.Equal(leftTable.Rows[0].Cells[k].Anchor.ToString(), cells[k].LeftCellAnchor);
+            Assert.Equal(rightTable.Rows[0].Cells[k].Anchor.ToString(), cells[k].RightCellAnchor);
+        }
+        Assert.Null(cells[3].LeftCellAnchor);   // the inserted column is the tail, not the front
+        Assert.Equal(rightTable.Rows[0].Cells[3].Anchor.ToString(), cells[3].RightCellAnchor);
+    }
+
+    [Fact]
     public void Ordinary_rows_mixed_middle_insert_and_edit_align_insert_before_edited_retained_row()
     {
         // The row analogue of the cell case above. The row renderer natively supports both insertions and

@@ -145,6 +145,8 @@ internal static class DocxDiffOps
             settings.PreAcceptInputRevisions = preAcceptInputRevisions;
         if (TryGetBool(root, "preserveInputRevisions", out var preserveInputRevisions))
             settings.PreserveInputRevisions = preserveInputRevisions;
+        if (TryGetBool(root, "normalizeRevisionAuthors", out var normalizeRevisionAuthors))
+            settings.NormalizeRevisionAuthors = normalizeRevisionAuthors;
 
         return settings;
     }

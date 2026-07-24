@@ -43,6 +43,10 @@ public class IrTokenDifferTests
         return tokens;
     }
 
+    /// <summary>A single non-whitespace Separator token (e.g. "." or "-") — content, not connective.</summary>
+    private static IrDiffToken Sep(string s) =>
+        new(IrDiffTokenKind.Separator, s, s, 0, s.Length, Plain);
+
     private static readonly IrRunFormat Plain = new() { Bold = false, UnmodeledDigest = default };
     private static readonly IrRunFormat Bold = new() { Bold = true, UnmodeledDigest = default };
 
@@ -114,15 +118,79 @@ public class IrTokenDifferTests
         Assert.Equal("Equal(0,3|0,3) Delete(3,5|3,3)", Sig(d));
     }
 
+    /// <summary>Word texts (Kind==Word) that fall inside an Equal op — i.e. retained across the diff.</summary>
+    private static List<string> RetainedWords(IrTokenDiff d, IReadOnlyList<IrDiffToken> left)
+    {
+        var retained = new List<string>();
+        foreach (var op in d.Ops)
+            if (op.Kind == IrTokenOpKind.Equal)
+                for (int i = op.LeftStart; i < op.LeftEnd; i++)
+                    if (left[i].Kind == IrDiffTokenKind.Word)
+                        retained.Add(left[i].Text);
+        return retained;
+    }
+
+    [Fact]
+    public void Content_anchored_retains_shared_word_amid_divergent_phrases()
+    {
+        // Two sentences sharing the content words "Open", "Sans", "a". Word anchors the intra-paragraph
+        // diff on content words and retains them (rendering ins/del around the retained anchors). A
+        // whitespace-anchored Myers instead spends its matches on the abundant identical spaces and
+        // DROPS the interior "a" (delete+insert it), scattering the ink. Content-anchored diffing keeps
+        // the shared content words retained.
+        var left = Words("Open", "Sans", "bold", "underline", "creates", "a", "distinctive", "modern", "heading", "style");
+        var right = Words("Open", "Sans", "is", "a", "humanist", "sans", "serif", "typeface");
+        var d = Diff(left, right);
+        var retained = RetainedWords(d, left);
+        Assert.Contains("Open", retained);
+        Assert.Contains("Sans", retained);
+        Assert.Contains("a", retained);   // the interior shared content word must be retained, not dropped
+    }
+
+    /// <summary>Concatenate several token sub-lists into one paragraph token list.</summary>
+    private static List<IrDiffToken> Concat(params List<IrDiffToken>[] parts)
+    {
+        var all = new List<IrDiffToken>();
+        foreach (var p in parts) all.AddRange(p);
+        return all;
+    }
+
+    [Fact]
+    public void Content_anchored_retains_interior_word_in_real_whitespace_crowded_pair()
+    {
+        // The documented real regression pair (docs root cause):
+        //   left : "Open Sans bold underline creates a distinctive modern heading style."
+        //   right: "Open Sans is a humanist sans-serif typeface for digital use."
+        // Both share the interior content word "a" (and "Open", "Sans"). With enough diverging words
+        // on both sides plus the shared trailing "." (and the "-" in "sans-serif"), a whitespace-keyed
+        // Myers spends its LCS budget on the abundant identical spaces and DROPS the interior "a",
+        // deleting+re-inserting it. Word instead anchors on the CONTENT word "a" and retains it.
+        // Content-anchored diffing keeps "a" in an Equal span.
+        var left = Concat(
+            Words("Open", "Sans", "bold", "underline", "creates", "a", "distinctive", "modern", "heading", "style"),
+            new List<IrDiffToken> { Sep(".") });
+        var right = Concat(
+            Words("Open", "Sans", "is", "a", "humanist", "sans"),
+            new List<IrDiffToken> { Sep("-") },
+            Words("serif", "typeface", "for", "digital", "use"),
+            new List<IrDiffToken> { Sep(".") });
+        var d = Diff(left, right);
+        var retained = RetainedWords(d, left);
+        Assert.Contains("Open", retained);
+        Assert.Contains("Sans", retained);
+        Assert.Contains("a", retained);   // interior shared content word must be RETAINED, not dropped
+    }
+
     [Fact]
     public void All_changed_no_common_tokens()
     {
         var left = Words("one", "two");
         var right = Words("three", "four");
         var d = Diff(left, right);
-        // No shared MatchKeys at all => whole-left delete, whole-right insert. The shared separators
-        // would normally match; here the separator " " IS shared, so it survives as Equal in the middle.
-        // Sanity: every right token covered, every left token covered (asserts already checked).
+        // No shared CONTENT tokens => whole-left delete, whole-right insert. The interior separator " "
+        // is connective, so under content-anchored diffing it never anchors: it lands inside a segment
+        // bounded by non-matching content and is absorbed into the del/ins band rather than surviving as
+        // Equal (whitespace ink follows the changed content, matching Word). Coverage asserts already run.
         Assert.Contains(IrTokenOpKind.Delete, d.Ops.Select(o => o.Kind));
         Assert.Contains(IrTokenOpKind.Insert, d.Ops.Select(o => o.Kind));
     }
@@ -273,14 +341,16 @@ public class IrTokenDifferTests
     public void Repeated_words_with_distinct_tail()
     {
         // "the the the a the the" vs "the the a the the the": deterministic, invariants hold, and the
-        // op shape is pinned so a regression in the Myers tie-break is caught.
+        // op shape is pinned so a regression in the anchor tie-break is caught.
         var left = Words("the", "the", "the", "a", "the", "the");
         var right = Words("the", "the", "a", "the", "the", "the");
         var d = Diff(left, right);
-        // Stable, deterministic signature (regression pin). Myers deletes the early "the " and
-        // inserts a "the" at the tail; the empty-left Insert anchor sits at the post-delete cursor.
+        // Stable, deterministic signature (regression pin). The char-weighted anchor rule keeps all five
+        // "the" anchors (matched char weight 15) rather than pairing the lone "a" (weight 13) — both are
+        // equally-minimal two-edit scripts, so this pins the char-weight tie-break: the right "a " is
+        // inserted early and the left "a " deleted, leaving the surrounding "the"s Equal.
         Assert.Equal(
-            "Equal(0,4|0,4) Delete(4,6|4,4) Equal(6,11|4,9) Insert(11,11|9,11)",
+            "Equal(0,4|0,4) Insert(4,4|4,6) Equal(4,6|6,8) Delete(6,8|8,8) Equal(8,11|8,11)",
             Sig(d));
     }
 

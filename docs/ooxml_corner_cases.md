@@ -689,6 +689,131 @@ counted, table attributed to the section it starts in) and
 
 ---
 
+## Tables: Word's compare backfills a hairline cell-margin/indent on fixed-width tables
+
+**Status:** Fixed (DocxDiff — `WordCompareTableNormalizer`)
+
+### Symptom
+
+A DocxDiff redline of two documents containing a fixed-width table rendered (in LibreOffice) with every
+cell's text shifted horizontally versus Microsoft Word's redline of the same pair — the whole table
+"ghosts" against the oracle, costing large amounts of pixel-diff energy even when the tracked-changes
+word stream is byte-identical to Word's.
+
+### The corner case
+
+A fixed-width table (`w:tblW w:type="dxa"`, cell widths summing to the table width) authored with **no**
+explicit `w:tblCellMar` relies on the application's default cell margin. Word's and LibreOffice's defaults
+disagree: LibreOffice insets cell text by ≈108 twips (its default), which on a fixed layout eats into the
+declared column widths, while Word insets by a hairline.
+
+Word's **compare** output does not leave the margin implicit — it materializes it. Across the Word-compare
+corpus, every fixed-width table lacking cell margins came back with `w:tblCellMar` left/right **and** a
+matching `w:tblInd` whose value equals the table's border width:
+
+| Source `tblBorders` `w:sz` | Point size | Materialized `tblCellMar`/`tblInd` (twips) |
+|---|---|---|
+| `4` | 0.5 pt | `10` |
+
+(`w:sz` is in eighths of a point; 1 pt = 20 twips, so twips = `sz × 2.5`.) AUTO-width tables
+(`type="auto"`) are **not** normalized (Word leaves them bare), and a table that already declares
+`w:tblCellMar` is left untouched.
+
+| Renderer | Fixed-width table, no `tblCellMar` |
+|---|---|
+| Word (compare output) | inserts `tblCellMar`/`tblInd` = border width (hairline) → cells fill the fixed columns |
+| LibreOffice (our un-normalized output) | applies its own ≈108-twip default → cell text shifts right, table ghosts |
+| Docxodus (after fix) | inserts border-width inset like Word → renders where Word's does |
+
+### The fix
+
+`WordCompareTableNormalizer.NormalizeAll` runs as a single-owner post-pass over the assembled body blocks
+in `IrMarkupRenderer.Render`. For each `w:tbl` whose `w:tblW` is `dxa`, that has a derivable border width
+and no declared `w:tblCellMar`, it inserts `w:tblCellMar` (left/right) and `w:tblInd` at the border-width
+inset, in CT_TblPrBase schema order. This mirrors the docDefaults backfill (`WordStockDocDefaults`) — the
+engine's job is to reproduce Word's compare output, so its tables must land where Word's do. The inset is
+a table property, not tracked-changes markup, so the `accept ≡ right` / `reject ≡ left` contract (verified
+at body-text level) is unaffected.
+
+**Known limitation:** on a pathological "repaired" document whose oracle itself normalized only *some* of
+its tables, the rule over-fires on the un-normalized ones (no principled source condition distinguishes
+them). The affected document is a deep residual on other grounds; the net effect across the corpus is a
+strong improvement with no table rendered worse than the un-normalized default.
+
+### Relevant code
+
+- `Docxodus/Ir/Diff/WordCompareTableNormalizer.cs` — the normalization rule.
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `Render` invokes the post-pass after block assembly.
+
+### Tests
+
+`Docxodus.Tests/DocxDiffTableCellMarginBackfillTests.cs` — border-width backfill, border-width tracking
+(`sz="8"` → 20), auto-width untouched, existing-margin untouched, no-border untouched.
+
+---
+
+## Tracked changes: author-color leak when input revisions are preserved
+
+**Status:** Fixed (DocxDiff — `DocxDiffSettings.NormalizeRevisionAuthors`, opt-in)
+
+### Symptom
+
+A DocxDiff redline of a document whose source (the revised side) already carried tracked changes —
+e.g. Google-Docs "suggestions" authored by *Online User*, or another reviewer's edits — rendered (in
+LibreOffice) with that preserved content in a DIFFERENT COLOR from the fresh compare markup, while
+Microsoft Word's oracle redline of the same pair was a single color. On a page dominated by such
+content this cost large amounts of pixel-diff energy even though the tracked-changes markup was
+structurally faithful.
+
+### The corner case
+
+LibreOffice colors tracked changes **by author**: each distinct `w:author` gets its own color. With
+`PreserveInputRevisions` on (as the Word-parity submission profile uses), the inputs' own revisions
+ride through into the output under their **original** author, and the fresh compare revisions use the
+engine's own author — so the output carries **two** authors and renders in **two** colors. Word's
+compare output, for these documents, is single-author (its oracle carries one `w:author`), hence one
+color.
+
+Empirically across the corpus this is common but not universal — of 42 documents where our output
+leaked a second author, 29 had single-author oracles (Word collapsed to one) and 13 had genuinely
+multi-author oracles (Word kept more than one). Because there is no reliable structural signal that
+distinguishes "Word collapsed" from "Word kept" on the input alone, this is exposed as an **opt-in
+setting**, not default behavior.
+
+| Renderer | Source with a preserved foreign-author revision |
+|---|---|
+| Word (compare output, these docs) | single `w:author` → one color |
+| Docxodus (default, `PreserveInputRevisions` on) | fresh author + preserved author → two colors |
+| Docxodus (`NormalizeRevisionAuthors` on) | all revision authors collapsed to one → one color |
+
+### The fix
+
+`IrMarkupRenderer.NormalizeRevisionAuthors` runs as a byte→byte post-pass over the rendered document
+when the flag is set: it stamps `settings.AuthorForRevisions` onto the `w:author` of every
+tracked-revision element (`w:ins`/`w:del`/`w:moveFrom`/`w:moveTo` and the `*Change` markers) across the
+wordprocessing story parts (document, headers, footers, footnotes, endnotes, comments-part revisions),
+leaving `w:comment` authors untouched (a comment is not a tracked change) and non-wordprocessing parts
+(charts, customXml, SmartArt) alone. Author is presentation metadata, so revision structure — and the
+`accept ≡ right` / `reject ≡ left` contract — is unaffected.
+
+This normalizes the **render**, not the markup semantics — it matches how an author-coloring renderer
+displays Word's single-author output, and it is a net-positive approximation (correct for the 29
+single-oracle docs, a no-op-or-neutral change for the 13 multi-oracle docs in practice) enabled via an
+explicit setting. It deliberately does not touch Consolidate/N-way output, whose per-reviewer authors
+are intentional.
+
+### Relevant code
+
+- `Docxodus/Ir/Diff/IrMarkupRenderer.cs` — `NormalizeRevisionAuthors` / `RevisionBearingParts`.
+- `Docxodus/Ir/Diff/IrDiffSettings.cs`, `Docxodus/DocxDiff.cs` — the flag + public mirror.
+
+### Tests
+
+`Docxodus.Tests/DocxDiffAuthorNormalizationTests.cs` — collapse of a preserved foreign author to the
+single author; the leak when the flag is off.
+
+---
+
 ## Contributing
 
 When adding new corner cases to this document:

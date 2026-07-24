@@ -74,6 +74,25 @@ internal sealed class IrBlockSimilarity
     /// <summary>Number of <see cref="IrDiffTokenKind.Word"/> tokens in a block (0 for non-paragraphs).</summary>
     public int WordCount(IrBlock block) => block is IrParagraph p ? Bag(p).WordCount : 0;
 
+    /// <summary>
+    /// True iff <paramref name="block"/> is a FUNGIBLE blank-spacer paragraph: an
+    /// <see cref="IrParagraph"/> whose tokens are all <see cref="IrDiffTokenKind.Separator"/> (or none)
+    /// — i.e. it is empty or whitespace-only, carrying NO words and NO atomic content (image / textbox /
+    /// note / tab / break / field). Such paragraphs are interchangeable (any blank matches any blank),
+    /// so an asymmetric leading/trailing count can pair one across an intervening table; the crossing
+    /// resolver treats them as demotable rather than pinning a heavier Modified block out of place.
+    /// A table / section break / opaque block is never a blank spacer (non-paragraph → false).
+    /// </summary>
+    public bool IsBlankSpacer(IrBlock block)
+    {
+        if (block is not IrParagraph p)
+            return false;
+        foreach (var t in Bag(p).Tokens)
+            if (t.Kind != IrDiffTokenKind.Separator)
+                return false;
+        return true;
+    }
+
     /// <summary>The paragraph's WORD-token MatchKey multiset (key → multiplicity). Cached per Align
     /// call; used by the junction pass's uniqueness discipline.</summary>
     public IReadOnlyDictionary<string, int> WordKeys(IrParagraph paragraph) => Bag(paragraph).WordCounts;
@@ -117,11 +136,20 @@ internal sealed class IrBlockSimilarity
         // "1.5 Line Spacing Demo"), which this rule does not touch.
         if (a.WordCount == 1 && b.WordCount == 1)
             return true;
+        // Word's compare INTERLEAVES a residue pair (renders one mixed ins/del paragraph with retained
+        // anchors) only when the two paragraphs genuinely correspond — ≥ 2 shared content words. A pair
+        // sharing a SINGLE incidental word ("Size 12 … font size …" vs "… font sizes …") is a full
+        // REWRITE to Word: it emits a separate inserted + deleted paragraph, not an interleave on the
+        // lone "font". Our old "any shared word force-pairs" over-interleaved those (the font_size/
+        // bold_italic tail-paragraph over-anchoring). Zero-overlap already stayed separate; this raises
+        // the bar from 1 → 2 to match Word. (The 1-word-vs-1-word typo/renumber case above is exempt.)
         var (small, large) = a.TrimmedWords.Count <= b.TrimmedWords.Count ? (a, b) : (b, a);
+        var seen = new System.Collections.Generic.HashSet<string>();
+        int shared = 0;
         foreach (var w in small.TrimmedWords)
-            if (large.TrimmedWords.Contains(w))
-                return true;
-        return false;
+            if (large.TrimmedWords.Contains(w) && seen.Add(w))
+                shared++;
+        return shared >= 2;
     }
 
     /// <summary>
@@ -129,7 +157,7 @@ internal sealed class IrBlockSimilarity
     /// <see cref="IrDiffTokenKind.Word"/>-kind MatchKeys only, and the Jaccard index over those
     /// word-only multisets. Separator/punctuation/atomic tokens are EXCLUDED — a shared "." or a
     /// run of shared whitespace is no evidence two paragraphs correspond (decoded from the
-    /// Word-compare oracle corpus: Word never pairs paragraphs on punctuation-only overlap).
+    /// Word's compare output: Word never pairs paragraphs on punctuation-only overlap).
     /// Empty or whitespace-only paragraphs have zero shared words, so they can never qualify.
     /// Uses the same per-Align-call bag cache as <see cref="Score"/>.
     /// </summary>

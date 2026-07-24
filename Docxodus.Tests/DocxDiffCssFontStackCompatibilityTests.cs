@@ -13,37 +13,38 @@ using Xunit;
 namespace Docxodus.Tests;
 
 /// <summary>
-/// Regression guards for the final-output compatibility projection for malformed CSS font-family
-/// lists.  The guard intentionally requires the exact list on direct runs in BOTH input packages;
-/// it must not turn into a general font resolver or rewrite one-sided values / quoted lists with
-/// a concrete fallback face.
+/// Guards for how the output handles malformed CSS font-family lists (e.g. "Roboto, sans-serif")
+/// that some HTML→DOCX producers write straight into <c>w:rFonts</c>. Word's compare keeps the raw
+/// stack verbatim, and so do we — rewriting it to Arial (the pre-2026-07 behavior) diverged from Word,
+/// so a rendered redline diverged from Word's compare output. Instead, the backfilled fontTable
+/// (<see cref="Docxodus.Ir.Diff.WordCompareFontTableBackfill"/>) declares each stack with Word's own
+/// <c>&lt;w:altName&gt;</c> descriptor so LibreOffice substitutes it the same way Word's compare output does.
 /// </summary>
 public class DocxDiffCssFontStackCompatibilityTests
 {
     private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
     [Fact]
-    public void SharedUnquotedCssFontStack_ProjectsDirectOutputRunsToArial()
+    public void SharedUnquotedCssFontStack_KeepsRawStackAndDeclaresAltNameInFontTable()
     {
         const string stack = "Roboto, sans-serif";
         var result = DocxDiff.Compare(Doc("old", stack), Doc("new", stack));
 
         var fonts = DirectRunFonts(result).ToList();
 
+        // The raw stack rides through unchanged (Word-faithful) — no Arial rewrite.
         Assert.NotEmpty(fonts);
-        Assert.All(fonts, f =>
-        {
-            Assert.Equal("Arial", (string?)f.Attribute(W + "ascii"));
-            Assert.Equal("Arial", (string?)f.Attribute(W + "hAnsi"));
-            Assert.Equal("Arial", (string?)f.Attribute(W + "cs"));
-        });
+        Assert.All(fonts, f => Assert.Equal(stack, (string?)f.Attribute(W + "ascii")));
+        // The backfilled fontTable declares the stack with its primary family as altName so the
+        // substitution matches Word's compare output.
+        Assert.Equal("Roboto", FontTableAltName(result, stack));
         Assert.Equal("new", BodyText(RevisionProcessor.AcceptRevisions(result)));
         Assert.Equal("old", BodyText(RevisionProcessor.RejectRevisions(result)));
         Assert.Empty(SchemaErrors(result));
     }
 
     [Fact]
-    public void SharedQuotedPrimaryWithOnlyGenericSansFallback_ProjectsDirectOutputRunsToArial()
+    public void SharedQuotedPrimaryWithOnlyGenericSansFallback_KeepsRawStackAndDeclaresAltName()
     {
         const string stack = "\"Open Sans\", sans-serif";
         var result = DocxDiff.Compare(Doc("old", stack), Doc("new", stack));
@@ -51,12 +52,8 @@ public class DocxDiffCssFontStackCompatibilityTests
         var fonts = DirectRunFonts(result).ToList();
 
         Assert.NotEmpty(fonts);
-        Assert.All(fonts, f =>
-        {
-            Assert.Equal("Arial", (string?)f.Attribute(W + "ascii"));
-            Assert.Equal("Arial", (string?)f.Attribute(W + "hAnsi"));
-            Assert.Equal("Arial", (string?)f.Attribute(W + "cs"));
-        });
+        Assert.All(fonts, f => Assert.Equal(stack, (string?)f.Attribute(W + "ascii")));
+        Assert.Equal("Open Sans", FontTableAltName(result, stack));
         Assert.Equal("new", BodyText(RevisionProcessor.AcceptRevisions(result)));
         Assert.Equal("old", BodyText(RevisionProcessor.RejectRevisions(result)));
         Assert.Empty(SchemaErrors(result));
@@ -161,6 +158,20 @@ public class DocxDiffCssFontStackCompatibilityTests
             .Where(fonts => fonts is not null)
             .Select(fonts => fonts!)
             .ToList();
+    }
+
+    private static string? FontTableAltName(WmlDocument doc, string fontName)
+    {
+        using var stream = new MemoryStream(doc.DocumentByteArray);
+        using var word = WordprocessingDocument.Open(stream, false);
+        var fontTable = word.MainDocumentPart!.FontTablePart;
+        if (fontTable is null)
+            return null;
+        using var reader = new StreamReader(fontTable.GetStream());
+        var xdoc = XDocument.Parse(reader.ReadToEnd());
+        return xdoc.Descendants(W + "font")
+            .FirstOrDefault(f => (string?)f.Attribute(W + "name") == fontName)
+            ?.Element(W + "altName")?.Attribute(W + "val")?.Value;
     }
 
     private static string BodyText(WmlDocument doc)
