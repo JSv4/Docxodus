@@ -599,6 +599,8 @@ export interface PaginatedDocumentProps {
   showPageNumbers?: boolean;
   /** Gap between pages in pixels. Default: 20 */
   pageGap?: number;
+  /** Whether simple paragraphs may fragment across page boundaries. Default: true. */
+  fragmentParagraphs?: boolean;
   /** Background color for the viewer. Default: "#525659" */
   backgroundColor?: string;
   /** CSS class prefix used in the HTML. Default: "page-" */
@@ -666,6 +668,7 @@ export function usePagination(
     showPageNumbers = true,
     pageGap = 20,
     cssPrefix = "page-",
+    fragmentParagraphs = true,
   } = options;
 
   const paginate = useCallback(() => {
@@ -702,6 +705,7 @@ export function usePagination(
         showPageNumbers,
         pageGap,
         cssPrefix,
+        fragmentParagraphs,
       };
       const engine = new PaginationEngine(staging, pageContainer, engineOptions);
       const paginationResult = engine.paginate();
@@ -711,7 +715,7 @@ export function usePagination(
     } finally {
       setIsPaginating(false);
     }
-  }, [html, containerRef, scale, showPageNumbers, pageGap, cssPrefix]);
+  }, [html, containerRef, scale, showPageNumbers, pageGap, cssPrefix, fragmentParagraphs]);
 
   // Auto-paginate when HTML changes
   useEffect(() => {
@@ -763,6 +767,7 @@ export function PaginatedDocument({
   scale = 1,
   showPageNumbers = true,
   pageGap = 20,
+  fragmentParagraphs = true,
   backgroundColor = "#525659",
   cssPrefix = "page-",
   onPaginationComplete,
@@ -779,7 +784,8 @@ export function PaginatedDocument({
     showPageNumbers,
     pageGap,
     cssPrefix,
-  }), [scale, showPageNumbers, pageGap, cssPrefix]);
+    fragmentParagraphs,
+  }), [scale, showPageNumbers, pageGap, cssPrefix, fragmentParagraphs]);
 
   const { result, isPaginating, error } = usePagination(html, containerRef, options);
 

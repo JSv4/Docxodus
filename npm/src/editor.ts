@@ -685,7 +685,13 @@ export class DocxEditor {
 
   /** Paginated mount: flow blocks into page boxes via pagination.ts, wire the page clones. */
   private mountPaginated(fullHtml: string): void {
-    paginateHtml(fullHtml, this.container, { scale: this.options.scale, cssPrefix: "page-" });
+    // Fragmented paragraphs intentionally have only one addressable head and
+    // are therefore unsuitable for the editor's one-block editing model.
+    paginateHtml(fullHtml, this.container, {
+      scale: this.options.scale,
+      cssPrefix: "page-",
+      fragmentParagraphs: false,
+    });
     // pagination.ts measures the hidden #pagination-staging subtree ONCE, then flows CLONES of its
     // blocks into the visible page boxes. Leaving staging in the live DOM is a trap: every
     // data-anchor exists twice (staging + page-box copy), so document.querySelector('[data-anchor]')
