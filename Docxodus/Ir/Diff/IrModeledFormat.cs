@@ -51,6 +51,7 @@ internal static class IrModeledFormat
         Append(sb, "SizeHalfPoints", f.SizeHalfPoints);
         Append(sb, "ColorHex", f.ColorHex);
         Append(sb, "Highlight", f.Highlight);
+        Append(sb, "Shading", f.Shading?.CanonicalXml);
         Append(sb, "Caps", f.Caps);
         Append(sb, "SmallCaps", f.SmallCaps);
         Append(sb, "Vanish", f.Vanish);
@@ -80,6 +81,7 @@ internal static class IrModeledFormat
         Append(sb, "KeepNext", f.KeepNext);
         Append(sb, "KeepLines", f.KeepLines);
         Append(sb, "PBB", f.PageBreakBefore);
+        Append(sb, "Shading", f.Shading?.CanonicalXml);
         Append(sb, "NumId", f.NumId);
         Append(sb, "Ilvl", f.Ilvl);
         return sb.ToString();
@@ -179,6 +181,7 @@ internal static class IrModeledFormat
         AddInt(dict, "fontSize", f.SizeHalfPoints);
         AddProp(dict, "color", f.ColorHex);
         AddProp(dict, "highlight", f.Highlight);
+        AddProp(dict, "shading", f.Shading?.CanonicalXml);
         AddBool(dict, "allCaps", f.Caps);
         AddBool(dict, "smallCaps", f.SmallCaps);
         AddBool(dict, "hidden", f.Vanish);
@@ -213,7 +216,7 @@ internal static class IrModeledFormat
     private static readonly string[] ModeledFieldOrder =
     {
         "style", "bold", "italic", "underline", "strikethrough", "doubleStrikethrough",
-        "verticalAlign", "font", "fontSize", "color", "highlight", "allCaps", "smallCaps", "hidden",
+        "verticalAlign", "font", "fontSize", "color", "highlight", "shading", "allCaps", "smallCaps", "hidden",
     };
 
     /// <summary>
@@ -239,6 +242,7 @@ internal static class IrModeledFormat
         AddBool(dict, "keepNext", f.KeepNext);
         AddBool(dict, "keepLines", f.KeepLines);
         AddBool(dict, "pageBreakBefore", f.PageBreakBefore);
+        AddProp(dict, "shading", f.Shading?.CanonicalXml);
         AddInt(dict, "numId", f.NumId);
         AddInt(dict, "numLevel", f.Ilvl);
         return dict;
@@ -272,7 +276,7 @@ internal static class IrModeledFormat
     {
         "style", "justification", "indentLeft", "indentRight", "indentFirstLine",
         "spacingBefore", "spacingAfter", "lineSpacing", "outlineLevel",
-        "keepNext", "keepLines", "pageBreakBefore", "numId", "numLevel",
+        "keepNext", "keepLines", "pageBreakBefore", "shading", "numId", "numLevel",
     };
 
     /// <summary>Project a SECTION format's modeled fields to a property dictionary (block-format-change family,

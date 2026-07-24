@@ -66,11 +66,28 @@ public static class DocxDiff
         ArgumentNullException.ThrowIfNull(left);
         ArgumentNullException.ThrowIfNull(right);
         var s = settings ?? new DocxDiffSettings();
+        // Exact identity is a no-op even for Strict OOXML or revision-bearing packages. An explicit
+        // accept-all request is an exception: it is an intentional transformation, so carry it out
+        // below. Compatibility gates still run before taking the fast path when callers enabled them.
+        if (DocxCompare.HasIdenticalPackageBytes(left, right) &&
+            !(s.PreAcceptInputRevisions && !s.PreserveInputRevisions))
+        {
+            if (s.OnCompatibilityWarning != null || s.ThrowOnCompatibilityWarning)
+            {
+                var preflightLeft = PreAccept(s, left);
+                var preflightRight = PreAccept(s, right);
+                PreflightCompatibility(s, preflightLeft, preflightRight);
+            }
+
+            return new WmlDocument(left);
+        }
         // Opt-in accept-all pre-flatten (default off → no-op): diff (and clone the output from) the accepted
         // view of both inputs so no pre-existing input revision survives into the result. See the flag's docs.
         left = PreAccept(s, left);
         right = PreAccept(s, right);
         PreflightCompatibility(s, left, right);
+        if (DocxCompare.HasIdenticalPackageBytes(left, right))
+            return new WmlDocument(left);
         var diff = s.ToIrDiffSettings();
         var irLeft = IrReader.Read(left, ReadOpts);
         var irRight = IrReader.Read(right, ReadOpts);
@@ -442,19 +459,31 @@ public static class DocxDiff
     /// <paramref name="doc"/> (a new <see cref="WmlDocument"/>; the input is untouched) so both the IR read AND
     /// the output-package clone are revision-free; when not set, return <paramref name="doc"/> unchanged so the
     /// default path is byte-for-byte what it was before the flag existed.
+    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> WINS over the pre-accept: preserving input markup
+    /// and pre-flattening it are opposite policies, and the Word-parity choice is to keep it.
     /// </summary>
-    private static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc) =>
-        settings.PreAcceptInputRevisions ? RevisionProcessor.AcceptRevisions(doc) : doc;
+    private static WmlDocument PreAccept(DocxDiffSettings settings, WmlDocument doc)
+    {
+        // Strict-conformance packages (ISO 29500 purl.oclc.org namespaces) are normalized to
+        // transitional before ANY read — Word does the same on open. No-op for transitional docs.
+        doc = StrictOoxmlNormalizer.NormalizeToTransitional(doc);
+        // mc:AlternateContent resolution (VML-choice unwrap, dead-draft fallback) — Word resolves
+        // on open and its compare output carries the resolved content. No-op when nothing matches.
+        doc = MarkupCompatibilityNormalizer.Normalize(doc);
+        // The byte-level accept-flatten is skipped under Preserve; the normalizers above always apply.
+        return settings.PreAcceptInputRevisions && !settings.PreserveInputRevisions
+            ? RevisionProcessor.AcceptRevisions(doc)
+            : doc;
+    }
 
-    /// <summary>Per-reviewer <see cref="PreAccept(DocxDiffSettings, WmlDocument)"/> for the N-way entry points;
-    /// returns the original list unchanged when the flag is off.</summary>
+    /// <summary>Per-reviewer <see cref="PreAccept(DocxDiffSettings, WmlDocument)"/> for the N-way entry points
+    /// (strict normalization always applies; the accept-flatten only when the flag is set and not
+    /// overridden by Preserve).</summary>
     private static IReadOnlyList<DocxDiffReviewer> PreAccept(
         DocxDiffSettings settings, IReadOnlyList<DocxDiffReviewer> reviewers)
     {
-        if (!settings.PreAcceptInputRevisions)
-            return reviewers;
         return reviewers
-            .Select(r => new DocxDiffReviewer { Author = r.Author, Document = RevisionProcessor.AcceptRevisions(r.Document) })
+            .Select(r => new DocxDiffReviewer { Author = r.Author, Document = PreAccept(settings, r.Document) })
             .ToList();
     }
 }
@@ -493,20 +522,19 @@ public enum DocxDiffRevisionGranularity
 public enum DocxDiffFormatComparison
 {
     /// <summary>
-    /// Compare only the MODELED run-format fields (bold, italic, underline, size, color, sub/superscript,
-    /// strike, caps, highlight, …) — the default. A format change is reported only when a modeled field
-    /// differs. <b>Trade-off:</b> a visible but UNMODELED rPr difference (e.g. <c>w:shd</c> run shading,
-    /// complex-script toggles, secondary font faces, <c>w:lang</c>) reads as Unchanged — a false negative.
-    /// This default exists because a <c>w:rPrChange</c>-grade report can only ever DESCRIBE modeled fields,
-    /// so reporting an undescribable unmodeled-only flip is noise; comparing modeled fields collapses that
-    /// noise without losing any delta a format-change report could express.
+    /// Compare only the MODELED run-format fields (bold, italic, underline, size, color, shading,
+    /// sub/superscript, strike, caps, highlight, …) — the default. A format change is reported only when a
+    /// modeled field differs. <b>Trade-off:</b> a visible but residual rPr difference (e.g. <c>w:bdr</c>,
+    /// complex-script toggles, secondary font faces) or a metadata flip such as <c>w:lang</c> reads as
+    /// Unchanged — a false negative. This default filters known residual-format churn while native revision
+    /// markup preserves the complete source <c>w:rPr</c> for every change it does detect.
     /// </summary>
     ModeledOnly,
 
     /// <summary>
-    /// Compare the FULL run format including the unmodeled rPr digest — every rPr difference (lang,
-    /// complex-script toggles, secondary font faces, shading) is significant. Choose this for byte-fidelity
-    /// consumers that must DETECT (even if they cannot fully describe) every formatting difference. The
+    /// Compare the FULL run format including the residual rPr digest — every remaining rPr difference (lang,
+    /// complex-script toggles, secondary font faces, borders) is significant. Choose this for byte-fidelity
+    /// consumers that must DETECT every formatting difference. The
     /// trade-off is the inverse of <see cref="ModeledOnly"/>: format-change noise from cosmetic rPr churn
     /// (e.g. editing tools rewriting <c>w:lang</c>/<c>w:bCs</c>) is reported.
     /// </summary>
@@ -668,9 +696,60 @@ public sealed class DocxDiffSettings
     /// every insertion and dropping every deletion. If you need to preserve or re-adjudicate the inputs'
     /// in-flight revisions, do not enable this; resolve them first by your own policy, then diff.</para>
     ///
-    /// <para>.NET-only in v1: not yet surfaced on the WASM/npm/python bridges.</para>
+    /// <para>The shared WASM/npm/python wire surface exposes this as
+    /// <c>preAcceptInputRevisions</c>.</para>
     /// </summary>
     public bool PreAcceptInputRevisions { get; set; }
+
+    /// <summary>
+    /// When true, tracked revisions ALREADY PRESENT in the input documents are PRESERVED in the compare
+    /// output — the inputs' original author/date markup rides through verbatim alongside this diff's fresh
+    /// revisions — while the text diff itself is still computed over the <b>accepted view</b> of each side.
+    /// This is Word Compare's own behavior: an input's pre-existing <c>w:ins</c>/<c>w:del</c> markup is kept
+    /// intact in Word's output. Default false.
+    ///
+    /// <para><b>V1 scope (what is preserved).</b> The RIGHT input's foreign markup is preserved in blocks
+    /// the diff finds content-EQUAL (emitted verbatim from the original right element) and in whole-block
+    /// INSERTED content (the diff's <c>w:ins</c> wraps only the plain runs; a foreign <c>w:ins</c>/<c>w:del</c>
+    /// child is left as-is, so no same-kind wrapper ever nests) — in the BODY and in footnote/endnote
+    /// bodies (note definitions pair by id and their blocks preserve through the same emission paths).
+    /// The LEFT package's carried-over parts (headers/footers, unchanged notes, styles, comments) keep
+    /// their markup because no pre-accept runs.
+    /// NOT preserved (flattened to the accepted view, attributable to this diff only): foreign markup inside
+    /// MODIFIED/format-only/split/merge/moved blocks and inside changed header/footer stories — the
+    /// char-precise renderers there require accept-view sources; the LEFT side's foreign markup in deleted
+    /// blocks is likewise flattened. <see cref="DocxDiff.GetRevisions"/> does not report preserved foreign
+    /// revisions (they are input facts, not edits of this diff).</para>
+    ///
+    /// <para><b>Round-trip contract under the flag (one-sided, exactly like Word).</b>
+    /// <c>accept(Compare(left, right))</c> still content-equals <c>accept(right)</c> — a preserved foreign
+    /// deletion vanishes on accept and a preserved foreign insertion is kept, matching the right side's own
+    /// accepted view. But <c>reject(Compare(left, right))</c> does NOT equal <c>left</c> wherever foreign
+    /// markup was preserved: rejecting a foreign <c>w:del</c> RESTORES its deleted text (and rejecting a
+    /// foreign <c>w:ins</c> removes text the left side never had). Word's Compare output behaves identically
+    /// under Reject All — this is inherent to preserving input revisions, not a defect; do not rely on
+    /// reject ≡ left when enabling this flag.</para>
+    ///
+    /// <para><b>Precedence.</b> When both this and <see cref="PreAcceptInputRevisions"/> are set, Preserve
+    /// wins: the byte-level pre-accept is skipped entirely (the two flags are opposite policies for the same
+    /// input markup; preserving is the Word-parity choice).</para>
+    ///
+    /// <para>The shared WASM/npm/python wire surface exposes this as
+    /// <c>preserveInputRevisions</c>.</para>
+    /// </summary>
+    public bool PreserveInputRevisions { get; set; }
+
+    /// <summary>
+    /// When true, every tracked-revision element in the output has its <c>w:author</c> stamped to
+    /// <see cref="AuthorForRevisions"/>, collapsing the output to a SINGLE revision author (default false).
+    /// This matches how author-coloring renderers (LibreOffice) display Word's single-author compare output:
+    /// with <see cref="PreserveInputRevisions"/> on, the inputs' own revisions ride through under their
+    /// ORIGINAL authors, so a document whose source carried foreign-authored suggestions renders in TWO
+    /// colors while Word's oracle is one. This normalizes the render, not the markup semantics — comment
+    /// authors are untouched, and it does not affect Consolidate/N-way outputs (per-reviewer authors are
+    /// intended there). See <c>docs/ooxml_corner_cases.md</c>.
+    /// </summary>
+    public bool NormalizeRevisionAuthors { get; set; }
 
     /// <summary>
     /// When true (the DEFAULT — matching Word Compare's "Headers and footers" comparison setting, which
@@ -746,6 +825,8 @@ public sealed class DocxDiffSettings
                 ? IrFormatComparison.Full
                 : IrFormatComparison.ModeledOnly,
             CompareHeadersFooters = CompareHeadersFooters,
+            PreserveInputRevisions = PreserveInputRevisions,
+            NormalizeRevisionAuthors = NormalizeRevisionAuthors,
             TrackBlockFormatChanges = TrackBlockFormatChanges,
             // The three slices default equal to the block flag (two-way behaves identically) — so the public
             // opt-out cascades to all of them. Only the composite diverges them (all slices on, umbrella off)

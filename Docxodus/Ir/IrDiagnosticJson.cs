@@ -171,6 +171,15 @@ internal static class IrDiagnosticJson
                 WriteHashes(writer, t);
                 WriteTableBody(writer, t);
                 break;
+            case IrSdtBlock sdt:
+                writer.WriteString("type", "sdt");
+                WriteHashes(writer, sdt);
+                writer.WriteString("envelopeDigest", sdt.EnvelopeDigest.ToHex());
+                writer.WriteStartArray("blocks");
+                foreach (var child in sdt.Blocks)
+                    WriteBlock(writer, child);
+                writer.WriteEndArray();
+                break;
             case IrSectionBreak s:
                 writer.WriteString("type", "sectionBreak");
                 WriteHashes(writer, s);
@@ -240,6 +249,12 @@ internal static class IrDiagnosticJson
             writer.WriteString("anchor", row.Anchor.ToString());
             writer.WriteString("contentHash", row.ContentHash.ToHex());
             writer.WriteString("trPrDigest", row.TrPrDigest.ToHex());
+            // Keep common direct-row diagnostics byte-stable; offsets only surface when they carry
+            // real grid geometry that a consumer needs to inspect.
+            if (row.GridBefore != 0)
+                writer.WriteNumber("gridBefore", row.GridBefore);
+            if (row.GridAfter != 0)
+                writer.WriteNumber("gridAfter", row.GridAfter);
             writer.WriteStartArray("cells");
             foreach (var cell in row.Cells)
             {
@@ -310,6 +325,7 @@ internal static class IrDiagnosticJson
                 // filesystem path may leak into the diagnostic output.
                 writer.WriteString("partUri", img.PartUri.ToString());
                 writer.WriteString("imageBytesHash", img.ImageBytesHash.ToHex());
+                writer.WriteString("drawingDigest", img.DrawingDigest.ToHex());
                 writer.WriteNumber("widthEmu", img.WidthEmu);
                 writer.WriteNumber("heightEmu", img.HeightEmu);
                 if (img.AltText is { } altText) writer.WriteString("altText", altText);
@@ -359,6 +375,7 @@ internal static class IrDiagnosticJson
         if (f.SizeHalfPoints is { } size) writer.WriteNumber("sizeHalfPoints", size);
         if (f.ColorHex is { } colorHex2) writer.WriteString("colorHex", colorHex2);
         if (f.Highlight is { } highlight) writer.WriteString("highlight", highlight);
+        if (f.Shading is { } shading) writer.WriteString("shading", shading.CanonicalXml);
         if (f.Caps is { } caps) writer.WriteBoolean("caps", caps);
         if (f.SmallCaps is { } smallCaps) writer.WriteBoolean("smallCaps", smallCaps);
         if (f.Vanish is { } vanish) writer.WriteBoolean("vanish", vanish);
@@ -386,6 +403,7 @@ internal static class IrDiagnosticJson
         if (f.KeepNext is { } keepNext) writer.WriteBoolean("keepNext", keepNext);
         if (f.KeepLines is { } keepLines) writer.WriteBoolean("keepLines", keepLines);
         if (f.PageBreakBefore is { } pageBreak) writer.WriteBoolean("pageBreakBefore", pageBreak);
+        if (f.Shading is { } shading) writer.WriteString("shading", shading.CanonicalXml);
         writer.WriteEndObject();
     }
 

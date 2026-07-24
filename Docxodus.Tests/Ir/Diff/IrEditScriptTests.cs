@@ -90,6 +90,40 @@ public class IrEditScriptTests
     }
 
     [Fact]
+    public void InlineEnvelopeChange_ProducesWholeParagraphModify_AndJsonRoundTrips()
+    {
+        var left = FromXml("<w:p><w:r><w:t>controlled</w:t></w:r></w:p>");
+        var right = FromXml(
+            "<w:p><w:sdt><w:sdtPr><w:tag w:val=\"new\"/></w:sdtPr>" +
+            "<w:sdtContent><w:r><w:t>controlled</w:t></w:r></w:sdtContent></w:sdt></w:p>");
+
+        var script = BuildVerified(left, right);
+        var op = Assert.Single(script.Operations);
+
+        Assert.Equal(IrEditOpKind.ModifyBlock, op.Kind);
+        Assert.True(op.RequiresWholeParagraphReplace);
+        Assert.NotNull(op.TokenDiff); // Content stays transparent; the flag is what carries the structure.
+        Assert.Contains("\"requiresWholeParagraphReplace\"", IrEditScriptJson.Write(script));
+    }
+
+    [Fact]
+    public void Interior_full_rewrite_carries_matching_body_group_through_json()
+    {
+        // The preceding paragraph pairs as a normal edit and the following paragraph is equal, so
+        // the zero-lexical middle residue is the body shape Word renders as two physical paragraphs.
+        var l = Doc("Anchor title blue", "obsolete amber stanza", "shared trailing paragraph");
+        var r = Doc("Anchor title bold", "fresh quantum clause", "shared trailing paragraph");
+        var s = BuildVerified(l, r);
+
+        var rewriteOps = s.Operations
+            .Where(o => o.Kind is IrEditOpKind.InsertBlock or IrEditOpKind.DeleteBlock).ToList();
+        Assert.Equal(2, rewriteOps.Count);
+        Assert.NotNull(rewriteOps[0].BodyFullRewriteGroupId);
+        Assert.Equal(rewriteOps[0].BodyFullRewriteGroupId, rewriteOps[1].BodyFullRewriteGroupId);
+        Assert.Contains("\"bodyFullRewriteGroupId\"", IrEditScriptJson.Write(s));
+    }
+
+    [Fact]
     public void Insert_block_has_right_anchor_only()
     {
         var l = Doc("alpha", "beta");

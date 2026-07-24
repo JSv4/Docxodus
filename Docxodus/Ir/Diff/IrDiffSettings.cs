@@ -12,7 +12,7 @@ namespace Docxodus.Ir.Diff;
 internal enum IrFormatComparison
 {
     /// <summary>
-    /// Compare only the MODELED run-format fields (Bold/Italic/Underline/Size/Color/… — the
+    /// Compare only the MODELED run-format fields (Bold/Italic/Underline/Size/Color/Shading/… — the
     /// <see cref="IrRunFormat"/> record EXCLUDING its <see cref="IrRunFormat.UnmodeledDigest"/>). The
     /// DEFAULT.
     /// <para><b>Why default.</b> The WC-BodyBookmarks diagnosis (M2.2 Task 4, sub-task B) showed the
@@ -20,13 +20,12 @@ internal enum IrFormatComparison
     /// ONLY format difference is unmodeled rPr leftovers — <c>w:lang</c> (4597), <c>w:iCs</c> (1328),
     /// <c>w:bCs</c> (550), <c>w:rFonts</c> hAnsi/cs faces (33), <c>w:szCs</c>/<c>w:rtl</c> — with every
     /// MODELED field byte-identical. Those are legitimate IR facts but pure noise for diff purposes:
-    /// a <c>w:rPrChange</c>-grade format-change report can only ever DESCRIBE modeled fields anyway, so
-    /// reporting a format change driven by an undescribable unmodeled-digest flip is a false positive.
-    /// Comparing modeled fields only collapses that noise (FormatOnly → Unchanged) without losing any
-    /// format delta a <c>w:rPrChange</c>-grade report could DESCRIBE. The honest trade-off: a visible
-    /// but UNMODELED format change (e.g. <c>w:shd</c> run shading) is a false NEGATIVE under this
-    /// default — it reads as Unchanged. Consumers needing to detect (if not describe) such changes use
-    /// <see cref="Full"/>.</para>
+    /// reporting a format change driven by a residual-digest flip is a false positive. Comparing modeled
+    /// fields only collapses that noise (FormatOnly → Unchanged). The honest trade-off: a remaining visible
+    /// but UNMODELED format change (e.g. <c>w:bdr</c> run borders) is a false NEGATIVE under this default —
+    /// it reads as Unchanged. Consumers needing to detect every residual change use <see cref="Full"/>.
+    /// Direct <c>w:shd</c> is intentionally modeled: its full canonical XML participates in the default
+    /// comparison and native revision markup archives the original raw property.</para>
     /// </summary>
     ModeledOnly,
 
@@ -148,7 +147,9 @@ internal sealed record IrDiffSettings
     /// <summary>
     /// DIFF-TIME setting. Characters that split an <c>IrTextRun</c>'s text into word vs. separator
     /// tokens. Each separator character becomes its own <see cref="IrDiffTokenKind.Separator"/> token
-    /// (matching <c>WmlComparer</c>'s atom granularity — one atom per separator char).
+    /// (matching <c>WmlComparer</c>'s atom granularity — one atom per separator char). The tokenizer
+    /// applies WmlComparer's special <c>.</c>/<c>,</c> rule before this set: either punctuation mark
+    /// remains part of a word when immediately adjacent to a digit (including across adjacent text runs).
     /// </summary>
     /// <remarks>
     /// Default copied verbatim from <c>WmlComparerSettings.WordSeparators</c> (Docxodus/WmlComparer.cs
@@ -185,19 +186,20 @@ internal sealed record IrDiffSettings
     /// DIFF-TIME setting. Minimum block similarity (Jaccard over token <c>MatchKey</c> multisets,
     /// 0.0–1.0) for two blocks left UNPAIRED after a gap's exact refinement to be paired as
     /// <c>Modified</c> (a "same block, edited" pairing) rather than falling out as separate
-    /// <c>Deleted</c>+<c>Inserted</c>. Default 0.5.
+    /// <c>Deleted</c>+<c>Inserted</c>. Default 0.35.
     /// </summary>
     /// <remarks>
-    /// <b>Why 0.5.</b> Below half token-overlap, treating two blocks as "the same block edited" produces
-    /// a WORSE edit script than a clean Insert+Delete: a Modified pairing forces a token diff whose
-    /// shared run is a minority of the content, so the diff is mostly Delete-then-Insert anyway but now
-    /// carries the false claim that the destination paragraph is a revision of that particular source
-    /// paragraph (misleading review UIs, bad blame). At ≥0.5 the majority of tokens are shared, so the
-    /// "edited in place" framing is the faithful one. 0.5 is the in-gap floor; cross-gap MOVES demand the
-    /// stricter <see cref="MoveSimilarityThreshold"/> because relocating-and-editing is a stronger claim
-    /// than editing in place.
+    /// <b>Why 0.35.</b> Word's own compare pairs paragraphs well below half token-overlap — e.g. a
+    /// sentence rewrite keeping only a trailing clause (Jaccard ≈ 0.375) renders in Word's redline as ONE
+    /// paragraph with interleaved ins/del runs, not as a deleted + an inserted paragraph. 0.35 was
+    /// calibrated against Word's compare output: it captures those rewrites (raising
+    /// pixel fidelity vs Word's arrangement measurably) while still refusing junk pairings — at even
+    /// lower floors (≈0.15) the pairing starts claiming unrelated paragraphs are revisions of each other,
+    /// which misleads review UIs and measurably WORSENS fidelity on rewritten documents. This is the
+    /// in-gap floor; cross-gap MOVES demand the stricter <see cref="MoveSimilarityThreshold"/> because
+    /// relocating-and-editing is a stronger claim than editing in place.
     /// </remarks>
-    public double BlockSimilarityThreshold { get; init; } = 0.5;
+    public double BlockSimilarityThreshold { get; init; } = 0.35;
 
     /// <summary>
     /// DIFF-TIME setting. Minimum block similarity (Jaccard over token <c>MatchKey</c> multisets,
@@ -254,6 +256,46 @@ internal sealed record IrDiffSettings
     public int SplitMaxRunLength { get; init; } = 8;
 
     /// <summary>
+    /// DIFF-TIME setting (Word-parity: added-text merges/splits, 2026-07-22). When true (the DEFAULT),
+    /// a split/merge may fire even when the SINGULAR side's LCS coverage is below
+    /// <see cref="SplitCoverageThreshold"/> — i.e. the merged/split paragraph ADDS new text — PROVIDED
+    /// the RUN side is genuinely retained (foreign slack ≤ <see cref="SplitAddedTextMaxSlack"/>), the
+    /// singular is still substantially explained (coverage ≥ <see cref="SplitAddedTextMinCoverage"/>),
+    /// and every content member carries ≥2 matched phrase words. Word merges "A." + "B." →
+    /// "A. which C. B extended." reporting B's words as retained anchors in B's paragraph slot; requiring
+    /// 90% singular coverage vetoed that exact shape (the merged paragraph's new text lowers coverage
+    /// even though the base paragraphs are absorbed in order — e.g. the corpus <c>justify_alignment</c>
+    /// merge). Set false for the pre-2026-07 coverage-only gate.
+    /// <para><b>Why the slack bound stays strict (not loosened to catch every messy merge).</b> Pushing
+    /// slack past ~0.35 admits "messy" merges/splits where a base member keeps one contiguous anchor but
+    /// drops most of its text. Two problems appear there: (1) local coverage/slack/member-word scores can
+    /// no longer separate a genuine Word split (<c>right_aligned_italic</c>) from a false one Word keeps
+    /// positional (<c>center_bold</c> → <c>clear_formatting</c>) — that is Word's GLOBAL minimal-edit
+    /// tie-break, not a local predicate; and (2) even when detection is right, the SPLIT paragraph-property
+    /// (jc/pPrChange/pilcrow-placement) rendering is not yet Word-faithful, so the render is pixel-neutral
+    /// or worse despite a matching word stream. Both are tracked follow-ups; until then this path is
+    /// scoped to the clean low-slack merges it can reproduce faithfully.</para>
+    /// </summary>
+    public bool MergeSplitAllowAddedText { get; init; } = true;
+
+    /// <summary>
+    /// DIFF-TIME setting. For the added-text merge/split path (<see cref="MergeSplitAllowAddedText"/>),
+    /// the maximum foreign slack (fraction of the RUN's content tokens NOT matched). Kept at the same
+    /// strictness as <see cref="SplitForeignSlack"/> (the added-text path relaxes only the SINGULAR
+    /// coverage requirement, not run retention) — see <see cref="MergeSplitAllowAddedText"/> for why
+    /// looser slack is deferred. Default 0.34.
+    /// </summary>
+    public double SplitAddedTextMaxSlack { get; init; } = 0.34;
+
+    /// <summary>
+    /// DIFF-TIME setting. For the added-text merge/split path, the MINIMUM in-order LCS coverage of the
+    /// singular by the run — the containment floor that keeps the path from gluing paragraphs that merely
+    /// SHARE A FEW WORDS. A merged/split paragraph only, say, 19% explained by the base is new content
+    /// coincidentally overlapping, not a merge. Default 0.30.
+    /// </summary>
+    public double SplitAddedTextMinCoverage { get; init; } = 0.30;
+
+    /// <summary>
     /// DIFF-TIME setting (header/footer campaign, 2026-07-03). When true (the DEFAULT — Word's own
     /// Compare "Headers and footers" granularity default), <see cref="IrEditScriptBuilder"/> diffs the
     /// header/footer stories (paired per section ordinal × occurrence kind, with Word's
@@ -264,6 +306,33 @@ internal sealed record IrDiffSettings
     /// verbatim and no header change is reported anywhere.
     /// </summary>
     public bool CompareHeadersFooters { get; init; } = true;
+
+    /// <summary>
+    /// RENDER-TIME setting (Word-parity input-revision preservation). When true, the markup renderer
+    /// carries the RIGHT input's pre-existing tracked-revision markup through into the output for
+    /// content-EQUAL blocks (verbatim from the ORIGINAL right element rather than the accepted working
+    /// copy) and for whole-block INSERTED content (the diff's <c>w:ins</c> wraps only plain runs; a
+    /// foreign <c>w:ins</c>/<c>w:del</c> child stays as-is, never nested same-kind) — in the body and
+    /// in footnote/endnote bodies (note definitions pair by id). All char-precise paths
+    /// (modify/format-only/split/merge/move, changed header/footer stories) keep rendering
+    /// over the accepted view. Default false — the accepted-view-only behavior. Public mirror:
+    /// <see cref="DocxDiffSettings.PreserveInputRevisions"/> (see it for the one-sided round-trip
+    /// contract: accept ≡ accept(right) holds; reject ≠ left where foreign markup exists).
+    /// </summary>
+    public bool PreserveInputRevisions { get; init; }
+
+    /// <summary>
+    /// RENDER-TIME setting. When true, every tracked-revision element in the output (across all parts —
+    /// body, headers/footers, footnotes/endnotes) has its <c>w:author</c> stamped to
+    /// <see cref="AuthorForRevisions"/>, collapsing the output to a SINGLE revision author. Default false.
+    /// Public mirror: <see cref="DocxDiffSettings.NormalizeRevisionAuthors"/>. This targets renderers that
+    /// color tracked changes BY AUTHOR (LibreOffice): with <see cref="PreserveInputRevisions"/> on, the
+    /// inputs' own revisions ride through under their ORIGINAL authors, so a doc whose source carried
+    /// foreign-authored suggestions renders in two colors while Word's single-author compare output is one
+    /// — a rendering (not markup) divergence. Comment authors (<c>w:comment</c>) are left untouched, as are
+    /// Consolidate/N-way outputs (their per-reviewer authors are intended).
+    /// </summary>
+    public bool NormalizeRevisionAuthors { get; init; }
 
     /// <summary>
     /// DIFF-TIME setting (block-format-change family, 2026-07-03). When true (the DEFAULT), paragraph-and-above
@@ -292,12 +361,14 @@ internal sealed record IrDiffSettings
 
     /// <summary>
     /// DIFF-TIME setting (Consolidate sub-project B2). The TABLE-SHELL slice of
-    /// <see cref="TrackBlockFormatChanges"/>: gates ONLY the table-shell property-revision markup
+    /// <see cref="TrackBlockFormatChanges"/>: gates the table-shell property-revision markup
     /// (<c>w:tcPrChange</c>/<c>w:trPrChange</c>/<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/<c>w:tblPrExChange</c>),
     /// NOT the paragraph or section variants. Defaults equal to <see cref="TrackBlockFormatChanges"/> (so every
     /// two-way call behaves byte-identically — the split is invisible outside the composite). The composite
     /// merger + renderers set this TRUE while forcing <see cref="TrackBlockFormatChanges"/> FALSE, so
-    /// <c>Consolidate</c> merges reviewers' table-shell changes (B2) with per-element attribution.
+    /// <c>Consolidate</c> merges reviewers' table-shell changes (B2) with per-element attribution. A
+    /// right-only table-cell insertion also needs <c>w:tblGridChange</c> to be reversible; when this is
+    /// false, that shape intentionally falls back to a whole-table revision.
     /// </summary>
     public bool TrackTableFormatChanges { get; init; } = true;
 

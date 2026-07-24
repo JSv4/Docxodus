@@ -124,6 +124,13 @@ internal enum IrEditOpKind
 /// <item><see cref="IrEditOpKind.MergeBlock"/>: <see cref="RightAnchor"/> set, <see cref="LeftAnchor"/> null;
 /// <see cref="SplitMergeAnchors"/> carries the N≥2 left anchors; <see cref="SegmentDiffs"/> holds one diff
 /// per left block against the corresponding slice of the right token stream; mirror of SplitBlock otherwise.</item>
+/// <item><see cref="BodyFullRewriteGroupId"/>: set only on the matching InsertBlock/DeleteBlock pair
+/// emitted from one BODY-level 1×1 full-lexical-rewrite gap. It is renderer-only provenance; nested
+/// scopes and every other operation leave it null.</item>
+/// <item><see cref="RequiresWholeParagraphReplace"/>: set only on a paired paragraph operation whose
+/// non-tokenizable structural carrier differs (an inline <c>w:sdt</c>/<c>w:smartTag</c> envelope or a
+/// non-hyperlink field code/state carrier). Its token diff remains available for apply/diagnostics, but renderers
+/// must emit whole old/new paragraphs so the original carrier never leaks through Accept or Reject.</item>
 /// </list>
 /// </remarks>
 internal sealed record IrEditOp(
@@ -136,7 +143,9 @@ internal sealed record IrEditOp(
     IrTableDiff? TableDiff = null,
     IrNodeList<IrTextboxDiff>? TextboxDiffs = null,
     IrNodeList<string>? SplitMergeAnchors = null,
-    IrNodeList<IrTokenDiff>? SegmentDiffs = null);
+    IrNodeList<IrTokenDiff>? SegmentDiffs = null,
+    int? BodyFullRewriteGroupId = null,
+    bool RequiresWholeParagraphReplace = false);
 
 /// <summary>
 /// The nested inner-block diff of ONE textbox pair inside a Modified paragraph (M2.4 Task 1). A paragraph
@@ -184,7 +193,11 @@ internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrE
 /// A story is the effective header (or footer) of one occurrence kind for one body section; stories pair
 /// across documents by (section ordinal, kind) with Word's previous-section inheritance rule, then
 /// de-duplicate to distinct (left part, right part) pairs — an inherited story referenced by several
-/// sections is diffed once, at its first cell.
+/// sections is diffed once, at its first cell. When one LEFT part is paired with multiple RIGHT
+/// stories, a later pair is rendered into a clone of the left part and <see cref="ReferenceBindings"/>
+/// describes the static section topology that selects it. OOXML cannot revision-track a
+/// <c>w:headerReference</c>/<c>w:footerReference</c>, so this refined topology is the only shape that
+/// accepts to the right story and rejects to the left story without mutating an earlier shared section.
 /// </summary>
 /// <remarks>
 /// <para><b>Naming convention (the <see cref="IrNoteDiff"/> convention).</b> <see cref="ScopeName"/> is
@@ -200,8 +213,12 @@ internal sealed record IrNoteDiff(IrNoteKind Kind, string NoteId, IrNodeList<IrE
 /// <para><b>Part URIs.</b> <see cref="LeftPartUri"/>/<see cref="RightPartUri"/> are the source part URIs
 /// (<see cref="Docxodus.Ir.IrScope.PartUri"/>) — the markup renderer locates the output part (a clone of
 /// the left package) by <see cref="LeftPartUri"/> and clones an inserted story's shell/relationships from
-/// <see cref="RightPartUri"/>.</para>
+/// <see cref="RightPartUri"/>. <see cref="CloneLeftPart"/> requests a fresh copy of the left part before
+/// its content is redlined; <see cref="ReferenceBindings"/> then attaches that copy to the exact
+/// section/kind cells that require it.</para>
 /// </remarks>
+internal readonly record struct IrHeaderFooterBinding(int SectionIndex, IrHeaderFooterKind Kind);
+
 internal sealed record IrHeaderFooterDiff(
     bool IsHeader,
     IrHeaderFooterKind Kind,
@@ -210,7 +227,9 @@ internal sealed record IrHeaderFooterDiff(
     string? LeftScopeName,
     Uri? LeftPartUri,
     Uri? RightPartUri,
-    IrNodeList<IrEditOp> Ops);
+    IrNodeList<IrEditOp> Ops,
+    bool CloneLeftPart = false,
+    IrNodeList<IrHeaderFooterBinding>? ReferenceBindings = null);
 
 /// <summary>
 /// The kind of a row-level operation in an <see cref="IrTableDiff"/> (M2.2 Task 4). Rows carry a
@@ -237,7 +256,9 @@ internal enum IrRowOpKind
 
 /// <summary>
 /// One row-level operation in a table diff. For <see cref="IrRowOpKind.ModifyRow"/>,
-/// <see cref="CellOps"/> carries the positional per-cell diff; all other kinds carry a null
+/// <see cref="CellOps"/> carries the per-cell diff (ordinary unit-span grids may use a monotone body-key
+/// alignment with bounded affinity-based gap fill for safe right-growth; complex topology retains positional
+/// pairing); all other kinds carry a null
 /// <see cref="CellOps"/>. <see cref="MoveGroupId"/> links a <see cref="IrRowOpKind.MovedRow"/> source
 /// and destination (one row op per side, like the block-level move convention).
 /// </summary>
@@ -250,8 +271,9 @@ internal sealed record IrRowOp(
     bool? IsMoveSource = null);
 
 /// <summary>
-/// One cell-level operation inside a <see cref="IrRowOpKind.ModifyRow"/>. Cells pair POSITIONALLY within
-/// the row (grid-aware pairing — gridSpan/vMerge-aware — is M2.3+; documented). A paired cell's
+/// One cell-level operation inside a <see cref="IrRowOpKind.ModifyRow"/>. Ordinary, direct unit-span rows
+/// can pair stable cells by a monotone body-hash spine plus bounded affinity-based gap fill across a right-only
+/// insertion; all other shapes pair positionally (gridSpan/vMerge topology remains a later capability). A paired cell's
 /// paragraph blocks are aligned with the same block machinery and each Modified paragraph pair carries a
 /// token diff in <see cref="BlockOps"/>, so a cell-text edit surfaces as a token diff IN THE CELL rather
 /// than a whole-table blob. An unpaired cell (column count differs) carries one anchor and a null

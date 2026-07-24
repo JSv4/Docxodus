@@ -248,6 +248,38 @@ public class IrRevisionRendererTests
         Assert.Contains(after, x => x.Type == IrRevisionType.Deleted && !string.IsNullOrEmpty(x.Text));
     }
 
+    [Fact]
+    public void MoveModify_format_delta_emits_format_revision_after_destination()
+    {
+        // Exact text relocation plus bold formatting is still an in-move change. The revision surface must agree
+        // with the edit script and OOXML: Moved first, then the run-level FormatChanged with both source anchors.
+        const string anchor = "Anchor paragraph holds the document spine steady.";
+        const string moved = "Moved paragraph contains enough distinct words for move detection today.";
+        const string trailing = "Trailing paragraph also has enough words to stabilize matching.";
+        const string trailing2 = "Final paragraph provides another stable matching anchor here.";
+        var l = FromXml(
+            $"<w:p><w:r><w:t>{anchor}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{moved}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing2}</w:t></w:r></w:p>");
+        var r = FromXml(
+            $"<w:p><w:r><w:t>{anchor}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing2}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>{moved}</w:t></w:r></w:p>");
+
+        var revs = Render(l, r).ToList();
+        var destination = Assert.Single(revs, revision =>
+            revision.Type == IrRevisionType.Moved && revision.IsMoveSource == false);
+        var format = Assert.Single(revs, revision =>
+            revision.Type == IrRevisionType.FormatChanged && revision.Text == moved);
+
+        Assert.True(revs.IndexOf(format) > revs.IndexOf(destination));
+        Assert.Contains("bold", format.FormatChange!.ChangedPropertyNames);
+        Assert.NotNull(format.LeftAnchor);
+        Assert.NotNull(format.RightAnchor);
+    }
+
     // ------------------------------------------------------------------ table recursion
 
     [Fact]
@@ -280,6 +312,57 @@ public class IrRevisionRendererTests
 
         Assert.Contains(revs, x => x.Type == IrRevisionType.Deleted && x.Text.Contains("old"));
         Assert.Contains(revs, x => x.Type == IrRevisionType.Inserted && x.Text.Contains("new"));
+    }
+
+    [Fact]
+    public void TableDiff_middle_column_insert_projects_one_granular_cell_revision()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(c => Cell(c, width))) + "</w:tr>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr/><w:tblGrid>" +
+            string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", columns)) +
+            "</w:tblGrid>" + string.Concat(rows) + "</w:tbl>";
+
+        var left = FromXml(Table(2000, 3, Row(2000, "A", "B", "C")));
+        var right = FromXml(Table(1500, 4, Row(1500, "A", "NEW", "B", "C")));
+        var revisions = Render(left, right).ToList();
+
+        var inserted = Assert.Single(revisions, r => r.Type == IrRevisionType.Inserted);
+        Assert.Equal("NEW", inserted.Text);
+        Assert.Null(inserted.LeftAnchor);
+        Assert.NotNull(inserted.RightAnchor);
+        Assert.DoesNotContain(revisions, r => r.Type == IrRevisionType.Deleted);
+    }
+
+    [Fact]
+    public void TableDiff_mixed_middle_column_insert_and_edit_keeps_the_retained_cell_token_granular()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(cell => Cell(cell, width))) + "</w:tr>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr/><w:tblGrid>" +
+            string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", columns)) +
+            "</w:tblGrid>" + string.Concat(rows) + "</w:tbl>";
+
+        var left = FromXml(Table(2000, 3, Row(2000, "A", "B", "C")));
+        var right = FromXml(Table(1500, 4, Row(1500, "A", "X", "B2", "C")));
+        var revisions = Render(left, right).ToList();
+
+        var insertedCell = Assert.Single(revisions,
+            revision => revision.Type == IrRevisionType.Inserted && revision.Text == "X");
+        Assert.Null(insertedCell.LeftAnchor);
+        Assert.NotNull(insertedCell.RightAnchor);
+        Assert.Contains(revisions, revision => revision.Type == IrRevisionType.Deleted && revision.Text == "B");
+        Assert.Contains(revisions, revision => revision.Type == IrRevisionType.Inserted && revision.Text == "B2" &&
+            revision.LeftAnchor is not null);
+        Assert.DoesNotContain(revisions, revision => revision.Type == IrRevisionType.Deleted && revision.Text == "C");
     }
 
     // ------------------------------------------------------------------ equal blocks emit nothing
@@ -383,9 +466,11 @@ public class IrRevisionRendererTests
     }
 
     /// <summary>
-    /// Compatible mode coalesces a paragraph's alternating per-word del/ins token ops into ONE Deleted + ONE
-    /// Inserted contiguous region (separators between changed words bridged), where Fine mode emits one
-    /// revision per word. Same content, different atomization — the WmlComparer-grade projection.
+    /// A no-shared-word replacement inside a paragraph renders as ONE Deleted + ONE Inserted contiguous
+    /// region in BOTH granularities. Content-anchoring (the intra-paragraph diff anchors on shared content
+    /// words, not whitespace) already emits a clean whole-segment replace in Fine mode — the pre-anchor
+    /// per-word del/ins alternation was the whitespace-crowding artifact this pass removes. Compatible mode
+    /// keeps producing the same WmlComparer-grade contiguous region.
     /// </summary>
     [Fact]
     public void Compatible_mode_coalesces_adjacent_word_ops_into_one_del_one_ins()
@@ -396,14 +481,14 @@ public class IrRevisionRendererTests
         var fine = Render(l, r, Default).ToList();
         var compat = Render(l, r, Compatible).ToList();
 
-        // Fine: one Deleted + one Inserted per changed word (three each here).
-        Assert.True(fine.Count(x => x.Type == IrRevisionType.Deleted) >= 3);
-
-        // Compatible: a single contiguous Deleted + single Inserted region.
-        Assert.Equal(1, compat.Count(x => x.Type == IrRevisionType.Deleted));
-        Assert.Equal(1, compat.Count(x => x.Type == IrRevisionType.Inserted));
-        Assert.Equal("now foo bar baz", compat.Single(x => x.Type == IrRevisionType.Deleted).Text);
-        Assert.Equal("what are the chances", compat.Single(x => x.Type == IrRevisionType.Inserted).Text);
+        // Both granularities: a single contiguous Deleted + single Inserted region ("This is" retained).
+        foreach (var revs in new[] { fine, compat })
+        {
+            Assert.Equal(1, revs.Count(x => x.Type == IrRevisionType.Deleted));
+            Assert.Equal(1, revs.Count(x => x.Type == IrRevisionType.Inserted));
+            Assert.Equal("now foo bar baz", revs.Single(x => x.Type == IrRevisionType.Deleted).Text);
+            Assert.Equal("what are the chances", revs.Single(x => x.Type == IrRevisionType.Inserted).Text);
+        }
     }
 
     /// <summary>

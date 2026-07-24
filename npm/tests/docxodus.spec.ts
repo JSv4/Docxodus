@@ -843,6 +843,158 @@ test.describe('Docxodus WASM Tests', () => {
       console.log(`Pagination test passed: ${paginationResult.totalPages} pages, no content overflow`);
     });
 
+    test('splits a simple oversized table at row boundaries without clipping rows', async ({ page }) => {
+      const bytes = readTestFile('HW002-Table14.docx');
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      await page.addScriptTag({ path: 'dist/pagination.bundle.js' });
+
+      const paginationResult = await page.evaluate((html) => {
+        const container = document.createElement('div');
+        container.id = 'test-pagination-simple-oversized-table';
+        container.innerHTML = html;
+        document.body.appendChild(container);
+
+        const staging = container.querySelector('#pagination-staging') as HTMLElement;
+        const pageContainer = container.querySelector('#pagination-container') as HTMLElement;
+        if (!staging || !pageContainer) {
+          document.body.removeChild(container);
+          return { error: 'Pagination elements not found' };
+        }
+
+        const sourceTable = staging.querySelector('table') as HTMLTableElement | null;
+        if (!sourceTable) {
+          document.body.removeChild(container);
+          return { error: 'Source table not found' };
+        }
+        sourceTable.dataset.anchor = 'simple-table-anchor';
+        const sourceRows = Array.from(sourceTable.rows).map(row =>
+          (row.textContent || '').replace(/\s+/g, ' ').trim()
+        );
+
+        const { PaginationEngine } = (window as any).DocxodusPagination;
+        try {
+          const engine = new PaginationEngine(staging, pageContainer, {
+            scale: 1,
+            showPageNumbers: true
+          });
+          const pagination = engine.paginate();
+
+          const renderedTables = Array.from(
+            pageContainer.querySelectorAll('.page-content table')
+          ) as HTMLTableElement[];
+          const renderedRows = renderedTables.flatMap(table =>
+            Array.from(table.rows).map(row => (row.textContent || '').replace(/\s+/g, ' ').trim())
+          );
+          const overflowingTables: number[] = [];
+          for (const [index, table] of renderedTables.entries()) {
+            const wrapper = table.parentElement as HTMLElement | null;
+            const content = table.closest('.page-content') as HTMLElement | null;
+            if (!wrapper || !content) continue;
+
+            const wrapperRect = wrapper.getBoundingClientRect();
+            const contentRect = content.getBoundingClientRect();
+            const marginBottom = parseFloat(window.getComputedStyle(wrapper).marginBottom) || 0;
+            if (wrapperRect.bottom + marginBottom > contentRect.bottom + 1) {
+              overflowingTables.push(index);
+            }
+          }
+
+          const retainedAnchors = pageContainer.querySelectorAll(
+            'table[data-anchor="simple-table-anchor"]'
+          ).length;
+          document.body.removeChild(container);
+          return {
+            totalPages: pagination.totalPages,
+            tableFragments: renderedTables.length,
+            sourceRows,
+            renderedRows,
+            overflowingTables,
+            retainedAnchors
+          };
+        } catch (e) {
+          document.body.removeChild(container);
+          return { error: (e as Error).message };
+        }
+      }, result.html!);
+
+      if ('error' in paginationResult) {
+        throw new Error(paginationResult.error as string);
+      }
+
+      expect(paginationResult.totalPages).toBeGreaterThan(1);
+      expect(paginationResult.tableFragments).toBeGreaterThan(1);
+      expect(paginationResult.renderedRows).toEqual(paginationResult.sourceRows);
+      expect(paginationResult.overflowingTables).toEqual([]);
+      expect(paginationResult.retainedAnchors).toBe(1);
+    });
+
+    test('does not split an oversized table with merged cells', async ({ page }) => {
+      const bytes = readTestFile('HW002-Table17.docx');
+      const result = await convertToHtmlWithPagination(page, bytes, 1, 1.0);
+
+      expect(result.error).toBeUndefined();
+      expect(result.html).toBeDefined();
+
+      await page.addScriptTag({ path: 'dist/pagination.bundle.js' });
+
+      const paginationResult = await page.evaluate((html) => {
+        const container = document.createElement('div');
+        container.id = 'test-pagination-merged-oversized-table';
+        container.innerHTML = html;
+        document.body.appendChild(container);
+
+        const staging = container.querySelector('#pagination-staging') as HTMLElement;
+        const pageContainer = container.querySelector('#pagination-container') as HTMLElement;
+        const sourceTable = staging?.querySelector('table') as HTMLTableElement | null;
+        if (!staging || !pageContainer || !sourceTable) {
+          document.body.removeChild(container);
+          return { error: 'Pagination elements or source table not found' };
+        }
+
+        // Make the fixture decisively taller than a body page. The regression is
+        // that merge topology must keep the existing conservative fallback.
+        for (const row of Array.from(sourceTable.rows)) {
+          (row as HTMLElement).style.height = '180pt';
+        }
+
+        const { PaginationEngine } = (window as any).DocxodusPagination;
+        try {
+          const engine = new PaginationEngine(staging, pageContainer, {
+            scale: 1,
+            showPageNumbers: true
+          });
+          engine.paginate();
+
+          const renderedTables = Array.from(
+            pageContainer.querySelectorAll('.page-content table')
+          ) as HTMLTableElement[];
+          const rendered = renderedTables[0];
+          const outcome = {
+            tableFragments: renderedTables.length,
+            hasRowspan: !!rendered?.querySelector('[rowspan]'),
+            hasColspan: !!rendered?.querySelector('[colspan]')
+          };
+          document.body.removeChild(container);
+          return outcome;
+        } catch (e) {
+          document.body.removeChild(container);
+          return { error: (e as Error).message };
+        }
+      }, result.html!);
+
+      if ('error' in paginationResult) {
+        throw new Error(paginationResult.error as string);
+      }
+
+      expect(paginationResult.tableFragments).toBe(1);
+      expect(paginationResult.hasRowspan).toBe(true);
+      expect(paginationResult.hasColspan).toBe(true);
+    });
+
     test('scaled pagination maintains proper clipping', async ({ page }) => {
       const bytes = readTestFile(testDoc);
 

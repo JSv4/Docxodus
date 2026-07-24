@@ -77,6 +77,36 @@ public class IrDiagnosticJsonTests
         Assert.True(bodyScope.GetProperty("blocks").GetArrayLength() > 0);
     }
 
+    [Fact]
+    public void DiagnosticJson_BlockSdt_ContainsEnvelopeAndNestedBlocks()
+    {
+        var child = new IrParagraph
+        {
+            Anchor = new IrAnchor(IrAnchorKind.P, "body", new string('1', 32)),
+            ContentHash = IrHash.Compute("child"),
+            FormatFingerprint = ZeroHash,
+            Format = EmptyParaFormat,
+            Inlines = IrNodeList.From(new IrInline[] { new IrTextRun("inside", EmptyRunFormat) }),
+        };
+        var envelope = IrHash.Compute("whole-sdt-envelope");
+        var sdt = new IrSdtBlock
+        {
+            Anchor = new IrAnchor(IrAnchorKind.Sdt, "body", new string('2', 32)),
+            ContentHash = IrHash.Compute("framed-sdt"),
+            FormatFingerprint = ZeroHash,
+            EnvelopeDigest = envelope,
+            Blocks = IrNodeList.From(new IrBlock[] { child }),
+        };
+
+        using var parsed = JsonDocument.Parse(RenderBlock(sdt));
+        var json = parsed.RootElement.GetProperty("scopes")[0].GetProperty("blocks")[0];
+        Assert.Equal("sdt", json.GetProperty("type").GetString());
+        Assert.Equal(envelope.ToHex(), json.GetProperty("envelopeDigest").GetString());
+        var children = json.GetProperty("blocks");
+        Assert.Equal(1, children.GetArrayLength());
+        Assert.Equal("paragraph", children[0].GetProperty("type").GetString());
+    }
+
     // --- writer/reader lockstep completeness guard ------------------------
     //
     // The diagnostic writer keeps an "unsupported" fallback for kinds the reader can't yet emit.
@@ -177,6 +207,14 @@ public class IrDiagnosticJsonTests
             Rows = IrNodeList.Empty<IrRow>(),
             TblPrDigest = ZeroHash,
             TblGridDigest = ZeroHash,
+        },
+        _ when t == typeof(IrSdtBlock) => new IrSdtBlock
+        {
+            Anchor = Anchor(IrAnchorKind.Sdt),
+            ContentHash = ZeroHash,
+            FormatFingerprint = ZeroHash,
+            EnvelopeDigest = ZeroHash,
+            Blocks = IrNodeList.Empty<IrBlock>(),
         },
         _ when t == typeof(IrSectionBreak) => new IrSectionBreak
         {

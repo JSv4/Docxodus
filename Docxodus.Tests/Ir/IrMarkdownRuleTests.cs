@@ -422,10 +422,43 @@ public class IrMarkdownRuleTests
     [Fact]
     public void Rule_BlockSdt_SkippedFromMarkdown()
     {
-        AssertEquivalent(IrTestDocuments.FromBodyXml(
+        var doc = IrTestDocuments.FromBodyXml(
             "<w:p><w:r><w:t>before</w:t></w:r></w:p>" +
             "<w:sdt><w:sdtContent><w:p><w:r><w:t>inside cc</w:t></w:r></w:p></w:sdtContent></w:sdt>" +
-            "<w:p><w:r><w:t>after</w:t></w:r></w:p>"));
+            "<w:p><w:r><w:t>after</w:t></w:r></w:p>");
+        AssertEquivalent(doc);
+
+        var ir = IrReader.Read(new WmlDocument(doc));
+        var sdt = Assert.IsType<IrSdtBlock>(ir.Body.Blocks[1]);
+        var inner = Assert.IsType<IrParagraph>(Assert.Single(sdt.Blocks));
+        var result = IrMarkdownEmitter.Emit(ir, new WmlToMarkdownConverterSettings());
+
+        // The public projection follows the oracle's split behavior: skip the direct wrapper in
+        // markdown, but index its descendant paragraph. The internal sdt anchor must not leak.
+        Assert.DoesNotContain("inside cc", result.Markdown);
+        Assert.Contains(inner.Anchor.ToString(), result.AnchorIndex.Keys);
+        Assert.DoesNotContain(sdt.Anchor.ToString(), result.AnchorIndex.Keys);
+    }
+
+    [Fact]
+    public void Rule_BlockSdtInTableCell_ContributesDescendantTextAndAnchor()
+    {
+        var doc = IrTestDocuments.FromBodyXml(
+            "<w:tbl><w:tr><w:tc>" +
+            "<w:sdt><w:sdtPr><w:tag w:val=\"cell\"/></w:sdtPr>" +
+            "<w:sdtContent><w:p><w:r><w:t>inside cell</w:t></w:r></w:p></w:sdtContent></w:sdt>" +
+            "</w:tc></w:tr></w:tbl>");
+        AssertEquivalent(doc);
+
+        var ir = IrReader.Read(new WmlDocument(doc));
+        var cell = Assert.Single(Assert.Single(ir.Body.Blocks.OfType<IrTable>()).Rows).Cells.Single();
+        var sdt = Assert.IsType<IrSdtBlock>(Assert.Single(cell.Blocks));
+        var inner = Assert.IsType<IrParagraph>(Assert.Single(sdt.Blocks));
+        var result = IrMarkdownEmitter.Emit(ir, new WmlToMarkdownConverterSettings());
+
+        Assert.Contains("inside cell", result.Markdown);
+        Assert.Contains(inner.Anchor.ToString(), result.AnchorIndex.Keys);
+        Assert.DoesNotContain(sdt.Anchor.ToString(), result.AnchorIndex.Keys);
     }
 
     /// <summary>A tab inside a formatted run lands INSIDE that run's delimiter span (the oracle groups a

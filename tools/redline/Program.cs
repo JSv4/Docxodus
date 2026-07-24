@@ -87,10 +87,9 @@ class Program
             DetailThreshold = 0
         };
 
-        // Which comparison engine to use. Default WmlComparer (the blessed engine);
-        // --engine=docxdiff opts into the newer IR diff engine. The default is NOT
-        // flipped — this is the shared selector seam (see DocxCompare / ComparisonEngine).
-        var engine = ComparisonEngine.WmlComparer;
+        // DocxDiff is the production comparison path. --engine=wmlcomparer remains available for
+        // callers that explicitly need the historical engine.
+        var engine = ComparisonEngine.DocxDiff;
 
         foreach (var flag in flags)
         {
@@ -217,7 +216,7 @@ class Program
         Console.WriteLine("  output.docx      Path for the output redline document");
         Console.WriteLine();
         Console.WriteLine("Options:");
-        Console.WriteLine("  --engine=<wmlcomparer|docxdiff>   Comparison engine (default: wmlcomparer)");
+        Console.WriteLine("  --engine=<wmlcomparer|docxdiff>   Comparison engine (default: docxdiff)");
         Console.WriteLine("  --author=<name>                   Author name for tracked changes (default: Redline)");
         Console.WriteLine("  --detail-threshold=<0.0-1.0>      Comparison granularity (lower = more detailed, default: 0; wmlcomparer only)");
         Console.WriteLine("  --case-insensitive                 Ignore case differences");

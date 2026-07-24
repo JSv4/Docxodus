@@ -273,9 +273,10 @@ internal static class IrMarkdownEmitter
     /// <summary>
     /// Walk the body blocks yielding each addressable anchor with its TextPreview, in the oracle's
     /// <c>DescendantsAndSelf</c> order: a paragraph (then its in-pPr <c>sec</c> if any), a table then
-    /// its rows then cells then cell blocks, a standalone section break, an opaque block. Empty
-    /// preview for sectPr/opaque (no <c>w:t</c> descendants), mirroring the oracle. Suppress-mode
-    /// drops empty paragraphs from the index too.
+    /// its rows then cells then cell blocks, and the descendants of a block-level content control
+    /// (but never the control wrapper itself), plus standalone section breaks. Empty preview for
+    /// sectPr/opaque (no <c>w:t</c> descendants), mirroring the oracle. Suppress-mode drops empty
+    /// paragraphs from the index too.
     /// </summary>
     private static IEnumerable<(IrAnchor Anchor, string Preview)> WalkAnchorsForIndex(
         IrNodeList<IrBlock> blocks, WmlToMarkdownConverterSettings settings)
@@ -284,6 +285,12 @@ internal static class IrMarkdownEmitter
         {
             switch (b)
             {
+                case IrSdtBlock sdt:
+                    // The oracle's index walk descends into w:sdtContent, but KindFor does not make
+                    // the w:sdt wrapper a public anchor. Preserve that split: recurse, do not yield sdt.
+                    foreach (var inner in WalkAnchorsForIndex(sdt.Blocks, settings))
+                        yield return inner;
+                    break;
                 case IrParagraph p:
                     // Suppress-mode: drop empty paragraphs from the index (oracle parity). Note a
                     // paragraph whose only "text" lives in a textbox is NOT empty under the oracle's
@@ -393,6 +400,12 @@ internal static class IrMarkdownEmitter
                         if (inline is IrTextbox tb)
                             Visit(tb.Blocks);
                 }
+                else if (b is IrSdtBlock sdt)
+                {
+                    // The public index excludes the wrapper but includes descendants, so their
+                    // heading/list numbering facts must be available to AddIndexEntry.
+                    Visit(sdt.Blocks);
+                }
                 else if (b is IrTable t)
                 {
                     foreach (var row in t.Rows)
@@ -445,6 +458,10 @@ internal static class IrMarkdownEmitter
         {
             case IrParagraph p:
                 AppendInlineText(p.Inlines, sb);
+                break;
+            case IrSdtBlock sdt:
+                foreach (var b in sdt.Blocks)
+                    AppendFlatText(b, sb);
                 break;
             case IrTable t:
                 foreach (var row in t.Rows)
@@ -714,10 +731,10 @@ internal static class IrMarkdownEmitter
 
     private static void EmitBlocks(IrNodeList<IrBlock> blocks, StringBuilder sb, EmitCtx ctx)
     {
-        // Skip blocks a block-level w:sdt delivered: the oracle's EmitBlocks dispatches only direct
-        // w:p/w:tbl/w:sectPr children and silently skips the w:sdt wrapper, so it never renders these.
-        // They stay in the IR + anchor index (the oracle indexes them via Descendants).
-        var list = blocks.Where(b => !b.Source.FromBlockSdt).ToList();
+        // The oracle's EmitBlocks dispatches only direct w:p/w:tbl/w:sectPr children and silently
+        // skips a block-level w:sdt wrapper. Keep that wrapper atomic in the IR, but omit its entire
+        // subtree here; WalkAnchorsForIndex separately descends into the children for index parity.
+        var list = blocks.Where(b => b is not IrSdtBlock).ToList();
         for (var i = 0; i < list.Count; i++)
         {
             var b = list[i];

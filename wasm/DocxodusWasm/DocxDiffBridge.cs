@@ -14,11 +14,10 @@ namespace DocxodusWasm;
 /// the shared <see cref="DocxDiffOps"/> facade so the WASM and stdio NDJSON
 /// transports stay byte-for-byte identical.
 ///
-/// <para><c>WmlComparer</c> remains the default comparison surface
-/// (<see cref="DocumentComparer"/>); this bridge exposes the NEW engine, whose
-/// differentiators are anchor-addressed revisions and the diff-as-data edit
-/// script. Settings arrive as a JSON object (the transport mirror of
-/// <c>DocxDiffSettings</c>); an empty/whitespace string uses the defaults.</para>
+/// <para><see cref="DocumentComparer"/> also defaults to this engine for primary
+/// comparisons. This bridge exposes its additional anchor-addressed revisions and
+/// diff-as-data edit script. Settings arrive as a JSON object (the transport mirror
+/// of <c>DocxDiffSettings</c>); an empty/whitespace string uses the defaults.</para>
 /// </summary>
 [SupportedOSPlatform("browser")]
 public static partial class DocxDiffBridge

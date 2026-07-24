@@ -60,6 +60,11 @@ internal static class HtmlConversionOps
             throw new ArgumentException("No document data provided", nameof(docxBytes));
         ArgumentNullException.ThrowIfNull(options);
 
+        // WmlToHtmlConverter's XDocument pipeline is transitional-namespace based. Match
+        // DocxDiff's open behavior so Word Strict packages render rather than presenting an
+        // unrecognized purl.oclc.org body to the converter.
+        docxBytes = StrictOoxmlNormalizer.NormalizeToTransitional(docxBytes);
+
         // Writable stream required: WmlToHtmlConverter runs RevisionAccepter internally.
         using var memoryStream = new MemoryStream();
         memoryStream.Write(docxBytes, 0, docxBytes.Length);
@@ -74,6 +79,12 @@ internal static class HtmlConversionOps
         }
 
         var renderComments = options.CommentRenderMode >= 0;
+        bool renderPagination = options.PaginationMode == (int)PaginationMode.Paginated;
+        // The paginated React viewer injects this document HTML into its capture host. A body margin
+        // therefore applies to the HOST body as well as the document staging tree and makes every fixed-size
+        // page box overflow onto a second printed page. Keep the comfortable standalone-document margin, but
+        // leave the host flush when pagination owns page geometry.
+        string bodyMargin = renderPagination ? "0" : "20px";
 
         var settings = new WmlToHtmlConverterSettings
         {
@@ -81,7 +92,7 @@ internal static class HtmlConversionOps
             CssClassPrefix = options.CssClassPrefix,
             FabricateCssClasses = options.FabricateCssClasses,
             AdditionalCss = options.AdditionalCss,
-            GeneralCss = "body { font-family: Arial, sans-serif; margin: 20px; } " +
+            GeneralCss = $"body {{ font-family: Arial, sans-serif; margin: {bodyMargin}; }} " +
                          "span { white-space: pre-wrap; }",
             RenderComments = renderComments,
             CommentRenderMode = renderComments
@@ -90,6 +101,10 @@ internal static class HtmlConversionOps
             CommentCssClassPrefix = options.CommentCssClassPrefix,
             IncludeCommentMetadata = true,
             RenderPagination = (PaginationMode)options.PaginationMode,
+            // Paginated output is printed from fixed-size page boxes. Emit physical page CSS for
+            // every paginated document: uniform sections use one global rule; mixed sections use
+            // named rules selected by each rendered page box.
+            GeneratePageCss = renderPagination,
             PaginationScale = options.PaginationScale > 0 ? options.PaginationScale : 1.0,
             PaginationCssClassPrefix = options.PaginationCssClassPrefix,
             RenderAnnotations = options.RenderAnnotations,
@@ -141,6 +156,8 @@ internal static class HtmlConversionOps
         if (string.IsNullOrWhiteSpace(anchorId))
             throw new ArgumentException("No anchor id provided", nameof(anchorId));
         ArgumentNullException.ThrowIfNull(options);
+
+        docxBytes = StrictOoxmlNormalizer.NormalizeToTransitional(docxBytes);
 
         using var sourceStream = new MemoryStream();
         sourceStream.Write(docxBytes, 0, docxBytes.Length);

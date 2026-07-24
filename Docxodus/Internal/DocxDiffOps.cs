@@ -141,6 +141,12 @@ internal static class DocxDiffOps
             settings.CompareHeadersFooters = compareHf;
         if (TryGetBool(root, "trackBlockFormatChanges", out var trackBlockFmt))
             settings.TrackBlockFormatChanges = trackBlockFmt;
+        if (TryGetBool(root, "preAcceptInputRevisions", out var preAcceptInputRevisions))
+            settings.PreAcceptInputRevisions = preAcceptInputRevisions;
+        if (TryGetBool(root, "preserveInputRevisions", out var preserveInputRevisions))
+            settings.PreserveInputRevisions = preserveInputRevisions;
+        if (TryGetBool(root, "normalizeRevisionAuthors", out var normalizeRevisionAuthors))
+            settings.NormalizeRevisionAuthors = normalizeRevisionAuthors;
 
         return settings;
     }

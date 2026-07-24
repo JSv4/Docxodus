@@ -1,6 +1,8 @@
 #nullable enable
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
+using System.Text;
 using DocumentFormat.OpenXml.Packaging;
 using Docxodus;
 using Docxodus.Internal;
@@ -18,6 +20,43 @@ public class HtmlConversionOpsTests
         File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
             "HC001-5DayTourPlanTemplate.docx"));
 
+    private const string TransitionalMain =
+        "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    private const string StrictMain = "http://purl.oclc.org/ooxml/wordprocessingml/main";
+    private const string TransitionalRels =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    private const string StrictRels =
+        "http://purl.oclc.org/ooxml/officeDocument/relationships";
+
+    private static byte[] StrictDocumentOnlyDocxBytes(string text)
+    {
+        var bytes = DocumentOnlyDocxBytes(text);
+        using var ms = new MemoryStream();
+        ms.Write(bytes, 0, bytes.Length);
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Update, leaveOpen: true))
+        {
+            foreach (var entry in zip.Entries.ToList())
+            {
+                if (!entry.FullName.EndsWith(".xml", System.StringComparison.OrdinalIgnoreCase) &&
+                    !entry.FullName.EndsWith(".rels", System.StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string xml;
+                using (var reader = new StreamReader(entry.Open(), Encoding.UTF8))
+                    xml = reader.ReadToEnd();
+                var strict = xml
+                    .Replace(TransitionalMain, StrictMain, System.StringComparison.Ordinal)
+                    .Replace(TransitionalRels, StrictRels, System.StringComparison.Ordinal);
+                if (strict == xml)
+                    continue;
+                using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+                writer.BaseStream.SetLength(0);
+                writer.Write(strict);
+            }
+        }
+        return ms.ToArray();
+    }
+
     [Fact]
     public void HCO001_ConvertBytes_ProducesHtmlWithPrefix()
     {
@@ -27,6 +66,74 @@ public class HtmlConversionOpsTests
 
         Assert.Contains("<html", html);
         Assert.Contains("zz-", html);
+    }
+
+    [Fact]
+    public void HCO003_PaginatedHtml_LeavesTheCaptureHostBodyFlush()
+    {
+        // Paginated HTML is injected into the React viewer's capture host. Its fixed-size page boxes
+        // own geometry, so a converter-level body margin must not shrink/overflow that host. Standalone
+        // conversion retains the readable 20px margin for existing consumers.
+        string paginated = HtmlConversionOps.ConvertToHtml(TourPlanBytes(),
+            new HtmlConversionOptions { PaginationMode = (int)PaginationMode.Paginated });
+        string standalone = HtmlConversionOps.ConvertToHtml(TourPlanBytes(), new HtmlConversionOptions());
+
+        Assert.Contains("body { font-family: Arial, sans-serif; margin: 0; }", paginated);
+        Assert.Contains("body { font-family: Arial, sans-serif; margin: 20px; }", standalone);
+    }
+
+    [Fact]
+    public void HCO076_PaginatedHtml_UsesDocumentPageSizeWithoutOuterPrintMargin()
+    {
+        // The paginator has already applied the Word margins within each page box. Its capture
+        // path must advertise the paper size to Chromium without applying those margins again.
+        string paginated = HtmlConversionOps.ConvertToHtml(
+            PageSizedDocxBytes(width: 11906, height: 16838),
+            new HtmlConversionOptions { PaginationMode = (int)PaginationMode.Paginated });
+        string standalone = HtmlConversionOps.ConvertToHtml(
+            PageSizedDocxBytes(width: 11906, height: 16838), new HtmlConversionOptions());
+
+        Assert.Contains("@page", paginated);
+        Assert.Contains("size: 8.27in 11.69in;", paginated);
+        Assert.Contains("margin: 0;", paginated);
+        Assert.DoesNotContain("@page docxodus-section-", paginated);
+        Assert.DoesNotContain("@page", standalone);
+    }
+
+    [Fact]
+    public void HCO077_MixedPaginatedSections_UseNamedPrintPages()
+    {
+        // The staging and final paginator page boxes retain their data-section-index. Named
+        // pages let Chromium print each section at its own physical size without relying on a
+        // caller to customize page.pdf options.
+        string html = HtmlConversionOps.ConvertToHtml(MixedPageSizedDocxBytes(),
+            new HtmlConversionOptions { PaginationMode = (int)PaginationMode.Paginated });
+
+        Assert.Contains("@page docxodus-section-0", html);
+        Assert.Contains("size: 8.27in 11.69in;", html);
+        Assert.Contains("@page docxodus-section-1", html);
+        Assert.Contains("size: 11.00in 8.50in;", html);
+        Assert.Contains(".page-box[data-section-index=\"0\"]", html);
+        Assert.Contains("page: docxodus-section-0;", html);
+        Assert.Contains(".page-box[data-section-index=\"1\"]", html);
+        Assert.Contains("page: docxodus-section-1;", html);
+        Assert.DoesNotContain("@page {", html);
+        Assert.Contains("data-section-index=\"0\"", html);
+        Assert.Contains("data-page-width=\"595.3\"", html);
+        Assert.Contains("data-page-height=\"841.9\"", html);
+        Assert.Contains("data-section-index=\"1\"", html);
+        Assert.Contains("data-page-width=\"792.0\"", html);
+        Assert.Contains("data-page-height=\"612.0\"", html);
+    }
+
+    [Fact]
+    public void HCO078_PaginatedHtml_WithoutSectionProperties_UsesLetterPageSize()
+    {
+        string html = HtmlConversionOps.ConvertToHtml(DocumentOnlyDocxBytes("No section properties"),
+            new HtmlConversionOptions { PaginationMode = (int)PaginationMode.Paginated });
+
+        Assert.Contains("size: 8.50in 11.00in;", html);
+        Assert.Contains("margin: 0;", html);
     }
 
     [Fact]
@@ -491,6 +598,46 @@ public class HtmlConversionOpsTests
         return ms.ToArray();
     }
 
+    private static byte[] PageSizedDocxBytes(uint width, uint height)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(new Wp.Run(new Wp.Text("Page-sized test content"))),
+                    new Wp.SectionProperties(
+                        new Wp.PageSize { Width = width, Height = height },
+                        new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })));
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
+    private static byte[] MixedPageSizedDocxBytes()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new Wp.Document(
+                new Wp.Body(
+                    new Wp.Paragraph(
+                        new Wp.ParagraphProperties(
+                            new Wp.SectionProperties(
+                                new Wp.PageSize { Width = 11906, Height = 16838 },
+                                new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })),
+                        new Wp.Run(new Wp.Text("A4 section"))),
+                    new Wp.Paragraph(new Wp.Run(new Wp.Text("Landscape section"))),
+                    new Wp.SectionProperties(
+                        new Wp.PageSize { Width = 15840, Height = 12240 },
+                        new Wp.PageMargin { Top = 1440, Right = 1440, Bottom = 1440, Left = 1440 })));
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
     // Issue #265 — sibling of the missing-settings crash fixed in #264. word/styles.xml
     // (StyleDefinitionsPart) is also optional in OOXML: Word opens a document-only package
     // without repair, but FormattingAssembler.AssembleFormatting dereferenced
@@ -536,5 +683,389 @@ public class HtmlConversionOpsTests
         string block = HtmlConversionOps.RenderBlockHtml(bytes, anchorId, opts);
 
         Assert.Contains("HCO064 block text", block);
+    }
+
+    // Some producer packages use a VML <v:imagedata> relationship id for a non-image part. The
+    // unsupported VML image is safely omitted, but it must not cast CustomXmlPart to ImagePart and
+    // take down the document conversion (the complex_style_attr benchmark fixtures have this shape).
+    [Fact]
+    public void HCO065_VmlImageDataReferencingCustomXmlPart_DoesNotCrashConverter()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var customXml = main.AddCustomXmlPart(CustomXmlPartType.CustomXml);
+            using (var customWriter = new StreamWriter(customXml.GetStream(FileMode.Create, FileAccess.Write)))
+                customWriter.Write("<payload/>");
+            string relationshipId = main.GetIdOfPart(customXml);
+
+            using (var documentWriter = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                documentWriter.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
+                    "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" " +
+                    "xmlns:v=\"urn:schemas-microsoft-com:vml\"><w:body><w:p><w:r><w:t>" +
+                    "HCO065 retained text</w:t></w:r><w:r><w:pict><v:shape style=\"width:10pt;height:10pt\">" +
+                    $"<v:imagedata r:id=\"{relationshipId}\"/></v:shape></w:pict></w:r></w:p>" +
+                    "<w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
+
+        Assert.Contains("HCO065 retained text", html);
+    }
+
+    // Word tolerates malformed pPr payloads where lineRule is present but the required line value
+    // is absent (including documents with duplicate pPr elements). Treat it as the implicit browser
+    // line-height instead of casting the missing attribute and aborting the complete conversion.
+    [Fact]
+    public void HCO066_AutoLineRuleWithoutLineValue_DoesNotCrashConverter()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var documentWriter = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                documentWriter.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:body><w:p><w:pPr><w:spacing w:lineRule=\"auto\"/></w:pPr><w:pPr/>" +
+                    "<w:r><w:t>HCO066 retained text</w:t></w:r></w:p><w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(), new HtmlConversionOptions());
+
+        Assert.Contains("HCO066 retained text", html);
+        Assert.DoesNotContain("line-height", html);
+    }
+
+    // Strict/compatibility producers can express paragraph spacing as fractional point measures
+    // rather than raw twips. It must use the same measure parser for before and line spacing so
+    // one style default cannot abort every paragraph in the document.
+    [Fact]
+    public void HCO073_PointSuffixedAutoLineSpacing_ConvertsToPercent()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:body><w:p><w:pPr><w:spacing w:before=\"2pt\" w:line=\"12.95pt\" w:lineRule=\"auto\"/>" +
+                    "</w:pPr><w:r><w:t>HCO073 retained text</w:t></w:r></w:p><w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO073 retained text", html);
+        Assert.Contains("line-height: 107.9%", html);
+    }
+
+    // Table indentation and preceding paragraph spacing can use point measures too. A table-cell
+    // fill with no explicit shading pattern is likewise a common Word-compatible clear shading
+    // form. Normalize both shapes without throwing while probing the shade mapper.
+    [Fact]
+    public void HCO074_CellFillWithoutShadeValue_RendersClearFill()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:body><w:p><w:pPr><w:spacing w:after=\"8pt\"/></w:pPr><w:r><w:t>HCO074 preceding text</w:t></w:r></w:p>" +
+                    "<w:tbl><w:tblPr><w:tblInd w:w=\"0pt\" w:type=\"dxa\"/></w:tblPr>" +
+                    "<w:tblGrid><w:gridCol w:w=\"2400\"/></w:tblGrid><w:tr><w:tc>" +
+                    "<w:tcPr><w:tcW w:w=\"2400\" w:type=\"dxa\"/><w:shd w:fill=\"D9EAF7\"/></w:tcPr>" +
+                    "<w:p><w:r><w:t>HCO074 retained text</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
+                    "<w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+
+        string html = HtmlConversionOps.ConvertToHtml(ms.ToArray(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO074 retained text", html);
+        Assert.Contains("background: #D9EAF7", html);
+    }
+
+    // The viewer's byte-based HTML bridge must open Strict OOXML packages just as DocxDiff does.
+    // Exercise both full-document and anchor-addressed block rendering; before normalization the
+    // converter sees no transitional w:body and throws on these packages.
+    [Fact]
+    public void HCO067_StrictOoxml_NormalizesBeforeFullAndBlockRender()
+    {
+        byte[] strict = StrictDocumentOnlyDocxBytes("HCO067 strict retained text");
+        var options = new HtmlConversionOptions { StampAnchors = true, FabricateCssClasses = false };
+
+        string full = HtmlConversionOps.ConvertToHtml(strict, options);
+        Assert.Contains("HCO067 strict retained text", full);
+        var anchor = System.Xml.Linq.XElement.Parse(full).Descendants()
+            .First(e => (string?)e.Attribute("data-anchor") != null)
+            .Attribute("data-anchor")!.Value;
+
+        string block = HtmlConversionOps.RenderBlockHtml(strict, anchor, options);
+        Assert.Contains("HCO067 strict retained text", block);
+    }
+
+    // Word writes one text box twice inside mc:AlternateContent: a modern DrawingML/wps branch
+    // and a VML fallback. The renderer must select the supported modern branch exactly once,
+    // retain the visible text, and not double the logical box in HTML.
+    [Fact]
+    public void HCO068_ModernDrawingMlTextBox_RendersChoiceWithoutVmlDuplicate()
+    {
+        byte[] bytes = TextBoxDocxBytes(
+            "<mc:AlternateContent>" +
+            "<mc:Choice Requires=\"wps\"><w:drawing><wp:inline><wp:extent cx=\"1524000\" cy=\"762000\"/>" +
+            "<a:graphic><a:graphicData><wps:wsp><wps:spPr><a:solidFill><a:srgbClr val=\"FFFFFF\"/>" +
+            "</a:solidFill><a:ln w=\"12700\"><a:solidFill><a:srgbClr val=\"000000\"/>" +
+            "</a:solidFill></a:ln></wps:spPr><wps:txbx><w:txbxContent><w:p><w:r><w:t>" +
+            "HCO068 modern text box</w:t></w:r></w:p></w:txbxContent></wps:txbx>" +
+            "<wps:bodyPr lIns=\"91440\" tIns=\"45720\" rIns=\"91440\" bIns=\"45720\"><a:spAutoFit/>" +
+            "</wps:bodyPr>" +
+            "</wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>" +
+            "<mc:Fallback><w:pict><v:shape style=\"width:120pt;height:60pt\"><v:textbox>" +
+            "<w:txbxContent><w:p><w:r><w:t>HCO068 fallback text box</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback>" +
+            "</mc:AlternateContent>");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO068 modern text box", html);
+        Assert.DoesNotContain("HCO068 fallback text box", html);
+        Assert.Contains("width: 120pt", html);
+        Assert.DoesNotContain("height: 60pt", html);
+        Assert.Contains("margin-bottom: 0", html);
+    }
+
+    // Some legacy Word documents keep the modern DrawingML text-box body in a related XML
+    // part. The synthetic package deliberately uses a distinct VML fallback so this verifies
+    // that the supported choice gains its external body without rendering both copies.
+    [Fact]
+    public void HCO075_ExternalDrawingMlTextBox_RendersChoiceWithoutVmlDuplicate()
+    {
+        byte[] bytes = ExternalTextBoxDocxBytes();
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO075 external textbox text", html);
+        Assert.DoesNotContain("HCO075 fallback text box", html);
+        Assert.Contains("width: 120pt", html);
+    }
+
+    // Old Office 2008 wps markup is not a namespace this renderer understands. Markup
+    // Compatibility requires selecting its portable VML fallback rather than dropping the
+    // entire logical text box.
+    [Fact]
+    public void HCO069_LegacyDrawingMlTextBox_RendersVmlFallback()
+    {
+        byte[] bytes = TextBoxDocxBytes(
+            "<mc:AlternateContent>" +
+            "<mc:Choice Requires=\"legacywps\"><w:drawing><wp:inline><wp:extent cx=\"1524000\" cy=\"762000\"/>" +
+            "<a:graphic><a:graphicData><legacywps:wsp/></a:graphicData></a:graphic>" +
+            "</wp:inline></w:drawing></mc:Choice>" +
+            "<mc:Fallback><w:pict><v:shape style=\"width:100pt;height:40pt\"><v:textbox>" +
+            "<w:txbxContent><w:p><w:r><w:t>HCO069 legacy fallback text box</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback>" +
+            "</mc:AlternateContent>");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO069 legacy fallback text box", html);
+        Assert.Contains("width: 100pt", html);
+        Assert.Contains("height: 40pt", html);
+    }
+
+    // A direct VML text box is not an AlternateContent compatibility fallback and remains a
+    // supported, standalone shape. Preserve its content and size in the HTML projection.
+    [Fact]
+    public void HCO070_DirectVmlTextBox_RendersTextAndDimensions()
+    {
+        byte[] bytes = TextBoxDocxBytes(
+            "<w:pict><v:shape style=\"width:100pt;height:40pt\"><v:textbox><w:txbxContent>" +
+            "<w:p><w:r><w:t>HCO070 direct VML text box</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict>");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO070 direct VML text box", html);
+        Assert.Contains("width: 100pt", html);
+        Assert.Contains("height: 40pt", html);
+    }
+
+    // VML theme colour values can append Word palette metadata. Keep the colour itself, but do
+    // not feed the suffix (or arbitrary CSS declarations) through to the generated style string.
+    [Fact]
+    public void HCO071_VmlThemeColors_NormalizeAndRejectStyleInjection()
+    {
+        byte[] themed = TextBoxDocxBytes(
+            "<w:pict><v:shape style=\"width:100pt;height:40pt\" fillcolor=\"#156082 [3204]\" " +
+            "strokecolor=\"white [3212]\"><v:textbox><w:txbxContent><w:p><w:r><w:t>" +
+            "HCO071 themed VML text box</w:t></w:r></w:p></w:txbxContent></v:textbox></v:shape>" +
+            "</w:pict>");
+        byte[] unsafeColor = TextBoxDocxBytes(
+            "<w:pict><v:shape style=\"width:100pt;height:40pt\" fillcolor=\"red; color: blue\"><v:textbox>" +
+            "<w:txbxContent><w:p><w:r><w:t>HCO071 unsafe VML text box</w:t></w:r></w:p></w:txbxContent>" +
+            "</v:textbox></v:shape></w:pict>");
+
+        string themedHtml = HtmlConversionOps.ConvertToHtml(themed,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+        string unsafeHtml = HtmlConversionOps.ConvertToHtml(unsafeColor,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("background-color: #156082", themedHtml);
+        Assert.Contains("border: 1pt solid white", themedHtml);
+        Assert.DoesNotContain("3204", themedHtml);
+        Assert.DoesNotContain("color: blue", unsafeHtml);
+    }
+
+    [Fact]
+    public void HCO072_DirectAutoFitVmlTextBox_DropsStoredHeightAndTrailingSpacing()
+    {
+        byte[] bytes = TextBoxDocxBytes(
+            "<w:pict><v:shape style=\"width:100pt;height:40pt\"><v:textbox style=\"mso-fit-shape-to-text:t\">" +
+            "<w:txbxContent><w:p><w:r><w:t>HCO072 auto-fit VML text box</w:t></w:r></w:p>" +
+            "</w:txbxContent></v:textbox></v:shape></w:pict>");
+
+        string html = HtmlConversionOps.ConvertToHtml(bytes,
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO072 auto-fit VML text box", html);
+        Assert.DoesNotContain("height: 40pt", html);
+        Assert.Contains("margin-bottom: 0", html);
+    }
+
+    // The clean-view fast path must recognize every revision family the accepter handles. A cell
+    // deletion has no w:ins/w:del wrapper, so the former body-only detector skipped acceptance and
+    // leaked its text into the supposedly accepted HTML.
+    [Fact]
+    public void HCO073_CleanView_AcceptsCellDeletionRevision()
+    {
+        string html = HtmlConversionOps.ConvertToHtml(CellDeletionTableDocxBytes(),
+            new HtmlConversionOptions { FabricateCssClasses = false });
+
+        Assert.Contains("HCO073 retained cell", html);
+        Assert.DoesNotContain("HCO073 deleted cell", html);
+    }
+
+    private static byte[] CellDeletionTableDocxBytes()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:body><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2400\"/><w:gridCol w:w=\"2400\"/>" +
+                    "</w:tblGrid><w:tr>" +
+                    "<w:tc><w:tcPr><w:tcW w:w=\"2400\" w:type=\"dxa\"/></w:tcPr><w:p><w:r><w:t>" +
+                    "HCO073 retained cell</w:t></w:r></w:p></w:tc>" +
+                    "<w:tc><w:tcPr><w:tcW w:w=\"2400\" w:type=\"dxa\"/><w:cellDel w:id=\"1\" " +
+                    "w:author=\"Test\" w:date=\"2026-01-01T00:00:00Z\"/></w:tcPr><w:p><w:r><w:t>" +
+                    "HCO073 deleted cell</w:t></w:r></w:p></w:tc>" +
+                    "</w:tr></w:tbl><w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+        return ms.ToArray();
+    }
+
+    private static byte[] TextBoxDocxBytes(string runContent)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
+                    "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" " +
+                    "xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+                    "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" " +
+                    "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
+                    "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\" " +
+                    "xmlns:legacywps=\"http://schemas.microsoft.com/office/word/2008/6/28/wordprocessingShape\">" +
+                    "<w:body><w:p><w:r>" + runContent + "</w:r></w:p><w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+        return ms.ToArray();
+    }
+
+    private static byte[] ExternalTextBoxDocxBytes()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            var externalTextBox = main.AddExtendedPart(
+                "http://schemas.microsoft.com/office/2006/relationships/txbx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.txbx+xml",
+                ".xml",
+                "rIdExternal");
+            using (var writer = new StreamWriter(externalTextBox.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w14:txbx xmlns:w14=\"http://schemas.microsoft.com/office/word/2008/9/12/wordml\" " +
+                    "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">" +
+                    "<w:p><w:r><w:t>HCO075 external textbox text</w:t></w:r></w:p></w14:txbx>");
+            }
+
+            using (var writer = new StreamWriter(main.GetStream(FileMode.Create, FileAccess.Write)))
+            {
+                writer.Write(
+                    "<w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
+                    "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" " +
+                    "xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" " +
+                    "xmlns:v=\"urn:schemas-microsoft-com:vml\" " +
+                    "xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" " +
+                    "xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" " +
+                    "xmlns:wps=\"http://schemas.microsoft.com/office/word/2010/wordprocessingShape\">" +
+                    "<w:body><w:p><w:r><mc:AlternateContent>" +
+                    "<mc:Choice Requires=\"wps\"><w:drawing><wp:inline><wp:extent cx=\"1524000\" cy=\"762000\"/>" +
+                    "<a:graphic><a:graphicData><wps:wsp><wps:txbx r:txbx=\"rIdExternal\"/>" +
+                    "</wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>" +
+                    "<mc:Fallback><w:pict><v:shape style=\"width:120pt;height:60pt\"><v:textbox>" +
+                    "<w:txbxContent><w:p><w:r><w:t>HCO075 fallback text box</w:t></w:r></w:p>" +
+                    "</w:txbxContent></v:textbox></v:shape></w:pict></mc:Fallback>" +
+                    "</mc:AlternateContent></w:r></w:p><w:sectPr/></w:body></w:document>");
+            }
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Wp.Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Wp.Settings();
+            doc.Save();
+        }
+        return ms.ToArray();
     }
 }

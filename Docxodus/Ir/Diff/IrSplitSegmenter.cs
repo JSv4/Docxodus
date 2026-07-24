@@ -38,9 +38,14 @@ namespace Docxodus.Ir.Diff;
 internal static class IrSplitSegmenter
 {
     /// <summary>One candidate's score: in-order coverage of the singular side's content tokens, the
-    /// run's foreign-content fraction, and the per-member matched-content counts (used by detection to
-    /// trim net-new edge members — the R2 false-positive guard).</summary>
-    internal sealed record SplitScore(double Coverage, double ForeignSlack, IReadOnlyList<int> MemberMatchedContent);
+    /// run's foreign-content fraction, the per-member matched-content counts (used by detection to
+    /// trim net-new edge members — the R2 false-positive guard), and per-member matched Word-token
+    /// counts (used to require two meaningful phrase fragments rather than isolated token moves).</summary>
+    internal sealed record SplitScore(
+        double Coverage,
+        double ForeignSlack,
+        IReadOnlyList<int> MemberMatchedContent,
+        IReadOnlyList<int> MemberMatchedWords);
 
     /// <summary>Score one candidate: the singular paragraph vs the concatenated run, per spec §2.2.</summary>
     public static SplitScore Score(IrParagraph singular, IReadOnlyList<IrParagraph> run, IrDiffSettings settings)
@@ -61,12 +66,15 @@ internal static class IrSplitSegmenter
         int singleContent = CountContent(single);
         int matchedContent = 0;
         var memberMatched = new int[run.Count];
+        var memberMatchedWords = new int[run.Count];
         for (int i = 0; i < single.Count; i++)
         {
             if (partner[i] < 0 || !IsContent(single[i]))
                 continue;
             matchedContent++;
             memberMatched[memberOfFlat[partner[i]]]++;
+            if (single[i].Kind == IrDiffTokenKind.Word)
+                memberMatchedWords[memberOfFlat[partner[i]]]++;
         }
 
         int runContent = CountContent(flat);
@@ -77,7 +85,7 @@ internal static class IrSplitSegmenter
 
         double coverage = singleContent == 0 ? 0.0 : (double)matchedContent / singleContent;
         double slack = runContent == 0 ? 0.0 : (double)(runContent - runMatchedContent) / runContent;
-        return new SplitScore(coverage, slack, memberMatched);
+        return new SplitScore(coverage, slack, memberMatched, memberMatchedWords);
     }
 
     /// <summary>

@@ -282,6 +282,7 @@ internal sealed class IrEffectiveFormats
             KeepNext = upper.KeepNext ?? lower.KeepNext,
             KeepLines = upper.KeepLines ?? lower.KeepLines,
             PageBreakBefore = upper.PageBreakBefore ?? lower.PageBreakBefore,
+            Shading = upper.Shading ?? lower.Shading,
             UnmodeledDigest = unmodeledDigest,
         };
 
@@ -305,6 +306,7 @@ internal sealed class IrEffectiveFormats
             SizeHalfPoints = upper.SizeHalfPoints ?? lower.SizeHalfPoints,
             ColorHex = upper.ColorHex ?? lower.ColorHex,
             Highlight = upper.Highlight ?? lower.Highlight,
+            Shading = upper.Shading ?? lower.Shading,
             Caps = upper.Caps ?? lower.Caps,
             SmallCaps = upper.SmallCaps ?? lower.SmallCaps,
             Vanish = upper.Vanish ?? lower.Vanish,

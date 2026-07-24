@@ -362,6 +362,294 @@ export class PaginationEngine {
   }
 
   /**
+   * Measures one element in the same hidden staging context used for the source blocks.
+   * This is intentionally DOM-based: table row heights cannot be inferred from individual
+   * rows because wrapping and collapsed borders change the height of a fragment.
+   */
+  private measureElement(element: HTMLElement, dims: PageDimensions): MeasuredBlock {
+    const measurementHost = document.createElement("div");
+    measurementHost.style.position = "absolute";
+    measurementHost.style.visibility = "hidden";
+    measurementHost.style.left = "-9999px";
+    measurementHost.style.width = `${dims.contentWidth}pt`;
+
+    const measuredElement = element.cloneNode(true) as HTMLElement;
+    measurementHost.appendChild(measuredElement);
+    this.stagingElement.appendChild(measurementHost);
+
+    const rect = measuredElement.getBoundingClientRect();
+    const style = window.getComputedStyle(measuredElement);
+    const measured: MeasuredBlock = {
+      element,
+      heightPt: pxToPt(rect.height),
+      marginTopPt: pxToPt(parseFloat(style.marginTop) || 0),
+      marginBottomPt: pxToPt(parseFloat(style.marginBottom) || 0),
+      keepWithNext: element.dataset.keepWithNext === "true",
+      keepLines: element.dataset.keepLines === "true",
+      pageBreakBefore: element.dataset.pageBreakBefore === "true",
+      isPageBreak:
+        element.dataset.pageBreak === "true" ||
+        element.classList.contains(`${this.cssPrefix}break`),
+    };
+
+    this.stagingElement.removeChild(measurementHost);
+    return measured;
+  }
+
+  /**
+   * Returns the contiguous keep-with-next chain beginning at a block.
+   *
+   * A hard page break or a page-break-before directive is stronger than a
+   * keep-with-next directive, so it terminates the chain. The caller only
+   * keeps a chain together when the whole chain can fit on a fresh page.
+   */
+  private getKeepWithNextChain(blocks: MeasuredBlock[], startIndex: number): MeasuredBlock[] {
+    const firstBlock = blocks[startIndex];
+    if (!firstBlock) return [];
+
+    const chain = [firstBlock];
+    let lastIndex = startIndex;
+
+    while (blocks[lastIndex].keepWithNext) {
+      const nextBlock = blocks[lastIndex + 1];
+      if (!nextBlock || nextBlock.isPageBreak || nextBlock.pageBreakBefore) {
+        break;
+      }
+
+      chain.push(nextBlock);
+      lastIndex++;
+    }
+
+    return chain;
+  }
+
+  /**
+   * Measures the visible body height of a keep-with-next chain using the same
+   * collapsed-margin rules as normal block placement. The trailing margin is
+   * intentionally excluded, matching the individual block fit check.
+   */
+  private measureKeepWithNextChainBodyHeight(
+    chain: MeasuredBlock[],
+    previousMarginBottomPt: number,
+    isFirstOnPage: boolean
+  ): number {
+    const firstBlock = chain[0];
+    if (!firstBlock) return 0;
+
+    const firstMarginTop = isFirstOnPage
+      ? firstBlock.marginTopPt
+      : Math.max(firstBlock.marginTopPt, previousMarginBottomPt) - previousMarginBottomPt;
+    let bodyHeight = firstMarginTop + firstBlock.heightPt;
+
+    for (let index = 1; index < chain.length; index++) {
+      const previousBlock = chain[index - 1];
+      const block = chain[index];
+      bodyHeight += Math.max(previousBlock.marginBottomPt, block.marginTopPt) + block.heightPt;
+    }
+
+    return bodyHeight;
+  }
+
+  /**
+   * Finds footnote references introduced by a sequence of blocks, preserving
+   * document order and excluding references already assigned to the page.
+   */
+  private collectNewFootnoteIds(
+    blocks: MeasuredBlock[],
+    existingFootnoteIds: string[]
+  ): string[] {
+    const knownIds = new Set(existingFootnoteIds);
+    const newIds: string[] = [];
+
+    for (const block of blocks) {
+      for (const id of this.extractFootnoteRefs(block.element)) {
+        if (!knownIds.has(id)) {
+          knownIds.add(id);
+          newIds.push(id);
+        }
+      }
+    }
+
+    return newIds;
+  }
+
+  /**
+   * The shortest body available to a section's first, default, or even page.
+   * A row fragment must fit every variant, otherwise a later header/footer could
+   * send it through the oversized-block fallback again.
+   */
+  private smallestEffectiveContentHeight(dims: PageDimensions, sectionIndex: number): number {
+    return Math.min(
+      this.getEffectiveHeights(dims, sectionIndex, 1, 1).contentHeight,
+      this.getEffectiveHeights(dims, sectionIndex, 2, 1).contentHeight,
+      this.getEffectiveHeights(dims, sectionIndex, 2, 2).contentHeight
+    );
+  }
+
+  /**
+   * Builds a clone of a simple table wrapper containing a contiguous run of rows.
+   * Complex table features are deliberately rejected by the caller: a split across
+   * merged cells, nested tables, or footnotes cannot be made correct by cloning rows.
+   */
+  private createSimpleTableFragment(
+    wrapper: HTMLElement,
+    table: HTMLTableElement,
+    body: HTMLTableSectionElement,
+    rows: HTMLTableRowElement[],
+    retainAnchor: boolean
+  ): HTMLElement {
+    const wrapperClone = wrapper.cloneNode(false) as HTMLElement;
+    const tableClone = table.cloneNode(false) as HTMLTableElement;
+
+    // The eligibility gate permits only colgroups alongside the body. Keep each
+    // colgroup so fixed and proportional column widths remain stable per fragment.
+    for (const child of Array.from(table.children)) {
+      if (child !== body) {
+        tableClone.appendChild(child.cloneNode(true));
+      }
+    }
+
+    const bodyClone = body.cloneNode(false) as HTMLTableSectionElement;
+    for (const row of rows) {
+      bodyClone.appendChild(row.cloneNode(true));
+    }
+    tableClone.appendChild(bodyClone);
+
+    if (!retainAnchor) {
+      wrapperClone.removeAttribute("data-anchor");
+      tableClone.removeAttribute("data-anchor");
+    }
+
+    wrapperClone.appendChild(tableClone);
+    return wrapperClone;
+  }
+
+  /**
+   * Splits an oversized, ordinary table at row boundaries. This only participates
+   * in the existing oversized-block fallback; unsupported tables keep the previous
+   * overflow behavior rather than risking broken table semantics.
+   */
+  private trySplitSimpleOversizedTable(
+    block: MeasuredBlock,
+    dims: PageDimensions,
+    sectionIndex: number
+  ): MeasuredBlock[] | null {
+    const wrapper = block.element;
+    if (
+      wrapper.tagName !== "DIV" ||
+      wrapper.children.length !== 1 ||
+      block.keepWithNext ||
+      block.keepLines ||
+      block.pageBreakBefore ||
+      block.isPageBreak
+    ) {
+      return null;
+    }
+
+    const table = wrapper.firstElementChild;
+    if (!(table instanceof HTMLTableElement)) {
+      return null;
+    }
+
+    const body = table.tBodies.length === 1 ? table.tBodies[0] : null;
+    if (
+      !body ||
+      table.tHead ||
+      table.tFoot ||
+      body.rows.length < 2 ||
+      Array.from(table.children).some(child => child !== body && child.tagName !== "COLGROUP") ||
+      table.querySelector("table, [rowspan], [colspan], [data-footnote-id]") ||
+      wrapper.querySelector("[data-footnote-id]")
+    ) {
+      return null;
+    }
+
+    const rows = Array.from(body.rows);
+    const minimumContentHeight = this.smallestEffectiveContentHeight(dims, sectionIndex);
+    // Use the source's full vertical margins while forming groups. Continuation
+    // fragments later clear their joining margins, so this conservative bound
+    // cannot create a fragment that overflows a header/footer variant.
+    const maximumFragmentHeight = minimumContentHeight - block.marginTopPt - block.marginBottomPt;
+    if (maximumFragmentHeight <= 0) {
+      return null;
+    }
+
+    const groups: HTMLTableRowElement[][] = [];
+    let start = 0;
+    while (start < rows.length) {
+      let end = start;
+      while (end < rows.length) {
+        const candidate = this.createSimpleTableFragment(
+          wrapper,
+          table,
+          body,
+          rows.slice(start, end + 1),
+          start === 0
+        );
+        const measured = this.measureElement(candidate, dims);
+        if (measured.heightPt > maximumFragmentHeight) {
+          break;
+        }
+        end++;
+      }
+
+      // Even a one-row fragment cannot fit. Preserve the established overflow
+      // fallback rather than looping or clipping a partially split row.
+      if (end === start) {
+        return null;
+      }
+
+      groups.push(rows.slice(start, end));
+      start = end;
+    }
+
+    if (groups.length < 2) {
+      return null;
+    }
+
+    const fragments: MeasuredBlock[] = [];
+    for (let index = 0; index < groups.length; index++) {
+      const isFirst = index === 0;
+      const isLast = index === groups.length - 1;
+      const fragment = this.createSimpleTableFragment(
+        wrapper,
+        table,
+        body,
+        groups[index],
+        isFirst
+      );
+
+      // Keep the source's outer spacing only at the table's real boundaries.
+      // Continuation margins would otherwise add blank space at the top/bottom
+      // of every paginated fragment.
+      if (!isFirst) {
+        fragment.style.setProperty("margin-top", "0", "important");
+      }
+      if (!isLast) {
+        fragment.style.setProperty("margin-bottom", "0", "important");
+      }
+
+      const measured = this.measureElement(fragment, dims);
+      if (
+        measured.heightPt + measured.marginTopPt + measured.marginBottomPt >
+        minimumContentHeight
+      ) {
+        return null;
+      }
+
+      fragments.push({
+        ...measured,
+        keepWithNext: false,
+        keepLines: false,
+        pageBreakBefore: false,
+        isPageBreak: false,
+      });
+    }
+
+    return fragments;
+  }
+
+  /**
    * Parses the header/footer registry from the staging element.
    * Also measures heights during parsing for lazy-loading compatibility.
    */
@@ -942,7 +1230,9 @@ export class PaginationEngine {
     }
 
     const finishPage = () => {
-      if (currentContent.length === 0 && !currentContinuation) return;
+      const hasCurrentContinuation =
+        (currentContinuation?.remainingElements.length ?? 0) > 0;
+      if (currentContent.length === 0 && !hasCurrentContinuation) return;
 
       const page = this.createPage(
         dims,
@@ -984,7 +1274,6 @@ export class PaginationEngine {
 
     for (let i = 0; i < blocks.length; i++) {
       const block = blocks[i];
-      const nextBlock = blocks[i + 1];
 
       // Handle explicit page breaks
       if (block.isPageBreak) {
@@ -997,10 +1286,85 @@ export class PaginationEngine {
         finishPage();
       }
 
+      // A series of keep-with-next blocks is one indivisible placement unit
+      // when it can fit a new page. The former one-block lookahead was never
+      // applied to the placement decision, and it could not preserve a chain of
+      // headings/paragraphs. Do not force an oversized chain to a fresh page:
+      // its members retain the established greedy/overflow behavior instead.
+      const previousBlock = blocks[i - 1];
+      const startsKeepChain =
+        !previousBlock ||
+        !previousBlock.keepWithNext ||
+        previousBlock.isPageBreak ||
+        block.pageBreakBefore;
+      // A footnote continuation also occupies this page even when its body has
+      // no blocks yet. In that case a feasible chain may need to move past the
+      // continuation as a unit.
+      const pageHasOccupiedSpace = currentContent.length > 0 || currentFootnoteHeight > 0;
+      if (pageHasOccupiedSpace && block.keepWithNext && startsKeepChain) {
+        const keepChain = this.getKeepWithNextChain(blocks, i);
+        if (keepChain.length > 1) {
+          const newChainFootnoteIds = this.collectNewFootnoteIds(
+            keepChain,
+            currentFootnoteIds
+          );
+          let additionalChainFootnoteHeight = 0;
+          if (newChainFootnoteIds.length > 0 && this.footnoteRegistry.size > 0) {
+            const totalChainFootnoteHeight = this.measureFootnotesHeight(
+              [...currentFootnoteIds, ...newChainFootnoteIds],
+              dims.contentWidth,
+              currentContinuation
+            );
+            additionalChainFootnoteHeight = Math.max(
+              0,
+              totalChainFootnoteHeight - currentFootnoteHeight
+            );
+          }
+
+          const currentChainHeight =
+            this.measureKeepWithNextChainBodyHeight(
+              keepChain,
+              prevMarginBottomPt,
+              currentContent.length === 0
+            ) +
+            additionalChainFootnoteHeight;
+          const currentAvailableHeight = remainingHeight - currentFootnoteHeight;
+
+          if (currentChainHeight > currentAvailableHeight) {
+            const nextPageHeights = this.getEffectiveHeights(
+              dims,
+              sectionIndex,
+              pageInSection + 1,
+              pageNumber + 1
+            );
+            const freshChainBodyHeight = this.measureKeepWithNextChainBodyHeight(
+              keepChain,
+              0,
+              true
+            );
+            // finishPage transfers this continuation to the new page's
+            // currentContinuation state, so include it in the destination
+            // page's footnote reservation before deciding to move the chain.
+            const freshChainFootnoteHeight = this.measureFootnotesHeight(
+              newChainFootnoteIds,
+              dims.contentWidth,
+              nextPageContinuation
+            );
+
+            if (
+              freshChainBodyHeight + freshChainFootnoteHeight <=
+              nextPageHeights.contentHeight
+            ) {
+              finishPage();
+            }
+          }
+        }
+      }
+
       // Extract footnote references from this block
-      const blockFootnoteIds = this.extractFootnoteRefs(block.element);
+      const allBlockFootnoteIds = this.extractFootnoteRefs(block.element);
       // Only count new footnotes (not already on this page)
-      const newFootnoteIds = blockFootnoteIds.filter(id => !currentFootnoteIds.includes(id));
+      const newFootnoteIds = this.collectNewFootnoteIds([block], currentFootnoteIds);
 
       // Calculate additional footnote height if this block is added
       let additionalFootnoteHeight = 0;
@@ -1029,15 +1393,6 @@ export class PaginationEngine {
       // bottom margin extends beyond the content area and is clipped by overflow:hidden.
       // It is still tracked in remainingHeight for correct margin collapsing with the next block.
       const blockSpace = effectiveMarginTop + block.heightPt + additionalFootnoteHeight;
-
-      // Calculate needed height (including keepWithNext)
-      let neededHeight = blockSpace;
-      if (block.keepWithNext && nextBlock && !nextBlock.isPageBreak) {
-        // For keepWithNext, include the next block with collapsed margins
-        const collapsedMargin = Math.max(block.marginBottomPt, nextBlock.marginTopPt);
-        neededHeight = effectiveMarginTop + block.heightPt + collapsedMargin +
-                       nextBlock.heightPt + additionalFootnoteHeight;
-      }
 
       // Effective remaining height (content area minus footnotes already on page)
       const effectiveRemainingHeight = remainingHeight - currentFootnoteHeight;
@@ -1108,10 +1463,12 @@ export class PaginationEngine {
                     footnoteId,
                     fittingElements: fits
                   });
-                  nextPageContinuation = {
-                    footnoteId,
-                    remainingElements: overflow
-                  };
+                  if (overflow.length > 0) {
+                    nextPageContinuation = {
+                      footnoteId,
+                      remainingElements: overflow
+                    };
+                  }
                   currentFootnoteHeight = availableForFootnotes;
                 } else {
                   // Nothing fits, entire footnote continues to next page
@@ -1156,14 +1513,14 @@ export class PaginationEngine {
           } else {
             // Still doesn't fit - start new page
             finishPage();
-            const newPageFootnoteHeight = blockFootnoteIds.length > 0
-              ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth, currentContinuation)
+            const newPageFootnoteHeight = allBlockFootnoteIds.length > 0
+              ? this.measureFootnotesHeight(allBlockFootnoteIds, dims.contentWidth, currentContinuation)
               : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
             const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
             currentContent.push(block.element.cloneNode(true) as HTMLElement);
             remainingHeight = effectiveContentHeight - newPageSpace;
             prevMarginBottomPt = block.marginBottomPt;
-            currentFootnoteIds = [...blockFootnoteIds];
+            currentFootnoteIds = [...allBlockFootnoteIds];
             currentFootnoteHeight = newPageFootnoteHeight;
           }
         } else {
@@ -1171,25 +1528,38 @@ export class PaginationEngine {
           finishPage();
           // On new page, recalculate footnote height for just this block's footnotes
           // (plus any continuation from previous page)
-          const newPageFootnoteHeight = blockFootnoteIds.length > 0
-            ? this.measureFootnotesHeight(blockFootnoteIds, dims.contentWidth, currentContinuation)
+          const newPageFootnoteHeight = allBlockFootnoteIds.length > 0
+            ? this.measureFootnotesHeight(allBlockFootnoteIds, dims.contentWidth, currentContinuation)
             : (currentContinuation ? this.measureContinuationHeight(currentContinuation, dims.contentWidth) : 0);
           // Include full top margin
           const newPageSpace = block.marginTopPt + block.heightPt + block.marginBottomPt;
           currentContent.push(block.element.cloneNode(true) as HTMLElement);
           remainingHeight = effectiveContentHeight - newPageSpace;
           prevMarginBottomPt = block.marginBottomPt;
-          currentFootnoteIds = [...blockFootnoteIds];
+          currentFootnoteIds = [...allBlockFootnoteIds];
           currentFootnoteHeight = newPageFootnoteHeight;
         }
       } else {
-        // Block is taller than a page - add it and let it overflow
-        // (In a more sophisticated implementation, we would split the block)
+        // Block is taller than a page. Ordinary tables can be split at complete
+        // row boundaries; every other block retains the established overflow path.
+        const tableFragments = this.trySplitSimpleOversizedTable(block, dims, sectionIndex);
+        if (tableFragments) {
+          if (currentContent.length > 0 || currentContinuation) {
+            finishPage();
+          }
+          blocks.splice(i, 1, ...tableFragments);
+          i--;
+          continue;
+        }
+
+        // Unsupported oversized blocks are intentionally left intact. Splitting
+        // arbitrary HTML, merged tables, or footnote-bearing tables would be less
+        // correct than the prior clipped fallback.
         if (currentContent.length > 0) {
           finishPage();
         }
         currentContent.push(block.element.cloneNode(true) as HTMLElement);
-        currentFootnoteIds = [...blockFootnoteIds];
+        currentFootnoteIds = [...allBlockFootnoteIds];
         finishPage();
       }
     }

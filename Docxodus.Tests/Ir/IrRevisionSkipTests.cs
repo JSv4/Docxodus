@@ -56,6 +56,11 @@ public class IrRevisionSkipTests
     private static string PreAcceptedReadMarkdown(WmlDocument doc) =>
         AcceptReadMarkdown(RevisionProcessor.AcceptRevisions(doc));
 
+    private static string Table(string text) =>
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2400\"/></w:tblGrid>" +
+        "<w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>" + text +
+        "</w:t></w:r></w:p></w:tc></w:tr></w:tbl>";
+
     [Fact]
     public void AcceptRead_TblPrExChangeOnly_MatchesPreAccepted()
     {
@@ -110,6 +115,42 @@ public class IrRevisionSkipTests
         Assert.Contains("inserted-in-header", headerText);
 
         Assert.Equal(PreAcceptedReadMarkdown(doc), AcceptReadMarkdown(doc));
+    }
+
+    [Fact]
+    public void AcceptRead_preserves_preexisting_clean_adjacent_table_boundaries()
+    {
+        // The insertion makes this document take the accept path.  The two following tables were
+        // already adjacent and carry no revisions, so their original two-table topology is part of
+        // the accepted VIEW.  RevisionProcessor's final-document normalizer normally merges them,
+        // which made a clean counterpart look like a table delete+insert to the IR diff.
+        const string dirtyLead =
+            "<w:p><w:ins w:id=\"1\" w:author=\"A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:t>accepted lead</w:t></w:r></w:ins></w:p>";
+        var doc = IrTestDocuments.FromBodyXml(dirtyLead + Table("first") + Table("second"));
+
+        var accepted = IrReader.Read(doc,
+            new IrReaderOptions { RevisionView = RevisionView.Accept });
+
+        Assert.Equal(2, accepted.Body.Blocks.OfType<IrTable>().Count());
+    }
+
+    [Fact]
+    public void AcceptRead_keeps_table_coalescing_when_acceptance_created_the_adjacency()
+    {
+        // Unlike the previous case, these tables are separated in the source.  Accepting the fully
+        // deleted paragraph creates the adjacency, so it must retain RevisionProcessor's normal
+        // coalescing behavior rather than being re-split as though it were an original table run.
+        const string deletedParagraph =
+            "<w:p><w:pPr><w:rPr><w:del w:id=\"2\" w:author=\"A\" w:date=\"2020-01-01T00:00:00Z\"/>" +
+            "</w:rPr></w:pPr><w:del w:id=\"3\" w:author=\"A\" w:date=\"2020-01-01T00:00:00Z\">" +
+            "<w:r><w:delText>deleted separator</w:delText></w:r></w:del></w:p>";
+        var doc = IrTestDocuments.FromBodyXml(Table("first") + deletedParagraph + Table("second"));
+
+        var accepted = IrReader.Read(doc,
+            new IrReaderOptions { RevisionView = RevisionView.Accept });
+
+        Assert.Single(accepted.Body.Blocks.OfType<IrTable>());
     }
 
     /// <summary>

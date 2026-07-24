@@ -57,13 +57,30 @@ internal static class IrTokenDiffer
         return new IrTokenDiff(IrNodeList.From(ops));
     }
 
-    // ------------------------------------------------------------------ Myers O(ND)
+    // ------------------------------------------------------------------ content-anchored two-level diff
 
     /// <summary>
-    /// Forward greedy Myers O(ND) diff over MatchKeys, returning coalesced same-kind
-    /// <see cref="IrTokenOp"/> spans (Equal/Insert/Delete only — the format pass runs later). Insert
-    /// spans carry an empty left span at the anchor index; Delete spans an empty right span.
+    /// Content-anchored token diff, returning coalesced same-kind <see cref="IrTokenOp"/> spans
+    /// (Equal/Insert/Delete only — the format pass runs later). Insert spans carry an empty left span
+    /// at the anchor index; Delete spans an empty right span.
     /// </summary>
+    /// <remarks>
+    /// A single all-token Myers keyed on <see cref="IrDiffToken.MatchKey"/> mis-anchors on whitespace:
+    /// every separator shares the key <c>" "</c>, so with many identical spaces Myers spends its LCS
+    /// budget matching spaces and DROPS interior shared CONTENT words (delete+re-insert them). Word
+    /// anchors on content words, not whitespace. We do the same in two levels:
+    /// <list type="number">
+    /// <item>Run Myers' LCS over the subsequence of NON-connective (content) tokens only — a token is
+    /// connective iff it is a whitespace-only <see cref="IrDiffTokenKind.Separator"/>; Words, punctuation
+    /// separators, and the atomic kinds all count as content and CAN anchor. This yields ordered Equal
+    /// content-anchor pairs mapped back to full-stream indices.</item>
+    /// <item>Partition both full streams at the anchors and emit, per segment, a common WHITESPACE prefix
+    /// and suffix as Equal with the middle as Delete(all left)+Insert(all right) — no nested all-token
+    /// Myers (that would reintroduce the whitespace crowding).</item>
+    /// </list>
+    /// The forward per-token edit stream feeds the shared <see cref="Coalesce"/> so anchors merge with
+    /// adjacent whitespace Equal and consecutive Delete/Insert merge into maximal spans.
+    /// </remarks>
     private static List<IrTokenOp> MyersSpans(
         IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right)
     {
@@ -84,8 +101,126 @@ internal static class IrTokenDiffer
             return spans;
         }
 
+        // 1. Content-token anchors (full-stream index pairs, strictly increasing on both sides).
+        // Atomic tokens (note refs, images, tabs, breaks, opaque, textboxes) share coarse MatchKeys
+        // (every footnote ref keys "fn"), so anchoring the content LCS on them can pair the WRONG
+        // occurrence and mis-attribute which one was inserted — breaking note/definition reject
+        // round-trips. When either side carries an atomic token, fall back to all-token anchoring
+        // (the pre-content-anchor behavior: whitespace participates, so an atomic token is paired
+        // in its full surrounding context). Pure text/word/space paragraphs — where whitespace
+        // crowding is the problem this pass exists to fix — take the content-anchored path.
+        bool anchorAll = HasAtomic(left) || HasAtomic(right);
+        var anchors = ContentAnchors(left, right, anchorAll);
+
+        // 2. Partition at anchors: for each anchor, emit the segment before it, then the anchor as Equal.
+        var edits = new List<(IrTokenOpKind Kind, int Left, int Right)>();
+        int li = 0, ri = 0;
+        foreach (var (al, ar) in anchors)
+        {
+            EmitSegment(left, right, li, al, ri, ar, edits);
+            edits.Add((IrTokenOpKind.Equal, al, ar));
+            li = al + 1;
+            ri = ar + 1;
+        }
+
+        // Trailing segment after the last anchor.
+        EmitSegment(left, right, li, n, ri, m, edits);
+
+        // 3. Coalesce the forward per-token edit stream into maximal same-kind spans.
+        Coalesce(edits, spans);
+        return spans;
+    }
+
+    /// <summary>True for a connective token: a whitespace-only <see cref="IrDiffTokenKind.Separator"/>.
+    /// These are the tokens that MUST NOT anchor the diff (else Myers crowds on abundant spaces).</summary>
+    private static bool IsConnective(IrDiffToken t) =>
+        t.Kind == IrDiffTokenKind.Separator && string.IsNullOrWhiteSpace(t.Text);
+
+    /// <summary>True if any token is atomic (not a Word or Separator) — a note ref, image, tab,
+    /// break, opaque inline, or textbox. These carry coarse MatchKeys and must be paired in full
+    /// context (all-token anchoring), never content-anchored, or note/definition reject can break.</summary>
+    private static bool HasAtomic(IReadOnlyList<IrDiffToken> tokens)
+    {
+        foreach (var t in tokens)
+            if (t.Kind is not (IrDiffTokenKind.Word or IrDiffTokenKind.Separator))
+                return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Compute the ordered content-anchor pairs: Myers' LCS over the non-connective (content) token
+    /// subsequences of <paramref name="left"/> and <paramref name="right"/>, keyed on MatchKey, mapped
+    /// back to full-stream indices. Strictly increasing on both sides.
+    /// </summary>
+    private static List<(int Left, int Right)> ContentAnchors(
+        IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right, bool anchorAll)
+    {
+        var leftContent = new List<int>();
+        for (int i = 0; i < left.Count; i++)
+            if (anchorAll || !IsConnective(left[i]))
+                leftContent.Add(i);
+
+        var rightContent = new List<int>();
+        for (int j = 0; j < right.Count; j++)
+            if (anchorAll || !IsConnective(right[j]))
+                rightContent.Add(j);
+
+        var pairs = CharWeightedLcs(
+            leftContent.Count, rightContent.Count,
+            (a, b) => left[leftContent[a]].MatchKey == right[rightContent[b]].MatchKey,
+            a => left[leftContent[a]].Text.Length);
+
+        var anchors = new List<(int, int)>(pairs.Count);
+        foreach (var (a, b) in pairs)
+            anchors.Add((leftContent[a], rightContent[b]));
+        return anchors;
+    }
+
+    /// <summary>
+    /// Common-subsequence match that maximizes total matched CHARACTER length (each match contributes
+    /// <paramref name="weight"/>(a)) rather than token COUNT — a hypothesis for Word's anchor tie-break:
+    /// among equal-length subsequences Word keeps the one covering more characters (a distinctive
+    /// "strikethrough"/13 over an incidental "text"/4; a contiguous phrase over a scattered pair). O(n·m)
+    /// DP with a deterministic prefer-left back-walk; falls back to token count when all weights are 1.
+    /// </summary>
+    private static List<(int A, int B)> CharWeightedLcs(int n, int m, Func<int, int, bool> eq, Func<int, int> weight)
+    {
+        var matches = new List<(int, int)>();
+        if (n == 0 || m == 0)
+            return matches;
+        var dp = new int[n + 1, m + 1];
+        for (int i = n - 1; i >= 0; i--)
+            for (int j = m - 1; j >= 0; j--)
+                dp[i, j] = eq(i, j)
+                    ? dp[i + 1, j + 1] + Math.Max(1, weight(i))
+                    : Math.Max(dp[i + 1, j], dp[i, j + 1]);
+        for (int i = 0, j = 0; i < n && j < m;)
+        {
+            if (eq(i, j) && dp[i, j] == dp[i + 1, j + 1] + Math.Max(1, weight(i)))
+            {
+                matches.Add((i, j)); i++; j++;
+            }
+            else if (dp[i + 1, j] >= dp[i, j + 1]) i++;
+            else j++;
+        }
+        return matches;
+    }
+
+    /// <summary>
+    /// Forward greedy Myers O(ND) diff (Myers §2/§4) over two length-only sequences with a supplied
+    /// equality predicate, returning the LCS as ordered matched index pairs <c>(a, b)</c> (a in
+    /// <c>[0,n)</c>, b in <c>[0,m)</c>, both strictly increasing). Deterministic for fixed inputs via
+    /// the standard prefer-down tie-break. Ignores non-matching positions (this level needs only the
+    /// anchor matches; the segment pass handles the rest).
+    /// </summary>
+    private static List<(int A, int B)> MyersMatches(int n, int m, Func<int, int, bool> eq)
+    {
+        var matches = new List<(int, int)>();
+        if (n == 0 || m == 0)
+            return matches;
+
         int max = n + m;
-        // V is indexed by diagonal k in [-max, max]; offset by `max`. trace[d] snapshots V after the
+        // V is indexed by diagonal k in [-max, max]; offset by `max`. trace[d] snapshots V before the
         // d-th round so we can backtrace the actual edit path (Myers §4 "recording the trace").
         int offset = max;
         var v = new int[2 * max + 1];
@@ -94,24 +229,22 @@ internal static class IrTokenDiffer
         bool reached = false;
         for (int d = 0; d <= max && !reached; d++)
         {
-            var snapshot = (int[])v.Clone();
-            trace.Add(snapshot);
+            trace.Add((int[])v.Clone());
 
             for (int k = -d; k <= d; k += 2)
             {
-                // Choose to come from the diagonal above (insert/down) or left (delete/right).
-                // Tie-break: prefer down (insert) — k == -d, or (k != d and the up neighbour reaches
-                // further). This fixes the path deterministically.
+                // Prefer down (insert): k == -d, or (k != d and the up neighbour reaches further). This
+                // fixes the path deterministically.
                 int x;
                 if (k == -d || (k != d && v[offset + k - 1] < v[offset + k + 1]))
-                    x = v[offset + k + 1];          // down: insert a right token (x unchanged)
+                    x = v[offset + k + 1];          // down: consume a right item (x unchanged)
                 else
-                    x = v[offset + k - 1] + 1;      // right: delete a left token (x advances)
+                    x = v[offset + k - 1] + 1;      // right: consume a left item (x advances)
 
                 int y = x - k;
 
-                // Follow the snake (matching diagonal) as far as MatchKeys agree.
-                while (x < n && y < m && left[x].MatchKey == right[y].MatchKey)
+                // Follow the snake (matching diagonal) as far as the predicate agrees.
+                while (x < n && y < m && eq(x, y))
                 {
                     x++;
                     y++;
@@ -127,71 +260,90 @@ internal static class IrTokenDiffer
             }
         }
 
-        Backtrace(left, right, trace, offset, n, m, spans);
-        return spans;
-    }
-
-    /// <summary>
-    /// Walk the recorded V-snapshots back from (n,m) to (0,0), emitting per-token edits in reverse,
-    /// then reverse and coalesce them into maximal same-kind spans.
-    /// </summary>
-    private static void Backtrace(
-        IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right,
-        List<int[]> trace, int offset, int n, int m, List<IrTokenOp> spans)
-    {
-        // Reverse-order per-token edits as (kind, leftIndex, rightIndex). For Equal we record the
-        // matched (x-1, y-1); for Delete the consumed left index (x-1); for Insert the right index (y-1).
-        var rev = new List<(IrTokenOpKind Kind, int Left, int Right)>();
-
+        // Backtrace from (n,m) to (0,0), collecting the diagonal (match) steps in reverse.
         int curX = n, curY = m;
         for (int d = trace.Count - 1; d > 0; d--)
         {
-            var v = trace[d];
+            var vv = trace[d];
             int k = curX - curY;
 
             int prevK;
-            if (k == -d || (k != d && v[offset + k - 1] < v[offset + k + 1]))
+            if (k == -d || (k != d && vv[offset + k - 1] < vv[offset + k + 1]))
                 prevK = k + 1; // came from down (insert)
             else
                 prevK = k - 1; // came from right (delete)
 
-            int prevX = v[offset + prevK];
+            int prevX = vv[offset + prevK];
             int prevY = prevX - prevK;
 
-            // Snake (diagonal) steps before the edit are Equal matches.
             while (curX > prevX && curY > prevY)
             {
                 curX--;
                 curY--;
-                rev.Add((IrTokenOpKind.Equal, curX, curY));
+                matches.Add((curX, curY));
             }
 
-            // The single non-diagonal edit at this D-step (d > 0 throughout this loop, so an edit always exists).
             if (curX == prevX)
-            {
-                // Insert: right token at prevY..curY-1 (one token, curY-1).
-                curY--;
-                rev.Add((IrTokenOpKind.Insert, -1, curY));
-            }
+                curY--; // insert (unmatched right)
             else
-            {
-                // Delete: left token curX-1.
-                curX--;
-                rev.Add((IrTokenOpKind.Delete, curX, -1));
-            }
+                curX--; // delete (unmatched left)
         }
 
-        // Any remaining snake down to (0,0) at d == 0 is Equal.
+        // Any remaining snake down to (0,0) at d == 0 is all matches.
         while (curX > 0 && curY > 0)
         {
             curX--;
             curY--;
-            rev.Add((IrTokenOpKind.Equal, curX, curY));
+            matches.Add((curX, curY));
         }
 
-        // Coalesce the reversed edits (which are right-to-left) into forward maximal spans.
-        rev.Reverse();
-        Coalesce(rev, spans);
+        matches.Reverse();
+        return matches;
+    }
+
+    /// <summary>
+    /// Emit the forward per-token edits for one anchor-free segment <c>left[ls..le) × right[rs..re)</c>
+    /// (no content-anchor matches inside by construction): retain a common WHITESPACE prefix and suffix
+    /// as Equal, and emit the middle as Delete(all remaining left) then Insert(all remaining right).
+    /// A nested all-token Myers is deliberately NOT run here — it would reintroduce whitespace crowding.
+    /// </summary>
+    private static void EmitSegment(
+        IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right,
+        int ls, int le, int rs, int re,
+        List<(IrTokenOpKind Kind, int Left, int Right)> edits)
+    {
+        int leftLen = le - ls;
+        int rightLen = re - rs;
+
+        // Common whitespace prefix: grow while both sides share a connective token.
+        int p = 0;
+        while (p < leftLen && p < rightLen &&
+               left[ls + p].MatchKey == right[rs + p].MatchKey &&
+               IsConnective(left[ls + p]))
+            p++;
+
+        // Common whitespace suffix from the ends, not overlapping the prefix on either side.
+        int sfx = 0;
+        while (p + sfx < leftLen && p + sfx < rightLen &&
+               left[le - 1 - sfx].MatchKey == right[re - 1 - sfx].MatchKey &&
+               IsConnective(left[le - 1 - sfx]))
+            sfx++;
+
+        // Equal prefix.
+        for (int t = 0; t < p; t++)
+            edits.Add((IrTokenOpKind.Equal, ls + t, rs + t));
+
+        // Delete middle-left.
+        for (int t = ls + p; t < le - sfx; t++)
+            edits.Add((IrTokenOpKind.Delete, t, -1));
+
+        // Insert middle-right.
+        for (int t = rs + p; t < re - sfx; t++)
+            edits.Add((IrTokenOpKind.Insert, -1, t));
+
+        // Equal suffix.
+        for (int t = 0; t < sfx; t++)
+            edits.Add((IrTokenOpKind.Equal, le - sfx + t, re - sfx + t));
     }
 
     /// <summary>

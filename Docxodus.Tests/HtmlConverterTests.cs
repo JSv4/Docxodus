@@ -798,6 +798,62 @@ namespace OxPt
         }
 
         [Fact]
+        public void HC008e_PaginationPrintCss_IsGeneratedOnlyForPaginatedOutput()
+        {
+            // Screen pagination is deliberately a scaled flex-column viewer. Its print
+            // rules must restore physical page boundaries without imposing an @page size
+            // or margin policy on the caller.
+            DirectoryInfo sourceDir = new DirectoryInfo("../../../../TestFiles/");
+            FileInfo doc = new FileInfo(Path.Combine(sourceDir.FullName, "HC006-Test-01.docx"));
+            byte[] bytes = File.ReadAllBytes(doc.FullName);
+
+            string Convert(PaginationMode paginationMode)
+            {
+                using var ms = new MemoryStream();
+                ms.Write(bytes, 0, bytes.Length);
+                ms.Position = 0;
+                using var wDoc = WordprocessingDocument.Open(ms, true);
+                var settings = new WmlToHtmlConverterSettings()
+                {
+                    FabricateCssClasses = true,
+                    RenderPagination = paginationMode,
+                    PaginationCssClassPrefix = "print-",
+                };
+                return WmlToHtmlConverter.ConvertToHtml(wDoc, settings)
+                    .ToString(SaveOptions.DisableFormatting);
+            }
+
+            string paginatedHtml = Convert(PaginationMode.Paginated);
+            string expectedPrintCss = string.Join("\n", new[]
+            {
+                "@media print {",
+                "    .print-container {",
+                "        display: block;",
+                "        gap: 0;",
+                "        padding: 0;",
+                "        background: transparent;",
+                "        min-height: 0;",
+                "    }",
+                "    .print-box {",
+                "        zoom: 1 !important;",
+                "        transform: none !important;",
+                "        margin: 0 !important;",
+                "        box-shadow: none;",
+                "    }",
+                "    .print-box + .print-box {",
+                "        break-before: page;",
+                "        page-break-before: always;",
+                "    }",
+                "}",
+            });
+            Assert.Contains(expectedPrintCss, paginatedHtml.Replace("\r\n", "\n"));
+
+            string unpaginatedHtml = Convert(PaginationMode.None);
+            Assert.DoesNotContain(".print-container {", unpaginatedHtml);
+            Assert.DoesNotContain(".print-box + .print-box {", unpaginatedHtml);
+        }
+
+        [Fact]
         public void HC009_HeadersAndFooters_CssEnabled()
         {
             // Test that header/footer CSS is generated when RenderHeadersAndFooters is true

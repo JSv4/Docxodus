@@ -161,20 +161,19 @@ public class DocxDiffTests
     }
 
     [Fact]
-    public void GetRevisions_TableColumnChange_ReportsWholeTableReplace()
+    public void GetRevisions_RightOnlyTableColumn_ReportsInsertedCell()
     {
-        // A column add/remove bails the MARKUP renderer to a whole-table del(left)+ins(right) fallback
-        // (see Compare_DeletedTableColumn_RejectRestoresTheColumn). GetRevisions must mirror that: it
-        // previously returned ZERO revisions for a column-count change (the per-cell path drops the
-        // surplus cell), diverging from the WmlComparer oracle — which reports a Deleted + Inserted pair —
-        // and silently hiding the change from revision consumers even though the markup tracks it.
+        // A right-only cell in an ordinary table grid is now tracked natively with w:cellIns plus
+        // tblGridChange, so GetRevisions must surface the granular cell insertion rather than the older
+        // conservative whole-table replacement. Left-only removals remain whole-table fallbacks.
         var left = TableDoc(new[] { "a", "b" });          // 1 row, 2 columns
         var right = TableDoc(new[] { "a", "b", "c" });    // 1 row, 3 columns — a column added
 
         var revisions = DocxDiff.GetRevisions(left, right);
 
-        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Deleted);
-        Assert.Contains(revisions, r => r.Type == DocxDiffRevisionType.Inserted);
+        var insertion = Assert.Single(revisions);
+        Assert.Equal(DocxDiffRevisionType.Inserted, insertion.Type);
+        Assert.Equal("c", insertion.Text);
     }
 
     // A document whose body paragraph has lead text followed by an INLINE content control (w:sdt) wrapping
@@ -223,14 +222,23 @@ public class DocxDiffTests
     public void Compare_IdenticalDocuments_HasNoTrackedChanges()
     {
         var doc = Doc("Unchanged paragraph one.", "Unchanged paragraph two.");
+        var samePackage = new WmlDocument(doc);
 
-        var result = DocxDiff.Compare(doc, doc);
+        var result = DocxDiff.Compare(doc, samePackage);
+
+        Assert.NotSame(doc, result);
+        Assert.NotSame(doc.DocumentByteArray, result.DocumentByteArray);
+        Assert.Equal(doc.FileName, result.FileName);
+        Assert.Equal(doc.DocumentByteArray, result.DocumentByteArray);
 
         using var stream = new MemoryStream(result.DocumentByteArray);
         using var wdoc = WordprocessingDocument.Open(stream, false);
         var body = wdoc.MainDocumentPart!.Document.Body!;
         Assert.False(body.Descendants<InsertedRun>().Any());
         Assert.False(body.Descendants<DeletedRun>().Any());
+
+        result.DocumentByteArray[0] ^= 0x01;
+        Assert.NotEqual(doc.DocumentByteArray, result.DocumentByteArray);
     }
 
     // ----------------------------------------------------------------- GetRevisions

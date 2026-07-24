@@ -142,9 +142,9 @@ internal static class HeaderFooterFixtures
         return result;
     }
 
-    /// <summary>Visible text of the story a given section+kind reference resolves to, or null when
-    /// the reference does not exist. <paramref name="isHeader"/> selects header vs footer references;
-    /// <paramref name="sectionIndex"/> is the document-order sectPr ordinal.</summary>
+    /// <summary>Visible text of the effective story a given section+kind resolves to, or null when no
+    /// reference exists in that section or any earlier section. <paramref name="isHeader"/> selects header vs
+    /// footer references; <paramref name="sectionIndex"/> is the document-order sectPr ordinal.</summary>
     public static string? ReferencedStoryText(WmlDocument d, bool isHeader, int sectionIndex, string kind)
     {
         using var ms = new MemoryStream(d.DocumentByteArray);
@@ -156,7 +156,8 @@ internal static class HeaderFooterFixtures
         if (sectionIndex >= sectPrs.Count) return null;
         XNamespace r = Rns;
         var refName = Wn + (isHeader ? "headerReference" : "footerReference");
-        var reference = sectPrs[sectionIndex].Elements(refName)
+        var reference = sectPrs.Take(sectionIndex + 1).Reverse()
+            .SelectMany(sectPr => sectPr.Elements(refName))
             .FirstOrDefault(e => ((string?)e.Attribute(Wn + "type") ?? "default") == kind);
         if (reference is null) return null;
         var relId = (string?)reference.Attribute(r + "id");
@@ -194,12 +195,17 @@ internal static class HeaderFooterFixtures
     /// <summary>Add a 1×1 PNG <see cref="ImagePart"/> under the FIRST header part with relationship id
     /// <paramref name="relId"/>, so a story block built with <see cref="ImageParagraphXml"/> resolves.</summary>
     public static WmlDocument WithImageInFirstHeaderPart(WmlDocument d, string relId)
+        => WithImageInHeaderPart(d, headerIndex: 0, relId: relId);
+
+    /// <summary>Add a 1×1 PNG under one header part in part-enumeration order. Useful for a shared-story
+    /// reassignment regression where the primary and cloned stories each own different image relationships.</summary>
+    public static WmlDocument WithImageInHeaderPart(WmlDocument d, int headerIndex, string relId)
     {
         using var ms = new MemoryStream();
         ms.Write(d.DocumentByteArray, 0, d.DocumentByteArray.Length);
         using (var doc = WordprocessingDocument.Open(ms, true))
         {
-            var headerPart = doc.MainDocumentPart!.HeaderParts.First();
+            var headerPart = doc.MainDocumentPart!.HeaderParts.ElementAt(headerIndex);
             var imagePart = headerPart.AddNewPart<ImagePart>("image/png", relId);
             using var s = imagePart.GetStream(FileMode.Create, FileAccess.Write);
             s.Write(OnePixelPng, 0, OnePixelPng.Length);

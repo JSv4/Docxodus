@@ -30,7 +30,7 @@ public class FingerprintNoiseDiagnosticTests
     private static readonly HashSet<XName> Consumed = new()
     {
         W + "rStyle", W + "b", W + "i", W + "strike", W + "dstrike", W + "caps",
-        W + "smallCaps", W + "vanish", W + "u", W + "sz", W + "color", W + "highlight",
+        W + "smallCaps", W + "vanish", W + "u", W + "sz", W + "color", W + "highlight", W + "shd",
     };
 
     private static readonly IrReaderOptions ReadOptsRetain =

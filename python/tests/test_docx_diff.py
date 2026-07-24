@@ -82,3 +82,22 @@ def test_docx_diff_settings_track_block_format_changes_to_wire() -> None:
     assert DocxDiffSettings(track_block_format_changes=False).to_wire()[
         "trackBlockFormatChanges"
     ] is False
+
+
+def test_docx_diff_settings_input_revision_policies_to_wire() -> None:
+    """Both input-revision policies must reach the shared DocxDiffOps parser.
+
+    Preserve intentionally wins when both are set, but emitting both lets the
+    .NET engine own that precedence consistently across every transport.
+    """
+    from docx_scalpel.types import DocxDiffSettings
+
+    assert "preAcceptInputRevisions" not in DocxDiffSettings().to_wire()
+    assert "preserveInputRevisions" not in DocxDiffSettings().to_wire()
+
+    wire = DocxDiffSettings(
+        pre_accept_input_revisions=True,
+        preserve_input_revisions=True,
+    ).to_wire()
+    assert wire["preAcceptInputRevisions"] is True
+    assert wire["preserveInputRevisions"] is True

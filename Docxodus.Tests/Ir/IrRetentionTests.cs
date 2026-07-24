@@ -139,7 +139,10 @@ public class IrRetentionTests
         foreach (var b in blocks)
         {
             yield return b;
-            if (b is IrTable table)
+            if (b is IrSdtBlock sdt)
+                foreach (var inner in Flatten(sdt.Blocks))
+                    yield return inner;
+            else if (b is IrTable table)
                 foreach (var row in table.Rows)
                     foreach (var cell in row.Cells)
                         foreach (var inner in Flatten(cell.Blocks))

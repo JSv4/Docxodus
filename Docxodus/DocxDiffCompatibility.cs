@@ -176,7 +176,11 @@ public static class DocxDiffCompatibility
                 + "glossary (building-blocks) document part — keep their pre-existing revisions. "
                 + "Two honest costs of accept-all: it flattens prior authorship and change boundaries (you "
                 + "lose who edited what and where), and 'accept all' is itself a policy that overrides any change a "
-                + "prior reviewer had left unaccepted (effectively rejected). See ir_diff_engine.md + "
+                + "prior reviewer had left unaccepted (effectively rejected). The Word-parity alternative is "
+                + "DocxDiffSettings.PreserveInputRevisions (wins when both are set): the inputs' own markup rides "
+                + "through verbatim for equal blocks and whole-block inserts — accept(output) still equals "
+                + "accept(right), but reject(output) no longer equals left where foreign markup exists (exactly "
+                + "Word's Compare behavior). See ir_diff_engine.md + "
                 + "ooxml_corner_cases.md.", "PreAcceptInputRevisions"),
             roots => Count(roots, W + "ins", W + "del", W + "moveFrom", W + "moveTo")),
     };

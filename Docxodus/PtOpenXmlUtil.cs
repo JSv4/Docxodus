@@ -1578,6 +1578,27 @@ listSeparator
             settingsPart.PutXDocument();
         }
 
+        /// <summary>
+        /// Insert <paramref name="child"/> into the settings <paramref name="root"/> at its CT_Settings
+        /// schema slot — the same slot-insert discipline as <see cref="EnsureEvenAndOddHeaders"/> (place it
+        /// before the first sibling that <c>Order_settings</c> ranks later; unknown siblings are never
+        /// moved, so a whole-part reorder never sorts extension content to the end) — but only when no
+        /// child of that name already exists. Returns true iff it was inserted. Caller persists the part.
+        /// </summary>
+        internal static bool EnsureSettingsChildInOrder(XElement root, XElement child)
+        {
+            if (root.Element(child.Name) != null)
+                return false;
+            var rank = Order_settings.TryGetValue(child.Name, out var r) ? r : 999;
+            var firstLater = root.Elements().FirstOrDefault(e =>
+                Order_settings.TryGetValue(e.Name, out var laterRank) && laterRank > rank);
+            if (firstLater == null)
+                root.Add(child);
+            else
+                firstLater.AddBeforeSelf(child);
+            return true;
+        }
+
         public static WmlDocument BreakLinkToTemplate(WmlDocument source)
         {
             using (MemoryStream ms = new MemoryStream())

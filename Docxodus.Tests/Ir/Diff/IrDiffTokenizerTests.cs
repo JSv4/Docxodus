@@ -78,6 +78,94 @@ public class IrDiffTokenizerTests
         Assert.Empty(Tok(Para("<w:p/>")));
     }
 
+    [Fact]
+    public void Period_and_comma_split_only_when_not_adjacent_to_a_digit()
+    {
+        // WmlComparer's atom grouping isolates sentence punctuation, but keeps decimal/thousands punctuation
+        // in its numeric word even though comma is also a configured static separator.
+        var tokens = Tok(TextPara("This. 3.14 1,234 end,"));
+        Assert.Equal(
+            new[] { "This", ".", " ", "3.14", " ", "1,234", " ", "end", "," },
+            tokens.Select(t => t.Text));
+        Assert.Equal(
+            new[]
+            {
+                IrDiffTokenKind.Word, IrDiffTokenKind.Separator, IrDiffTokenKind.Separator,
+                IrDiffTokenKind.Word, IrDiffTokenKind.Separator, IrDiffTokenKind.Word,
+                IrDiffTokenKind.Separator, IrDiffTokenKind.Word, IrDiffTokenKind.Separator,
+            },
+            tokens.Select(t => t.Kind));
+    }
+
+    [Theory]
+    [InlineData("3", ".", "14")]
+    [InlineData("1", ",", "234")]
+    public void Numeric_punctuation_uses_adjacent_differently_formatted_runs(
+        string leadingDigits, string punctuation, string trailingDigits)
+    {
+        // The punctuation run sees adjacent text runs, but remains a separate token so each source run's
+        // format, provenance, and char offsets remain intact.
+        var p = Para(
+            $"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>{leadingDigits}</w:t></w:r>" +
+            $"<w:r><w:rPr><w:i/></w:rPr><w:t>{punctuation}</w:t></w:r>" +
+            $"<w:r><w:rPr><w:u w:val=\"single\"/></w:rPr><w:t>{trailingDigits}</w:t></w:r></w:p>");
+
+        var tokens = Tok(p);
+        Assert.Equal(new[] { leadingDigits, punctuation, trailingDigits }, tokens.Select(t => t.Text));
+        Assert.All(tokens, t => Assert.Equal(IrDiffTokenKind.Word, t.Kind));
+        Assert.True(tokens[0].Format!.Bold);
+        Assert.True(tokens[1].Format!.Italic);
+        Assert.Equal(IrUnderlineKind.Single, tokens[2].Format!.Underline!.Kind);
+        Assert.Equal((leadingDigits.Length, leadingDigits.Length + punctuation.Length),
+            (tokens[1].StartChar, tokens[1].EndChar));
+    }
+
+    [Fact]
+    public void Numeric_punctuation_looks_through_a_transparent_hyperlink_child()
+    {
+        const string R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        var p = IrReader.Read(IrTestDocuments.FromBodyXmlWithHyperlinks(
+            $"<w:p><w:r><w:t>3</w:t></w:r>" +
+            $"<w:hyperlink r:id=\"r1\" xmlns:r=\"{R}\"><w:r><w:rPr><w:b/></w:rPr><w:t>.</w:t></w:r></w:hyperlink>" +
+            "<w:r><w:t>14</w:t></w:r></w:p>",
+            ("r1", "https://a.example")), NoSources)
+            .Body.Blocks.OfType<IrParagraph>().First();
+
+        var punctuation = Tok(p).Single(t => t.Text == ".");
+        Assert.Equal(IrDiffTokenKind.Word, punctuation.Kind);
+        Assert.True(punctuation.Format!.Bold);
+    }
+
+    [Fact]
+    public void Numeric_punctuation_looks_through_a_transparent_field_result()
+    {
+        var p = Para(
+            "<w:p><w:r><w:t>1</w:t></w:r>" +
+            "<w:r><w:fldChar w:fldCharType=\"begin\"/></w:r>" +
+            "<w:r><w:instrText xml:space=\"preserve\"> PAGE </w:instrText></w:r>" +
+            "<w:r><w:fldChar w:fldCharType=\"separate\"/></w:r>" +
+            "<w:r><w:rPr><w:b/></w:rPr><w:t>,</w:t></w:r>" +
+            "<w:r><w:fldChar w:fldCharType=\"end\"/></w:r>" +
+            "<w:r><w:t>234</w:t></w:r></w:p>");
+
+        var punctuation = Tok(p).Single(t => t.Text == ",");
+        Assert.Equal(IrDiffTokenKind.Word, punctuation.Kind);
+        Assert.True(punctuation.Format!.Bold);
+    }
+
+    [Fact]
+    public void Numeric_punctuation_does_not_look_through_a_tab_atom()
+    {
+        // A tab is a comparison-atom boundary. The period must not reuse the digit before it when its actual
+        // next neighbor is non-numeric, otherwise "3<tab>.x" would incorrectly keep '.' in a word.
+        var p = Para(
+            "<w:p><w:r><w:t>3</w:t></w:r><w:r><w:tab/></w:r>" +
+            "<w:r><w:t>.</w:t></w:r><w:r><w:t>x</w:t></w:r></w:p>");
+
+        var punctuation = Tok(p).Single(t => t.Text == ".");
+        Assert.Equal(IrDiffTokenKind.Separator, punctuation.Kind);
+    }
+
     // --- normalization settings ------------------------------------------
 
     [Fact]

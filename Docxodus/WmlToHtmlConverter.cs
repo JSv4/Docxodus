@@ -856,9 +856,15 @@ namespace Docxodus
 
         public static XElement ConvertToHtml(WordprocessingDocument wordDoc, WmlToHtmlConverterSettings htmlConverterSettings)
         {
+            // Some older Word producers store a DrawingML textbox's body in a related XML part
+            // instead of the inline w:txbxContent normally expected by wps:txbx. Bring that
+            // body into its owning content part before the normal simplification and formatting
+            // pipeline, so it receives the same revision/style processing as inline textboxes.
+            InlineExternalTextBoxBodies(wordDoc);
+
             // Only accept revisions if NOT rendering tracked changes AND document has tracked changes
             // This optimization saves ~9% of conversion time for documents without revisions
-            if (!htmlConverterSettings.RenderTrackedChanges && HasTrackedChanges(wordDoc))
+            if (!htmlConverterSettings.RenderTrackedChanges && RevisionAccepter.HasTrackedRevisions(wordDoc))
             {
                 RevisionAccepter.AcceptRevisions(wordDoc);
             }
@@ -968,34 +974,6 @@ namespace Docxodus
             // must do it correctly, or entities will not be serialized properly.
 
             return xhtml;
-        }
-
-        /// <summary>
-        /// Quickly checks if a document contains any tracked changes (revisions).
-        /// This is used to skip the expensive AcceptRevisions call when not needed.
-        /// </summary>
-        /// <param name="wordDoc">The Word document to check</param>
-        /// <returns>True if the document has any tracked changes</returns>
-        private static bool HasTrackedChanges(WordprocessingDocument wordDoc)
-        {
-            var mainPart = wordDoc.MainDocumentPart;
-            if (mainPart == null) return false;
-
-            var xDoc = mainPart.GetXDocument();
-            var body = xDoc.Root?.Element(W.body);
-            if (body == null) return false;
-
-            // Check for any revision elements - this is a fast descendant scan
-            return body.Descendants().Any(e =>
-                e.Name == W.ins ||
-                e.Name == W.del ||
-                e.Name == W.moveFrom ||
-                e.Name == W.moveTo ||
-                e.Name == W.rPrChange ||
-                e.Name == W.pPrChange ||
-                e.Name == W.tblPrChange ||
-                e.Name == W.tcPrChange ||
-                e.Name == W.sectPrChange);
         }
 
         /// <summary>
@@ -2146,12 +2124,37 @@ namespace Docxodus
             sb.AppendLine("    display: none;");
             sb.AppendLine("}");
 
+            // The viewer uses a flex column and scaled boxes on screen. Those layout
+            // affordances can introduce blank physical pages when the paginated view is
+            // captured with a browser's print/PDF path, so restore document-page layout
+            // only for print. The conversion bridge enables GeneratePageCss for paginated
+            // documents so Chromium also receives each document section's physical page size.
+            sb.AppendLine("@media print {");
+            sb.AppendLine($"    .{prefix}container {{");
+            sb.AppendLine("        display: block;");
+            sb.AppendLine("        gap: 0;");
+            sb.AppendLine("        padding: 0;");
+            sb.AppendLine("        background: transparent;");
+            sb.AppendLine("        min-height: 0;");
+            sb.AppendLine("    }");
+            sb.AppendLine($"    .{prefix}box {{");
+            sb.AppendLine("        zoom: 1 !important;");
+            sb.AppendLine("        transform: none !important;");
+            sb.AppendLine("        margin: 0 !important;");
+            sb.AppendLine("        box-shadow: none;");
+            sb.AppendLine("    }");
+            sb.AppendLine($"    .{prefix}box + .{prefix}box {{");
+            sb.AppendLine("        break-before: page;");
+            sb.AppendLine("        page-break-before: always;");
+            sb.AppendLine("    }");
+            sb.AppendLine("}");
+
             return sb.ToString();
         }
 
         /// <summary>
-        /// Generates @page CSS rule with document page dimensions and margins.
-        /// Uses the first section's settings for page size and margins.
+        /// Generates @page CSS rule with document page dimensions and margins. Paginated output
+        /// uses zero outer margin because its fixed page boxes already apply section margins.
         /// </summary>
         private static string GeneratePageCss(WmlToHtmlConverterSettings settings, WordprocessingDocument wordDoc)
         {
@@ -2162,6 +2165,16 @@ namespace Docxodus
             var body = wordDoc.MainDocumentPart?.GetXDocument()?.Root?.Element(W.body);
             if (body == null)
                 return string.Empty;
+
+            // A paginated document already has one fixed-size page box per logical page. The
+            // browser can switch physical paper only through named @page rules, selected by the
+            // page box's section index. Keep the existing single global rule for the common
+            // uniform-size case, but do not force a portrait page onto a landscape section.
+            if (settings.RenderPagination == PaginationMode.Paginated &&
+                !HasUniformMainStoryPageSize(wordDoc))
+            {
+                return GenerateNamedPaginatedPageCss(body, settings);
+            }
 
             // Find section properties (body-level sectPr or last paragraph's sectPr)
             var sectPr = body.Element(W.sectPr) ??
@@ -2181,18 +2194,87 @@ namespace Docxodus
             sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
                 "    size: {0:0.00}in {1:0.00}in;", widthIn, heightIn));
 
-            // Generate margin (top right bottom left)
-            double marginTopIn = dims.MarginTopPt / 72.0;
-            double marginRightIn = dims.MarginRightPt / 72.0;
-            double marginBottomIn = dims.MarginBottomPt / 72.0;
-            double marginLeftIn = dims.MarginLeftPt / 72.0;
-            sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
-                "    margin: {0:0.00}in {1:0.00}in {2:0.00}in {3:0.00}in;",
-                marginTopIn, marginRightIn, marginBottomIn, marginLeftIn));
+            if (settings.RenderPagination == PaginationMode.Paginated)
+            {
+                // The paginator has already positioned content within each page box using the
+                // Word section margins. Reapplying them to the physical print page shrinks the
+                // box and can spill an A4 page onto an extra Letter-sized PDF page.
+                sb.AppendLine("    margin: 0;");
+            }
+            else
+            {
+                // Generate margin (top right bottom left) for continuous HTML, where the
+                // browser's physical page margin is the only representation of section margins.
+                double marginTopIn = dims.MarginTopPt / 72.0;
+                double marginRightIn = dims.MarginRightPt / 72.0;
+                double marginBottomIn = dims.MarginBottomPt / 72.0;
+                double marginLeftIn = dims.MarginLeftPt / 72.0;
+                sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
+                    "    margin: {0:0.00}in {1:0.00}in {2:0.00}in {3:0.00}in;",
+                    marginTopIn, marginRightIn, marginBottomIn, marginLeftIn));
+            }
 
             sb.AppendLine("}");
 
             return sb.ToString();
+        }
+
+        /// <summary>
+        /// Emits one named physical page per main-story section and attaches it to the matching
+        /// page-box class. The TypeScript paginator copies the section index from its staging
+        /// container to every final page box, so a sequence such as portrait → landscape →
+        /// portrait becomes three correctly sized PDF page groups in Chromium.
+        /// </summary>
+        private static string GenerateNamedPaginatedPageCss(XElement body,
+            WmlToHtmlConverterSettings settings)
+        {
+            var sectionDimensions = CollectSectionData(body)
+                .Select(section => ExtractPageDimensions(section.sectPr))
+                .ToList();
+            var prefix = settings.PaginationCssClassPrefix ?? "page-";
+            var sb = new StringBuilder();
+
+            sb.AppendLine();
+            sb.AppendLine("/* Named page CSS for mixed-size paginated sections */");
+            for (int sectionIndex = 0; sectionIndex < sectionDimensions.Count; sectionIndex++)
+            {
+                var dims = sectionDimensions[sectionIndex];
+                sb.AppendLine($"@page docxodus-section-{sectionIndex} {{");
+                sb.AppendLine(string.Format(NumberFormatInfo.InvariantInfo,
+                    "    size: {0:0.00}in {1:0.00}in;",
+                    dims.PageWidthPt / 72.0, dims.PageHeightPt / 72.0));
+                // Section margins are already represented inside each fixed page box.
+                sb.AppendLine("    margin: 0;");
+                sb.AppendLine("}");
+            }
+
+            sb.AppendLine("@media print {");
+            for (int sectionIndex = 0; sectionIndex < sectionDimensions.Count; sectionIndex++)
+            {
+                sb.AppendLine($"    .{prefix}box[data-section-index=\"{sectionIndex}\"] {{");
+                sb.AppendLine($"        page: docxodus-section-{sectionIndex};");
+                sb.AppendLine("    }");
+            }
+            sb.AppendLine("}");
+
+            return sb.ToString();
+        }
+
+        internal static bool HasUniformMainStoryPageSize(WordprocessingDocument wordDoc)
+        {
+            var body = wordDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
+            if (body == null)
+                return false;
+
+            // Match pagination's main-story traversal: it recognizes section breaks inside
+            // tables but intentionally excludes floating text-box stories.
+            var sectionDimensions = CollectSectionData(body)
+                .Select(section => ExtractPageDimensions(section.sectPr))
+                .ToList();
+            var first = sectionDimensions[0];
+            return sectionDimensions.Skip(1).All(section =>
+                section.PageWidthPt == first.PageWidthPt &&
+                section.PageHeightPt == first.PageHeightPt);
         }
 
         private static string GenerateAnnotationCss(WmlToHtmlConverterSettings settings)
@@ -2639,6 +2721,17 @@ namespace Docxodus
             if (element.Name == W.drawing || element.Name == W.pict || element.Name == W._object)
             {
                 return ProcessImage(wordDoc, element, settings.ImageHandler, settings);
+            }
+
+            // An AlternateContent run carries two representations of the same object (normally a
+            // modern DrawingML choice and a VML fallback). Rendering both duplicates text boxes
+            // and images. Select the first choice whose required namespaces this converter
+            // understands; do not promote an unsupported branch's VML fallback because the
+            // browser/LibreOffice-compatible projection deliberately leaves that legacy markup
+            // unrendered.
+            if (element.Name == MC.AlternateContent)
+            {
+                return ProcessAlternateContent(wordDoc, settings, element, currentMarginLeft);
             }
 
             // Transform content controls.
@@ -4531,7 +4624,7 @@ namespace Docxodus
                 {
                     if (tblIndType == "dxa")
                     {
-                        var width = (decimal?)tblInd.Attribute(W._w);
+                        var width = WordprocessingMLUtil.AttributeToTwips(tblInd.Attribute(W._w));
                         if (width != null)
                         {
                             style.AddIfMissing("margin-left",
@@ -4546,12 +4639,12 @@ namespace Docxodus
             var tblpPr = element.Elements(W.tblPr).Elements(W.tblpPr).FirstOrDefault();
             if (tblpPr != null)
             {
-                var topFromText = (decimal?)tblpPr.Attribute(W.topFromText);
+                var topFromText = WordprocessingMLUtil.AttributeToTwips(tblpPr.Attribute(W.topFromText));
                 if (topFromText != null && topFromText > 0)
                     style.AddIfMissing("margin-top",
                         string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", topFromText / 20m));
 
-                var bottomFromText = (decimal?)tblpPr.Attribute(W.bottomFromText);
+                var bottomFromText = WordprocessingMLUtil.AttributeToTwips(tblpPr.Attribute(W.bottomFromText));
                 if (bottomFromText != null && bottomFromText > 0)
                     style.AddIfMissing("margin-bottom",
                         string.Format(NumberFormatInfo.InvariantInfo, "{0}pt", bottomFromText / 20m));
@@ -4571,7 +4664,7 @@ namespace Docxodus
                 {
                     var precedingPPr = precedingSibling.Element(W.pPr);
                     var precedingSpacing = precedingPPr?.Element(W.spacing);
-                    var afterVal = (decimal?)precedingSpacing?.Attribute(W.after);
+                    var afterVal = WordprocessingMLUtil.AttributeToTwips(precedingSpacing?.Attribute(W.after));
 
                     // If preceding paragraph has no spacing-after or zero, table needs top margin
                     if (precedingSpacing == null || afterVal == null || afterVal == 0)
@@ -5322,7 +5415,9 @@ namespace Docxodus
         {
             if (spacing == null) return;
 
-            var spacingBefore = suppressLeadingWhiteSpace ? 0 : (decimal?) spacing.Attribute(W.before);
+            var spacingBefore = suppressLeadingWhiteSpace
+                ? 0
+                : WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.before));
             if (spacingBefore != null && elementName != Xhtml.span)
                 style.AddIfMissing("margin-top",
                     spacingBefore > 0m
@@ -5331,25 +5426,26 @@ namespace Docxodus
 
             // Per OOXML spec (ISO/IEC 29500), when lineRule is absent the default is "auto"
             var lineRule = (string) spacing.Attribute(W.lineRule) ?? (spacing.Attribute(W.line) != null ? "auto" : null);
-            if (lineRule == "auto")
+            // Word also permits point-suffixed line values (for example, 12.95pt) in
+            // compatibility-produced packages.  Normalize all line measures to twips before
+            // deriving their CSS value, just as before/after spacing already does below.
+            var line = WordprocessingMLUtil.AttributeToTwips(spacing.Attribute(W.line));
+            if (lineRule == "auto" && line is { } autoLine)
             {
-                var line = (decimal) spacing.Attribute(W.line);
-                if (line != 240m)
+                if (autoLine != 240m)
                 {
-                    var pct = (line/240m)*100m;
+                    var pct = (autoLine/240m)*100m;
                     style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}%", pct));
                 }
             }
-            if (lineRule == "exact")
+            if (lineRule == "exact" && line is { } exactLine)
             {
-                var line = (decimal) spacing.Attribute(W.line);
-                var points = line/20m;
+                var points = exactLine/20m;
                 style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", points));
             }
-            if (lineRule == "atLeast")
+            if (lineRule == "atLeast" && line is { } atLeastLine)
             {
-                var line = (decimal) spacing.Attribute(W.line);
-                var points = line/20m;
+                var points = atLeastLine/20m;
                 if (points >= 14m)
                     style.Add("line-height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.0}pt", points));
             }
@@ -7594,17 +7690,18 @@ namespace Docxodus
         {
             if (shd == null)
                 return;
-            var shadeType = (string)shd.Attribute(W.val);
+            // Word and other producers sometimes omit w:val for a plain cell fill.  OOXML's
+            // effective behavior is a clear shading pattern, so retain the fill rather than
+            // passing a null key to the shade lookup.
+            var shadeType = (string?)shd.Attribute(W.val) ?? "clear";
 
             // Resolve color and fill with theme support
             var themeScheme = contextElement != null ? GetThemeColorScheme(contextElement) : null;
             var color = ResolveThemeColor(shd, W.color, W.themeColor, W.themeTint, W.themeShade, themeScheme);
             var fill = ResolveThemeColor(shd, W.fill, W.themeFill, W.themeFillTint, W.themeFillShade, themeScheme);
 
-            if (ShadeMapper.ContainsKey(shadeType))
-            {
-                color = ShadeMapper[shadeType](color, fill);
-            }
+            if (ShadeMapper.TryGetValue(shadeType, out var shadeMapper))
+                color = shadeMapper(color, fill);
             if (color != null)
             {
                 var cvtColor = ConvertColor(color);
@@ -7935,23 +8032,392 @@ namespace Docxodus
             "image/png", "image/gif", "image/tiff", "image/jpeg"
         };
 
+        // Keep this deliberately small: it describes namespaces that are meaningful to this HTML
+        // projection, not every namespace Word itself can consume. In particular, an obsolete
+        // pre-release wps namespace must fall through to its VML fallback (as Word does).
+        private static readonly HashSet<string> HtmlSupportedMarkupNamespaces = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "urn:schemas-microsoft-com:vml",
+            "urn:schemas-microsoft-com:office:office",
+            "urn:schemas-microsoft-com:office:word",
+            WPS.wps.NamespaceName,
+            WPG.wpg.NamespaceName,
+            WPC.wpc.NamespaceName,
+            WP14.wp14.NamespaceName,
+            W14.w14.NamespaceName,
+        };
+
+        private static object ProcessAlternateContent(WordprocessingDocument wordDoc,
+            WmlToHtmlConverterSettings settings, XElement alternateContent, decimal currentMarginLeft)
+        {
+            // Markup Compatibility requires readers to use the Fallback whenever none of the
+            // available Choice branches advertises only namespaces they understand. This also
+            // gives older draft DrawingML shapes a portable VML representation instead of
+            // silently dropping the entire logical object.
+            var selected = alternateContent.Elements(MC.Choice).FirstOrDefault(IsSupportedMarkupChoice)
+                ?? alternateContent.Element(MC.Fallback);
+
+            return selected == null
+                ? null
+                : selected.Elements().Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false,
+                    currentMarginLeft));
+        }
+
+        private static bool IsSupportedMarkupChoice(XElement choice)
+        {
+            var requires = (string)choice.Attribute("Requires");
+            if (string.IsNullOrWhiteSpace(requires))
+                return true;
+
+            return requires.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Select(prefix => choice.GetNamespaceOfPrefix(prefix)?.NamespaceName ?? string.Empty)
+                .All(HtmlSupportedMarkupNamespaces.Contains);
+        }
+
 
         public static XElement ProcessImage(WordprocessingDocument wordDoc,
             XElement element, Func<ImageInfo, XElement> imageHandler, WmlToHtmlConverterSettings settings = null)
         {
-            if (imageHandler == null)
-            {
-                return null;
-            }
             if (element.Name == W.drawing)
             {
-                return ProcessDrawing(wordDoc, element, imageHandler, settings);
+                // Preserve established image output for the uncommon shape that carries both an
+                // image and textbox body. A textbox-only drawing falls through when no image can
+                // be resolved (including a malformed/missing relationship).
+                if (imageHandler != null)
+                {
+                    var image = ProcessDrawing(wordDoc, element, imageHandler, settings);
+                    if (image != null)
+                        return image;
+                }
+                return ProcessTextBox(wordDoc, element, settings);
             }
             if (element.Name == W.pict || element.Name == W._object)
             {
-                return ProcessPictureOrObject(wordDoc, element, imageHandler, settings);
+                if (imageHandler != null)
+                {
+                    var image = ProcessPictureOrObject(wordDoc, element, imageHandler, settings);
+                    if (image != null)
+                        return image;
+                }
+                return ProcessTextBox(wordDoc, element, settings);
             }
             return null;
+        }
+
+        /// <summary>
+        /// Projects a DrawingML or VML text box into valid inline HTML. Word commonly stores the
+        /// same logical box in an <c>mc:Choice</c> and a VML fallback; callers select one branch
+        /// before reaching here. This models the portable core (dimensions, simple fill/border and
+        /// its Word paragraphs) rather than passing VML's absolute-positioning directives through
+        /// to a browser, where they otherwise escape the document flow.
+        /// </summary>
+        private static XElement ProcessTextBox(WordprocessingDocument wordDoc, XElement element,
+            WmlToHtmlConverterSettings settings)
+        {
+            var textBoxContent = element.Descendants(W.txbxContent).FirstOrDefault();
+            if (textBoxContent == null)
+                return null;
+
+            var wrapper = new XElement(Xhtml.span);
+            var style = new Dictionary<string, string>
+            {
+                { "display", "inline-block" },
+                { "box-sizing", "border-box" },
+                { "vertical-align", "top" },
+                { "overflow", "hidden" },
+            };
+
+            var drawingContainer = element.Elements()
+                .FirstOrDefault(e => e.Name == WP.inline || e.Name == WP.anchor);
+            var vmlShape = element.Descendants(VML.shape).FirstOrDefault();
+            var autoFit = HasAutoFitTextBox(element);
+            if (drawingContainer != null)
+                AddDrawingTextBoxStyle(style, element, drawingContainer);
+            else if (vmlShape != null)
+                AddVmlTextBoxStyle(style, vmlShape);
+
+            var renderedBlocks = new List<object>();
+            foreach (var child in textBoxContent.Elements())
+            {
+                if (child.Name == W.p)
+                {
+                    var paragraph = ConvertToHtmlTransform(wordDoc, settings, child, false, 0m) as XElement;
+                    if (paragraph == null)
+                        continue;
+
+                    // A span can safely remain inside the containing run. Preserve paragraph
+                    // styling, but turn the inner block into a block-level span so browser HTML
+                    // parsing never closes the outer paragraph around a text box.
+                    paragraph.Name = Xhtml.span;
+                    var paragraphStyle = paragraph.Annotation<Dictionary<string, string>>();
+                    if (paragraphStyle == null)
+                    {
+                        paragraphStyle = new Dictionary<string, string>();
+                        paragraph.AddAnnotation(paragraphStyle);
+                    }
+                    paragraphStyle.AddIfMissing("display", "block");
+                    if (autoFit)
+                    {
+                        // In an automatically fitted shape, LibreOffice sizes the box to the
+                        // text line and its insets, not the document style's trailing paragraph
+                        // spacing. Keeping Normal's usual 10pt after-spacing makes the box
+                        // visibly too tall.
+                        paragraphStyle["margin-bottom"] = "0";
+                    }
+                    renderedBlocks.Add(paragraph);
+                    continue;
+                }
+
+                if (child.Name == W.tbl)
+                {
+                    // Tables cannot legally live inside a span. Keep their text visible rather
+                    // than emitting invalid nested block markup; full table projection inside a
+                    // floating text box remains a separate layout feature.
+                    var text = child.Descendants(W.t).Select(t => t.Value).StringConcatenate();
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        var tableText = new XElement(Xhtml.span, new XText(text));
+                        tableText.AddAnnotation(new Dictionary<string, string>
+                        {
+                            { "display", "block" },
+                        });
+                        renderedBlocks.Add(tableText);
+                    }
+                }
+            }
+
+            if (renderedBlocks.Count == 0)
+                return null;
+
+            wrapper.Add(renderedBlocks);
+            wrapper.AddAnnotation(style);
+            return wrapper;
+        }
+
+        // Word 2008's external textbox part uses this namespace rather than the W14 namespace
+        // used elsewhere in the document. Keep it local because the namespace only exists to
+        // normalize this compatibility representation into standard w:txbxContent markup.
+        private static readonly XName LegacyExternalTextBox = XName.Get("txbx",
+            "http://schemas.microsoft.com/office/word/2008/9/12/wordml");
+
+        private static readonly XName ExternalTextBoxRelationshipId = R.r + "txbx";
+
+        private static void InlineExternalTextBoxBodies(WordprocessingDocument wordDoc)
+        {
+            foreach (var ownerPart in wordDoc.ContentParts())
+            {
+                var ownerDocument = ownerPart.GetXDocument();
+                var textBoxes = ownerDocument.Descendants(WPS.txbx)
+                    .Where(textBox => !textBox.Descendants(W.txbxContent).Any())
+                    .ToList();
+                var changed = false;
+
+                foreach (var textBox in textBoxes)
+                {
+                    var relationshipId = (string)textBox.Attribute(ExternalTextBoxRelationshipId);
+                    if (string.IsNullOrWhiteSpace(relationshipId))
+                        continue;
+
+                    var relatedPart = ownerPart.Parts
+                        .Where(pair => pair.RelationshipId == relationshipId)
+                        .Select(pair => pair.OpenXmlPart)
+                        .FirstOrDefault();
+                    if (relatedPart == null || !IsXmlPart(relatedPart))
+                        continue;
+
+                    try
+                    {
+                        var textBoxContent = GetExternalTextBoxContent(relatedPart);
+                        if (textBoxContent == null)
+                            continue;
+
+                        textBox.Add(textBoxContent);
+                        changed = true;
+                    }
+                    catch (System.Xml.XmlException)
+                    {
+                        // A broken compatibility part must not prevent the rest of the document
+                        // from rendering. Leave the selected Choice empty rather than promoting
+                        // its VML fallback.
+                    }
+                    catch (System.IO.IOException)
+                    {
+                        // Treat unreadable related parts like missing textbox content.
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Some malformed package relationships cannot provide a readable part.
+                    }
+                }
+
+                if (changed)
+                    ownerPart.PutXDocument();
+            }
+        }
+
+        private static bool IsXmlPart(OpenXmlPart part)
+        {
+            var contentType = part.ContentType;
+            return contentType.EndsWith("+xml", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(contentType, "application/xml", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(contentType, "text/xml", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static XElement GetExternalTextBoxContent(OpenXmlPart part)
+        {
+            var root = part.GetXDocument().Root;
+            if (root == null)
+                return null;
+
+            // Be tolerant of a producer that writes normal inline textbox markup into the
+            // relationship target.
+            var inlineContent = root.Name == W.txbxContent
+                ? root
+                : root.Descendants(W.txbxContent).FirstOrDefault();
+            if (inlineContent != null)
+                return new XElement(inlineContent);
+
+            // Legacy external textbox parts place paragraphs/tables directly under w14:txbx.
+            // Wrap those cloned blocks in the standard inline container expected downstream.
+            if (root.Name != LegacyExternalTextBox && root.Name != W14.w14 + "txbx")
+                return null;
+
+            var blocks = root.Elements()
+                .Where(element => element.Name == W.p || element.Name == W.tbl)
+                .Select(element => new XElement(element))
+                .ToList();
+            return blocks.Count == 0 ? null : new XElement(W.txbxContent, blocks);
+        }
+
+        private static void AddDrawingTextBoxStyle(Dictionary<string, string> style, XElement drawing,
+            XElement drawingContainer)
+        {
+            var extentCx = (long?)drawingContainer.Elements(WP.extent)
+                .Attributes(NoNamespace.cx).FirstOrDefault();
+            var extentCy = (long?)drawingContainer.Elements(WP.extent)
+                .Attributes(NoNamespace.cy).FirstOrDefault();
+            AddEmuDimensions(style, extentCx, extentCy);
+
+            var horizontalAlign = drawingContainer.Elements(WP.positionH).Elements(WP.align)
+                .Select(e => e.Value).FirstOrDefault();
+            if (horizontalAlign == "center")
+            {
+                style["display"] = "block";
+                style.AddIfMissing("margin-left", "auto");
+                style.AddIfMissing("margin-right", "auto");
+            }
+            else if (horizontalAlign == "right")
+            {
+                style["display"] = "block";
+                style.AddIfMissing("margin-left", "auto");
+            }
+
+            var shapeProperties = drawing.Descendants(WPS.spPr).FirstOrDefault();
+            if (shapeProperties != null)
+            {
+                var fill = (string)shapeProperties.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                if (IsHexColor(fill))
+                    style.AddIfMissing("background-color", "#" + fill);
+
+                var line = shapeProperties.Element(A.ln);
+                var lineColor = (string)line?.Element(A.solidFill)?.Element(A.srgbClr)?.Attribute("val");
+                if (IsHexColor(lineColor))
+                {
+                    var widthEmu = (long?)line.Attribute("w") ?? 12700L;
+                    style.AddIfMissing("border", string.Format(NumberFormatInfo.InvariantInfo,
+                        "{0:0.##}pt solid #{1}", widthEmu / 12700.0, lineColor));
+                }
+            }
+
+            var bodyProperties = drawing.Descendants(WPS.bodyPr).FirstOrDefault();
+            if (bodyProperties != null)
+            {
+                // LibreOffice honors DrawingML's automatic shape fitting: a one-line text box
+                // with a large stored extent shrinks to its content height. Leaving the fixed
+                // extent here creates a visibly oversized rectangle in the visual oracle.
+                if (bodyProperties.Element(A.spAutoFit) != null)
+                    style.Remove("height");
+                AddEmuPadding(style, "padding-left", (long?)bodyProperties.Attribute("lIns"));
+                AddEmuPadding(style, "padding-top", (long?)bodyProperties.Attribute("tIns"));
+                AddEmuPadding(style, "padding-right", (long?)bodyProperties.Attribute("rIns"));
+                AddEmuPadding(style, "padding-bottom", (long?)bodyProperties.Attribute("bIns"));
+            }
+        }
+
+        private static void AddVmlTextBoxStyle(Dictionary<string, string> style, XElement shape)
+        {
+            var vmlStyle = (string)shape.Attribute("style");
+            if (!string.IsNullOrEmpty(vmlStyle))
+            {
+                var tokens = vmlStyle.Split(';');
+                var width = WidthInPoints(tokens);
+                var height = HeightInPoints(tokens);
+                if (width != null)
+                    style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.##}pt", width));
+                if (height != null)
+                    style.AddIfMissing("height", string.Format(NumberFormatInfo.InvariantInfo, "{0:0.##}pt", height));
+            }
+
+            var fill = NormalizeVmlCssColor((string)shape.Attribute("fillcolor"));
+            if (fill != null)
+                style.AddIfMissing("background-color", fill);
+            var stroke = NormalizeVmlCssColor((string)shape.Attribute("strokecolor"));
+            if (stroke != null)
+                style.AddIfMissing("border", "1pt solid " + stroke);
+
+            if (HasVmlTextBoxAutoFit(shape))
+                style.Remove("height");
+        }
+
+        private static bool HasAutoFitTextBox(XElement element) =>
+            element.Descendants(WPS.bodyPr).Elements(A.spAutoFit).Any() ||
+            HasVmlTextBoxAutoFit(element);
+
+        private static bool HasVmlTextBoxAutoFit(XElement element) =>
+            element.Descendants(VML.textbox)
+                .Select(textBox => (string)textBox.Attribute("style"))
+                .Any(style => style?.IndexOf("mso-fit-shape-to-text:t",
+                    StringComparison.OrdinalIgnoreCase) >= 0);
+
+        private static void AddEmuDimensions(Dictionary<string, string> style, long? widthEmu, long? heightEmu)
+        {
+            if (widthEmu != null)
+                style.AddIfMissing("width", string.Format(NumberFormatInfo.InvariantInfo,
+                    "{0:0.##}pt", widthEmu.Value / 12700.0));
+            if (heightEmu != null)
+                style.AddIfMissing("height", string.Format(NumberFormatInfo.InvariantInfo,
+                    "{0:0.##}pt", heightEmu.Value / 12700.0));
+        }
+
+        private static void AddEmuPadding(Dictionary<string, string> style, string cssName, long? emu)
+        {
+            if (emu != null)
+                style.AddIfMissing(cssName, string.Format(NumberFormatInfo.InvariantInfo,
+                    "{0:0.##}pt", emu.Value / 12700.0));
+        }
+
+        private static bool IsHexColor(string color) =>
+            color != null && color.Length == 6 && color.All(Uri.IsHexDigit);
+
+        private static string NormalizeVmlCssColor(string color)
+        {
+            if (string.IsNullOrWhiteSpace(color))
+                return null;
+
+            // VML theme colors can carry a Word-specific palette suffix, e.g.
+            // "#156082 [3204]" or "white [3212]". Retain only the actual colour token;
+            // accepting the complete attribute would both yield invalid CSS and allow a
+            // malformed document to inject additional style declarations.
+            var token = color.Trim().Split(' ')[0];
+            if (token.Length > 1 && token[0] == '#' &&
+                (token.Length == 4 || token.Length == 7 || token.Length == 9) &&
+                token.Skip(1).All(Uri.IsHexDigit))
+                return token;
+
+            return token.All(char.IsLetter) &&
+                   !string.Equals(token, "none", StringComparison.OrdinalIgnoreCase)
+                ? token
+                : null;
         }
 
         private static XElement ProcessDrawing(WordprocessingDocument wordDoc,
@@ -7998,18 +8464,22 @@ namespace Docxodus
             var pp3 = wordDoc.MainDocumentPart.Parts.FirstOrDefault(pp => pp.RelationshipId == imageRid);
             if (pp3 == null) return null;
 
-            var imagePart = (ImagePart)pp3.OpenXmlPart;
+            // Broken packages can point drawing image markup at any relationship target (for
+            // example custom XML). Treat a non-image target the same as a missing image instead
+            // of allowing a cast failure to abort the whole HTML conversion.
+            var imagePart = pp3.OpenXmlPart as ImagePart;
             if (imagePart == null) return null;
 
             // If the image markup points to a NULL image, then following will throw an ArgumentOutOfRangeException
             try
             {
-                imagePart = (ImagePart)wordDoc.MainDocumentPart.GetPartById(imageRid);
+                imagePart = wordDoc.MainDocumentPart.GetPartById(imageRid) as ImagePart;
             }
             catch (ArgumentOutOfRangeException)
             {
                 return null;
             }
+            if (imagePart == null) return null;
 
             var contentType = imagePart.ContentType;
             if (!ImageContentTypes.Contains(contentType))
@@ -8123,7 +8593,9 @@ namespace Docxodus
                 var pp = wordDoc.MainDocumentPart.Parts.FirstOrDefault(pp2 => pp2.RelationshipId == imageRid);
                 if (pp == null) return null;
 
-                var imagePart = (ImagePart)pp.OpenXmlPart;
+                // VML <v:imagedata> can be malformed in exactly the same way as DrawingML:
+                // tolerate a relationship to a non-image part and simply omit the unusable image.
+                var imagePart = pp.OpenXmlPart as ImagePart;
                 if (imagePart == null) return null;
 
                 var contentType = imagePart.ContentType;

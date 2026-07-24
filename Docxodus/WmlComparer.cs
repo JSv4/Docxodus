@@ -144,6 +144,11 @@ namespace Docxodus
 
         public static WmlDocument Compare(WmlDocument source1, WmlDocument source2, WmlComparerSettings settings)
         {
+            // Preserve an exact self/package comparison byte-for-byte. The regular preprocessing path
+            // intentionally annotates and reserializes both inputs, which is useful for a real diff but
+            // violates the no-change contract for callers that compare a document with itself.
+            if (DocxCompare.CanReturnExactNoOp(source1, source2))
+                return new WmlDocument(source1);
             return CompareInternal(source1, source2, settings, true);
         }
 
@@ -2146,11 +2151,17 @@ namespace Docxodus
         // internal (was private): reused by Docxodus.Ir.Diff.IrMarkupRenderer for numbering continuity
         // (esp. legal-numbering preservation, GitHub #1634) when right-only content carries numbering the
         // LEFT package lacks.
-        internal static void CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
+        /// <summary>Copies numbering definitions missing from <paramref name="wDocTo"/> out of
+        /// <paramref name="wDocFrom"/>. Returns the numId translation table for source definitions
+        /// that had to be RENUMBERED around an id collision (source numId → destination numId);
+        /// references to those ids in content cloned from the source document must be rebound by
+        /// the caller — the ids they carry resolve to the destination's (different) definition.</summary>
+        internal static Dictionary<int, int> CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
         {
+            var numIdMap = new Dictionary<int, int>();
             var fromNumberingPart = wDocFrom.MainDocumentPart.NumberingDefinitionsPart;
             if (fromNumberingPart == null)
-                return;
+                return numIdMap;
 
             var toNumberingPart = wDocTo.MainDocumentPart.NumberingDefinitionsPart;
             XDocument toNumberingXDoc;
@@ -2274,6 +2285,7 @@ namespace Docxodus
                     if (abstractNumIdElement != null)
                         abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
                     AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
+                    numIdMap[fromNumId.Value] = maxNumId;
                 }
                 else
                 {
@@ -2290,6 +2302,7 @@ namespace Docxodus
             }
 
             toNumberingPart.PutXDocument(toNumberingXDoc);
+            return numIdMap;
         }
 
         /// <summary>
@@ -6242,10 +6255,70 @@ namespace Docxodus
         internal static XElement MoveRelatedPartsToDestination(PackagePart partOfDeletedContent, PackagePart partInNewDocument,
             XElement contentElement, bool skipDanglingRelationships = false, bool skipHeaderFooterReferences = false)
         {
+            var state = new RelatedPartImportState(partOfDeletedContent, partInNewDocument);
+            return MoveRelatedPartsToDestination(
+                partOfDeletedContent, partInNewDocument, contentElement, state,
+                skipDanglingRelationships, skipHeaderFooterReferences);
+        }
+
+        /// <summary>
+        /// Per-root import state. Reusing one copied destination part for a repeated source target preserves
+        /// relationship graphs (including a corrupt cyclic graph) without unbounded recursive cloning.
+        /// </summary>
+        private sealed class RelatedPartImportState
+        {
+            // Most package parts are globally identified by their source URI, so copying the same target once
+            // correctly preserves sharing and cycles. DiagramDataPart is the exception: its
+            // dsp:dataModelExt/@relId is resolved against the *owner that linked the data part*. A shared data
+            // part can therefore carry distinct owner-local prebuilt drawing edges. Keep a separate cloned data
+            // part for each such source owner instead of letting the first import rewrite the shared copy for all
+            // subsequent owners.
+            private readonly Dictionary<RelatedPartKey, PackagePart> _destinationsBySourceKey = new();
+
+            private readonly record struct RelatedPartKey(
+                Uri SourcePartUri,
+                Uri? DiagramDataRelationshipOwnerUri);
+
+            public RelatedPartImportState(PackagePart sourceRoot, PackagePart destinationRoot)
+            {
+                _destinationsBySourceKey.Add(new RelatedPartKey(sourceRoot.Uri, null), destinationRoot);
+            }
+
+            public bool TryGetDestination(
+                PackagePart sourcePart, PackagePart sourceOwner, PackageRelationship sourceRelationship,
+                out PackagePart destinationPart) =>
+                _destinationsBySourceKey.TryGetValue(
+                    GetKey(sourcePart, sourceOwner, sourceRelationship), out destinationPart);
+
+            public void Remember(
+                PackagePart sourcePart, PackagePart sourceOwner, PackageRelationship sourceRelationship,
+                PackagePart destinationPart) =>
+                _destinationsBySourceKey.Add(
+                    GetKey(sourcePart, sourceOwner, sourceRelationship), destinationPart);
+
+            private static RelatedPartKey GetKey(
+                PackagePart sourcePart, PackagePart sourceOwner, PackageRelationship sourceRelationship) =>
+                new(
+                    sourcePart.Uri,
+                    sourceRelationship.RelationshipType.EndsWith("/diagramData", StringComparison.Ordinal)
+                        ? sourceOwner.Uri
+                        : null);
+        }
+
+        private static XElement MoveRelatedPartsToDestination(
+            PackagePart partOfDeletedContent, PackagePart partInNewDocument, XElement contentElement,
+            RelatedPartImportState state, bool skipDanglingRelationships, bool skipHeaderFooterReferences)
+        {
             var elementsToUpdate = contentElement
-                .Descendants()
+                // Recursive graph import can receive an XML-part ROOT (not just a cloned paragraph/drawing).
+                // Include that root so a relationship attribute located directly on it is copied/remapped too.
+                .DescendantsAndSelf()
                 .Where(d => d.Attributes().Any(a => ComparisonUnitWord.s_RelationshipAttributeNames.Contains(a.Name)))
-                .Where(d => d.Name != C.externalData)
+                // c:externalData is INCLUDED: skipping it (a leftover from the legacy DetachExternalData
+                // flow, which the IR path never runs) left a copied chart part without its own rels —
+                // the embedded workbook never came across and the chart's rId dangled, so LibreOffice
+                // rendered the chart as a black box. A genuinely dangling externalData rel is skipped
+                // (not thrown) below, preserving the legacy callers' tolerance.
                 // The IR renderer clones whole blocks (paragraphs), which can carry a w:sectPr with
                 // w:headerReference/w:footerReference. Header/footer scopes are NOT diffed, so the LEFT
                 // package's parts (already present, same r:ids — both sides derive from one base) are
@@ -6271,7 +6344,7 @@ namespace Docxodus
                     // dangling reference on unchanged-text content, opts into skipping it.
                     if (!partOfDeletedContent.RelationshipExists(rId))
                     {
-                        if (skipDanglingRelationships)
+                        if (skipDanglingRelationships || element.Name == C.externalData)
                             continue;
                         throw new FileFormatException(
                             $"Content references relationship id '{rId}' that does not exist in the source part.");
@@ -6281,68 +6354,195 @@ namespace Docxodus
                     if (relationshipForDeletedPart == null)
                         throw new FileFormatException("Invalid document");
 
-                    var tartString = relationshipForDeletedPart.TargetUri.ToString();
-
-                    Uri targetUri;
-                    try
+                    // External and hyperlink relationships have no package part. The old path attempted
+                    // Package.GetPart on them, which made a nested chart c:externalData/@r:id detectable
+                    // by the IR but impossible to render. Recreate them on the copied XML owner and remap.
+                    if (relationshipForDeletedPart.TargetMode == TargetMode.External)
                     {
-                        targetUri = PackUriHelper
-                            .ResolvePartUri(
-                                new Uri(partOfDeletedContent.Uri.ToString(), UriKind.RelativeOrAbsolute),
-                                    new Uri(tartString, UriKind.RelativeOrAbsolute));
-                    }
-                    catch (System.ArgumentException)
-                    {
-                        targetUri = null;
+                        att.Value = ImportExternalRelationship(partInNewDocument, relationshipForDeletedPart);
+                        continue;
                     }
 
-                    if (targetUri != null)
+                    if (!TryGetInternalTargetPart(partOfDeletedContent, relationshipForDeletedPart, out var relatedPackagePart))
                     {
-
-                        var relatedPackagePart = partOfDeletedContent.Package.GetPart(targetUri);
-                        var uriSplit = relatedPackagePart.Uri.ToString().Split('/');
-                        var last = uriSplit[uriSplit.Length - 1].Split('.');
-                        string uriString = null;
-                        if (last.Length == 2)
-                        {
-                            uriString = uriSplit.PtSkipLast(1).Select(p => p + "/").StringConcatenate() +
-                                "P" + Guid.NewGuid().ToString().Replace("-", "") + "." + last[1];
-                        }
-                        else
-                        {
-                            uriString = uriSplit.PtSkipLast(1).Select(p => p + "/").StringConcatenate() +
-                                "P" + Guid.NewGuid().ToString().Replace("-", "");
-                        }
-                        Uri uri = null;
-                        if (relatedPackagePart.Uri.IsAbsoluteUri)
-                            uri = new Uri(uriString, UriKind.Absolute);
-                        else
-                            uri = new Uri(uriString, UriKind.Relative);
-
-                        var newPart = partInNewDocument.Package.CreatePart(uri, relatedPackagePart.ContentType);
-                        using (var oldPartStream = relatedPackagePart.GetStream())
-                        using (var newPartStream = newPart.GetStream())
-                            FileUtils.CopyStream(oldPartStream, newPartStream);
-
-                        var newRid = "R" + Guid.NewGuid().ToString().Replace("-", "");
-                        partInNewDocument.CreateRelationship(newPart.Uri, TargetMode.Internal, relationshipForDeletedPart.RelationshipType, newRid);
-                        att.Value = newRid;
-
-                        if (newPart.ContentType.EndsWith("xml"))
-                        {
-                            XDocument newPartXDoc = null;
-                            using (var stream = newPart.GetStream())
-                            {
-                                newPartXDoc = XDocument.Load(stream);
-                                MoveRelatedPartsToDestination(relatedPackagePart, newPart, newPartXDoc.Root, skipDanglingRelationships);
-                            }
-                            using (var stream = newPart.GetStream())
-                                newPartXDoc.Save(stream);
-                        }
+                        if (skipDanglingRelationships || element.Name == C.externalData)
+                            continue;
+                        throw new FileFormatException(
+                            $"Content relationship '{rId}' does not resolve to a package part.");
                     }
+
+                    att.Value = ImportInternalRelationship(
+                        partOfDeletedContent, partInNewDocument, relatedPackagePart, relationshipForDeletedPart,
+                        state, skipDanglingRelationships, skipHeaderFooterReferences);
                 }
             }
             return contentElement;
+        }
+
+        private static string ImportExternalRelationship(
+            PackagePart destinationOwner, PackageRelationship sourceRelationship)
+        {
+            var newRid = NewRelationshipId();
+            destinationOwner.CreateRelationship(
+                sourceRelationship.TargetUri, TargetMode.External, sourceRelationship.RelationshipType, newRid);
+            return newRid;
+        }
+
+        private static string ImportInternalRelationship(
+            PackagePart sourceOwner, PackagePart destinationOwner, PackagePart sourceTarget,
+            PackageRelationship sourceRelationship, RelatedPartImportState state,
+            bool skipDanglingRelationships, bool skipHeaderFooterReferences)
+        {
+            if (!state.TryGetDestination(sourceTarget, sourceOwner, sourceRelationship, out var destinationTarget))
+            {
+                destinationTarget = destinationOwner.Package.CreatePart(
+                    NewRelatedPartUri(sourceTarget), sourceTarget.ContentType);
+                state.Remember(sourceTarget, sourceOwner, sourceRelationship, destinationTarget);
+                using (var oldPartStream = sourceTarget.GetStream())
+                using (var newPartStream = destinationTarget.GetStream())
+                    FileUtils.CopyStream(oldPartStream, newPartStream);
+
+                FixupCopiedXmlPart(
+                    sourceOwner, destinationOwner, sourceTarget, destinationTarget, sourceRelationship, state,
+                    skipDanglingRelationships, skipHeaderFooterReferences);
+            }
+
+            var newRid = NewRelationshipId();
+            destinationOwner.CreateRelationship(
+                destinationTarget.Uri, TargetMode.Internal, sourceRelationship.RelationshipType, newRid);
+            return newRid;
+        }
+
+        private static void FixupCopiedXmlPart(
+            PackagePart sourceOwner, PackagePart destinationOwner, PackagePart sourcePart, PackagePart copiedPart,
+            PackageRelationship sourceRelationship, RelatedPartImportState state,
+            bool skipDanglingRelationships, bool skipHeaderFooterReferences)
+        {
+            if (!copiedPart.ContentType.EndsWith("xml", StringComparison.OrdinalIgnoreCase))
+                return;
+
+            XDocument copiedXDoc;
+            try
+            {
+                using var stream = copiedPart.GetStream();
+                copiedXDoc = XDocument.Load(stream);
+            }
+            catch (Exception e) when (e is System.Xml.XmlException or ArgumentException)
+            {
+                // A readable malformed XML part receives a raw-byte identity in IrDrawingGraphHasher. It was
+                // already copied intact; skipping recursive fixup keeps Compare total and lets Accept/Reject
+                // retain its exact source bytes instead of turning a detected change into an import failure.
+                return;
+            }
+
+            if (copiedXDoc.Root is null)
+                return;
+
+            MoveRelatedPartsToDestination(
+                sourcePart, copiedPart, copiedXDoc.Root, state,
+                skipDanglingRelationships, skipHeaderFooterReferences);
+            using (var stream = copiedPart.GetStream())
+                copiedXDoc.Save(stream);
+
+            // SmartArt's PREBUILT drawing rides an extension inside the DATA part (dsp:dataModelExt/@relId)
+            // whose relationship lives on the owner that linked the data part, not the data part itself.
+            if (sourceRelationship.RelationshipType.EndsWith("/diagramData", StringComparison.Ordinal))
+            {
+                ChaseDiagramDataModelExt(
+                    sourceOwner, destinationOwner, copiedPart, state,
+                    skipDanglingRelationships, skipHeaderFooterReferences);
+            }
+        }
+
+        private static bool TryGetInternalTargetPart(
+            PackagePart sourceOwner, PackageRelationship relationship, out PackagePart targetPart)
+        {
+            try
+            {
+                var targetUri = PackUriHelper.ResolvePartUri(
+                    new Uri(sourceOwner.Uri.ToString(), UriKind.RelativeOrAbsolute),
+                    new Uri(relationship.TargetUri.ToString(), UriKind.RelativeOrAbsolute));
+                if (sourceOwner.Package.PartExists(targetUri))
+                {
+                    targetPart = sourceOwner.Package.GetPart(targetUri);
+                    return true;
+                }
+            }
+            catch (ArgumentException)
+            {
+                // Treat a malformed internal target like the other dangling relationship forms above.
+            }
+
+            targetPart = null;
+            return false;
+        }
+
+        private static Uri NewRelatedPartUri(PackagePart sourcePart)
+        {
+            var uriSplit = sourcePart.Uri.ToString().Split('/');
+            var last = uriSplit[uriSplit.Length - 1].Split('.');
+            var uriString = last.Length == 2
+                ? uriSplit.PtSkipLast(1).Select(p => p + "/").StringConcatenate() +
+                    "P" + Guid.NewGuid().ToString().Replace("-", "") + "." + last[1]
+                : uriSplit.PtSkipLast(1).Select(p => p + "/").StringConcatenate() +
+                    "P" + Guid.NewGuid().ToString().Replace("-", "");
+            return sourcePart.Uri.IsAbsoluteUri
+                ? new Uri(uriString, UriKind.Absolute)
+                : new Uri(uriString, UriKind.Relative);
+        }
+
+        private static string NewRelationshipId() =>
+            "R" + Guid.NewGuid().ToString().Replace("-", "");
+
+        /// <summary>See the call site: copy the MS-2007 prebuilt diagram drawing referenced by the
+        /// copied data part's <c>dsp:dataModelExt/@relId</c> (resolved against the top-level source
+        /// part) and rewire the attribute. A dangling or absent extension is skipped gracefully.</summary>
+        private static void ChaseDiagramDataModelExt(
+            PackagePart topLevelSourcePart, PackagePart partInNewDocument, PackagePart copiedDataPart,
+            RelatedPartImportState state, bool skipDanglingRelationships, bool skipHeaderFooterReferences)
+        {
+            XNamespace dsp = "http://schemas.microsoft.com/office/drawing/2008/diagram";
+            XDocument dataXDoc;
+            try
+            {
+                using var s = copiedDataPart.GetStream();
+                dataXDoc = XDocument.Load(s);
+            }
+            catch (Exception e) when (e is System.Xml.XmlException or ArgumentException)
+            {
+                return;
+            }
+
+            bool changed = false;
+            foreach (var ext in dataXDoc.Descendants(dsp + "dataModelExt").ToList())
+            {
+                var relId = (string)ext.Attribute("relId");
+                if (string.IsNullOrEmpty(relId) || !topLevelSourcePart.RelationshipExists(relId))
+                    continue;
+                var rel = topLevelSourcePart.GetRelationship(relId);
+                if (rel is null)
+                    continue;
+
+                if (rel.TargetMode == TargetMode.External)
+                {
+                    ext.SetAttributeValue("relId", ImportExternalRelationship(partInNewDocument, rel));
+                    changed = true;
+                    continue;
+                }
+
+                if (!TryGetInternalTargetPart(topLevelSourcePart, rel, out var srcPart))
+                    continue;
+                ext.SetAttributeValue(
+                    "relId",
+                    ImportInternalRelationship(
+                        topLevelSourcePart, partInNewDocument, srcPart, rel, state,
+                        skipDanglingRelationships, skipHeaderFooterReferences));
+                changed = true;
+            }
+
+            if (changed)
+                using (var s = copiedDataPart.GetStream())
+                    dataXDoc.Save(s);
         }
 
         private static XAttribute GetXmlSpaceAttribute(string textOfTextElement)

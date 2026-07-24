@@ -22,9 +22,7 @@ internal abstract record IrBlock
     public required IrHash FormatFingerprint { get; init; }
 
     /// <summary>
-    /// Back-reference to source OOXML; equality-neutral (does not affect record equality). Also carries
-    /// the <see cref="IrProvenance.FromBlockSdt"/> flag (see there) which the markdown emitter uses to
-    /// mirror the oracle's block-level-SDT skip without perturbing block value equality.
+    /// Back-reference to source OOXML; equality-neutral (does not affect record equality).
     /// </summary>
     public IrProvenance Source { get; init; } = new();
 }
@@ -101,6 +99,30 @@ internal sealed record IrParagraph : IrBlock
     public IrHash PPrDigest { get; init; }
 
     /// <summary>
+    /// Resolver-aware canonical digest of this paragraph's outer inline <c>w:sdt</c>/<c>w:smartTag</c>
+    /// carriers, including their metadata, full contained OOXML, and position in the inline tree. The reader
+    /// deliberately splices those wrappers from <see cref="Inlines"/> to preserve the markdown projection,
+    /// so this separate structural fact lets the diff/render paths recognize a carrier-only change and avoid
+    /// slicing an atomic wrapper into incompatible revisions. It is intentionally separate from
+    /// <see cref="IrBlock.ContentHash"/>: ordinary text alignment remains stable, while a paired edit whose
+    /// envelope digest differs is explicitly lowered to a whole-paragraph replacement.
+    /// <para><c>default(IrHash)</c> means the paragraph contains no inline carrier; non-empty carrier streams
+    /// always have a canonical SHA-256 digest.</para>
+    /// </summary>
+    public IrHash InlineEnvelopeDigest { get; init; }
+
+    /// <summary>
+    /// Canonical digest of the non-hyperlink fields carried by this paragraph: field-code instruction, simple
+    /// versus complex representation, inline position, and source scaffolding that normal content/token hashes
+    /// intentionally omit. It is deliberately separate from <see cref="IrBlock.ContentHash"/> so a run-based
+    /// field result still aligns like its visible text, while a code/state-only change (or any direct simple-field
+    /// mutation) is lowered to a reversible whole paragraph replacement instead of leaking the right field into
+    /// Reject.
+    /// <para><c>default(IrHash)</c> means no non-hyperlink field occurs in the modeled inline tree.</para>
+    /// </summary>
+    public IrHash FieldEnvelopeDigest { get; init; }
+
+    /// <summary>
     /// The oracle's <c>WmlToMarkdownConverter.IsListItem</c> verdict for this paragraph: a purely
     /// <em>structural</em> predicate — true iff a <c>w:numPr</c> is present inline (<c>w:pPr/w:numPr</c>)
     /// OR anywhere up the <c>pStyle → basedOn</c> chain, <b>regardless of whether that numPr carries a
@@ -136,10 +158,44 @@ internal sealed record IrTable : IrBlock
     public required IrHash TblGridDigest { get; init; }
 }
 
+/// <summary>
+/// A block-level <c>w:sdt</c> content-control envelope. The control remains one structural block so
+/// its wrapper, metadata, and child ordering are never lost; <see cref="Blocks"/> is retained for
+/// recursive anchor/flat-text traversal rather than flattening the control into its parent scope.
+/// </summary>
+/// <remarks>
+/// <see cref="EnvelopeDigest"/> is the resolver-aware canonical hash of the OUTER <c>w:sdt</c>, not
+/// merely <c>w:sdtPr</c>. Thus the modeled identity includes its properties, end properties, nested
+/// wrappers, and exact content-tree shape. The parsed child blocks remain equality-participating too,
+/// while source provenance remains equality-neutral.
+/// </remarks>
+internal sealed record IrSdtBlock : IrBlock
+{
+    /// <summary>Direct block children of <c>w:sdtContent</c>, in document order.</summary>
+    public required IrNodeList<IrBlock> Blocks { get; init; }
+
+    /// <summary>Resolver-aware canonical digest of the complete outer <c>w:sdt</c> envelope.</summary>
+    public required IrHash EnvelopeDigest { get; init; }
+}
+
 /// <summary>A table row. <paramref name="Source"/> is equality-neutral provenance.</summary>
 internal sealed record IrRow(IrAnchor Anchor, IrNodeList<IrCell> Cells, IrHash ContentHash)
 {
     public IrProvenance Source { get; init; } = new();
+
+    /// <summary>
+    /// The number of leading table-grid columns omitted by this row's cells
+    /// (<c>w:trPr/w:gridBefore</c>).  Zero means the first cell starts at grid column zero.
+    /// This is equality-participating table geometry, not merely source provenance.
+    /// </summary>
+    public int GridBefore { get; init; }
+
+    /// <summary>
+    /// The number of trailing table-grid columns omitted by this row's cells
+    /// (<c>w:trPr/w:gridAfter</c>).  Zero means the last cell reaches the row's declared grid extent.
+    /// This is equality-participating table geometry, not merely source provenance.
+    /// </summary>
+    public int GridAfter { get; init; }
 
     /// <summary>
     /// Canonical hash of the row's SHELL — all non-`w:tc`/non-`w:sdt` row children (the `w:trPr` element

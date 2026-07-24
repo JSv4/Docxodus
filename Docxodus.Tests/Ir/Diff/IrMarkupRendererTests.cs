@@ -55,6 +55,34 @@ public class IrMarkupRendererTests
         return main.HeaderParts.Count() + main.FooterParts.Count();
     }
 
+    /// <summary>Assert every image relationship used by one explicitly bound header part resolves locally.</summary>
+    private static void AssertHeaderImageEmbedsResolve(WmlDocument doc, int sectionIndex, int expectedEmbedCount)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var wordDoc = WordprocessingDocument.Open(ms, false);
+        var main = wordDoc.MainDocumentPart!;
+        var body = main.GetXDocument().Root!.Element(W.body)!;
+        var sectPr = body.Descendants(W.sectPr)
+            .Where(candidate => candidate.Parent?.Name != W.sectPrChange)
+            .ElementAt(sectionIndex);
+        var reference = sectPr.Element(W.headerReference)!;
+        var header = (HeaderPart)main.GetPartById((string)reference.Attribute(R.id)!);
+        XNamespace a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        var embeds = header.GetXDocument().Root!.Descendants(a + "blip")
+            .Select(blip => (string?)blip.Attribute(R.r + "embed"))
+            .Where(id => id is not null)
+            .Cast<string>()
+            .ToList();
+        Assert.Equal(expectedEmbedCount, embeds.Count);
+        var partRelationships = header.Parts.ToDictionary(pair => pair.RelationshipId, pair => pair.OpenXmlPart);
+        foreach (var embed in embeds)
+        {
+            Assert.True(partRelationships.TryGetValue(embed, out var imagePart),
+                $"Header clone has r:embed '{embed}' but only [{string.Join(", ", partRelationships.Keys)}].");
+            Assert.IsType<ImagePart>(imagePart);
+        }
+    }
+
     // ----------------------------------------------------------------- header/footer part hygiene
 
     /// <summary>
@@ -193,9 +221,11 @@ public class IrMarkupRendererTests
             case IrParagraph p:
                 sink.Add("pf:" + IrModeledFormat.BlockSignature(p, settings));
                 // A3: an inline (in-pPr) sectPr's modeled page setup must round-trip too (accept≡right,
-                // reject≡left) — it is folded into the fingerprint but not the BlockSignature.
+                // reject≡left). Compare only the modeled section key: its raw unmodeled digest contains
+                // header/footer refs, which a correct refined story topology may intentionally rebind to a
+                // cloned part while preserving the same effective story grid.
                 if (p.InlineSectionFormat is { } isf)
-                    sink.Add("psec:" + IrHasher.FingerprintSectionFormat(isf).ToHex());
+                    sink.Add("psec:" + IrModeledFormat.SectionKey(isf));
                 break;
             case IrTable t:
                 // Include the SHELL digests (block-format-change family): tblPr/tblGrid are in the
@@ -302,10 +332,11 @@ public class IrMarkupRendererTests
     }
 
     /// <summary>
-    /// The referenced header/footer STORY content-hash projection (2026-07-03 campaign): for every
-    /// explicit body reference cell (section ordinal × kind, headers then footers, deterministic order),
-    /// the story's per-block ContentHashes — skipping stories with no visible text (an empty story ≡ an
-    /// absent story: the round-trip's reject-of-inserted / accept-of-deleted leaves an empty part).
+    /// The effective header/footer STORY content-hash projection (2026-07-03 campaign): resolve every
+    /// section ordinal × kind by Word's carry-forward inheritance, then collect the visible story's per-block
+    /// ContentHashes (headers then footers, deterministic order). This intentionally compares presentation
+    /// semantics rather than raw explicit refs: a correct refined topology can add a clone ref at section 1
+    /// while Reject still resolves to the same A/A effective header grid as the original inherited left side.
     /// </summary>
     private static List<string> StoryContentHashes(WmlDocument doc)
     {
@@ -313,17 +344,32 @@ public class IrMarkupRendererTests
         var result = new List<string>();
         foreach (var (tag, stories) in new[] { ("hdr", ir.Headers), ("ftr", ir.Footers) })
         {
-            var cells = new List<(int Section, IrHeaderFooterKind Kind, IrHeaderFooter Story)>();
+            var explicitCells = new Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter>();
             foreach (var hf in stories)
                 foreach (var r in hf.References)
-                    cells.Add((r.SectionIndex, r.Kind, hf));
-            foreach (var (section, kind, story) in cells.OrderBy(c => c.Section).ThenBy(c => c.Kind))
+                    if (!explicitCells.ContainsKey((r.SectionIndex, r.Kind)))
+                        explicitCells[(r.SectionIndex, r.Kind)] = hf;
+
+            int sectionCount = Math.Max(1, ir.Body.Blocks.OfType<IrParagraph>()
+                .Count(paragraph => paragraph.InlineSectionBreakAnchor is not null) + 1);
+            var currentByKind = new Dictionary<IrHeaderFooterKind, IrHeaderFooter?>();
+            foreach (var kind in new[]
+                     { IrHeaderFooterKind.Default, IrHeaderFooterKind.First, IrHeaderFooterKind.Even })
+                currentByKind[kind] = null;
+            for (int section = 0; section < sectionCount; section++)
             {
-                if (!story.Scope.Blocks.Any(BlockHasVisibleText))
-                    continue;
-                result.Add($"{tag}@s{section}:{kind}");
-                foreach (var b in story.Scope.Blocks)
-                    CollectHashes(b, result);
+                foreach (var kind in new[]
+                         { IrHeaderFooterKind.Default, IrHeaderFooterKind.First, IrHeaderFooterKind.Even })
+                {
+                    if (explicitCells.TryGetValue((section, kind), out var explicitStory))
+                        currentByKind[kind] = explicitStory;
+                    var current = currentByKind[kind];
+                    if (current is null || !current.Scope.Blocks.Any(BlockHasVisibleText))
+                        continue;
+                    result.Add($"{tag}@s{section}:{kind}");
+                    foreach (var block in current.Scope.Blocks)
+                        CollectHashes(block, result);
+                }
             }
         }
         return result;
@@ -405,6 +451,204 @@ public class IrMarkupRendererTests
         AssertRoundTrip(left, right, label: "modify-paragraph");
     }
 
+    /// <summary>
+    /// A Modified table with a tail column add must stay ONE table. The table differ deliberately
+    /// emits three paired cell ops plus one right-only cell op per row; rendering that right-only
+    /// tail cell as <c>w:cellIns</c> lets the native <c>w:tblGridChange</c> restore the old grid on
+    /// reject. Falling back to whole-table del+ins is structurally coarser than Word's one-table
+    /// revision shape and is especially visible when every row grows by one column.
+    /// </summary>
+    [Fact]
+    public void Render_table_tail_column_add_stays_one_table_and_round_trips()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(c => Cell(c, width))) + "</w:tr>";
+        static string Grid(int width, int count) =>
+            "<w:tblGrid>" + string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", count)) + "</w:tblGrid>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr><w:tblW w:w=\"6000\" w:type=\"dxa\"/></w:tblPr>" +
+            Grid(width, columns) + string.Concat(rows) + "</w:tbl>";
+
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>lead</w:t></w:r></w:p>" +
+            Table(2000, 3,
+                Row(2000, "old A", "old B", "old C"),
+                Row(2000, "old D", "old E", "old F"),
+                Row(2000, "old G", "old H", "old I")));
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>lead</w:t></w:r></w:p>" +
+            Table(1500, 4,
+                Row(1500, "new A", "new B", "new C", "new D"),
+                Row(1500, "new E", "new F", "new G", "new H"),
+                Row(1500, "new I", "new J", "new K", "new L")));
+
+        var rendered = RenderMarkup(left, right);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var table = Assert.Single(body.Elements(W.tbl)); // not the whole-table del+ins fallback
+        var rows = table.Elements(W.tr).ToList();
+        Assert.Equal(3, rows.Count);
+        Assert.All(rows, row => Assert.Equal(4, row.Elements(W.tc).Count()));
+        Assert.Equal(3, table.Descendants(W.cellIns).Count());
+        Assert.Empty(table.Descendants(W.cellDel));
+        Assert.Single(table.Descendants(W.tblGridChange));
+        Assert.Equal(9, table.Descendants(W.tcPrChange).Count());
+        Assert.Equal(0, SchemaErrorCount(rendered));
+
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "table-tail-column-add");
+    }
+
+    /// <summary>
+    /// A column inserted between retained columns must keep those later columns paired with their actual
+    /// left-side cells, not merely append a tail <c>w:cellIns</c>. Every retained cell changes width here, so
+    /// the differ has to find its spine from the tcPr-free cell body key.
+    /// </summary>
+    [Fact]
+    public void Render_table_middle_column_add_stays_one_table_and_round_trips()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(c => Cell(c, width))) + "</w:tr>";
+        static string Grid(int width, int count) =>
+            "<w:tblGrid>" + string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", count)) + "</w:tblGrid>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr><w:tblW w:w=\"6000\" w:type=\"dxa\"/></w:tblPr>" +
+            Grid(width, columns) + string.Concat(rows) + "</w:tbl>";
+
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>lead</w:t></w:r></w:p>" +
+            Table(2000, 3,
+                Row(2000, "A1", "B1", "C1"),
+                Row(2000, "A2", "B2", "C2"),
+                Row(2000, "A3", "B3", "C3")));
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t>lead</w:t></w:r></w:p>" +
+            Table(1500, 4,
+                Row(1500, "A1", "NEW-1", "B1", "C1"),
+                Row(1500, "A2", "NEW-2", "B2", "C2"),
+                Row(1500, "A3", "NEW-3", "B3", "C3")));
+
+        var rendered = RenderMarkup(left, right);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var table = Assert.Single(body.Elements(W.tbl)); // not the conservative whole-table fallback
+        var rows = table.Elements(W.tr).ToList();
+        Assert.Equal(3, rows.Count);
+        Assert.All(rows, row =>
+        {
+            var cells = row.Elements(W.tc).ToList();
+            Assert.Equal(4, cells.Count);
+            Assert.NotEmpty(cells[1].Descendants(W.cellIns));
+            Assert.All(cells.Where((_, index) => index != 1), cell =>
+                Assert.Empty(cell.Descendants(W.cellIns)));
+            // The inserted shell is new; only explicitly paired cells receive tcPr history.
+            Assert.Empty(cells[1].Descendants(W.tcPrChange));
+        });
+        Assert.Equal(3, table.Descendants(W.cellIns).Count());
+        Assert.Empty(table.Descendants(W.cellDel));
+        Assert.Single(table.Descendants(W.tblGridChange));
+        Assert.Equal(9, table.Descendants(W.tcPrChange).Count());
+        Assert.Equal(0, SchemaErrorCount(rendered));
+
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "table-middle-column-add");
+    }
+
+    /// <summary>
+    /// A middle cell insertion must remain fine-grained when the retained cell immediately after it is also
+    /// edited. The costed gap alignment identifies X as <c>w:cellIns</c> and renders B→B2 as an ordinary
+    /// token edit; the former positional pairing shifted B onto X and made the real retained cell look new.
+    /// </summary>
+    [Fact]
+    public void Render_table_mixed_middle_column_insert_and_edit_stays_granular_and_round_trips()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(cell => Cell(cell, width))) + "</w:tr>";
+        static string Grid(int width, int count) =>
+            "<w:tblGrid>" + string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", count)) + "</w:tblGrid>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr><w:tblW w:w=\"6000\" w:type=\"dxa\"/></w:tblPr>" +
+            Grid(width, columns) + string.Concat(rows) + "</w:tbl>";
+
+        var left = IrTestDocuments.FromBodyXml(Table(2000, 3, Row(2000, "A", "B", "C")));
+        var right = IrTestDocuments.FromBodyXml(Table(1500, 4, Row(1500, "A", "X", "B2", "C")));
+
+        var rendered = RenderMarkup(left, right);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var table = Assert.Single(body.Elements(W.tbl));
+        var cells = Assert.Single(table.Elements(W.tr)).Elements(W.tc).ToList();
+        Assert.Equal(4, cells.Count);
+        Assert.Empty(cells[0].Descendants(W.cellIns));
+        Assert.NotEmpty(cells[1].Descendants(W.cellIns));
+        Assert.Empty(cells[2].Descendants(W.cellIns));
+        Assert.NotEmpty(cells[2].Descendants(W.ins));
+        Assert.NotEmpty(cells[2].Descendants(W.del));
+        Assert.Empty(cells[3].Descendants(W.cellIns));
+        Assert.Single(table.Descendants(W.cellIns));
+        Assert.Empty(table.Descendants(W.cellDel));
+        Assert.Single(table.Descendants(W.tblGridChange));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "table-mixed-middle-column-insert-edit");
+    }
+
+    /// <summary>
+    /// Native <c>w:cellIns</c> needs a matching <c>w:tblGridChange</c> to remove the accepted-side widened
+    /// grid on reject. The table-shell opt-out therefore chooses the reversible whole-table fallback instead
+    /// of emitting an apparently fine-grained but one-way result.
+    /// </summary>
+    [Fact]
+    public void Render_table_column_add_with_table_shell_tracking_off_uses_whole_table_fallback()
+    {
+        static string Cell(string text, int width) =>
+            $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+            $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+        static string Row(int width, params string[] cells) =>
+            "<w:tr>" + string.Concat(cells.Select(c => Cell(c, width))) + "</w:tr>";
+        static string Table(int width, int columns, params string[] rows) =>
+            "<w:tbl><w:tblPr/><w:tblGrid>" +
+            string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", columns)) +
+            "</w:tblGrid>" + string.Concat(rows) + "</w:tbl>";
+
+        var left = IrTestDocuments.FromBodyXml(Table(3000, 2, Row(3000, "A", "B")));
+        var right = IrTestDocuments.FromBodyXml(Table(2000, 3, Row(2000, "A", "NEW", "B")));
+        var settings = new IrDiffSettings { TrackTableFormatChanges = false };
+
+        var rendered = RenderMarkup(left, right, settings);
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        Assert.Equal(2, body.Elements(W.tbl).Count());
+        Assert.Empty(body.Descendants(W.cellIns));
+        Assert.NotEmpty(body.Descendants(W.del));
+        Assert.NotEmpty(body.Descendants(W.ins));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        AssertRoundTrip(left, right, settings, "table-column-add-table-format-off");
+    }
+
     [Fact]
     public void Render_split_run_fragment_with_boundary_whitespace_carries_xml_space_preserve()
     {
@@ -459,10 +703,10 @@ public class IrMarkupRendererTests
     }
 
     [Fact]
-    public void Render_preserves_unmodeled_run_properties_on_modified_paragraph()
+    public void Render_preserves_run_shading_on_modified_paragraph()
     {
-        // A run carrying an UNMODELED rPr child (w:shd) on an EQUAL portion must survive into the output —
-        // proving provenance-clone (not IrRunFormat rebuild) preserves unmodeled formatting.
+        // A shaded run on an EQUAL portion must survive into the output — proving provenance-clone (not
+        // IrRunFormat rebuild) preserves direct formatting while another span is revised.
         var left = IrTestDocuments.FromBodyXml(
             "<w:p><w:r><w:rPr><w:shd w:val=\"clear\" w:fill=\"FFFF00\"/></w:rPr><w:t>highlight one two</w:t></w:r></w:p>");
         var right = IrTestDocuments.FromBodyXml(
@@ -472,8 +716,8 @@ public class IrMarkupRendererTests
         using var ms = new MemoryStream(rendered.DocumentByteArray);
         using var wd = WordprocessingDocument.Open(ms, false);
         var shdCount = wd.MainDocumentPart!.GetXDocument().Descendants(W.shd).Count();
-        Assert.True(shdCount > 0, "unmodeled w:shd run property must be preserved through the split");
-        AssertRoundTrip(left, right, label: "unmodeled-shd");
+        Assert.True(shdCount > 0, "w:shd run property must be preserved through the split");
+        AssertRoundTrip(left, right, label: "run-shading");
     }
 
     [Fact]
@@ -1067,15 +1311,80 @@ public class IrMarkupRendererTests
         using var ms = new MemoryStream(rendered.DocumentByteArray);
         using var wd = WordprocessingDocument.Open(ms, false);
         var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
-        // If the aligner classified this as a MoveModify, the moveTo range exists and carries nested ins/del.
-        // (If the similarity pass instead classified it as Move + separate edits, the round-trip still holds —
-        // so we assert the contract, the round-trip, and only check nesting WHEN moveTo is present.)
-        if (body.Descendants(W.moveTo).Any())
-        {
-            var moveToRangeStart = body.Descendants(W.moveToRangeStart).FirstOrDefault();
-            Assert.NotNull(moveToRangeStart);
-        }
+        // The destination's move range contains the relocated unchanged spans plus the separate in-move edit
+        // revisions.  A plain right-side moveTo clone would accept/reject correctly but hide this edit.
+        var destination = Assert.Single(body.Elements(W.p),
+            p => p.Descendants(W.moveToRangeStart).Any());
+        Assert.NotEmpty(destination.Descendants(W.moveTo));
+        Assert.NotEmpty(destination.Descendants(W.ins));
+        Assert.NotEmpty(destination.Descendants(W.del));
         AssertRoundTrip(left, right, settings, label: "move-modify");
+    }
+
+    [Fact]
+    public void Render_moved_format_change_is_tracked_at_destination()
+    {
+        // Exact text relocation with a bold change is a MoveModify: its destination must carry both the native
+        // move wrapper and the old run formatting. Without that projection, reviewers see only a move and reject
+        // cannot reconstruct the left formatting.
+        const string anchor = "Anchor paragraph holds the document spine steady.";
+        const string moved = "Moved paragraph contains enough distinct words for move detection today.";
+        const string trailing = "Trailing paragraph also has enough words to stabilize matching.";
+        const string trailing2 = "Final paragraph provides another stable matching anchor here.";
+        var left = IrTestDocuments.FromBodyXml(
+            $"<w:p><w:r><w:t>{anchor}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{moved}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing2}</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            $"<w:p><w:r><w:t>{anchor}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:t>{trailing2}</w:t></w:r></w:p>" +
+            $"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>{moved}</w:t></w:r></w:p>");
+        var settings = new IrDiffSettings { MoveSimilarityThreshold = 0.6, MoveMinimumTokenCount = 3 };
+
+        var script = IrEditScriptBuilder.Build(IrReader.Read(left), IrReader.Read(right), settings);
+        var destinationOp = Assert.Single(script.Operations,
+            op => op.Kind == IrEditOpKind.MoveModifyBlock && op.IsMoveSource == false);
+        Assert.Contains(destinationOp.TokenDiff!.Ops, op => op.Kind == IrTokenOpKind.FormatChanged);
+
+        var rendered = RenderMarkup(left, right, settings);
+
+        using var ms = new MemoryStream(rendered.DocumentByteArray);
+        using var wd = WordprocessingDocument.Open(ms, false);
+        var body = wd.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        var destination = Assert.Single(body.Elements(W.p),
+            p => p.Descendants(W.moveToRangeStart).Any());
+        Assert.NotEmpty(destination.Descendants(W.moveTo));
+        var oldRunFormat = Assert.Single(destination.Descendants(W.rPrChange));
+        Assert.Null(oldRunFormat.Element(W.rPr)!.Element(W.b));
+        AssertRoundTrip(left, right, settings, label: "move-format");
+    }
+
+    /// <summary>
+    /// Two paragraphs can be both edited and reordered inside one unmatched gap.  Their strong lexical
+    /// correspondence crosses document order, so treating either pair as an in-place ModifyBlock is unsafe:
+    /// the right-ordered renderer then keeps the left text in the right order when revisions are rejected.
+    /// Such correspondence must lower to move or delete/insert semantics, both of which restore the original
+    /// left order on reject.
+    /// </summary>
+    [Fact]
+    public void Render_crossed_edited_paragraphs_restore_left_order_on_reject()
+    {
+        const string leftBody =
+            "<w:p><w:r><w:t>anchor-start</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>red green blue orange</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>cat dog mouse horse</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>anchor-end</w:t></w:r></w:p>";
+        const string rightBody =
+            "<w:p><w:r><w:t>anchor-start</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>cat dog mouse zebra</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>red green blue purple</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t>anchor-end</w:t></w:r></w:p>";
+        var left = IrTestDocuments.FromBodyXml(leftBody);
+        var right = IrTestDocuments.FromBodyXml(rightBody);
+
+        AssertRoundTrip(left, right, label: "crossed-edited-paragraphs");
     }
 
     [Fact]
@@ -1536,6 +1845,216 @@ public class IrMarkupRendererTests
         Assert.Equal("CONFIDENTIAL Draft 1",
             Assert.Single(HeaderFooterFixtures.StoryTexts(RevisionProcessor.RejectRevisions(rendered))));
         Assert.Equal(0, SchemaErrorCount(rendered));
+    }
+
+    [Fact]
+    public void Render_reassigned_inherited_header_clones_only_the_later_section()
+    {
+        // A is shared by both left sections. The right document keeps A in section 0 but assigns B at section 1.
+        // The output cannot rewrite A in place: it needs an A→B clone bound at section 1, while section 0 remains A.
+        var left = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+            },
+            headerParts: new Dictionary<string, string[]> { ["rIdA"] = new[] { "Header A" } });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdB") }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A" },
+                ["rIdB"] = new[] { "Header B" },
+            });
+
+        var rendered = RenderMarkup(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+
+        Assert.Equal(2, HeaderFooterPartCount(rendered));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rendered, true, 0, "default"));
+        Assert.Equal("Header B", HeaderFooterFixtures.ReferencedStoryText(rendered, true, 1, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 0, "default"));
+        Assert.Equal("Header B", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 1, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 0, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 1, "default"));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "header-reassign-inherited");
+    }
+
+    [Fact]
+    public void Render_reassigned_header_rejoins_the_primary_story_after_the_clone()
+    {
+        // The refined topology must explicitly rebind from the cloned B story back to primary A at section 1.
+        // Otherwise A's inherited successor would incorrectly keep B all the way through section 2.
+        var left = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+                new HeaderFooterFixtures.Section(new[] { "section 2" }),
+            },
+            headerParts: new Dictionary<string, string[]> { ["rIdA"] = new[] { "Header A" } });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdB") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 2" }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A" },
+                ["rIdB"] = new[] { "Header B" },
+            });
+
+        var rendered = RenderMarkup(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+
+        Assert.Equal(2, HeaderFooterPartCount(rendered));
+        Assert.Equal("Header B", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 0, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 1, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 2, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 0, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 1, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 2, "default"));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "header-clone-rejoin");
+    }
+
+    [Fact]
+    public void Render_reassigned_header_clone_preserves_left_and_imports_right_media_relationships()
+    {
+        // The cloned A→B story keeps an equal left image and gains an inserted right image. Both relationship
+        // graphs are part-owned: copying XML alone would leave one or both r:embed ids dangling.
+        var left = HeaderFooterFixtures.WithImageInHeaderPart(HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A", HeaderFooterFixtures.ImageParagraphXml("rIdOld") },
+            }), headerIndex: 0, relId: "rIdOld");
+        // Relationship IDs are scoped to their owning header part. The same rIdOld is therefore attached
+        // separately to A and B; B also owns its new image relationship.
+        var right = HeaderFooterFixtures.WithImageInHeaderPart(
+            HeaderFooterFixtures.WithImageInHeaderPart(
+                HeaderFooterFixtures.WithImageInHeaderPart(HeaderFooterFixtures.Build(
+                    new[]
+                    {
+                        new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                        new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdB") }),
+                    },
+                    headerParts: new Dictionary<string, string[]>
+                    {
+                        ["rIdA"] = new[] { "Header A", HeaderFooterFixtures.ImageParagraphXml("rIdOld") },
+                        ["rIdB"] = new[]
+                        {
+                            "Header B",
+                            HeaderFooterFixtures.ImageParagraphXml("rIdOld"),
+                            HeaderFooterFixtures.ImageParagraphXml("rIdNew"),
+                        },
+                    }), headerIndex: 0, relId: "rIdOld"), headerIndex: 1, relId: "rIdOld"),
+            headerIndex: 1, relId: "rIdNew");
+
+        var rendered = RenderMarkup(left, right);
+        AssertHeaderImageEmbedsResolve(rendered, sectionIndex: 1, expectedEmbedCount: 2);
+
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "header-clone-media");
+    }
+
+    [Fact]
+    public void Render_reassigned_header_clone_keeps_left_media_relationships_for_deleted_content()
+    {
+        // Rebuilding the clone emits the deleted LEFT image from its original source XML. Its rId must resolve
+        // from the clone itself, even though no right-side image is imported into the B story.
+        var left = HeaderFooterFixtures.WithImageInHeaderPart(HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A", HeaderFooterFixtures.ImageParagraphXml("rIdOld") },
+            }), headerIndex: 0, relId: "rIdOld");
+        var right = HeaderFooterFixtures.WithImageInHeaderPart(HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdB") }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A", HeaderFooterFixtures.ImageParagraphXml("rIdOld") },
+                ["rIdB"] = new[] { "Header B" },
+            }), headerIndex: 0, relId: "rIdOld");
+
+        var rendered = RenderMarkup(left, right);
+        AssertHeaderImageEmbedsResolve(rendered, sectionIndex: 1, expectedEmbedCount: 1);
+
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+        AssertHeaderImageEmbedsResolve(rejected, sectionIndex: 1, expectedEmbedCount: 1);
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "header-clone-left-media");
+    }
+
+    [Fact]
+    public void Render_reused_right_header_keeps_each_left_story_independently_rejectable()
+    {
+        // The physical right B story is reused in both sections. Each section must bind to its own A→B/C→B
+        // output part; a flat right-URI map would make both references target the last C→B part on rebind.
+        var left = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdC") }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A" },
+                ["rIdC"] = new[] { "Header C" },
+            });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdB") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdB") }),
+            },
+            headerParts: new Dictionary<string, string[]> { ["rIdB"] = new[] { "Header B" } });
+
+        var rendered = RenderMarkup(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(rendered);
+        var rejected = RevisionProcessor.RejectRevisions(rendered);
+
+        Assert.Equal(2, HeaderFooterPartCount(rendered));
+        Assert.Equal("Header B", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 0, "default"));
+        Assert.Equal("Header B", HeaderFooterFixtures.ReferencedStoryText(accepted, true, 1, "default"));
+        Assert.Equal("Header A", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 0, "default"));
+        Assert.Equal("Header C", HeaderFooterFixtures.ReferencedStoryText(rejected, true, 1, "default"));
+        Assert.Equal(0, SchemaErrorCount(rendered));
+        Assert.Equal(0, SchemaErrorCount(accepted));
+        Assert.Equal(0, SchemaErrorCount(rejected));
+        AssertRoundTrip(left, right, label: "header-reused-right-part");
     }
 
     [Fact]

@@ -39,7 +39,8 @@ internal sealed class IrBlockSimilarity
         new(ReferenceEqualityComparer.Instance);
 
     // Per-Align-call table-bag cache (M2.4b Workstream C): a table is tokenized to a flattened multiset of
-    // ALL its descendant cell-paragraph tokens at most once, even though it is scored against many candidates.
+    // its cell-paragraph tokens (including those inside block SDTs) at most once, even though it is scored
+    // against many candidates.
     private readonly Dictionary<IrTable, MatchKeyBag> _tableBagCache =
         new(ReferenceEqualityComparer.Instance);
 
@@ -57,8 +58,8 @@ internal sealed class IrBlockSimilarity
 
         // Table-aware similarity (M2.4b Workstream C): score a TABLE pair by the Jaccard index over their
         // CONCATENATED cell-paragraph token multisets — the same token model paragraphs use, flattened over
-        // every descendant cell paragraph. This lets the in-gap pairing classify two structurally-similar
-        // tables (e.g. the two endnote tables of WC-1750/1760, which differ only in a couple of cell words) as
+        // every cell paragraph (including block-SDT children). This lets the in-gap pairing classify two
+        // structurally-similar tables (e.g. the two endnote tables of WC-1750/1760, which differ only in a couple of cell words) as
         // a Modified pair, so IrTableDiffer can produce row/cell-granular edits instead of a whole-table
         // delete+insert. Exact-content tables still score 1.0 (their token multisets are identical), so this
         // never demotes an exact relocation. NB: this is an ALIGNMENT capability addition — it runs in BOTH
@@ -72,6 +73,270 @@ internal sealed class IrBlockSimilarity
 
     /// <summary>Number of <see cref="IrDiffTokenKind.Word"/> tokens in a block (0 for non-paragraphs).</summary>
     public int WordCount(IrBlock block) => block is IrParagraph p ? Bag(p).WordCount : 0;
+
+    /// <summary>
+    /// True iff <paramref name="block"/> is a FUNGIBLE blank-spacer paragraph: an
+    /// <see cref="IrParagraph"/> whose tokens are all <see cref="IrDiffTokenKind.Separator"/> (or none)
+    /// — i.e. it is empty or whitespace-only, carrying NO words and NO atomic content (image / textbox /
+    /// note / tab / break / field). Such paragraphs are interchangeable (any blank matches any blank),
+    /// so an asymmetric leading/trailing count can pair one across an intervening table; the crossing
+    /// resolver treats them as demotable rather than pinning a heavier Modified block out of place.
+    /// A table / section break / opaque block is never a blank spacer (non-paragraph → false).
+    /// </summary>
+    public bool IsBlankSpacer(IrBlock block)
+    {
+        if (block is not IrParagraph p)
+            return false;
+        foreach (var t in Bag(p).Tokens)
+            if (t.Kind != IrDiffTokenKind.Separator)
+                return false;
+        return true;
+    }
+
+    /// <summary>The paragraph's WORD-token MatchKey multiset (key → multiplicity). Cached per Align
+    /// call; used by the junction pass's uniqueness discipline.</summary>
+    public IReadOnlyDictionary<string, int> WordKeys(IrParagraph paragraph) => Bag(paragraph).WordCounts;
+
+    /// <summary>
+    /// The subset of a paragraph's word-token keys that contains lexical content (at least one
+    /// letter).  The weak, corpus-calibrated junction matcher uses this rather than every
+    /// word-token: a shared ordinal such as <c>17</c> is positional scaffolding, not evidence that
+    /// two otherwise unrelated paragraphs are revisions of one another.  Alphanumeric labels such
+    /// as <c>Q1</c> remain lexical and therefore continue to count.
+    /// </summary>
+    public IReadOnlyDictionary<string, int> PairingWordKeys(IrParagraph paragraph) => Bag(paragraph).PairingWordCounts;
+
+    /// <summary>Number of lexical word tokens used by the weak junction-pairing evidence gate.</summary>
+    public int PairingWordCount(IrParagraph paragraph) => Bag(paragraph).PairingWordCount;
+
+    /// <summary>
+    /// Should a lone 1×1 gap residue of these two paragraphs force-pair as Modified? True when
+    /// EITHER side has no <see cref="IrDiffTokenKind.Word"/> tokens at all (an atomic-only or empty
+    /// paragraph — textboxes/images carry no lexical evidence to demand, and demoting them to
+    /// Delete+Insert loses the nested textbox/image diff), or when the two sides share at least one
+    /// word by RAW TEXT — punctuation-trimmed and normalized according to
+    /// <see cref="IrDiffSettings.CaseInsensitive"/>, so "This." shares "This", and a
+    /// hyperlink word whose target changed (different MatchKey link suffix) still counts as the
+    /// same word. This is deliberately laxer than <see cref="WordOverlap"/>'s MatchKey grain: the
+    /// residue test asks "is this the same block, edited?", not "do these tokens diff Equal?".
+    /// A full rewrite (zero shared trimmed words, both sides lexical) returns false — the Word
+    /// oracle keeps those as separate ins/del paragraphs ("24" ↔ "1.5 Line Spacing Demo").
+    /// </summary>
+    public bool ResidueForcePair(IrParagraph left, IrParagraph right)
+    {
+        var a = Bag(left);
+        var b = Bag(right);
+        if (a.WordCount == 0 || b.WordCount == 0)
+            return true;
+        // A single word replaced by a single word is "the same short label, edited" — a typo
+        // ("Nested." → "Nexted.", WC043's cell), a renumbering ("Two" → "Two1", RC-0010), a
+        // retargeted link text — WmlComparer pairs these positionally, and demoting them loses the
+        // compat token grain (and turned RC-0010's disjoint-reviewer composition into a false
+        // conflict). The oracle's kept-separate cases are all one-word-vs-MULTI-word ("24" ↔
+        // "1.5 Line Spacing Demo"), which this rule does not touch.
+        if (a.WordCount == 1 && b.WordCount == 1)
+            return true;
+        // Word's compare INTERLEAVES a residue pair (renders one mixed ins/del paragraph with retained
+        // anchors) only when the two paragraphs genuinely correspond — ≥ 2 shared content words. A pair
+        // sharing a SINGLE incidental word ("Size 12 … font size …" vs "… font sizes …") is a full
+        // REWRITE to Word: it emits a separate inserted + deleted paragraph, not an interleave on the
+        // lone "font". Our old "any shared word force-pairs" over-interleaved those (the font_size/
+        // bold_italic tail-paragraph over-anchoring). Zero-overlap already stayed separate; this raises
+        // the bar from 1 → 2 to match Word. (The 1-word-vs-1-word typo/renumber case above is exempt.)
+        var (small, large) = a.TrimmedWords.Count <= b.TrimmedWords.Count ? (a, b) : (b, a);
+        var seen = new System.Collections.Generic.HashSet<string>();
+        int shared = 0;
+        foreach (var w in small.TrimmedWords)
+            if (large.TrimmedWords.Contains(w) && seen.Add(w))
+                shared++;
+        return shared >= 2;
+    }
+
+    /// <summary>
+    /// WORD-token overlap statistics for a paragraph pair: the multiset intersection size over
+    /// <see cref="IrDiffTokenKind.Word"/>-kind MatchKeys only, and the Jaccard index over those
+    /// word-only multisets. Separator/punctuation/atomic tokens are EXCLUDED — a shared "." or a
+    /// run of shared whitespace is no evidence two paragraphs correspond (decoded from the
+    /// Word's compare output: Word never pairs paragraphs on punctuation-only overlap).
+    /// Empty or whitespace-only paragraphs have zero shared words, so they can never qualify.
+    /// Uses the same per-Align-call bag cache as <see cref="Score"/>.
+    /// </summary>
+    public (int SharedWords, double WordJaccard) WordOverlap(IrParagraph left, IrParagraph right)
+    {
+        var a = Bag(left);
+        var b = Bag(right);
+        if (a.WordCount == 0 || b.WordCount == 0)
+            return (0, 0.0);
+
+        int intersection = 0;
+        var (small, large) = a.WordCounts.Count <= b.WordCounts.Count ? (a, b) : (b, a);
+        foreach (var kv in small.WordCounts)
+            if (large.WordCounts.TryGetValue(kv.Key, out int other))
+                intersection += System.Math.Min(kv.Value, other);
+
+        int union = a.WordCount + b.WordCount - intersection;
+        return (intersection, union == 0 ? 0.0 : (double)intersection / union);
+    }
+
+    /// <summary>
+    /// Lexical-only variant of <see cref="WordOverlap"/> for the weak junction-pairing pass.
+    /// Numeric-only tokens are deliberately excluded: otherwise synthetic or numbered documents
+    /// whose paragraphs merely share their ordinal become an all-Modified diagonal despite having
+    /// no common prose.
+    /// </summary>
+    public (int SharedWords, double WordJaccard) PairingWordOverlap(IrParagraph left, IrParagraph right)
+    {
+        var a = Bag(left);
+        var b = Bag(right);
+        if (a.PairingWordCount == 0 || b.PairingWordCount == 0)
+            return (0, 0.0);
+
+        int intersection = 0;
+        var (small, large) = a.PairingWordCounts.Count <= b.PairingWordCounts.Count ? (a, b) : (b, a);
+        foreach (var kv in small.PairingWordCounts)
+            if (large.PairingWordCounts.TryGetValue(kv.Key, out int other))
+                intersection += System.Math.Min(kv.Value, other);
+
+        int union = a.PairingWordCount + b.PairingWordCount - intersection;
+        return (intersection, union == 0 ? 0.0 : (double)intersection / union);
+    }
+
+    /// <summary>
+    /// Overlap over lexical word tokens plus four-digit calendar years. The regular junction pass
+    /// remains lexical-only; this score is used only by the explicit labeled-date bridge in
+    /// <see cref="IsLabeledCalendarDateBridge"/>.
+    /// </summary>
+    public (int SharedWords, double WordJaccard) JunctionWordOverlap(IrParagraph left, IrParagraph right)
+    {
+        var a = Bag(left);
+        var b = Bag(right);
+        if (a.JunctionWordCount == 0 || b.JunctionWordCount == 0)
+            return (0, 0.0);
+
+        int intersection = 0;
+        var (small, large) = a.JunctionWordCounts.Count <= b.JunctionWordCounts.Count ? (a, b) : (b, a);
+        foreach (var kv in small.JunctionWordCounts)
+            if (large.JunctionWordCounts.TryGetValue(kv.Key, out int other))
+                intersection += System.Math.Min(kv.Value, other);
+
+        int union = a.JunctionWordCount + b.JunctionWordCount - intersection;
+        return (intersection, union == 0 ? 0.0 : (double)intersection / union);
+    }
+
+    /// <summary>
+    /// Returns true only for Word's observed date-heading bridge: a year-suffixed title versus a
+    /// labeled English calendar date that share exactly one calendar year and no lexical MatchKey.
+    /// This is intentionally a narrow LCS fallback, not generic numeric pairing evidence.
+    /// </summary>
+    public bool IsLabeledCalendarDateBridge(IrParagraph left, IrParagraph right)
+    {
+        if (PairingWordOverlap(left, right).SharedWords != 0)
+            return false;
+
+        var a = Bag(left);
+        var b = Bag(right);
+        if (!TryGetSingleSharedCalendarYear(a, b, out string year))
+            return false;
+
+        return (IsLabeledCalendarDate(a, year) && IsYearSuffixedTitle(b, year)) ||
+            (IsLabeledCalendarDate(b, year) && IsYearSuffixedTitle(a, year));
+    }
+
+    private static bool TryGetSingleSharedCalendarYear(
+        MatchKeyBag left, MatchKeyBag right, out string sharedYear)
+    {
+        string? candidate = null;
+        foreach (string year in left.CalendarYears)
+        {
+            if (!right.CalendarYears.Contains(year))
+                continue;
+            if (candidate is not null)
+            {
+                sharedYear = string.Empty;
+                return false;
+            }
+            candidate = year;
+        }
+        sharedYear = candidate ?? string.Empty;
+        return candidate is not null;
+    }
+
+    private static bool IsLabeledCalendarDate(MatchKeyBag bag, string year)
+    {
+        int firstWord = -1;
+        for (int i = 0; i < bag.Tokens.Count; i++)
+        {
+            if (bag.Tokens[i].Kind == IrDiffTokenKind.Word)
+            {
+                firstWord = i;
+                break;
+            }
+        }
+        if (firstWord < 0)
+            return false;
+
+        string label = bag.Tokens[firstWord].Text;
+        bool hasLabelColon = string.Equals(label, "Date:", System.StringComparison.OrdinalIgnoreCase);
+        if (!hasLabelColon && !string.Equals(label, "Date", System.StringComparison.OrdinalIgnoreCase))
+            return false;
+        for (int i = firstWord + 1; !hasLabelColon && i < bag.Tokens.Count; i++)
+        {
+            var token = bag.Tokens[i];
+            if (token.Kind == IrDiffTokenKind.Word)
+                break;
+            if (token.Kind == IrDiffTokenKind.Separator && token.Text == ":")
+            {
+                hasLabelColon = true;
+                break;
+            }
+        }
+        if (!hasLabelColon)
+            return false;
+
+        bool hasMonth = false, hasDay = false, hasYear = false;
+        foreach (var token in bag.Tokens)
+        {
+            if (token.Kind != IrDiffTokenKind.Word)
+                continue;
+            hasMonth |= MonthNames.Contains(token.Text);
+            hasDay |= IsDayOfMonth(token.Text);
+            hasYear |= token.Text == year;
+        }
+        return hasMonth && hasDay && hasYear;
+    }
+
+    private static bool IsYearSuffixedTitle(MatchKeyBag bag, string year)
+    {
+        if (bag.PairingWordCount < 2)
+            return false;
+        for (int i = bag.Tokens.Count - 1; i >= 0; i--)
+            if (bag.Tokens[i].Kind == IrDiffTokenKind.Word)
+                return bag.Tokens[i].Text == year;
+        return false;
+    }
+
+    private static bool IsDayOfMonth(string value)
+    {
+        if (value.Length > 1 && value[^1] is ',' or '.')
+            value = value[..^1];
+        if (value.Length is < 1 or > 2)
+            return false;
+        int day = 0;
+        foreach (char c in value)
+        {
+            if (c < '0' || c > '9')
+                return false;
+            day = day * 10 + (c - '0');
+        }
+        return day is >= 1 and <= 31;
+    }
+
+    private static readonly HashSet<string> MonthNames = new(System.StringComparer.OrdinalIgnoreCase)
+    {
+        "January", "Jan", "February", "Feb", "March", "Mar", "April", "Apr", "May",
+        "June", "Jun", "July", "Jul", "August", "Aug", "September", "Sep", "Sept",
+        "October", "Oct", "November", "Nov", "December", "Dec",
+    };
 
     private MatchKeyBag Bag(IrParagraph paragraph)
     {
@@ -111,52 +376,172 @@ internal sealed class IrBlockSimilarity
         return union == 0 ? 1.0 : (double)intersection / union;
     }
 
-    /// <summary>A token-MatchKey multiset plus the Word-kind token count, built once per block.</summary>
+    /// <summary>A token-MatchKey multiset plus the Word-kind token count (and word-only sub-multiset),
+    /// built once per block.</summary>
     private sealed class MatchKeyBag
     {
+        private static readonly Dictionary<string, int> EmptyCounts = new();
+
+        private static readonly HashSet<string> EmptyWords = new();
+
         public Dictionary<string, int> Counts { get; }
+        public Dictionary<string, int> WordCounts { get; }  // Word-kind tokens only, by MatchKey
+        public Dictionary<string, int> PairingWordCounts { get; } // Word keys containing at least one letter
+        public Dictionary<string, int> JunctionWordCounts { get; } // lexical keys plus year-like values
+        public IReadOnlyList<IrDiffToken> Tokens { get; }
+        public HashSet<string> CalendarYears { get; }
+        public HashSet<string> TrimmedWords { get; }        // raw word texts, punct-trimmed + case-folded
         public int Total { get; }      // sum of all multiplicities (every token kind)
         public int WordCount { get; }  // Word-kind tokens only
+        public int PairingWordCount { get; } // Word-kind tokens carrying lexical (not ordinal-only) content
+        public int JunctionWordCount { get; } // Lexical tokens plus semantic calendar years
 
-        private MatchKeyBag(Dictionary<string, int> counts, int total, int wordCount)
+        private MatchKeyBag(Dictionary<string, int> counts, Dictionary<string, int> wordCounts,
+            Dictionary<string, int> pairingWordCounts, Dictionary<string, int> junctionWordCounts,
+            IReadOnlyList<IrDiffToken> tokens, HashSet<string> calendarYears, HashSet<string> trimmedWords,
+            int total, int wordCount, int pairingWordCount, int junctionWordCount)
         {
             Counts = counts;
+            WordCounts = wordCounts;
+            PairingWordCounts = pairingWordCounts;
+            JunctionWordCounts = junctionWordCounts;
+            Tokens = tokens;
+            CalendarYears = calendarYears;
+            TrimmedWords = trimmedWords;
             Total = total;
             WordCount = wordCount;
+            PairingWordCount = pairingWordCount;
+            JunctionWordCount = junctionWordCount;
         }
 
         public static MatchKeyBag Build(IrParagraph paragraph, IrDiffSettings settings)
         {
             var tokens = IrDiffTokenizer.Tokenize(paragraph, settings);
             var counts = new Dictionary<string, int>();
-            int wordCount = 0;
+            var wordCounts = new Dictionary<string, int>();
+            var pairingWordCounts = new Dictionary<string, int>();
+            var junctionWordCounts = new Dictionary<string, int>();
+            var calendarYears = new HashSet<string>(System.StringComparer.Ordinal);
+            var trimmedWords = new HashSet<string>();
+            int wordCount = 0, pairingWordCount = 0, junctionWordCount = 0;
             foreach (var t in tokens)
             {
                 counts[t.MatchKey] = counts.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
                 if (t.Kind == IrDiffTokenKind.Word)
+                {
+                    wordCounts[t.MatchKey] = wordCounts.TryGetValue(t.MatchKey, out int w) ? w + 1 : 1;
                     wordCount++;
+                    if (ContainsLetter(t.Text))
+                    {
+                        pairingWordCounts[t.MatchKey] = pairingWordCounts.TryGetValue(t.MatchKey, out int p) ? p + 1 : 1;
+                        pairingWordCount++;
+                    }
+                    if (ContainsLetter(t.Text) || IsCalendarYear(t.Text))
+                    {
+                        junctionWordCounts[t.MatchKey] = junctionWordCounts.TryGetValue(t.MatchKey, out int j) ? j + 1 : 1;
+                        junctionWordCount++;
+                    }
+                    if (IsCalendarYear(t.Text))
+                        calendarYears.Add(t.Text);
+                    AddLexicalPieces(t.Text, trimmedWords, settings);
+                }
             }
-            return new MatchKeyBag(counts, tokens.Count, wordCount);
+            return new MatchKeyBag(
+                counts, wordCounts, pairingWordCounts, junctionWordCounts, tokens, calendarYears, trimmedWords, tokens.Count,
+                wordCount, pairingWordCount, junctionWordCount);
         }
 
-        /// <summary>Flatten a table to one MatchKey multiset over EVERY descendant cell paragraph's tokens
-        /// (document order), so two structurally-similar tables score by shared cell content.</summary>
+        private static bool ContainsLetter(string value)
+        {
+            foreach (char c in value)
+                if (char.IsLetter(c))
+                    return true;
+            return false;
+        }
+
+        private static bool IsCalendarYear(string value)
+        {
+            if (value.Length != 4)
+                return false;
+            int year = 0;
+            foreach (char c in value)
+            {
+                if (c < '0' || c > '9')
+                    return false;
+                year = year * 10 + (c - '0');
+            }
+            return year is >= 1900 and <= 2099;
+        }
+
+        /// <summary>Split a raw word on EVERY non-letter/digit character and add pieces normalized
+        /// under the configured case policy — the lexical identity the 1×1-residue evidence test compares on.
+        /// Word-style boundaries: "This." contributes "this"; "www.ericwhite.com" contributes
+        /// "www"/"ericwhite"/"com", so a hyperlink whose target text changed one segment still
+        /// shares lexical content with its original.</summary>
+        private static void AddLexicalPieces(string raw, HashSet<string> sink, IrDiffSettings settings)
+        {
+            int start = -1;
+            for (int i = 0; i <= raw.Length; i++)
+            {
+                bool wordChar = i < raw.Length && char.IsLetterOrDigit(raw[i]);
+                if (wordChar)
+                {
+                    if (start < 0)
+                        start = i;
+                }
+                else if (start >= 0)
+                {
+                    string piece = raw.Substring(start, i - start);
+                    if (settings.CaseInsensitive)
+                        piece = settings.Culture is { } culture
+                            ? piece.ToLower(culture)
+                            : piece.ToLowerInvariant();
+                    sink.Add(piece);
+                    start = -1;
+                }
+            }
+        }
+
+        /// <summary>Flatten a table to one MatchKey multiset over its cell-paragraph tokens (including
+        /// block-SDT children) in document order, so structurally-similar tables score by shared cell content.</summary>
         public static MatchKeyBag BuildTable(IrTable table, IrDiffSettings settings)
         {
             var counts = new Dictionary<string, int>();
             int total = 0, wordCount = 0;
             foreach (var row in table.Rows)
                 foreach (var cell in row.Cells)
-                    foreach (var block in cell.Blocks)
-                        if (block is IrParagraph p)
-                            foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
-                            {
-                                counts[t.MatchKey] = counts.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
-                                total++;
-                                if (t.Kind == IrDiffTokenKind.Word)
-                                    wordCount++;
-                            }
-            return new MatchKeyBag(counts, total, wordCount);
+                    AddTableBlockTokens(cell.Blocks, settings, counts, ref total, ref wordCount);
+            // Table bags never feed WordOverlap/ResidueForcePair (junction pairing is
+            // paragraph-only), so the word-only structures are not materialized.
+            return new MatchKeyBag(
+                counts, EmptyCounts, EmptyCounts, EmptyCounts, System.Array.Empty<IrDiffToken>(), EmptyWords,
+                EmptyWords, total, wordCount, 0, 0);
+        }
+
+        /// <summary>Add token keys from direct paragraphs and those reachable through block SDTs in a table cell.
+        /// Block SDTs stay atomic to the aligner; this only supplies the table's content-summary heuristic.</summary>
+        private static void AddTableBlockTokens(
+            IReadOnlyList<IrBlock> blocks, IrDiffSettings settings, Dictionary<string, int> counts,
+            ref int total, ref int wordCount)
+        {
+            foreach (var block in blocks)
+            {
+                switch (block)
+                {
+                    case IrParagraph p:
+                        foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+                        {
+                            counts[t.MatchKey] = counts.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
+                            total++;
+                            if (t.Kind == IrDiffTokenKind.Word)
+                                wordCount++;
+                        }
+                        break;
+                    case IrSdtBlock sdt:
+                        AddTableBlockTokens(sdt.Blocks, settings, counts, ref total, ref wordCount);
+                        break;
+                }
+            }
         }
     }
 }

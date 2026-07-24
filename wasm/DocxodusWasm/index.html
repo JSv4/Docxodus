@@ -208,7 +208,8 @@
                 const resultBytes = window.Docxodus.DocumentComparer.CompareDocuments(
                     originalBytes,
                     modifiedBytes,
-                    'Docxodus WASM'
+                    'Docxodus WASM',
+                    1 // ComparisonEngine.DocxDiff
                 );
 
                 if (resultBytes.length === 0) {

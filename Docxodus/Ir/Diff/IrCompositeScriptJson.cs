@@ -185,6 +185,12 @@ internal static class IrCompositeScriptJson
         bool isMoveKind = op.Kind is IrEditOpKind.MoveBlock or IrEditOpKind.MoveModifyBlock;
         if (isMoveKind && op.MoveGroupId is { } group) writer.WriteNumber("moveGroupId", group);
         if (isMoveKind && op.IsMoveSource is { } source) writer.WriteBoolean("isMoveSource", source);
+        if (op.RequiresWholeParagraphReplace)
+            writer.WriteBoolean("requiresWholeParagraphReplace", true);
+        // BodyFullRewriteGroupId is deliberately omitted: its ids are local to one two-way script,
+        // while a composite combines reviewers. The composite markup renderer dispatches each op
+        // directly (never through the two-way Word-shaped seam renderer), so this provenance is
+        // neither meaningful nor safe to carry across reviewer namespaces.
         if (op.TokenDiff is { } diff)
         {
             writer.WritePropertyName("tokenDiff");
