@@ -145,6 +145,52 @@ public class BlockFormatChangeTests
     }
 
     [Fact]
+    public void ShadingOnly_run_change_is_tracked_with_native_rPrChange_and_roundtrips()
+    {
+        var left = IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Same text here.</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:rPr><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFFF00\"/></w:rPr><w:t>Same text here.</w:t></w:r></w:p>");
+
+        var result = DocxDiff.Compare(left, right, ModeledOnly);
+        var body = BodyOf(result);
+        var rPrChange = body.Descendants(W + "rPrChange").Single();
+        Assert.Empty(rPrChange.Element(W + "rPr")!.Elements(W + "shd")); // old = no shading
+        Assert.Equal("FFFF00", (string?)rPrChange.Parent!.Element(W + "shd")?.Attribute(W + "fill"));
+
+        var revision = Assert.Single(DocxDiff.GetRevisions(left, right, ModeledOnly));
+        Assert.Equal(DocxDiffRevisionType.FormatChanged, revision.Type);
+        Assert.Equal(DocxDiffFormatChangeScope.Run, revision.FormatChange!.Scope);
+        Assert.Equal(new[] { "shading" }, revision.FormatChange.ChangedPropertyNames);
+        Assert.Contains("FFFF00", revision.FormatChange.NewProperties["shading"]);
+        Assert.False(revision.FormatChange.OldProperties.ContainsKey("shading"));
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        Assert.Equal("FFFF00", (string?)BodyOf(accepted).Descendants(W + "shd").Single().Attribute(W + "fill"));
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Empty(BodyOf(rejected).Descendants(W + "shd"));
+    }
+
+    [Fact]
+    public void TextAndShading_run_change_tracks_the_equal_span_and_roundtrips()
+    {
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">same </w:t></w:r><w:r><w:t>old</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:rPr><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFFF00\"/></w:rPr><w:t xml:space=\"preserve\">same </w:t></w:r><w:r><w:t>new</w:t></w:r></w:p>");
+
+        var result = DocxDiff.Compare(left, right, ModeledOnly);
+        Assert.NotEmpty(BodyOf(result).Descendants(W + "rPrChange"));
+        Assert.Contains(DocxDiff.GetRevisions(left, right, ModeledOnly), r =>
+            r.Type == DocxDiffRevisionType.FormatChanged &&
+            r.FormatChange!.ChangedPropertyNames.Contains("shading"));
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        Assert.Equal("FFFF00", (string?)BodyOf(accepted).Descendants(W + "shd").Single().Attribute(W + "fill"));
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Empty(BodyOf(rejected).Descendants(W + "shd"));
+    }
+
+    [Fact]
     public void TextAndPPr_modify_reports_paragraph_scope_alongside_token_revisions()
     {
         var left = IrTestDocuments.FromBodyXml("<w:p><w:r><w:t>Old words here now.</w:t></w:r></w:p>");
@@ -213,14 +259,25 @@ public class BlockFormatChangeTests
     }
 
     [Fact]
-    public void UnmodeledOnly_pPr_delta_stays_untracked_under_ModeledOnly()
+    public void ShadingOnly_pPr_delta_is_tracked_under_ModeledOnly_and_roundtrips()
     {
-        // The documented blind spot survives Phase 1: paragraph shading is unmodeled → no markup, right-apply.
         var right = IrTestDocuments.FromBodyXml(
             "<w:p><w:pPr><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFFF00\"/></w:pPr><w:r><w:t>Same text here.</w:t></w:r></w:p>");
         var result = DocxDiff.Compare(PPrLeft, right, ModeledOnly);
-        Assert.Empty(BodyOf(result).Descendants(W + "pPrChange"));
-        Assert.Single(BodyOf(result).Descendants(W + "shd"));
+        var pPrChange = BodyOf(result).Descendants(W + "pPrChange").Single();
+        Assert.Empty(pPrChange.Element(W + "pPr")!.Elements(W + "shd")); // old = no shading
+        Assert.Equal("FFFF00", (string?)pPrChange.Parent!.Element(W + "shd")?.Attribute(W + "fill"));
+
+        var revision = Assert.Single(DocxDiff.GetRevisions(PPrLeft, right, ModeledOnly));
+        Assert.Equal(DocxDiffFormatChangeScope.Paragraph, revision.FormatChange!.Scope);
+        Assert.Equal(new[] { "shading" }, revision.FormatChange.ChangedPropertyNames);
+        Assert.Contains("FFFF00", revision.FormatChange.NewProperties["shading"]);
+        Assert.False(revision.FormatChange.OldProperties.ContainsKey("shading"));
+
+        var accepted = RevisionProcessor.AcceptRevisions(result);
+        Assert.Equal("FFFF00", (string?)BodyOf(accepted).Descendants(W + "shd").Single().Attribute(W + "fill"));
+        var rejected = RevisionProcessor.RejectRevisions(result);
+        Assert.Empty(BodyOf(rejected).Descendants(W + "shd"));
     }
 
     // ------------------------------------------------------------------ note / header pPrChange (follow-up A4)
@@ -1041,16 +1098,14 @@ public class BlockFormatChangeTests
     }
 
     [Fact]
-    public void UnmodeledOnly_pPr_change_stays_Unchanged_under_ModeledOnly()
+    public void ShadingOnly_pPr_change_classifies_FormatOnly_under_ModeledOnly()
     {
-        // The documented ModeledOnly blind spot, pPr edition: paragraph shading is unmodeled, so the
-        // delta reads Unchanged under the default (untracked right-apply) and FormatOnly under Full.
         var left = Ir(PPrLeft);
         var right = Ir(IrTestDocuments.FromBodyXml(
             "<w:p><w:pPr><w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFFF00\"/></w:pPr><w:r><w:t>Same text here.</w:t></w:r></w:p>"));
 
         var modeled = IrBlockAligner.Align(left, right, new IrDiffSettings());
-        Assert.Equal(IrAlignmentKind.Unchanged, modeled.Entries.Single().Kind);
+        Assert.Equal(IrAlignmentKind.FormatOnly, modeled.Entries.Single().Kind);
 
         var full = IrBlockAligner.Align(left, right, new IrDiffSettings { FormatComparison = IrFormatComparison.Full });
         Assert.Equal(IrAlignmentKind.FormatOnly, full.Entries.Single().Kind);

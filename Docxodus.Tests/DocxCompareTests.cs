@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using Docxodus.Internal;
@@ -15,8 +16,8 @@ namespace Docxodus.Tests;
 /// M-B — the shared comparison-engine selector. <see cref="DocxCompare"/> owns the sole
 /// <c>WmlComparer</c>-vs-<c>DocxDiff</c> branch that the CLI / WASM / npm surfaces route through.
 /// These tests pin: (1) the <see cref="ComparisonEngine"/> integer contract the byte-level surfaces
-/// rely on, (2) that the default engine reproduces <see cref="WmlComparer"/> exactly (no behavior
-/// change), (3) that the opt-in <c>DocxDiff</c> branch equals a direct <see cref="DocxDiff.Compare"/>,
+/// rely on, (2) that the legacy wire value remains stable, (3) that the default
+/// <c>DocxDiff</c> branch equals a direct <see cref="DocxDiff.Compare"/>,
 /// (4) that the settings map carries the common option set, and (5) the uniform revision-count
 /// assumption redline relies on.
 /// </summary>
@@ -49,12 +50,34 @@ public class DocxCompareTests
             .Select(r => $"{r.RevisionType}:{r.Text}")
             .ToArray();
 
+    private static string[] SchemaErrors(WmlDocument document)
+    {
+        using var stream = new MemoryStream(document.DocumentByteArray);
+        using var wordDoc = WordprocessingDocument.Open(stream, false);
+        return new OpenXmlValidator().Validate(wordDoc).Select(error => error.Description).ToArray();
+    }
+
     [Fact]
-    public void DefaultEngine_IsWmlComparer()
+    public void EngineWireValues_PreserveLegacyWmlComparerAtZero()
     {
         Assert.Equal(ComparisonEngine.WmlComparer, default(ComparisonEngine));
         Assert.Equal(ComparisonEngine.WmlComparer, (ComparisonEngine)0);
         Assert.Equal(1, (int)ComparisonEngine.DocxDiff);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(2)]
+    public void InvalidEngine_IsRejectedBeforeTheNoOpShortcut(int rawEngine)
+    {
+        var source = Doc("Unchanged paragraph.");
+        var identical = new WmlDocument(source);
+
+        var exception = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            DocxCompare.Compare(source, identical, (ComparisonEngine)rawEngine,
+                new WmlComparerSettings()));
+
+        Assert.Equal("engine", exception.ParamName);
     }
 
     [Fact]
@@ -82,6 +105,60 @@ public class DocxCompareTests
         var direct = DocxDiff.Compare(left, right, DocxCompare.ToDocxDiffSettings(settings));
 
         Assert.Equal(direct.DocumentByteArray, viaFacade.DocumentByteArray);
+    }
+
+    [Theory]
+    [InlineData(ComparisonEngine.WmlComparer)]
+    [InlineData(ComparisonEngine.DocxDiff)]
+    public void ByteIdenticalInputs_ReturnDetachedExactCloneFromFacade(ComparisonEngine engine)
+    {
+        var source = Doc("Unchanged paragraph.");
+        var samePackage = new WmlDocument(source);
+        samePackage.FileName = "right.docx";
+
+        var result = DocxCompare.Compare(source, samePackage, engine, new WmlComparerSettings());
+
+        Assert.NotSame(source, result);
+        Assert.NotSame(source.DocumentByteArray, result.DocumentByteArray);
+        Assert.Equal(source.FileName, result.FileName);
+        Assert.Equal(source.DocumentByteArray, result.DocumentByteArray);
+        result.DocumentByteArray[0] ^= 0x01;
+        Assert.NotEqual(source.DocumentByteArray, result.DocumentByteArray);
+    }
+
+    [Fact]
+    public void ByteIdenticalInputs_ReturnDetachedExactCloneFromDirectWmlComparer()
+    {
+        var source = Doc("Unchanged paragraph.");
+        var samePackage = new WmlDocument(source);
+
+        var result = WmlComparer.Compare(source, samePackage, new WmlComparerSettings());
+
+        Assert.NotSame(source, result);
+        Assert.NotSame(source.DocumentByteArray, result.DocumentByteArray);
+        Assert.Equal(source.FileName, result.FileName);
+        Assert.Equal(source.DocumentByteArray, result.DocumentByteArray);
+        result.DocumentByteArray[0] ^= 0x01;
+        Assert.NotEqual(source.DocumentByteArray, result.DocumentByteArray);
+    }
+
+    [Fact]
+    public void ByteIdenticalMalformedMathRevision_UsesLegacyNormalizationInsteadOfExactClone()
+    {
+        var source = new WmlDocument(Path.GetFullPath(Path.Combine(
+            "../../../../TestFiles", "WC", "WC012-Math-After.docx")));
+        var samePackage = new WmlDocument(source);
+
+        Assert.NotEmpty(SchemaErrors(source));
+        Assert.False(DocxCompare.CanReturnExactNoOp(source, samePackage));
+
+        var direct = WmlComparer.Compare(source, samePackage, new WmlComparerSettings());
+        var viaFacade = DocxCompare.Compare(source, samePackage,
+            ComparisonEngine.WmlComparer, new WmlComparerSettings());
+
+        Assert.NotEqual(source.DocumentByteArray, direct.DocumentByteArray);
+        Assert.Empty(SchemaErrors(direct));
+        Assert.Empty(SchemaErrors(viaFacade));
     }
 
     [Fact]
@@ -124,10 +201,10 @@ public class DocxCompareTests
     [InlineData("bogus")]
     [InlineData("")]
     [InlineData(null)]
-    public void TryParseEngine_RejectsUnknown_DefaultsToWmlComparer(string? value)
+    public void TryParseEngine_RejectsUnknown_DefaultsToDocxDiff(string? value)
     {
         Assert.False(DocxCompare.TryParseEngine(value, out var engine));
-        Assert.Equal(ComparisonEngine.WmlComparer, engine);
+        Assert.Equal(ComparisonEngine.DocxDiff, engine);
     }
 
     [Fact]
@@ -140,5 +217,52 @@ public class DocxCompareTests
         var output = DocxCompare.Compare(left, right, ComparisonEngine.DocxDiff, settings);
 
         Assert.True(WmlComparer.GetRevisions(output, settings).Count > 0);
+    }
+
+    [Fact]
+    public void DocxDiffBranch_PreAcceptsInputRevisions_LikeWmlComparerAndWord()
+    {
+        // WmlComparer (and Microsoft Word's compare) treat tracked changes in the INPUTS as accepted
+        // before comparing — no input revision markup (or its author) survives into the redline body.
+        // Engine equivalence through DocxCompare requires the DocxDiff branch to behave identically,
+        // so the mapping sets PreAcceptInputRevisions (the raw DocxDiff API default remains opt-in).
+        static WmlDocument DocWithTrackedInsertion(string plain, string inserted)
+        {
+            using var stream = new MemoryStream();
+            using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+            {
+                var mainPart = doc.AddMainDocumentPart();
+                mainPart.Document = new Document(new Body(new Paragraph(
+                    new Run(new Text(plain) { Space = SpaceProcessingModeValues.Preserve }),
+                    new InsertedRun(
+                        new Run(new Text(inserted) { Space = SpaceProcessingModeValues.Preserve }))
+                    {
+                        Author = "PriorReviewer",
+                        Id = "99",
+                        Date = System.DateTime.Parse("2020-06-01T00:00:00Z",
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.AdjustToUniversal),
+                    })));
+                var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+                stylesPart.Styles = new Styles(new DocDefaults(
+                    new RunPropertiesDefault(new RunPropertiesBaseStyle(
+                        new RunFonts { Ascii = "Calibri" }, new FontSize { Val = "22" })),
+                    new ParagraphPropertiesDefault()));
+                mainPart.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                doc.Save();
+            }
+            return new WmlDocument("tracked.docx", stream.ToArray());
+        }
+
+        var left = DocWithTrackedInsertion("Base text ", "with a prior insertion");
+        var right = Doc("Base text with a prior insertion plus fresh words");
+        var settings = new WmlComparerSettings { AuthorForRevisions = "Bench", DateTimeForRevisions = FixedDate };
+
+        var output = DocxCompare.Compare(left, right, ComparisonEngine.DocxDiff, settings);
+
+        using var stream = new MemoryStream(output.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var bodyXml = wdoc.MainDocumentPart!.Document.Body!.OuterXml;
+        Assert.DoesNotContain("PriorReviewer", bodyXml);
     }
 }

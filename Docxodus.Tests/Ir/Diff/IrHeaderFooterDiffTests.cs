@@ -259,6 +259,120 @@ public class IrHeaderFooterDiffTests
     }
 
     [Fact]
+    public void Builder_reassigns_an_inherited_story_to_a_new_right_part()
+    {
+        // Section 1 inherits A on the left, but explicitly switches to B on the right.  The A/A
+        // equality at section 0 must not consume A and hide the later A/B correspondence: the renderer
+        // needs an operation at section 1 so its accepted view can attach B there.
+        var left = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(
+                    new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+            },
+            headerParts: new Dictionary<string, string[]> { ["rIdA"] = new[] { "Header A" } });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(
+                    new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(
+                    new[] { "section 1" }, Headers: new[] { ("default", "rIdB") }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A" },
+                ["rIdB"] = new[] { "Header B" },
+            });
+
+        var script = Build(left, right);
+
+        var diff = Assert.Single(script.HeaderFooterOps!);
+        Assert.True(diff.IsHeader);
+        Assert.Equal(IrHeaderFooterKind.Default, diff.Kind);
+        Assert.Equal(1, diff.SectionIndex);
+        Assert.NotNull(diff.LeftPartUri);
+        Assert.NotNull(diff.RightPartUri);
+        Assert.True(diff.CloneLeftPart);
+        var binding = Assert.Single(diff.ReferenceBindings!);
+        Assert.Equal(1, binding.SectionIndex);
+        Assert.Equal(IrHeaderFooterKind.Default, binding.Kind);
+        Assert.Contains(diff.Ops, op => op.Kind is not IrEditOpKind.EqualBlock);
+    }
+
+    [Fact]
+    public void Builder_rejoins_the_primary_story_after_a_cloned_reassignment()
+    {
+        // The changed first section needs its own A→B clone, but following sections must return to the original A.
+        // The rejoin is topology-only: there are no story content ops for A/A, yet it still needs a binding.
+        var left = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+                new HeaderFooterFixtures.Section(new[] { "section 2" }),
+            },
+            headerParts: new Dictionary<string, string[]> { ["rIdA"] = new[] { "Header A" } });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdB") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 2" }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A" },
+                ["rIdB"] = new[] { "Header B" },
+            });
+
+        var script = Build(left, right);
+
+        Assert.NotNull(script.HeaderFooterOps);
+        Assert.Equal(2, script.HeaderFooterOps!.Count);
+        var clonedChange = Assert.Single(script.HeaderFooterOps, diff => diff.CloneLeftPart);
+        Assert.Contains(clonedChange.ReferenceBindings!, binding => binding.SectionIndex == 0);
+        var rejoin = Assert.Single(script.HeaderFooterOps, diff => !diff.CloneLeftPart && diff.Ops.Count == 0);
+        Assert.Contains(rejoin.ReferenceBindings!, binding => binding.SectionIndex == 1);
+    }
+
+    [Fact]
+    public void Builder_binds_each_explicit_right_story_cell_when_one_right_part_is_reused()
+    {
+        // Both right sections reference B, but each needs a separate reversible left-derived output part.
+        // A URI-only right→output map is ambiguous here, so the script must bind both explicit cells directly.
+        var left = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdC") }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A" },
+                ["rIdC"] = new[] { "Header C" },
+            });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdB") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdB") }),
+            },
+            headerParts: new Dictionary<string, string[]> { ["rIdB"] = new[] { "Header B" } });
+
+        var script = Build(left, right);
+
+        Assert.NotNull(script.HeaderFooterOps);
+        Assert.Equal(2, script.HeaderFooterOps!.Count);
+        var bindings = script.HeaderFooterOps
+            .SelectMany(diff => diff.ReferenceBindings ?? IrNodeList.Empty<IrHeaderFooterBinding>())
+            .ToList();
+        Assert.Contains(bindings, binding => binding.SectionIndex == 0 && binding.Kind == IrHeaderFooterKind.Default);
+        Assert.Contains(bindings, binding => binding.SectionIndex == 1 && binding.Kind == IrHeaderFooterKind.Default);
+    }
+
+    [Fact]
     public void Builder_gate_off_restores_old_behavior()
     {
         var left = HeaderFooterFixtures.Simple(new[] { "Body" }, headerParas: new[] { "Header v1" });
@@ -368,6 +482,40 @@ public class IrHeaderFooterDiffTests
 
         var json = IrEditScriptJson.Write(script);
         Assert.Contains("\"headerFooterOps\"", json);
+        var back = IrEditScriptJson.Read(json);
+        Assert.Equal(script, back);
+        Assert.Equal(json, IrEditScriptJson.Write(back));
+    }
+
+    [Fact]
+    public void Json_round_trips_refined_header_footer_topology()
+    {
+        var left = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }),
+                new HeaderFooterFixtures.Section(new[] { "section 2" }),
+            },
+            headerParts: new Dictionary<string, string[]> { ["rIdA"] = new[] { "Header A" } });
+        var right = HeaderFooterFixtures.Build(
+            new[]
+            {
+                new HeaderFooterFixtures.Section(new[] { "section 0" }, Headers: new[] { ("default", "rIdB") }),
+                new HeaderFooterFixtures.Section(new[] { "section 1" }, Headers: new[] { ("default", "rIdA") }),
+                new HeaderFooterFixtures.Section(new[] { "section 2" }),
+            },
+            headerParts: new Dictionary<string, string[]>
+            {
+                ["rIdA"] = new[] { "Header A" },
+                ["rIdB"] = new[] { "Header B" },
+            });
+
+        var script = Build(left, right);
+        var json = IrEditScriptJson.Write(script);
+
+        Assert.Contains("\"cloneLeftPart\": true", json);
+        Assert.Contains("\"referenceBindings\"", json);
         var back = IrEditScriptJson.Read(json);
         Assert.Equal(script, back);
         Assert.Equal(json, IrEditScriptJson.Write(back));

@@ -380,7 +380,7 @@ internal static class IrEditScriptVerifier
     }
 
     /// <summary>
-    /// Verify a ModifyRow's positional cell ops: anchors resolve against the actual rows, paired cells'
+    /// Verify a ModifyRow's monotone cell ops: anchors resolve against the actual rows, paired cells'
     /// block ops reconstruct the right cell text, and the cell-op count covers both rows' cells.
     /// </summary>
     private static void VerifyCellOps(IrRow left, IrRow right, IrNodeList<IrCellOp> cellOps, IrDiffSettings settings)

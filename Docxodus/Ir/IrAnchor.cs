@@ -7,7 +7,8 @@ namespace Docxodus.Ir;
 /// <summary>
 /// The kind component of an IR anchor. The token strings (see <see cref="IrAnchor.KindToken"/>)
 /// are the markdown-projection anchor kinds produced by <c>WmlToMarkdownConverter.KindFor</c>,
-/// extended with <see cref="Img"/>/<see cref="Drw"/>/<see cref="Unk"/> for IR-internal use.
+/// extended with <see cref="Img"/>/<see cref="Drw"/>/<see cref="Sdt"/>/<see cref="Unk"/> for
+/// IR-internal use.
 /// </summary>
 internal enum IrAnchorKind
 {
@@ -23,6 +24,7 @@ internal enum IrAnchorKind
     Img,
     Drw,
     Sec,
+    Sdt,
     Unk,
 }
 
@@ -49,6 +51,7 @@ internal readonly record struct IrAnchor(IrAnchorKind Kind, string Scope, string
         IrAnchorKind.Img => "img",
         IrAnchorKind.Drw => "drw",
         IrAnchorKind.Sec => "sec",
+        IrAnchorKind.Sdt => "sdt",
         IrAnchorKind.Unk => "unk",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown anchor kind."),
     };
@@ -68,6 +71,7 @@ internal readonly record struct IrAnchor(IrAnchorKind Kind, string Scope, string
         "img" => IrAnchorKind.Img,
         "drw" => IrAnchorKind.Drw,
         "sec" => IrAnchorKind.Sec,
+        "sdt" => IrAnchorKind.Sdt,
         "unk" => IrAnchorKind.Unk,
         _ => throw new ArgumentException($"Unknown anchor kind token: '{token}'.", nameof(token)),
     };

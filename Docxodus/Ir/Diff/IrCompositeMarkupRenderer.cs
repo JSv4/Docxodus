@@ -146,7 +146,7 @@ internal static class IrCompositeMarkupRenderer
                         wDocRev.MainDocumentPart?.StyleDefinitionsPart != null)
                         WmlComparer.CopyMissingStylesFromOneDocToAnother(wDocRev, wDoc);
                     WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRev, wDoc);
-                    IrMarkupRenderer.MergeRightCommentDefinitions(main, wDocRev.MainDocumentPart);
+                    IrMarkupRenderer.MergeRightCommentDefinitions(main, wDocRev.MainDocumentPart, streamDoc, revStream);
                 }
 
                 // Reconcile the assembled body's comment markers (unique ids, 1:1 range pairing, exactly-one

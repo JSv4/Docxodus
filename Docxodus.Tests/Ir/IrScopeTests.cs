@@ -85,7 +85,17 @@ public class IrScopeTests
     {
         foreach (var b in blocks)
         {
-            yield return b.Anchor.ToString();
+            // A block SDT is internal IR structure: the markdown projection indexes its descendants,
+            // not the wrapper anchor itself.
+            if (b is IrSdtBlock sdt)
+            {
+                foreach (var a in CollectBlockAnchors(sdt.Blocks))
+                    yield return a;
+            }
+            else
+            {
+                yield return b.Anchor.ToString();
+            }
             if (b is IrTable t)
                 foreach (var row in t.Rows)
                     foreach (var cell in row.Cells)

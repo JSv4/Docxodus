@@ -33,6 +33,13 @@ internal static class IrHasher
     private static readonly XName WpDocPr =
         (XNamespace)"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" + "docPr";
 
+    // Word 2010's drawing anchor/edit ids are likewise opaque per-edit identifiers rather than presentation
+    // state. They are frequently added/removed by Word around an otherwise unchanged inline image.
+    private static readonly XNamespace Wp14 =
+        "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing";
+    private static readonly XName Wp14AnchorId = Wp14 + "anchorId";
+    private static readonly XName Wp14EditId = Wp14 + "editId";
+
     // PowerTools bookkeeping namespaces (Unid/StyleName/etc.) — declared via the "pt14"
     // prefix in the codebase. Stripped from canonical form so it survives Unid churn.
     private static readonly string PtNamespace = "http://powertools.codeplex.com/2011";
@@ -73,7 +80,8 @@ internal static class IrHasher
     /// internal media, the URI for external/hyperlink rels, a sentinel for dangling/xml-part rels) so a
     /// renumbered-but-content-identical drawing/image/diagram canonicalizes identically. When null, rel
     /// values pass through unchanged (the legacy, rel-numbering-sensitive behavior). Either way the
-    /// renumber-prone <c>wp:docPr/@id</c> is stripped (it is a non-content drawing-object id).
+    /// renumber-prone <c>wp:docPr/@id</c> and <c>wp14:anchorId</c>/<c>editId</c> are stripped (they are
+    /// non-content drawing-object identifiers).
     /// </summary>
     public static byte[] Canonicalize(XElement element, IrRelResolver? resolver)
     {
@@ -90,7 +98,25 @@ internal static class IrHasher
     public static IrHash CanonicalHash(XElement element, IrRelResolver? resolver) =>
         IrHash.Compute(Canonicalize(element, resolver));
 
-    private static void Clean(XElement element, IrRelResolver? resolver)
+    /// <summary>
+    /// Canonical SHA-256 with a caller-supplied attribute rewriter. This keeps the shared XML-noise
+    /// normalization rules while allowing a narrowly scoped owner (currently the drawing relationship-graph
+    /// hasher) to replace relationship values with a richer identity than <see cref="IrRelResolver"/>'s
+    /// legacy tokens. The callback receives attributes from the canonicalizer's private clone, so it may
+    /// safely return the original attribute when no rewrite is required.
+    /// </summary>
+    internal static IrHash CanonicalHashWithAttributeRewrite(
+        XElement element, Func<XAttribute, XAttribute> attributeRewrite)
+    {
+        ArgumentNullException.ThrowIfNull(attributeRewrite);
+        var clone = new XElement(element);
+        Clean(clone, resolver: null, attributeRewrite: attributeRewrite);
+        return IrHash.Compute(Encoding.UTF8.GetBytes(clone.ToString(SaveOptions.DisableFormatting)));
+    }
+
+    private static void Clean(
+        XElement element, IrRelResolver? resolver,
+        Func<XAttribute, XAttribute>? attributeRewrite = null)
     {
         // Remove noise child elements first (proofErr/noProof, anywhere in the subtree).
         var toRemove = element
@@ -101,16 +127,21 @@ internal static class IrHasher
             d.Remove();
 
         foreach (var el in element.DescendantsAndSelf())
-            CleanAttributes(el, resolver);
+            CleanAttributes(el, resolver, attributeRewrite);
     }
 
-    private static void CleanAttributes(XElement element, IrRelResolver? resolver)
+    private static void CleanAttributes(
+        XElement element, IrRelResolver? resolver,
+        Func<XAttribute, XAttribute>? attributeRewrite)
     {
         var kept = element.Attributes()
             .Where(a => !ShouldStripAttribute(a))
-            .Select(a => RewriteRelAttribute(a, resolver))
             .OrderBy(a => a.Name.NamespaceName, StringComparer.Ordinal)
             .ThenBy(a => a.Name.LocalName, StringComparer.Ordinal)
+            // Run graph-aware rewrites only after ordering the original attributes. A rewrite can recursively
+            // inspect relationship targets; canonical attribute order keeps that traversal independent of how a
+            // malformed-but-equivalent source happened to order its XML attributes.
+            .Select(a => attributeRewrite is null ? RewriteRelAttribute(a, resolver) : attributeRewrite(a))
             .ToList();
 
         element.RemoveAttributes();
@@ -153,6 +184,11 @@ internal static class IrHasher
         if (attribute.Name == "id" && attribute.Parent?.Name == WpDocPr)
             return true;
 
+        // Word's 2010 drawing anchor/edit IDs are transient object/edit identifiers. Retaining them would turn
+        // harmless editor churn around an otherwise identical image/presentation into a false replacement.
+        if (attribute.Name == Wp14AnchorId || attribute.Name == Wp14EditId)
+            return true;
+
         return false;
     }
 
@@ -181,6 +217,7 @@ internal static class IrHasher
         AppendField(sb, "SizeHalfPoints", f.SizeHalfPoints);
         AppendField(sb, "ColorHex", f.ColorHex);
         AppendField(sb, "Highlight", f.Highlight);
+        AppendField(sb, "Shading", f.Shading?.CanonicalXml);
         AppendField(sb, "Caps", f.Caps);
         AppendField(sb, "SmallCaps", f.SmallCaps);
         AppendField(sb, "Vanish", f.Vanish);
@@ -203,6 +240,7 @@ internal static class IrHasher
         AppendField(sb, "KeepNext", f.KeepNext);
         AppendField(sb, "KeepLines", f.KeepLines);
         AppendField(sb, "PageBreakBefore", f.PageBreakBefore);
+        AppendField(sb, "Shading", f.Shading?.CanonicalXml);
         AppendField(sb, "NumId", f.NumId);
         AppendField(sb, "Ilvl", f.Ilvl);
         return HashFields(sb, f.UnmodeledDigest);
@@ -470,9 +508,15 @@ internal sealed class IrContentHashBuilder
 
     public const byte SentinelOpaque = 0x0F;
 
-    // Structure markers (written after a 0x02 lead byte) — table structure.
+    // Structure markers (written after a 0x02 lead byte) — block/tree structure.
     public const byte StructureRow = 0x10;
     public const byte StructureCell = 0x11;
+    public const byte StructureSdt = 0x12;
+    // A paragraph's inline carrier digests deliberately stay outside its own visible-content hash. When that
+    // paragraph is nested in a table cell, these distinct markers roll the carrier into the container identity so
+    // a code/wrapper-only edit cannot make the entire table align Equal.
+    public const byte StructureInlineCarrier = 0x13;
+    public const byte StructureFieldCarrier = 0x14;
 
     private const byte SentinelLead = 0x01;
     private const byte StructureLead = 0x02;

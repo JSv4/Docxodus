@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Packaging;
 using System.Linq;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
@@ -101,6 +102,97 @@ internal static class IrMarkupRenderer
     /// removed explicitly before output regardless.</summary>
     private static readonly XName SourceLinkTarget = PtOpenXml.pt + "SourceLinkTarget";
 
+    /// <summary>Identifies a style definition independently of the source <see cref="XElement"/>.
+    /// Style ids are typed in OOXML, so the type participates in right-import provenance.</summary>
+    private readonly record struct StyleIdentity(string Type, string Id);
+
+    /// <summary>
+    /// A deliberately scoped, reversible package-presentation plan. OOXML has no native tracked revision for
+    /// <c>docDefaults</c>, theme, numbering, or settings parts, so the output keeps the left package parts and
+    /// materializes only a proven docDefaults-only delta into the CURRENT payload of shared style definitions.
+    /// The old effective payload is carried by the standard style-level pPrChange/rPrChange markers, making
+    /// accept/reject switch presentation without a hidden package swap.
+    /// </summary>
+    private sealed record DocDefaultsStyleProjection(HashSet<StyleIdentity> Styles)
+    {
+        public bool Includes(string? type, string? id) =>
+            type is not null && id is not null && Styles.Contains(new StyleIdentity(type, id));
+    }
+
+    // Mirrors the tail of DocxSession.PPrChildOrder after w:spacing. When a right-only style
+    // delegates paragraph spacing to defaults, the materialized w:spacing must precede the first
+    // present CT_PPrBase child in this set (for example w:ind or w:jc), not merely w:outlineLvl.
+    private static readonly HashSet<XName> PPrChildrenAfterSpacing = new()
+    {
+        W.ind,
+        W.contextualSpacing,
+        W.mirrorIndents,
+        W.suppressOverlap,
+        W.jc,
+        W.textDirection,
+        W.textAlignment,
+        W.textboxTightWrap,
+        W.outlineLvl,
+        W.divId,
+        W.cnfStyle,
+        W.rPr,
+        W.sectPr,
+        W.pPrChange,
+    };
+
+    // Mirrors the tail of PtOpenXmlUtil.Order_rPr after w:kern. Synthesized kerning must remain
+    // between w:w and w:position even when a copied style has no explicit size; appending it after
+    // w:lang, for example, produces schema-invalid CT_RPr ordering.
+    private static readonly HashSet<XName> RPrChildrenAfterKern = new()
+    {
+        W.position,
+        W.sz,
+        W14.wShadow,
+        W14.wTextOutline,
+        W14.wTextFill,
+        W14.wScene3d,
+        W14.wProps3d,
+        W.szCs,
+        W.highlight,
+        W.u,
+        W.effect,
+        W.bdr,
+        W.shd,
+        W.fitText,
+        W.vertAlign,
+        W.rtl,
+        W.cs,
+        W.em,
+        W.lang,
+        W.eastAsianLayout,
+        W.specVanish,
+        W.oMath,
+    };
+
+    // Schema order for the properties produced by the reversible docDefaults projection. Effective formatting
+    // is assembled from several cascade layers, so a later override can otherwise be appended after an earlier
+    // property with a higher schema position (for example an inherited w:rFonts after w:b). Keep unknown/
+    // extension children stable at the tail; the v1 projection admits only literal WordprocessingML properties.
+    private static readonly string[] StylePPrChildOrder =
+    {
+        "pStyle", "keepNext", "keepLines", "pageBreakBefore", "framePr", "widowControl", "numPr",
+        "suppressLineNumbers", "pBdr", "shd", "tabs", "suppressAutoHyphens", "kinsoku", "wordWrap",
+        "overflowPunct", "topLinePunct", "autoSpaceDE", "autoSpaceDN", "bidi", "adjustRightInd",
+        "snapToGrid", "spacing", "ind", "contextualSpacing", "mirrorIndents", "suppressOverlap", "jc",
+        "textDirection", "textAlignment", "textboxTightWrap", "outlineLvl", "divId", "cnfStyle", "rPr",
+        "sectPr", "pPrChange",
+    };
+
+    private static readonly string[] StyleRPrChildOrder =
+    {
+        "moveFrom", "moveTo", "ins", "del", "rStyle", "rFonts", "b", "bCs", "i", "iCs", "caps",
+        "smallCaps", "strike", "dstrike", "outline", "shadow", "emboss", "imprint", "noProof",
+        "snapToGrid", "vanish", "webHidden", "color", "spacing", "w", "kern", "position", "sz",
+        "wShadow", "wTextOutline", "wTextFill", "wScene3d", "wProps3d", "szCs", "highlight", "u",
+        "effect", "bdr", "shd", "fitText", "vertAlign", "rtl", "cs", "em", "lang", "eastAsianLayout",
+        "specVanish", "oMath", "rPrChange",
+    };
+
     /// <summary>
     /// Render <paramref name="script"/> into a tracked-revisions <see cref="WmlDocument"/> on the LEFT
     /// document's package. <paramref name="left"/>/<paramref name="right"/> are the original documents the
@@ -124,11 +216,34 @@ internal static class IrMarkupRenderer
         var irRight = IrReader.Read(right, readOpts);
 
         var state = new RenderState(irLeft, irRight, settings);
+        state.LeftStyleIds = ReadStyleIds(left);
 
-        // Assemble the new body's block-level children (w:p / w:tbl), in script order.
+        // Word-parity input-revision preservation (PreserveInputRevisions): map each accepted working-copy
+        // body block back to its ORIGINAL source element. A revision-free LEFT keeps the established path:
+        // right Equal/Insert emissions carry the RIGHT input's foreign markup verbatim. When LEFT itself is
+        // dirty, do NOT preserve the RIGHT half alone (that is asymmetric); instead retain a narrowly safe
+        // LEFT map for delete-side projection. A pre-existing left w:ins that the comparison deletes must be
+        // emitted as deletion-grade markup, not flattened then re-deleted as a fresh unrelated change. More
+        // complex two-sided cases (left moves/property revisions and Modify spans) deliberately stay on the
+        // accepted-view renderer until they have source-provenance-aware handling.
+        if (settings.PreserveInputRevisions)
+        {
+            if (HasTrackedRevisionMarkup(left))
+            {
+                state.LeftPreservedOriginals = BuildPreservedOriginalIndex(irLeft, left);
+                // A raw LEFT deletion can be the historical counterpart of a right-only accepted block.
+                // Do not try to infer this generally: only direct body ordinal matches with a fully deleted
+                // source block are safe enough to project as the source author's insertion.
+                state.LeftDeletedInsertionOriginals = BuildLeftDeletedInsertionIndex(irLeft, irRight, left);
+            }
+            else
+                state.PreservedOriginals = BuildPreservedOriginalIndex(irRight, right);
+        }
+
+        // Assemble the new body's block-level children (w:p / w:tbl), in script order with Word's
+        // replace-gap arrangement (inserted blocks before deleted ones inside each gap).
         var bodyBlocks = new List<XElement>();
-        foreach (var op in script.Operations)
-            RenderBlockOp(op, state, bodyBlocks);
+        RenderBlockOpsWordShaped(script.Operations, state, bodyBlocks);
 
         // SimplifyMoveMarkup (Task 4): rewrite native move markup as del/ins + strip range markers, a
         // post-pass mirroring WmlComparer.SimplifyMoveMarkupToDelIns (a Word-compat workaround). Operates on
@@ -136,6 +251,11 @@ internal static class IrMarkupRenderer
         if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
             foreach (var block in bodyBlocks)
                 SimplifyMoveMarkup(block);
+
+        // Reproduce Word's compare-output normalization of fixed-width tables (materialize the hairline
+        // cell-margin/table-indent inset Word backfills), so rendered tables land where Word's do instead
+        // of shifting under the renderer's own default cell margin. See WordCompareTableNormalizer.
+        WordCompareTableNormalizer.NormalizeAll(bodyBlocks);
 
         // Drop the assembled blocks into a clone of the LEFT package, preserving its trailing top-level
         // w:sectPr (last-section metadata). Copy the RIGHT document's missing styles/numbering for continuity
@@ -152,6 +272,28 @@ internal static class IrMarkupRenderer
                 var mainXDoc = main.GetXDocument();
                 var bodyEl = mainXDoc.Root?.Element(W.body)
                     ?? throw new DocxodusException("LEFT document has no w:body.");
+
+                // Capture this predicate while MAIN still is the untouched LEFT package.  Once
+                // the body is assembled below, the output deliberately contains clones from both
+                // sides and can no longer serve as evidence that a font list was shared by the
+                // original inputs.
+                var sharedCssFontStacks = DirectCssFontStacks(main);
+                if (wDocRight.MainDocumentPart is { } rightMainForFontStacks)
+                    sharedCssFontStacks.IntersectWith(DirectCssFontStacks(rightMainForFontStacks));
+                else
+                    sharedCssFontStacks.Clear();
+
+                // A very narrow malformed-input compatibility shape: a complete body replacement can
+                // introduce an entirely new paragraph-style universe into a left package that has no
+                // defaults or default paragraph style of its own. Word projects the USED inserted styles
+                // against the left package's stock defaults (rather than raw-copying them), which keeps
+                // their line metrics compact. The helper proves all of the safety preconditions while the
+                // package still contains the original LEFT stories; outside that shape it returns null and
+                // style treatment remains the established general path.
+                var leftHadTheme = main.ThemePart is not null;
+                var insertedStyleNormalization = TryCreateInsertedStyleNormalization(
+                    script, state, main, wDocRight.MainDocumentPart);
+                var docDefaultsStyleProjection = TryCreateDocDefaultsStyleProjection(wDoc, wDocRight, state);
 
                 // Preserve the trailing top-level sectPr (a direct child of w:body that is NOT inside a pPr).
                 var trailingSectPr = bodyEl.Elements(W.sectPr).LastOrDefault();
@@ -202,7 +344,7 @@ internal static class IrMarkupRenderer
                 // ops (same dispatch as the body — anchors resolve in the shared AnchorIndex) so accept/reject
                 // round-trips note content too. Done BEFORE PutXDocument of the note parts.
                 if (script.NoteOps is { Count: > 0 })
-                    RenderNoteScopes(script.NoteOps, state, wDoc, main, wDocRight, settings);
+                    RenderNoteScopes(script.NoteOps, state, main, wDocRight, settings, streamDoc, rightStream);
 
                 // Header/footer story markup (2026-07-03 campaign): apply each changed story's edit ops
                 // INSIDE its header/footer part (the output package carries the LEFT parts; a changed
@@ -211,6 +353,17 @@ internal static class IrMarkupRenderer
                 if (script.HeaderFooterOps is { Count: > 0 })
                     RenderHeaderFooterScopes(script.HeaderFooterOps, state, main,
                         wDocRight.MainDocumentPart, settings, streamDoc, rightStream);
+
+                // Story-reference reconciliation — MUST run after the story machinery above so its
+                // part mapping is known. Cloned RIGHT-side content (a paired paragraph's adopted pPr,
+                // a seam, a whole-block insert) can carry inline w:sectPr story references under the
+                // RIGHT package's r:ids, which in this left-based package are dangling or name a
+                // relationship of the wrong kind — LibreOffice refuses such a package outright.
+                // Each reference is REBOUND to the output part carrying that story (the left part the
+                // story diff merged into for a matched pair, the freshly-inserted part for a
+                // right-only story, or a wholesale import as a last resort); only references no
+                // package can resolve are dropped (absent reference ⇒ OOXML section inheritance).
+                RebindOrStripStoryReferences(state, main, wDocRight.MainDocumentPart);
 
                 // Note-id renumber pass (M2.6 Task 1): mirror the oracle's ChangeFootnoteEndnoteReferencesToUniqueRange.
                 // Walk the produced body in document order; every footnote/endnote reference gets a sequential id
@@ -230,8 +383,13 @@ internal static class IrMarkupRenderer
                 // reference. Then reconcile the body's markers to unique ids, 1:1 range pairing, and exactly-one
                 // resolved definition per reference — collapsing an unchanged comment to a single bare range
                 // (survives accept AND reject) and renumber-deduping a rewritten comment's del/ins copies.
-                MergeRightCommentDefinitions(main, wDocRight.MainDocumentPart);
+                MergeRightCommentDefinitions(main, wDocRight.MainDocumentPart, streamDoc, rightStream);
                 NormalizeComments(main, BodyCommentIds(state.Left), BodyCommentIds(state.RightSource), state);
+                // The output's comments part is cloned from the LEFT/original, so a LEFT comment whose
+                // annotated content the diff fully replaced — leaving no marker anywhere — leaves its
+                // w:comment definition dangling. Word's compare output never emits such an orphan; prune them
+                // (and their threading metadata). See PruneOrphanedComments.
+                PruneOrphanedComments(main);
 
                 // Bookmark normalization pass: an edit straddling a bookmark range endpoint, or a dense
                 // overlapping content-region layout, can leave the rendered body with a duplicate bookmark id
@@ -247,19 +405,289 @@ internal static class IrMarkupRenderer
                 // boundaries (AlwaysKeep) so a REF/PAGEREF field is never orphaned, but a boundary may leave the
                 // plumbing in the wrong revision wrapper (e.g. a begin/separate run wrapped in w:ins after the
                 // text before the field was edited — the field would then vanish on reject). Re-home each field's
-                // plumbing to the field's own context: bare for an unchanged or result-edited field (survives
-                // accept AND reject), left in w:del/w:ins for a wholly deleted/inserted field.
+                // plumbing to the field's own context in every rendered story (body, headers/footers, and notes):
+                // bare for an unchanged or result-edited field (survives accept AND reject), left in w:del/w:ins
+                // for a wholly deleted/inserted field.
                 NormalizeFields(main);
 
-                // Carry right-only styles + numbering into the left-based package.
-                if (main.StyleDefinitionsPart != null &&
-                    wDocRight.MainDocumentPart?.StyleDefinitionsPart != null)
-                    WmlComparer.CopyMissingStylesFromOneDocToAnother(wDocRight, wDoc);
-                WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRight, wDoc);
+                // Style-definition provenance (decoded from Word's compare output): the result
+                // keeps the LEFT document's styles part — docDefaults/theme/latentStyles byte-identical
+                // to the left — while each style whose RAW definition formatting differs between the
+                // sides has its CURRENT payload updated to the RIGHT document's EFFECTIVE formatting,
+                // with the left's effective payload archived in a tracked rPrChange/pPrChange INSIDE
+                // the style definition. Eligible raw-equal styles also receive a reversible projection
+                // when a literal docDefaults delta is the only safe presentation difference. Right-only
+                // styles are copied in. Numbering keeps the existing missing-copy treatment (numId
+                // collisions are remapped there, not overwritten).
+                var rightImportedStyles = TrackStyleDefinitionChanges(
+                    wDoc, wDocRight, state, insertedStyleNormalization, leftHadTheme, docDefaultsStyleProjection);
+                // Equal blocks and archived pPr values are cloned verbatim, so neither path passes
+                // through the paired-paragraph style guard. Once the final styles part is known,
+                // discard only paragraph-style references which cannot resolve there.
+                DropDanglingParagraphStyleRefs(main);
+                // The output's surviving body is RIGHT-sourced (equal/inserted/modified blocks emit
+                // the right document's XML) while the numbering part is seeded from the LEFT. When
+                // a numId collides across the sides with different content, the copy renumbers the
+                // right's definition to a fresh id — rebind every surviving reference to it, or
+                // right-sourced lists silently resolve against the left's definition (decimal
+                // rendering as the left's bullets). Deleted (left-sourced) paragraphs — the ones
+                // whose paragraph mark carries w:del — keep the left id untouched, as do archived
+                // left properties inside *Change elements.
+                var numIdMap = WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRight, wDoc);
+                RebindRightNumberingReferences(main, numIdMap, state);
+                RebindRightImportedStyleNumberingReferences(
+                    main.StyleDefinitionsPart, rightImportedStyles, numIdMap);
+                // Word-parity repair: a body numPr referencing a numId with NO definition (tool-made
+                // corpus inputs ship this) renders as a plain paragraph in LibreOffice, while Word
+                // synthesizes a decimal multilevel definition on open — its compare oracle carries
+                // exactly that. Mirror the repair so numbered lists survive into the redline.
+                RepairDanglingNumberingReferences(main);
+                // Word always writes a settings part; a package without one makes LibreOffice fall
+                // back to its own default tab stop (≈709 twips) instead of Word's 720, drifting every
+                // tab-positioned run cumulatively. Backfill a minimal settings part with the 720-twip
+                // default so tab metrics match the oracle (tool-generated corpus inputs ship without).
+                if (main.DocumentSettingsPart is null)
+                {
+                    var settingsPart = main.AddNewPart<DocumentSettingsPart>("rIdSettingsBackfill");
+                    settingsPart.GetXDocument().Add(new XElement(W.settings,
+                        new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName),
+                        new XElement(W.defaultTabStop, new XAttribute(W.val, 720))));
+                    settingsPart.PutXDocument();
+                }
+                // settings.xml canonical-children backfill (same provenance rule as theme/docDefaults/
+                // fontTable): Word's compare output synthesizes compat/compatibilityMode + a small set of
+                // canonical settings for every document even when the source carries an empty stub. Only
+                // compatibilityMode is rendering-relevant — it selects LibreOffice's layout-engine emulation,
+                // so an output missing it lays out under a different engine than Word's redline (which always
+                // carries one) and a rendered redline diverges from Word's compare output. See WordCompareSettingsBackfill.
+                WordCompareSettingsBackfill.Backfill(main, wDocRight.MainDocumentPart);
+                // Theme backfill: without a theme part, LibreOffice resolves scheme colors
+                // (bg1/tx1/accentN) to BLACK — right-sourced charts and shapes render as black
+                // boxes. Word's compare output always carries a theme, and when the ORIGINAL (left)
+                // document has none Word supplies its STOCK default — NOT the revised document's
+                // theme (adopting the right's shifts every theme-referencing cloned run's font away
+                // from the oracle). Backfill Word's stock theme byte-for-byte (WordStockTheme:
+                // Aptos fonts, 2023+ palette — verified identical across 164 Word outputs).
+                if (!leftHadTheme)
+                    BackfillDefaultTheme(main);
+                // docDefaults backfill (same provenance rule as the theme): when the left's styles
+                // part carries no w:docDefaults, Word's compare output backfills Word's STOCK
+                // docDefaults — never the revised document's. Which stock depends on whether the
+                // left had a theme: themeless lefts are seeded like a new document (modern stock:
+                // sz 24, spacing after=160 line=278, kern, ligatures — the era of the stock theme
+                // above), while a left with its own theme gets the classic-era stock (sz 22,
+                // line=259). Verified across the six corpus oracles whose lefts lack docDefaults
+                // (two byte-identical groups keyed exactly on theme presence).
+                BackfillStockDocDefaults(main, leftHadTheme);
+
+                // fontTable/webSettings backfill (same provenance rule as theme/docDefaults): Word's
+                // compare output SYNTHESIZES word/fontTable.xml + word/webSettings.xml for every document
+                // even when the inputs carry neither. The fontTable's per-font panose/family metrics steer
+                // LibreOffice's substitution of absent fonts (Aptos/Calibri/CSS stacks); without it our
+                // output substitutes those fonts DIFFERENTLY from Word's redline (which always carries one),
+                // so a rendered redline diverges from Word's compare output even on a byte-identical body.
+                // See WordCompareFontTableBackfill.
+                WordCompareFontTableBackfill.Backfill(main);
+
+                // Some HTML-to-DOCX producers write CSS font-family lists directly into w:rFonts
+                // (for example "Roboto, sans-serif").  Word's comparison output keeps that raw
+                // string, but LibreOffice does not apply Word's fallback behavior when rendering a
+                // tracked document.  A tightly-scoped compatibility projection is warranted only
+                // when BOTH original documents carry the identical CSS-shaped list in direct run
+                // formatting AND it is not archived by a tracked run-format change: together,
+                // those prove it is shared formatting rather than one side's actual edit.  The
+                // recognized syntax is either an unquoted comma-bearing list or one quoted primary
+                // followed only by the CSS generic <c>sans-serif</c>; quoted lists with a concrete
+                // fallback remain untouched because that fallback is semantically meaningful.  As
+                // before, styles, themes, east-Asian fonts, and one-sided lists are excluded.
+                // Rewriting a shared CSS font stack to Arial DIVERGES from Word (which keeps the raw stack
+                // verbatim), so our runs render a different font than Word's redline. Now that
+                // WordCompareFontTableBackfill declares each raw stack with Word's own altName descriptor
+                // (the primary family LibreOffice resolves for substitution), the stack rides through
+                // unchanged and both sides substitute it identically — the faithful behavior.
+                _ = sharedCssFontStacks;
             }
-            return streamDoc.GetModifiedWmlDocument();
+            var rendered = streamDoc.GetModifiedWmlDocument();
+            return settings.NormalizeRevisionAuthors
+                ? NormalizeRevisionAuthors(rendered, settings.AuthorForRevisions)
+                : rendered;
         }
     }
+
+    /// <summary>
+    /// Stamp <paramref name="author"/> onto the <c>w:author</c> of every tracked-revision element in every
+    /// XML part of <paramref name="doc"/>, collapsing the output to a single revision author. Renderers that
+    /// color tracked changes by author (LibreOffice) then show one color, matching Word's single-author
+    /// compare output — instead of a second color leaking from input revisions preserved under their
+    /// original author (<see cref="IrDiffSettings.PreserveInputRevisions"/>). Comment authors
+    /// (<c>w:comment</c>) are deliberately left untouched — a comment is not a tracked change. A pure
+    /// byte→byte package rewrite that never touches revision STRUCTURE, so the accept ≡ right / reject ≡ left
+    /// contract is unaffected (author is presentation metadata).
+    /// </summary>
+    private static WmlDocument NormalizeRevisionAuthors(WmlDocument doc, string author)
+    {
+        using var streamDoc = new OpenXmlMemoryStreamDocument(doc);
+        using (var wDoc = streamDoc.GetWordprocessingDocument())
+        {
+            var main = wDoc.MainDocumentPart;
+            if (main is null)
+                return doc;
+            foreach (var part in RevisionBearingParts(main))
+            {
+                XDocument xdoc;
+                try
+                {
+                    xdoc = part.GetXDocument();
+                }
+                catch (System.Xml.XmlException)
+                {
+                    continue;   // a malformed auxiliary part carries no revision authors — skip it
+                }
+                if (xdoc.Root is null)
+                    continue;
+                bool touched = false;
+                foreach (var el in xdoc.Descendants())
+                {
+                    if (el.Name == W.comment)
+                        continue;
+                    var attr = el.Attribute(W.author);
+                    if (attr != null && attr.Value != author)
+                    {
+                        // Every WML element carrying a w:author attribute IS a tracked-change / range /
+                        // property-change marker except w:comment (excluded above), so an unconditional set
+                        // over these story parts is correct and complete.
+                        attr.Value = author;
+                        touched = true;
+                    }
+                }
+                if (touched)
+                    part.PutXDocument();
+            }
+        }
+        return streamDoc.GetModifiedWmlDocument();
+    }
+
+    /// <summary>The wordprocessing STORY parts that can carry tracked-revision <c>w:author</c> markup — the
+    /// main document plus its headers, footers, footnotes, endnotes, and comments — each once. Chart,
+    /// customXml, SmartArt, and embedding parts are deliberately excluded (no revision authors, and some are
+    /// not plain XML the reader can parse).</summary>
+    private static IEnumerable<OpenXmlPart> RevisionBearingParts(MainDocumentPart main)
+    {
+        yield return main;
+        foreach (var h in main.HeaderParts)
+            yield return h;
+        foreach (var f in main.FooterParts)
+            yield return f;
+        if (main.FootnotesPart is { } fn)
+            yield return fn;
+        if (main.EndnotesPart is { } en)
+            yield return en;
+        if (main.WordprocessingCommentsPart is { } cm)
+            yield return cm;
+    }
+
+    /// <summary>
+    /// Projects the narrowly malformed, shared CSS-like direct font-list shapes described at the
+    /// call site to LibreOffice's reliable sans-serif fallback.  This runs after all renderer
+    /// package work has completed so it cannot influence edit alignment, source provenance, or
+    /// style/numbering reconciliation.
+    /// </summary>
+    private static void ProjectSharedCssFontStacks(
+        MainDocumentPart outputMain,
+        HashSet<string> sharedStacks)
+    {
+        if (sharedStacks.Count == 0)
+            return;
+
+        var output = outputMain.GetXDocument();
+        // A run-format revision's current rPr becomes the accepted document.  Projecting its font
+        // would therefore leak the renderer fallback into that accepted result (and empirically
+        // breaks the accepted-output oracle). Exclude only the exact stack recorded by such a
+        // revision; unrelated format revisions remain harmless.
+        sharedStacks.RemoveWhere(stack => output.Descendants(W.rPrChange)
+            .Descendants(W.rFonts)
+            .Any(fonts => IsExactFontTriplet(fonts, stack)));
+        if (sharedStacks.Count == 0)
+            return;
+
+        var changed = false;
+        foreach (var fonts in output.Descendants(W.rFonts))
+        {
+            // Limit the projection to direct run properties.  A style/default/theme carrying a
+            // similarly-shaped value is semantically broader and has not earned this workaround.
+            if (fonts.Parent?.Name != W.rPr || fonts.Parent.Parent?.Name != W.r)
+                continue;
+
+            var ascii = (string?)fonts.Attribute(W.ascii);
+            if (ascii is null || !sharedStacks.Contains(ascii) || !IsExactFontTriplet(fonts, ascii))
+                continue;
+
+            fonts.SetAttributeValue(W.ascii, "Arial");
+            fonts.SetAttributeValue(W.hAnsi, "Arial");
+            fonts.SetAttributeValue(W.cs, "Arial");
+            changed = true;
+        }
+
+        if (changed)
+            outputMain.PutXDocument();
+    }
+
+    /// <summary>Returns exact direct-run font triplets that use one of the narrowly supported
+    /// CSS-like font-list syntaxes. Exact matching is deliberate: different fallback ordering,
+    /// a concrete fallback after a quoted primary, or a one-sided occurrence must not opt a
+    /// document into the renderer compatibility projection.</summary>
+    private static HashSet<string> DirectCssFontStacks(MainDocumentPart main)
+    {
+        var stacks = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var run in main.GetXDocument().Descendants(W.r))
+        {
+            var fonts = run.Element(W.rPr)?.Element(W.rFonts);
+            var ascii = (string?)fonts?.Attribute(W.ascii);
+            if (ascii is not null && fonts is not null && IsExactFontTriplet(fonts, ascii) &&
+                IsCssFontStackWithArialFallback(ascii))
+                stacks.Add(ascii);
+        }
+        return stacks;
+    }
+
+    private static bool IsExactFontTriplet(XElement fonts, string face)
+        => (string?)fonts.Attribute(W.ascii) == face &&
+           (string?)fonts.Attribute(W.hAnsi) == face &&
+           (string?)fonts.Attribute(W.cs) == face;
+
+    private static bool IsUnquotedCssFontStack(string value)
+    {
+        var first = value.TrimStart();
+        return first.Length > 1 && first.IndexOf(',') > 0 && first[0] is not '\'' and not '\"';
+    }
+
+    /// <summary>
+    /// Recognizes the one quoted CSS-family shape that has no concrete fallback to preserve:
+    /// <c>"Primary", sans-serif</c> (or its single-quoted equivalent).  It deliberately declines
+    /// multiple quoted names, explicit secondary faces such as <c>"Calibri", Arial, sans-serif</c>,
+    /// malformed quoting, and non-sans generic families.  Those are not interchangeable with the
+    /// renderer's Arial/Liberation Sans compatibility fallback.
+    /// </summary>
+    private static bool IsQuotedPrimaryWithOnlyGenericSansFallback(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Length < 5 || trimmed[0] is not '\'' and not '\"')
+            return false;
+
+        var quote = trimmed[0];
+        int closingQuote = trimmed.IndexOf(quote, 1);
+        if (closingQuote <= 1)
+            return false;
+
+        var remainder = trimmed[(closingQuote + 1)..].TrimStart();
+        if (!remainder.StartsWith(",", StringComparison.Ordinal))
+            return false;
+
+        return string.Equals(remainder[1..].Trim(), "sans-serif", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsCssFontStackWithArialFallback(string value)
+        => IsUnquotedCssFontStack(value) || IsQuotedPrimaryWithOnlyGenericSansFallback(value);
 
     /// <summary>
     /// Import media (and hyperlink/external relationships) referenced by RIGHT-sourced clones into the output's
@@ -296,8 +724,195 @@ internal static class IrMarkupRenderer
 
     // ----------------------------------------------------------------- block-op dispatch
 
+    /// <summary>
+    /// Render a sequence of block ops with Microsoft Word's replace-gap arrangement (the grammar Word's
+    /// own compare output uses at every site where old blocks are deleted and new blocks inserted):
+    /// <list type="number">
+    /// <item>INSERTED blocks render before the deleted ones (Word emits new content first, struck old
+    /// content after it) — deletes are buffered until the run of pure Delete/Insert ops ends.</item>
+    /// <item>The SEAM: the last inserted paragraph and the first deleted paragraph share one
+    /// <c>w:p</c> — Word renders the old text inline right after the new text. The seam paragraph keeps
+    /// the deleted paragraph's <c>pPr</c> (whose tracked paragraph mark makes reject restore the old
+    /// paragraph exactly); the inserted paragraph's own mark-ins is dropped (the new side contributes
+    /// n−1 inserted marks, exactly as Word does).</item>
+    /// <item>The TERMINATOR: the last deleted paragraph of a seam-merged gap keeps a LIVE (untracked)
+    /// mark, so accepting ends the inserted text at it instead of bleeding into the following block,
+    /// and rejecting still restores that paragraph under its own mark.</item>
+    /// </list>
+    /// Every other op kind (Equal/FormatOnly/Modify/Move/Split/Merge) flushes the buffer and renders in
+    /// script order, so single-sided gaps and non-gap ops render exactly as before. The seam mutates the
+    /// last inserted paragraph IN PLACE (it may be registered as a right-sourced clone for the
+    /// post-assembly media/relationship import — the registered instance must stay the live tree node);
+    /// deleted blocks are left-sourced and safe to consume. The accept ≡ right / reject ≡ left contract
+    /// is preserved in both directions (proof: DocxDiffWordShapeTests).
+    /// </summary>
+    internal static void RenderBlockOpsWordShaped(
+        IEnumerable<IrEditOp> ops, RenderState state, List<XElement> sink)
+    {
+        // A MoveModify destination deliberately owns only its RIGHT anchor: its paired LEFT anchor lives on
+        // the separately emitted source op.  Resolve that pairing for THIS operation list before rendering.
+        // Scoping matters because note/header/cell projections allocate move-group ids locally; a nested cell
+        // render must not replace the body scope's source lookup once it returns.
+        var opList = ops as IReadOnlyList<IrEditOp> ?? ops.ToList();
+        var previousMoveSources = state.ActiveMoveSourceAnchors;
+        var moveSources = new Dictionary<int, string>();
+        foreach (var candidate in opList)
+            if (candidate.IsMoveSource == true && candidate.MoveGroupId is { } groupId &&
+                candidate.LeftAnchor is { } leftAnchor)
+                moveSources[groupId] = leftAnchor;
+        state.ActiveMoveSourceAnchors = moveSources;
+
+        try
+        {
+        var pendingDeletes = new List<IrEditOp>();
+        int gapInsertStart = -1;   // sink index where the current gap's inserted elements begin
+        int? lastInsertedBodyFullRewriteGroupId = null;
+
+        void FlushGap()
+        {
+            if (pendingDeletes.Count == 0)
+            {
+                gapInsertStart = -1;
+                lastInsertedBodyFullRewriteGroupId = null;
+                return;
+            }
+            int? firstDeletedBodyFullRewriteGroupId = pendingDeletes[0].BodyFullRewriteGroupId;
+            var delEls = new List<XElement>();
+            foreach (var d in pendingDeletes)
+                RenderBlockOp(d, state, delEls);
+            pendingDeletes.Clear();
+
+            var hasInserts = gapInsertStart >= 0 && sink.Count > gapInsertStart;
+            var lastIns = hasInserts ? sink[^1] : null;
+            var firstDel = delEls.Count > 0 ? delEls[0] : null;
+            // Seam-merge guard: both boundary blocks must be plain paragraphs; neither paragraph's
+            // pPr may carry an inline w:sectPr (swapping the pPr would silently move a section
+            // break); and the deleted paragraph must not carry a PAGE BREAK (pageBreakBefore or a
+            // w:br type="page" run) — Word keeps a deleted page break PAGINATING, so the deleted
+            // paragraph stays standalone and the following struck content still starts its own page.
+            static bool CarriesPageBreak(XElement p) =>
+                p.Element(W.pPr)?.Element(W.pageBreakBefore) is not null ||
+                p.Descendants(W.br).Any(b => (string?)b.Attribute(W.type) == "page");
+            // This is intentionally explicit alignment provenance, never a renderer guess based on
+            // a 1×1 cardinality or textual heuristic. The builder can set it only for a body-level,
+            // non-tail full lexical rewrite, where Word Compare keeps two physical marked paragraphs.
+            // Cell/textbox/note/header/footer ops remain unmarked and retain the normal seam.
+            bool suppressSeam = lastInsertedBodyFullRewriteGroupId is { } groupId &&
+                firstDeletedBodyFullRewriteGroupId == groupId;
+            if (lastIns is not null && firstDel is not null &&
+                !suppressSeam &&
+                lastIns.Name == W.p && firstDel.Name == W.p &&
+                lastIns.Element(W.pPr)?.Element(W.sectPr) is null &&
+                firstDel.Element(W.pPr)?.Element(W.sectPr) is null &&
+                !CarriesPageBreak(firstDel) && !CarriesPageBreak(lastIns))
+            {
+                // Capture the ins-side pPr before it is dropped: Word's seam-terminator carries the
+                // RIGHT side's DIRECT paragraph props (real spacing/indents survive) but never a
+                // style reference the left universe can't resolve, and never format-change bars.
+                XElement? insPPr = null;
+                if (lastIns.Element(W.pPr) is { } insSrc)
+                {
+                    insPPr = StripUnids(new XElement(insSrc));
+                    insPPr.Elements(W.rPr).Elements(W.ins).Remove();
+                    insPPr.Elements(W.rPr).Where(r => !r.HasElements && !r.HasAttributes).Remove();
+                    DropUnresolvableStyleRef(insPPr, state);
+                    if (!insPPr.HasElements && !insPPr.HasAttributes)
+                        insPPr = null;
+                }
+
+                // Mutate lastIns in place into the seam: drop its pPr (and with it the mark-ins),
+                // adopt the deleted paragraph's pPr (carrying the tracked mark + old paragraph props),
+                // and move the deleted paragraph's content in AFTER the inserted runs.
+                lastIns.Element(W.pPr)?.Remove();
+                if (firstDel.Element(W.pPr) is { } delPPr)
+                {
+                    delPPr.Remove();
+                    lastIns.AddFirst(delPPr);
+                }
+                foreach (var child in firstDel.Elements().ToList())
+                {
+                    child.Remove();
+                    lastIns.Add(child);
+                }
+                delEls.RemoveAt(0);
+
+                // Live terminator: the last deleted paragraph of the CONTIGUOUS paragraph chain that
+                // starts at the seam (the seam itself when no deleted paragraph follows it directly)
+                // keeps an untracked mark — accept coalesces the chain into it, ending the inserted
+                // text there. A deleted TABLE breaks the chain: paragraphs beyond it are disconnected
+                // from the seam's accept-time coalescing, so they keep their tracked marks (accept
+                // removes them via the deleted-range rules; a live mark there would leave a stray
+                // empty paragraph behind).
+                var terminator = lastIns;
+                foreach (var el in delEls)
+                {
+                    if (el.Name != W.p)
+                        break;
+                    terminator = el;
+                }
+                terminator.Element(W.pPr)?.Element(W.rPr)?.Elements(W.del).Remove();
+
+                // Word's seam-terminator shape (decoded across Word's compare output): the surviving
+                // paragraph carries the INS side's DIRECT props — real spacing/indent survive —
+                // but never a style reference the left universe can't resolve (a Title/Heading on
+                // the right renders plain in Word's own compare output when the left lacks the
+                // style), never the del side's pPr (the left's style must not outlive accept),
+                // and never a w:pPrChange (Word puts no format-change bars on seam lines).
+                // Skipped when the del-side pPr carries an inline w:sectPr — replacing it would
+                // silently move a section break (the seam guard above only vets firstDel/lastIns,
+                // not a chain terminator).
+                if (terminator.Element(W.pPr) is not { } termPPr || termPPr.Element(W.sectPr) is null)
+                {
+                    terminator.Element(W.pPr)?.Remove();
+                    if (insPPr is not null)
+                        terminator.AddFirst(new XElement(insPPr));
+                }
+            }
+            sink.AddRange(delEls);
+            gapInsertStart = -1;
+            lastInsertedBodyFullRewriteGroupId = null;
+        }
+
+        foreach (var op in opList)
+        {
+            if (op.Kind == IrEditOpKind.DeleteBlock || op.Kind == IrEditOpKind.InsertBlock)
+            {
+                if (gapInsertStart < 0)
+                {
+                    gapInsertStart = sink.Count;
+                    lastInsertedBodyFullRewriteGroupId = null;
+                }
+                if (op.Kind == IrEditOpKind.DeleteBlock)
+                    pendingDeletes.Add(op);       // buffered: renders after the gap's inserts
+                else
+                {
+                    RenderBlockOp(op, state, sink); // insert leapfrogs the buffered deletes of its gap
+                    lastInsertedBodyFullRewriteGroupId = op.BodyFullRewriteGroupId;
+                }
+                continue;
+            }
+            FlushGap();
+            RenderBlockOp(op, state, sink);
+        }
+        FlushGap();
+        }
+        finally
+        {
+            state.ActiveMoveSourceAnchors = previousMoveSources;
+        }
+    }
+
     internal static void RenderBlockOp(IrEditOp op, RenderState state, List<XElement> sink)
     {
+        // A block-level content control owns a non-run OOXML envelope (`w:sdtPr`, `w:sdtEndPr`, nesting,
+        // bindings, locks, etc.). It cannot be reconstructed safely from independent paragraph/table ops.
+        // Route every operation through the atomic envelope renderer before the generic block dispatch.
+        if (IsBlockSdtOp(op, state))
+        {
+            RenderBlockSdtOp(op, state, sink);
+            return;
+        }
+
         // A standalone trailing section-break block (a `sec:` anchor, an IrSectionBreak) is last-section page
         // METADATA, not body content. Its `w:sectPr` is a direct w:body child that must be the LAST element —
         // we preserve the LEFT package's own trailing sectPr separately, so emitting this block here would put
@@ -326,7 +941,12 @@ internal static class IrMarkupRenderer
                 break;
 
             case IrEditOpKind.InsertBlock:
-                EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                // A very narrow dirty-left projection is supported here only. Its raw-left candidate is
+                // keyed to this exact main-body InsertBlock target; other right-side insert emissions (a
+                // replacement half, move destination, split member, note/header block, etc.) must remain on
+                // the normal accepted-view path.
+                EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true,
+                    projectLeftDeletionAsInsertion: true);
                 break;
 
             case IrEditOpKind.DeleteBlock:
@@ -339,6 +959,17 @@ internal static class IrMarkupRenderer
 
             case IrEditOpKind.MoveBlock:
             case IrEditOpKind.MoveModifyBlock:
+                // An inline envelope or non-hyperlink field carrier change is structurally inseparable from its
+                // paragraph. Do not disguise it as a native move whose destination can slice the carrier: a full
+                // delete/insert pair is the only representation that makes both Accept and Reject exact.
+                if (op.RequiresWholeParagraphReplace)
+                {
+                    if (op.IsMoveSource == true)
+                        EmitWholeBlock(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                    else
+                        EmitWholeBlock(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                    break;
+                }
                 // When move rendering is OFF (the DetectMoves=false analogue), a move is projected as a plain
                 // delete-here + insert-there pair: the SOURCE op (left anchor) emits a whole-block del, the
                 // DESTINATION op (right anchor) a whole-block ins. With move rendering ON, emit NATIVE move
@@ -369,6 +1000,60 @@ internal static class IrMarkupRenderer
             case IrEditOpKind.MergeBlock:
                 RenderMergeBlock(op, state, sink);
                 break;
+        }
+    }
+
+    /// <summary>Whether either side of an operation resolves to an atomic block-level content control.</summary>
+    private static bool IsBlockSdtOp(IrEditOp op, RenderState state) =>
+        (op.LeftAnchor is { } left && ResolveBlock(left, state.Left) is IrSdtBlock) ||
+        (op.RightAnchor is { } right && ResolveBlock(right, state.RightSource) is IrSdtBlock);
+
+    /// <summary>
+    /// Render a block-level <c>w:sdt</c> as a single ownership unit.  Native content-control range revisions
+    /// toggle the wrapper itself, while normal whole-block run/paragraph/table marking toggles its payload.
+    /// Both layers are required: Word's custom-XML deletion range accepts by COLLAPSING an SDT to its content,
+    /// not by deleting that content, so a range-only representation would leak a deleted control's text.
+    /// </summary>
+    private static void RenderBlockSdtOp(IrEditOp op, RenderState state, List<XElement> sink)
+    {
+        switch (op.Kind)
+        {
+            case IrEditOpKind.EqualBlock:
+            case IrEditOpKind.FormatOnlyBlock:
+                EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true);
+                return;
+
+            case IrEditOpKind.InsertBlock:
+                EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                return;
+
+            case IrEditOpKind.DeleteBlock:
+                EmitWholeSdt(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                return;
+
+            case IrEditOpKind.ModifyBlock:
+                EmitWholeSdt(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                return;
+
+            case IrEditOpKind.MoveBlock:
+            case IrEditOpKind.MoveModifyBlock:
+                // The aligner deliberately lowers SDT relocations to delete+insert. Keep this defensive
+                // projection too so an old/corrupt script can never emit a native move around an SDT envelope.
+                if (op.IsMoveSource == true)
+                    EmitWholeSdt(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                else
+                    EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                return;
+
+            default:
+                // Split/merge operations are paragraph-only by construction. A malformed SDT-bearing op
+                // degrades to the same reversible old/new envelope pair as a generic structural replacement.
+                if (op.LeftAnchor is not null)
+                    EmitWholeSdt(op.LeftAnchor, state.Left, state, sink, RevKind.Del, fromRight: false);
+                if (op.RightAnchor is not null)
+                    EmitWholeSdt(op.RightAnchor, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
+                return;
         }
     }
 
@@ -523,7 +1208,7 @@ internal static class IrMarkupRenderer
         bool leftIsPara = ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph;
         bool rightIsPara = ResolveBlock(op.RightAnchor, state.RightSource) is IrParagraph;
 
-        if (op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
+        if (!op.RequiresWholeParagraphReplace && op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
             op.TextboxDiffs is null)             // textbox-interior diffs are not finely rendered in Task 3
         {
             // Commented paragraphs render finely too: comment range markers + the commentReference run ride
@@ -563,6 +1248,15 @@ internal static class IrMarkupRenderer
         var rightTbl = SourceElement(op.RightAnchor, state.RightSource);
         var leftTbl = SourceElement(op.LeftAnchor, state.Left);
         if (rightTbl == null || leftTbl == null || rightTbl.Name != W.tbl || leftTbl.Name != W.tbl)
+            return false;
+
+        // A right-only cell is reversible in place only when the renderer can also emit tblGridChange /
+        // tcPrChange histories. With table-format tracking disabled, cloning the accepted (right) grid and
+        // merely marking the cell w:cellIns would make Reject remove the cell but retain the widened grid and
+        // widths. Bail before touching render state so the caller emits the conservative whole-table pair.
+        if (!state.Settings.TrackTableFormatChanges && tableDiff.RowOps.Any(row =>
+                row.Kind == IrRowOpKind.ModifyRow && row.CellOps is { } cells &&
+                cells.Any(cell => cell.LeftCellAnchor == null || cell.RightCellAnchor == null)))
             return false;
 
         // Index the source rows by anchor so a row op resolves to its source w:tr.
@@ -661,59 +1355,77 @@ internal static class IrMarkupRenderer
             return true;
         }
 
-        // A column add/remove (a cell op missing its left or right anchor — IrTableDiffer.DiffCells emits these
-        // for surplus cells) cannot be rendered as in-place per-cell markup: a deleted column's cell op would be
-        // dropped (the `ci >= rightCells.Count` cutoff below), so RejectRevisions would NOT restore the column,
-        // and an added column's cell would render unmarked. Bail to the caller's whole-table del(left)+ins(right)
-        // fallback, which round-trips exactly (reject ≡ left, accept ≡ right) at the cost of coarser markup —
-        // the honest representation, since the per-cell renderer is column-count-stable in v1.
-        foreach (var cellOp in rowOp.CellOps)
-            if (cellOp.LeftCellAnchor == null || cellOp.RightCellAnchor == null)
-                return false;
+        var rightCells = rightRowSrc.Elements(W.tc).ToList();
+        var leftCells = leftRowSrc?.Elements(W.tc).ToList();
+        // A monotone cell-op sequence is renderable whenever every output (right) cell is represented once
+        // and no left-only deletion is present.  This includes an ordinary-grid insertion at the head or in
+        // the middle: build from the accepted right grid, mark only the right-only cell w:cellIns, and let
+        // tblGridChange restore the old grid on reject.  Left-only cells remain a conservative whole-table
+        // fallback until the delete/merge topology path is made grid-aware.
+        if (rowOp.CellOps.Count(c => c.RightCellAnchor != null) != rightCells.Count ||
+            rowOp.CellOps.Any(c => c.RightCellAnchor == null) ||
+            (leftCells != null && rowOp.CellOps.Count(c => c.LeftCellAnchor != null) != leftCells.Count))
+            return false;
 
         var newRow = new XElement(W.tr);
         foreach (var pre in rightRowSrc.Elements().Where(e => e.Name != W.tc))
             newRow.Add(StripUnids(new XElement(pre)));
 
-        var rightCells = rightRowSrc.Elements(W.tc).ToList();
-        int ci = 0;
+        int rightIndex = 0;
+        int leftIndex = 0;
         foreach (var cellOp in rowOp.CellOps)
         {
-            if (ci >= rightCells.Count)
-                break;
-            var cellSrc = rightCells[ci++];
+            if (rightIndex >= rightCells.Count)
+                return false;
+            var cellSrc = rightCells[rightIndex++];
+            if (cellOp.LeftCellAnchor == null)
+            {
+                var insertedCell = StripUnids(new XElement(cellSrc));
+                state.RegisterMediaReferences(insertedCell);
+                MarkWholeCell(insertedCell, RevKind.Ins, state);
+                newRow.Add(insertedCell);
+                continue;
+            }
+
+            XElement? leftCellSrc = null;
+            if (leftCells != null)
+            {
+                if (leftIndex >= leftCells.Count)
+                    return false;
+                leftCellSrc = leftCells[leftIndex++];
+            }
+
             var newCell = new XElement(W.tc);
-            foreach (var pre in cellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+            foreach (var pre in cellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt))
                 newCell.Add(StripUnids(new XElement(pre)));
 
             if (cellOp.BlockOps != null)
             {
                 // Render the cell's block ops with the same dispatch the body uses (paragraph token diffs, etc.).
                 var cellSink = new List<XElement>();
-                foreach (var bop in cellOp.BlockOps)
-                    RenderBlockOp(bop, state, cellSink);
+                RenderBlockOpsWordShaped(cellOp.BlockOps, state, cellSink);
                 // A cell must contain at least one block-level child; if the ops produced none, keep the right
                 // cell's content verbatim so the table stays schema-valid.
                 if (cellSink.Count == 0)
-                    foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+                    foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
                         cellSink.Add(StripUnids(new XElement(b)));
                 newCell.Add(cellSink);
             }
             else
             {
-                foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+                foreach (var b in cellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
                     newCell.Add(StripUnids(new XElement(b)));
             }
+            // Do not compare by output ordinal: a middle cellIns shifts every later right cell.  The
+            // monotone differ guarantees leftCellSrc is exactly this paired operation's source cell.
+            if (leftCellSrc != null)
+                ApplyPairedCellShellChange(newCell, leftCellSrc, state);
             newRow.Add(newCell);
         }
-        // Append any right cells the cell-op list did not cover (column surplus) verbatim.
-        for (; ci < rightCells.Count; ci++)
-            newRow.Add(StripUnids(new XElement(rightCells[ci])));
-
         state.RegisterMediaReferences(newRow);
-        // Track this row's trPr + each cell's tcPr shell change against the accepted-state left row.
+        // The paired tcPr histories were applied per cell above; row shells remain one per row.
         if (leftRowSrc != null)
-            ApplyRowAndCellShellChanges(newRow, leftRowSrc, state);
+            ApplyRowShellChanges(newRow, leftRowSrc, state);
         newTbl.Add(newRow);
         return true;
     }
@@ -1046,7 +1758,7 @@ internal static class IrMarkupRenderer
             }
 
             var newCell = new XElement(W.tc);
-            foreach (var pre in shellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+            foreach (var pre in shellSrc.Elements().Where(e => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt))
                 newCell.Add(StripUnids(new XElement(pre)));
 
             // The winner's shell was swapped in above; stamp a native w:tcPrChange (inner = BASE tcPr)
@@ -1068,14 +1780,14 @@ internal static class IrMarkupRenderer
                 foreach (var cellBlock in blockOps)
                     renderOneCompositeBlock(cellBlock, baseIr, reviewerIrs, state, cellSink);
                 if (cellSink.Count == 0)
-                    foreach (var b in baseCellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+                    foreach (var b in baseCellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
                         cellSink.Add(StripUnids(new XElement(b)));
                 newCell.Add(cellSink);
             }
             else
             {
                 // Base passthrough: the base cell's content verbatim.
-                foreach (var b in baseCellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl))
+                foreach (var b in baseCellSrc.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt))
                     newCell.Add(StripUnids(new XElement(b)));
             }
             newRow.Add(newCell);
@@ -1146,8 +1858,9 @@ internal static class IrMarkupRenderer
     /// body still round-trips).
     /// </summary>
     private static void RenderNoteScopes(
-        IReadOnlyList<IrNoteDiff> noteOps, RenderState state, WordprocessingDocument wDoc, MainDocumentPart main,
-        WordprocessingDocument? wDocRight, IrDiffSettings settings)
+        IReadOnlyList<IrNoteDiff> noteOps, RenderState state, MainDocumentPart main,
+        WordprocessingDocument? wDocRight, IrDiffSettings settings,
+        OpenXmlMemoryStreamDocument leftStreamDoc, OpenXmlMemoryStreamDocument rightStreamDoc)
     {
         // Group note diffs by their target part so each part is loaded/saved once.
         var footnoteDiffs = noteOps.Where(n => n.Kind == IrNoteKind.Footnote).ToList();
@@ -1155,9 +1868,9 @@ internal static class IrMarkupRenderer
 
         var rightMain = wDocRight?.MainDocumentPart;
         ApplyNoteDiffsToPart(footnoteDiffs, EnsureNotePart(main, isFootnote: true, rightMain),
-            rightMain?.FootnotesPart, W.footnote, W.footnotes, state, settings);
+            rightMain?.FootnotesPart, W.footnote, W.footnotes, state, settings, leftStreamDoc, rightStreamDoc);
         ApplyNoteDiffsToPart(endnoteDiffs, EnsureNotePart(main, isFootnote: false, rightMain),
-            rightMain?.EndnotesPart, W.endnote, W.endnotes, state, settings);
+            rightMain?.EndnotesPart, W.endnote, W.endnotes, state, settings, leftStreamDoc, rightStreamDoc);
     }
 
     /// <summary>Return the output's footnotes/endnotes part, creating an EMPTY one (with the right part's
@@ -1197,7 +1910,8 @@ internal static class IrMarkupRenderer
 
     private static void ApplyNoteDiffsToPart(
         List<IrNoteDiff> diffs, OpenXmlPart? part, OpenXmlPart? rightPart, XName noteName, XName rootName,
-        RenderState state, IrDiffSettings settings)
+        RenderState state, IrDiffSettings settings, OpenXmlMemoryStreamDocument leftStreamDoc,
+        OpenXmlMemoryStreamDocument rightStreamDoc)
     {
         if (diffs.Count == 0 || part == null)
             return;
@@ -1207,6 +1921,10 @@ internal static class IrMarkupRenderer
             return;
         var rightRoot = rightPart?.GetXDocument().Root;
 
+        // The registry is shared by body, notes, and stories. Take a per-note-part watermark so the
+        // relationships for clones rendered below are imported from THIS right note part, rather than the
+        // main document part (OOXML relationship ids are part-scoped).
+        int clonesBefore = state.RightSourcedClones.Count;
         bool changed = false;
         foreach (var diff in diffs)
         {
@@ -1226,15 +1944,14 @@ internal static class IrMarkupRenderer
                 if (rightNote == null)
                     continue;
                 noteEl = new XElement(noteName, rightNote.Attributes());
-                foreach (var pre in rightNote.Elements().Where(e => e.Name != W.p && e.Name != W.tbl))
+                foreach (var pre in rightNote.Elements().Where(e => e.Name != W.p && e.Name != W.tbl && e.Name != W.sdt))
                     noteEl.Add(StripUnids(new XElement(pre)));
                 root.Add(noteEl);
             }
 
             // Render the note's block ops to a fresh block list (same dispatch as the body).
             var noteBlocks = new List<XElement>();
-            foreach (var op in diff.Ops)
-                RenderBlockOp(op, state, noteBlocks);
+            RenderBlockOpsWordShaped(diff.Ops, state, noteBlocks);
             if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
                 foreach (var b in noteBlocks)
                     SimplifyMoveMarkup(b);
@@ -1243,8 +1960,8 @@ internal static class IrMarkupRenderer
             foreach (var b in noteBlocks)
                 StripUnids(b);
 
-            // Replace the note's block-level children (w:p / w:tbl), keeping any non-block prelude.
-            noteEl.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).Remove();
+            // Replace the note's block-level children (w:p / w:tbl / w:sdt), keeping any non-block prelude.
+            noteEl.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt).Remove();
             noteEl.Add(noteBlocks);
 
             // Re-id a MATCHED note's definition to its RIGHT/scope id so the definition shares an id space with
@@ -1263,12 +1980,40 @@ internal static class IrMarkupRenderer
 
         if (changed)
         {
+            ImportNoteSourcedRelationships(state, clonesBefore, part, rightPart,
+                leftStreamDoc, rightStreamDoc);
+
             // A note part should never carry pt bookkeeping in the output.
             foreach (var attr in root.DescendantsAndSelf().Attributes()
                          .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
                 attr.Remove();
             part.PutXDocument();
         }
+    }
+
+    /// <summary>
+    /// Import media parts plus hyperlink/external relationships referenced by clones registered while one
+    /// footnote/endnote part was rendered. The body import cannot serve these clones: relationship ids are
+    /// scoped to the note part that owns them.
+    /// </summary>
+    private static void ImportNoteSourcedRelationships(
+        RenderState state, int clonesBefore, OpenXmlPart outputPart, OpenXmlPart? rightPart,
+        OpenXmlMemoryStreamDocument leftStreamDoc, OpenXmlMemoryStreamDocument rightStreamDoc)
+    {
+        if (rightPart is null)
+            return;
+        var noteClones = state.RightSourcedClones.Skip(clonesBefore).ToList();
+        if (noteClones.Count == 0)
+            return;
+
+        ImportHyperlinkAndExternalRelationships(noteClones, outputPart, rightPart);
+
+        var outPkgPart = leftStreamDoc.GetPackage().GetPart(outputPart.Uri);
+        var rightPkgPart = rightStreamDoc.GetPackage().GetPart(rightPart.Uri);
+        foreach (var clone in noteClones)
+            WmlComparer.MoveRelatedPartsToDestination(
+                rightPkgPart, outPkgPart, clone, skipDanglingRelationships: true,
+                skipHeaderFooterReferences: true);
     }
 
     // ----------------------------------------------------------------- header/footer story markup (2026-07-03)
@@ -1288,21 +2033,116 @@ internal static class IrMarkupRenderer
         MainDocumentPart? rightMain, IrDiffSettings settings,
         OpenXmlMemoryStreamDocument leftStreamDoc, OpenXmlMemoryStreamDocument rightStreamDoc)
     {
-        foreach (var diff in hfOps)
+        // A left story can feed several independently revised output stories. Materialize every clone BEFORE
+        // rendering any primary story: otherwise a primary A→B rewrite would become the accidental source for a
+        // later A→C clone and rejecting that clone would restore B rather than the real left A.
+        var outputParts = new Dictionary<int, OpenXmlPart>();
+        for (int index = 0; index < hfOps.Count; index++)
         {
+            var diff = hfOps[index];
+            if (!diff.CloneLeftPart || diff.LeftPartUri is not { } leftUri)
+                continue;
+            var sourcePart = FindHeaderFooterPart(main, diff.IsHeader, leftUri);
+            var clone = sourcePart is null
+                ? null
+                : CloneHeaderFooterPart(sourcePart, diff.IsHeader, main, leftStreamDoc);
+            if (clone is not null)
+                outputParts[index] = clone;
+        }
+
+        for (int index = 0; index < hfOps.Count; index++)
+        {
+            var diff = hfOps[index];
             if (diff.LeftPartUri is { } leftUri)
             {
                 // Matched (rebuild with token-level markup) or deleted-only (all content marked w:del —
                 // the part and its reference stay; accept leaves an empty story, Word's own behavior).
-                var part = FindHeaderFooterPart(main, diff.IsHeader, leftUri);
+                OpenXmlPart? part = diff.CloneLeftPart
+                    ? outputParts.TryGetValue(index, out var clonedPart) ? clonedPart : null
+                    : FindHeaderFooterPart(main, diff.IsHeader, leftUri);
                 if (part is null)
                     continue; // left part vanished (malformed input) — keep the carry-over
-                ApplyHeaderFooterDiffToPart(diff, part, state, settings, rightMain, leftStreamDoc, rightStreamDoc);
+                outputParts[index] = part;
+                if (diff.RightPartUri is { } rightUri)
+                    state.StoryOutputParts[rightUri] = part;
+                // A topology-only record rebinds an inherited reference without changing the story's content.
+                if (diff.Ops.Count > 0)
+                    ApplyHeaderFooterDiffToPart(diff, part, state, settings, rightMain, leftStreamDoc, rightStreamDoc);
+                if (diff.ReferenceBindings is not { Count: > 0 })
+                    EnsureStoryReference(diff, part, main);
             }
             else
             {
-                InsertHeaderFooterStory(diff, state, main, rightMain, settings, leftStreamDoc, rightStreamDoc);
+                var part = InsertHeaderFooterStory(
+                    diff, state, main, rightMain, settings, leftStreamDoc, rightStreamDoc);
+                if (part is not null)
+                    outputParts[index] = part;
             }
+        }
+
+        ApplyHeaderFooterReferenceBindings(hfOps, outputParts, main, rightMain);
+    }
+
+    /// <summary>
+    /// Create a fresh header/footer part from a pristine LEFT story root before any redline rendering. The
+    /// rebuilt story may contain deleted or moved LEFT content, so its original rIds must remain valid in the
+    /// clone; connect the clone to the existing left-package targets under the SAME local relationship ids.
+    /// RIGHT-sourced content receives fresh, isolated relationship ids during the normal story import below.
+    /// </summary>
+    private static OpenXmlPart? CloneHeaderFooterPart(
+        OpenXmlPart sourcePart, bool isHeader, MainDocumentPart main,
+        OpenXmlMemoryStreamDocument leftStreamDoc)
+    {
+        var sourceRoot = sourcePart.GetXDocument().Root;
+        if (sourceRoot is null)
+            return null;
+
+        OpenXmlPart clonePart = isHeader
+            ? main.AddNewPart<HeaderPart>()
+            : main.AddNewPart<FooterPart>();
+        var cloneRoot = new XElement(sourceRoot);
+        var cloneXDoc = clonePart.GetXDocument();
+        if (cloneXDoc.Root is null)
+            cloneXDoc.Add(cloneRoot);
+        else
+            cloneXDoc.Root.ReplaceWith(cloneRoot);
+
+        var sourcePackagePart = leftStreamDoc.GetPackage().GetPart(sourcePart.Uri);
+        var clonePackagePart = leftStreamDoc.GetPackage().GetPart(clonePart.Uri);
+        CopyStoryRelationshipsWithOriginalIds(sourcePackagePart, clonePackagePart);
+        clonePart.PutXDocument();
+        return clonePart;
+    }
+
+    /// <summary>
+    /// Give a cloned story the LEFT source's relationship graph without changing its rIds. Header/footer parts
+    /// live in the same package as their source, so their existing targets can be shared safely; the renderer
+    /// never mutates those targets. This deliberately differs from cross-document imports, which must create
+    /// isolated parts and rewrite only RIGHT-sourced XML.
+    /// </summary>
+    private static void CopyStoryRelationshipsWithOriginalIds(PackagePart sourcePart, PackagePart destinationPart)
+    {
+        foreach (var relationship in sourcePart.GetRelationships())
+        {
+            if (destinationPart.RelationshipExists(relationship.Id))
+                continue;
+
+            Uri targetUri = relationship.TargetUri;
+            if (relationship.TargetMode == TargetMode.Internal)
+            {
+                try
+                {
+                    targetUri = PackUriHelper.ResolvePartUri(sourcePart.Uri, relationship.TargetUri);
+                }
+                catch (ArgumentException)
+                {
+                    // Preserve a malformed/dangling target verbatim. It was already present on the left source,
+                    // and retaining its local rId is safer than silently rebinding it to an unrelated target.
+                }
+            }
+
+            destinationPart.CreateRelationship(
+                targetUri, relationship.TargetMode, relationship.RelationshipType, relationship.Id);
         }
     }
 
@@ -1316,17 +2156,17 @@ internal static class IrMarkupRenderer
     /// keeps the inserted content; reject strips it, leaving an EMPTY story — text-level ≡ the left's
     /// absent story, matching Word's own reject behavior for an inserted header.
     /// </summary>
-    private static void InsertHeaderFooterStory(
+    private static OpenXmlPart? InsertHeaderFooterStory(
         IrHeaderFooterDiff diff, RenderState state, MainDocumentPart main, MainDocumentPart? rightMain,
         IrDiffSettings settings, OpenXmlMemoryStreamDocument leftStreamDoc,
         OpenXmlMemoryStreamDocument rightStreamDoc)
     {
         if (rightMain is null || diff.RightPartUri is null)
-            return;
+            return null;
         var rightPart = FindHeaderFooterPart(rightMain, diff.IsHeader, diff.RightPartUri);
         var rightRoot = rightPart?.GetXDocument().Root;
         if (rightRoot is null)
-            return;
+            return null;
 
         // Locate the target sectPr FIRST — a story that cannot attach must not create an orphan part.
         // Document-order sectPr enumeration matches the reader's section ordinals. A section ordinal the
@@ -1335,15 +2175,19 @@ internal static class IrMarkupRenderer
         var mainXDoc = main.GetXDocument();
         var body = mainXDoc.Root?.Element(W.body);
         if (body is null)
-            return;
-        var sectPrs = body.Descendants(W.sectPr).ToList();
+            return null;
+        // A w:sectPrChange's inner sectPr is change history, not a section — counting it mis-indexes
+        // multi-section outputs.
+        var sectPrs = body.Descendants(W.sectPr)
+            .Where(s => s.Parent?.Name != W.sectPrChange)
+            .ToList();
         if (diff.SectionIndex >= sectPrs.Count)
-            return;
-        var sectPr = sectPrs[diff.SectionIndex];
+            return null;
 
         OpenXmlPart newPart = diff.IsHeader
             ? main.AddNewPart<HeaderPart>()
             : main.AddNewPart<FooterPart>();
+        state.StoryOutputParts[diff.RightPartUri] = newPart;
         var newRoot = new XElement(rightRoot.Name, rightRoot.Attributes());
         var xDoc = newPart.GetXDocument();
         if (xDoc.Root == null)
@@ -1353,8 +2197,7 @@ internal static class IrMarkupRenderer
 
         int clonesBefore = state.RightSourcedClones.Count;
         var blocks = new List<XElement>();
-        foreach (var op in diff.Ops)
-            RenderBlockOp(op, state, blocks);
+        RenderBlockOpsWordShaped(diff.Ops, state, blocks);
         if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
             foreach (var b in blocks)
                 SimplifyMoveMarkup(b);
@@ -1368,8 +2211,137 @@ internal static class IrMarkupRenderer
             attr.Remove();
         newPart.PutXDocument();
 
-        // Attach the reference (header/footer references lead the CT_SectPr sequence, so AddFirst is
-        // always schema-ordered — the DocumentBuilder convention) and ensure the visibility flag.
+        if (diff.ReferenceBindings is not { Count: > 0 })
+        {
+            // Legacy/single-cell shape: attach directly. Refined topology records attach all cells together
+            // after every output part exists, so a clone can safely rejoin the original at a later section.
+            BindHeaderFooterReference(diff.IsHeader, diff.Kind, diff.SectionIndex, newPart, main, rightMain);
+        }
+        return newPart;
+    }
+
+    /// <summary>Whether the right document's <paramref name="sectionIndex"/>-th section activates
+    /// <c>w:titlePg</c> (sectPrChange inners excluded from the section count).</summary>
+    private static bool RightSectionHasTitlePg(MainDocumentPart rightMain, int sectionIndex)
+    {
+        var body = rightMain.GetXDocument().Root?.Element(W.body);
+        if (body is null)
+            return false;
+        var sectPrs = body.Descendants(W.sectPr)
+            .Where(s => s.Parent?.Name != W.sectPrChange)
+            .ToList();
+        return sectionIndex < sectPrs.Count && sectPrs[sectionIndex].Element(W.titlePg) is not null;
+    }
+
+    /// <summary>
+    /// Apply the static refined topology emitted by the builder. References themselves have no native revision
+    /// representation, so each binding deliberately changes the output's section map while the bound story part
+    /// contains the normal reversible content redline. A binding replaces an explicit same-kind ref when present
+    /// (rather than appending a duplicate) and is otherwise inserted in schema order.
+    /// </summary>
+    private static void ApplyHeaderFooterReferenceBindings(
+        IReadOnlyList<IrHeaderFooterDiff> hfOps, IReadOnlyDictionary<int, OpenXmlPart> outputParts,
+        MainDocumentPart main, MainDocumentPart? rightMain)
+    {
+        for (int index = 0; index < hfOps.Count; index++)
+        {
+            var diff = hfOps[index];
+            if (diff.ReferenceBindings is not { Count: > 0 } bindings ||
+                !outputParts.TryGetValue(index, out var part))
+                continue;
+            foreach (var binding in bindings)
+                BindHeaderFooterReference(diff.IsHeader, binding.Kind, binding.SectionIndex, part, main, rightMain);
+        }
+    }
+
+    private static void BindHeaderFooterReference(
+        bool isHeader, IrHeaderFooterKind kind, int sectionIndex, OpenXmlPart part,
+        MainDocumentPart main, MainDocumentPart? rightMain)
+    {
+        var body = main.GetXDocument().Root?.Element(W.body);
+        if (body is null)
+            return;
+        var sectPrs = body.Descendants(W.sectPr)
+            .Where(s => s.Parent?.Name != W.sectPrChange)
+            .ToList();
+        if (sectionIndex < 0 || sectionIndex >= sectPrs.Count)
+            return;
+
+        var sectPr = sectPrs[sectionIndex];
+        var refName = isHeader ? W.headerReference : W.footerReference;
+        string typeValue = kind switch
+        {
+            IrHeaderFooterKind.First => "first",
+            IrHeaderFooterKind.Even => "even",
+            _ => "default",
+        };
+        string relationshipId = main.GetIdOfPart(part);
+        var existing = sectPr.Elements(refName)
+            .Where(reference => (string?)reference.Attribute(W.type) == typeValue)
+            .ToList();
+        if (existing.Count > 0)
+        {
+            existing[0].SetAttributeValue(R.id, relationshipId);
+            foreach (var duplicate in existing.Skip(1))
+                duplicate.Remove();
+        }
+        else
+        {
+            var newReference = new XElement(refName,
+                new XAttribute(W.type, typeValue), new XAttribute(R.id, relationshipId));
+            // CT_SectPr orders all headers before all footers. Insert a header before the first footer;
+            // insert a footer after the final header (or before an existing footer when no headers exist).
+            if (isHeader)
+            {
+                var firstFooter = sectPr.Element(W.footerReference);
+                if (firstFooter is null)
+                    sectPr.AddFirst(newReference);
+                else
+                    firstFooter.AddBeforeSelf(newReference);
+            }
+            else
+            {
+                var lastHeader = sectPr.Elements(W.headerReference).LastOrDefault();
+                if (lastHeader is not null)
+                    lastHeader.AddAfterSelf(newReference);
+                else if (sectPr.Element(W.footerReference) is { } firstFooter)
+                    firstFooter.AddBeforeSelf(newReference);
+                else
+                    sectPr.AddFirst(newReference);
+            }
+        }
+
+        // Activate only the visibility flags genuinely active on the right. A latent First/Even ref must stay
+        // latent; forcing a flag routes pages through an otherwise invisible, empty story.
+        if (rightMain is not null && kind == IrHeaderFooterKind.First && sectPr.Element(W.titlePg) is null &&
+            RightSectionHasTitlePg(rightMain, sectionIndex))
+            InsertIntoSectPr(sectPr, new XElement(W.titlePg));
+        if (rightMain?.DocumentSettingsPart?.GetXDocument().Root?.Element(W.evenAndOddHeaders) is not null &&
+            kind == IrHeaderFooterKind.Even)
+            WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
+        main.PutXDocument();
+    }
+
+    /// <summary>
+    /// A matched or deleted-only story merges into the LEFT part assuming "the part and its
+    /// reference stay". When the left reference lived on an inline <c>w:sectPr</c> the body render
+    /// did not preserve (the section structure collapsed), the merged part is ORPHANED — nothing
+    /// renders and reject cannot restore the left story. Re-attach a reference of the story's
+    /// kind/type at its section ordinal (clamped to the surviving structure) iff no reference of
+    /// that kind/type is reachable there — a reference on this or any EARLIER section keeps the
+    /// story reachable via OOXML inheritance.
+    /// </summary>
+    private static void EnsureStoryReference(IrHeaderFooterDiff diff, OpenXmlPart part, MainDocumentPart main)
+    {
+        var body = main.GetXDocument().Root?.Element(W.body);
+        if (body is null)
+            return;
+        var sectPrs = body.Descendants(W.sectPr)
+            .Where(s => s.Parent?.Name != W.sectPrChange)
+            .ToList();
+        if (sectPrs.Count == 0)
+            return;
+        int idx = Math.Min(diff.SectionIndex, sectPrs.Count - 1);
         var refName = diff.IsHeader ? W.headerReference : W.footerReference;
         string typeValue = diff.Kind switch
         {
@@ -1377,13 +2349,12 @@ internal static class IrMarkupRenderer
             IrHeaderFooterKind.Even => "even",
             _ => "default",
         };
-        sectPr.AddFirst(new XElement(refName,
+        if (sectPrs.Take(idx + 1).Any(s =>
+                s.Elements(refName).Any(e => (string?)e.Attribute(W.type) == typeValue)))
+            return;
+        sectPrs[idx].AddFirst(new XElement(refName,
             new XAttribute(W.type, typeValue),
-            new XAttribute(R.id, main.GetIdOfPart(newPart))));
-        if (diff.Kind == IrHeaderFooterKind.First && sectPr.Element(W.titlePg) is null)
-            InsertIntoSectPr(sectPr, new XElement(W.titlePg));
-        if (diff.Kind == IrHeaderFooterKind.Even)
-            WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
+            new XAttribute(R.id, main.GetIdOfPart(part))));
         main.PutXDocument();
     }
 
@@ -1428,13 +2399,12 @@ internal static class IrMarkupRenderer
         // Slice the clone registry around this story's render so ONLY its clones import into this part.
         int clonesBefore = state.RightSourcedClones.Count;
         var blocks = new List<XElement>();
-        foreach (var op in diff.Ops)
-            RenderBlockOp(op, state, blocks);
+        RenderBlockOpsWordShaped(diff.Ops, state, blocks);
         if (settings is { RenderMoves: true, SimplifyMoveMarkup: true })
             foreach (var b in blocks)
                 SimplifyMoveMarkup(b);
 
-        root.Elements().Where(e => e.Name == W.p || e.Name == W.tbl).Remove();
+        root.Elements().Where(e => e.Name == W.p || e.Name == W.tbl || e.Name == W.sdt).Remove();
         root.Add(blocks);
 
         ImportStorySourcedRelationships(diff, state, clonesBefore, part, rightMain,
@@ -1706,9 +2676,14 @@ internal static class IrMarkupRenderer
     /// none), then carry its threading metadata so a right-added reply still links to its parent. No-op when the
     /// right has no comments part or every referenced comment already resolves.
     /// </summary>
-    internal static void MergeRightCommentDefinitions(MainDocumentPart main, MainDocumentPart? rightMain)
+    internal static void MergeRightCommentDefinitions(
+        MainDocumentPart main,
+        MainDocumentPart? rightMain,
+        OpenXmlMemoryStreamDocument outputStream,
+        OpenXmlMemoryStreamDocument rightStream)
     {
-        var rightRoot = rightMain?.WordprocessingCommentsPart?.GetXDocument().Root;
+        var rightComments = rightMain?.WordprocessingCommentsPart;
+        var rightRoot = rightComments?.GetXDocument().Root;
         if (rightRoot == null)
             return;
         var body = main.GetXDocument().Root?.Element(W.body);
@@ -1728,13 +2703,32 @@ internal static class IrMarkupRenderer
             return;
 
         var outRoot = EnsureCommentsRoot(main);
+        var outputComments = main.WordprocessingCommentsPart!;
+        var addedDefinitions = new List<XElement>(toAdd.Count);
         var addedParaIds = new HashSet<string>();
         foreach (var def in toAdd)
         {
-            outRoot.Add(new XElement(def));
+            // Keep the live clone: relationship import rewrites its r:embed/r:id attributes in place.
+            // Comment definitions live in comments.xml, not document.xml, so the ordinary body media import
+            // cannot repair these references after the XML has been copied into the left-based package.
+            var clone = new XElement(def);
+            outRoot.Add(clone);
+            addedDefinitions.Add(clone);
             foreach (var pid in def.Descendants().Attributes((W14ns + "paraId")))
                 if ((string?)pid is { Length: > 0 } v) addedParaIds.Add(v);
         }
+
+        // Import relationships against their OWNERS: both r:embed media and w:hyperlink r:ids in a
+        // comment resolve from comments.xml. The left comments part may already own the same rId for a
+        // different image/target, so the shared import routines remap the live clone to a fresh output id.
+        ImportHyperlinkAndExternalRelationships(addedDefinitions, outputComments, rightComments!);
+        var outputPackagePart = outputStream.GetPackage().GetPart(outputComments.Uri);
+        var rightPackagePart = rightStream.GetPackage().GetPart(rightComments!.Uri);
+        foreach (var clone in addedDefinitions)
+            WmlComparer.MoveRelatedPartsToDestination(
+                rightPackagePart, outputPackagePart, clone, skipDanglingRelationships: true,
+                skipHeaderFooterReferences: true);
+
         main.WordprocessingCommentsPart!.PutXDocument();
 
         // Carry threading metadata for the merged comments (paraId-keyed), so a right-added reply keeps its link.
@@ -1965,6 +2959,79 @@ internal static class IrMarkupRenderer
 
         if (changed)
             main.PutXDocument();
+    }
+
+    /// <summary>
+    /// Remove comment DEFINITIONS referenced by no live marker in any story — the inverse of
+    /// <see cref="NormalizeComments"/> step (C), which drops markers with no definition. The output's comments
+    /// part is cloned from the LEFT/original document, so a LEFT comment whose annotated content the diff fully
+    /// replaced — leaving no <c>commentRangeStart</c>/<c>commentReference</c> anywhere, not even inside a
+    /// preserved <c>w:del</c> — leaves its <c>w:comment</c> definition dangling. Word's compare output never
+    /// emits such an orphan (verified against Word's compare output). Their <c>commentsExtended</c>/
+    /// <c>commentsIds</c> threading entries (keyed by the comment paragraph's <c>w14:paraId</c>) are pruned in
+    /// turn so those don't dangle either. Safe for the round trip: a definition is removed only when NO marker
+    /// references it, so neither accept nor reject can resurface the reference — the accept ≡ right / reject ≡
+    /// left body contract is untouched (only orphaned <c>comments.xml</c> entries are affected).
+    /// </summary>
+    internal static void PruneOrphanedComments(MainDocumentPart main)
+    {
+        var commentsPart = main.WordprocessingCommentsPart;
+        var commentsRoot = commentsPart?.GetXDocument().Root;
+        if (commentsRoot == null)
+            return;
+
+        // A comment referenced in ANY story (body + headers + footers) must be kept.
+        var referenced = new HashSet<string>();
+        void Collect(XElement? root)
+        {
+            if (root == null)
+                return;
+            foreach (var m in root.Descendants()
+                         .Where(e => e.Name == W.commentRangeStart || e.Name == W.commentReference))
+                if ((string?)m.Attribute(W.id) is { Length: > 0 } id)
+                    referenced.Add(id);
+        }
+        Collect(main.GetXDocument().Root);
+        foreach (var h in main.HeaderParts)
+            Collect(h.GetXDocument().Root);
+        foreach (var f in main.FooterParts)
+            Collect(f.GetXDocument().Root);
+
+        var orphans = commentsRoot.Elements(W.comment)
+            .Where(c => (string?)c.Attribute(W.id) is { Length: > 0 } id && !referenced.Contains(id))
+            .ToList();
+        if (orphans.Count == 0)
+            return;
+
+        // Threading keys (w14:paraId of the comment's paragraphs) so their commentsExtended/commentsIds
+        // entries are pruned in turn.
+        var orphanParaIds = orphans
+            .SelectMany(c => c.Descendants().Attributes(W14ns + "paraId"))
+            .Select(a => a.Value).Where(v => v.Length > 0).ToHashSet();
+
+        foreach (var o in orphans)
+            o.Remove();
+        commentsPart!.PutXDocument();
+
+        if (orphanParaIds.Count == 0)
+            return;
+        PruneThreadingEntriesByParaId(main.WordprocessingCommentsExPart, W15ns + "commentEx", W15ns + "paraId", orphanParaIds);
+        PruneThreadingEntriesByParaId(main.WordprocessingCommentsIdsPart, W16cidNs + "commentId", W16cidNs + "paraId", orphanParaIds);
+    }
+
+    private static void PruneThreadingEntriesByParaId(OpenXmlPart? part, XName entryName, XName paraIdAttr,
+        HashSet<string> paraIds)
+    {
+        var root = part?.GetXDocument().Root;
+        if (root == null)
+            return;
+        var gone = root.Elements(entryName)
+            .Where(e => (string?)e.Attribute(paraIdAttr) is { } p && paraIds.Contains(p)).ToList();
+        if (gone.Count == 0)
+            return;
+        foreach (var e in gone)
+            e.Remove();
+        part!.PutXDocument();
     }
 
     /// <summary>True iff the comment marker sits at the paragraph/body run level (its ancestors up to the
@@ -2244,7 +3311,16 @@ internal static class IrMarkupRenderer
     private static bool IsInWholeBlockRevisedParagraph(XElement marker)
     {
         var p = marker.Ancestors(W.p).FirstOrDefault();
-        var mark = p?.Element(W.pPr)?.Element(W.rPr);
+        return p != null && IsWholeBlockRevisedParagraph(p);
+    }
+
+    /// <summary>True for a paragraph emitted as one complete insertion/deletion (or whole move) rather than a
+    /// fine token-level revision. Its field plumbing already has the same revision context as its carrier and
+    /// must never be lifted bare by <see cref="NormalizeFields"/> — an instruction-only field has no result run
+    /// from which that normalizer could infer its context.</summary>
+    private static bool IsWholeBlockRevisedParagraph(XElement paragraph)
+    {
+        var mark = paragraph.Element(W.pPr)?.Element(W.rPr);
         return mark != null && (mark.Element(W.del) != null || mark.Element(W.ins) != null);
     }
 
@@ -2326,15 +3402,38 @@ internal static class IrMarkupRenderer
     /// </summary>
     private static void NormalizeFields(MainDocumentPart main)
     {
-        var body = main.GetXDocument().Root?.Element(W.body);
-        if (body == null)
-            return;
+        // The body is not the only renderer that emits fine-grained field revisions: note and header/footer
+        // scope diffs share the same token renderer. Normalize each live story root after all scopes have been
+        // rebuilt, otherwise a field boundary in a header or footnote can still vanish on one revision view.
+        var parts = new List<OpenXmlPart> { main };
+        parts.AddRange(main.HeaderParts);
+        parts.AddRange(main.FooterParts);
+        if (main.FootnotesPart is not null)
+            parts.Add(main.FootnotesPart);
+        if (main.EndnotesPart is not null)
+            parts.Add(main.EndnotesPart);
 
+        foreach (var part in parts.Distinct())
+        {
+            var root = part.GetXDocument().Root;
+            if (root is not null && NormalizeFieldsInRoot(root))
+                part.PutXDocument();
+        }
+    }
+
+    private static bool NormalizeFieldsInRoot(XElement root)
+    {
         static bool IsBareRun(XElement r) => !r.Ancestors().Any(a => a.Name == W.ins || a.Name == W.del);
 
         bool changed = false;
-        foreach (var p in body.Descendants(W.p))
+        foreach (var p in root.Descendants(W.p))
         {
+            // A whole paired paragraph is already a complete w:del/w:ins carrier. Do not infer field context
+            // from its result runs: instruction-only and empty-result fields have none, and lifting their begin /
+            // instruction / end plumbing bare would make BOTH codes survive Accept and Reject.
+            if (IsWholeBlockRevisedParagraph(p))
+                continue;
+
             // Walk this paragraph's runs in document order, grouping each top-level fldChar field (begin..end)
             // into its plumbing runs (fldChar / instrText) and result runs (the visible display between separate
             // and end). Nested fields fold into the enclosing one (their plumbing is still field plumbing).
@@ -2385,8 +3484,7 @@ internal static class IrMarkupRenderer
             }
         }
 
-        if (changed)
-            main.PutXDocument();
+        return changed;
     }
 
     /// <summary>Lift a run out of its sole-child <c>w:ins</c>/<c>w:del</c> wrapper to bare. A run lifted out of a
@@ -2449,14 +3547,17 @@ internal static class IrMarkupRenderer
             return;
         }
         string moveName = state.MoveName(gid);
+        string? leftAnchor = state.MoveSourceAnchor(gid);
+        var leftMovedPara = SourceElement(leftAnchor, state.Left);
 
-        if (op.Kind == IrEditOpKind.MoveModifyBlock && op.TokenDiff is { } tokenDiff &&
-            op.TextboxDiffs is null && ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph)
+        if (!op.RequiresWholeParagraphReplace &&
+            op.Kind == IrEditOpKind.MoveModifyBlock && op.TokenDiff is { } tokenDiff &&
+            op.TextboxDiffs is null && leftMovedPara?.Name == W.p && leftAnchor is not null)
         {
             // Build the destination paragraph from the token diff, like RenderModifiedParagraph, but with the
             // moved-and-equal spans wrapped in w:moveTo (instead of left unwrapped) so the whole relocated
             // content vanishes on reject and appears on accept. Insert spans → w:ins, Delete spans → w:del.
-            var para = BuildMoveModifyDestination(op, tokenDiff, state);
+            var para = BuildMoveModifyDestination(op, tokenDiff, leftAnchor, state);
             if (para != null)
             {
                 MarkParagraphMark(para, RevKind.MoveTo, state);
@@ -2470,7 +3571,7 @@ internal static class IrMarkupRenderer
         state.RegisterMediaReferences(dest);
         // A moved paragraph whose pPr also changed tracks the property change at the DESTINATION
         // (Word's own shape: moveTo content + pPrChange). Source/reject keeps the left paragraph verbatim.
-        if (SourceElement(op.LeftAnchor, state.Left) is { } leftMovedPara && leftMovedPara.Name == W.p)
+        if (leftMovedPara?.Name == W.p)
             ApplyBlockFormatChanges(dest, leftMovedPara, src, state);
         MarkWholeParagraphAs(dest, RevKind.MoveTo, state);
         BracketParagraphWithMoveRange(dest, isFrom: false, moveName, state);
@@ -2481,16 +3582,17 @@ internal static class IrMarkupRenderer
     /// <c>w:moveTo</c> (moved-and-unchanged), Insert spans → <c>w:ins</c>, Delete spans → <c>w:del</c>. Returns
     /// null if the source elements are unexpectedly missing (caller falls back to a plain whole-paragraph
     /// moveTo).</summary>
-    private static XElement? BuildMoveModifyDestination(IrEditOp op, IrTokenDiff tokenDiff, RenderState state)
+    private static XElement? BuildMoveModifyDestination(
+        IrEditOp op, IrTokenDiff tokenDiff, string leftAnchor, RenderState state)
     {
-        var leftPara = SourceElement(op.LeftAnchor, state.Left);
+        var leftPara = SourceElement(leftAnchor, state.Left);
         var rightPara = SourceElement(op.RightAnchor, state.RightSource);
         if (leftPara == null || rightPara == null)
             return null;
 
         var leftRuns = new SourceRunModel(leftPara);
         var rightRuns = new SourceRunModel(rightPara);
-        var leftTokens = ParagraphTokens(op.LeftAnchor, state.Left, state.Settings);
+        var leftTokens = ParagraphTokens(leftAnchor, state.Left, state.Settings);
         var rightTokens = ParagraphTokens(op.RightAnchor, state.RightSource, state.Settings);
 
         var newPara = new XElement(W.p);
@@ -2499,39 +3601,11 @@ internal static class IrMarkupRenderer
             newPara.Add(StripUnids(new XElement(rightPPr)));
         ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
 
-        var content = new List<XElement>();
-        foreach (var tokenOp in tokenDiff.Ops)
-        {
-            switch (tokenOp.Kind)
-            {
-                case IrTokenOpKind.Equal:
-                case IrTokenOpKind.FormatChanged:
-                {
-                    var (rs, re) = RightSpanChars(rightTokens, tokenOp);
-                    var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
-                    foreach (var r in rightRuns.Slice(rs, re, zs, ze))
-                        content.AddRange(WrapFieldAware(r, RevKind.MoveTo, state));   // moved-and-unchanged
-                    break;
-                }
-                case IrTokenOpKind.Insert:
-                {
-                    var (s, e) = RightSpanChars(rightTokens, tokenOp);
-                    var (zs, ze) = ZeroWidthBoundaries(rightTokens, tokenOp.RightStart, tokenOp.RightEnd);
-                    foreach (var r in rightRuns.Slice(s, e, zs, ze))
-                        content.AddRange(WrapFieldAware(r, RevKind.Ins, state));
-                    break;
-                }
-                case IrTokenOpKind.Delete:
-                {
-                    var (s, e) = LeftSpanChars(leftTokens, tokenOp);
-                    var (zs, ze) = ZeroWidthBoundaries(leftTokens, tokenOp.LeftStart, tokenOp.LeftEnd);
-                    foreach (var r in leftRuns.Slice(s, e, zs, ze))
-                        content.AddRange(WrapFieldAware(r, RevKind.Del, state));
-                    break;
-                }
-            }
-        }
-        newPara.Add(CoalesceAdjacentHyperlinks(content));
+        // The regular fine renderer already knows how to produce both FormatChanged rPrChange markers and
+        // the field-safe insert/delete projection. Its optional stable-span wrapper gives this move destination
+        // the one additional shape it needs: unchanged and format-changed right spans live in w:moveTo.
+        newPara.Add(BuildTokenOpContent(tokenDiff, leftTokens, rightTokens, leftRuns, rightRuns, state,
+            stableSpanKind: RevKind.MoveTo));
         return newPara;
     }
 
@@ -2586,6 +3660,23 @@ internal static class IrMarkupRenderer
         var src = SourceElement(anchor, doc);
         if (src == null)
             return;
+        // Word-parity preservation: an EQUAL block emits the ORIGINAL right element(s) — pre-existing
+        // input revision markup intact — when PreserveInputRevisions mapped a group; otherwise the
+        // accepted working element exactly as before. A multi-member group carries the mark-deleted
+        // paragraphs the document-level accept merged away; they vanish again on accept, so the accept
+        // round-trip is unchanged. (The map only ever holds right-body elements, so left-side and
+        // composite lookups are no-ops.)
+        if (state.PreservedGroup(src) is { } group)
+        {
+            foreach (var member in group)
+            {
+                var preserved = NormalizePreservedClone(new XElement(member), state);
+                if (fromRight)
+                    state.RegisterMediaReferences(preserved);
+                sink.Add(StripUnids(preserved));
+            }
+            return;
+        }
         var clone = new XElement(src);
         if (fromRight)
             state.RegisterMediaReferences(clone);
@@ -2598,12 +3689,58 @@ internal static class IrMarkupRenderer
     /// the table and marks every paragraph mark — accept/reject still resolve the whole table correctly.
     /// </summary>
     private static void EmitWholeBlock(
-        string? anchor, IrDocument doc, RenderState state, List<XElement> sink, RevKind kind, bool fromRight)
+        string? anchor,
+        IrDocument doc,
+        RenderState state,
+        List<XElement> sink,
+        RevKind kind,
+        bool fromRight,
+        bool projectLeftDeletionAsInsertion = false)
     {
         var src = SourceElement(anchor, doc);
         if (src == null)
             return;
-        var clone = StripUnids(new XElement(src));
+        // Word-parity preservation: an INSERTED right-only block is built from the ORIGINAL right
+        // element(s) when PreserveInputRevisions mapped a group, so the input's own w:ins/w:del markup
+        // rides through — MarkWholeParagraph leaves foreign wrappers as-is (never nesting a same-kind
+        // wrapper) and wraps only the plain runs as this diff's insertion; MarkParagraphMark keeps a
+        // foreign mark marker (a multi-member group's mark-deleted members vanish again on accept, so
+        // the accept round-trip is unchanged).
+        var group = fromRight
+            ? state.PreservedGroup(src)
+            : IsDeleteGrade(kind) ? state.ProjectableLeftDeletionGroup(src) : null;
+        bool projectsLeftDeletionAsInsertion = false;
+        if (group == null && fromRight && projectLeftDeletionAsInsertion && kind == RevKind.Ins &&
+            state.ProjectableLeftInsertionOriginal(src) is { } leftDeletion)
+        {
+            group = new List<XElement> { leftDeletion };
+            projectsLeftDeletionAsInsertion = true;
+        }
+        if (group != null)
+        {
+            foreach (var member in group)
+            {
+                var preserved = NormalizePreservedClone(new XElement(member), state);
+                if (!fromRight)
+                    ProjectLeftInsertionsAsDeletions(preserved);
+                else if (projectsLeftDeletionAsInsertion)
+                    ProjectLeftDeletionsAsInsertions(preserved);
+
+                // The reverse projection clones a raw LEFT source. Its media relationships already belong to
+                // the output package (which is a clone of LEFT), so it must not enter the RIGHT import path.
+                EmitOneWholeBlock(preserved, state, sink, kind,
+                    fromRight: fromRight && !projectsLeftDeletionAsInsertion);
+            }
+            return;
+        }
+        EmitOneWholeBlock(new XElement(src), state, sink, kind, fromRight);
+    }
+
+    /// <summary>The single-block tail of <see cref="EmitWholeBlock"/>: strip engine bookkeeping, register
+    /// media, revision-mark per block kind, and emit.</summary>
+    private static void EmitOneWholeBlock(XElement clone, RenderState state, List<XElement> sink, RevKind kind, bool fromRight)
+    {
+        StripUnids(clone);
         if (fromRight)
             state.RegisterMediaReferences(clone);
 
@@ -2627,6 +3764,100 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>
+    /// Emit one whole block-level content control.  OOXML does not permit a bare <c>w:ins</c>/<c>w:del</c>
+    /// around the control envelope: its property/binding shell would then survive the opposite revision view.
+    /// Word represents an inserted/deleted control with two paired custom-XML range boundaries: one crosses the
+    /// opening <c>w:sdt</c> tag and one crosses its closing tag.  The range layer toggles the wrapper; the
+    /// recursively marked payload toggles the content after a delete-range accept collapses that wrapper.
+    /// </summary>
+    private static void EmitWholeSdt(
+        string? anchor, IrDocument doc, RenderState state, List<XElement> sink, RevKind kind, bool fromRight)
+    {
+        var src = SourceElement(anchor, doc);
+        if (src == null || src.Name != W.sdt || src.Element(W.sdtContent) is null)
+            return;
+
+        var sdt = StripUnids(new XElement(src));
+        if (fromRight)
+            state.RegisterMediaReferences(sdt);
+
+        var boundaries = MarkWholeSdtEnvelope(sdt, kind, state);
+        sink.Add(boundaries.Before);
+        sink.Add(sdt);
+        sink.Add(boundaries.After);
+    }
+
+    /// <summary>
+    /// Mark a control envelope and all of its block payload.  For a nested control the returned boundaries are
+    /// inserted as siblings in its parent's <c>w:sdtContent</c>; for the outer control they are emitted by
+    /// <see cref="EmitWholeSdt"/> around the cloned <c>w:sdt</c>.  The two range IDs are intentionally
+    /// distinct: the first captures the SDT's start tag and the second its end tag, which is the pairing shape
+    /// <see cref="RevisionProcessor"/> recognizes when accepting a deleted control.
+    /// </summary>
+    private static (XElement Before, XElement After) MarkWholeSdtEnvelope(XElement sdt, RevKind kind, RenderState state)
+    {
+        var content = sdt.Element(W.sdtContent)!;
+        foreach (var child in content.Elements().ToList())
+            MarkWholeSdtContentChild(child, kind, state);
+
+        var startName = IsDeleteGrade(kind) ? W.customXmlDelRangeStart : W.customXmlInsRangeStart;
+        var endName = IsDeleteGrade(kind) ? W.customXmlDelRangeEnd : W.customXmlInsRangeEnd;
+
+        // Range A begins immediately before the control and ends as the first sdtContent child, so it contains
+        // the opening tag. Range B begins as the last sdtContent child and ends immediately after the control,
+        // so it contains the closing tag. AcceptDeletedAndMovedFromContentControls intersects those two sets.
+        var before = new XElement(startName, state.RevisionAttributes());
+        var beforeId = (string?)before.Attribute(W.id) ?? "";
+        content.AddFirst(new XElement(endName, new XAttribute(W.id, beforeId)));
+
+        var afterStart = new XElement(startName, state.RevisionAttributes());
+        var afterId = (string?)afterStart.Attribute(W.id) ?? "";
+        content.Add(afterStart);
+        var after = new XElement(endName, new XAttribute(W.id, afterId));
+        return (before, after);
+    }
+
+    /// <summary>
+    /// Mark payload carried by a block-level SDT without losing legal intermediate containers.  Paragraphs and
+    /// tables own the established whole-block revision shapes; nested SDTs receive their own envelope ranges.
+    /// Inline SDT payloads can be direct runs, so they are wrapped at run granularity too. Any other transparent
+    /// block container is descended so customXml/smartTag wrappers do not leave visible paragraphs unmarked after
+    /// an enclosing delete-range acceptance.
+    /// </summary>
+    private static void MarkWholeSdtContentChild(XElement child, RevKind kind, RenderState state)
+    {
+        if (child.Name == W.p)
+        {
+            MarkWholeParagraph(child, kind, state);
+            return;
+        }
+        if (child.Name == W.tbl)
+        {
+            MarkWholeTable(child, kind, state);
+            return;
+        }
+        if (child.Name == W.sdt && child.Element(W.sdtContent) is not null)
+        {
+            var boundaries = MarkWholeSdtEnvelope(child, kind, state);
+            child.AddBeforeSelf(boundaries.Before);
+            child.AddAfterSelf(boundaries.After);
+            return;
+        }
+
+        if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.smartTag)
+        {
+            var replacement = WrapFieldAware(child, kind, state).Cast<object>().ToArray();
+            child.ReplaceWith(replacement);
+            return;
+        }
+
+        // Content controls can legally carry transparent block containers such as w:customXml. Preserve their
+        // shell verbatim but descend into their block-bearing children; raw leaf metadata has no visible payload.
+        foreach (var nested in child.Elements().ToList())
+            MarkWholeSdtContentChild(nested, kind, state);
+    }
+
+    /// <summary>
     /// Conservative whole-table revision marking (Task-3 fallback; Task 4 emits row/cell-precise markup). Mark
     /// EVERY row inserted/deleted (<c>w:trPr/w:ins</c> or <c>w:trPr/w:del</c>) AND every contained run +
     /// paragraph mark, so accept/reject toggle the whole table cleanly: accept of an all-rows-deleted table
@@ -2644,11 +3875,19 @@ internal static class IrMarkupRenderer
                 trPr = new XElement(W.trPr);
                 tr.AddFirst(trPr);   // trPr is the first child of tr per schema order
             }
-            // In w:trPr the row-revision markers w:ins/w:del come at the END of the property order (after
-            // cnfStyle/trHeight/cantSplit/…, before only w:trPrChange) — so APPEND, never AddFirst, or a
-            // following w:trHeight becomes schema-invalid.
-            trPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del).Remove();
-            trPr.Add(new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes()));
+            // PreserveInputRevisions: a preserved ORIGINAL row that already carries a foreign row marker
+            // (Arthur's inserted/deleted row) keeps it — same rule as MarkParagraphMark. Unreachable when
+            // the flag is off (accept-view sources carry none).
+            bool foreignRowMark = state.Settings.PreserveInputRevisions &&
+                trPr.Elements().Any(e => e.Name == W.ins || e.Name == W.del);
+            if (!foreignRowMark)
+            {
+                // In w:trPr the row-revision markers w:ins/w:del come at the END of the property order (after
+                // cnfStyle/trHeight/cantSplit/…, before only w:trPrChange) — so APPEND, never AddFirst, or a
+                // following w:trHeight becomes schema-invalid.
+                trPr.Elements().Where(e => e.Name == W.ins || e.Name == W.del).Remove();
+                trPr.Add(new XElement(kind == RevKind.Ins ? W.ins : W.del, state.RevisionAttributes()));
+            }
 
             // Mark every paragraph in the row's cells (runs + paragraph mark).
             foreach (var p in tr.Descendants(W.p).ToList())
@@ -2669,7 +3908,28 @@ internal static class IrMarkupRenderer
 
         var wrapped = new List<XElement>();
         foreach (var child in runChildren)
-            wrapped.AddRange(WrapFieldAware(child, kind, state));
+        {
+            // A content-control wrapper has native custom-XML range revisions that make the envelope itself
+            // reversible. Ordinary w:del/w:ins can only toggle its runs, leaving an empty w:sdt behind in the
+            // opposite view. Mark the full envelope here, then retain its range boundaries as paragraph-level
+            // siblings while the payload receives run revisions inside MarkWholeSdtEnvelope.
+            if (child.Name == W.sdt && child.Element(W.sdtContent) is not null)
+            {
+                var boundaries = MarkWholeSdtEnvelope(child, kind, state);
+                wrapped.Add(boundaries.Before);
+                wrapped.Add(child);
+                wrapped.Add(boundaries.After);
+                continue;
+            }
+            // PreserveInputRevisions: a preserved ORIGINAL block may carry foreign revision wrappers as
+            // paragraph children. Leave them exactly as-is — their content is already revision-marked
+            // (foreign ins stays inserted, foreign del/moveFrom stays deleted-grade), and re-wrapping
+            // would nest same-kind wrappers. Unreachable when the flag is off: sources are accept-view.
+            if (state.Settings.PreserveInputRevisions && PreservedWrapperNames.Contains(child.Name))
+                wrapped.Add(child);
+            else
+                wrapped.AddRange(WrapFieldAware(child, kind, state));
+        }
 
         // Re-insert wrapped runs after pPr (or at the front if no pPr).
         if (pPr != null)
@@ -2726,18 +3986,22 @@ internal static class IrMarkupRenderer
     /// <see cref="RevisionProcessor"/> reject did not strip it — the content leaked through, breaking the
     /// <c>reject ≡ left</c> contract. Structural children (<c>w:sdtPr</c>, …) pass through untouched.
     /// </summary>
-    private static XElement WrapContainerChild(XElement child, RevKind kind, RenderState state)
+    private static IEnumerable<XElement> WrapContainerChild(XElement child, RevKind kind, RenderState state)
     {
+        // A nested fldSimple is just as illegal inside w:ins/w:del as a top-level one. Expand it before
+        // wrapping, preserving its result position inside the enclosing hyperlink/SDT/smartTag container.
+        if (child.Name == W.fldSimple)
+            return WrapFieldAware(child, kind, state);
         if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.smartTag || child.Name == W.sdt)
-            return WrapRunLevel(child, kind, state);
+            return new[] { WrapRunLevel(child, kind, state) };
         if (child.Name == W.sdtContent)
         {
             var content = new XElement(child.Name, child.Attributes());
             foreach (var inner in child.Elements())
                 content.Add(WrapContainerChild(inner, kind, state));
-            return content;
+            return new[] { content };
         }
-        return new XElement(child);
+        return new[] { new XElement(child) };
     }
 
     /// <summary>Mark a paragraph's end-of-paragraph mark inserted/deleted: an EMPTY <c>w:ins</c>/<c>w:del</c>
@@ -2747,6 +4011,17 @@ internal static class IrMarkupRenderer
     /// TO marks it inserted (ins-grade).</summary>
     private static void MarkParagraphMark(XElement para, RevKind kind, RenderState state)
     {
+        // PreserveInputRevisions: a preserved ORIGINAL paragraph whose mark already carries a revision
+        // marker (a foreign mark-insertion or mark-deletion) keeps it — the input's own paragraph-structure
+        // revision is the Word-parity fact, and stamping ours would re-attribute (or resurrect) it. A
+        // foreign mark-DELETED paragraph still vanishes on accept, so the accept round-trip is unchanged.
+        // Unreachable when the flag is off: accept-view sources carry no mark markers.
+        if (state.Settings.PreserveInputRevisions &&
+            para.Element(W.pPr)?.Element(W.rPr) is { } presentRPr &&
+            presentRPr.Elements().Any(e =>
+                e.Name == W.ins || e.Name == W.del || e.Name == W.moveFrom || e.Name == W.moveTo))
+            return;
+
         var pPr = para.Element(W.pPr);
         if (pPr == null)
         {
@@ -2796,7 +4071,11 @@ internal static class IrMarkupRenderer
         var newPara = new XElement(W.p);
         var rightPPr = rightPara.Element(W.pPr);
         if (rightPPr != null)
-            newPara.Add(StripUnids(new XElement(rightPPr)));
+        {
+            var stamped = StripUnids(new XElement(rightPPr));
+            DropUnresolvableStyleRef(stamped, state);
+            newPara.Add(stamped);
+        }
         ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
 
         int cursor = 0;
@@ -2999,11 +4278,16 @@ internal static class IrMarkupRenderer
         var rightTokens = ParagraphTokens(op.RightAnchor, state.RightSource, state.Settings);
 
         // The new paragraph: clone the RIGHT paragraph's pPr (accepted-state paragraph properties) and rebuild
-        // its run-level content from the spans.
+        // its run-level content from the spans. A right pStyle absent from the LEFT style universe is
+        // dropped — Word expresses a paired paragraph's format change in direct props only.
         var newPara = new XElement(W.p);
         var rightPPr = rightPara.Element(W.pPr);
         if (rightPPr != null)
-            newPara.Add(StripUnids(new XElement(rightPPr)));
+        {
+            var stamped = StripUnids(new XElement(rightPPr));
+            DropUnresolvableStyleRef(stamped, state);
+            newPara.Add(stamped);
+        }
         ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
 
         newPara.Add(BuildTokenOpContent(tokenDiff, leftTokens, rightTokens, leftRuns, rightRuns, state));
@@ -3017,13 +4301,339 @@ internal static class IrMarkupRenderer
     /// own absolute StartChar/EndChar, so a SLICE of a paragraph's token list (which retains the source
     /// paragraph's char positions) composes with the full paragraph's <see cref="SourceRunModel"/> unchanged.
     /// </summary>
+    /// <summary>
+    /// Re-anchor a narrowly provable ambiguous whitespace match, then rearrange a paragraph's token ops into
+    /// Word's replace-region grammar (the token-level analogue
+    /// of <see cref="RenderBlockOpsWordShaped"/>): a maximal run of Insert/Delete ops separated only by
+    /// WHITESPACE Equal ops renders as ONE inserted region (all right-side tokens, interior whitespace
+    /// included) followed by ONE deleted region (all left-side tokens likewise) — Word writes
+    /// "Heading <ins>2 Center</ins><del>1 Style</del> Demo", never per-word del/ins alternation.
+    /// Interior whitespace Equals are CONVERTED to an Insert op over their right span plus a Delete op
+    /// over their left span, so accept still yields exactly the right bytes and reject the left bytes
+    /// (each side's raw text is emitted from its own source; per-side span tiling is preserved — the
+    /// converted ops carry an empty span on the opposite side). Pure-insert or pure-delete runs, and
+    /// any Equal that is non-whitespace or zero-width passes through untouched. A format-changing separator
+    /// normally acts as interior glue too. Before that grouping, however, a bounded normalization repairs the
+    /// one ambiguous shape in which Myers matched the WRONG repeated whitespace token: an isolated space is
+    /// paired before left- or right-only text even though an identical space immediately precedes the next
+    /// retained word on both sides. The normalizer moves that match to the retained-word boundary, so it becomes
+    /// a format change instead of a synthetic insertion/deletion. The caller additionally restricts this to
+    /// paragraphs made solely of direct text runs, so a transparent field/container boundary cannot be moved.
+    /// This is intentionally render-only: it never changes the edit script, token differ, or revision-list
+    /// projection.
+    /// </summary>
+    private static List<IrTokenOp> CoalesceTokenOpsWordShaped(
+        IReadOnlyList<IrTokenOp> ops,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        IrFormatComparison formatComparison,
+        SourceRunModel leftRuns, SourceRunModel rightRuns)
+    {
+        // Re-pairing an otherwise transparent token match is safe only when both source paragraphs
+        // are ordinary direct text runs. Fields, content controls, hyperlinks, revision containers,
+        // and zero-width inline plumbing are deliberately transparent to the tokenizer, but their
+        // source ownership cannot be reconstructed from token provenance after moving a boundary.
+        // Keep those paragraphs on the normal projection path.
+        IReadOnlyList<IrTokenOp> projectedOps =
+            leftRuns.SupportsWhitespaceReanchoring && rightRuns.SupportsWhitespaceReanchoring
+                ? ReanchorAmbiguousWhitespaceMatches(ops, leftTokens, rightTokens, formatComparison)
+                : ops;
+
+        // Interior separator: an Equal OR FormatChanged span whose raw text is pure whitespace on
+        // both sides. FormatChanged qualifies because when the two sides' run formats differ (a
+        // formatting-change rewrite), every separator space between replaced words is a
+        // FormatChanged span, not Equal — excluding it re-fragments the replacement into the
+        // word-by-word zip this pass exists to remove. The conversion emits each side's own bytes
+        // AND formatting (right space as w:ins, left space as w:del), so it is exact by construction.
+        bool IsInteriorWhitespaceSeparator(IrTokenOp op)
+        {
+            if (op.Kind != IrTokenOpKind.Equal && op.Kind != IrTokenOpKind.FormatChanged)
+                return false;
+            var l = RawSpanText(leftTokens, op.LeftStart, op.LeftEnd);
+            var r = RawSpanText(rightTokens, op.RightStart, op.RightEnd);
+            return l.Length > 0 && r.Length > 0 &&
+                   string.IsNullOrWhiteSpace(l) && string.IsNullOrWhiteSpace(r);
+        }
+
+        var result = new List<IrTokenOp>(projectedOps.Count);
+        int i = 0;
+        while (i < projectedOps.Count)
+        {
+            if (projectedOps[i].Kind != IrTokenOpKind.Insert && projectedOps[i].Kind != IrTokenOpKind.Delete)
+            {
+                result.Add(projectedOps[i]);
+                i++;
+                continue;
+            }
+            // Grow the window over changed ops and interior whitespace Equals; it must END changed.
+            int lastChanged = i;
+            int j = i + 1;
+            while (j < projectedOps.Count)
+            {
+                if (projectedOps[j].Kind is IrTokenOpKind.Insert or IrTokenOpKind.Delete)
+                {
+                    lastChanged = j;
+                    j++;
+                }
+                else if (IsInteriorWhitespaceSeparator(projectedOps[j]))
+                {
+                    j++;   // tentatively interior; trimmed below if nothing changed follows
+                }
+                else
+                {
+                    break;
+                }
+            }
+            var group = new List<IrTokenOp>();
+            for (int k = i; k <= lastChanged; k++)
+                group.Add(projectedOps[k]);
+            i = lastChanged + 1;
+
+            var hasIns = group.Any(g => g.Kind == IrTokenOpKind.Insert);
+            var hasDel = group.Any(g => g.Kind == IrTokenOpKind.Delete);
+            if (!hasIns || !hasDel)
+            {
+                result.AddRange(group);
+                continue;
+            }
+            foreach (var g in group)
+            {
+                if (g.Kind == IrTokenOpKind.Insert)
+                    result.Add(g);
+                else if (g.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged)
+                    result.Add(new IrTokenOp(IrTokenOpKind.Insert, g.LeftStart, g.LeftStart, g.RightStart, g.RightEnd));
+            }
+            foreach (var g in group)
+            {
+                if (g.Kind == IrTokenOpKind.Delete)
+                    result.Add(g);
+                else if (g.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged)
+                    result.Add(new IrTokenOp(IrTokenOpKind.Delete, g.LeftStart, g.LeftEnd, g.RightStart, g.RightStart));
+            }
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Normalizes the one whitespace-alignment ambiguity which is visible in Word-compare output.  The tokenizer
+    /// intentionally represents every separator as its own token; when a replacement has no shared prefix,
+    /// Myers may therefore match its first repeated space instead of the space immediately before a retained
+    /// suffix word.  For example, it can pair the first spaces in
+    /// <c>"Subtitle Style Demo"</c> / <c>"Superscript Demo"</c>, leaving the second left space deleted.  Word
+    /// instead retains <c>" Demo"</c>.  That difference matters when formatting changes: grouping the early
+    /// <c>FormatChanged</c> space below otherwise creates a visible inserted+deleted space pair.
+    ///
+    /// The proof gate is deliberately strict: exactly one ASCII-space separator must be matched;
+    /// only unilateral delete (or mirror insert) ops may lie before the next raw-identical WORD anchor; and an
+    /// identical separator must sit immediately before that anchor on the unilateral side.  Thus the operation
+    /// re-tiles the same left/right token ranges without changing their text, and it cannot cross a hyperlink,
+    /// NBSP-vs-space normalization, punctuation, or zero-width atom boundary.  This is a markup-projection
+    /// normalization only; <see cref="IrTokenDiffer"/> and the persisted edit script remain byte-for-byte as
+    /// produced by the diff engine.
+    /// </summary>
+    private static List<IrTokenOp> ReanchorAmbiguousWhitespaceMatches(
+        IReadOnlyList<IrTokenOp> ops,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        IrFormatComparison formatComparison)
+    {
+        var normalized = new List<IrTokenOp>(ops.Count);
+        for (int i = 0; i < ops.Count; i++)
+        {
+            if (TryReanchorWhitespaceToFollowingWordOnLeft(
+                    ops, i, leftTokens, rightTokens, formatComparison,
+                    out var consumedThrough, out var replacement) ||
+                TryReanchorWhitespaceToFollowingWordOnRight(
+                    ops, i, leftTokens, rightTokens, formatComparison,
+                    out consumedThrough, out replacement))
+            {
+                normalized.AddRange(replacement);
+                i = consumedThrough;
+                continue;
+            }
+
+            normalized.Add(ops[i]);
+        }
+        return normalized;
+    }
+
+    /// <summary>
+    /// Left-side form of the ambiguity: a whitespace match is followed only by deleted left tokens before the
+    /// next retained word.  Re-pair the right whitespace with the identical left whitespace directly before
+    /// that word, and fold the former left whitespace into the deletion range.
+    /// </summary>
+    private static bool TryReanchorWhitespaceToFollowingWordOnLeft(
+        IReadOnlyList<IrTokenOp> ops, int matchIndex,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        IrFormatComparison formatComparison,
+        out int consumedThrough, out List<IrTokenOp> replacement)
+    {
+        consumedThrough = -1;
+        replacement = new List<IrTokenOp>();
+        var match = ops[matchIndex];
+        if (!IsSingleRawWhitespaceMatch(match, leftTokens, rightTokens))
+            return false;
+
+        int leftCursor = match.LeftEnd;
+        int rightCursor = match.RightEnd;
+        int anchorIndex = matchIndex + 1;
+        while (anchorIndex < ops.Count && ops[anchorIndex].Kind == IrTokenOpKind.Delete)
+        {
+            var deleted = ops[anchorIndex];
+            if (deleted.LeftStart != leftCursor || deleted.RightStart != rightCursor ||
+                deleted.RightEnd != rightCursor)
+                return false;
+            leftCursor = deleted.LeftEnd;
+            anchorIndex++;
+        }
+
+        if (anchorIndex == matchIndex + 1 || anchorIndex >= ops.Count)
+            return false;
+        var anchor = ops[anchorIndex];
+        if (anchor.LeftStart != leftCursor || anchor.RightStart != rightCursor ||
+            !IsRawEqualWordAnchor(anchor, leftTokens, rightTokens))
+            return false;
+
+        int retainedLeftSpace = anchor.LeftStart - 1;
+        if (retainedLeftSpace < match.LeftEnd ||
+            !SameRawWhitespaceToken(leftTokens[retainedLeftSpace], rightTokens[match.RightStart]))
+            return false;
+
+        // The old left match plus its intervening deleted content become one deletion; the whitespace directly
+        // before the retained suffix becomes a freshly classified Equal/FormatChanged span.
+        replacement.Add(new IrTokenOp(IrTokenOpKind.Delete,
+            match.LeftStart, retainedLeftSpace, match.RightStart, match.RightStart));
+        AppendReclassifiedWhitespaceAndAnchor(replacement,
+            retainedLeftSpace, match.RightStart, anchor,
+            leftTokens, rightTokens, formatComparison);
+        consumedThrough = anchorIndex;
+        return true;
+    }
+
+    /// <summary>
+    /// Mirror of <see cref="TryReanchorWhitespaceToFollowingWordOnLeft"/>: a whitespace match is followed only
+    /// by inserted right tokens before the next retained word.  Re-pair the left whitespace with the identical
+    /// right whitespace directly before that word and fold the former right whitespace into the insertion.
+    /// </summary>
+    private static bool TryReanchorWhitespaceToFollowingWordOnRight(
+        IReadOnlyList<IrTokenOp> ops, int matchIndex,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        IrFormatComparison formatComparison,
+        out int consumedThrough, out List<IrTokenOp> replacement)
+    {
+        consumedThrough = -1;
+        replacement = new List<IrTokenOp>();
+        var match = ops[matchIndex];
+        if (!IsSingleRawWhitespaceMatch(match, leftTokens, rightTokens))
+            return false;
+
+        int leftCursor = match.LeftEnd;
+        int rightCursor = match.RightEnd;
+        int anchorIndex = matchIndex + 1;
+        while (anchorIndex < ops.Count && ops[anchorIndex].Kind == IrTokenOpKind.Insert)
+        {
+            var inserted = ops[anchorIndex];
+            if (inserted.LeftStart != leftCursor || inserted.LeftEnd != leftCursor ||
+                inserted.RightStart != rightCursor)
+                return false;
+            rightCursor = inserted.RightEnd;
+            anchorIndex++;
+        }
+
+        if (anchorIndex == matchIndex + 1 || anchorIndex >= ops.Count)
+            return false;
+        var anchor = ops[anchorIndex];
+        if (anchor.LeftStart != leftCursor || anchor.RightStart != rightCursor ||
+            !IsRawEqualWordAnchor(anchor, leftTokens, rightTokens))
+            return false;
+
+        int retainedRightSpace = anchor.RightStart - 1;
+        if (retainedRightSpace < match.RightEnd ||
+            !SameRawWhitespaceToken(leftTokens[match.LeftStart], rightTokens[retainedRightSpace]))
+            return false;
+
+        replacement.Add(new IrTokenOp(IrTokenOpKind.Insert,
+            match.LeftStart, match.LeftStart, match.RightStart, retainedRightSpace));
+        AppendReclassifiedWhitespaceAndAnchor(replacement,
+            match.LeftStart, retainedRightSpace, anchor,
+            leftTokens, rightTokens, formatComparison);
+        consumedThrough = anchorIndex;
+        return true;
+    }
+
+    /// <summary>Add the re-paired whitespace under the engine's normal format policy, then retain the original
+    /// word anchor as a separate span.  Keeping the source boundary is essential: a re-paired whitespace token
+    /// can have different old/new run properties from the following retained word, and a single rPrChange cannot
+    /// represent both reject-side formats.</summary>
+    private static void AppendReclassifiedWhitespaceAndAnchor(
+        List<IrTokenOp> sink, int leftSpace, int rightSpace, IrTokenOp anchor,
+        IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
+        IrFormatComparison formatComparison)
+    {
+        var whitespaceKind = IrModeledFormat.RunFormatEqual(
+            leftTokens[leftSpace].Format, rightTokens[rightSpace].Format, formatComparison)
+            ? IrTokenOpKind.Equal
+            : IrTokenOpKind.FormatChanged;
+        var whitespace = new IrTokenOp(whitespaceKind,
+            leftSpace, leftSpace + 1, rightSpace, rightSpace + 1);
+        sink.Add(whitespace);
+
+        sink.Add(anchor);
+    }
+
+    private static bool IsSingleRawWhitespaceMatch(
+        IrTokenOp op, IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens) =>
+        (op.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged) &&
+        op.LeftEnd == op.LeftStart + 1 && op.RightEnd == op.RightStart + 1 &&
+        SameRawWhitespaceToken(leftTokens[op.LeftStart], rightTokens[op.RightStart]);
+
+    /// <summary>The following retained anchor must be a raw-identical lexical word, rather than a punctuation,
+    /// normalized NBSP/case match, hyperlink-context mismatch, or zero-width atom.  Those cases stay on the
+    /// original engine projection.</summary>
+    private static bool IsRawEqualWordAnchor(
+        IrTokenOp op, IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens)
+    {
+        if (op.Kind is not (IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged) ||
+            op.LeftStart >= op.LeftEnd || op.RightStart >= op.RightEnd)
+            return false;
+        var left = leftTokens[op.LeftStart];
+        var right = rightTokens[op.RightStart];
+        return left.Kind == IrDiffTokenKind.Word && right.Kind == IrDiffTokenKind.Word &&
+               left.MatchKey == right.MatchKey &&
+               string.Equals(left.Text, right.Text, StringComparison.Ordinal) &&
+               string.Equals(
+                   RawSpanText(leftTokens, op.LeftStart, op.LeftEnd),
+                   RawSpanText(rightTokens, op.RightStart, op.RightEnd),
+                   StringComparison.Ordinal);
+    }
+
+    private static bool SameRawWhitespaceToken(IrDiffToken left, IrDiffToken right) =>
+        left.Kind == IrDiffTokenKind.Separator && right.Kind == IrDiffTokenKind.Separator &&
+        left.Text == " " && right.Text == " " &&
+        left.MatchKey == right.MatchKey &&
+        string.Equals(left.Text, right.Text, StringComparison.Ordinal);
+
     private static List<XElement> BuildTokenOpContent(
         IrTokenDiff tokenDiff,
         IReadOnlyList<IrDiffToken> leftTokens, IReadOnlyList<IrDiffToken> rightTokens,
-        SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state)
+        SourceRunModel leftRuns, SourceRunModel rightRuns, RenderState state,
+        RevKind? stableSpanKind = null)
     {
         var content = new List<XElement>();
-        foreach (var tokenOp in tokenDiff.Ops)
+
+        // Fine paragraph changes normally leave equal/format-changed spans bare. A MoveModify destination
+        // supplies MoveTo here instead: the spans still receive their ordinary rPrChange history first, then
+        // the resulting run-level element is wrapped as relocated content.
+        void AddStableSpan(XElement runLevel)
+        {
+            state.RegisterMediaReferences(runLevel);
+            if (stableSpanKind is { } kind)
+                content.AddRange(WrapFieldAware(runLevel, kind, state));
+            else
+                content.Add(runLevel);
+        }
+
+        foreach (var tokenOp in CoalesceTokenOpsWordShaped(
+                     tokenDiff.Ops, leftTokens, rightTokens, state.Settings.FormatComparison,
+                     leftRuns, rightRuns))
         {
             switch (tokenOp.Kind)
             {
@@ -3055,37 +4665,48 @@ internal static class IrMarkupRenderer
                         // Text-equal, FORMAT-differing: emit the RIGHT runs (accepted-state formatting) and stamp
                         // each with a w:rPrChange carrying the LEFT (old) modeled rPr. Accept drops the rPrChange
                         // (keeps right format); reject swaps the run's rPr to the rPrChange's inner rPr (restores
-                        // the left format). The old rPr is rebuilt from the LEFT token's modeled IrRunFormat at
-                        // the aligned position, so the modeled-only block format signature round-trips.
-                        // rawLeft == rawRight here, so the left/right char spans carry identical text and the
-                        // left char at offset k matches the right char at offset k. For each emitted right run
-                        // covering right chars [cursor, cursor+len), clone the LEFT run's rPr at the aligned left
-                        // char (ls + (cursor-rs)) as the old formatting, preserving modeled AND unmodeled left rPr.
-                        int cursor = rs;
-                        foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
+                        // the left format). The old rPr is rebuilt from the LEFT run's rPr at the aligned position,
+                        // preserving modeled AND unmodeled left rPr. rawLeft == rawRight here, so the left/right
+                        // char spans carry identical text and left char lc aligns to right char rs + (lc - ls).
+                        //
+                        // The LEFT span may cross SOURCE-RUN boundaries whose formatting DIFFERS (e.g. a bold run
+                        // then an italic run) while the RIGHT is a single run. Stamping ONE rPrChange over the whole
+                        // span would restore only the FIRST left format on reject, silently losing the rest. So
+                        // split the right span at the LEFT-format boundaries: each sub-span carries one uniform old
+                        // rPr, so reject restores EVERY left region's original formatting. A left boundary at left
+                        // char lc maps to the right cut rs + (lc - ls). An empty boundary set (single left run, or
+                        // several runs with identical rPr) yields exactly one Slice(rs,re,rzs,rze) call stamped with
+                        // the constant left rPr — byte-identical to the pre-split renderer.
+                        var boundaries = leftRuns.FormatBoundaries(ls, le);
+                        int subStart = rs;
+                        for (int bi = 0; bi <= boundaries.Count; bi++)
                         {
-                            state.RegisterMediaReferences(r);
-                            // Only a w:r carries run formatting — bookmarks/zero-width markers pass through
-                            // untouched (stamping an rPr onto them is schema-invalid). A w:hyperlink wrapper holds
-                            // its w:r(s) one level down, so stamp each contained run at its aligned left char and
-                            // advance the cursor per-run (descending into the wrapper preserves char alignment).
-                            foreach (var innerRun in RunsForFormatStamp(r))
+                            int subEnd = bi < boundaries.Count ? rs + (boundaries[bi] - ls) : re;
+                            // Zero-width ownership: the first sub-span owns the span's leading zero-width (per the
+                            // op's boundary flag), the last owns the trailing one. An interior cut was strictly
+                            // interior to the whole span, so the sub-span STARTING there claims its zero-width
+                            // (includeStart = true) and the previous one does not (includeEnd = false) — reproducing
+                            // the single-slice ownership exactly (claim-dedup guarantees each is emitted once).
+                            bool subStartZw = bi == 0 ? rzs : true;
+                            bool subEndZw = bi == boundaries.Count ? rze : false;
+                            // Left format is uniform across the sub-span, so one RPrAtChar at its start suffices.
+                            var oldRPr = leftRuns.RPrAtChar(ls + (subStart - rs));
+                            foreach (var r in rightRuns.Slice(subStart, subEnd, subStartZw, subEndZw))
                             {
-                                int leftChar = ls + (cursor - rs);
-                                var oldRPr = leftRuns.RPrAtChar(leftChar);
-                                ApplyRPrChange(innerRun, oldRPr, state);
-                                cursor += RunTextLength(innerRun);
+                                // Only a w:r carries run formatting — bookmarks/zero-width markers pass through
+                                // untouched (stamping an rPr onto them is schema-invalid). A w:hyperlink wrapper
+                                // holds its w:r(s) one level down; stamp each contained run.
+                                foreach (var innerRun in RunsForFormatStamp(r))
+                                    ApplyRPrChange(innerRun, oldRPr, state);
+                                AddStableSpan(r);
                             }
-                            content.Add(r);
+                            subStart = subEnd;
                         }
                     }
                     else
                     {
                         foreach (var r in rightRuns.Slice(rs, re, rzs, rze))
-                        {
-                            state.RegisterMediaReferences(r);
-                            content.Add(r);
-                        }
+                            AddStableSpan(r);
                     }
                     break;
                 }
@@ -3341,7 +4962,9 @@ internal static class IrMarkupRenderer
     /// deleted — the field code survives with no content). Expand it to the equivalent <c>fldChar</c> run
     /// sequence (begin / instrText / separate / cached result / end) so the WHOLE field — code and result —
     /// rides in revision-wrappable runs and toggles cleanly: accept of a deletion drops the entire field,
-    /// reject restores it live. Any non-field run-level element is yielded unchanged.
+    /// reject restores it live. The simple field's <c>w:dirty</c>/<c>w:fldLock</c> state and <c>w:fldData</c>
+    /// move to the generated begin <c>w:fldChar</c>, preserving field semantics even though a direct simple-field
+    /// serialization itself cannot live inside a revision. Any non-field run-level element is yielded unchanged.
     /// </summary>
     private static IEnumerable<XElement> ExpandFieldForRevision(XElement runLevel)
     {
@@ -3351,12 +4974,22 @@ internal static class IrMarkupRenderer
             yield break;
         }
         var instr = (string?)runLevel.Attribute(W.instr) ?? "";
-        yield return new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin")));
+        var begin = new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"));
+        foreach (var attribute in runLevel.Attributes().Where(attribute =>
+                     attribute.Name == W.dirty || attribute.Name == W.fldLock))
+            begin.Add(new XAttribute(attribute));
+        foreach (var fieldData in runLevel.Elements(W.fldData))
+            begin.Add(new XElement(fieldData));
+        yield return new XElement(W.r, begin);
         yield return new XElement(W.r,
             new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), instr));
         yield return new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate")));
-        foreach (var child in runLevel.Elements())   // the cached result (display) content
-            yield return new XElement(child);
+        foreach (var child in runLevel.Elements().Where(child => child.Name != W.fldData))
+            // A simple field may legally contain another simple field. Flatten nested fields to their equivalent
+            // fldChar run sequence before revisions are applied; otherwise the inner fldSimple would become an
+            // invalid direct child of w:ins/w:del.
+            foreach (var expanded in ExpandFieldForRevision(child))
+                yield return expanded;
         yield return new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end")));
     }
 
@@ -3538,20 +5171,42 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>Stamp a row's <c>w:trPrChange</c> and each of its cells' <c>w:tcPrChange</c> (cells paired
-    /// positionally against the left row) where the emitted right shells differ from the left. No-op when
-    /// block-format tracking is off.</summary>
+    /// positionally against the left row) where the emitted right shells differ from the left.  This helper
+    /// remains for content-equal/legacy positional rows; ordinary-grid ModifyRow rendering calls the row and
+    /// cell halves separately so an interior cellIns cannot shift tcPr history pairing.</summary>
     private static void ApplyRowAndCellShellChanges(XElement newRow, XElement leftRow, RenderState state)
+    {
+        ApplyRowShellChanges(newRow, leftRow, state);
+        if (!state.Settings.TrackTableFormatChanges)
+            return;
+
+        var leftCells = leftRow.Elements(W.tc).ToList();
+        var newCells = newRow.Elements(W.tc).ToList();
+        for (int c = 0; c < newCells.Count && c < leftCells.Count; c++)
+            ApplyPairedCellShellChange(newCells[c], leftCells[c], state);
+    }
+
+    /// <summary>Apply only the paired row-level shell histories.</summary>
+    private static void ApplyRowShellChanges(XElement newRow, XElement leftRow, RenderState state)
     {
         if (!state.Settings.TrackTableFormatChanges)
             return;
 
         ApplyShellChange(newRow, W.trPr, W.trPrChange, leftRow.Element(W.trPr), state, idOnly: false, TrPrInnerExclude);
         ApplyShellChange(newRow, W.tblPrEx, W.tblPrExChange, leftRow.Element(W.tblPrEx), state, idOnly: false, TblPrExInnerExclude);
+    }
 
-        var leftCells = leftRow.Elements(W.tc).ToList();
-        var newCells = newRow.Elements(W.tc).ToList();
-        for (int c = 0; c < newCells.Count && c < leftCells.Count; c++)
-            ApplyShellChange(newCells[c], W.tcPr, W.tcPrChange, leftCells[c].Element(W.tcPr), state, idOnly: false, TcPrInnerExclude);
+    /// <summary>
+    /// Apply a tcPr history for one explicitly paired cell.  A right-only cell insertion deliberately never
+    /// calls this: its <c>w:cellIns</c> is its complete revision history, and borrowing a shifted left tcPr
+    /// would corrupt rejection.
+    /// </summary>
+    private static void ApplyPairedCellShellChange(XElement newCell, XElement leftCell, RenderState state)
+    {
+        if (!state.Settings.TrackTableFormatChanges)
+            return;
+        ApplyShellChange(newCell, W.tcPr, W.tcPrChange, leftCell.Element(W.tcPr), state,
+            idOnly: false, TcPrInnerExclude);
     }
 
     /// <summary>Apply ONE composed block-format shell across reviewers (Consolidate B2): swap the winning
@@ -3763,6 +5418,11 @@ internal static class IrMarkupRenderer
     {
         var leftHyper = leftMain.HyperlinkRelationships.ToDictionary(r => r.Id, StringComparer.Ordinal);
         var leftExternalIds = new HashSet<string>(leftMain.ExternalRelationships.Select(r => r.Id), StringComparer.Ordinal);
+        // ALL ids in use on the left part, any relationship kind. An id "free" among left hyperlinks
+        // may still be TAKEN by a part relationship (comments.xml, an image, ...) — recreating the right
+        // relationship under it makes System.IO.Packaging throw XmlException ("ID conflicts with the ID
+        // of an existing relationship"), so those must take the remap path, not the same-id path.
+        var leftUsedIds = UsedRelationshipIds(leftMain);
         var rightHyper = rightMain.HyperlinkRelationships.ToDictionary(r => r.Id, StringComparer.Ordinal);
         var rightExternal = rightMain.ExternalRelationships.ToDictionary(r => r.Id, StringComparer.Ordinal);
 
@@ -3780,12 +5440,24 @@ internal static class IrMarkupRenderer
         {
             if (rightHyper.TryGetValue(id, out var hr))
             {
-                if (!leftHyper.ContainsKey(id))
+                if (!leftUsedIds.Contains(id))
                 {
                     // The id is FREE in the left part — recreate the relationship under the SAME id so the
                     // cloned w:hyperlink/@r:id keeps resolving (the common, no-collision case).
                     try { leftMain.AddHyperlinkRelationship(hr.Uri, hr.IsExternal, id); }
                     catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { }
+                }
+                else if (!leftHyper.ContainsKey(id))
+                {
+                    // The id is taken by a left relationship of a DIFFERENT KIND (a part relationship —
+                    // comments.xml, an image, ...): recreating under the same id is impossible, and the
+                    // cloned r:id would resolve to the wrong object. Remap to a fresh id.
+                    if (hr.Uri is { } takenUri)
+                    {
+                        string fresh = FreshRelationshipId(leftMain);
+                        leftMain.AddHyperlinkRelationship(takenUri, hr.IsExternal, fresh);
+                        RewriteReferenceId(rightClones, id, fresh);
+                    }
                 }
                 else if (hr.Uri is { } hrUri &&
                          !string.Equals(leftHyper[id].Uri?.ToString(), hrUri.ToString(), StringComparison.Ordinal))
@@ -3802,10 +5474,20 @@ internal static class IrMarkupRenderer
             }
             else if (rightExternal.TryGetValue(id, out var er))
             {
-                if (!leftExternalIds.Contains(id))
+                if (!leftUsedIds.Contains(id))
                 {
                     try { leftMain.AddExternalRelationship(er.RelationshipType, er.Uri, id); }
                     catch (Exception ex) when (ex is ArgumentException or InvalidOperationException) { }
+                }
+                else if (!leftExternalIds.Contains(id))
+                {
+                    // Taken by a non-external left relationship (part/hyperlink/data) — remap, as above.
+                    if (er.Uri is { } takenUri)
+                    {
+                        string fresh = FreshRelationshipId(leftMain);
+                        leftMain.AddExternalRelationship(er.RelationshipType, takenUri, fresh);
+                        RewriteReferenceId(rightClones, id, fresh);
+                    }
                 }
                 else
                 {
@@ -3823,17 +5505,1352 @@ internal static class IrMarkupRenderer
         }
     }
 
+    /// <summary>One deliberately narrow style-normalization candidate. It is created only for a
+    /// total main-body replacement whose LEFT stories cannot observe a newly-defaulted paragraph
+    /// style after rejection. The style ids are the complete RIGHT paragraph-style closure actually
+    /// reachable from inserted blocks, including default and basedOn ancestors.</summary>
+    private sealed class InsertedStyleNormalization
+    {
+        public InsertedStyleNormalization(HashSet<string> usedStyleIds)
+        {
+            UsedStyleIds = usedStyleIds;
+        }
+
+        public HashSet<string> UsedStyleIds { get; }
+
+        public bool Uses(string styleId) => UsedStyleIds.Contains(styleId);
+    }
+
+    /// <summary>
+    /// Build the first reversible document-presentation plan. It intentionally admits only literal docDefaults
+    /// changes in a simple story universe: package parts remain left-owned, and no theme/numbering/settings,
+    /// glossary, pre-existing style history, or complex consumer can be mistaken for a style-revision problem.
+    /// Unsupported presentation changes stay visible as the left package rather than being silently copied into
+    /// both accept and reject views.
+    /// </summary>
+    private static DocDefaultsStyleProjection? TryCreateDocDefaultsStyleProjection(
+        WordprocessingDocument leftDocument, WordprocessingDocument rightDocument, RenderState state)
+    {
+        if (state.Settings.PreserveInputRevisions)
+            return null;
+
+        var leftMain = leftDocument.MainDocumentPart;
+        var rightMain = rightDocument.MainDocumentPart;
+        var leftStyles = leftMain?.StyleDefinitionsPart?.GetXDocument().Root;
+        var rightStyles = rightMain?.StyleDefinitionsPart?.GetXDocument().Root;
+        if (leftMain is null || rightMain is null || leftStyles is null || rightStyles is null ||
+            leftMain.GlossaryDocumentPart is not null ||
+            DocDefaultsPayloadsEqual(leftStyles, rightStyles) ||
+            !PartsEqual(leftMain.ThemePart, rightMain.ThemePart) ||
+            !PartsEqual(leftMain.NumberingDefinitionsPart, rightMain.NumberingDefinitionsPart) ||
+            !PartsEqual(leftMain.DocumentSettingsPart, rightMain.DocumentSettingsPart) ||
+            HasThemeReference(leftStyles) || HasThemeReference(rightStyles) ||
+            HasUnsafePresentationConsumer(state.Left) || HasUnsafePresentationConsumer(state.Right))
+            return null;
+
+        var candidates = CollectUsedStyleIdentities(state.Left);
+        candidates.UnionWith(CollectUsedStyleIdentities(state.Right));
+        candidates.RemoveWhere(identity => !StyleChainIsSharedAndResolvable(leftStyles, rightStyles, identity));
+        return candidates.Count == 0 ? null : new DocDefaultsStyleProjection(candidates);
+    }
+
+    private static bool DocDefaultsPayloadsEqual(XElement leftStyles, XElement rightStyles)
+    {
+        XElement Payload(XElement styles) => new XElement(W.docDefaults,
+            new XElement(W.pPrDefault,
+                new XElement(W.pPr, styles.Element(W.docDefaults)?.Element(W.pPrDefault)?.Element(W.pPr)?.Elements())),
+            new XElement(W.rPrDefault,
+                new XElement(W.rPr, styles.Element(W.docDefaults)?.Element(W.rPrDefault)?.Element(W.rPr)?.Elements())));
+        var left = Payload(leftStyles);
+        var right = Payload(rightStyles);
+        StripStyleNoise(left);
+        StripStyleNoise(right);
+        return XNode.DeepEquals(left, right);
+    }
+
+    private static bool PartsEqual(OpenXmlPart? left, OpenXmlPart? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+        using var leftStream = left.GetStream(FileMode.Open, FileAccess.Read);
+        using var rightStream = right.GetStream(FileMode.Open, FileAccess.Read);
+        while (true)
+        {
+            int a = leftStream.ReadByte();
+            int b = rightStream.ReadByte();
+            if (a != b)
+                return false;
+            if (a < 0)
+                return true;
+        }
+    }
+
+    private static bool HasThemeReference(XElement root) => root.DescendantsAndSelf().Attributes()
+        .Any(attribute => attribute.Name.LocalName.IndexOf("theme", StringComparison.OrdinalIgnoreCase) >= 0);
+
+    private static bool HasUnsafePresentationConsumer(IrDocument document)
+    {
+        // This first style-level slice deliberately avoids shapes whose effective appearance includes a higher
+        // precedence layer (table conditional styles and list labels), an independent package graph (drawing),
+        // or an envelope that needs its own structural revision. Later presentation-plan phases can support each
+        // explicitly.
+        var unsafeNames = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "tbl", "numPr", "drawing", "pict", "txbxContent", "fldSimple", "fldChar", "instrText", "delInstrText",
+            "sdt", "smartTag",
+        };
+        return document.Sources.Values.Any(source => source.Root?.DescendantsAndSelf().Any(element =>
+            element.Name.Namespace == W.w && unsafeNames.Contains(element.Name.LocalName)) == true) ||
+            document.Sources.Values.Any(source => source.Root is not null && HasThemeReference(source.Root));
+    }
+
+    private static HashSet<StyleIdentity> CollectUsedStyleIdentities(IrDocument document)
+    {
+        var identities = new HashSet<StyleIdentity>();
+        foreach (var paragraph in document.AnchorIndex.Values.OfType<IrParagraph>())
+        {
+            var paragraphStyle = paragraph.Format.StyleId ?? document.Styles.DefaultParagraphStyleId;
+            if (!string.IsNullOrEmpty(paragraphStyle))
+                identities.Add(new StyleIdentity("paragraph", paragraphStyle));
+            CollectInlineCharacterStyles(paragraph.Inlines, identities);
+        }
+
+        // Most run-like IR nodes preserve their character style through IrFormat, but a break or note-reference
+        // run can legally own w:rStyle without carrying an IrFormat. Source XML is retained by the renderer and
+        // represents the accepted view, so supplement the IR scan with its direct live style references rather
+        // than overlooking a visible consumer of the projected defaults.
+        foreach (var source in document.Sources.Values)
+        foreach (var styleRef in source.Descendants().Where(element =>
+                     element.Name == W.pStyle || element.Name == W.rStyle))
+        {
+            if (styleRef.Ancestors().Any(ancestor =>
+                    ancestor.Name == W.pPrChange || ancestor.Name == W.rPrChange))
+                continue;
+            var styleId = (string?)styleRef.Attribute(W.val);
+            if (!string.IsNullOrEmpty(styleId))
+                identities.Add(new StyleIdentity(styleRef.Name == W.pStyle ? "paragraph" : "character", styleId));
+        }
+        return identities;
+    }
+
+    private static void CollectInlineCharacterStyles(IEnumerable<IrInline> inlines, HashSet<StyleIdentity> identities)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrTextRun text when !string.IsNullOrEmpty(text.Format.StyleId):
+                    identities.Add(new StyleIdentity("character", text.Format.StyleId));
+                    break;
+                case IrTab tab when !string.IsNullOrEmpty(tab.Format.StyleId):
+                    identities.Add(new StyleIdentity("character", tab.Format.StyleId));
+                    break;
+                case IrHyperlink hyperlink:
+                    CollectInlineCharacterStyles(hyperlink.Inlines, identities);
+                    break;
+                case IrFieldRun field:
+                    CollectInlineCharacterStyles(field.CachedResult, identities);
+                    break;
+            }
+        }
+    }
+
+    /// <summary>Prove that a used style and every same-type ancestor can be safely materialized. Existing
+    /// property history must remain verbatim, and numbered styles need their own label-level revision model,
+    /// so either condition deliberately excludes the chain from this first projection slice.</summary>
+    private static bool StyleChainIsSharedAndResolvable(
+        XElement leftStyles, XElement rightStyles, StyleIdentity identity)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        string? current = identity.Id;
+        for (int depth = 0; current is not null && depth < 16; depth++)
+        {
+            if (!seen.Add(current))
+                return false;
+            var left = leftStyles.Elements(W.style).Where(style =>
+                string.Equals((string?)style.Attribute(W.type), identity.Type, StringComparison.Ordinal) &&
+                string.Equals((string?)style.Attribute(W.styleId), current, StringComparison.Ordinal)).ToList();
+            var right = rightStyles.Elements(W.style).Where(style =>
+                string.Equals((string?)style.Attribute(W.type), identity.Type, StringComparison.Ordinal) &&
+                string.Equals((string?)style.Attribute(W.styleId), current, StringComparison.Ordinal)).ToList();
+            if (left.Count != 1 || right.Count != 1 ||
+                !StyleCascadeMetadataEqual(left[0], right[0]) ||
+                HasStylePropertyRevisions(left[0]) || HasStylePropertyRevisions(right[0]) ||
+                left[0].Descendants(W.numPr).Any() || right[0].Descendants(W.numPr).Any())
+                return false;
+            current = (string?)left[0].Element(W.basedOn)?.Attribute(W.val);
+        }
+        return current is null;
+    }
+
+    /// <summary>
+    /// Return the special Word-style provenance mode only when the comparison is a literal full
+    /// replacement of the main body, the LEFT has neither docDefaults nor a default paragraph style,
+    /// and every paragraph in every LEFT story names a fully resolvable LEFT paragraph-style chain.
+    /// Those conditions make a right-only default style observationally unreachable after reject, so
+    /// its tracked style projection cannot alter LEFT body content or direct formatting.
+    /// </summary>
+    private static InsertedStyleNormalization? TryCreateInsertedStyleNormalization(
+        IrEditScript script, RenderState state, MainDocumentPart main, MainDocumentPart? rightMain)
+    {
+        // Notes and headers/footers are global-style consumers too. Keep this compatibility path
+        // main-body-only until their right-only style provenance has a separately proven projection.
+        // The renderer preserves the glossary part untouched. Until its style reachability is
+        // explicitly modeled, a right default must not be allowed to change its rejected view.
+        if (main.GlossaryDocumentPart is not null ||
+            script.NoteOps is not null || script.HeaderFooterOps is not null ||
+            !IsPureFullBodyReplacement(script, state) ||
+            !LeftLacksDefaultsAndDefaultParagraphStyle(main) ||
+            !AllLeftStoryParagraphStylesResolveWithinLeftStyles(main))
+            return null;
+
+        var directlyUsedStyleIds = new HashSet<string>(StringComparer.Ordinal);
+        bool usesImplicitDefault = false;
+        foreach (var op in script.Operations)
+        {
+            if (op.Kind != IrEditOpKind.InsertBlock || IsSectionBreakOp(op, state))
+                continue;
+            var source = SourceElement(op.RightAnchor, state.RightSource);
+            if (source is null)
+                return null; // Provenance is load-bearing for the guard as well as the renderer.
+            foreach (var paragraph in source.DescendantsAndSelf(W.p))
+            {
+                var styleId = (string?)paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val);
+                if (string.IsNullOrEmpty(styleId))
+                    usesImplicitDefault = true;
+                else
+                    directlyUsedStyleIds.Add(styleId);
+            }
+        }
+
+        if (directlyUsedStyleIds.Count == 0 && !usesImplicitDefault)
+            return null;
+
+        // A direct pStyle can inherit all visible formatting from right-only ancestors. Resolve the
+        // whole same-type chain now, while the untouched RIGHT styles part is available; ambiguity,
+        // a missing node, a cycle, or a cross-type hop makes this special projection unsafe.
+        var leftStylesRoot = main.StyleDefinitionsPart?.GetXDocument().Root;
+        var rightStylesRoot = rightMain?.StyleDefinitionsPart?.GetXDocument().Root;
+        return leftStylesRoot is not null && rightStylesRoot is not null &&
+            TryResolveUsedRightParagraphStyleClosure(
+                leftStylesRoot, rightStylesRoot, directlyUsedStyleIds, usesImplicitDefault, out var usedStyleIds)
+            ? new InsertedStyleNormalization(usedStyleIds)
+            : null;
+    }
+
+    private static bool TryResolveUsedRightParagraphStyleClosure(
+        XElement leftStylesRoot, XElement stylesRoot, IReadOnlyCollection<string> directlyUsedStyleIds,
+        bool usesImplicitDefault,
+        out HashSet<string> usedStyleIds)
+    {
+        usedStyleIds = new HashSet<string>(StringComparer.Ordinal);
+
+        // Style ids are package-global. Refuse an ambiguous id even if its duplicate is a different
+        // type: a malformed package can otherwise bind a basedOn edge differently after style copy.
+        var stylesById = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var style in stylesRoot.Elements(W.style))
+        {
+            var styleId = (string?)style.Attribute(W.styleId);
+            if (string.IsNullOrEmpty(styleId))
+                continue;
+            if (!stylesById.TryAdd(styleId, style))
+                return false;
+        }
+
+        var roots = new HashSet<string>(directlyUsedStyleIds, StringComparer.Ordinal);
+        if (usesImplicitDefault)
+        {
+            var defaults = stylesById
+                .Where(pair => string.Equals((string?)pair.Value.Attribute(W.type), "paragraph", StringComparison.Ordinal) &&
+                    IsOn((string?)pair.Value.Attribute(W._default)))
+                .Select(pair => pair.Key)
+                .ToList();
+            if (defaults.Count != 1)
+                return false;
+            roots.Add(defaults[0]);
+        }
+
+        foreach (var styleId in roots)
+            if (!TryAddRightParagraphStyleChain(styleId, stylesById, usedStyleIds))
+                return false;
+
+        // The general style merger matches by (type, styleId), but styleId itself is package-global.
+        // A right paragraph style that collides with any LEFT type would be appended alongside the
+        // left definition. Decline the exceptional projection rather than making that ambiguity
+        // carry a retained default or synthesized property revisions.
+        var leftStyleIds = leftStylesRoot.Elements(W.style)
+            .Select(style => (string?)style.Attribute(W.styleId))
+            .Where(styleId => !string.IsNullOrEmpty(styleId))
+            .Cast<string>()
+            .ToHashSet(StringComparer.Ordinal);
+        if (usedStyleIds.Overlaps(leftStyleIds))
+            return false;
+        return true;
+    }
+
+    private static bool TryAddRightParagraphStyleChain(
+        string styleId, IReadOnlyDictionary<string, XElement> stylesById, HashSet<string> usedStyleIds)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var currentId = styleId;
+        while (true)
+        {
+            if (!seen.Add(currentId) || !stylesById.TryGetValue(currentId, out var style) ||
+                !string.Equals((string?)style.Attribute(W.type), "paragraph", StringComparison.Ordinal))
+                return false;
+
+            usedStyleIds.Add(currentId);
+            var basedOn = style.Element(W.basedOn);
+            if (basedOn is null)
+                return true;
+
+            var basedOnStyleId = (string?)basedOn.Attribute(W.val);
+            if (string.IsNullOrEmpty(basedOnStyleId))
+                return false;
+            currentId = basedOnStyleId;
+        }
+    }
+
+    /// <summary>Strictly prove that every non-section main-body block is either deleted from LEFT or
+    /// inserted from RIGHT, exactly once. A paired/modified/moved block is intentionally disqualifying:
+    /// it could still observe a style on both accept and reject.</summary>
+    private static bool IsPureFullBodyReplacement(IrEditScript script, RenderState state)
+    {
+        var leftAnchors = state.Left.Body.Blocks
+            .Where(b => b is not IrSectionBreak)
+            .Select(b => b.Anchor.ToString())
+            .ToHashSet(StringComparer.Ordinal);
+        var rightAnchors = state.RightSource.Body.Blocks
+            .Where(b => b is not IrSectionBreak)
+            .Select(b => b.Anchor.ToString())
+            .ToHashSet(StringComparer.Ordinal);
+        if (leftAnchors.Count == 0 || rightAnchors.Count == 0)
+            return false;
+
+        var deleted = new HashSet<string>(StringComparer.Ordinal);
+        var inserted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var op in script.Operations)
+        {
+            if (IsSectionBreakOp(op, state))
+                continue;
+            switch (op.Kind)
+            {
+                case IrEditOpKind.DeleteBlock when op.LeftAnchor is { } left && op.RightAnchor is null:
+                    if (!leftAnchors.Contains(left) || !deleted.Add(left))
+                        return false;
+                    break;
+                case IrEditOpKind.InsertBlock when op.RightAnchor is { } right && op.LeftAnchor is null:
+                    if (!rightAnchors.Contains(right) || !inserted.Add(right))
+                        return false;
+                    break;
+                default:
+                    return false;
+            }
+        }
+        return deleted.SetEquals(leftAnchors) && inserted.SetEquals(rightAnchors);
+    }
+
+    /// <summary>The compatibility projection is valid only when the left styles part is present but
+    /// has neither docDefaults nor a default paragraph style. Missing a styles part takes the existing
+    /// stock-default backfill path instead; it has no right-style copy surface to normalize.</summary>
+    private static bool LeftLacksDefaultsAndDefaultParagraphStyle(MainDocumentPart main)
+    {
+        var root = main.StyleDefinitionsPart?.GetXDocument().Root;
+        return root is not null && root.Element(W.docDefaults) is null &&
+            !root.Elements(W.style).Any(style =>
+                ((string?)style.Attribute(W.type) is null or "paragraph") &&
+                IsOn((string?)style.Attribute(W._default)));
+    }
+
+    /// <summary>Scan the same text stories the reader/revision processor understands. Every LEFT
+    /// paragraph style must resolve entirely within the original LEFT styles part: a missing node,
+    /// cycle, type mismatch, malformed basedOn, or default-style dependency could otherwise become
+    /// observable when the right style universe is copied into the rejected package.</summary>
+    private static bool AllLeftStoryParagraphStylesResolveWithinLeftStyles(MainDocumentPart main)
+    {
+        var stylesRoot = main.StyleDefinitionsPart?.GetXDocument().Root;
+        if (stylesRoot is null)
+            return false;
+
+        // Style ids are package-global across types. Ambiguous duplicate ids could resolve to a
+        // different definition after right-only styles are copied, so this deliberately declines.
+        var stylesById = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var style in stylesRoot.Elements(W.style))
+        {
+            var styleId = (string?)style.Attribute(W.styleId);
+            if (string.IsNullOrEmpty(styleId))
+                continue;
+            if (!stylesById.TryAdd(styleId, style))
+                return false;
+        }
+
+        foreach (var part in StyleSafetyStoryParts(main))
+        {
+            var root = part.GetXDocument().Root;
+            if (root is null)
+                return false;
+            foreach (var paragraph in root.DescendantsAndSelf(W.p))
+            {
+                var styleId = (string?)paragraph.Element(W.pPr)?.Element(W.pStyle)?.Attribute(W.val);
+                if (string.IsNullOrEmpty(styleId) ||
+                    !ResolvesLeftParagraphStyleChain(styleId, stylesById))
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool ResolvesLeftParagraphStyleChain(
+        string styleId, IReadOnlyDictionary<string, XElement> stylesById)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var currentId = styleId;
+        while (true)
+        {
+            if (!seen.Add(currentId) || !stylesById.TryGetValue(currentId, out var style) ||
+                !string.Equals((string?)style.Attribute(W.type), "paragraph", StringComparison.Ordinal) ||
+                IsOn((string?)style.Attribute(W._default)))
+                return false;
+
+            var basedOn = style.Element(W.basedOn);
+            if (basedOn is null)
+                return true;
+
+            var basedOnStyleId = (string?)basedOn.Attribute(W.val);
+            if (string.IsNullOrEmpty(basedOnStyleId))
+                return false;
+            currentId = basedOnStyleId;
+        }
+    }
+
+    private static IEnumerable<OpenXmlPart> StyleSafetyStoryParts(MainDocumentPart main)
+    {
+        yield return main;
+        foreach (var header in main.HeaderParts)
+            yield return header;
+        foreach (var footer in main.FooterParts)
+            yield return footer;
+        if (main.FootnotesPart is not null)
+            yield return main.FootnotesPart;
+        if (main.EndnotesPart is not null)
+            yield return main.EndnotesPart;
+        if (main.WordprocessingCommentsPart is not null)
+            yield return main.WordprocessingCommentsPart;
+    }
+
+    private static bool IsOn(string? value) =>
+        string.Equals(value, "1", StringComparison.Ordinal) ||
+        string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(value, "on", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Mirror Word compare's style-definition treatment into the LEFT-based output package (decoded
+    /// from Word's compare output — see DocxDiffStyleProvenanceTests): keep the left styles
+    /// part (docDefaults et al.), copy right-only styles, and rewrite every shared style whose RAW
+    /// definition formatting differs (rsid noise ignored) to the right's EFFECTIVE formatting
+    /// (docDefaults + basedOn chain + own definition), with the left effective payload archived in a
+    /// tracked <c>w:rPrChange</c>/<c>w:pPrChange</c>. A narrowly proven docDefaults-only plan applies
+    /// the same reversible projection to eligible raw-equal styles. This lets the redline render with
+    /// the revised look while Reject restores the original, without copying an untrackable package
+    /// part. No-ops gracefully when either side lacks a styles part.
+    /// </summary>
+    private static HashSet<StyleIdentity> TrackStyleDefinitionChanges(
+        WordprocessingDocument wDoc, WordprocessingDocument wDocRight, RenderState state,
+        InsertedStyleNormalization? insertedStyleNormalization, bool leftHadTheme,
+        DocDefaultsStyleProjection? docDefaultsStyleProjection)
+    {
+        var rightImportedStyles = new HashSet<StyleIdentity>();
+        if (wDoc.MainDocumentPart?.StyleDefinitionsPart is not { } leftStyles ||
+            wDocRight.MainDocumentPart?.StyleDefinitionsPart is not { } rightStyles)
+            return rightImportedStyles;
+
+        var outXDoc = leftStyles.GetXDocument();
+        if (outXDoc.Root is not { } root || rightStyles.GetXDocument().Root is not { } rightRoot)
+            return rightImportedStyles;
+        var leftOriginalRoot = new XElement(root);   // frozen snapshot for left-effective resolution
+        var stockDocDefaults = insertedStyleNormalization is null
+            ? null
+            : XElement.Parse(leftHadTheme ? WordStockDocDefaults.ClassicXml : WordStockDocDefaults.ModernXml);
+
+        foreach (var rightStyle in rightRoot.Elements(W.style))
+        {
+            var type = (string?)rightStyle.Attribute(W.type);
+            var styleId = (string?)rightStyle.Attribute(W.styleId);
+            var leftStyle = root.Elements(W.style).FirstOrDefault(st =>
+                (string?)st.Attribute(W.type) == type &&
+                (string?)st.Attribute(W.styleId) == styleId);
+            if (leftStyle is null)
+            {
+                var cloned = new XElement(rightStyle);
+                bool usedInsertedParagraphStyle = styleId is not null && type == "paragraph" &&
+                    insertedStyleNormalization is not null &&
+                    insertedStyleNormalization.Uses(styleId);
+                // RawStylePayload deliberately strips these markers; never send a pre-existing input
+                // style revision through that path. Keep this individual used style verbatim while
+                // still normalizing other independently-safe members of the same basedOn closure.
+                bool preservesInputPropertyRevisions = usedInsertedParagraphStyle &&
+                    HasStylePropertyRevisions(rightStyle);
+                if (usedInsertedParagraphStyle && !preservesInputPropertyRevisions)
+                {
+                    NormalizeInsertedParagraphStyle(cloned, rightStyle, stockDocDefaults!, state);
+                }
+                else if (!preservesInputPropertyRevisions)
+                {
+                    // In the general path the LEFT's default paragraph style remains authoritative.
+                    // The exceptional normalized path above retains a right default only after proving
+                    // every LEFT story paragraph names a style explicitly. A used default with an
+                    // input property revision is also retained: stripping its default flag would
+                    // change the source revision's reachability before it can be preserved.
+                    cloned.Attribute(W._default)?.Remove();
+                }
+                root.Add(cloned);
+                if (type is not null && styleId is not null)
+                    rightImportedStyles.Add(new StyleIdentity(type, styleId));
+                continue;
+            }
+            if (styleId is null)
+                continue;
+
+            if (StyleDefinitionPayloadsEqual(leftStyle, rightStyle))
+            {
+                if (docDefaultsStyleProjection?.Includes(type, styleId) == true &&
+                    StyleCascadeMetadataEqual(leftStyle, rightStyle))
+                    ApplyDocDefaultsStyleProjection(leftStyle, leftOriginalRoot, rightRoot, type, styleId, state);
+                continue;
+            }
+
+            // Payload provenance decoded from the oracle: the PARAGRAPH side stays at RAW definition
+            // payloads — Word's updated Normal carries an EMPTY current pPr (docDefaults spacing is
+            // NOT materialized into the style; doing so outranks table-style conditional spacing and
+            // inflates every styled table's rows) — while the RUN side materializes the resolved
+            // (docDefaults + basedOn chain) fonts/size, exactly as Word writes them.
+            var rightRawPPr = RawStylePayload(W.pPr, rightStyle);
+            var leftRawPPr = RawStylePayload(W.pPr, leftStyle);
+            var (_, rightRPr) = ResolveEffectiveStyleFormatting(rightRoot, type, styleId);
+            var (_, leftRPr) = ResolveEffectiveStyleFormatting(leftOriginalRoot, type, styleId);
+
+            leftStyle.Elements(W.pPr).Remove();
+            leftStyle.Elements(W.rPr).Remove();
+            var newPPr = new XElement(W.pPr, rightRawPPr.Elements(),
+                new XElement(W.pPrChange, state.RevisionAttributes(),
+                    new XElement(W.pPr, leftRawPPr.Elements())));
+            var newRPr = new XElement(W.rPr, rightRPr.Elements(),
+                new XElement(W.rPrChange, state.RevisionAttributes(),
+                    new XElement(W.rPr, leftRPr.Elements())));
+            // Schema: pPr precedes rPr, both after the leading metadata children and before any
+            // table-style children (w:tblPr/w:trPr/w:tcPr/w:tblStylePr).
+            var anchor = leftStyle.Elements().FirstOrDefault(e =>
+                e.Name == W.tblPr || e.Name == W.trPr || e.Name == W.tcPr || e.Name == W.tblStylePr);
+            if (anchor is null)
+            {
+                leftStyle.Add(newPPr);
+                leftStyle.Add(newRPr);
+            }
+            else
+            {
+                anchor.AddBeforeSelf(newPPr);
+                anchor.AddBeforeSelf(newRPr);
+            }
+        }
+        leftStyles.PutXDocument();
+        return rightImportedStyles;
+    }
+
+    /// <summary>
+    /// Materialize a docDefaults-only presentation delta into one shared style definition. The package still
+    /// carries LEFT docDefaults, so the current effective properties must be made direct on the style for the
+    /// accepted view; the LEFT effective properties inside the native property-change marker restore Reject.
+    /// Character styles can own run properties only, while paragraph styles safely own both slices.
+    /// </summary>
+    private static void ApplyDocDefaultsStyleProjection(
+        XElement outputStyle, XElement leftStylesRoot, XElement rightStylesRoot,
+        string? type, string styleId, RenderState state)
+    {
+        var (leftPPr, leftRPr) = ResolveEffectiveStyleFormatting(leftStylesRoot, type, styleId);
+        var (rightPPr, rightRPr) = ResolveEffectiveStyleFormatting(rightStylesRoot, type, styleId);
+        NormalizeStylePropertyOrder(leftPPr, StylePPrChildOrder);
+        NormalizeStylePropertyOrder(rightPPr, StylePPrChildOrder);
+        NormalizeStylePropertyOrder(leftRPr, StyleRPrChildOrder);
+        NormalizeStylePropertyOrder(rightRPr, StyleRPrChildOrder);
+
+        bool projectPPr = string.Equals(type, "paragraph", StringComparison.Ordinal) &&
+            !XNode.DeepEquals(leftPPr, rightPPr);
+        bool projectRPr = (string.Equals(type, "paragraph", StringComparison.Ordinal) ||
+                           string.Equals(type, "character", StringComparison.Ordinal)) &&
+            !XNode.DeepEquals(leftRPr, rightRPr);
+        if (!projectPPr && !projectRPr)
+            return;
+
+        XElement? currentPPr = null;
+        if (projectPPr)
+        {
+            currentPPr = new XElement(rightPPr);
+            currentPPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), new XElement(leftPPr)));
+        }
+
+        XElement? currentRPr = null;
+        if (projectRPr)
+        {
+            currentRPr = new XElement(rightRPr);
+            currentRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), new XElement(leftRPr)));
+        }
+
+        ReplaceStyleProperties(outputStyle, currentPPr, currentRPr);
+    }
+
+    /// <summary>Replace only the style property slices supplied by a presentation projection, preserving the
+    /// style metadata and the schema-required pPr → rPr → table-property ordering.</summary>
+    private static void ReplaceStyleProperties(XElement style, XElement? pPr, XElement? rPr)
+    {
+        if (pPr is not null)
+            style.Elements(W.pPr).Remove();
+        if (rPr is not null)
+            style.Elements(W.rPr).Remove();
+
+        if (pPr is not null)
+        {
+            var pPrAnchor = style.Elements().FirstOrDefault(e =>
+                e.Name == W.rPr || e.Name == W.tblPr || e.Name == W.trPr || e.Name == W.tcPr ||
+                e.Name == W.tblStylePr);
+            if (pPrAnchor is null)
+                style.Add(pPr);
+            else
+                pPrAnchor.AddBeforeSelf(pPr);
+        }
+
+        if (rPr is not null)
+        {
+            var rPrAnchor = style.Elements().FirstOrDefault(e =>
+                e.Name == W.tblPr || e.Name == W.trPr || e.Name == W.tcPr || e.Name == W.tblStylePr);
+            if (rPrAnchor is null)
+                style.Add(rPr);
+            else
+                rPrAnchor.AddBeforeSelf(rPr);
+        }
+    }
+
+    private static void NormalizeStylePropertyOrder(XElement props, string[] order)
+    {
+        var children = props.Elements().Select((element, index) => new
+        {
+            Element = element,
+            Index = index,
+            Rank = element.Name.Namespace == W.w
+                ? System.Array.IndexOf(order, element.Name.LocalName)
+                : -1,
+        }).OrderBy(item => item.Rank >= 0 ? item.Rank : 10_000 + item.Index).ToList();
+        foreach (var child in children)
+            child.Element.Remove();
+        props.Add(children.Select(child => child.Element));
+    }
+
+    /// <summary>Raw-equivalent pPr/rPr payloads are not enough to prove a docDefaults-only change: a changed
+    /// basedOn edge would also change effective formatting but needs its own semantic style diff. The first
+    /// presentation slice requires the cascade edge to be identical on both sides.</summary>
+    private static bool StyleCascadeMetadataEqual(XElement leftStyle, XElement rightStyle) =>
+        string.Equals((string?)leftStyle.Element(W.basedOn)?.Attribute(W.val),
+            (string?)rightStyle.Element(W.basedOn)?.Attribute(W.val), StringComparison.Ordinal);
+
+    private static bool HasStylePropertyRevisions(XElement style) =>
+        style.Descendants(W.pPrChange).Any() || style.Descendants(W.rPrChange).Any();
+
+    /// <summary>
+    /// Project a copied, right-only paragraph style as Word does for the guarded total-replacement
+    /// shape. The body keeps its source pPr/rPr verbatim; only the otherwise unreachable style
+    /// definition is made explicit against the LEFT stock defaults, with the raw source payload kept
+    /// in tracked property history. That keeps accept/reject content and direct formatting unchanged.
+    /// </summary>
+    private static void NormalizeInsertedParagraphStyle(
+        XElement outputStyle, XElement rightStyle, XElement stockDocDefaults, RenderState state)
+    {
+        var sourcePPr = RawStylePayload(W.pPr, rightStyle);
+        var sourceRPr = RawStylePayload(W.rPr, rightStyle);
+        var currentPPr = new XElement(sourcePPr);
+        var currentRPr = new XElement(sourceRPr);
+        var stockPPr = StockStyleProperties(stockDocDefaults, W.pPr);
+        var stockRPr = StockStyleProperties(stockDocDefaults, W.rPr);
+
+        // Word's imported style payloads pin an auto 12pt line even when the right source delegated
+        // spacing to its own empty docDefaults. Preserve real before/after values from the source;
+        // only supply a zero after-value when it was inherited. This is the layout-critical piece of
+        // the malformed pgsz → uiPriority projection.
+        EnsureCompactStyleSpacing(currentPPr);
+        NormalizeInsertedStyleRunProperties(currentRPr, stockRPr);
+
+        bool isDefaultParagraphStyle = IsOn((string?)rightStyle.Attribute(W._default));
+        // For the right default, the old payload is the left package's stock defaults — precisely the
+        // values this projection supersedes. Other right-only styles archive their direct source
+        // payload; after reject every one is unreachable by the guard, but retaining it makes the
+        // change history honest and inspectable.
+        var previousPPr = isDefaultParagraphStyle ? stockPPr : sourcePPr;
+        var previousRPr = isDefaultParagraphStyle ? stockRPr : sourceRPr;
+        if (!XNode.DeepEquals(currentPPr, previousPPr))
+            currentPPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), new XElement(previousPPr)));
+        if (!XNode.DeepEquals(currentRPr, previousRPr))
+            currentRPr.Add(new XElement(W.rPrChange, state.RevisionAttributes(), new XElement(previousRPr)));
+
+        outputStyle.Elements(W.pPr).Remove();
+        outputStyle.Elements(W.rPr).Remove();
+        var anchor = outputStyle.Elements().FirstOrDefault(e =>
+            e.Name == W.tblPr || e.Name == W.trPr || e.Name == W.tcPr || e.Name == W.tblStylePr);
+        if (anchor is null)
+        {
+            outputStyle.Add(currentPPr);
+            outputStyle.Add(currentRPr);
+        }
+        else
+        {
+            anchor.AddBeforeSelf(currentPPr);
+            anchor.AddBeforeSelf(currentRPr);
+        }
+    }
+
+    private static XElement StockStyleProperties(XElement docDefaults, XName propertyName)
+    {
+        var properties = propertyName == W.pPr
+            ? docDefaults.Element(W.pPrDefault)?.Element(W.pPr)
+            : docDefaults.Element(W.rPrDefault)?.Element(W.rPr);
+        return new XElement(propertyName, properties?.Elements());
+    }
+
+    /// <summary>Ensure the compact Word-style line spacing without replacing source direct pPr
+    /// facts such as heading before/after spacing, outline level, shading, or indentation.</summary>
+    private static void EnsureCompactStyleSpacing(XElement pPr)
+    {
+        var spacing = pPr.Element(W.spacing);
+        if (spacing is null)
+        {
+            spacing = new XElement(W.spacing,
+                new XAttribute(W.after, 0),
+                new XAttribute(W.line, 240),
+                new XAttribute(W.lineRule, "auto"));
+            // Insert before the first present CT_PPrBase child ordered after w:spacing (or any
+            // foreign-namespace extension, which likewise belongs after the standard sequence). In
+            // particular w:ind/w:jc commonly occur without explicit spacing; appending in that
+            // shape violates schema order and makes Word repair the styles part on open.
+            var tail = pPr.Elements().FirstOrDefault(e =>
+                PPrChildrenAfterSpacing.Contains(e.Name) || e.Name.Namespace != W.w);
+            if (tail is null)
+                pPr.Add(spacing);
+            else
+                tail.AddBeforeSelf(spacing);
+        }
+        else
+        {
+            if (spacing.Attribute(W.after) is null)
+                spacing.SetAttributeValue(W.after, 0);
+            spacing.SetAttributeValue(W.line, 240);
+            spacing.SetAttributeValue(W.lineRule, "auto");
+        }
+
+        // Word writes the schema-default color explicitly when it materializes a shaded style.
+        // This is rendering-neutral but makes the copied style deterministic across consumers.
+        var shading = pPr.Element(W.shd);
+        if (shading is not null && shading.Attribute(W.color) is null)
+            shading.SetAttributeValue(W.color, "auto");
+    }
+
+    /// <summary>
+    /// Materialize only the run-format facts that differ from the stock left defaults. A right
+    /// 12-point style inherits size from stock, while an explicit larger heading/title keeps its
+    /// size. Modern stock has kern=2, whereas Word projects these imported source styles with
+    /// kern=0.
+    /// </summary>
+    private static void NormalizeInsertedStyleRunProperties(XElement rPr, XElement stockRPr)
+    {
+        var stockSize = (string?)stockRPr.Element(W.sz)?.Attribute(W.val);
+        var stockSizeCs = (string?)stockRPr.Element(W.szCs)?.Attribute(W.val);
+        var size = rPr.Element(W.sz);
+        var sizeCs = rPr.Element(W.szCs);
+        if (size is not null && sizeCs is not null &&
+            string.Equals((string?)size.Attribute(W.val), stockSize, StringComparison.Ordinal) &&
+            string.Equals((string?)sizeCs.Attribute(W.val), stockSizeCs, StringComparison.Ordinal))
+        {
+            size.Remove();
+            sizeCs.Remove();
+        }
+
+        // Only override kerning when the stock defaults supplied a nonzero baseline. An explicit
+        // source kern setting is direct style formatting and must remain authoritative.
+        if (stockRPr.Element(W.kern) is not null && rPr.Element(W.kern) is null)
+        {
+            var kern = new XElement(W.kern, new XAttribute(W.val, 0));
+            // Extensions such as w14:ligatures belong after the standard CT_RPr sequence, so they
+            // are an insertion tail too. Appending kern after one is just as schema-invalid as
+            // appending it after w:lang.
+            var tail = rPr.Elements().FirstOrDefault(e =>
+                RPrChildrenAfterKern.Contains(e.Name) || e.Name.Namespace != W.w);
+            if (tail is null)
+                rPr.Add(kern);
+            else
+                tail.AddBeforeSelf(kern);
+        }
+
+    }
+
+    /// <summary>
+    /// Synthesize numbering definitions for body <c>w:numId</c> references that resolve to nothing —
+    /// Microsoft Word's own dangling-numId repair (verified against its compare oracle output): a
+    /// decimal multilevel abstract (lvlText "%N.", 720-twip-per-level hanging indents) plus a
+    /// <c>w:num</c> mapping the dangling id onto it. No-op when every referenced id is defined.
+    /// </summary>
+    private static void RepairDanglingNumberingReferences(MainDocumentPart main)
+    {
+        var body = main.GetXDocument().Root?.Element(W.body);
+        if (body is null)
+            return;
+        var referenced = body.Descendants(W.numId)
+            .Select(e => (string?)e.Attribute(W.val))
+            .Where(v => !string.IsNullOrEmpty(v) && v != "0")
+            .Select(v => v!)
+            .ToHashSet(StringComparer.Ordinal);
+        if (referenced.Count == 0)
+            return;
+
+        var numberingPart = main.NumberingDefinitionsPart;
+        var defined = numberingPart?.GetXDocument().Root?.Elements(W.num)
+            .Select(n => (string?)n.Attribute(W.numId))
+            .Where(v => v is not null)
+            .Select(v => v!)
+            .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+        var dangling = referenced.Except(defined).OrderBy(v => v, StringComparer.Ordinal).ToList();
+        if (dangling.Count == 0)
+            return;
+
+        numberingPart ??= main.AddNewPart<NumberingDefinitionsPart>();
+        var numXDoc = numberingPart.GetXDocument();
+        if (numXDoc.Root is null)
+            numXDoc.Add(new XElement(W.numbering,
+                new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName)));
+        var root = numXDoc.Root!;
+
+        int nextAbstract = root.Elements(W.abstractNum)
+            .Select(a => int.TryParse((string?)a.Attribute(W.abstractNumId), out var id) ? id : -1)
+            .DefaultIfEmpty(-1)
+            .Max() + 1;
+        // Schema order inside w:numbering: numPicBullet*, abstractNum*, num* — new abstracts go
+        // before the first existing w:num; the num mappings append at the end.
+        var firstNum = root.Elements(W.num).FirstOrDefault();
+        foreach (var id in dangling)
+        {
+            var abstractNum = new XElement(W.abstractNum,
+                new XAttribute(W.abstractNumId, nextAbstract),
+                new XElement(W.multiLevelType, new XAttribute(W.val, "multilevel")),
+                Enumerable.Range(0, 9).Select(i => new XElement(W.lvl,
+                    new XAttribute(W.ilvl, i),
+                    new XElement(W.start, new XAttribute(W.val, 1)),
+                    new XElement(W.numFmt, new XAttribute(W.val, "decimal")),
+                    new XElement(W.lvlText, new XAttribute(W.val, $"%{i + 1}.")),
+                    new XElement(W.lvlJc, new XAttribute(W.val, "left")),
+                    new XElement(W.pPr,
+                        new XElement(W.ind,
+                            new XAttribute(W.left, 720 * (i + 1)),
+                            new XAttribute(W.hanging, 720))))));
+            if (firstNum is null)
+                root.Add(abstractNum);
+            else
+                firstNum.AddBeforeSelf(abstractNum);
+            root.Add(new XElement(W.num,
+                new XAttribute(W.numId, id),
+                new XElement(W.abstractNumId, new XAttribute(W.val, nextAbstract))));
+            nextAbstract++;
+        }
+        numberingPart.PutXDocument();
+    }
+
+    /// <summary>True when any story part that <see cref="RevisionProcessor"/> considers carries tracked
+    /// revision markup. The scan is namespace-aware so an alternate prefix for WordprocessingML cannot evade
+    /// the one-sided input-revision-preservation gate. It deliberately covers the main document plus headers,
+    /// footers, endnotes, and footnotes — a dirty header is just as asymmetric as a dirty body when only the
+    /// RIGHT input's revisions would otherwise be preserved.</summary>
+    private static bool HasTrackedRevisionMarkup(WmlDocument doc)
+    {
+        try
+        {
+            using var ms = new MemoryStream(doc.DocumentByteArray, writable: false);
+            using var zip = new System.IO.Compression.ZipArchive(ms, System.IO.Compression.ZipArchiveMode.Read);
+            foreach (var entry in zip.Entries)
+            {
+                // Mirrors RevisionProcessor.HasTrackedRevisions' story-part scope without opening the
+                // document through the SDK before the renderer's package pass. Header/footer part names are
+                // generated as word/header*.xml and word/footer*.xml by Word/Open XML SDK; scanning every
+                // such part is conservative for an orphaned relationship and never risks asymmetric output.
+                bool trackedStoryPart = entry.FullName is "word/document.xml" or "word/endnotes.xml" or "word/footnotes.xml" ||
+                    (entry.FullName.StartsWith("word/header", StringComparison.Ordinal) &&
+                     entry.FullName.EndsWith(".xml", StringComparison.Ordinal)) ||
+                    (entry.FullName.StartsWith("word/footer", StringComparison.Ordinal) &&
+                     entry.FullName.EndsWith(".xml", StringComparison.Ordinal));
+                if (!trackedStoryPart)
+                    continue;
+
+                using var stream = entry.Open();
+                using var reader = System.Xml.XmlReader.Create(stream);
+                while (reader.Read())
+                {
+                    if (reader.NodeType == System.Xml.XmlNodeType.Element &&
+                        TrackedRevisionNames.Contains(XName.Get(reader.LocalName, reader.NamespaceURI)))
+                        return true;
+                }
+            }
+            return false;
+        }
+        catch (Exception e) when (e is InvalidDataException or System.Xml.XmlException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Style ids defined in a document's styles part, read without opening the package
+    /// through the SDK (called before the render's package pass).</summary>
+    private static HashSet<string> ReadStyleIds(WmlDocument doc)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        try
+        {
+            using var ms = new MemoryStream(doc.DocumentByteArray, writable: false);
+            using var zip = new System.IO.Compression.ZipArchive(ms, System.IO.Compression.ZipArchiveMode.Read);
+            var entry = zip.GetEntry("word/styles.xml");
+            if (entry is null)
+                return ids;
+            using var stream = entry.Open();
+            var root = XDocument.Load(stream).Root;
+            if (root is null)
+                return ids;
+            foreach (var style in root.Elements(W.style))
+                if ((string?)style.Attribute(W.styleId) is { } id)
+                    ids.Add(id);
+        }
+        catch (Exception e) when (e is InvalidDataException or System.Xml.XmlException)
+        {
+            // Malformed package/part: leave the set as-is; the drop check degrades to a no-op set.
+        }
+        return ids;
+    }
+
+    /// <summary>Drop a stamped-current pPr's <c>w:pStyle</c> when the referenced style is not
+    /// defined in the LEFT styles part. Word expresses a PAIRED paragraph's format change within
+    /// the left style universe — an unresolvable style reference is dropped and the delta lives in
+    /// direct properties (oracle-verified: the output styles part never gains the right-only style
+    /// for a paired paragraph; only wholly-inserted paragraphs import their styles).</summary>
+    private static void DropUnresolvableStyleRef(XElement pPr, RenderState state)
+    {
+        if (state.LeftStyleIds is not { } known)
+            return;
+        var pStyle = pPr.Element(W.pStyle);
+        if (pStyle is not null && (string?)pStyle.Attribute(W.val) is { } id && !known.Contains(id))
+            pStyle.Remove();
+    }
+
+    /// <summary>
+    /// Remove paragraph-style references in the rendered main body that cannot resolve against the
+    /// FINAL paragraph-style registry. This closes the verbatim EqualBlock and archived
+    /// <c>w:pPrChange</c> paths, which have no paired-paragraph context in which to invoke
+    /// <see cref="DropUnresolvableStyleRef"/>. Restricting the lookup to paragraph styles is
+    /// intentional: a matching character/table style does not make a <c>w:pStyle</c> valid.
+    /// </summary>
+    private static void DropDanglingParagraphStyleRefs(MainDocumentPart main)
+    {
+        var body = main.GetXDocument().Root?.Element(W.body);
+        if (body is null)
+            return;
+
+        var knownParagraphStyles = main.StyleDefinitionsPart?.GetXDocument().Root?
+            .Elements(W.style)
+            .Where(style => (string?)style.Attribute(W.type) == "paragraph")
+            .Select(style => (string?)style.Attribute(W.styleId))
+            .Where(id => !string.IsNullOrEmpty(id))
+            .Select(id => id!)
+            .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+
+        var dangling = body.Descendants(W.pStyle)
+            .Where(pStyle => (string?)pStyle.Attribute(W.val) is not { } id ||
+                !knownParagraphStyles.Contains(id))
+            .ToList();
+        if (dangling.Count == 0)
+            return;
+
+        foreach (var pStyle in dangling)
+            pStyle.Remove();
+        main.PutXDocument();
+    }
+
+    /// <summary>
+    /// Rebind live RIGHT-sourced paragraph numbering to definitions that collision handling imported under a
+    /// fresh id.  An equal paragraph can still be semantically changed when its shared <c>w:numId</c> resolves
+    /// through a different numbering definition, so its current properties take the imported id and its left
+    /// properties are preserved in <c>w:pPrChange</c>.  Accept therefore resolves the right definition and
+    /// reject restores the left definition.  Deleted/move-from paragraphs and archived <c>*Change</c> payloads
+    /// remain left-sourced.  Covers the main document, headers, footers, footnotes, and endnotes.
+    /// </summary>
+    private static void RebindRightNumberingReferences(
+        MainDocumentPart main, Dictionary<int, int> numIdMap, RenderState state)
+    {
+        if (numIdMap.Count == 0)
+            return;
+        var parts = new List<OpenXmlPart> { main };
+        parts.AddRange(main.HeaderParts);
+        parts.AddRange(main.FooterParts);
+        if (main.FootnotesPart is not null)
+            parts.Add(main.FootnotesPart);
+        if (main.EndnotesPart is not null)
+            parts.Add(main.EndnotesPart);
+        foreach (var part in parts)
+        {
+            var xDoc = part.GetXDocument();
+            var changed = false;
+            foreach (var paragraph in xDoc.Descendants(W.p).ToList())
+            {
+                if (IsDeletedParagraph(paragraph))
+                    continue;
+                var pPr = paragraph.Element(W.pPr);
+                var numIdEl = pPr?.Element(W.numPr)?.Element(W.numId);
+                if (numIdEl is null ||
+                    !int.TryParse((string?)numIdEl.Attribute(W.val), out var id) ||
+                    !numIdMap.TryGetValue(id, out var mapped))
+                    continue;
+
+                // An inserted/move-to paragraph disappears on reject.  Every other live paragraph needs a
+                // standard pPr history unless another formatting pass already supplied one; in that case its
+                // archived pPr is the left payload and must retain the original numId.
+                XElement? oldPPr = null;
+                if (state.Settings.TrackParagraphFormatChanges &&
+                    !IsInsertedParagraph(paragraph) &&
+                    pPr!.Element(W.pPrChange) is null)
+                {
+                    oldPPr = StripUnids(new XElement(W.pPr, pPr.Attributes(),
+                        pPr.Elements().Where(e => e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange)));
+                }
+
+                numIdEl.SetAttributeValue(W.val, mapped);
+                if (oldPPr is not null)
+                    pPr!.Add(new XElement(W.pPrChange, state.RevisionAttributes(), oldPPr));
+                changed = true;
+            }
+            if (changed)
+                part.PutXDocument();
+        }
+    }
+
+    /// <summary>
+    /// Rebind numbering references owned by styles copied from the RIGHT package.  This deliberately
+    /// receives the import-provenance set from <see cref="TrackStyleDefinitionChanges"/> instead of
+    /// walking every output style: pre-existing LEFT styles, including archived property histories,
+    /// must keep resolving through the LEFT numbering definitions.  Property-change archives within
+    /// a copied style are likewise left untouched.
+    /// </summary>
+    private static void RebindRightImportedStyleNumberingReferences(
+        StyleDefinitionsPart? stylesPart, IReadOnlySet<StyleIdentity> rightImportedStyles,
+        Dictionary<int, int> numIdMap)
+    {
+        if (stylesPart is null || rightImportedStyles.Count == 0 || numIdMap.Count == 0)
+            return;
+
+        var root = stylesPart.GetXDocument().Root;
+        if (root is null)
+            return;
+
+        var changed = false;
+        foreach (var style in root.Elements(W.style))
+        {
+            var type = (string?)style.Attribute(W.type);
+            var styleId = (string?)style.Attribute(W.styleId);
+            if (type is null || styleId is null ||
+                !rightImportedStyles.Contains(new StyleIdentity(type, styleId)))
+                continue;
+
+            // A style can carry paragraph properties directly or in a table-style conditional
+            // payload.  Rebind either current payload, but never an archived *Change payload.
+            foreach (var numIdEl in style.Descendants(W.numPr).Elements(W.numId).ToList())
+            {
+                if (numIdEl.Ancestors().Any(a =>
+                        a.Name.LocalName.EndsWith("Change", StringComparison.Ordinal)))
+                    continue;
+                if (int.TryParse((string?)numIdEl.Attribute(W.val), out var id) &&
+                    numIdMap.TryGetValue(id, out var mapped))
+                {
+                    numIdEl.SetAttributeValue(W.val, mapped);
+                    changed = true;
+                }
+            }
+        }
+
+        if (changed)
+            stylesPart.PutXDocument();
+    }
+
+    /// <summary>A paragraph that exists only in the right document: inserted pilcrow
+    /// (<c>pPr/rPr/w:ins</c>), or all of its content inside <c>w:ins</c>/<c>w:moveTo</c> wrappers
+    /// with no live or deleted runs.</summary>
+    private static bool IsInsertedParagraph(XElement paragraph)
+    {
+        if (paragraph.Element(W.pPr)?.Element(W.rPr)?.Element(W.ins) is not null)
+            return true;
+        var hasIns = false;
+        foreach (var child in paragraph.Elements())
+        {
+            if (child.Name == W.ins || child.Name == W.moveTo)
+                hasIns = true;
+            else if (child.Name == W.r || child.Name == W.hyperlink || child.Name == W.del || child.Name == W.moveFrom)
+                return false;
+        }
+        return hasIns;
+    }
+
+    /// <summary>A paragraph whose mark is deleted (including a move-from encoded as a deleted mark) belongs to
+    /// the left/reject state and must continue resolving through the left numbering definition.</summary>
+    private static bool IsDeletedParagraph(XElement paragraph) =>
+        paragraph.Element(W.pPr)?.Element(W.rPr)?.Elements().Any(e =>
+            e.Name == W.del || e.Name == W.moveFrom) == true;
+
+    /// <summary>When the output styles part lacks <c>w:docDefaults</c> (or the whole part is
+    /// missing), insert Word's stock docDefaults (<see cref="WordStockDocDefaults"/>) — the era
+    /// variant keyed on whether the left shipped a theme. See the call site for provenance.</summary>
+    private static void BackfillStockDocDefaults(MainDocumentPart main, bool leftHadTheme)
+    {
+        var stylesPart = main.StyleDefinitionsPart;
+        if (stylesPart is null)
+        {
+            stylesPart = main.AddNewPart<StyleDefinitionsPart>("rIdStylesBackfill");
+            var stylesDoc = stylesPart.GetXDocument();
+            stylesDoc.Add(new XElement(W.styles,
+                new XAttribute(XNamespace.Xmlns + "w", W.w.NamespaceName)));
+            stylesPart.PutXDocument();
+        }
+        var root = stylesPart.GetXDocument().Root;
+        if (root is null || root.Element(W.docDefaults) is not null)
+            return;
+        var stock = XElement.Parse(leftHadTheme ? WordStockDocDefaults.ClassicXml : WordStockDocDefaults.ModernXml);
+        root.AddFirst(stock);
+        stylesPart.PutXDocument();
+    }
+
+    /// <summary>Write Microsoft Word's stock default theme (<see cref="WordStockTheme"/> — Aptos
+    /// fonts, 2023+ Office palette, byte-for-byte as Word's compare backfills it) into a fresh
+    /// <see cref="ThemePart"/>. See the call site for why the RIGHT's theme must not be adopted
+    /// instead.</summary>
+    private static void BackfillDefaultTheme(MainDocumentPart main)
+    {
+        // Explicit relationship id: AddNewPart's auto-generated ids are RANDOM, which breaks
+        // byte-determinism between identical Compare invocations.
+        var themePart = main.AddNewPart<ThemePart>("rIdThemeBackfill");
+        using var writer = new StreamWriter(themePart.GetStream(FileMode.Create), new System.Text.UTF8Encoding(false));
+        writer.Write(WordStockTheme.Xml);
+    }
+
+    /// <summary>The RAW formatting payload of a style definition: its direct <c>pPr</c>/<c>rPr</c>
+    /// minus tracked-change markers and rsid noise.</summary>
+    private static XElement RawStylePayload(XName name, XElement style)
+    {
+        var props = style.Element(name);
+        var clone = props is null ? new XElement(name) : new XElement(props);
+        clone.Descendants().Where(d => d.Name == W.rsid || d.Name == W.pPrChange || d.Name == W.rPrChange)
+            .Remove();
+        clone.DescendantsAndSelf().Attributes().Where(at => at.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal))
+            .Remove();
+        return clone;
+    }
+
+    /// <summary>Compare raw style formatting while deliberately ignoring property-history and rsid noise.
+    /// A raw match usually needs no style revision; the separate, tightly guarded docDefaults projection
+    /// may still materialize a reversible effective-format delta for a used style.</summary>
+    private static bool StyleDefinitionPayloadsEqual(XElement a, XElement b)
+        => XNode.DeepEquals(RawStylePayload(W.pPr, a), RawStylePayload(W.pPr, b)) &&
+           XNode.DeepEquals(RawStylePayload(W.rPr, a), RawStylePayload(W.rPr, b));
+
+    /// <summary>
+    /// Resolve a style's EFFECTIVE direct formatting within one styles part: docDefaults underlaid,
+    /// then the basedOn chain overlaid outermost-first, then the style's own definition. Same-named
+    /// property elements replace; <c>w:rFonts</c> merges attribute-wise (matching how Word materializes
+    /// the resolved fonts into a tracked style update). Tracked-change and rsid noise excluded.
+    /// </summary>
+    private static (XElement PPr, XElement RPr) ResolveEffectiveStyleFormatting(
+        XElement stylesRoot, string? type, string styleId)
+    {
+        var accPPr = new XElement(W.pPr,
+            stylesRoot.Element(W.docDefaults)?.Element(W.pPrDefault)?.Element(W.pPr)?.Elements());
+        var accRPr = new XElement(W.rPr,
+            stylesRoot.Element(W.docDefaults)?.Element(W.rPrDefault)?.Element(W.rPr)?.Elements());
+
+        var chain = new List<XElement>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var currentId = styleId;
+        while (currentId is not null && seen.Add(currentId) && chain.Count < 16)
+        {
+            var style = stylesRoot.Elements(W.style).FirstOrDefault(st =>
+                (string?)st.Attribute(W.type) == type &&
+                (string?)st.Attribute(W.styleId) == currentId);
+            if (style is null)
+                break;
+            chain.Add(style);
+            currentId = (string?)style.Element(W.basedOn)?.Attribute(W.val);
+        }
+        chain.Reverse();   // outermost ancestor first, the style itself last
+
+        foreach (var style in chain)
+        {
+            OverlayProps(accPPr, style.Element(W.pPr));
+            OverlayProps(accRPr, style.Element(W.rPr));
+        }
+        StripStyleNoise(accPPr);
+        StripStyleNoise(accRPr);
+        return (accPPr, accRPr);
+    }
+
+    private static void OverlayProps(XElement acc, XElement? layer)
+    {
+        if (layer is null)
+            return;
+        foreach (var prop in layer.Elements())
+        {
+            if (prop.Name == W.pPrChange || prop.Name == W.rPrChange || prop.Name == W.rsid)
+                continue;
+            var existing = acc.Element(prop.Name);
+            if (prop.Name == W.rFonts && existing is not null)
+            {
+                foreach (var at in prop.Attributes())
+                    existing.SetAttributeValue(at.Name, at.Value);
+                continue;
+            }
+            existing?.Remove();
+            acc.Add(new XElement(prop));
+        }
+    }
+
+    private static void StripStyleNoise(XElement props)
+    {
+        props.Descendants().Where(d => d.Name == W.rsid).Remove();
+        props.DescendantsAndSelf().Attributes()
+            .Where(at => at.Name.LocalName.StartsWith("rsid", StringComparison.Ordinal)).Remove();
+    }
+
+    /// <summary>
+    /// Reconcile every <c>w:headerReference</c>/<c>w:footerReference</c> in the output body (see the
+    /// call site in <see cref="Render"/> for the phenomenon): a reference whose <c>r:id</c> does not
+    /// resolve to a part of its own kind is REBOUND to the output part carrying that story — the part
+    /// the story diff produced for the right part with that id (matched → merged left part; inserted →
+    /// fresh part), or a wholesale import of the right story part as a last resort — and only
+    /// references neither package can resolve are removed. Finally, duplicate same-kind/same-type
+    /// references within one sectPr (a rebind can land next to a story-diff-attached reference to the
+    /// SAME part) are collapsed to the first.
+    /// </summary>
+    private static void RebindOrStripStoryReferences(
+        RenderState state, MainDocumentPart main, MainDocumentPart? rightMain)
+    {
+        var xDoc = main.GetXDocument();
+        var body = xDoc.Root?.Element(W.body);
+        if (body is null)
+            return;
+
+        var headerIds = new HashSet<string>(StringComparer.Ordinal);
+        var footerIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rel in main.Parts)
+        {
+            if (rel.OpenXmlPart is HeaderPart)
+                headerIds.Add(rel.RelationshipId);
+            else if (rel.OpenXmlPart is FooterPart)
+                footerIds.Add(rel.RelationshipId);
+        }
+
+        var remap = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var el in body.Descendants()
+                     .Where(e => e.Name == W.headerReference || e.Name == W.footerReference)
+                     .ToList())
+        {
+            var isHeader = el.Name == W.headerReference;
+            var valid = isHeader ? headerIds : footerIds;
+            if ((string?)el.Attribute(R.id) is not { Length: > 0 } id)
+            {
+                el.Remove();
+                continue;
+            }
+            if (valid.Contains(id))
+                continue;
+            if (remap.TryGetValue(id, out var mappedId))
+            {
+                el.SetAttributeValue(R.id, mappedId);
+                continue;
+            }
+
+            OpenXmlPart? rightPart = null;
+            if (rightMain is not null)
+            {
+                try { rightPart = rightMain.GetPartById(id); }
+                catch (ArgumentOutOfRangeException) { }
+            }
+            var kindMatches = isHeader ? rightPart is HeaderPart : rightPart is FooterPart;
+            if (!kindMatches || rightPart is null)
+            {
+                el.Remove();   // unresolvable in either package — inheritance takes over
+                continue;
+            }
+
+            if (!state.StoryOutputParts.TryGetValue(rightPart.Uri, out var target))
+            {
+                // Last resort: import the right story part wholesale. Descendants carrying their own
+                // relationship references (drawings, embedded images) are pruned — their relationship
+                // graph did not come along, and a dangling id INSIDE the story part would make the
+                // package unloadable again. Text, fields and page numbers survive.
+                target = isHeader
+                    ? main.AddNewPart<HeaderPart>()
+                    : (OpenXmlPart)main.AddNewPart<FooterPart>();
+                var clone = new XElement(rightPart.GetXDocument().Root!);
+                clone.Descendants()
+                    .Where(d => d.Attributes().Any(a => a.Name.Namespace == R.r))
+                    .ToList()
+                    .ForEach(d => d.Remove());
+                foreach (var attr in clone.DescendantsAndSelf().Attributes()
+                             .Where(a => a.Name.Namespace == PtOpenXml.pt).ToList())
+                    attr.Remove();
+                var targetXDoc = target.GetXDocument();
+                if (targetXDoc.Root is null)
+                    targetXDoc.Add(clone);
+                else
+                    targetXDoc.Root.ReplaceWith(clone);
+                target.PutXDocument();
+                state.StoryOutputParts[rightPart.Uri] = target;
+            }
+
+            var newId = main.GetIdOfPart(target);
+            remap[id] = newId;
+            el.SetAttributeValue(R.id, newId);
+            (isHeader ? headerIds : footerIds).Add(newId);
+        }
+
+        // Collapse duplicate same-kind/same-type references within each sectPr (keep the first).
+        foreach (var sectPr in body.Descendants(W.sectPr))
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var el in sectPr.Elements()
+                         .Where(e => e.Name == W.headerReference || e.Name == W.footerReference)
+                         .ToList())
+            {
+                var key = $"{el.Name.LocalName}:{(string?)el.Attribute(W.type)}";
+                if (!seen.Add(key))
+                    el.Remove();
+            }
+        }
+        main.PutXDocument();
+    }
+
+    /// <summary>Every relationship id currently in use on <paramref name="part"/>, all kinds
+    /// (part, hyperlink, external, data-part reference).</summary>
+    private static HashSet<string> UsedRelationshipIds(OpenXmlPart part)
+    {
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var rel in part.Parts) used.Add(rel.RelationshipId);
+        foreach (var rel in part.HyperlinkRelationships) used.Add(rel.Id);
+        foreach (var rel in part.ExternalRelationships) used.Add(rel.Id);
+        foreach (var rel in part.DataPartReferenceRelationships) used.Add(rel.Id);
+        return used;
+    }
+
     /// <summary>A relationship id not currently in use by any of the left main part's relationships (parts,
     /// hyperlinks, external links, and data-part references alike). Deterministic: the first free
     /// <c>rIdRemap{n}</c> (n ascending from 1). The dedicated <c>rIdRemap</c> prefix avoids colliding with the
     /// document's own <c>rId{n}</c> numbering — the very collision this remap exists to resolve.</summary>
     private static string FreshRelationshipId(OpenXmlPart leftMain)
     {
-        var used = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var rel in leftMain.Parts) used.Add(rel.RelationshipId);
-        foreach (var rel in leftMain.HyperlinkRelationships) used.Add(rel.Id);
-        foreach (var rel in leftMain.ExternalRelationships) used.Add(rel.Id);
-        foreach (var rel in leftMain.DataPartReferenceRelationships) used.Add(rel.Id);
+        var used = UsedRelationshipIds(leftMain);
         int n = 1;
         string candidate;
         do { candidate = "rIdRemap" + n++; } while (used.Contains(candidate));
@@ -3869,6 +6886,413 @@ internal static class IrMarkupRenderer
     /// block was read with <c>RetainSources=true</c> (the renderer's internal read does this).</summary>
     private static XElement? SourceElement(string? anchor, IrDocument doc) =>
         ResolveBlock(anchor, doc)?.Source.Element;
+
+    // ------------------------------------------- input-revision preservation (PreserveInputRevisions)
+
+    /// <summary>Every element name <see cref="RevisionProcessor"/> recognizes as tracked-revision markup —
+    /// the "does this block carry pre-existing revisions worth preserving?" gate.</summary>
+    private static readonly HashSet<XName> TrackedRevisionNames = new(RevisionProcessor.TrackedRevisionsElements);
+
+    /// <summary>Range-start → matching range-end names among the tracked revision elements. The two
+    /// endpoints of one range deliberately share an id; every other tracked-revision element needs a
+    /// distinct annotation id.</summary>
+    private static readonly IReadOnlyDictionary<XName, XName> PreservedRangeEnds =
+        new Dictionary<XName, XName>
+        {
+            [W.moveFromRangeStart] = W.moveFromRangeEnd,
+            [W.moveToRangeStart] = W.moveToRangeEnd,
+            [W.customXmlDelRangeStart] = W.customXmlDelRangeEnd,
+            [W.customXmlInsRangeStart] = W.customXmlInsRangeEnd,
+        };
+
+    /// <summary>Range-end → matching range-start names, materialized once for normalizing preserved clones.</summary>
+    private static readonly IReadOnlyDictionary<XName, XName> PreservedRangeStarts =
+        PreservedRangeEnds.ToDictionary(p => p.Value, p => p.Key);
+
+    /// <summary>The run-level revision WRAPPERS a preserved (original) block may legitimately contain as
+    /// paragraph children. When <c>PreserveInputRevisions</c> is on, <see cref="MarkWholeParagraph"/> leaves
+    /// these as-is instead of re-wrapping them — a foreign <c>w:ins</c> stays a single <c>w:ins</c> (its
+    /// content is already marked inserted), a foreign <c>w:del</c>/<c>w:moveFrom</c> stays deleted-grade, and
+    /// no same-kind wrapper ever nests. Range markers ride through unchanged (they wrap nothing).</summary>
+    private static readonly HashSet<XName> PreservedWrapperNames = new()
+    {
+        W.ins, W.del, W.moveFrom, W.moveTo,
+        W.moveFromRangeStart, W.moveFromRangeEnd, W.moveToRangeStart, W.moveToRangeEnd,
+    };
+
+    /// <summary>
+    /// Build the accepted-working-element → ORIGINAL right body element(s) map that powers
+    /// <c>PreserveInputRevisions</c>. The renderer's IR read normalizes revisions by ACCEPTING the whole
+    /// working copy first (see <see cref="IrReaderOptions.RevisionView"/>), so every retained
+    /// <c>Source.Element</c> is revision-free; preserving Word-style requires reaching back to the ORIGINAL
+    /// elements. Pairing is an in-order two-pointer walk over the two bodies' child sequences that mirrors
+    /// the document-level accept's modeled body restructurings — a paragraph whose MARK is deleted merges into
+    /// the NEXT paragraph (a fully-deleted paragraph vanishes the same way), while adjacent tables with the
+    /// same bidi setting coalesce. A GROUP of original elements grows until its last member no longer
+    /// merge-continues, then its accepted visible
+    /// text to equal the working block's text. A verified group maps working → [originals] (one working
+    /// block may correspond to SEVERAL originals: the mark-deleted members ride along and vanish again on
+    /// accept, exactly Word's shape). Any unexplained divergence (removed content controls, trailing
+    /// unmatched originals) stops the walk and returns the PARTIAL map — every entry
+    /// already emitted was verified in order, and unmapped blocks degrade to accepted-view emission rather
+    /// than risking a wrong pairing. Only markup-bearing groups are mapped (a clean block's accepted
+    /// emission already equals its original content, so mapping it would change nothing but bytes churn).
+    /// <para><b>Note scopes ride the same map.</b> Footnote/endnote definitions pair by <c>w:id</c> (stable
+    /// across accept) and each paired definition's child blocks are aligned with the same walk — the note
+    /// renderer dispatches through the shared <see cref="RenderBlockOp"/>, so Equal/Insert note blocks then
+    /// preserve through the same two emit hooks with zero extra plumbing.</para>
+    /// </summary>
+    private static Dictionary<XElement, List<XElement>>? BuildPreservedOriginalIndex(IrDocument irRight, WmlDocument right)
+    {
+        // The working (accepted) part trees: the IR read pins each part's parsed XDocument in Sources;
+        // every body block's Source.Element lives in the w:document tree, note blocks in w:footnotes/w:endnotes.
+        XElement? WorkingRoot(XName rootName) =>
+            irRight.Sources.Values.Select(xd => xd.Root).FirstOrDefault(r => r?.Name == rootName);
+
+        var workingBody = WorkingRoot(W.document)?.Element(W.body);
+        if (workingBody == null)
+            return null;
+
+        var map = new Dictionary<XElement, List<XElement>>();
+        using (var streamDoc = new OpenXmlMemoryStreamDocument(right))
+        using (var wDoc = streamDoc.GetWordprocessingDocument())
+        {
+            var main = wDoc.MainDocumentPart;
+            var originalBody = main?.GetXDocument().Root?.Element(W.body);
+            if (originalBody == null)
+                return null;
+            AlignPreservedChildren(workingBody, originalBody, map);
+
+            AlignPreservedNoteScope(WorkingRoot(W.footnotes),
+                main?.FootnotesPart?.GetXDocument().Root, W.footnote, map);
+            AlignPreservedNoteScope(WorkingRoot(W.endnotes),
+                main?.EndnotesPart?.GetXDocument().Root, W.endnote, map);
+        }
+        return map.Count == 0 ? null : map;
+    }
+
+    /// <summary>
+    /// Find the deliberately tiny inverse of the dirty-left insertion projection: a raw LEFT whole-block
+    /// deletion that Word carries forward as its ORIGINAL insertion when the accepted RIGHT view contains that
+    /// block. This is intentionally not an alignment algorithm. A target must be a direct child of the RIGHT
+    /// working body's exact ordinal, and the raw LEFT child at that SAME ordinal must be a fully deleted
+    /// <c>w:p</c>/<c>w:tbl</c> which has no accepted LEFT block at that ordinal. Matching the block name and
+    /// projected text is the final guard. That shape occurs in Word's own reintroduced-deletion redlines; any
+    /// shifted, nested, mixed, field-bearing, move/property, or partially bare shape remains on the ordinary
+    /// comparer-authored insertion fallback.
+    /// </summary>
+    private static Dictionary<XElement, XElement>? BuildLeftDeletedInsertionIndex(
+        IrDocument irLeft,
+        IrDocument irRight,
+        WmlDocument left)
+    {
+        XElement? WorkingBody(IrDocument ir) =>
+            ir.Sources.Values.Select(xd => xd.Root).FirstOrDefault(r => r?.Name == W.document)?.Element(W.body);
+
+        var acceptedLeftBody = WorkingBody(irLeft);
+        var workingRightBody = WorkingBody(irRight);
+        if (acceptedLeftBody == null || workingRightBody == null)
+            return null;
+
+        using var streamDoc = new OpenXmlMemoryStreamDocument(left);
+        using var wDoc = streamDoc.GetWordprocessingDocument();
+        var rawLeftBody = wDoc.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
+        if (rawLeftBody == null)
+            return null;
+
+        // Ordinals intentionally count EVERY direct body element, including comment/bookmark/range leaves.
+        // The raw and working bodies may have different lengths after accepting revisions; that is precisely
+        // why this is a per-ordinal eligibility check rather than a two-pointer resynchronization walk.
+        var rawLeft = rawLeftBody.Elements().ToList();
+        var acceptedLeft = acceptedLeftBody.Elements().ToList();
+        var workingRight = workingRightBody.Elements().ToList();
+        var map = new Dictionary<XElement, XElement>();
+
+        for (int ordinal = 0; ordinal < workingRight.Count && ordinal < rawLeft.Count; ordinal++)
+        {
+            var target = workingRight[ordinal];
+            var candidate = rawLeft[ordinal];
+            if ((target.Name != W.p && target.Name != W.tbl) || candidate.Name != target.Name)
+                continue;
+
+            // The raw deleted block must not still be represented by an accepted LEFT p/tbl at this position.
+            // We deliberately do not search elsewhere: a shifted match could reattribute an unrelated change.
+            if (ordinal < acceptedLeft.Count &&
+                (acceptedLeft[ordinal].Name == W.p || acceptedLeft[ordinal].Name == W.tbl))
+                continue;
+
+            if (!IsProjectableLeftDeletionAsInsertion(candidate))
+                continue;
+            if (!string.Equals(DeletedProjectionVisibleText(candidate), VisibleText(target), StringComparison.Ordinal))
+                continue;
+
+            map[target] = candidate;
+        }
+
+        return map.Count == 0 ? null : map;
+    }
+
+    /// <summary>Whether one raw LEFT direct body block is safe to turn from native deletion to native insertion.
+    /// The source has to be all-and-only deletion markup: paragraph candidates need a deleted paragraph mark;
+    /// table candidates need every direct row marked deleted. Fields, moves, property revisions, a foreign
+    /// insertion, malformed <c>w:t</c> in deleted content, and every bare paragraph child are rejected.
+    /// </summary>
+    private static bool IsProjectableLeftDeletionAsInsertion(XElement candidate)
+    {
+        if (candidate.Name == W.p)
+        {
+            if (candidate.Element(W.pPr)?.Element(W.rPr)?.Element(W.del) == null)
+                return false;
+        }
+        else if (candidate.Name == W.tbl)
+        {
+            var rows = candidate.Elements(W.tr).ToList();
+            if (rows.Count == 0 || rows.Any(row => row.Element(W.trPr)?.Element(W.del) == null))
+                return false;
+        }
+        else
+        {
+            return false;
+        }
+
+        // A simple/complex field has distinct containment and text-conversion rules. This projection does not
+        // expand or rebuild it, so it is safer to leave it to the proven accepted-view whole-block renderer.
+        if (candidate.DescendantsAndSelf().Any(e =>
+                e.Name == W.fldSimple || e.Name == W.fldChar ||
+                e.Name == W.instrText || e.Name == W.delInstrText))
+            return false;
+
+        // RevisionProcessor's public tracked-element list does not include the custom-XML move range
+        // endpoints even though it transforms them. They are move provenance, never simple deletion
+        // provenance, so keep all four on the accepted-view fallback explicitly.
+        if (candidate.DescendantsAndSelf().Any(e =>
+                e.Name == W.customXmlMoveFromRangeStart || e.Name == W.customXmlMoveFromRangeEnd ||
+                e.Name == W.customXmlMoveToRangeStart || e.Name == W.customXmlMoveToRangeEnd))
+            return false;
+
+        var tracked = candidate.DescendantsAndSelf()
+            .Where(e => TrackedRevisionNames.Contains(e.Name))
+            .ToList();
+        if (!tracked.Any(e => e.Name == W.del) ||
+            tracked.Any(e => e.Name != W.del && e.Name != W.delText))
+            return false;
+
+        // `w:delText` is valid only under a deletion wrapper. A raw `w:t` would need a different semantic
+        // conversion and proves the candidate is not wholly deleted.
+        if (candidate.DescendantsAndSelf(W.delText).Any(t => !t.Ancestors(W.del).Any()) ||
+            candidate.DescendantsAndSelf(W.t).Any())
+            return false;
+
+        // At the paragraph level no run-level child may be bare: preserving an arbitrary marker/run alongside
+        // the converted wrappers would make part of an ostensibly deleted block survive the projection.
+        return candidate.DescendantsAndSelf(W.p)
+            .All(p => p.Elements().All(child => child.Name == W.pPr || child.Name == W.del));
+    }
+
+    /// <summary>The visible text a raw deleted block will expose after its <c>w:delText</c> nodes become
+    /// <c>w:t</c>. Called only after <see cref="IsProjectableLeftDeletionAsInsertion"/> verified the strict
+    /// all-deleted shape.</summary>
+    private static string DeletedProjectionVisibleText(XElement candidate) =>
+        string.Concat(candidate.Descendants(W.delText).Select(t => t.Value));
+
+    /// <summary>Pair each working note definition with the original of the SAME <c>w:id</c> (note ids are
+    /// untouched by the accept normalization) and align their child blocks — the note-scope leg of
+    /// <see cref="BuildPreservedOriginalIndex"/>. Null roots (scope absent on either side) are a no-op.</summary>
+    private static void AlignPreservedNoteScope(
+        XElement? workingRoot, XElement? originalRoot, XName noteName, Dictionary<XElement, List<XElement>> map)
+    {
+        if (workingRoot == null || originalRoot == null)
+            return;
+        var originalById = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var note in originalRoot.Elements(noteName))
+            if ((string?)note.Attribute(W.id) is { } id && !originalById.ContainsKey(id))
+                originalById[id] = note;
+        foreach (var workingNote in workingRoot.Elements(noteName))
+            if ((string?)workingNote.Attribute(W.id) is { } id && originalById.TryGetValue(id, out var originalNote))
+                AlignPreservedChildren(workingNote, originalNote, map);
+    }
+
+    /// <summary>The container-level two-pointer alignment walk of <see cref="BuildPreservedOriginalIndex"/>
+    /// (see there for the model and the conservative-bail rules). Adds verified markup-bearing groups to
+    /// <paramref name="map"/>; a divergence stops THIS container's walk only (entries already added stand).</summary>
+    private static void AlignPreservedChildren(
+        XElement workingContainer, XElement originalContainer, Dictionary<XElement, List<XElement>> map)
+    {
+        var working = workingContainer.Elements().ToList();
+        var original = originalContainer.Elements().ToList();
+
+        int i = 0;
+        foreach (var w in working)
+        {
+            // AcceptDeletedAndMoveFromParagraphMarks rebuilds body/note containers from p/tbl blocks and
+            // retains only body sectPr. Direct leaf annotations (comment/bookmark/range markers, etc.) are
+            // therefore discarded. Skip only such leaves, and only when the working side does not carry the
+            // same name, so a non-normalized 1:1 marker still has to match exactly.
+            while (i < original.Count && IsAcceptDiscardedLeaf(original[i], w))
+                i++;
+            if (i >= original.Count)
+                return;   // originals exhausted early — alignment lost; keep what was verified.
+
+            // AcceptRevisions merges a maximal direct run of clean, same-bidi tables into one table. This is
+            // resynchronization only: the accepted working table is already the correct renderer source, and
+            // mapping several raw tables back to it could later re-emit a structurally different table run.
+            if (TryConsumeCleanTableMerge(w, original, ref i))
+                continue;
+
+            // Any remaining non-block child (not an accept-discarded leaf) requires an exact 1:1 name match
+            // to stay aligned; it is never preserved itself.
+            if (w.Name != W.p && w.Name != W.tbl)
+            {
+                if (original[i].Name != w.Name)
+                    return;
+                i++;
+                continue;
+            }
+
+            string target = VisibleText(w);
+            var group = new List<XElement>();
+            var acc = new System.Text.StringBuilder();
+            while (true)
+            {
+                // Cover a direct leaf that sat between a mark-deleted paragraph and the paragraph it merges
+                // into. The accept transform drops it just like a leaf before an ordinary working block.
+                while (i < original.Count && IsAcceptDiscardedLeaf(original[i], w))
+                    i++;
+                if (i >= original.Count)
+                    return;   // ran out of originals mid-group — alignment lost.
+                var o = original[i];
+                group.Add(o);
+                acc.Append(AcceptedVisibleText(o));
+                i++;
+                // A paragraph whose MARK is deleted merge-continues into the next original — keep growing.
+                if (HasDeletedParagraphMark(o))
+                    continue;
+                // Group boundary: the last member contributes the block identity. Verify.
+                if (o.Name != w.Name || !string.Equals(acc.ToString(), target, StringComparison.Ordinal))
+                    return;   // accept semantics we do not model (removed sdt, etc.) — stop.
+                break;
+            }
+
+            if (group.Any(g => g.Descendants().Any(d => TrackedRevisionNames.Contains(d.Name))))
+                map[w] = group;
+        }
+    }
+
+    /// <summary>True when the original child is a direct leaf discarded by the accept transform that rebuilds
+    /// body/note block containers. A wrapper with any nested paragraph/table is deliberately NOT skipped: its
+    /// topology needs explicit modeling. The name guard preserves exact matching when the working container
+    /// still carries the same leaf.</summary>
+    private static bool IsAcceptDiscardedLeaf(XElement original, XElement working) =>
+        original.Name != working.Name &&
+        original.Name != W.p && original.Name != W.tbl && original.Name != W.sectPr &&
+        !original.Descendants().Any(e => e.Name == W.p || e.Name == W.tbl);
+
+    /// <summary>Consume exactly the clean table run that
+    /// <see cref="RevisionProcessor.AcceptRevisions"/> coalesces into <paramref name="working"/>. The run is
+    /// never entered into the preservation map: cloning several raw tables for one accepted source would change
+    /// table structure. Failure leaves <paramref name="originalIndex"/> unchanged, so the ordinary strict
+    /// 1:1 walk either verifies a non-merged table or bails conservatively.</summary>
+    private static bool TryConsumeCleanTableMerge(
+        XElement working, IReadOnlyList<XElement> original, ref int originalIndex)
+    {
+        if (working.Name != W.tbl || originalIndex >= original.Count || original[originalIndex].Name != W.tbl)
+            return false;
+
+        bool BidiVisual(XElement table) => table.Element(W.tblPr)?.Element(W.bidiVisual) != null;
+        bool bidiVisual = BidiVisual(original[originalIndex]);
+        int end = originalIndex + 1;
+        while (end < original.Count && original[end].Name == W.tbl && BidiVisual(original[end]) == bidiVisual)
+            end++;
+        if (end - originalIndex < 2)
+            return false;
+
+        var run = original.Skip(originalIndex).Take(end - originalIndex).ToList();
+        if (run.Any(table => table.DescendantsAndSelf().Any(e => TrackedRevisionNames.Contains(e.Name))))
+            return false;
+        if (!string.Equals(VisibleText(working), string.Concat(run.Select(AcceptedVisibleText)), StringComparison.Ordinal))
+            return false;
+        if (working.Elements(W.tr).Count() != run.Sum(table => table.Elements(W.tr).Count()))
+            return false;
+
+        originalIndex = end;
+        return true;
+    }
+
+    /// <summary>
+    /// Normalize a PRESERVED original clone before emission: every tracked-revision element gets a FRESH
+    /// <c>w:id</c> from the render's single ascending counter (the input's own ids would collide with this
+    /// diff's — validator-flagged duplicates). The two endpoints of an actual range keep one shared fresh
+    /// id, while a wrapper/property-change that happens to reuse its input id gets its own id. This repairs
+    /// malformed input documents that reuse one id for unrelated revisions. Non-W-namespace extension
+    /// attributes on revision elements (e.g. Word 2023's
+    /// <c>w16du:dateUtc</c>) are dropped — the preserved facts are author/date/content, and the extension
+    /// attrs are undeclared noise to the SDK schema the output is validated against.
+    /// </summary>
+    private static XElement NormalizePreservedClone(XElement clone, RenderState state)
+    {
+        foreach (var rev in clone.DescendantsAndSelf().Where(e => TrackedRevisionNames.Contains(e.Name)))
+        {
+            if (rev.Attribute(W.id) is { } id)
+            {
+                id.Value = PreservedRangeEnds.ContainsKey(rev.Name)
+                    ? state.OpenPreservedRange(rev.Name, id.Value)
+                    : PreservedRangeStarts.TryGetValue(rev.Name, out var startName)
+                        ? state.ClosePreservedRange(startName, id.Value)
+                        : state.NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+            rev.Attributes()
+                .Where(a => !a.IsNamespaceDeclaration && a.Name.Namespace != W.w)
+                .Remove();
+        }
+        return clone;
+    }
+
+    /// <summary>Project a raw LEFT input insertion onto the comparison's DELETE side. Word does not nest the
+    /// old <c>w:ins</c> inside a new deletion; it converts that insertion — including a paragraph/row mark —
+    /// to deletion-grade markup in place. This helper is called only for the conservative eligibility slice in
+    /// <see cref="RenderState.ProjectableLeftDeletionGroup"/>: groups whose tracked state is exclusively
+    /// <c>w:ins</c>. That keeps moves/property revisions on the accepted-view fallback until their distinct
+    /// source-history semantics are modeled.</summary>
+    private static void ProjectLeftInsertionsAsDeletions(XElement clone)
+    {
+        foreach (var ins in clone.DescendantsAndSelf(W.ins).ToList())
+        {
+            ins.Name = W.del;
+            ConvertTextToDelText(ins);
+        }
+    }
+
+    /// <summary>Project a raw LEFT whole-block deletion onto the comparison's INSERT side. This is the reverse
+    /// of <see cref="ProjectLeftInsertionsAsDeletions"/> and is called only after the direct-body ordinal and
+    /// strict pure-deletion checks in <see cref="BuildLeftDeletedInsertionIndex"/>. The original author/date
+    /// attributes stay on the native revision wrapper; only its sense and text element names change.</summary>
+    private static void ProjectLeftDeletionsAsInsertions(XElement clone)
+    {
+        foreach (var del in clone.DescendantsAndSelf(W.del).ToList())
+            del.Name = W.ins;
+        foreach (var delText in clone.DescendantsAndSelf(W.delText).ToList())
+            delText.Name = W.t;
+    }
+
+    /// <summary>True when a paragraph's MARK is revision-deleted (<c>w:pPr/w:rPr/w:del</c> or
+    /// <c>w:moveFrom</c>) — on accept the paragraph merges into the NEXT one (vanishing entirely when its
+    /// content is all delete-grade), the one body restructuring the preservation walk models.</summary>
+    private static bool HasDeletedParagraphMark(XElement block) =>
+        block.Name == W.p &&
+        (block.Element(W.pPr)?.Element(W.rPr)?.Elements()
+            .Any(e => e.Name == W.del || e.Name == W.moveFrom) ?? false);
+
+    /// <summary>Concatenated <c>w:t</c> text of an (already accepted) working block.</summary>
+    private static string VisibleText(XElement block) =>
+        string.Concat(block.Descendants(W.t).Select(t => t.Value));
+
+    /// <summary>The accepted-view visible text of an ORIGINAL (markup-bearing) block: every <c>w:t</c> not
+    /// inside delete-grade markup (<c>w:del</c> holds <c>w:delText</c>, excluded implicitly; <c>w:moveFrom</c>
+    /// holds <c>w:t</c> that accept REMOVES, excluded explicitly).</summary>
+    private static string AcceptedVisibleText(XElement block) =>
+        string.Concat(block.Descendants(W.t)
+            .Where(t => !t.Ancestors(W.moveFrom).Any() && !t.Ancestors(W.del).Any())
+            .Select(t => t.Value));
 
     private static IReadOnlyList<IrDiffToken> ParagraphTokens(string? anchor, IrDocument doc, IrDiffSettings settings)
     {
@@ -3926,6 +7350,16 @@ internal static class IrMarkupRenderer
         public IrDocument Right { get; }
         public IrDiffSettings Settings { get; }
 
+        /// <summary>LEFT source anchor by move-group id for the operation list currently being rendered.
+        /// Move destinations intentionally carry only their RIGHT anchor; nested render scopes replace this
+        /// map temporarily because cell, note, and header projections each use local move-group ids.</summary>
+        public IReadOnlyDictionary<int, string> ActiveMoveSourceAnchors { get; set; } =
+            new Dictionary<int, string>();
+
+        /// <summary>Resolve the LEFT source anchor for the active move-group scope, if present.</summary>
+        public string? MoveSourceAnchor(int moveGroupId) =>
+            ActiveMoveSourceAnchors.TryGetValue(moveGroupId, out var anchor) ? anchor : null;
+
         /// <summary>The document the CURRENTLY-emitting op draws inserted/modified ("right-side") block elements
         /// and token text from. In a two-way render this is always <see cref="Right"/> (set once in the ctor and
         /// never reassigned), so behavior is byte-identical to before this field existed. The composite renderer
@@ -3936,6 +7370,93 @@ internal static class IrMarkupRenderer
         /// <summary>When non-null, overrides Settings.AuthorForRevisions for emitted revision attributes
         /// (composite multi-author rendering). Null for normal two-way render → behavior unchanged.</summary>
         public string? AuthorOverride { get; set; }
+
+        /// <summary>Style ids defined in the LEFT document's styles part. A PAIRED paragraph's
+        /// right-side <c>w:pStyle</c> referencing a style outside this set is dropped when stamped
+        /// as current (<see cref="DropUnresolvableStyleRef"/>) — Word expresses a paired
+        /// paragraph's format change within the left style universe. Null disables the check.</summary>
+        public HashSet<string>? LeftStyleIds { get; set; }
+
+        /// <summary>Accepted-working-element → ORIGINAL right body element(s) map for
+        /// <c>PreserveInputRevisions</c> (see <see cref="IrMarkupRenderer.BuildPreservedOriginalIndex"/>).
+        /// A working block maps to MULTIPLE originals when the document-level accept merged mark-deleted
+        /// paragraphs into it (they ride through and vanish again on accept). Null when preservation is
+        /// off, when the original body could not be paired, or in a composite render (Consolidate does
+        /// not preserve input revisions in v1) — a null map means zero behavior change.</summary>
+        public Dictionary<XElement, List<XElement>>? PreservedOriginals { get; set; }
+
+        /// <summary>Accepted-working-element → ORIGINAL LEFT body element(s) for the narrowly supported
+        /// dirty-left delete projection. Unlike <see cref="PreservedOriginals"/>, this map is never used to
+        /// carry a left block verbatim: its raw <c>w:ins</c> wrappers are converted to delete-grade markup when
+        /// the comparison deletes that block.</summary>
+        public Dictionary<XElement, List<XElement>>? LeftPreservedOriginals { get; set; }
+
+        /// <summary>Accepted RIGHT main-body block → raw LEFT whole-block deletion for the narrow inverse
+        /// projection. Entries are populated only for direct-body, same-ordinal, fully deleted p/tbl matches;
+        /// unlike <see cref="PreservedOriginals"/> this map is consulted only by a literal
+        /// <see cref="IrEditOpKind.InsertBlock"/> emission.</summary>
+        public Dictionary<XElement, XElement>? LeftDeletedInsertionOriginals { get; set; }
+
+        /// <summary>The ORIGINAL right element group mapped for <paramref name="src"/> under
+        /// <c>PreserveInputRevisions</c>, or null (the common case: flag off, a left/composite-sourced
+        /// element, or a block with no pre-existing markup).</summary>
+        public List<XElement>? PreservedGroup(XElement src) =>
+            PreservedOriginals != null && PreservedOriginals.TryGetValue(src, out var group) ? group : null;
+
+        /// <summary>Return a raw LEFT group only when it is safe to project it as a whole-block deletion. The
+        /// group may contain ordinary structure (comments/bookmarks/etc.), but every tracked-revision element
+        /// must be a <c>w:ins</c> and it must contain no simple fields (which cannot safely sit in a converted
+        /// <c>w:del</c>). A source move/property-change needs richer provenance than this whole-block slice can
+        /// provide and falls back to the accepted-view renderer.</summary>
+        internal List<XElement>? ProjectableLeftDeletionGroup(XElement src)
+        {
+            if (LeftPreservedOriginals == null || !LeftPreservedOriginals.TryGetValue(src, out var group))
+                return null;
+            return group.All(member => member.DescendantsAndSelf()
+                    .Where(e => TrackedRevisionNames.Contains(e.Name))
+                    .All(e => e.Name == W.ins)) &&
+                !group.Any(member => member.DescendantsAndSelf(W.fldSimple).Any())
+                ? group
+                : null;
+        }
+
+        /// <summary>The verified raw LEFT deletion to emit as its native insertion at this accepted RIGHT
+        /// source block, or null when this is not one of the strict direct-body matches.</summary>
+        internal XElement? ProjectableLeftInsertionOriginal(XElement src) =>
+            LeftDeletedInsertionOriginals != null && LeftDeletedInsertionOriginals.TryGetValue(src, out var original)
+                ? original
+                : null;
+
+        // Active preserved range ids, shared across emitted clones because one source range can span
+        // multiple preserved blocks. The start element name is part of the key: the same malformed input
+        // id may legitimately occur in both a move-from and a move-to range. A stack repairs duplicate/nested
+        // same-id ranges deterministically while preserving well-formed start/end pairs.
+        private readonly Dictionary<(XName StartName, string OriginalId), Stack<string>> _preservedRangeIds = new();
+
+        /// <summary>Allocate and remember a fresh id for one preserved range start.</summary>
+        public string OpenPreservedRange(XName startName, string originalId)
+        {
+            string fresh = NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var key = (startName, originalId);
+            if (!_preservedRangeIds.TryGetValue(key, out var ids))
+                _preservedRangeIds[key] = ids = new Stack<string>();
+            ids.Push(fresh);
+            return fresh;
+        }
+
+        /// <summary>Close a preserved range, or give an unmatched malformed end marker its own fresh id.</summary>
+        public string ClosePreservedRange(XName startName, string originalId)
+        {
+            var key = (startName, originalId);
+            if (_preservedRangeIds.TryGetValue(key, out var ids) && ids.Count > 0)
+            {
+                string fresh = ids.Pop();
+                if (ids.Count == 0)
+                    _preservedRangeIds.Remove(key);
+                return fresh;
+            }
+            return NextId().ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
 
         /// <summary>The bucket key of the CURRENTLY-active right source package, used to attribute media-bearing
         /// clones to the package they must be imported FROM. Two-way uses the single key 0 (the right package);
@@ -3950,6 +7471,12 @@ internal static class IrMarkupRenderer
         /// actually containing an r-namespace attribute are recorded, so the common text-only case adds nothing.
         /// In a two-way render every clone lands in bucket 0 (the right package).</summary>
         public Dictionary<int, List<XElement>> RightSourcedClonesBySource { get; } = new();
+
+        /// <summary>RIGHT story-part URI → the OUTPUT part carrying that story: the merged left part
+        /// for a matched pair, the freshly-created part for an inserted story, or a wholesale import.
+        /// Populated by the header/footer scope renderer and the story-reference rebind pass — see
+        /// <see cref="RebindOrStripStoryReferences"/>.</summary>
+        public Dictionary<Uri, OpenXmlPart> StoryOutputParts { get; } = new();
 
         /// <summary>The two-way render's single clone bucket (bucket 0 = the right package). Preserves the original
         /// flat-list API for the two-way <see cref="Render"/> media-import pass; equivalent to the bucket-0 list.
@@ -4051,12 +7578,30 @@ internal static class IrMarkupRenderer
         /// fully-replaced single link (same target both sides) while keeping a genuine retarget (WC019) split.</summary>
         private readonly Dictionary<XElement, string?> _hyperlinkTarget = new(ReferenceEqualityComparer.Instance);
 
+        /// <summary>
+        /// Whether this paragraph has no source structure which is transparent to diff tokens. The whitespace
+        /// re-anchoring projection may move a token boundary, so it is allowed only for direct <c>w:r</c> children
+        /// containing ordinary text (and optional run properties). This excludes fields, hyperlinks, SDTs, smart
+        /// tags, revision wrappers, bookmarks, tabs/breaks/drawings, and pre-existing run-format revisions.
+        /// </summary>
+        public bool SupportsWhitespaceReanchoring { get; }
+
         public SourceRunModel(XElement para)
         {
+            SupportsWhitespaceReanchoring = para.Elements()
+                .Where(e => e.Name != W.pPr)
+                .All(IsPlainDirectTextRun);
+
             int charOffset = 0;
             foreach (var child in para.Elements().Where(e => e.Name != W.pPr))
                 WalkRunLevel(child, ref charOffset, ContainerChain.Empty);
         }
+
+        private static bool IsPlainDirectTextRun(XElement element) =>
+            element.Name == W.r &&
+            element.Elements().All(child =>
+                child.Name == W.t ||
+                (child.Name == W.rPr && !child.Descendants(W.rPrChange).Any()));
 
         private void WalkRunLevel(XElement runLevel, ref int charOffset, ContainerChain chain)
         {
@@ -4094,16 +7639,26 @@ internal static class IrMarkupRenderer
                     _segments.Add(new Segment(runLevel, charOffset, charOffset, SegmentKind.ZeroWidth) { Chain = childChain });
             }
             else if (runLevel.Name == W.ins || runLevel.Name == W.del ||
-                     runLevel.Name == W.sdt || runLevel.Name == W.smartTag)
+                     runLevel.Name == W.sdt || runLevel.Name == W.smartTag || runLevel.Name == W.fldSimple)
             {
-                // Non-hyperlink container (sdt/smartTag/accepted ins-del wrapper): one ATOMIC segment spanning its
-                // full inner text, emitted whole. Its char span is the sum of its descendant w:t lengths
-                // (mirroring the tokenizer's transparent recursion). Claim-tracked in Slice so multiple
-                // overlapping ops emit it once.
+                // Non-hyperlink container (sdt/smartTag/accepted ins-del wrapper/direct simple field): one ATOMIC
+                // segment spanning its full inner text, emitted whole. A changed fldSimple is always marked as a
+                // whole-paragraph structural replacement by FieldEnvelopeDigest; this branch only needs to carry
+                // an unchanged simple field once while adjacent token edits use the correct text offset. Its char
+                // span mirrors the reader/tokenizer's transparent recursion, including the special hyphens and
+                // valid w:sym glyphs that each contribute one visible character. Counting only descendant w:t
+                // nodes makes a suffix edit start one character early after a direct simple field containing one
+                // of those run children, so the source slicer can drop or misplace the field/result.
                 int start = charOffset;
-                foreach (var t in runLevel.Descendants(W.t))
-                    charOffset += t.Value.Length;
-                _segments.Add(new Segment(runLevel, start, charOffset, SegmentKind.Container) { Chain = chain });
+                charOffset += VisibleTextLength(runLevel);
+                _segments.Add(new Segment(runLevel, start, charOffset, SegmentKind.Container)
+                {
+                    Chain = chain,
+                    // A result-less direct field has no diff token to claim it at an adjacent edit boundary.
+                    // Keep it exactly once just like a structural marker; otherwise an unchanged REF/PAGE field
+                    // can disappear merely because following prose changed.
+                    AlwaysKeep = runLevel.Name == W.fldSimple && start == charOffset,
+                });
             }
             else
             {
@@ -4187,6 +7742,78 @@ internal static class IrMarkupRenderer
 
         private static bool IsContainer(XName n) =>
             n == W.hyperlink || n == W.ins || n == W.del || n == W.sdt || n == W.smartTag;
+
+        /// <summary>
+        /// Visible character length of an atomic source container. This intentionally mirrors the reader's
+        /// <see cref="IrReader.InlineWalker"/> / <see cref="IrReader.EmitRunChild"/> topology instead of simply
+        /// summing descendant <c>w:t</c> nodes: textbox bodies and opaque containers can contain text in their
+        /// raw XML yet are zero-width in the tokenizer's coordinate space. Literal text contributes its UTF-16
+        /// length, the two special hyphen elements each contribute one character, and only a valid BMP
+        /// <c>w:sym/@w:char</c> contributes one. An invalid symbol is modeled as zero-width opaque content and
+        /// must not move a source-slice boundary.
+        /// </summary>
+        private static int VisibleTextLength(XElement container) => VisibleRunLevelTextLength(container, 0);
+
+        private static int VisibleRunLevelTextLength(XElement element, int sdtDepth)
+        {
+            if (element.Name == W.r)
+            {
+                int length = 0;
+                foreach (var child in element.Elements())
+                    if (child.Name != W.rPr)
+                        length += VisibleRunChildTextLength(child);
+                return length;
+            }
+
+            if (element.Name == W.hyperlink || element.Name == W.ins || element.Name == W.del)
+                return element.Elements().Sum(child => VisibleRunLevelTextLength(child, sdtDepth));
+
+            if (element.Name == W.fldSimple)
+                return element.Elements().Where(child => child.Name != W.fldData)
+                    .Sum(child => VisibleRunLevelTextLength(child, sdtDepth));
+
+            // Keep this depth cap aligned with IrReader.MaxSdtDepth. At the cap the reader preserves an inline
+            // content-control envelope opaquely, so none of its descendant raw text has a tokenizer coordinate.
+            if (element.Name == W.sdt)
+            {
+                if (sdtDepth >= 64)
+                    return 0;
+                var content = element.Element(W.sdtContent);
+                return content is null
+                    ? 0
+                    : content.Elements().Sum(child => VisibleRunLevelTextLength(child, sdtDepth + 1));
+            }
+
+            if (element.Name == W.smartTag)
+            {
+                if (sdtDepth >= 64)
+                    return 0;
+                return element.Elements().Where(child => child.Name != W.smartTagPr)
+                    .Sum(child => VisibleRunLevelTextLength(child, sdtDepth + 1));
+            }
+
+            // Non-run-level elements are either reader-dropped or modeled as one zero-width atomic inline:
+            // drawing/pict/textbox, tabs/breaks/note refs, field plumbing, and arbitrary opaque XML all land here.
+            return 0;
+        }
+
+        private static int VisibleRunChildTextLength(XElement child)
+        {
+            if (child.Name == W.t)
+                return child.Value.Length;
+            if (child.Name == W.noBreakHyphen || child.Name == W.softHyphen)
+                return 1;
+            return child.Name == W.sym && IsVisibleSym(child) ? 1 : 0;
+        }
+
+        private static bool IsVisibleSym(XElement sym)
+        {
+            var raw = (string?)sym.Attribute(W.w + "char");
+            return raw is not null
+                && int.TryParse(raw, System.Globalization.NumberStyles.HexNumber,
+                    System.Globalization.CultureInfo.InvariantCulture, out var code)
+                && code is >= 0x20 and <= 0xFFFF;
+        }
 
         /// <summary>Resolve a source <c>w:hyperlink</c>'s target, mirroring <c>IrReader.BuildHyperlink</c>: an
         /// <c>@r:id</c> resolves against the owning part's hyperlink relationships to the external URI (the part is
@@ -4417,6 +8044,46 @@ internal static class IrMarkupRenderer
             var rPr = hit?.Element.Element(W.rPr);
             return rPr != null ? new XElement(rPr) : null;
         }
+
+        /// <summary>Char positions STRICTLY inside <c>(start,end)</c> where the covering source run's old-rPr —
+        /// as it would be stamped by <c>ApplyRPrChange</c> (StripUnids-normalized) — CHANGES value: the LEFT
+        /// source-run FORMAT boundaries a FormatChanged span must be split at. A single-format span (one run, or
+        /// several runs with identical rPr) yields none, so the emitted markup is byte-identical to the pre-split
+        /// renderer; a heterogeneous span (e.g. a bold run then an italic run) yields one cut per format change so
+        /// each emitted sub-run carries the correct old formatting for its region and reject restores EVERY left
+        /// format. Boundaries are ascending. Comparison is on the RAW StripUnids(rPr) — the exact value the
+        /// rPrChange restores — so an unmodeled-only difference still cuts (reject ≡ left is a property-byte
+        /// invariant here, not modeled-only).</summary>
+        public IReadOnlyList<int> FormatBoundaries(int start, int end)
+        {
+            var cuts = new List<int>();
+            XElement? prev = null;
+            bool have = false;
+            foreach (var seg in _segments)
+            {
+                if (seg.Kind != SegmentKind.RunText || seg.End <= start || seg.Start >= end)
+                    continue;
+                var rPr = seg.Element.Element(W.rPr);
+                // seg.Start is the boundary between this run's text region and the previous one. Only an INTERIOR
+                // boundary that lands a genuine format change is a cut; a boundary at (or before) `start` is the
+                // span start, not a cut. Consecutive segments of the SAME run share an rPr ⇒ never cut.
+                if (have && seg.Start > start && seg.Start < end && !SameStampedRPr(prev, rPr))
+                    cuts.Add(seg.Start);
+                prev = rPr;
+                have = true;
+            }
+            return cuts;
+        }
+
+        /// <summary>Whether two source-run <c>w:rPr</c> would stamp an IDENTICAL <c>w:rPrChange</c> inner —
+        /// compared exactly as <c>ApplyRPrChange</c> builds it (StripUnids over a clone; absent ⇒ empty rPr).</summary>
+        private static bool SameStampedRPr(XElement? a, XElement? b) =>
+            XNode.DeepEquals(NormalizedStampedRPr(a), NormalizedStampedRPr(b));
+
+        private static XElement NormalizedStampedRPr(XElement? rPr) =>
+            rPr != null
+                ? StripUnids(new XElement(W.rPr, rPr.Attributes(), rPr.Elements()))
+                : new XElement(W.rPr);
 
         private static bool PreserveSpace(string s) =>
             s.Length > 0 && (char.IsWhiteSpace(s[0]) || char.IsWhiteSpace(s[^1]));

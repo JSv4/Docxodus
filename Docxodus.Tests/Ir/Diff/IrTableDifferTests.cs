@@ -24,11 +24,20 @@ public class IrTableDifferTests
     private static string Cell(string text) =>
         $"<w:tc><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
 
+    private static string Cell(string text, int width) =>
+        $"<w:tc><w:tcPr><w:tcW w:w=\"{width}\" w:type=\"dxa\"/></w:tcPr>" +
+        $"<w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:tc>";
+
     private static string Row(params string[] cells) =>
         $"<w:tr>{string.Concat(cells)}</w:tr>";
 
     private static string Table(params string[] rows) =>
         $"<w:tbl><w:tblPr/><w:tblGrid/>{string.Concat(rows)}</w:tbl>";
+
+    private static string GridTable(int width, int columns, params string[] rows) =>
+        "<w:tbl><w:tblPr/><w:tblGrid>" +
+        string.Concat(Enumerable.Repeat($"<w:gridCol w:w=\"{width}\"/>", columns)) +
+        $"</w:tblGrid>{string.Concat(rows)}</w:tbl>";
 
     private static IrEditOp TableOp(IrDocument l, IrDocument r)
     {
@@ -126,5 +135,161 @@ public class IrTableDifferTests
         var first = IrEditScriptBuilder.Build(left, right, Default);
         var second = IrEditScriptBuilder.Build(left, right, Default);
         Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void Ordinary_grid_middle_cell_insert_uses_body_spine_when_all_cell_widths_change()
+    {
+        // The retained A/B/C text is identical, but every tcPr/tcW changes as the table grows 3 → 4
+        // columns.  Full cell ContentHash therefore cannot anchor B/C; the ordinary-grid path must use
+        // the shell-free cell body key and place NEW at its actual right-side position.
+        var left = FromXml(GridTable(2000, 3,
+            Row(Cell("A", 2000), Cell("B", 2000), Cell("C", 2000)),
+            Row(Cell("D", 2000), Cell("E", 2000), Cell("F", 2000))));
+        var right = FromXml(GridTable(1500, 4,
+            Row(Cell("A", 1500), Cell("NEW-1", 1500), Cell("B", 1500), Cell("C", 1500)),
+            Row(Cell("D", 1500), Cell("NEW-2", 1500), Cell("E", 1500), Cell("F", 1500))));
+
+        var op = TableOp(left, right);
+        var leftTable = Assert.IsType<IrTable>(left.Body.Blocks.Single());
+        var rightTable = Assert.IsType<IrTable>(right.Body.Blocks.Single());
+        var rows = op.TableDiff!.RowOps.Where(r => r.Kind == IrRowOpKind.ModifyRow).ToList();
+        Assert.Equal(2, rows.Count);
+
+        for (int row = 0; row < rows.Count; row++)
+        {
+            var cells = rows[row].CellOps!;
+            Assert.Equal(4, cells.Count);
+            Assert.Equal(leftTable.Rows[row].Cells[0].Anchor.ToString(), cells[0].LeftCellAnchor);
+            Assert.Equal(rightTable.Rows[row].Cells[0].Anchor.ToString(), cells[0].RightCellAnchor);
+            Assert.Null(cells[1].LeftCellAnchor);
+            Assert.Equal(rightTable.Rows[row].Cells[1].Anchor.ToString(), cells[1].RightCellAnchor);
+            Assert.Equal(leftTable.Rows[row].Cells[1].Anchor.ToString(), cells[2].LeftCellAnchor);
+            Assert.Equal(rightTable.Rows[row].Cells[2].Anchor.ToString(), cells[2].RightCellAnchor);
+            Assert.Equal(leftTable.Rows[row].Cells[2].Anchor.ToString(), cells[3].LeftCellAnchor);
+            Assert.Equal(rightTable.Rows[row].Cells[3].Anchor.ToString(), cells[3].RightCellAnchor);
+            Assert.DoesNotContain(cells, c => c.RightCellAnchor == null);
+        }
+
+        Assert.NotEqual(leftTable.Rows[0].Cells[1].ContentHash, rightTable.Rows[0].Cells[2].ContentHash);
+    }
+
+    [Fact]
+    public void Ordinary_grid_mixed_middle_insert_and_edit_aligns_insert_before_edited_retained_cell()
+    {
+        // B is edited while X is inserted before it. A/C are exact body anchors, leaving B versus X/B2 in
+        // one free gap. The costed monotone fill must prefer B→B2 and identify X as the real inserted cell;
+        // positional pairing would instead shift B onto X and call C an inserted tail cell.
+        var left = FromXml(GridTable(2000, 3,
+            Row(Cell("A", 2000), Cell("B", 2000), Cell("C", 2000))));
+        var right = FromXml(GridTable(1500, 4,
+            Row(Cell("A", 1500), Cell("X", 1500), Cell("B2", 1500), Cell("C", 1500))));
+
+        var op = TableOp(left, right);
+        var leftTable = Assert.IsType<IrTable>(left.Body.Blocks.Single());
+        var rightTable = Assert.IsType<IrTable>(right.Body.Blocks.Single());
+        var cells = Assert.Single(op.TableDiff!.RowOps, r => r.Kind == IrRowOpKind.ModifyRow).CellOps!;
+
+        // A/A, +X, B/B2, C/C. The edited retained cell remains paired so its paragraph diff is available;
+        // only the actual X cell is emitted as a right-only native cell insertion.
+        Assert.Equal(4, cells.Count);
+        Assert.Equal(leftTable.Rows[0].Cells[0].Anchor.ToString(), cells[0].LeftCellAnchor);
+        Assert.Equal(rightTable.Rows[0].Cells[0].Anchor.ToString(), cells[0].RightCellAnchor);
+        Assert.Null(cells[1].LeftCellAnchor);
+        Assert.Equal(rightTable.Rows[0].Cells[1].Anchor.ToString(), cells[1].RightCellAnchor);
+        Assert.Equal(leftTable.Rows[0].Cells[1].Anchor.ToString(), cells[2].LeftCellAnchor);
+        Assert.Equal(rightTable.Rows[0].Cells[2].Anchor.ToString(), cells[2].RightCellAnchor);
+        Assert.NotNull(cells[2].BlockOps);
+        Assert.Equal(leftTable.Rows[0].Cells[2].Anchor.ToString(), cells[3].LeftCellAnchor);
+        Assert.Equal(rightTable.Rows[0].Cells[3].Anchor.ToString(), cells[3].RightCellAnchor);
+        Assert.DoesNotContain(cells, cell => cell.RightCellAnchor is null);
+    }
+
+    [Fact]
+    public void Wholly_rewritten_row_that_gains_a_column_keeps_base_cells_in_their_columns()
+    {
+        // A row rewritten cell-for-cell (no shared cell body to anchor on) that also grows by one column.
+        // With nothing to anchor, affinity-only fill would insert the new cell at the FRONT and slide every
+        // base cell one column right — scattering the deleted content into the wrong columns. Microsoft Word
+        // keeps a rewritten row's base cells in their original columns and clean-inserts the new one; the
+        // positional tie-break makes the fill do the same (base 0/1/2 pair right 0/1/2, the new cell is the
+        // right-only tail at column 3). Real body affinity, when present, still overrides this (see the
+        // mixed-insert-and-edit case above, where B pairs B2 rather than the inserted X).
+        var left = FromXml(GridTable(3000, 3,
+            Row(Cell("Region", 3000), Cell("Revenue", 3000), Cell("Target", 3000))));
+        var right = FromXml(GridTable(2340, 4,
+            Row(Cell("Metric", 2340), Cell("Q1", 2340), Cell("Q2", 2340), Cell("Q3", 2340))));
+
+        var op = TableOp(left, right);
+        var leftTable = Assert.IsType<IrTable>(left.Body.Blocks.Single());
+        var rightTable = Assert.IsType<IrTable>(right.Body.Blocks.Single());
+        var cells = Assert.Single(op.TableDiff!.RowOps, r => r.Kind == IrRowOpKind.ModifyRow).CellOps!;
+
+        Assert.Equal(4, cells.Count);
+        for (int k = 0; k < 3; k++)
+        {
+            Assert.Equal(leftTable.Rows[0].Cells[k].Anchor.ToString(), cells[k].LeftCellAnchor);
+            Assert.Equal(rightTable.Rows[0].Cells[k].Anchor.ToString(), cells[k].RightCellAnchor);
+        }
+        Assert.Null(cells[3].LeftCellAnchor);   // the inserted column is the tail, not the front
+        Assert.Equal(rightTable.Rows[0].Cells[3].Anchor.ToString(), cells[3].RightCellAnchor);
+    }
+
+    [Fact]
+    public void Ordinary_rows_mixed_middle_insert_and_edit_align_insert_before_edited_retained_row()
+    {
+        // The row analogue of the cell case above. The row renderer natively supports both insertions and
+        // deletions, so the same bounded alignment can always surface an inserted row plus a paired edit.
+        var left = FromXml(Table(Row(Cell("A")), Row(Cell("B")), Row(Cell("C"))));
+        var right = FromXml(Table(Row(Cell("A")), Row(Cell("X")), Row(Cell("B2")), Row(Cell("C"))));
+
+        var op = TableOp(left, right);
+        var leftTable = Assert.IsType<IrTable>(left.Body.Blocks.Single());
+        var rightTable = Assert.IsType<IrTable>(right.Body.Blocks.Single());
+        var rows = op.TableDiff!.RowOps;
+
+        Assert.Equal(4, rows.Count);
+        Assert.Equal(IrRowOpKind.EqualRow, rows[0].Kind);
+        Assert.Equal(leftTable.Rows[0].Anchor.ToString(), rows[0].LeftRowAnchor);
+        Assert.Equal(rightTable.Rows[0].Anchor.ToString(), rows[0].RightRowAnchor);
+        Assert.Equal(IrRowOpKind.InsertRow, rows[1].Kind);
+        Assert.Null(rows[1].LeftRowAnchor);
+        Assert.Equal(rightTable.Rows[1].Anchor.ToString(), rows[1].RightRowAnchor);
+        Assert.Equal(IrRowOpKind.ModifyRow, rows[2].Kind);
+        Assert.Equal(leftTable.Rows[1].Anchor.ToString(), rows[2].LeftRowAnchor);
+        Assert.Equal(rightTable.Rows[2].Anchor.ToString(), rows[2].RightRowAnchor);
+        Assert.NotNull(rows[2].CellOps);
+        Assert.Equal(IrRowOpKind.EqualRow, rows[3].Kind);
+        Assert.Equal(leftTable.Rows[2].Anchor.ToString(), rows[3].LeftRowAnchor);
+        Assert.Equal(rightTable.Rows[3].Anchor.ToString(), rows[3].RightRowAnchor);
+    }
+
+    [Fact]
+    public void Merged_or_offset_rows_keep_conservative_positional_cell_pairs()
+    {
+        // gridSpan and gridBefore need a topology-aware phase.  Phase 1 must not reinterpret either as an
+        // ordinary-column insertion just because their cell text happens to form a unique sequence.
+        var left = FromXml(
+            "<w:tbl><w:tblPr/><w:tblGrid/>" +
+            "<w:tr><w:trPr><w:gridBefore w:val=\"1\"/></w:trPr>" +
+            "<w:tc><w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>" +
+            Cell("B") + "</w:tr></w:tbl>");
+        var right = FromXml(
+            "<w:tbl><w:tblPr/><w:tblGrid/>" +
+            "<w:tr><w:trPr><w:gridBefore w:val=\"1\"/></w:trPr>" +
+            "<w:tc><w:tcPr><w:gridSpan w:val=\"2\"/></w:tcPr><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>" +
+            Cell("NEW") + Cell("B") + "</w:tr></w:tbl>");
+
+        var op = TableOp(left, right);
+        var leftTable = Assert.IsType<IrTable>(left.Body.Blocks.Single());
+        Assert.Equal(1, leftTable.Rows[0].GridBefore);
+        var cells = Assert.Single(op.TableDiff!.RowOps, r => r.Kind == IrRowOpKind.ModifyRow).CellOps!;
+
+        // The existing positional result remains: B is paired with NEW and the right B is a surplus tail.
+        Assert.Equal(3, cells.Count);
+        Assert.NotNull(cells[1].LeftCellAnchor);
+        Assert.NotNull(cells[1].RightCellAnchor);
+        Assert.Null(cells[2].LeftCellAnchor);
+        Assert.NotNull(cells[2].RightCellAnchor);
     }
 }

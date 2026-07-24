@@ -1,6 +1,11 @@
 #nullable enable
 
+using System.IO;
 using System.Linq;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using Docxodus;
 using Docxodus.Ir;
 using Xunit;
 
@@ -9,9 +14,9 @@ namespace Docxodus.Tests.Ir;
 /// <summary>
 /// M1.2 Task 3 tests: note references (<c>w:footnoteReference</c>/<c>w:endnoteReference</c> →
 /// <see cref="IrNoteRef"/>), inline images (<c>w:drawing</c> with an embedded <c>a:blip</c> →
-/// <see cref="IrInlineImage"/>), and N12 SDT/smartTag unwrapping. Covers the content-hash semantics
-/// from spec §6.1: note refs hash by kind sentinel only (no id), images by sentinel + image-bytes
-/// hash, and SDT/smartTag unwrap is content-transparent.
+/// <see cref="IrInlineImage"/>), and SDT/smartTag handling. Covers the content-hash semantics from
+/// spec §6.1: note refs hash by kind sentinel only (no id), images by sentinel + image-bytes hash,
+/// inline SDTs/smartTags splice transparently, and block SDTs retain their complete envelope.
 /// </summary>
 public class IrNoteImageSdtTests
 {
@@ -23,9 +28,9 @@ public class IrNoteImageSdtTests
 
     // A drawing element wrapping an inline picture whose a:blip references the given embed rel id.
     private static string Drawing(string embedId, long cx = 100, long cy = 200,
-        string? name = null, string? descr = null)
+        string? name = null, string? descr = null, int docPrId = 1)
     {
-        var docPrAttrs = $"id=\"1\" name=\"{name ?? "Picture 1"}\"" +
+        var docPrAttrs = $"id=\"{docPrId}\" name=\"{name ?? "Picture 1"}\"" +
                          (descr is null ? "" : $" descr=\"{descr}\"");
         return
             "<w:drawing>" +
@@ -143,6 +148,47 @@ public class IrNoteImageSdtTests
             .Inlines.OfType<IrInlineImage>().Single();
 
         Assert.Equal(imgA.ImageBytesHash, imgB.ImageBytesHash);
+        Assert.Equal(imgA.DrawingDigest, imgB.DrawingDigest);
+    }
+
+    [Fact]
+    public void Read_ImageDrawingDigest_IgnoresNonvisualDocPrIdRenumbering()
+    {
+        var docA = IrTestDocuments.FromBodyXmlWithImageParts(
+            $"<w:p><w:r>{Drawing("rId1", docPrId: 1)}</w:r></w:p>",
+            ("rId1", IrTestDocuments.TinyPng));
+        var docB = IrTestDocuments.FromBodyXmlWithImageParts(
+            $"<w:p><w:r>{Drawing("rId1", docPrId: 99)}</w:r></w:p>",
+            ("rId1", IrTestDocuments.TinyPng));
+
+        var imageA = IrReader.Read(docA).Body.Blocks.OfType<IrParagraph>().Single()
+            .Inlines.OfType<IrInlineImage>().Single();
+        var imageB = IrReader.Read(docB).Body.Blocks.OfType<IrParagraph>().Single()
+            .Inlines.OfType<IrInlineImage>().Single();
+
+        Assert.Equal(imageA.DrawingDigest, imageB.DrawingDigest);
+    }
+
+    [Fact]
+    public void Compare_ImageResizeWithSameBytes_RoundTripsBothDrawingLayouts()
+    {
+        var left = IrTestDocuments.FromBodyXmlWithImageParts(
+            $"<w:p><w:r>{Drawing("rIdImage", cx: 100, cy: 200)}</w:r></w:p>",
+            ("rIdImage", IrTestDocuments.TinyPng));
+        var right = IrTestDocuments.FromBodyXmlWithImageParts(
+            $"<w:p><w:r>{Drawing("rIdImage", cx: 300, cy: 200)}</w:r></w:p>",
+            ("rIdImage", IrTestDocuments.TinyPng));
+
+        var leftParagraph = IrReader.Read(left).Body.Blocks.OfType<IrParagraph>().Single();
+        var rightParagraph = IrReader.Read(right).Body.Blocks.OfType<IrParagraph>().Single();
+        Assert.NotEqual(leftParagraph.ContentHash, rightParagraph.ContentHash);
+
+        var redline = DocxDiff.Compare(left, right);
+        var accepted = RevisionProcessor.AcceptRevisions(redline);
+        var rejected = RevisionProcessor.RejectRevisions(redline);
+
+        Assert.Equal(300, MainImage(accepted).WidthEmu);
+        Assert.Equal(100, MainImage(rejected).WidthEmu);
     }
 
     [Fact]
@@ -186,6 +232,24 @@ public class IrNoteImageSdtTests
         Assert.NotEqual(p1.ContentHash, p2.ContentHash);
     }
 
+    [Fact]
+    public void Read_HeaderImage_ResolvesItsOwnRelationshipWhenRelIdsCollideWithMainDocument()
+    {
+        // r:ids are scoped to their owning part. Deliberately reuse rIdImage in the main document and
+        // header, but point them at different image bytes: resolving through Main would return the wrong
+        // image for the header story and make a header-only image edit invisible to the diff.
+        var mainBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x01 };
+        var headerBytes = new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x02 };
+        var doc = DocumentWithMainAndHeaderImageAtSameRelId(mainBytes, headerBytes);
+
+        var header = Assert.Single(IrReader.Read(doc).Headers);
+        var paragraph = Assert.Single(header.Scope.Blocks.OfType<IrParagraph>());
+        var image = Assert.Single(paragraph.Inlines.OfType<IrInlineImage>());
+
+        Assert.Equal(IrHash.Compute(headerBytes), image.ImageBytesHash);
+        Assert.NotEqual(IrHash.Compute(mainBytes), image.ImageBytesHash);
+    }
+
     // --- M2.4b Workstream A: relationship-id-stable opaque hashing -------
     //
     // The headline guard. An OPAQUE element that carries a relationship id (here a VML w:pict /
@@ -210,6 +274,52 @@ public class IrNoteImageSdtTests
         var p = IrReader.Read(doc).Body.Blocks.OfType<IrParagraph>().Single();
         return p.Inlines.OfType<IrOpaqueInline>().Single();
     }
+
+    private static WmlDocument DocumentWithMainAndHeaderImageAtSameRelId(byte[] mainBytes, byte[] headerBytes)
+    {
+        const string w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        const string r = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+        const string a = "http://schemas.openxmlformats.org/drawingml/2006/main";
+        const string wp = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
+
+        using var stream = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(stream, WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles();
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+
+            var mainImage = main.AddNewPart<ImagePart>("image/png", "rIdImage");
+            using (var imageStream = mainImage.GetStream(FileMode.Create, FileAccess.Write))
+                imageStream.Write(mainBytes, 0, mainBytes.Length);
+
+            var header = main.AddNewPart<HeaderPart>("rIdHeader");
+            var headerImage = header.AddNewPart<ImagePart>("image/png", "rIdImage");
+            using (var imageStream = headerImage.GetStream(FileMode.Create, FileAccess.Write))
+                imageStream.Write(headerBytes, 0, headerBytes.Length);
+
+            WritePartXml(header,
+                $"<w:hdr xmlns:w=\"{w}\" xmlns:r=\"{r}\" xmlns:a=\"{a}\" xmlns:wp=\"{wp}\">" +
+                $"<w:p><w:r>{Drawing("rIdImage")}</w:r></w:p></w:hdr>");
+            WritePartXml(main,
+                $"<w:document xmlns:w=\"{w}\" xmlns:r=\"{r}\"><w:body>" +
+                "<w:p><w:r><w:t>body</w:t></w:r></w:p>" +
+                "<w:sectPr><w:headerReference w:type=\"default\" r:id=\"rIdHeader\"/></w:sectPr>" +
+                "</w:body></w:document>");
+        }
+        return new WmlDocument("ir-test.docx", stream.ToArray());
+    }
+
+    private static void WritePartXml(OpenXmlPart part, string xml)
+    {
+        using var stream = part.GetStream(FileMode.Create, FileAccess.Write);
+        using var writer = new StreamWriter(stream);
+        writer.Write(xml);
+    }
+
+    private static IrInlineImage MainImage(WmlDocument document) =>
+        IrReader.Read(document).Body.Blocks.OfType<IrParagraph>().Single()
+            .Inlines.OfType<IrInlineImage>().Single();
 
     [Fact]
     public void Read_OpaqueRel_DifferentRelId_SamePartBytes_SameOpaqueHash()
@@ -245,10 +355,10 @@ public class IrNoteImageSdtTests
         Assert.Equal(a.CanonicalHash, b.CanonicalHash);
     }
 
-    // --- N12: SDT / smartTag unwrap --------------------------------------
+    // --- SDT / smartTag ---------------------------------------------------
 
     [Fact]
-    public void Read_BlockSdt_Unwrapped()
+    public void Read_BlockSdt_PreservedAsEnvelope()
     {
         var doc = Read(
             "<w:sdt><w:sdtPr/><w:sdtContent>" +
@@ -256,7 +366,12 @@ public class IrNoteImageSdtTests
               "<w:p><w:r><w:t>second</w:t></w:r></w:p>" +
             "</w:sdtContent></w:sdt>");
 
-        var paras = doc.Body.Blocks.OfType<IrParagraph>().ToList();
+        var sdt = Assert.IsType<IrSdtBlock>(Assert.Single(doc.Body.Blocks));
+        Assert.Equal(IrAnchorKind.Sdt, sdt.Anchor.Kind);
+        Assert.Same(sdt, doc.FindByAnchor(sdt.Anchor));
+        Assert.Equal("sdt", sdt.Source.Element?.Name.LocalName);
+
+        var paras = sdt.Blocks.OfType<IrParagraph>().ToList();
         Assert.Equal(2, paras.Count);
         Assert.Empty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
 
@@ -266,15 +381,45 @@ public class IrNoteImageSdtTests
     }
 
     [Fact]
-    public void Read_BlockSdt_WithTable_Unwrapped()
+    public void Read_BlockSdt_WithTable_PreservesEnvelope()
     {
         var doc = Read(
             "<w:sdt><w:sdtContent>" +
               "<w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>" +
             "</w:sdtContent></w:sdt>");
 
-        Assert.Single(doc.Body.Blocks.OfType<IrTable>());
+        var sdt = Assert.IsType<IrSdtBlock>(Assert.Single(doc.Body.Blocks));
+        var table = Assert.IsType<IrTable>(Assert.Single(sdt.Blocks));
+        Assert.Same(table, doc.FindByAnchor(table.Anchor));
         Assert.Empty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
+    }
+
+    [Fact]
+    public void Read_BlockSdt_EnvelopeMetadataParticipatesInIdentity()
+    {
+        var left = Assert.IsType<IrSdtBlock>(Assert.Single(Read(
+            "<w:sdt><w:sdtPr><w:tag w:val=\"left\"/></w:sdtPr>" +
+            "<w:sdtContent><w:p><w:r><w:t>same</w:t></w:r></w:p></w:sdtContent></w:sdt>")
+            .Body.Blocks));
+        var right = Assert.IsType<IrSdtBlock>(Assert.Single(Read(
+            "<w:sdt><w:sdtPr><w:tag w:val=\"right\"/></w:sdtPr>" +
+            "<w:sdtContent><w:p><w:r><w:t>same</w:t></w:r></w:p></w:sdtContent></w:sdt>")
+            .Body.Blocks));
+
+        // The direct child structure/text is identical, but wrapper metadata is part of the outer
+        // canonical envelope and therefore must force an atomic SDT identity change.
+        Assert.Equal(left.Blocks.Single().ContentHash, right.Blocks.Single().ContentHash);
+        Assert.NotEqual(left.EnvelopeDigest, right.EnvelopeDigest);
+        Assert.NotEqual(left.ContentHash, right.ContentHash);
+    }
+
+    [Fact]
+    public void Read_BlockSdtWithoutContent_FallsBackToOpaque()
+    {
+        var doc = Read("<w:sdt><w:sdtPr><w:tag w:val=\"broken\"/></w:sdtPr></w:sdt>");
+
+        var opaque = Assert.IsType<IrOpaqueBlock>(Assert.Single(doc.Body.Blocks));
+        Assert.Equal("sdt", opaque.ElementName.LocalName);
     }
 
     [Fact]
@@ -301,6 +446,27 @@ public class IrNoteImageSdtTests
     }
 
     [Fact]
+    public void Read_InlineEnvelopeDigest_DistinguishesWrapperAndMetadata_WhileContentStaysTransparent()
+    {
+        var plain = Para("<w:p><w:r><w:t>controlled</w:t></w:r></w:p>");
+        var oldTag = Para(
+            "<w:p><w:sdt><w:sdtPr><w:tag w:val=\"old\"/></w:sdtPr>" +
+            "<w:sdtContent><w:r><w:t>controlled</w:t></w:r></w:sdtContent></w:sdt></w:p>");
+        var newTag = Para(
+            "<w:p><w:sdt><w:sdtPr><w:tag w:val=\"new\"/></w:sdtPr>" +
+            "<w:sdtContent><w:r><w:t>controlled</w:t></w:r></w:sdtContent></w:sdt></w:p>");
+
+        Assert.Equal(plain.ContentHash, oldTag.ContentHash);
+        Assert.Equal(oldTag.ContentHash, newTag.ContentHash);
+        Assert.NotEqual(plain.InlineEnvelopeDigest, oldTag.InlineEnvelopeDigest);
+        Assert.NotEqual(oldTag.InlineEnvelopeDigest, newTag.InlineEnvelopeDigest);
+        Assert.Equal(oldTag.InlineEnvelopeDigest, Para(
+            "<w:p><w:sdt><w:sdtPr><w:tag w:val=\"old\"/></w:sdtPr>" +
+            "<w:sdtContent><w:r><w:t>controlled</w:t></w:r></w:sdtContent></w:sdt></w:p>")
+            .InlineEnvelopeDigest);
+    }
+
+    [Fact]
     public void Read_NestedSmartTag_Spliced()
     {
         var wrapped = Para(
@@ -313,9 +479,9 @@ public class IrNoteImageSdtTests
     }
 
     [Fact]
-    public void Read_NestedBlockSdt_Unwrapped()
+    public void Read_NestedBlockSdt_PreservesNestedEnvelopes()
     {
-        // sdt-in-sdt, 2 deep: the inner paragraph must surface correctly (no opaque fallback).
+        // sdt-in-sdt, 2 deep: both wrappers stay addressable and the inner paragraph remains reachable.
         var doc = Read(
             "<w:sdt><w:sdtContent>" +
               "<w:sdt><w:sdtContent>" +
@@ -323,9 +489,14 @@ public class IrNoteImageSdtTests
               "</w:sdtContent></w:sdt>" +
             "</w:sdtContent></w:sdt>");
 
-        var para = Assert.Single(doc.Body.Blocks.OfType<IrParagraph>());
+        var outer = Assert.IsType<IrSdtBlock>(Assert.Single(doc.Body.Blocks));
+        var inner = Assert.IsType<IrSdtBlock>(Assert.Single(outer.Blocks));
+        var para = Assert.IsType<IrParagraph>(Assert.Single(inner.Blocks));
         Assert.Empty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
         Assert.Equal("inner", string.Concat(para.Inlines.OfType<IrTextRun>().Select(r => r.Text)));
+        Assert.Same(outer, doc.FindByAnchor(outer.Anchor));
+        Assert.Same(inner, doc.FindByAnchor(inner.Anchor));
+        Assert.Same(para, doc.FindByAnchor(para.Anchor));
     }
 
     [Fact]
@@ -343,9 +514,25 @@ public class IrNoteImageSdtTests
 
         var doc = Read(sb.ToString());
 
-        // No throw, and the cap produced an opaque fallback (the deeply nested sdt is preserved
-        // opaquely rather than fully unwrapped to a paragraph).
-        Assert.NotEmpty(doc.Body.Blocks.OfType<IrOpaqueBlock>());
+        // No throw, and the cap produced an opaque fallback BELOW the preserved outer envelopes.
+        Assert.Contains(FlattenBlocks(doc.Body.Blocks), b => b is IrOpaqueBlock);
+    }
+
+    [Fact]
+    public void Read_BlockSdtInCell_PreservesEnvelopeAndCellText()
+    {
+        var doc = Read(
+            "<w:tbl><w:tr><w:tc>" +
+            "<w:sdt><w:sdtPr><w:tag w:val=\"cell-control\"/></w:sdtPr>" +
+            "<w:sdtContent><w:p><w:r><w:t>inside cell</w:t></w:r></w:p></w:sdtContent></w:sdt>" +
+            "</w:tc></w:tr></w:tbl>");
+
+        var cell = Assert.Single(Assert.Single(doc.Body.Blocks.OfType<IrTable>()).Rows).Cells.Single();
+        var sdt = Assert.IsType<IrSdtBlock>(Assert.Single(cell.Blocks));
+        var para = Assert.IsType<IrParagraph>(Assert.Single(sdt.Blocks));
+        Assert.Equal("inside cell", CellText(cell));
+        Assert.Same(sdt, doc.FindByAnchor(sdt.Anchor));
+        Assert.Same(para, doc.FindByAnchor(para.Anchor));
     }
 
     // --- row-level SDT cell unwrap (M1.4-T3 content-loss fix) -------------------------------------
@@ -401,7 +588,28 @@ public class IrNoteImageSdtTests
         Assert.Equal("deep", CellText(cell));
     }
 
-    private static string CellText(IrCell cell) =>
-        string.Concat(cell.Blocks.OfType<IrParagraph>()
-            .SelectMany(p => p.Inlines.OfType<IrTextRun>()).Select(r => r.Text));
+    private static string CellText(IrCell cell) => string.Concat(cell.Blocks.Select(BlockText));
+
+    private static string BlockText(IrBlock block) => block switch
+    {
+        IrParagraph p => string.Concat(p.Inlines.OfType<IrTextRun>().Select(r => r.Text)),
+        IrSdtBlock sdt => string.Concat(sdt.Blocks.Select(BlockText)),
+        IrTable table => string.Concat(table.Rows.SelectMany(r => r.Cells).Select(CellText)),
+        _ => string.Empty,
+    };
+
+    private static IEnumerable<IrBlock> FlattenBlocks(IrNodeList<IrBlock> blocks)
+    {
+        foreach (var block in blocks)
+        {
+            yield return block;
+            if (block is IrSdtBlock sdt)
+                foreach (var child in FlattenBlocks(sdt.Blocks))
+                    yield return child;
+            else if (block is IrTable table)
+                foreach (var cell in table.Rows.SelectMany(r => r.Cells))
+                    foreach (var child in FlattenBlocks(cell.Blocks))
+                        yield return child;
+        }
+    }
 }

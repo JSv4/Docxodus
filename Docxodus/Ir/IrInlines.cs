@@ -50,7 +50,38 @@ internal sealed record IrBreak(IrBreakKind Kind) : IrInline;
 /// A hyperlink (`w:hyperlink`). Exactly one of <paramref name="Target"/> (external URI) or
 /// <paramref name="InternalTarget"/> (in-document anchor) is expected to be set.
 /// </summary>
-internal sealed record IrHyperlink(string? Target, IrAnchor? InternalTarget, IrNodeList<IrInline> Inlines) : IrInline;
+internal sealed record IrHyperlink(string? Target, IrAnchor? InternalTarget, IrNodeList<IrInline> Inlines) : IrInline
+{
+    /// <summary>
+    /// True when this link originated as a <c>HYPERLINK</c> field rather than a <c>w:hyperlink</c> element.
+    /// This provenance is equality-neutral: a clean field and element form intentionally canonicalize to the
+    /// same link value. The revision planner nevertheless needs it because field plumbing cannot always be
+    /// token-sliced safely, especially for direct <c>w:fldSimple</c> carriers.
+    /// </summary>
+    public bool IsFieldHyperlink { get; init; }
+
+    /// <summary>
+    /// True when <see cref="IsFieldHyperlink"/> came from a direct <c>w:fldSimple</c>. Equality-neutral;
+    /// retained for diagnostics and revision-safety decisions only.
+    /// </summary>
+    public bool IsSimpleField { get; init; }
+
+    /// <summary>
+    /// Digest of field-only hyperlink state that is not represented by <see cref="Target"/> or the display
+    /// inlines: field dirty/lock/data state and noncanonical instruction switches such as <c>\o</c>/<c>\t</c>.
+    /// It is equality-neutral so a clean HYPERLINK field remains canonicalized with <c>w:hyperlink</c>; the
+    /// enclosing paragraph's separate structural-carrier digest consumes it when present.
+    /// </summary>
+    public IrHash FieldMetadataDigest { get; init; }
+
+    public bool Equals(IrHyperlink? other) =>
+        other is not null
+        && Target == other.Target
+        && EqualityComparer<IrAnchor?>.Default.Equals(InternalTarget, other.InternalTarget)
+        && EqualityComparer<IrNodeList<IrInline>>.Default.Equals(Inlines, other.Inlines);
+
+    public override int GetHashCode() => HashCode.Combine(Target, InternalTarget, Inlines);
+}
 
 /// <summary>
 /// A field (`w:fldSimple` or the run-based field machinery), modeled as its instruction string
@@ -68,21 +99,35 @@ internal sealed record IrFieldRun(string Instruction, IrNodeList<IrInline> Cache
 {
     /// <summary>True for a <c>w:fldSimple</c>; false for the run-based <c>w:fldChar</c> machinery.</summary>
     public bool IsSimpleField { get; init; }
+
+    /// <summary>
+    /// Resolver-aware digest of the field representation that the transparent content hash deliberately omits.
+    /// For a simple field this is the complete <c>w:fldSimple</c> carrier (which cannot be safely token-sliced);
+    /// for a run-based field it is the sequence of raw <c>w:fldChar</c> scaffolding, including begin-state
+    /// attributes and <c>w:fldData</c>. The containing paragraph combines this with the instruction and inline
+    /// position into its separate structural-carrier digest. Run-based fields leave cached-result edits on the
+    /// normal token path; any direct simple-field mutation intentionally takes the whole-carrier fallback.
+    /// </summary>
+    public IrHash ScaffoldDigest { get; init; }
 }
 
 /// <summary>A footnote/endnote reference (`w:footnoteReference`/`w:endnoteReference`).</summary>
 internal sealed record IrNoteRef(IrNoteKind Kind, string NoteId) : IrInline;
 
 /// <summary>
-/// An inline image: the image part, a hash of its bytes, EMU dimensions, alt text, and the
-/// addressable <see cref="Unid"/> of the source <c>w:drawing</c> (its <c>pt:Unid</c>, captured by the
-/// reader; null when the drawing carried none). The Unid is the IR's <c>img</c>-anchor identity for
-/// the markdown projection (M1.4-T2). It is equality-neutral metadata: two images with identical
-/// bytes/extent/alt but different Unids are still the same VALUE for diff/hash purposes, so it is
-/// excluded from record equality (the reader feeds image equality off bytes/extent/alt, not position).
+/// An inline image: the image part, a hash of its bytes, modeled dimensions/alt text, and a
+/// relationship-id-stable digest of the complete <c>w:drawing</c> presentation. The drawing digest
+/// covers layout that the compact fields do not model (anchor/wrap/crop/rotation/secondary media), so
+/// a same-byte visual change cannot be classified Equal and leak the right drawing through Reject.
+/// The addressable <see cref="Unid"/> of the source <c>w:drawing</c> is equality-neutral metadata: it
+/// is the markdown projection's <c>img</c>-anchor identity, not image content.
 /// </summary>
 internal sealed record IrInlineImage(Uri PartUri, IrHash ImageBytesHash, long WidthEmu, long HeightEmu, string? AltText) : IrInline
 {
+    /// <summary>Resolver-aware canonical hash of the source <c>w:drawing</c>, including its presentation
+    /// XML but with relationship ids and nonvisual <c>wp:docPr/@id</c> churn normalized.</summary>
+    public IrHash DrawingDigest { get; init; }
+
     /// <summary>The source <c>w:drawing</c>'s <c>pt:Unid</c>, or null when absent. Equality-neutral
     /// (see type remarks): does not participate in the record's structural equality.</summary>
     public string? Unid { get; init; }
@@ -93,10 +138,11 @@ internal sealed record IrInlineImage(Uri PartUri, IrHash ImageBytesHash, long Wi
         && ImageBytesHash == other.ImageBytesHash
         && WidthEmu == other.WidthEmu
         && HeightEmu == other.HeightEmu
-        && AltText == other.AltText;
+        && AltText == other.AltText
+        && DrawingDigest == other.DrawingDigest;
 
     public override int GetHashCode() =>
-        HashCode.Combine(PartUri, ImageBytesHash, WidthEmu, HeightEmu, AltText);
+        HashCode.Combine(PartUri, ImageBytesHash, WidthEmu, HeightEmu, AltText, DrawingDigest);
 }
 
 /// <summary>

@@ -39,7 +39,8 @@ namespace Docxodus.Ir.Diff;
 internal static class IrEditScriptBuilder
 {
     /// <summary>The left side of a move (source), keyed by the moved left block's body index.</summary>
-    private readonly record struct MoveInfo(int GroupId, IrBlock LeftBlock, IrEditOpKind OpKind);
+    private readonly record struct MoveInfo(
+        int GroupId, IrBlock LeftBlock, IrEditOpKind OpKind, bool RequiresWholeParagraphReplace);
 
     public static IrEditScript Build(IrDocument left, IrDocument right, IrDiffSettings settings)
     {
@@ -69,11 +70,11 @@ internal static class IrEditScriptBuilder
     /// kind. Scope names (<c>hdr1</c>…) are per-document positional labels over part-enumeration order —
     /// NOT stable across two documents — so pairing walks the effective story grid instead: for each
     /// section ordinal and kind, resolve each side's effective story (explicit reference, else inherited
-    /// carry-forward), pair the two cells, then de-duplicate to distinct (left part, right part) pairs so
-    /// an inherited story referenced by several sections is diffed once, at its first cell. A left part
-    /// that would pair with two DIFFERENT right parts keeps its first pairing (a part can only be rebuilt
-    /// once); a right part reused across cells is fine — each left part rebuilds to that story and the
-    /// per-cell text equivalence holds.</para>
+    /// carry-forward), then de-duplicate to distinct (left part, right part) pairs. An inherited story used
+    /// by several cells is therefore diffed once. When one LEFT part maps to several different RIGHT stories,
+    /// one plan retains the original left part and every additional plan starts from a cloned left-part graph;
+    /// explicit per-section bindings select the intended output part and may include a topology-only rejoin
+    /// back to the primary part. This preserves an independently reversible story for every output branch.</para>
     ///
     /// <para><b>Ops.</b> A matched pair runs the block aligner over the two stories' block lists exactly
     /// like a note or a cell (a header-text edit surfaces as a ModifyBlock token diff); an all-Equal pair
@@ -88,8 +89,8 @@ internal static class IrEditScriptBuilder
             return null;
 
         var diffs = new List<IrHeaderFooterDiff>();
-        BuildOneHeaderFooterScope(left.Headers, right.Headers, isHeader: true, settings, diffs);
-        BuildOneHeaderFooterScope(left.Footers, right.Footers, isHeader: false, settings, diffs);
+        BuildOneHeaderFooterScope(left, right, left.Headers, right.Headers, isHeader: true, settings, diffs);
+        BuildOneHeaderFooterScope(left, right, left.Footers, right.Footers, isHeader: false, settings, diffs);
         return diffs.Count == 0 ? null : IrNodeList.From(diffs);
     }
 
@@ -97,63 +98,165 @@ internal static class IrEditScriptBuilder
         { IrHeaderFooterKind.Default, IrHeaderFooterKind.First, IrHeaderFooterKind.Even };
 
     private static void BuildOneHeaderFooterScope(
+        IrDocument leftDocument, IrDocument rightDocument,
         IrNodeList<IrHeaderFooter> leftParts, IrNodeList<IrHeaderFooter> rightParts,
         bool isHeader, IrDiffSettings settings, List<IrHeaderFooterDiff> diffs)
     {
-        // The grid spans every section either side references; a tail section with no references of a
-        // kind inherits (carry-forward), so it needs no explicit cell of its own beyond the dedup below.
-        int sectionCount = 0;
+        // Pair stories on the effective section × kind grid, but retain the explicit-left grid too: a static
+        // rebind must compensate for an explicit left reference that would otherwise override a preceding clone.
+        // The body supplies the authoritative section topology; refs only extend that count for malformed input.
+        int sectionCount = Math.Max(SectionCount(leftDocument), SectionCount(rightDocument));
         foreach (var hf in leftParts.Concat(rightParts))
-            foreach (var r in hf.References)
-                sectionCount = Math.Max(sectionCount, r.SectionIndex + 1);
+            foreach (var reference in hf.References)
+                sectionCount = Math.Max(sectionCount, reference.SectionIndex + 1);
 
-        var leftGrid = EffectiveStoryGrid(leftParts, sectionCount);
-        var rightGrid = EffectiveStoryGrid(rightParts, sectionCount);
+        var leftExplicit = ExplicitStoryGrid(leftParts);
+        var rightExplicit = ExplicitStoryGrid(rightParts);
+        var leftGrid = EffectiveStoryGrid(leftExplicit, sectionCount);
+        var rightGrid = EffectiveStoryGrid(rightExplicit, sectionCount);
 
-        var seenPairs = new HashSet<(Uri?, Uri?)>();
-        var usedLeftParts = new HashSet<Uri>();
+        // Distinct physical story pairs are rendered once. Unlike the former "first pairing wins" rule, retain
+        // every pair: a later pair of the same LEFT part receives a cloned left part, letting its redline reject
+        // independently without changing an earlier section that still points at the original.
+        var plans = new List<HeaderFooterPairPlan>();
+        var plansByPair = new Dictionary<(Uri? Left, Uri? Right), HeaderFooterPairPlan>();
+        var plansByCell = new Dictionary<(int Section, IrHeaderFooterKind Kind), HeaderFooterPairPlan>();
         for (int s = 0; s < sectionCount; s++)
         {
             foreach (var kind in HeaderFooterKinds)
             {
-                leftGrid.TryGetValue((s, kind), out var l);
-                rightGrid.TryGetValue((s, kind), out var r);
-                if (l is null && r is null)
+                leftGrid.TryGetValue((s, kind), out var leftStory);
+                rightGrid.TryGetValue((s, kind), out var rightStory);
+                if (leftStory is null && rightStory is null)
                     continue;
-                if (!seenPairs.Add((l?.Scope.PartUri, r?.Scope.PartUri)))
-                    continue; // this exact story pair already diffed at an earlier cell
-                if (l?.Scope.PartUri is { } leftUri && !usedLeftParts.Add(leftUri))
-                    continue; // left part already rebuilt against another right story — first pairing wins
 
-                List<IrEditOp> ops;
-                if (l is not null && r is not null)
+                var pair = (leftStory?.Scope.PartUri, rightStory?.Scope.PartUri);
+                if (!plansByPair.TryGetValue(pair, out var plan))
                 {
-                    var alignment = IrBlockAligner.AlignBlocks(l.Scope.Blocks, r.Scope.Blocks, settings);
-                    ops = ProjectAlignment(l.Scope.Blocks, alignment, settings);
-                    if (!ops.Any(o => o.Kind is not IrEditOpKind.EqualBlock))
-                        continue; // unchanged story — keep the verbatim part carry-over
+                    plan = new HeaderFooterPairPlan(leftStory, rightStory);
+                    plansByPair.Add(pair, plan);
+                    plans.Add(plan);
                 }
-                else if (r is not null)
-                {
-                    ops = r.Scope.Blocks
-                        .Select(b => new IrEditOp(IrEditOpKind.InsertBlock, null, b.Anchor.ToString(), null, null, null))
-                        .ToList();
-                }
-                else
-                {
-                    ops = l!.Scope.Blocks
-                        .Select(b => new IrEditOp(IrEditOpKind.DeleteBlock, b.Anchor.ToString(), null, null, null, null))
-                        .ToList();
-                }
-                if (ops.Count == 0)
-                    continue; // an empty story on one side only — nothing to render or report
-
-                diffs.Add(new IrHeaderFooterDiff(isHeader, kind, s,
-                    ScopeName: (r ?? l)!.ScopeName, LeftScopeName: l?.ScopeName,
-                    LeftPartUri: l?.Scope.PartUri, RightPartUri: r?.Scope.PartUri,
-                    IrNodeList.From(ops)));
+                plan.Cells.Add((s, kind));
+                plansByCell.Add((s, kind), plan);
             }
         }
+
+        foreach (var plan in plans)
+            plan.Ops = BuildHeaderFooterStoryOps(plan.Left, plan.Right, settings);
+
+        // One physical left part can safely be rewritten once. Prefer an unchanged pair as its primary output
+        // (preserving the left part byte-for-byte), otherwise use the first effective cell deterministically;
+        // every other right target gets a separate clone of that same left source.
+        foreach (var group in plans.Where(p => p.LeftPartUri is not null).GroupBy(p => p.LeftPartUri!))
+        {
+            var primary = group
+                .OrderBy(p => p.Ops.Count == 0 ? 0 : 1)
+                .ThenBy(p => p.FirstSectionIndex)
+                .ThenBy(p => p.FirstKind)
+                .First();
+            foreach (var plan in group)
+                plan.CloneLeftPart = !ReferenceEquals(plan, primary);
+        }
+
+        // Plan static references over each kind's output timeline. An explicitly referenced RIGHT cell whose plan
+        // actually changes content or output identity gets an exact binding: the body renderer can carry its raw
+        // right rId, and a right part may map to different left-derived outputs in different sections. Pure A/A
+        // unchanged stories remain absent as before. We also bind at output-part transitions and when an explicit
+        // left reference would override an inherited clone even though the desired output part stays the same.
+        // This produces the crucial clone→primary rejoin record with empty Ops when needed.
+        foreach (var kind in HeaderFooterKinds)
+        {
+            object? previousOutput = null;
+            bool hasPreviousOutput = false;
+            for (int s = 0; s < sectionCount; s++)
+            {
+                if (!plansByCell.TryGetValue((s, kind), out var plan))
+                {
+                    previousOutput = null;
+                    hasPreviousOutput = false;
+                    continue;
+                }
+
+                object desiredOutput = plan.OutputIdentity;
+                leftExplicit.TryGetValue((s, kind), out var explicitLeftStory);
+                rightExplicit.TryGetValue((s, kind), out var explicitRightStory);
+                bool explicitAlreadySelectsDesired = desiredOutput is Uri desiredLeftUri &&
+                    explicitLeftStory?.Scope.PartUri == desiredLeftUri;
+                bool explicitWouldOverrideDesired = explicitLeftStory is not null && !explicitAlreadySelectsDesired;
+                bool rightExplicitNeedsBinding = explicitRightStory is not null &&
+                    (plan.Ops.Count > 0 || plan.CloneLeftPart || plan.LeftPartUri is null);
+                bool needsBinding = rightExplicitNeedsBinding || (hasPreviousOutput
+                    ? !Equals(previousOutput, desiredOutput) || explicitWouldOverrideDesired
+                    : !explicitAlreadySelectsDesired);
+                if (needsBinding)
+                    plan.ReferenceBindings.Add(new IrHeaderFooterBinding(s, kind));
+
+                previousOutput = desiredOutput;
+                hasPreviousOutput = true;
+            }
+        }
+
+        foreach (var plan in plans.OrderBy(p => p.FirstSectionIndex).ThenBy(p => p.FirstKind))
+        {
+            // A topology-only record is meaningful: it rebinds a later section back to the original primary part
+            // after an earlier cloned story. Purely unchanged/no-topology pairs still remain absent as before.
+            if (plan.Ops.Count == 0 && plan.ReferenceBindings.Count == 0)
+                continue;
+
+            var (sectionIndex, kind) = plan.Cells[0];
+            diffs.Add(new IrHeaderFooterDiff(isHeader, kind, sectionIndex,
+                ScopeName: (plan.Right ?? plan.Left)!.ScopeName, LeftScopeName: plan.Left?.ScopeName,
+                LeftPartUri: plan.LeftPartUri, RightPartUri: plan.RightPartUri,
+                IrNodeList.From(plan.Ops), plan.CloneLeftPart,
+                plan.ReferenceBindings.Count == 0 ? null : IrNodeList.From(plan.ReferenceBindings)));
+        }
+    }
+
+    private sealed class HeaderFooterPairPlan
+    {
+        public HeaderFooterPairPlan(IrHeaderFooter? left, IrHeaderFooter? right)
+        {
+            Left = left;
+            Right = right;
+        }
+
+        public IrHeaderFooter? Left { get; }
+        public IrHeaderFooter? Right { get; }
+        public Uri? LeftPartUri => Left?.Scope.PartUri;
+        public Uri? RightPartUri => Right?.Scope.PartUri;
+        public List<(int SectionIndex, IrHeaderFooterKind Kind)> Cells { get; } = new();
+        public List<IrEditOp> Ops { get; set; } = new();
+        public bool CloneLeftPart { get; set; }
+        public List<IrHeaderFooterBinding> ReferenceBindings { get; } = new();
+        public int FirstSectionIndex => Cells[0].SectionIndex;
+        public IrHeaderFooterKind FirstKind => Cells[0].Kind;
+
+        // Original left parts use their URI as a shared identity. Clones and right-only stories use the plan
+        // object itself, so physically distinct output parts never collapse merely because they share a right URI.
+        public object OutputIdentity => !CloneLeftPart && LeftPartUri is { } leftUri ? leftUri : this;
+    }
+
+    private static int SectionCount(IrDocument document) =>
+        Math.Max(1, document.Body.Blocks.OfType<IrParagraph>()
+            .Count(paragraph => paragraph.InlineSectionBreakAnchor is not null) + 1);
+
+    private static List<IrEditOp> BuildHeaderFooterStoryOps(
+        IrHeaderFooter? left, IrHeaderFooter? right, IrDiffSettings settings)
+    {
+        if (left is not null && right is not null)
+        {
+            var alignment = IrBlockAligner.AlignBlocks(left.Scope.Blocks, right.Scope.Blocks, settings);
+            var ops = ProjectAlignment(left.Scope.Blocks, alignment, settings);
+            return ops.Any(op => op.Kind is not IrEditOpKind.EqualBlock) ? ops : new List<IrEditOp>();
+        }
+        if (right is not null)
+            return right.Scope.Blocks
+                .Select(block => new IrEditOp(IrEditOpKind.InsertBlock, null, block.Anchor.ToString(), null, null, null))
+                .ToList();
+        return left!.Scope.Blocks
+            .Select(block => new IrEditOp(IrEditOpKind.DeleteBlock, block.Anchor.ToString(), null, null, null, null))
+            .ToList();
     }
 
     /// <summary>
@@ -162,8 +265,8 @@ internal static class IrEditScriptBuilder
     /// effective story carries forward (Word's inheritance rule); the first section with no reference
     /// has no story. Deterministic — built from the reader's document-ordered reference lists.
     /// </summary>
-    private static Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> EffectiveStoryGrid(
-        IrNodeList<IrHeaderFooter> parts, int sectionCount)
+    private static Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> ExplicitStoryGrid(
+        IrNodeList<IrHeaderFooter> parts)
     {
         var explicitCells = new Dictionary<(int, IrHeaderFooterKind), IrHeaderFooter>();
         foreach (var hf in parts)
@@ -171,6 +274,13 @@ internal static class IrEditScriptBuilder
                 if (!explicitCells.ContainsKey((r.SectionIndex, r.Kind)))
                     explicitCells[(r.SectionIndex, r.Kind)] = hf;
 
+        return explicitCells;
+    }
+
+    private static Dictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> EffectiveStoryGrid(
+        IReadOnlyDictionary<(int Section, IrHeaderFooterKind Kind), IrHeaderFooter> explicitCells,
+        int sectionCount)
+    {
         var grid = new Dictionary<(int, IrHeaderFooterKind), IrHeaderFooter>();
         foreach (var kind in HeaderFooterKinds)
         {
@@ -302,7 +412,7 @@ internal static class IrEditScriptBuilder
 
     // ------------------------------------------------------------------ note correspondence (M2.5 Task 3)
 
-    /// <summary>Walk the body in document order (recursing into tables, textboxes, fields, and hyperlinks the
+    /// <summary>Walk the body in document order (recursing into block SDTs, tables, textboxes, fields, and hyperlinks the
     /// same way the reader/tokenizer do) and return the <see cref="IrNoteRef.NoteId"/> of every reference of
     /// <paramref name="kind"/>, in encounter order — the oracle's note-correspondence axis.</summary>
     private static List<string> CollectNoteReferenceOrder(IrDocument doc, IrNoteKind kind)
@@ -325,6 +435,9 @@ internal static class IrEditScriptBuilder
                     foreach (var row in t.Rows)
                         foreach (var cell in row.Cells)
                             WalkBlocksForNoteRefs(cell.Blocks, kind, sink);
+                    break;
+                case IrSdtBlock sdt:
+                    WalkBlocksForNoteRefs(sdt.Blocks, kind, sink);
                     break;
             }
         }
@@ -517,24 +630,44 @@ internal static class IrEditScriptBuilder
     }
 
     /// <summary>Build (and cache) a note scope's whole-content WORD multiset — the <see cref="IrDiffTokenKind.Word"/>
-    /// tokens of every paragraph block concatenated in document order, keyed by <see cref="IrDiffToken.MatchKey"/>.
+    /// tokens of direct paragraph blocks and paragraphs nested beneath block SDTs, concatenated in document order,
+    /// keyed by <see cref="IrDiffToken.MatchKey"/>.
     /// Whitespace, separators, note-ref/opaque markers and other non-word tokens are EXCLUDED: they are shared
     /// near-uniformly across notes (every note opens with the same note-ref marker and is mostly spaces) and
-    /// would otherwise dominate a Jaccard score, pairing notes by length rather than by content. Non-paragraph
-    /// blocks contribute nothing. The residue similarity is a coarse content-overlap heuristic — it disambiguates
+    /// would otherwise dominate a Jaccard score, pairing notes by length rather than by content. Block SDTs
+    /// contribute their descendant paragraphs; other non-paragraph blocks contribute nothing. The residue
+    /// similarity is a coarse content-overlap heuristic — it disambiguates
     /// which reference a leftover note corresponds to, never gating a forced lone-left/lone-right pair.</summary>
     private static Dictionary<string, int> NoteTokenBag(
         Dictionary<string, Dictionary<string, int>> cache, string cacheKey, IrScope scope, IrDiffSettings settings)
     {
         if (cache.TryGetValue(cacheKey, out var bag)) return bag;
         bag = new Dictionary<string, int>();
-        foreach (var block in scope.Blocks)
-            if (block is IrParagraph p)
-                foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
-                    if (t.Kind == IrDiffTokenKind.Word)
-                        bag[t.MatchKey] = bag.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
+        AddNoteTokens(scope.Blocks, bag, settings);
         cache[cacheKey] = bag;
         return bag;
+    }
+
+    /// <summary>Add word tokens from direct paragraph blocks and paragraph descendants of block SDTs in a note.
+    /// This is deliberately a bookkeeping projection only: it does not make a block SDT token-diffable or alter
+    /// block alignment, which continues to treat its envelope as atomic.</summary>
+    private static void AddNoteTokens(
+        IReadOnlyList<IrBlock> blocks, Dictionary<string, int> bag, IrDiffSettings settings)
+    {
+        foreach (var block in blocks)
+        {
+            switch (block)
+            {
+                case IrParagraph p:
+                    foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+                        if (t.Kind == IrDiffTokenKind.Word)
+                            bag[t.MatchKey] = bag.TryGetValue(t.MatchKey, out int c) ? c + 1 : 1;
+                    break;
+                case IrSdtBlock sdt:
+                    AddNoteTokens(sdt.Blocks, bag, settings);
+                    break;
+            }
+        }
     }
 
     /// <summary>Jaccard index over two token multisets (sum of per-key min counts / sum of per-key max counts).
@@ -641,7 +774,11 @@ internal static class IrEditScriptBuilder
                 var opKind = entry.Kind == IrAlignmentKind.MovedModified
                     ? IrEditOpKind.MoveModifyBlock
                     : IrEditOpKind.MoveBlock;
-                moves[li] = new MoveInfo(nextGroup++, entry.Left!, opKind);
+                moves[li] = new MoveInfo(nextGroup++, entry.Left!, opKind,
+                    StructuralCarrierDiffers(entry.Left!, entry.Right!) ||
+                    (entry.Kind == IrAlignmentKind.MovedModified &&
+                     entry.Left is IrParagraph movedLeft && entry.Right is IrParagraph movedRight &&
+                     HasUnsliceableFieldCarrier(movedLeft, movedRight)));
             }
         }
 
@@ -672,15 +809,21 @@ internal static class IrEditScriptBuilder
             switch (entry.Kind)
             {
                 case IrAlignmentKind.Unchanged:
-                    ops.Add(new IrEditOp(IrEditOpKind.EqualBlock,
-                        entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
-                        null, null, null));
+                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
+                        ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
+                    else
+                        ops.Add(new IrEditOp(IrEditOpKind.EqualBlock,
+                            entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
+                            null, null, null));
                     break;
 
                 case IrAlignmentKind.FormatOnly:
-                    ops.Add(new IrEditOp(IrEditOpKind.FormatOnlyBlock,
-                        entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
-                        null, null, null));
+                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
+                        ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
+                    else
+                        ops.Add(new IrEditOp(IrEditOpKind.FormatOnlyBlock,
+                            entry.Left!.Anchor.ToString(), entry.Right!.Anchor.ToString(),
+                            null, null, null));
                     break;
 
                 case IrAlignmentKind.Modified:
@@ -689,12 +832,14 @@ internal static class IrEditScriptBuilder
 
                 case IrAlignmentKind.Inserted:
                     ops.Add(new IrEditOp(IrEditOpKind.InsertBlock,
-                        null, entry.Right!.Anchor.ToString(), null, null, null));
+                        null, entry.Right!.Anchor.ToString(), null, null, null,
+                        BodyFullRewriteGroupId: entry.BodyFullRewriteGroupId));
                     break;
 
                 case IrAlignmentKind.Deleted:
                     ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
-                        entry.Left!.Anchor.ToString(), null, null, null, null));
+                        entry.Left!.Anchor.ToString(), null, null, null, null,
+                        BodyFullRewriteGroupId: entry.BodyFullRewriteGroupId));
                     break;
 
                 // The detection gate (IrBlockAligner split/merge scan) only ever groups PARAGRAPH
@@ -703,6 +848,17 @@ internal static class IrEditScriptBuilder
                 {
                     var lp = (IrParagraph)entry.Left!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
+                    if (HasStructuralCarrier(lp) || members.Any(HasStructuralCarrier))
+                    {
+                        // A split has no one-to-one paragraph shell in which to place an atomic inline carrier
+                        // or a non-tokenizable field carrier. Lower it to the existing whole-block pair.
+                        ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
+                            lp.Anchor.ToString(), null, null, null, null));
+                        foreach (var member in members)
+                            ops.Add(new IrEditOp(IrEditOpKind.InsertBlock,
+                                null, member.Anchor.ToString(), null, null, null));
+                        break;
+                    }
                     ops.Add(new IrEditOp(IrEditOpKind.SplitBlock,
                         lp.Anchor.ToString(), null, null, null, null, null, null,
                         IrNodeList.From(members.Select(m => m.Anchor.ToString()).ToList()),
@@ -714,6 +870,15 @@ internal static class IrEditScriptBuilder
                 {
                     var rp = (IrParagraph)entry.Right!;
                     var members = entry.MultiBlocks!.Cast<IrParagraph>().ToList();
+                    if (HasStructuralCarrier(rp) || members.Any(HasStructuralCarrier))
+                    {
+                        foreach (var member in members)
+                            ops.Add(new IrEditOp(IrEditOpKind.DeleteBlock,
+                                member.Anchor.ToString(), null, null, null, null));
+                        ops.Add(new IrEditOp(IrEditOpKind.InsertBlock,
+                            null, rp.Anchor.ToString(), null, null, null));
+                        break;
+                    }
                     // Segment diffs are computed singular-vs-members (rp sliced against each left
                     // member) then MIRRORED so each stored diff reads left-member → right-slice,
                     // keeping the universal "left = left document" orientation for every consumer.
@@ -738,7 +903,8 @@ internal static class IrEditScriptBuilder
                         : null;
                     ops.Add(new IrEditOp(
                         move.OpKind, null, entry.Right!.Anchor.ToString(),
-                        tokenDiff, move.GroupId, IsMoveSource: false));
+                        tokenDiff, move.GroupId, IsMoveSource: false,
+                        RequiresWholeParagraphReplace: move.RequiresWholeParagraphReplace));
                     break;
                 }
             }
@@ -785,7 +951,8 @@ internal static class IrEditScriptBuilder
             var move = moves[pendingSources[n]];
             // The source op mirrors the destination's kind; the token diff lives only on the destination.
             ops.Add(new IrEditOp(
-                move.OpKind, move.LeftBlock.Anchor.ToString(), null, null, move.GroupId, IsMoveSource: true));
+                move.OpKind, move.LeftBlock.Anchor.ToString(), null, null, move.GroupId, IsMoveSource: true,
+                RequiresWholeParagraphReplace: move.RequiresWholeParagraphReplace));
             n++;
         }
         pendingSources.RemoveRange(0, n);
@@ -844,7 +1011,119 @@ internal static class IrEditScriptBuilder
         return new IrEditOp(IrEditOpKind.ModifyBlock,
             lp.Anchor.ToString(), rp.Anchor.ToString(),
             tokenDiff, null, null, null,
-            nest ? IrNodeList.From(textboxDiffs!) : null);
+            nest ? IrNodeList.From(textboxDiffs!) : null,
+            RequiresWholeParagraphReplace: StructuralCarrierDiffers(lp, rp) ||
+                HasUnsliceableFieldCarrier(lp, rp));
+    }
+
+    /// <summary>
+    /// Inline SDT/smartTag wrappers and non-hyperlink field code/state are deliberately transparent to ordinary
+    /// token alignment, but either carrier can be corrupted by slicing its source around a revision. Keep the
+    /// alignment stable and mark a differing paired paragraph for a reversible whole-paragraph replacement.
+    /// </summary>
+    private static bool StructuralCarrierDiffers(IrBlock left, IrBlock right) =>
+        left is IrParagraph lp && right is IrParagraph rp &&
+        (lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest ||
+         lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest);
+
+    private static bool HasStructuralCarrier(IrParagraph paragraph) =>
+        paragraph.InlineEnvelopeDigest != default ||
+        paragraph.FieldEnvelopeDigest != default ||
+        ContainsFieldCarrier(paragraph.Inlines);
+
+    /// <summary>
+    /// A field with no visible text has no character span in the token stream. Fine source slicing cannot assign
+    /// it deterministically when adjacent prose is replaced (there may be no Equal token to own the carrier), so
+    /// a modified paired paragraph containing one is rendered as one reversible old/new paragraph pair. Direct
+    /// simple fields with a tab/image/textbox-only result are included: all are zero-width to the tokenizer.
+    /// Textbox-contained fields are included too because the owning drawing is itself zero-width in the outer
+    /// paragraph's source coordinates. A canonicalized HYPERLINK field is included regardless of result width:
+    /// its field origin is equality-neutral in the IR, but its raw simple/complex plumbing cannot be assigned to
+    /// a token slice without risking a bare right-side field surviving Reject.
+    /// </summary>
+    private static bool HasUnsliceableFieldCarrier(IrParagraph left, IrParagraph right) =>
+        HasUnsliceableFieldCarrier(left.Inlines) || HasUnsliceableFieldCarrier(right.Inlines);
+
+    private static bool HasUnsliceableFieldCarrier(IReadOnlyList<IrInline> inlines)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrFieldRun field:
+                    if (VisibleTextLength(field.CachedResult) == 0 || HasUnsliceableFieldCarrier(field.CachedResult))
+                        return true;
+                    break;
+                case IrHyperlink hyperlink:
+                    if (hyperlink.IsFieldHyperlink || HasUnsliceableFieldCarrier(hyperlink.Inlines))
+                        return true;
+                    break;
+                case IrTextbox textbox when ContainsFieldCarrier(textbox.Blocks):
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static int VisibleTextLength(IReadOnlyList<IrInline> inlines)
+    {
+        int length = 0;
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrTextRun text:
+                    length += text.Text.Length;
+                    break;
+                case IrFieldRun field:
+                    length += VisibleTextLength(field.CachedResult);
+                    break;
+                case IrHyperlink hyperlink:
+                    length += VisibleTextLength(hyperlink.Inlines);
+                    break;
+            }
+        }
+        return length;
+    }
+
+    private static bool ContainsFieldCarrier(IReadOnlyList<IrBlock> blocks)
+    {
+        foreach (var block in blocks)
+        {
+            switch (block)
+            {
+                case IrParagraph paragraph when ContainsFieldCarrier(paragraph.Inlines):
+                    return true;
+                case IrTable table:
+                    foreach (var row in table.Rows)
+                        foreach (var cell in row.Cells)
+                            if (ContainsFieldCarrier(cell.Blocks))
+                                return true;
+                    break;
+                case IrSdtBlock sdt when ContainsFieldCarrier(sdt.Blocks):
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool ContainsFieldCarrier(IReadOnlyList<IrInline> inlines)
+    {
+        foreach (var inline in inlines)
+        {
+            switch (inline)
+            {
+                case IrFieldRun:
+                    return true;
+                case IrHyperlink hyperlink:
+                    if (hyperlink.IsFieldHyperlink || ContainsFieldCarrier(hyperlink.Inlines))
+                        return true;
+                    break;
+                case IrTextbox textbox when ContainsFieldCarrier(textbox.Blocks):
+                    return true;
+            }
+        }
+        return false;
     }
 
     // ------------------------------------------------------------------ textbox interiors (M2.4 Task 1)

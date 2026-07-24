@@ -619,6 +619,154 @@ namespace Docxodus
             return node;
         }
 
+        // The accepted document normalizer intentionally joins adjacent tables with the same
+        // bidiVisual setting.  That is normally a useful cleanup, but the IR reader compares the
+        // accepted view of two inputs independently: one input can contain revisions elsewhere and
+        // therefore be normalized while an otherwise-identical clean input keeps its original table
+        // boundaries.  Keep a small, source-aware record of only the table runs that were already
+        // adjacent AND carried no revision markup, so the IR-only accept path can put those original
+        // boundaries back after the normalizer has done its work.  Runs made adjacent by accepting a
+        // deletion are deliberately not captured and remain coalesced.
+        private sealed class PreexistingCleanTableRun
+        {
+            public PreexistingCleanTableRun(IEnumerable<XElement> sourceTables)
+            {
+                Tables = sourceTables
+                    .Select(t => (XElement)RemoveRsidTransform(new XElement(t)))
+                    .ToList();
+                Rows = Tables.SelectMany(t => t.Elements(W.tr))
+                    .Select(TableRunRowMatchShape)
+                    .ToList();
+                FirstTableProperties = Tables[0].Element(W.tblPr) is XElement props
+                    ? new XElement(props)
+                    : null;
+                HasBidiVisual = HasBidiVisualSetting(Tables[0]);
+            }
+
+            public List<XElement> Tables { get; }
+            public List<XElement> Rows { get; }
+            public XElement FirstTableProperties { get; }
+            public bool HasBidiVisual { get; }
+        }
+
+        private static List<PreexistingCleanTableRun> CapturePreexistingCleanTableRuns(XElement root)
+        {
+            var runs = new List<PreexistingCleanTableRun>();
+
+            foreach (var parent in root.DescendantsAndSelf())
+            {
+                // A table inside a revision wrapper is not an untouched input table, even if the
+                // wrapper itself sits outside the table element.  Do not resurrect those boundaries.
+                if (parent.AncestorsAndSelf().Any(e => IsProcessorRevisionMarkup(e.Name)))
+                    continue;
+
+                var currentRun = new List<XElement>();
+                bool? currentBidiVisual = null;
+
+                void Flush()
+                {
+                    if (currentRun.Count >= 2)
+                        runs.Add(new PreexistingCleanTableRun(currentRun));
+                    currentRun.Clear();
+                    currentBidiVisual = null;
+                }
+
+                foreach (var child in parent.Elements())
+                {
+                    if (child.Name != W.tbl || ContainsProcessorRevisionMarkup(child))
+                    {
+                        Flush();
+                        continue;
+                    }
+
+                    var bidiVisual = HasBidiVisualSetting(child);
+                    if (currentRun.Count > 0 && currentBidiVisual != bidiVisual)
+                        Flush();
+
+                    currentRun.Add(child);
+                    currentBidiVisual = bidiVisual;
+                }
+
+                Flush();
+            }
+
+            return runs;
+        }
+
+        private static void RestorePreexistingCleanTableRuns(
+            XElement acceptedRoot,
+            IReadOnlyList<PreexistingCleanTableRun> runs)
+        {
+            foreach (var run in runs)
+            {
+                // Re-split only an unambiguous exact match.  A table can legitimately have the same
+                // row text as another table elsewhere in a part; refusing an ambiguous match is much
+                // safer than moving a clean table run to the wrong location.
+                var matches = acceptedRoot.Descendants(W.tbl)
+                    .Where(table => MatchesMergedCleanTableRun(table, run))
+                    .ToList();
+                if (matches.Count != 1)
+                    continue;
+
+                matches[0].ReplaceWith(run.Tables.Select(t => (object)new XElement(t)).ToArray());
+            }
+        }
+
+        private static bool MatchesMergedCleanTableRun(XElement table, PreexistingCleanTableRun run)
+        {
+            if (HasBidiVisualSetting(table) != run.HasBidiVisual)
+                return false;
+
+            var tableProperties = table.Element(W.tblPr);
+            if (run.FirstTableProperties == null)
+            {
+                if (tableProperties != null)
+                    return false;
+            }
+            else if (tableProperties == null || !XNode.DeepEquals(tableProperties, run.FirstTableProperties))
+            {
+                return false;
+            }
+
+            var rows = table.Elements(W.tr).ToList();
+            if (rows.Count != run.Rows.Count)
+                return false;
+            for (var i = 0; i < rows.Count; i++)
+                if (!XNode.DeepEquals(TableRunRowMatchShape(rows[i]), run.Rows[i]))
+                    return false;
+            return true;
+        }
+
+        // MergeAdjacentTablesTransform recalculates tcW/gridSpan to fit the rolled-up table grid.
+        // Those layout values identify the merge rather than the source row, so ignore them for the
+        // source-to-accepted match while retaining every other row property and every cell payload.
+        private static XElement TableRunRowMatchShape(XElement row) =>
+            (XElement)TableRunMatchNodeShape(row)!;
+
+        private static object? TableRunMatchNodeShape(XNode node)
+        {
+            if (node is not XElement element)
+                return node;
+            if (element.Name == W.tcW || element.Name == W.gridSpan)
+                return null;
+            return new XElement(element.Name,
+                element.Attributes().Where(a => a.Name != PT.UniqueId && a.Name != PT.RunIds),
+                element.Nodes().Select(TableRunMatchNodeShape).Where(n => n != null));
+        }
+
+        private static bool HasBidiVisualSetting(XElement table) =>
+            table.Elements(W.tblPr).Elements(W.bidiVisual).Any();
+
+        private static bool ContainsProcessorRevisionMarkup(XElement element) =>
+            element.DescendantsAndSelf().Any(e => IsProcessorRevisionMarkup(e.Name));
+
+        private static bool IsProcessorRevisionMarkup(XName name) =>
+            TrackedRevisionsElements.Contains(name) ||
+            name == W.customXmlMoveFromRangeStart ||
+            name == W.customXmlMoveFromRangeEnd ||
+            name == W.customXmlMoveToRangeStart ||
+            name == W.customXmlMoveToRangeEnd;
+
         private static object ReverseRevisionsTransform(XNode node, ReverseRevisionsInfo rri)
         {
             var element = node as XElement;
@@ -1280,29 +1428,48 @@ namespace Docxodus
             return node;
         }
 
-        public static WmlDocument AcceptRevisions(WmlDocument document)
+        public static WmlDocument AcceptRevisions(WmlDocument document) =>
+            AcceptRevisionsCore(document, preservePreexistingCleanTableRuns: false);
+
+        /// <summary>
+        /// Accepts revisions for the IR reader while retaining adjacent, revision-free tables that
+        /// existed as separate tables in the input.  The ordinary revision processor deliberately
+        /// coalesces every adjacent compatible table after accepting revisions; that is useful for a
+        /// final accepted document, but it makes the accepted view of a dirty document structurally
+        /// unlike an otherwise-identical clean document.  The IR diff must not turn that incidental
+        /// normalisation into a delete-plus-insert table diff.
+        /// </summary>
+        internal static WmlDocument AcceptRevisionsForIrReader(WmlDocument document) =>
+            AcceptRevisionsCore(document, preservePreexistingCleanTableRuns: true);
+
+        private static WmlDocument AcceptRevisionsCore(
+            WmlDocument document,
+            bool preservePreexistingCleanTableRuns)
         {
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(document))
             {
                 using (WordprocessingDocument doc = streamDoc.GetWordprocessingDocument())
                 {
-                    AcceptRevisions(doc);
+                    AcceptRevisions(doc, preservePreexistingCleanTableRuns);
                 }
                 return streamDoc.GetModifiedWmlDocument();
             }
         }
 
-        public static void AcceptRevisions(WordprocessingDocument doc)
+        public static void AcceptRevisions(WordprocessingDocument doc) =>
+            AcceptRevisions(doc, preservePreexistingCleanTableRuns: false);
+
+        private static void AcceptRevisions(WordprocessingDocument doc, bool preservePreexistingCleanTableRuns)
         {
-            AcceptRevisionsForPart(doc.MainDocumentPart);
+            AcceptRevisionsForPart(doc.MainDocumentPart, preservePreexistingCleanTableRuns);
             foreach (var part in doc.MainDocumentPart.HeaderParts)
-                AcceptRevisionsForPart(part);
+                AcceptRevisionsForPart(part, preservePreexistingCleanTableRuns);
             foreach (var part in doc.MainDocumentPart.FooterParts)
-                AcceptRevisionsForPart(part);
+                AcceptRevisionsForPart(part, preservePreexistingCleanTableRuns);
             if (doc.MainDocumentPart.EndnotesPart != null)
-                AcceptRevisionsForPart(doc.MainDocumentPart.EndnotesPart);
+                AcceptRevisionsForPart(doc.MainDocumentPart.EndnotesPart, preservePreexistingCleanTableRuns);
             if (doc.MainDocumentPart.FootnotesPart != null)
-                AcceptRevisionsForPart(doc.MainDocumentPart.FootnotesPart);
+                AcceptRevisionsForPart(doc.MainDocumentPart.FootnotesPart, preservePreexistingCleanTableRuns);
             if (doc.MainDocumentPart.StyleDefinitionsPart != null)
                 AcceptRevisionsForStylesDefinitionPart(doc.MainDocumentPart.StyleDefinitionsPart);
         }
@@ -1329,9 +1496,12 @@ namespace Docxodus
             return node;
         }
 
-        public static void AcceptRevisionsForPart(OpenXmlPart part)
+        public static void AcceptRevisionsForPart(OpenXmlPart part, bool preservePreexistingCleanTableRuns = false)
         {
             XElement documentElement = part.GetXDocument().Root;
+            var cleanTableRuns = preservePreexistingCleanTableRuns
+                ? CapturePreexistingCleanTableRuns(documentElement)
+                : null;
             documentElement = (XElement)RemoveRsidTransform(documentElement);
             documentElement = (XElement)FixUpDeletedOrInsertedFieldCodesTransform(documentElement);
             var containsMoveFromMoveTo = documentElement.Descendants(W.moveFrom).Any();
@@ -1346,11 +1516,29 @@ namespace Docxodus
             documentElement = (XElement)AcceptAllOtherRevisionsTransform(documentElement);
             documentElement = (XElement)AcceptDeletedCellsTransform(documentElement);
             documentElement = (XElement)MergeAdjacentTablesTransform(documentElement);
+            if (cleanTableRuns is { Count: > 0 })
+                RestorePreexistingCleanTableRuns(documentElement, cleanTableRuns);
             documentElement = (XElement)AddEmptyParagraphToAnyEmptyCells(documentElement);
             documentElement.Descendants().Attributes().Where(a => a.Name == PT.UniqueId || a.Name == PT.RunIds).Remove();
             documentElement.Descendants(W.numPr).Where(np => !np.HasElements).Remove();
+            RemoveEmptyParagraphMarkShells(documentElement);
             XDocument newXDoc = new XDocument(documentElement);
             part.PutXDocument(newXDoc);
+        }
+
+        /// <summary>Removing a paragraph-mark revision (<c>w:pPr/w:rPr/w:ins</c> etc.) can leave an
+        /// empty <c>w:rPr</c> — and then an empty <c>w:pPr</c> — husk behind. Word's accept removes
+        /// the emptied shells; keeping them makes text-identical paragraphs from two processed
+        /// documents differ structurally, desynchronizing downstream block matching.</summary>
+        private static void RemoveEmptyParagraphMarkShells(XElement documentElement)
+        {
+            documentElement.Descendants(W.pPr)
+                .Elements(W.rPr)
+                .Where(r => !r.HasElements && !r.HasAttributes)
+                .Remove();
+            documentElement.Descendants(W.pPr)
+                .Where(p => !p.HasElements && !p.HasAttributes)
+                .Remove();
         }
 
         // Note that AcceptRevisionsForElement is an incomplete implementation.  It is not possible to accept all varieties of revisions
@@ -1537,7 +1725,24 @@ namespace Docxodus
                 if (element.Name == W.moveTo)
                     return element.Nodes().Select(n => AcceptMoveFromMoveToTransform(n));
                 if (element.Name == W.moveFrom)
+                {
+                    // w:pPr/w:rPr/w:moveFrom is the paragraph-MARK move-source sentinel (CT_ParaRPr),
+                    // not moved run content. Word removes the paragraph mark when the move is accepted
+                    // (the paragraph coalesces with what follows, or vanishes when all its content
+                    // moved away). Rewrite the mark to w:del so the later
+                    // AcceptDeletedAndMoveFromParagraphMarks pass — which already handles deleted
+                    // paragraph marks, including the paragraph-before-a-table / end-of-container
+                    // removal rule — treats it exactly like a deleted mark. Returning null here (the
+                    // old behavior) destroyed the mark before that pass could see it, leaving a
+                    // spurious empty paragraph behind on every Word-authored moved-away paragraph
+                    // (Word writes w:moveFrom marks; DocxDiff's own move markup writes w:del, which
+                    // is why in-house round-trips never hit this). Reject routes reversed moveTo
+                    // marks through this same path, so both directions are covered.
+                    if (element.Parent is { } rPr && rPr.Name == W.rPr &&
+                        rPr.Parent is { } pPr && pPr.Name == W.pPr)
+                        return new XElement(W.del, element.Attributes());
                     return null;
+                }
                 return new XElement(element.Name,
                     element.Attributes(),
                     element.Nodes().Select(n => AcceptMoveFromMoveToTransform(n)));
@@ -1794,6 +1999,26 @@ namespace Docxodus
                         return null;
                 }
 
+                // Accept revisions for a wholly-deleted hyperlink: a w:hyperlink whose content children all
+                // sit inside w:del/w:moveFrom would otherwise collapse to an empty <w:hyperlink> shell that
+                // keeps its paragraph alive (visible when rejecting an inserted hyperlink — the reversed
+                // w:ins→w:del removes every run but the shell survived). Drop the shell; bookmark markers
+                // inside it are preserved (the hyperlink-shell analogue of the wholly-deleted-table rule).
+
+                if (element.Name == W.hyperlink &&
+                    element.Elements().Any(e => e.Name == W.del || e.Name == W.moveFrom))
+                {
+                    var transformed = new XElement(W.hyperlink,
+                        element.Attributes(),
+                        element.Nodes().Select(n => AcceptAllOtherRevisionsTransform(n)));
+                    var hasContent = transformed.Elements().Any(e =>
+                        e.Name != W.bookmarkStart && e.Name != W.bookmarkEnd && e.Name != W.proofErr);
+                    if (!hasContent)
+                        return transformed.Elements()
+                            .Where(e => e.Name == W.bookmarkStart || e.Name == W.bookmarkEnd);
+                    return transformed;
+                }
+
                 // Accept deleted text in paragraphs.
 
                 if (element.Name == W.del)
@@ -1870,6 +2095,60 @@ namespace Docxodus
         /// the paragraph nodes when adding content, thereby preserving custom XML and content
         /// controls.
 
+        /// <summary>
+        /// True when <paramref name="candidate"/> is one block unit in
+        /// <paramref name="contentContainer"/>'s paragraph-mark stream. A block-level content control is a
+        /// boundary in that stream: its descendants must be processed inside its own <c>w:sdtContent</c>, never
+        /// paired with a deleted paragraph immediately outside the control. Treating the wrapper as transparent
+        /// turns a block SDT into an inline <c>w:p/w:sdt</c> during accept/reject (and drops <c>w:sdtPr</c>
+        /// ownership metadata).
+        /// </summary>
+        private static bool IsBlockContentElement(XElement candidate, XElement contentContainer) =>
+            candidate.Name == W.p || candidate.Name == W.tbl ||
+            (candidate.Name == W.sdt && candidate.Parent == contentContainer &&
+             IsBlockSdt(candidate));
+
+        /// <summary>
+        /// True for an SDT that occupies a block stream (body/cell/header/footer/note), including a nested
+        /// block SDT. Inline controls are children of a paragraph/run container and deliberately return false.
+        /// </summary>
+        private static bool IsBlockSdt(XElement sdt)
+        {
+            if (sdt.Name != W.sdt || sdt.Parent is not XElement parent)
+                return false;
+            if (W.BlockLevelContentContainers.Contains(parent.Name))
+                return true;
+            return parent.Name == W.sdtContent && parent.Parent is XElement outer && IsBlockSdt(outer);
+        }
+
+        /// <summary>
+        /// Whether an SDT content container carries BLOCK children rather than inline run content. The recursive
+        /// check distinguishes an outer block SDT whose only direct child is another block SDT from an inline
+        /// nested control whose content ultimately contains runs. Paragraph-mark processing must never rebuild the
+        /// latter as a block container.
+        /// </summary>
+        private static bool IsBlockSdtContent(XElement content)
+        {
+            foreach (var child in content.Elements())
+            {
+                if (child.Name == W.p || child.Name == W.tbl)
+                    return true;
+                if (child.Name == W.sdt && child.Element(W.sdtContent) is { } nested &&
+                    IsBlockSdtContent(nested))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// A block-level <c>w:sdtContent</c> needs the same deleted-paragraph-mark processing as a body/cell,
+        /// while an inline SDT's content contains runs and must remain on the ordinary identity-clone path.
+        /// </summary>
+        private static bool IsParagraphMarkContentContainer(XElement element) =>
+            W.BlockLevelContentContainers.Contains(element.Name) ||
+            (element.Name == W.sdtContent && element.Parent is XElement owner &&
+             IsBlockSdt(owner) && IsBlockSdtContent(element));
+
         private static void AnnotateBlockContentElements(XElement contentContainer)
         {
             // For convenience, there is a ParagraphInfo annotation on the contentContainer.
@@ -1880,7 +2159,7 @@ namespace Docxodus
             XElement firstContentElement = contentContainer
                 .Elements()
                 .DescendantsAndSelf()
-                .FirstOrDefault(e => e.Name == W.p || e.Name == W.tbl);
+                .FirstOrDefault(e => IsBlockContentElement(e, contentContainer));
             if (firstContentElement == null)
                 return;
 
@@ -1904,7 +2183,7 @@ namespace Docxodus
                     nextContentElement = current
                         .ElementsAfterSelf()
                         .DescendantsAndSelf()
-                        .FirstOrDefault(e => e.Name == W.p || e.Name == W.tbl);
+                        .FirstOrDefault(e => IsBlockContentElement(e, contentContainer));
                     if (nextContentElement != null)
                     {
                         currentContentInfo.NextBlockContentElement = nextContentElement;
@@ -1997,10 +2276,17 @@ namespace Docxodus
 
                 // find list of runs to surround
                 var runIds = contentControl.Attribute(PT.RunIds).Value.Split(',');
-                var runs = contentControl.Descendants(W.r).Where(r => runIds.Contains(r.Attribute(PT.UniqueId).Value));
-                // find the runs in the new document
-
-                var runsInNewDocument = runs.Select(r => newDocument.Descendants(W.r).First(z => z.Attribute(PT.UniqueId).Value == r.Attribute(PT.UniqueId).Value)).ToList();
+                var runs = contentControl.Descendants(W.r).Where(r => runIds.Contains(r.Attribute(PT.UniqueId)?.Value));
+                // Find the runs in the new document. A recorded run may not SURVIVE accept (its
+                // whole content was deleted/moved) — skip missing ones rather than throw; when no
+                // run survives there is nothing to wrap and the control is dropped with its content.
+                var runsInNewDocument = runs
+                    .Select(r => newDocument.Descendants(W.r)
+                        .FirstOrDefault(z => z.Attribute(PT.UniqueId)?.Value == r.Attribute(PT.UniqueId)?.Value))
+                    .Where(z => z != null)
+                    .ToList();
+                if (runsInNewDocument.Count == 0)
+                    continue;
 
                 // find common ancestor
                 List<XElement> runAncestorIntersection = null;
@@ -2139,7 +2425,7 @@ namespace Docxodus
             XElement element = node as XElement;
             if (element != null)
             {
-                if (W.BlockLevelContentContainers.Contains(element.Name))
+                if (IsParagraphMarkContentContainer(element))
                 {
                     XElement bodySectPr = null;
                     if (element.Name == W.body)
@@ -2236,7 +2522,9 @@ namespace Docxodus
                                 continue;
                             }
                         }
-                        else if (c.ThisBlockContentElement.Name == W.tbl || c.ThisBlockContentElement.Name.Namespace == M.m)
+                        else if (c.ThisBlockContentElement.Name == W.tbl ||
+                                 c.ThisBlockContentElement.Name == W.sdt ||
+                                 c.ThisBlockContentElement.Name.Namespace == M.m)
                         {
                             currentKey += 1;
                             deletedParagraphGroupingInfo.Add(
@@ -2295,7 +2583,8 @@ namespace Docxodus
                                 if (allIsDeleted &&
                                     g.Last().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr).Elements(W.rPr).Elements(W.del).Any() &&
                                     (g.Last().BlockLevelContent.NextBlockContentElement == null ||
-                                     g.Last().BlockLevelContent.NextBlockContentElement.Name == W.tbl))
+                                     g.Last().BlockLevelContent.NextBlockContentElement.Name == W.tbl ||
+                                     g.Last().BlockLevelContent.NextBlockContentElement.Name == W.sdt))
                                     return null;
 
                                 return (object)newParagraph;
@@ -2355,11 +2644,20 @@ namespace Docxodus
                     element.Name == W.bdr ||
                     element.Name == W.ins ||
                     element.Name == W.moveTo ||
-                    element.Name == W.smartTag)
-                    return element.Elements();
+                    element.Name == W.smartTag ||
+                    // Collapse hyperlinks too so AllParaContentIsDeleted sees THROUGH the shell:
+                    // a w:hyperlink holding only w:del content is not surviving content (IsRunContent
+                    // would otherwise count the shell itself as content and keep an empty paragraph
+                    // alive — visible when rejecting an inserted trailing hyperlink paragraph).
+                    element.Name == W.hyperlink)
+                    // Recurse while collapsing. Inline wrappers can nest (for example,
+                    // w:hyperlink > w:ins > w:r); returning only the immediate children would
+                    // leave w:ins at paragraph level, where AllParaContentIsDeleted cannot
+                    // classify it as run content.
+                    return element.Nodes().Select(n => CollapseTransform(n));
 
                 if (element.Name == W.sdt)
-                    return element.Elements(W.sdtContent).Elements();
+                    return element.Elements(W.sdtContent).Nodes().Select(n => CollapseTransform(n));
 
                 if (element.Name == W.pPr)
                     return null;
@@ -3300,4 +3598,3 @@ namespace Docxodus
 ///   cell immediately preceding the group of deleted cells by the
 ///   ***sum*** of the values of the w:val attributes of w:gridSpan
 ///   elements of each of the deleted cells.
-

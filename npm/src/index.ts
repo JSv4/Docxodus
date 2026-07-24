@@ -637,7 +637,7 @@ export async function compareDocuments(
   await yieldToMain();
 
   let result: Uint8Array;
-  const engine = options?.engine ?? ComparisonEngine.WmlComparer;
+  const engine = options?.engine ?? ComparisonEngine.DocxDiff;
 
   if (options?.detailThreshold !== undefined || options?.caseInsensitive) {
     result = exports.DocumentComparer.CompareDocumentsWithOptions(
@@ -686,7 +686,7 @@ export async function compareDocumentsToHtml(
   await yieldToMain();
 
   const renderTrackedChanges = options?.renderTrackedChanges ?? true;
-  const engine = options?.engine ?? ComparisonEngine.WmlComparer;
+  const engine = options?.engine ?? ComparisonEngine.DocxDiff;
 
   let result: string;
 
@@ -924,8 +924,7 @@ export async function getRevisions(
 
 // ─── DocxDiff (IR diff engine) ──────────────────────────────────────────────
 //
-// The NEW structure-aware comparison engine, exposed alongside the default
-// WmlComparer-backed compareDocuments/getRevisions. Differentiators:
+// The structure-aware default comparison engine. Its specialized APIs add
 // anchor-addressed revisions and the diff-as-data edit script. Settings flow as
 // a JSON object; an empty `{}` (or omitted options) uses the engine defaults.
 
@@ -2772,4 +2771,3 @@ export async function generateAnnotationCss(
   const parsed = JSON.parse(result);
   return parsed.Css ?? parsed.css;
 }
-

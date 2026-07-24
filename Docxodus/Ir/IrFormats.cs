@@ -20,6 +20,13 @@ internal enum IrLineSpacingRule { Auto, AtLeast, Exact }
 /// <summary>Line spacing: the value in twips plus the rule that interprets it.</summary>
 internal sealed record IrLineSpacing(int ValueTwips, IrLineSpacingRule Rule);
 
+/// <summary>
+/// Direct shading (`w:shd`) represented by its canonical OOXML rather than a lossy fill-color projection.
+/// The element's pattern, foreground/background/theme values, and any future attributes therefore all
+/// participate in equality exactly as written (modulo canonical noise normalization).
+/// </summary>
+internal sealed record IrShading(string CanonicalXml);
+
 /// <summary>Break kind (`w:br/@w:type`): line, page, or column.</summary>
 internal enum IrBreakKind { Line, Page, Column }
 
@@ -74,6 +81,8 @@ internal sealed record IrRunFormat
     /// <summary>`w:color/@w:val` as written, including the literal string "auto".</summary>
     public string? ColorHex { get; init; }
     public string? Highlight { get; init; }
+    /// <summary>Direct run shading (`w:shd`), when present.</summary>
+    public IrShading? Shading { get; init; }
     public bool? Caps { get; init; }
     public bool? SmallCaps { get; init; }
     public bool? Vanish { get; init; }
@@ -105,6 +114,8 @@ internal sealed record IrParaFormat
     public bool? KeepNext { get; init; }
     public bool? KeepLines { get; init; }
     public bool? PageBreakBefore { get; init; }
+    /// <summary>Direct paragraph shading (`w:shd`), when present.</summary>
+    public IrShading? Shading { get; init; }
 
     /// <summary>Direct list membership (`w:numPr/w:numId/@w:val`) as written; null when absent.</summary>
     public int? NumId { get; init; }

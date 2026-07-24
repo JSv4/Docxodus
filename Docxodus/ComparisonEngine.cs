@@ -7,19 +7,18 @@ namespace Docxodus;
 /// surfaces that route through it — use to redline two DOCX documents.
 ///
 /// <para>The integer values are part of the contract: the WASM and npm surfaces marshal the
-/// selector as an <c>int</c>, and <c>0</c> (the default / unset value) MUST map to
-/// <see cref="WmlComparer"/> so that omitting the selector reproduces today's behavior exactly.</para>
+/// selector as an <c>int</c>, and <c>0</c> remains mapped to
+/// <see cref="WmlComparer"/> for wire compatibility. Public surfaces that omit the selector choose
+/// <see cref="DocxDiff"/> explicitly.</para>
 ///
-/// <para><see cref="WmlComparer"/> is the blessed default. <see cref="DocxDiff"/> is the newer IR diff
-/// engine — a production-candidate that becomes the default only after the Word manual-verification
-/// checklist clears and a burn-in period (decision D4). This selector is the seam that lets that flip
-/// happen in one line; M-B does NOT flip it.</para>
+/// <para><see cref="DocxDiff"/> is the default comparison engine. <see cref="WmlComparer"/> remains
+/// available through an explicit selector for callers that require its historical behavior.</para>
 /// </summary>
 public enum ComparisonEngine
 {
-    /// <summary>The default, blessed <see cref="Docxodus.WmlComparer"/> engine.</summary>
+    /// <summary>The legacy <see cref="Docxodus.WmlComparer"/> engine (retained at wire value 0).</summary>
     WmlComparer = 0,
 
-    /// <summary>The <see cref="Docxodus.DocxDiff"/> IR diff engine (production-candidate; opt-in).</summary>
+    /// <summary>The default <see cref="Docxodus.DocxDiff"/> IR diff engine.</summary>
     DocxDiff = 1,
 }

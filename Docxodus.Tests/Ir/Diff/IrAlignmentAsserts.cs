@@ -25,10 +25,12 @@ internal static class IrAlignmentAsserts
     /// unmodeled rPr noise (lang/bCs/iCs/…) is legitimately Unchanged under the default policy even
     /// though its stored FormatFingerprint differs.</item>
     /// <item>FormatOnly ⇒ both present, ContentHash equal, format DIFFERS under the policy.</item>
-    /// <item>Moved ⇒ both present, ContentHash equal (format may differ).</item>
+    /// <item>Moved ⇒ both present, ContentHash equal. Structural blocks may retain an unprojected
+    /// format delta while the renderer has no reversible in-move representation for it.</item>
     /// <item>Modified ⇒ both present (no hash constraint).</item>
-    /// <item>MovedModified ⇒ both present (no hash constraint — M2.2 fuzzy moved+edited;
-    /// ContentHash equality is NOT required and would mean it should have been plain Moved).</item>
+    /// <item>MovedModified ⇒ both present (no hash constraint). It covers fuzzy moved+edited pairs
+    /// and content-equal paragraph moves with a modeled format delta, whose token diff contains
+    /// FormatChanged spans.</item>
     /// <item>Split (M2.6) ⇒ Left non-null, Right null, MultiBlocks ≥2 right blocks; the N right
     /// members count toward the right totality multiset.</item>
     /// <item>Merge (M2.6) ⇒ Left null, Right non-null, MultiBlocks ≥2 left blocks; the N left
@@ -80,8 +82,8 @@ internal static class IrAlignmentAsserts
                     Assert.NotNull(e.Right);
                     break;
                 case IrAlignmentKind.MovedModified:
-                    // M2.2 Task 3: fuzzy moved+edited. Both present; ContentHash NOT required equal
-                    // (equal ContentHash would mean it should have classified as plain Moved instead).
+                    // Both sides are present. Content may differ for a fuzzy moved+edit, or it may be equal
+                    // for a moved paragraph whose format-only delta needs a reversible token projection.
                     Assert.NotNull(e.Left);
                     Assert.NotNull(e.Right);
                     break;

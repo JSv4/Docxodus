@@ -9,10 +9,10 @@ namespace Docxodus.Tests.Ir.Diff;
 
 /// <summary>
 /// M2.2 Task 4 sub-task B tests for the <see cref="IrFormatComparison"/> policy. Two content-equal
-/// paragraphs differing ONLY in an unmodeled rPr child (the WC-BodyBookmarks noise pattern: w:lang /
+/// paragraphs differing ONLY in a residual rPr child (the WC-BodyBookmarks noise pattern: w:lang /
 /// w:bCs / w:iCs / w:szCs / w:rFonts cs faces) must classify as Unchanged under the default ModeledOnly
-/// policy (the unmodeled digest flips the stored FormatFingerprint but no MODELED field changed) and as
-/// FormatOnly under Full. A genuine MODELED format change (bold) is FormatOnly under BOTH policies.
+/// policy (the residual digest flips the stored FormatFingerprint but no MODELED field changed) and as
+/// FormatOnly under Full. A visible `w:shd` change is deliberately modeled under BOTH policies.
 /// </summary>
 public class IrFormatComparisonTests
 {
@@ -33,12 +33,7 @@ public class IrFormatComparisonTests
     [InlineData("<w:bCs/>")]                      // complex-script bold toggle (550 occ.)
     [InlineData("<w:iCs/>")]                      // complex-script italic toggle (1328 occ.)
     [InlineData("<w:szCs w:val=\"24\"/>")]       // complex-script size (3 occ.)
-    // w:shd is NOT noise — it's a VISIBLE unmodeled format change (run shading). It pins the
-    // documented ModeledOnly trade-off: visible-but-undescribable changes are false negatives
-    // (Unchanged) under the default and detectable (FormatOnly) only under Full. See
-    // IrFormatComparison.ModeledOnly's XML-doc.
-    [InlineData("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFFF00\"/>")]
-    public void Unmodeled_rpr_only_diff_is_unchanged_under_modeled_only_but_formatonly_under_full(string noiseRpr)
+    public void Residual_rpr_only_diff_is_unchanged_under_modeled_only_but_formatonly_under_full(string noiseRpr)
     {
         var left = FromXml(Para(string.Empty));
         var right = FromXml(Para(noiseRpr));
@@ -60,6 +55,21 @@ public class IrFormatComparisonTests
         Assert.Equal(IrAlignmentKind.FormatOnly, full.Entries.Single().Kind);
         IrAlignmentAsserts.AssertInvariants(left, right, full,
             new IrDiffSettings { FormatComparison = IrFormatComparison.Full });
+    }
+
+    [Fact]
+    public void Shading_only_rpr_diff_is_formatonly_under_both_policies()
+    {
+        var left = FromXml(Para(string.Empty));
+        var right = FromXml(Para("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"FFFF00\"/>"));
+
+        foreach (var comparison in new[] { IrFormatComparison.ModeledOnly, IrFormatComparison.Full })
+        {
+            var alignment = Align(left, right, comparison);
+            Assert.Equal(IrAlignmentKind.FormatOnly, alignment.Entries.Single().Kind);
+            IrAlignmentAsserts.AssertInvariants(left, right, alignment,
+                new IrDiffSettings { FormatComparison = comparison });
+        }
     }
 
     [Fact]

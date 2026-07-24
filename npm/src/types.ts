@@ -177,17 +177,17 @@ export enum RevisionType {
  * use to redline two documents.
  *
  * The numeric values are the contract shared with the .NET `ComparisonEngine` enum
- * and the WASM boundary (marshalled as an int); `0` (the default) MUST be
- * {@link ComparisonEngine.WmlComparer} so that omitting the selector reproduces
- * today's behavior exactly.
+ * and the WASM boundary (marshalled as an int); `0` remains
+ * {@link ComparisonEngine.WmlComparer} for wire compatibility. Omitted selectors use
+ * {@link ComparisonEngine.DocxDiff}.
  *
- * `WmlComparer` is the blessed default. `DocxDiff` is the newer IR diff engine — a
- * production-candidate that is opt-in until it becomes the default (decision D4).
+ * `DocxDiff` is the default comparison engine. `WmlComparer` remains available for
+ * callers that explicitly require its historical behavior.
  */
 export enum ComparisonEngine {
-  /** The default, blessed WmlComparer engine. */
+  /** The legacy WmlComparer engine (retained at wire value 0). */
   WmlComparer = 0,
-  /** The DocxDiff IR diff engine (production-candidate; opt-in). */
+  /** The default DocxDiff IR diff engine. */
   DocxDiff = 1,
 }
 
@@ -334,9 +334,8 @@ export interface CompareOptions {
    */
   renderTrackedChanges?: boolean;
   /**
-   * Which comparison engine to use (default: {@link ComparisonEngine.WmlComparer}).
-   * Omit for the blessed WmlComparer engine; pass {@link ComparisonEngine.DocxDiff}
-   * to opt into the newer IR diff engine.
+   * Which comparison engine to use (default: {@link ComparisonEngine.DocxDiff}).
+   * Pass {@link ComparisonEngine.WmlComparer} only when its historical behavior is required.
    */
   engine?: ComparisonEngine;
 }
@@ -440,11 +439,9 @@ export interface FormatChangeDetails {
 
 // ─── DocxDiff (IR diff engine) ──────────────────────────────────────────────
 //
-// The NEW structure-aware comparison engine, exposed alongside the default
-// WmlComparer-backed `compareDocuments`/`getRevisions`. Its differentiators:
+// The structure-aware default comparison engine. Its specialized APIs expose
 // anchor-addressed revisions (`leftAnchor`/`rightAnchor`) and the diff-as-data
-// edit script (`docxDiffGetEditScript`). WmlComparer remains the default for
-// production redlines until the swap is ratified.
+// edit script (`docxDiffGetEditScript`).
 
 /**
  * How `docxDiffGetRevisions` projects the edit script to revisions. Integer
@@ -479,6 +476,16 @@ export interface DocxDiffSettings {
   deterministic?: boolean;
   /** Explicit ISO-8601 revision date; overrides `deterministic` when set. */
   dateTimeForRevisions?: string;
+  /**
+   * Accept every pre-existing revision on both inputs before comparing (default false).
+   * This flattens prior authorship; `preserveInputRevisions` takes precedence when both are set.
+   */
+  preAcceptInputRevisions?: boolean;
+  /**
+   * Preserve the inputs' existing tracked revisions Word-style (default false).
+   * This takes precedence over `preAcceptInputRevisions` when both are set.
+   */
+  preserveInputRevisions?: boolean;
   /** Case-fold word match keys (default false). */
   caseInsensitive?: boolean;
   /** Culture name (e.g. "tr-TR") for case folding when `caseInsensitive` is true; default invariant/ordinal. */
@@ -3042,4 +3049,3 @@ export interface ExternalAnnotationProjectionSettings {
   /** Whether to validate annotations before projection (default: true) */
   validateBeforeProjection?: boolean;
 }
-

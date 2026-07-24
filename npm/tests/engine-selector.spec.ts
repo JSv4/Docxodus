@@ -79,11 +79,11 @@ test.describe('Shared comparison-engine selector (M-B)', () => {
     expect(revisions.revisions!.length).toBeGreaterThan(0);
   });
 
-  test('explicit WmlComparer engine (0) matches the default path', async ({ page }) => {
+  test('explicit DocxDiff engine (1) matches the default path', async ({ page }) => {
     const original = readTestFile(ORIGINAL);
     const modified = readTestFile(MODIFIED);
 
-    const result = await compareWithEngine(page, original, modified, 0);
+    const result = await compareWithEngine(page, original, modified, 1);
     expect(result.error).toBeUndefined();
     expectValidDocx(result.docxBytes);
 
@@ -104,5 +104,17 @@ test.describe('Shared comparison-engine selector (M-B)', () => {
     const revisions = await getRevisions(page, result.docxBytes!);
     expect(revisions.error).toBeUndefined();
     expect(revisions.revisions!.length).toBeGreaterThan(0);
+  });
+
+  test('byte-identical inputs preserve the exact package for every engine selector', async ({ page }) => {
+    const original = readTestFile(ORIGINAL);
+    const expected = Array.from(original);
+
+    for (const engine of [undefined, 0, 1]) {
+      const result = await compareWithEngine(page, original, original, engine);
+      expect(result.error).toBeUndefined();
+      expectValidDocx(result.docxBytes);
+      expect(result.docxBytes).toEqual(expected);
+    }
   });
 });

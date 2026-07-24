@@ -20,6 +20,7 @@ public class IrFormatTests
             Underline = new IrUnderline(IrUnderlineKind.Single, "FF0000"),
             SizeHalfPoints = 24,
             ColorHex = "auto",
+            Shading = new IrShading("<w:shd w:fill=\"FFFF00\"/>"),
             UnmodeledDigest = digestA,
         };
         var run2 = new IrRunFormat
@@ -29,14 +30,17 @@ public class IrFormatTests
             Underline = new IrUnderline(IrUnderlineKind.Single, "FF0000"),
             SizeHalfPoints = 24,
             ColorHex = "auto",
+            Shading = new IrShading("<w:shd w:fill=\"FFFF00\"/>"),
             UnmodeledDigest = digestA,
         };
         var run3 = run2 with { UnmodeledDigest = digestB };
+        var run4 = run2 with { Shading = new IrShading("<w:shd w:fill=\"00FF00\"/>") };
 
         Assert.Equal(run1, run2);
         Assert.Equal(run1.GetHashCode(), run2.GetHashCode());
 
         Assert.NotEqual(run1, run3);
+        Assert.NotEqual(run1, run4);
     }
 
     [Fact]

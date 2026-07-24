@@ -323,12 +323,20 @@ public class IrVsWmlComparerTests
             $"OldEmpty rose to {Cause(DivergenceCause.OldEmpty)}: IR reported revisions where WmlComparer surfaced none (an over-report).");
         Assert.True(Cause(DivergenceCause.OpaqueGap) <= 0,
             $"OpaqueGap rose to {Cause(DivergenceCause.OpaqueGap)}: IR missed an opaque/section sub-block the old engine covered.");
-        Assert.True(Cause(DivergenceCause.Unclassified) <= 2,
+        // Was <= 2; raised to 3 for the content-anchored intra-paragraph diff (whitespace-crowding fix):
+        // one WC pair now diverges from WmlComparer in a way the mechanical heuristics can't bucket — the
+        // coarser, Word-aligned revision grain (rewrite = one Del+Ins region vs WmlComparer's per-word).
+        // NOT a genuine fidelity loss (ScopeGapNewEmpty/OldEmpty/OpaqueGap all remain 0 above, and the
+        // accept/reject round-trip holds); DocxDiff optimizes for Word (the oracle), not WmlComparer parity.
+        Assert.True(Cause(DivergenceCause.Unclassified) <= 3,
             $"Unclassified rose to {Cause(DivergenceCause.Unclassified)}: an unexplained divergence none of the mechanical heuristics can bucket — inspect its detail file.");
 
-        // The WmlComparer-compatible projection is the headline parity grain; its Match is the parity number
-        // and must not regress either (baseline 150/184).
-        const int CompatMatchFloor = 150;
+        // The WmlComparer-compatible projection is the headline parity grain; its Match is the parity number.
+        // Was 150/184; lowered to 149 for the content-anchored intra-paragraph diff (whitespace-crowding fix):
+        // one pair's compatible-mode projection now takes the coarser, Word-aligned grain (rewrite = one Del+Ins
+        // region vs WmlComparer's per-word count). Intentional Word-divergence, round-trip unaffected; DocxDiff
+        // optimizes for Word (the oracle), not WmlComparer parity. May only rise from here.
+        const int CompatMatchFloor = 149;
         int compatMatch = compatResults.Count(r => r.Class == Classification.Match);
         Assert.True(compatMatch >= CompatMatchFloor,
             $"WmlComparer-compatible Match REGRESSED: {compatMatch} < floor {CompatMatchFloor}.");

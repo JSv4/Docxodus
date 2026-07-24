@@ -17,7 +17,7 @@ namespace Docxodus.Ir.Diff;
 /// <remarks>
 /// <para><b>Shape.</b> <c>{"operations":[ … ]}</c>. Each op is an object with a fixed field order:
 /// <c>kind</c> (enum name), then any of <c>leftAnchor</c>/<c>rightAnchor</c>/<c>moveGroupId</c>/
-/// <c>isMoveSource</c>/<c>tokenDiff</c> that are present (absent fields are simply omitted, matching the
+/// <c>isMoveSource</c>/<c>bodyFullRewriteGroupId</c>/<c>tokenDiff</c> that are present (absent fields are simply omitted, matching the
 /// record's nullability). A <c>tokenDiff</c> is <c>{"ops":[ [kind,ls,le,rs,re], … ]}</c> — each token
 /// op a COMPACT 5-element array: an integer kind code (0=Equal,1=Insert,2=Delete,3=FormatChanged) plus
 /// the four half-open span bounds. The compact array keeps a large corpus script terse while staying
@@ -74,6 +74,10 @@ internal static class IrEditScriptJson
         if (op.RightAnchor is { } right) writer.WriteString("rightAnchor", right);
         if (op.MoveGroupId is { } group) writer.WriteNumber("moveGroupId", group);
         if (op.IsMoveSource is { } source) writer.WriteBoolean("isMoveSource", source);
+        if (op.BodyFullRewriteGroupId is { } rewriteGroup)
+            writer.WriteNumber("bodyFullRewriteGroupId", rewriteGroup);
+        if (op.RequiresWholeParagraphReplace)
+            writer.WriteBoolean("requiresWholeParagraphReplace", true);
         if (op.TokenDiff is { } diff)
         {
             writer.WritePropertyName("tokenDiff");
@@ -144,6 +148,19 @@ internal static class IrEditScriptJson
         // consumer can identify the story's part and Read(Write(s)) stays exactly record-equal.
         if (diff.LeftPartUri is { } leftUri) writer.WriteString("leftPartUri", leftUri.ToString());
         if (diff.RightPartUri is { } rightUri) writer.WriteString("rightPartUri", rightUri.ToString());
+        if (diff.CloneLeftPart) writer.WriteBoolean("cloneLeftPart", true);
+        if (diff.ReferenceBindings is { Count: > 0 } bindings)
+        {
+            writer.WriteStartArray("referenceBindings");
+            foreach (var binding in bindings)
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("sectionIndex", binding.SectionIndex);
+                writer.WriteString("kind", binding.Kind.ToString());
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+        }
         writer.WriteStartArray("ops");
         foreach (var op in diff.Ops)
             WriteOp(writer, op);
@@ -277,11 +294,26 @@ internal static class IrEditScriptJson
             ? new Uri(lu.GetString()!, UriKind.RelativeOrAbsolute) : null;
         Uri? rightPartUri = element.TryGetProperty("rightPartUri", out var ru)
             ? new Uri(ru.GetString()!, UriKind.RelativeOrAbsolute) : null;
+        bool cloneLeftPart = element.TryGetProperty("cloneLeftPart", out var clp) && clp.GetBoolean();
+        IrNodeList<IrHeaderFooterBinding>? referenceBindings = null;
+        if (element.TryGetProperty("referenceBindings", out var bindingsElement))
+        {
+            var bindings = new List<IrHeaderFooterBinding>();
+            foreach (var bindingElement in bindingsElement.EnumerateArray())
+            {
+                int bindingSectionIndex = bindingElement.GetProperty("sectionIndex").GetInt32();
+                var bindingKind = Enum.Parse<Docxodus.Ir.IrHeaderFooterKind>(
+                    bindingElement.GetProperty("kind").GetString()!);
+                bindings.Add(new IrHeaderFooterBinding(bindingSectionIndex, bindingKind));
+            }
+            if (bindings.Count > 0)
+                referenceBindings = IrNodeList.From(bindings);
+        }
         var ops = new List<IrEditOp>();
         foreach (var opElement in element.GetProperty("ops").EnumerateArray())
             ops.Add(ReadOp(opElement));
         return new IrHeaderFooterDiff(isHeader, kind, sectionIndex, scope, leftScope,
-            leftPartUri, rightPartUri, IrNodeList.From(ops));
+            leftPartUri, rightPartUri, IrNodeList.From(ops), cloneLeftPart, referenceBindings);
     }
 
     private static IrNoteDiff ReadNoteDiff(JsonElement element)
@@ -302,6 +334,10 @@ internal static class IrEditScriptJson
         string? rightAnchor = element.TryGetProperty("rightAnchor", out var r) ? r.GetString() : null;
         int? moveGroupId = element.TryGetProperty("moveGroupId", out var g) ? g.GetInt32() : null;
         bool? isMoveSource = element.TryGetProperty("isMoveSource", out var s) ? s.GetBoolean() : null;
+        int? bodyFullRewriteGroupId = element.TryGetProperty("bodyFullRewriteGroupId", out var brg)
+            ? brg.GetInt32() : null;
+        bool requiresWholeParagraphReplace = element.TryGetProperty("requiresWholeParagraphReplace", out var whp)
+            && whp.GetBoolean();
         IrTokenDiff? tokenDiff = element.TryGetProperty("tokenDiff", out var t) ? ReadTokenDiff(t) : null;
         IrTableDiff? tableDiff = element.TryGetProperty("tableDiff", out var td) ? ReadTableDiff(td) : null;
         IrNodeList<IrTextboxDiff>? textboxDiffs = null;
@@ -334,7 +370,8 @@ internal static class IrEditScriptJson
             segmentDiffs = IrNodeList.From(list);
         }
         return new IrEditOp(kind, leftAnchor, rightAnchor, tokenDiff, moveGroupId, isMoveSource,
-            tableDiff, textboxDiffs, splitMergeAnchors, segmentDiffs);
+            tableDiff, textboxDiffs, splitMergeAnchors, segmentDiffs, bodyFullRewriteGroupId,
+            requiresWholeParagraphReplace);
     }
 
     private static IrTableDiff ReadTableDiff(JsonElement element)
