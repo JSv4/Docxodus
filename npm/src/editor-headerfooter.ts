@@ -387,8 +387,10 @@ export class HeaderFooterRegion {
       const el = this.renderStoryBlock(anchorId);
       if (!el) continue;
       body.appendChild(el);
-      this.callbacks.wireBlock(el);
+      // Adopt BEFORE wiring: the editor resolves a block's anchor from `data-hf-anchor` first,
+      // because a story paragraph's content-addressed unid can collide with another part's.
       this.adoptBlock(el, anchorId);
+      this.callbacks.wireBlock(el);
     }
   }
 

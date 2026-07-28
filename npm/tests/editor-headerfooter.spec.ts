@@ -1,4 +1,17 @@
 import { test, expect, Page } from '@playwright/test';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const TEST_FILES_DIR = path.join(__dirname, '../../TestFiles');
+
+function readTestFile(relativePath: string): number[] {
+  // Plain array: page.evaluate serializes structured-clone data, and a Uint8Array survives the
+  // hop as a plain object, so hand over an array and rebuild it in the page.
+  return Array.from(fs.readFileSync(path.join(TEST_FILES_DIR, relativePath)));
+}
 
 /**
  * Issue #275 — the DocxEditor's docked header/footer editing bands.
@@ -299,6 +312,55 @@ test.describe('DocxEditor — header/footer region', () => {
     expect(res.hadFix).toBe(true);
     expect(res.after.footerKind).toBe('even');
     expect(res.after.hidden).toBe(true);
+  });
+
+  /**
+   * Regression pin for a bug the live GUI smoke test found on a real Word document.
+   *
+   * Unids are CONTENT-ADDRESSED, so several *empty* story paragraphs in different parts share
+   * one unid. HC031-Complicated-Document.docx carries all six stories (default/first/even for
+   * both header and footer), all empty — its two remaining header paragraphs share one unid and
+   * all three footer paragraphs share another. `data-anchor` carries only the bare unid, so a
+   * unid-keyed lookup resolved such a block to whichever part was indexed LAST: selecting "Even
+   * pages" and typing put the text in header3.xml, the FIRST-page header. The band stamps the
+   * full `kind:scope:unid` anchor on each story block, and block→anchor resolution must prefer
+   * it over the unid map.
+   *
+   * The same file also proves why `SectionInfo.HeaderRefs` is needed at all: its part ordinals
+   * do NOT follow kind order (header1=even, header2=default, header3=first), so labelling bands
+   * by part-collection order would mislabel every one.
+   */
+  test('editing a kind whose story shares a unid with another part lands in the right part', async ({
+    page,
+  }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+    const res = await page.evaluate((raw: number[]) => {
+      const w = window as any;
+      const { container, editor } = w.__hfMount(new Uint8Array(raw), { headerFooter: true });
+
+      editor.setHeaderFooterKind('header', 'even');
+      w.__hfType(
+        container.querySelector('[data-hf-band="header"] [data-anchor][contenteditable="true"]'),
+        'EVEN PAGE RUNNING HEAD',
+      );
+      const saved: Uint8Array = editor.save();
+      editor.close();
+      container.remove();
+
+      const doc = w.__hfInspect(saved);
+      const headers: Record<string, string> = {};
+      for (const r of doc.sectionInfo.headerRefs) headers[r.kind] = doc.textInPart(r.partUri).trim();
+      const footers: Record<string, string> = {};
+      for (const r of doc.sectionInfo.footerRefs) footers[r.kind] = doc.textInPart(r.partUri).trim();
+      doc.close();
+      return { headers, footers };
+    }, bytes);
+
+    expect(res.headers.even).toContain('EVEN PAGE RUNNING HEAD');
+    expect(res.headers.first).toBe('');
+    expect(res.headers.default).toBe('');
+    // Nothing leaked into the footers either.
+    expect(Object.values(res.footers).join('')).toBe('');
   });
 
   test('bands survive a paginated toggle and keep their content', async ({ page }) => {
