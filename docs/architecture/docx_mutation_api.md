@@ -327,11 +327,52 @@ documented as intentional: the `w:evenAndOddHeaders` settings flag (only set by 
 `Even` kind) isn't reverted by undo — it's idempotent and has no visual effect without
 an even story.
 
+### Which part supplies which kind — `SectionInfo.HeaderRefs`/`FooterRefs`
+
+`HeaderPartUris`/`FooterPartUris` report *which* parts a section references but not which
+story kind each one supplies, and the projection's `hdr{N}`/`ftr{N}` numbering is by
+part-collection order, which carries no kind information either. A client that wants to
+show or edit "this document's **first-page** header" therefore cannot resolve it from
+those lists.
+
+`SectionInfo.HeaderRefs` and `FooterRefs` close that: each entry is a
+`HeaderFooterRef { HeaderFooterKind Kind; string PartUri; }`, in the references'
+declaration order. `w:type` is optional in OOXML, so an absent (or unrecognized) value
+reads as `Default` per ECMA-376 §17.6.10. The legacy URI lists are derived from the refs,
+so the two views can never disagree about which parts a section references.
+
+Combined with the `partUri` each projection anchor already carries, this gives a client
+the full kind → part → story-paragraph-anchors chain:
+
+```csharp
+var info = session.GetSectionInfo(body)!;
+var firstHeaderPart = info.HeaderRefs.First(r => r.Kind == HeaderFooterKind.First).PartUri;
+var storyParas = session.Project().AnchorIndex.Values
+    .Where(t => t.PartUri == firstHeaderPart && t.Anchor.Kind == "p")
+    .Select(t => t.Anchor.Id);
+```
+
+Wire: `headerRefs`/`footerRefs` (npm `SectionInfo.headerRefs`/`footerRefs`, `HeaderFooterRef`;
+`docx-scalpel` `SectionInfo.header_refs`/`footer_refs`). This is exactly what the browser
+editor's band chrome uses to label its kind selector.
+
+### The editor region
+
+The browser `DocxEditor` ships the visual affordance as **docked bands** — see
+`docs/architecture/ir_editor_feasibility.md` § "Header/footer editing region". Story
+paragraphs there are ordinary editable blocks addressed by their `p:hdr1:<unid>` anchors,
+which every text/format mutation on this page already accepts.
+
 ### Not yet
 
-- **A visual header/footer editing region in the browser `DocxEditor`.** The engine +
-  wire ship here; the editor UI (a separate editable region, since the parts live
-  outside the body) is a deliberate follow-up.
+- **Deleting a header/footer story.** `SetHeaderText`/`SetFooterText` create or replace;
+  there is no operation that removes a part and its reference. An empty payload yields an
+  empty story, which is not the same thing.
+- **The in-page-margin editing overlay** (editing the running head *inside* the page box's
+  top margin in `{ paginated: true }` mode). Two things block it: the full-document render
+  assigns Unids to the main document part only, so header/footer content carries no
+  `data-anchor`; and pagination clones one header node onto every page, so N pages would
+  mean N DOM nodes sharing one anchor. The docked bands avoid both.
 - **Footnote/endnote authoring** is tracked separately (still `FootnoteRefNotSupported`).
 - **Page-number formatting** (`w:pgNumType` start/format, `PAGE \* roman`) — v1 emits a
   plain `PAGE`/`NUMPAGES`; field switches are a follow-up.
