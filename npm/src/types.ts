@@ -1691,6 +1691,17 @@ export interface BlockMetadata {
   hasInlineFormatting: boolean;
 }
 
+/**
+ * A `w:headerReference`/`w:footerReference` on a section: the story kind it supplies and the
+ * URI of the part holding it. Maps a {@link HeaderFooterKind} to a part — and thence to that
+ * part's projection anchors, which carry the same `partUri` — instead of guessing from
+ * part-collection order, which carries no kind information.
+ */
+export interface HeaderFooterRef {
+  kind: HeaderFooterKind;
+  partUri: string;
+}
+
 /** Page-layout snapshot for the w:sectPr that governs an anchor.
  *  Returned by {@link DocxSession.getSectionInfo}. */
 export interface SectionInfo {
@@ -1705,6 +1716,12 @@ export interface SectionInfo {
   columns: number;
   headerPartUris: string[];
   footerPartUris: string[];
+  /** Header references in declaration order, each with its `w:type`. Describes exactly the
+   *  parts {@link SectionInfo.headerPartUris} lists, plus the kind each supplies. */
+  headerRefs: HeaderFooterRef[];
+  /** Footer references in declaration order, each with its `w:type`. Describes exactly the
+   *  parts {@link SectionInfo.footerPartUris} lists, plus the kind each supplies. */
+  footerRefs: HeaderFooterRef[];
 }
 
 /**

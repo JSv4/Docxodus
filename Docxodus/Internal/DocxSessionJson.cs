@@ -720,9 +720,33 @@ internal static class DocxSessionJson
             if (i > 0) sb.Append(',');
             sb.Append(JsonString(info.FooterPartUris[i]));
         }
-        sb.Append("]}");
+        sb.Append(']');
+        AppendHeaderFooterRefs(sb, ",\"headerRefs\":", info.HeaderRefs);
+        AppendHeaderFooterRefs(sb, ",\"footerRefs\":", info.FooterRefs);
+        sb.Append('}');
         return sb.ToString();
     }
+
+    private static void AppendHeaderFooterRefs(
+        StringBuilder sb, string key, IReadOnlyList<HeaderFooterRef> refs)
+    {
+        sb.Append(key).Append('[');
+        for (int i = 0; i < refs.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append("{\"kind\":").Append(JsonString(HeaderFooterKindToString(refs[i].Kind)))
+              .Append(",\"partUri\":").Append(JsonString(refs[i].PartUri)).Append('}');
+        }
+        sb.Append(']');
+    }
+
+    /// <summary>Outbound counterpart of <see cref="ParseHeaderFooterKind"/>.</summary>
+    private static string HeaderFooterKindToString(HeaderFooterKind kind) => kind switch
+    {
+        HeaderFooterKind.First => "first",
+        HeaderFooterKind.Even => "even",
+        _ => "default",
+    };
 
     private static string NumberFormatToString(NumberFormat f) => f switch
     {

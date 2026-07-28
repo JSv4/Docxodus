@@ -659,6 +659,23 @@ public sealed record BlockMetadata
 }
 
 /// <summary>
+/// A <c>w:headerReference</c>/<c>w:footerReference</c> on a section: which story kind it
+/// supplies and the URI of the part holding that story. Lets a caller map a
+/// <see cref="HeaderFooterKind"/> to a part — and thence to that part's projection anchors,
+/// which carry the same <c>PartUri</c> — instead of guessing from part-collection order,
+/// which carries no kind information.
+/// </summary>
+public sealed record HeaderFooterRef
+{
+    /// <summary>The reference's <c>w:type</c>. The attribute is optional in OOXML; an absent
+    /// (or unrecognized) value means <see cref="HeaderFooterKind.Default"/>.</summary>
+    required public HeaderFooterKind Kind { get; init; }
+
+    /// <summary>URI of the header/footer part this reference points at.</summary>
+    required public string PartUri { get; init; }
+}
+
+/// <summary>
 /// Page-layout snapshot for the <c>w:sectPr</c> that governs an anchor.
 /// Returned by <see cref="DocxSession.GetSectionInfo"/>; <c>null</c> for
 /// anchors outside the body part (footnotes/endnotes/headers/footers/comments).
@@ -684,6 +701,16 @@ public sealed record SectionInfo
 
     /// <summary>URIs of the footer parts referenced by this section, in declaration order.</summary>
     required public IReadOnlyList<string> FooterPartUris { get; init; }
+
+    /// <summary>Header references on this section, in declaration order, each with its
+    /// <c>w:type</c>. Describes exactly the parts <see cref="HeaderPartUris"/> lists — the URI
+    /// list is derived from this one — plus the kind each supplies.</summary>
+    required public IReadOnlyList<HeaderFooterRef> HeaderRefs { get; init; }
+
+    /// <summary>Footer references on this section, in declaration order, each with its
+    /// <c>w:type</c>. Describes exactly the parts <see cref="FooterPartUris"/> lists — the URI
+    /// list is derived from this one — plus the kind each supplies.</summary>
+    required public IReadOnlyList<HeaderFooterRef> FooterRefs { get; init; }
 }
 
 /// <summary>

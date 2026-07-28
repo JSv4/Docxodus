@@ -83,7 +83,7 @@ internal static class BlockMetadataOps
         if (cols is not null && int.TryParse((string?)cols.Attribute(W.num), out var parsedCols))
             colCount = parsedCols;
 
-        var (headerUris, footerUris) = ResolveSectionHeaderFooterUris(doc, sectPr);
+        var (headerRefs, footerRefs) = ResolveSectionHeaderFooterRefs(doc, sectPr);
 
         // The sectPr itself doesn't carry a stable Unid in every fixture; fall back
         // to a deterministic synthetic id derived from element position so the field
@@ -102,8 +102,12 @@ internal static class BlockMetadataOps
             MarginLeftTwips = left,
             MarginRightTwips = right,
             Columns = colCount,
-            HeaderPartUris = headerUris,
-            FooterPartUris = footerUris,
+            // Derived from the refs so the two views can never disagree about which parts
+            // the section references.
+            HeaderPartUris = headerRefs.Select(r => r.PartUri).ToList(),
+            FooterPartUris = footerRefs.Select(r => r.PartUri).ToList(),
+            HeaderRefs = headerRefs,
+            FooterRefs = footerRefs,
         };
     }
 
@@ -137,29 +141,47 @@ internal static class BlockMetadataOps
         return body.Element(W.sectPr);
     }
 
-    private static (IReadOnlyList<string> headers, IReadOnlyList<string> footers)
-        ResolveSectionHeaderFooterUris(WordprocessingDocument doc, XElement sectPr)
+    /// <summary>The story kind a <c>w:headerReference</c>/<c>w:footerReference</c> supplies.
+    /// <c>w:type</c> is optional; an absent or unrecognized value means the default story.</summary>
+    private static HeaderFooterKind ParseRefKind(XElement reference)
+        => (string?)reference.Attribute(W.type) switch
+        {
+            "first" => HeaderFooterKind.First,
+            "even" => HeaderFooterKind.Even,
+            _ => HeaderFooterKind.Default,
+        };
+
+    private static (IReadOnlyList<HeaderFooterRef> headers, IReadOnlyList<HeaderFooterRef> footers)
+        ResolveSectionHeaderFooterRefs(WordprocessingDocument doc, XElement sectPr)
     {
         var main = doc.MainDocumentPart;
         if (main is null)
-            return (System.Array.Empty<string>(), System.Array.Empty<string>());
+            return (System.Array.Empty<HeaderFooterRef>(), System.Array.Empty<HeaderFooterRef>());
 
-        var headers = new List<string>();
-        var footers = new List<string>();
+        var headers = new List<HeaderFooterRef>();
+        var footers = new List<HeaderFooterRef>();
 
         foreach (var headerRef in sectPr.Elements(W.headerReference))
         {
             var rId = (string?)headerRef.Attribute(R.id);
             if (rId is null) continue;
-            var part = main.GetPartById(rId) as HeaderPart;
-            if (part is not null) headers.Add(part.Uri.ToString());
+            if (main.GetPartById(rId) is HeaderPart part)
+                headers.Add(new HeaderFooterRef
+                {
+                    Kind = ParseRefKind(headerRef),
+                    PartUri = part.Uri.ToString(),
+                });
         }
         foreach (var footerRef in sectPr.Elements(W.footerReference))
         {
             var rId = (string?)footerRef.Attribute(R.id);
             if (rId is null) continue;
-            var part = main.GetPartById(rId) as FooterPart;
-            if (part is not null) footers.Add(part.Uri.ToString());
+            if (main.GetPartById(rId) is FooterPart part)
+                footers.Add(new HeaderFooterRef
+                {
+                    Kind = ParseRefKind(footerRef),
+                    PartUri = part.Uri.ToString(),
+                });
         }
         return (headers, footers);
     }

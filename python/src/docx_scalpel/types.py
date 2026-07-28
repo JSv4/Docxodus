@@ -28,6 +28,7 @@ from .enums import (
     DocxDiffRevisionType,
     EditErrorCode,
     EmptyParagraphMode,
+    HeaderFooterKind,
     PlaceholderKind,
     PlaceholderKinds,
     ProjectionScopes,
@@ -49,6 +50,7 @@ __all__ = [
     "BulkEditResult",
     "FillOptions",
     "FindOptions",
+    "HeaderFooterRef",
     "HtmlOptions",
     "ListMembership",
     "NumberFormat",
@@ -218,6 +220,24 @@ class BlockMetadata:
 
 
 @dataclass(frozen=True, slots=True)
+class HeaderFooterRef:
+    """A ``w:headerReference``/``w:footerReference`` on a section.
+
+    Carries the story kind the reference supplies and the URI of the part holding it,
+    so a caller can map a :class:`HeaderFooterKind` to a part — and thence to that
+    part's projection anchors, which carry the same ``part_uri`` — instead of guessing
+    from part-collection order, which carries no kind information.
+    """
+
+    kind: HeaderFooterKind
+    part_uri: str
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "HeaderFooterRef":
+        return cls(kind=HeaderFooterKind(d["kind"]), part_uri=d["partUri"])
+
+
+@dataclass(frozen=True, slots=True)
 class SectionInfo:
     """Page-layout snapshot for the w:sectPr that governs an anchor."""
 
@@ -232,6 +252,11 @@ class SectionInfo:
     columns: int
     header_part_uris: tuple[str, ...]
     footer_part_uris: tuple[str, ...]
+    #: Header references in declaration order, each with its ``w:type``. Describes exactly
+    #: the parts :attr:`header_part_uris` lists, plus the kind each supplies.
+    header_refs: tuple[HeaderFooterRef, ...] = ()
+    #: Footer references in declaration order, each with its ``w:type``.
+    footer_refs: tuple[HeaderFooterRef, ...] = ()
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "SectionInfo":
@@ -247,6 +272,9 @@ class SectionInfo:
             columns=int(d["columns"]),
             header_part_uris=tuple(d["headerPartUris"]),
             footer_part_uris=tuple(d["footerPartUris"]),
+            # .get: an older host that predates the refs still decodes.
+            header_refs=tuple(HeaderFooterRef._from_wire(r) for r in d.get("headerRefs", ())),
+            footer_refs=tuple(HeaderFooterRef._from_wire(r) for r in d.get("footerRefs", ())),
         )
 
 

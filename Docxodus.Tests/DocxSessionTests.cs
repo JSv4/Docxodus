@@ -4931,4 +4931,72 @@ public class DocxSessionTests
             .ToList();
         Assert.True(schemaErrors.Count == 0, string.Join("; ", schemaErrors));
     }
+
+    // The projection numbers header/footer scopes hdr1/hdr2… by part-collection order, which
+    // carries no kind information — so without w:type a client (the editor's band chrome) cannot
+    // tell an existing document's Default story from its First or Even one. SectionInfo.HeaderRefs
+    // / FooterRefs close that gap.
+    [Fact]
+    public void DS265_SectionInfo_ReportsHeaderFooterRefKinds()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.Default, "Default header").Success);
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.First, "First header").Success);
+        Assert.True(s.SetFooterText(body, HeaderFooterKind.Even, "Even footer").Success);
+
+        var info = s.GetSectionInfo(body)!;
+
+        Assert.Equal(
+            new[] { HeaderFooterKind.Default, HeaderFooterKind.First },
+            info.HeaderRefs.Select(r => r.Kind).OrderBy(k => k).ToArray());
+        Assert.Equal(new[] { HeaderFooterKind.Even }, info.FooterRefs.Select(r => r.Kind).ToArray());
+
+        // The refs and the legacy URI lists must describe exactly the same parts.
+        Assert.Equal(
+            info.HeaderPartUris.OrderBy(u => u, StringComparer.Ordinal).ToArray(),
+            info.HeaderRefs.Select(r => r.PartUri).OrderBy(u => u, StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            info.FooterPartUris.ToArray(),
+            info.FooterRefs.Select(r => r.PartUri).ToArray());
+        Assert.All(info.HeaderRefs, r => Assert.False(string.IsNullOrEmpty(r.PartUri)));
+
+        // Each ref's part must be the one actually holding that kind's story.
+        var firstUri = info.HeaderRefs.Single(r => r.Kind == HeaderFooterKind.First).PartUri;
+        using var saved = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(saved, false);
+        var firstPart = doc.MainDocumentPart!.HeaderParts
+            .Single(p => p.Uri.ToString() == firstUri);
+        Assert.Contains("First header", firstPart.Header!.InnerText);
+    }
+
+    // A document whose header reference omits the optional w:type attribute means "default"
+    // (ECMA-376 §17.6.10) — the parser must not treat the absent attribute as unknown.
+    [Fact]
+    public void DS266_SectionInfo_AbsentRefType_ReadsAsDefaultKind()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.Default, "No explicit type").Success);
+
+        // Strip the w:type Word writes, leaving a bare reference.
+        var raw = s.Save();
+        using (var ms = new MemoryStream())
+        {
+            ms.Write(raw, 0, raw.Length);
+            ms.Position = 0;
+            using (var doc = WordprocessingDocument.Open(ms, true))
+            {
+                var sectPr = LastSectPr(doc);
+                foreach (var hr in sectPr.Elements<HeaderReference>()) hr.Type = null;
+                doc.MainDocumentPart!.Document.Save();
+            }
+            raw = ms.ToArray();
+        }
+
+        using var s2 = new DocxSession(raw);
+        var info = s2.GetSectionInfo(FirstBodyPara(s2))!;
+        Assert.Equal(new[] { HeaderFooterKind.Default }, info.HeaderRefs.Select(r => r.Kind).ToArray());
+    }
 }
