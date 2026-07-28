@@ -350,10 +350,20 @@ show or edit "this document's **first-page** header" therefore cannot resolve it
 those lists.
 
 `SectionInfo.HeaderRefs` and `FooterRefs` close that: each entry is a
-`HeaderFooterRef { HeaderFooterKind Kind; string PartUri; }`, in the references'
-declaration order. `w:type` is optional in OOXML, so an absent (or unrecognized) value
-reads as `Default` per ECMA-376 §17.6.10. The legacy URI lists are derived from the refs,
-so the two views can never disagree about which parts a section references.
+`HeaderFooterRef { HeaderFooterKind Kind; string PartUri; bool Inherited; }`, in the
+references' declaration order. `w:type` is optional in OOXML, so an absent (or
+unrecognized) value reads as `Default` per ECMA-376 §17.6.10.
+
+**They report the stories that EFFECTIVELY apply, not just the section's own.** A section
+that declares no reference of a given type *continues the previous section's*
+(ECMA-376 §17.6.17), which is why a multi-section document typically defines its headers
+once in the first section and leaves the rest empty — `HC031-Complicated-Document.docx`
+has four sections and only the first declares anything. Reporting own references alone
+would tell a caller "this part of the document has no header" when it visibly does, and an
+editor acting on that would mint a redundant part and break the inheritance. Inherited
+entries carry `Inherited = true`; editing one edits the part both sections share, which is
+what Word does. `HeaderPartUris`/`FooterPartUris` keep their original meaning — this
+section's **own** references only.
 
 Combined with the `partUri` each projection anchor already carries, this gives a client
 the full kind → part → story-paragraph-anchors chain:

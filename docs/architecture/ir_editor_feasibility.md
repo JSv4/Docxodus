@@ -497,6 +497,11 @@ adversarial than a synthesized one:
   placeholder that the commit's `.trim()` removes, so the selection span overshot the committed
   text and `ApplyFormat` rejected it. Fixed with `trimmedSpan()`, the span analogue of the existing
   `trimmedSplitOffset()`.
+- *Later sections showed an empty band.* HC031 has four sections and only the first declares
+  header/footer references; OOXML says the rest **inherit** them, so the band offered to create a
+  redundant part that would have broken the inheritance. Fixed in the engine: `SectionInfo`'s
+  `HeaderRefs`/`FooterRefs` now report the *effective* stories, inherited entries flagged, and the
+  band shows the inherited story marked as such.
 - *First/even stories saved but never rendered.* Word leaves those parts behind without
   `w:titlePg`/`w:evenAndOddHeaders`; the band's seed path only runs when the part is absent. Fixed
   with the new `DocxSession.EnsureHeaderFooterVisible`, which the band calls on kind selection. See

@@ -83,7 +83,8 @@ internal static class BlockMetadataOps
         if (cols is not null && int.TryParse((string?)cols.Attribute(W.num), out var parsedCols))
             colCount = parsedCols;
 
-        var (headerRefs, footerRefs) = ResolveSectionHeaderFooterRefs(doc, sectPr);
+        var (ownHeaderRefs, ownFooterRefs) = ResolveSectionHeaderFooterRefs(doc, sectPr);
+        var (headerRefs, footerRefs) = AddInheritedRefs(doc, element, sectPr, ownHeaderRefs, ownFooterRefs);
 
         // The sectPr itself doesn't carry a stable Unid in every fixture; fall back
         // to a deterministic synthetic id derived from element position so the field
@@ -102,10 +103,10 @@ internal static class BlockMetadataOps
             MarginLeftTwips = left,
             MarginRightTwips = right,
             Columns = colCount,
-            // Derived from the refs so the two views can never disagree about which parts
-            // the section references.
-            HeaderPartUris = headerRefs.Select(r => r.PartUri).ToList(),
-            FooterPartUris = footerRefs.Select(r => r.PartUri).ToList(),
+            // The URI lists keep their original meaning — this section's OWN references — so only
+            // the (new) *Refs lists carry inherited stories.
+            HeaderPartUris = ownHeaderRefs.Select(r => r.PartUri).ToList(),
+            FooterPartUris = ownFooterRefs.Select(r => r.PartUri).ToList(),
             HeaderRefs = headerRefs,
             FooterRefs = footerRefs,
         };
@@ -139,6 +140,42 @@ internal static class BlockMetadataOps
             if (ownSect is not null) return ownSect;
         }
         return body.Element(W.sectPr);
+    }
+
+    /// <summary>
+    /// Extend a section's own references with the ones it INHERITS. Per ECMA-376 §17.6.17 a
+    /// section that declares no reference of a given type continues the nearest preceding
+    /// section's, which is why a multi-section document commonly defines its headers once, in
+    /// the first section, and leaves the rest empty. Reporting only a section's own references
+    /// would tell a caller "this part of the document has no header" when it visibly does — and
+    /// an editor acting on that would mint a redundant part and break the inheritance.
+    /// </summary>
+    private static (IReadOnlyList<HeaderFooterRef> headers, IReadOnlyList<HeaderFooterRef> footers)
+        AddInheritedRefs(WordprocessingDocument doc, XElement element, XElement governing,
+            IReadOnlyList<HeaderFooterRef> ownHeaders, IReadOnlyList<HeaderFooterRef> ownFooters)
+    {
+        var body = element.AncestorsAndSelf(W.body).FirstOrDefault();
+        if (body is null) return (ownHeaders, ownFooters);
+
+        // Every sectPr in document order — inline section breaks (w:pPr/w:sectPr) followed by the
+        // body's trailing one, which is exactly the order sections apply in.
+        var all = body.Descendants(W.sectPr).ToList();
+        int idx = all.IndexOf(governing);
+        if (idx <= 0) return (ownHeaders, ownFooters);
+
+        var headers = ownHeaders.ToList();
+        var footers = ownFooters.ToList();
+        for (int i = idx - 1; i >= 0 && (headers.Count < 3 || footers.Count < 3); i--)
+        {
+            var (prevHeaders, prevFooters) = ResolveSectionHeaderFooterRefs(doc, all[i]);
+            foreach (var r in prevHeaders)
+                if (!headers.Any(h => h.Kind == r.Kind))
+                    headers.Add(r with { Inherited = true });
+            foreach (var r in prevFooters)
+                if (!footers.Any(f => f.Kind == r.Kind))
+                    footers.Add(r with { Inherited = true });
+        }
+        return (headers, footers);
     }
 
     /// <summary>The story kind a <c>w:headerReference</c>/<c>w:footerReference</c> supplies.

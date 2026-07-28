@@ -1701,6 +1701,9 @@ export interface BlockMetadata {
 export interface HeaderFooterRef {
   kind: HeaderFooterKind;
   partUri: string;
+  /** True when this section declares no reference of `kind` and the story is INHERITED from the
+   *  nearest preceding section that does (ECMA-376 §17.6.17). Editing it edits the shared part. */
+  inherited: boolean;
 }
 
 /** Page-layout snapshot for the w:sectPr that governs an anchor.

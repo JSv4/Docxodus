@@ -5109,6 +5109,21 @@ public class DocxSessionTests
         Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.First).Success);
         Assert.Equal(1, TitlePgCount(s.Save()));
 
+        // …and a no-op call must not consume undo history. A kind selector calls this on every
+        // click, so snapshotting unconditionally would evict the user's real edits from the
+        // bounded ring. Undo after redundant calls must still reach the text edit before them.
+        var storyAnchor = s.Project().AnchorIndex.Values
+            .First(t => t.PartUri == info.HeaderRefs.Single(r => r.Kind == HeaderFooterKind.First).PartUri
+                        && t.Anchor.Kind == "p").Anchor.Id;
+        Assert.True(s.ReplaceText(storyAnchor, "UNDO PROBE").Success);
+        for (int i = 0; i < 6; i++)
+        {
+            Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.First).Success);
+            Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.Even).Success);
+        }
+        Assert.True(s.Undo());
+        Assert.DoesNotContain("UNDO PROBE", s.Project().Markdown);
+
         // Default needs no flag and must still succeed; a non-body anchor is rejected.
         Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.Default).Success);
         var hdrAnchor = s.Project().AnchorIndex.Values

@@ -231,10 +231,17 @@ class HeaderFooterRef:
 
     kind: HeaderFooterKind
     part_uri: str
+    #: True when this section declares no reference of ``kind`` and the story is inherited from
+    #: the nearest preceding section that does (ECMA-376 §17.6.17).
+    inherited: bool = False
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "HeaderFooterRef":
-        return cls(kind=HeaderFooterKind(d["kind"]), part_uri=d["partUri"])
+        return cls(
+            kind=HeaderFooterKind(d["kind"]),
+            part_uri=d["partUri"],
+            inherited=bool(d.get("inherited", False)),
+        )
 
 
 @dataclass(frozen=True, slots=True)

@@ -673,6 +673,14 @@ public sealed record HeaderFooterRef
 
     /// <summary>URI of the header/footer part this reference points at.</summary>
     required public string PartUri { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when this section declares no reference of <see cref="Kind"/> itself and the
+    /// story is INHERITED from the nearest preceding section that does (ECMA-376 §17.6.17 — a
+    /// section without a reference of a type continues the previous section's). Editing an
+    /// inherited story edits the part both sections share, which is what Word does.
+    /// </summary>
+    public bool Inherited { get; init; }
 }
 
 /// <summary>
@@ -702,14 +710,18 @@ public sealed record SectionInfo
     /// <summary>URIs of the footer parts referenced by this section, in declaration order.</summary>
     required public IReadOnlyList<string> FooterPartUris { get; init; }
 
-    /// <summary>Header references on this section, in declaration order, each with its
-    /// <c>w:type</c>. Describes exactly the parts <see cref="HeaderPartUris"/> lists — the URI
-    /// list is derived from this one — plus the kind each supplies.</summary>
+    /// <summary>
+    /// The header stories that EFFECTIVELY apply to this section: its own
+    /// <c>w:headerReference</c>s (in declaration order, each with its <c>w:type</c>) plus, for any
+    /// kind it does not declare, the one it inherits from the nearest preceding section that does
+    /// — flagged <see cref="HeaderFooterRef.Inherited"/>. This is what a renderer shows, so it is
+    /// what a caller asking "which header applies here?" needs. <see cref="HeaderPartUris"/>
+    /// remains this section's OWN references only.
+    /// </summary>
     required public IReadOnlyList<HeaderFooterRef> HeaderRefs { get; init; }
 
-    /// <summary>Footer references on this section, in declaration order, each with its
-    /// <c>w:type</c>. Describes exactly the parts <see cref="FooterPartUris"/> lists — the URI
-    /// list is derived from this one — plus the kind each supplies.</summary>
+    /// <summary>The footer stories that effectively apply to this section — see
+    /// <see cref="HeaderRefs"/>.</summary>
     required public IReadOnlyList<HeaderFooterRef> FooterRefs { get; init; }
 }
 
@@ -4386,17 +4398,20 @@ public sealed class DocxSession : IDisposable
         if (sectPr is null)
             return EditResult.Fail(EditErrorCode.InternalError, "no governing section properties", anchorId);
 
+        // Already set? Return BEFORE snapshotting. A UI that calls this on every kind selection
+        // (the editor's band does) would otherwise push a no-op snapshot per click into the
+        // bounded undo ring and evict the user's real history.
+        bool alreadySet = kind == HeaderFooterKind.First
+            ? sectPr.Element(W.titlePg) is not null
+            : main.DocumentSettingsPart?.GetXDocument().Root?.Element(W.evenAndOddHeaders) is not null;
+        if (alreadySet)
+            return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            if (kind == HeaderFooterKind.First)
-            {
-                if (sectPr.Element(W.titlePg) is null) InsertSectPrTitlePg(sectPr);
-            }
-            else
-            {
-                WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
-            }
+            if (kind == HeaderFooterKind.First) InsertSectPrTitlePg(sectPr);
+            else WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
             InvalidateProjectionCache();
             return new EditResult { Success = true, Modified = new[] { target.Anchor } };
         }

@@ -735,7 +735,8 @@ internal static class DocxSessionJson
         {
             if (i > 0) sb.Append(',');
             sb.Append("{\"kind\":").Append(JsonString(HeaderFooterKindToString(refs[i].Kind)))
-              .Append(",\"partUri\":").Append(JsonString(refs[i].PartUri)).Append('}');
+              .Append(",\"partUri\":").Append(JsonString(refs[i].PartUri))
+              .Append(",\"inherited\":").Append(refs[i].Inherited ? "true" : "false").Append('}');
         }
         sb.Append(']');
     }

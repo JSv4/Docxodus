@@ -324,7 +324,7 @@ test.describe('DocxEditor — header/footer region', () => {
       const before = { hidden: warn.hidden, text: (warn.textContent || '').trim() };
 
       // The fix button creates the matching even footer, which clears the warning.
-      const fix = warn.querySelector('[data-hf-fix-even-footer]') as HTMLButtonElement;
+      const fix = warn.querySelector('[data-hf-fix-counterpart]') as HTMLButtonElement;
       const hadFix = !!fix;
       fix?.click();
       const warnAfter = container.querySelector(
@@ -334,7 +334,7 @@ test.describe('DocxEditor — header/footer region', () => {
         // The note STAYS: turning even pages on really does stop them using the Default
         // stories, whether or not an even footer now exists. Only the offer goes away.
         hidden: warnAfter.hidden,
-        stillHasFix: !!warnAfter.querySelector('[data-hf-fix-even-footer]'),
+        stillHasFix: !!warnAfter.querySelector('[data-hf-fix-counterpart]'),
         footerKind: editor.headerFooterKind('footer'),
       };
 
@@ -569,6 +569,53 @@ test.describe('DocxEditor — header/footer region', () => {
     expect(firstRefSection).toBeDefined();
     expect(firstRefSection!).toMatch(/<w:titlePg\b/);
     expect(settingsXml).toMatch(/<w:evenAndOddHeaders\b/);
+  });
+
+  /**
+   * A multi-section document commonly defines its headers once, in the first section, and leaves
+   * the rest with no references at all — HC031 has four sections and only section 0 declares any.
+   * ECMA-376 §17.6.17 says such a section CONTINUES the previous one's stories, so reporting only
+   * a section's own references would tell the band "no header here" for most of the document, and
+   * creating one would mint a redundant part and break the inheritance the file relies on.
+   */
+  test('a later section shows the header it inherits, not an empty band', async ({ page }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+    const res = await page.evaluate((raw: number[]) => {
+      const w = window as any;
+      const { container, editor } = w.__hfMount(new Uint8Array(raw), { headerFooter: true });
+
+      // Author the first section's default header, then move the caret to the last body block —
+      // which lives in a later section that declares no references of its own.
+      w.__hfType(
+        container.querySelector('[data-hf-band="header"] [data-anchor][contenteditable="true"]'),
+        'RUNNING HEAD',
+      );
+      const bodyBlocks = Array.from(
+        container.querySelectorAll('.docx-body-flow [data-anchor][contenteditable="true"]'),
+      ) as HTMLElement[];
+      bodyBlocks[bodyBlocks.length - 1].focus();
+
+      const band = container.querySelector('[data-hf-band="header"]') as HTMLElement;
+      const out = {
+        sections: bodyBlocks.length,
+        text: (band.querySelector('[data-hf-body]')?.textContent || '').trim(),
+        empty: band.getAttribute('data-hf-empty'),
+        markedInherited: band.hasAttribute('data-hf-inherited'),
+        note: (band.querySelector('[data-hf-inherited-note]')?.textContent || '').trim(),
+        editable: !!band.querySelector('[data-anchor][contenteditable="true"]'),
+      };
+      editor.close();
+      container.remove();
+      return out;
+    }, bytes);
+
+    // The inherited story is shown and remains editable (it is the shared part).
+    expect(res.text).toContain('RUNNING HEAD');
+    expect(res.empty).toBeNull();
+    expect(res.editable).toBe(true);
+    // …and the band says where it came from, since editing it changes both sections.
+    expect(res.markedInherited).toBe(true);
+    expect(res.note).toMatch(/inherited/i);
   });
 
   test('bands survive a paginated toggle and keep their content', async ({ page }) => {

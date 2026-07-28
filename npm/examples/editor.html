@@ -51,6 +51,8 @@
       background: #fff7e6; border: 1px solid #f0d9a8; border-radius: 4px; color: #6b4e00; }
     .docx-hf-warning button { margin-left: 6px; padding: 2px 8px; font-size: 12px; }
     .docx-hf-placeholder { font-style: italic; color: #a3a6aa; }
+    .docx-hf-inherited { text-transform: none; letter-spacing: normal; font-style: italic; color: #8a8d91; }
+    .docx-hf-band[data-hf-inherited] { border-style: dotted; }
     /* With bands docked, the page sheet moves from #editor onto the body wrapper — otherwise the
        bands would sit INSIDE the body's sheet. Scoped with :has() so the region-off layout (no
        .docx-body-flow wrapper at all) keeps the original rule untouched. */

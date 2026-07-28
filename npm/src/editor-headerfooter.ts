@@ -57,6 +57,8 @@ export interface HeaderFooterRegionOptions {
 interface HeaderFooterRefLite {
   kind: HeaderFooterKind;
   partUri: string;
+  /** The story comes from an earlier section (this one declares no reference of that kind). */
+  inherited?: boolean;
 }
 
 interface SectionInfoLite {
@@ -254,9 +256,14 @@ export class HeaderFooterRegion {
     return (which === "header" ? info.headerRefs : info.footerRefs) ?? [];
   }
 
+  /** The reference supplying `kind` for this band — possibly inherited from an earlier section. */
+  private refFor(which: BandWhich, kind: HeaderFooterKind): HeaderFooterRefLite | null {
+    return this.refsFor(which).find((r) => r.kind === kind) ?? null;
+  }
+
   /** URI of the part supplying `kind` for this band, or null when the story doesn't exist. */
   private partUriFor(which: BandWhich, kind: HeaderFooterKind): string | null {
-    return this.refsFor(which).find((r) => r.kind === kind)?.partUri ?? null;
+    return this.refFor(which, kind)?.partUri ?? null;
   }
 
   /** Full anchor ids of the story paragraphs held in `partUri`, in document order. */
@@ -346,6 +353,12 @@ export class HeaderFooterRegion {
     });
     chrome.appendChild(pageNum);
 
+    const inheritedNote = document.createElement("span");
+    inheritedNote.className = "docx-hf-inherited";
+    inheritedNote.setAttribute("data-hf-inherited-note", "");
+    inheritedNote.hidden = true;
+    chrome.appendChild(inheritedNote);
+
     band.appendChild(chrome);
 
     const warning = document.createElement("div");
@@ -384,6 +397,16 @@ export class HeaderFooterRegion {
     const kind = this.kinds[which];
     const select = band.querySelector<HTMLSelectElement>("[data-hf-kind]");
     if (select && select.value !== kind) select.value = kind;
+
+    // A section that declares no reference of this kind shows the story it inherits from an
+    // earlier section. Say so: editing it changes BOTH sections, because they share one part.
+    const inherited = this.refFor(which, kind)?.inherited === true;
+    band.toggleAttribute("data-hf-inherited", inherited);
+    const note = band.querySelector<HTMLElement>("[data-hf-inherited-note]");
+    if (note) {
+      note.hidden = !inherited;
+      note.textContent = inherited ? "inherited from an earlier section" : "";
+    }
 
     this.renderKindWarning(which);
 
@@ -479,7 +502,7 @@ export class HeaderFooterRegion {
 
     const fix = document.createElement("button");
     fix.type = "button";
-    fix.setAttribute("data-hf-fix-even-footer", "");
+    fix.setAttribute("data-hf-fix-counterpart", "");
     fix.textContent = `Also create a ${kind === "even" ? "matching even" : "first-page"} ${other}`;
     fix.addEventListener("click", () => {
       this.setKind(other, kind);
