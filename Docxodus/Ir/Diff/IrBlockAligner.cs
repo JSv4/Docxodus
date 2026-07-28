@@ -167,6 +167,15 @@ internal static class IrBlockAligner
         // stay conservative and, crucially, reversible.
         ReleaseCrossingModifiedPairs(leftBlocks, rightBlocks, similarity, leftKind, rightKind, leftMatch, rightMatch);
 
+        // The pass above normalizes the ONE-TO-ONE in-place pairings against each other. Split and merge
+        // GROUPS take part in the same right-order emit, so they must join the same monotone discipline —
+        // this is the global backstop that makes `reject ≡ left` exact in ORDER, not just in content
+        // (issue #288). It runs BEFORE move detection on purpose: a released pairing that is genuinely a
+        // relocation is then re-formed as a Moved/MovedModified by the pass below, which reproduces left
+        // order by construction (the source op is emitted at the left position).
+        EnforceInPlaceOrderMonotonicity(leftBlocks, rightBlocks, leftKind, rightKind, leftMatch, rightMatch,
+            splitGroups, mergeGroups);
+
         // --- Cross-gap fuzzy moves: over the GLOBAL leftover Deleted × Inserted sets (after all gap
         // fill), re-pair similar blocks as Moved / MovedModified. Runs AFTER gap fill so it sees the
         // final Deleted/Inserted leftovers, never blocks already consumed in-place.
@@ -2228,6 +2237,220 @@ internal static class IrBlockAligner
                 minRight = Math.Min(minRight, leftMatch[li]);
         }
         return (maxRightBefore, minRightAfter);
+    }
+
+    // ------------------------------------------------------------------ in-place order invariant (#288)
+
+    /// <summary>
+    /// One LEFT-owning unit of the alignment: a pairing that carries left content into the right-order
+    /// emit at a single right position. <see cref="EmitEntries"/> walks the RIGHT document, so
+    /// <c>reject ≡ left</c> reproduces the left blocks in LEFT order only when the units' right positions
+    /// ascend with their left positions.
+    /// </summary>
+    /// <param name="LeftIndex">The unit's first left block — its position in the left document.</param>
+    /// <param name="RightPosition">Where <see cref="EmitEntries"/> emits the unit's entry.</param>
+    /// <param name="Weight">Blocks the unit keeps paired (2 for a 1:1 pair, 1+N for a split/merge group) —
+    /// the currency of the max-weight pick when a crossing has to be cut.</param>
+    /// <param name="Group">Index into <c>splitGroups</c>/<c>mergeGroups</c>, or -1 for a 1:1 pair.</param>
+    private readonly record struct OrderUnit(
+        int LeftIndex, int RightPosition, int Weight, int Group, IrAlignmentKind Kind);
+
+    /// <summary>
+    /// Global ORDER guarantee for the reject direction (issue #288).
+    /// <para>Every pass that forms an in-gap pairing enforces the order-preserving discipline against the
+    /// pairings that existed WHEN IT RAN (<see cref="InOrderRefine"/>'s crossing bounds,
+    /// <see cref="SameSlotPair"/>'s and <see cref="JunctionPair"/>'s <c>maxBelow</c>/<c>minAbove</c> sweeps,
+    /// <see cref="ReleaseCrossingModifiedPairs"/>' post-normalization). Nothing re-checked the pairings a
+    /// LATER pass adds: the split/merge containment scan runs after the refinement passes, so a group could
+    /// straddle a pair those passes had already formed between two verbatim-DUPLICATE blocks (duplicates
+    /// never anchor — <see cref="BuildUniqueIndex"/> keys on unique content — so which occurrence pairs with
+    /// which is decided in-gap, and the loser is free to sit on the wrong side of a group). The straddled
+    /// pair then emits at ITS right position and the group at THEIRS, and reject rebuilds the two left
+    /// blocks in the wrong ORDER. Content is never lost either way (the fuzzer's word multisets always
+    /// matched); only the order drifts.</para>
+    /// <para>Rather than teach each pass about the others, the invariant is enforced ONCE here over all
+    /// left-owning units: keep a maximum-WEIGHT strictly-increasing subsequence of (left → right position)
+    /// and RELEASE the rest to plain Deleted/Inserted, which is always reversible. Weight = blocks kept
+    /// paired, so an ambiguous cut sacrifices the pairing that holds the least content (a 1:1 duplicate
+    /// pair rather than a 3-block merge group). Because this runs before cross-gap move detection, a
+    /// released pair that IS a relocation comes straight back as a Moved — often a strictly better reading
+    /// than the in-place pairing it replaced.</para>
+    /// <para>Fast path: an already-monotone alignment (every corpus document, and 1997 of 2000 fuzz seeds)
+    /// returns after one linear scan with nothing touched, so the common path is byte-identical.</para>
+    /// </summary>
+    private static void EnforceInPlaceOrderMonotonicity(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
+        int[] leftMatch, int[] rightMatch,
+        List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
+        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups)
+    {
+        // Split group: keyed by its ONE left block. Merge group: keyed by its FIRST left member (the
+        // later members ride the same entry, so they contribute no unit of their own).
+        var splitBySingularLeft = new Dictionary<int, int>();
+        for (int g = 0; g < splitGroups.Count; g++)
+            splitBySingularLeft[splitGroups[g].SingularIndex] = g;
+        var mergeByFirstLeft = new Dictionary<int, int>();
+        for (int g = 0; g < mergeGroups.Count; g++)
+            mergeByFirstLeft[mergeGroups[g].PluralIndexes[0]] = g;
+
+        var units = new List<OrderUnit>();
+        for (int li = 0; li < leftBlocks.Count; li++)
+        {
+            var kind = leftKind[li];
+            switch (kind)
+            {
+                case IrAlignmentKind.Split when splitBySingularLeft.TryGetValue(li, out int sg):
+                    // Emitted at the FIRST member's right position (see EmitEntries).
+                    units.Add(new OrderUnit(li, splitGroups[sg].PluralIndexes[0],
+                        1 + splitGroups[sg].PluralIndexes.Count, sg, IrAlignmentKind.Split));
+                    break;
+                case IrAlignmentKind.Merge when mergeByFirstLeft.TryGetValue(li, out int mg):
+                    units.Add(new OrderUnit(li, mergeGroups[mg].SingularIndex,
+                        1 + mergeGroups[mg].PluralIndexes.Count, mg, IrAlignmentKind.Merge));
+                    break;
+                case IrAlignmentKind.Unchanged or IrAlignmentKind.FormatOnly or IrAlignmentKind.Modified
+                    when leftMatch[li] >= 0:
+                    units.Add(new OrderUnit(li, leftMatch[li], 2, -1, kind.Value));
+                    break;
+                // Deleted blocks are interleaved by EmitEntries' left-anchored buckets (which follow the
+                // units), and Moved/MovedModified emit a separate source op at their LEFT position — both
+                // reproduce left order once the units themselves are monotone.
+            }
+        }
+
+        bool monotone = true;
+        for (int u = 1; u < units.Count && monotone; u++)
+            monotone = units[u].RightPosition > units[u - 1].RightPosition;
+        if (monotone)
+            return;
+
+        var keep = MaxWeightIncreasingUnits(units, rightBlocks.Count);
+        var releasedSplits = new HashSet<int>();
+        var releasedMerges = new HashSet<int>();
+        for (int u = 0; u < units.Count; u++)
+        {
+            if (keep.Contains(u))
+                continue;
+            var unit = units[u];
+            switch (unit.Kind)
+            {
+                case IrAlignmentKind.Split:
+                    releasedSplits.Add(unit.Group);
+                    leftKind[unit.LeftIndex] = IrAlignmentKind.Deleted;
+                    leftMatch[unit.LeftIndex] = -1;
+                    foreach (int rj in splitGroups[unit.Group].PluralIndexes)
+                    {
+                        rightKind[rj] = IrAlignmentKind.Inserted;
+                        rightMatch[rj] = -1;
+                    }
+                    break;
+                case IrAlignmentKind.Merge:
+                    releasedMerges.Add(unit.Group);
+                    foreach (int mi in mergeGroups[unit.Group].PluralIndexes)
+                    {
+                        leftKind[mi] = IrAlignmentKind.Deleted;
+                        leftMatch[mi] = -1;
+                    }
+                    rightKind[mergeGroups[unit.Group].SingularIndex] = IrAlignmentKind.Inserted;
+                    rightMatch[mergeGroups[unit.Group].SingularIndex] = -1;
+                    break;
+                default:
+                {
+                    int rj = leftMatch[unit.LeftIndex];
+                    leftKind[unit.LeftIndex] = IrAlignmentKind.Deleted;
+                    leftMatch[unit.LeftIndex] = -1;
+                    if (rj >= 0)
+                    {
+                        rightKind[rj] = IrAlignmentKind.Inserted;
+                        rightMatch[rj] = -1;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (releasedSplits.Count > 0)
+            RemoveGroupsAt(splitGroups, releasedSplits);
+        if (releasedMerges.Count > 0)
+            RemoveGroupsAt(mergeGroups, releasedMerges);
+    }
+
+    private static void RemoveGroupsAt(
+        List<(int SingularIndex, List<int> PluralIndexes)> groups, HashSet<int> removeIndexes)
+    {
+        var kept = new List<(int, List<int>)>(groups.Count - removeIndexes.Count);
+        for (int g = 0; g < groups.Count; g++)
+            if (!removeIndexes.Contains(g))
+                kept.Add(groups[g]);
+        groups.Clear();
+        groups.AddRange(kept);
+    }
+
+    /// <summary>
+    /// Maximum-WEIGHT strictly-increasing (by <see cref="OrderUnit.RightPosition"/>) subsequence of
+    /// <paramref name="units"/>, which are already in ascending left order. Returns the kept unit indices.
+    /// O(k log nRight) via a Fenwick prefix-max over the right-index domain (right positions are distinct —
+    /// each right block belongs to at most one unit). Deterministic: strict <c>&gt;</c> comparisons keep the
+    /// earliest-processed (smallest left index) unit on every tie, in the tree updates and the endpoint pick
+    /// alike, so two <see cref="Align"/> calls on the same inputs release exactly the same units.
+    /// </summary>
+    private static HashSet<int> MaxWeightIncreasingUnits(List<OrderUnit> units, int nRight)
+    {
+        int n = units.Count;
+        var result = new HashSet<int>();
+        if (n == 0)
+            return result;
+
+        var treeWeight = new long[nRight + 1];
+        var treeIndex = new int[nRight + 1];
+        Array.Fill(treeIndex, -1);
+
+        void Update(int pos, long weight, int unitIndex)
+        {
+            for (; pos <= nRight; pos += pos & -pos)
+                if (weight > treeWeight[pos])
+                {
+                    treeWeight[pos] = weight;
+                    treeIndex[pos] = unitIndex;
+                }
+        }
+
+        (long Weight, int Index) Query(int pos)
+        {
+            long bestWeight = 0;
+            int bestIndex = -1;
+            for (; pos > 0; pos -= pos & -pos)
+                if (treeWeight[pos] > bestWeight)
+                {
+                    bestWeight = treeWeight[pos];
+                    bestIndex = treeIndex[pos];
+                }
+            return (bestWeight, bestIndex);
+        }
+
+        var dp = new long[n];
+        var parent = new int[n];
+        for (int u = 0; u < n; u++)
+        {
+            int r = units[u].RightPosition; // 0-based; positions 1..r cover right values 0..r-1
+            var (predWeight, predIndex) = Query(r);
+            dp[u] = units[u].Weight + predWeight;
+            parent[u] = predIndex;
+            Update(r + 1, dp[u], u);
+        }
+
+        long best = long.MinValue;
+        int end = -1;
+        for (int u = 0; u < n; u++)
+            if (dp[u] > best)
+            {
+                best = dp[u];
+                end = u;
+            }
+        for (int u = end; u != -1; u = parent[u])
+            result.Add(u);
+        return result;
     }
 
     // ------------------------------------------------------------------ emit
