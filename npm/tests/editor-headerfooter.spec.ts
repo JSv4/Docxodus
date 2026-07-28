@@ -363,6 +363,112 @@ test.describe('DocxEditor — header/footer region', () => {
     expect(Object.values(res.footers).join('')).toBe('');
   });
 
+  /**
+   * The display side of the same collision: `RenderBlockHtml` used to locate a block by bare unid
+   * across parts, so a band could SHOW one story while editing another. Author distinct text in
+   * each footer kind, then check every band selection displays its own.
+   */
+  test('each kind selection displays its own story, not a unid-colliding sibling', async ({
+    page,
+  }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+    const res = await page.evaluate((raw: number[]) => {
+      const w = window as any;
+      const { container, editor } = w.__hfMount(new Uint8Array(raw), { headerFooter: true });
+      const marker = { default: 'DDD-DEFAULT', first: 'FFF-FIRST', even: 'EEE-EVEN' } as const;
+
+      for (const kind of ['default', 'first', 'even'] as const) {
+        editor.setHeaderFooterKind('footer', kind);
+        w.__hfType(
+          container.querySelector('[data-hf-band="footer"] [data-anchor][contenteditable="true"]'),
+          marker[kind],
+        );
+      }
+      // Re-select each kind and read back what the band shows.
+      const shown: Record<string, string> = {};
+      for (const kind of ['default', 'first', 'even'] as const) {
+        editor.setHeaderFooterKind('footer', kind);
+        shown[kind] = (
+          container.querySelector('[data-hf-band="footer"] [data-hf-body]')?.textContent || ''
+        ).trim();
+      }
+
+      const saved: Uint8Array = editor.save();
+      editor.close();
+      container.remove();
+
+      const doc = w.__hfInspect(saved);
+      const stored: Record<string, string> = {};
+      for (const r of doc.sectionInfo.footerRefs) stored[r.kind] = doc.textInPart(r.partUri).trim();
+      doc.close();
+      return { shown, stored };
+    }, bytes);
+
+    // What the band showed must equal what is actually stored for that kind.
+    expect(res.shown).toEqual({ default: 'DDD-DEFAULT', first: 'FFF-FIRST', even: 'EEE-EVEN' });
+    expect(res.stored).toEqual({ default: 'DDD-DEFAULT', first: 'FFF-FIRST', even: 'EEE-EVEN' });
+  });
+
+  /**
+   * A block whose rendered DOM has edge whitespace — an empty header story renders with a
+   * placeholder space, and typing lands before it — produces a selection span one longer than
+   * the text the commit actually stores (`serializeInlineMarkdown(...).trim()`). ApplyFormat
+   * then rejects the span as out of range and the format SILENTLY does nothing. The editor
+   * already normalizes caret offsets for this (trimmedSplitOffset); selection spans need the
+   * same treatment. Found by clicking Bold in the demo right after typing a header.
+   */
+  test('formatting a just-typed band paragraph applies (span survives the commit trim)', async ({
+    page,
+  }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+    const res = await page.evaluate((raw: number[]) => {
+      const w = window as any;
+      const D = w.Docxodus;
+      // A real Word-authored empty Header story: renders with a placeholder space, which a
+      // session-seeded story does not — only this reproduces the trim mismatch.
+      const { container, editor } = w.__hfMount(new Uint8Array(raw), { headerFooter: true });
+
+      const blk = container.querySelector(
+        '[data-hf-band="header"] [data-anchor][contenteditable="true"]',
+      ) as HTMLElement;
+      // Type with the caret at the START, leaving the rendered placeholder space AFTER the typed
+      // text — what a user gets by clicking into an empty header and typing. Replacing the whole
+      // contents instead would delete the placeholder and hide the bug.
+      blk.focus();
+      let sel = window.getSelection()!;
+      let r = document.createRange();
+      r.setStart(blk, 0);
+      r.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      document.execCommand('insertText', false, 'DEFAULT HEAD PROBE');
+
+      // Select all and hit Bold with the block STILL FOCUSED — the demo's format buttons
+      // preventDefault on mousedown precisely so the selection survives, so format() computes
+      // the span before syncBlock commits (and trims) the typing.
+      sel = window.getSelection()!;
+      r = document.createRange();
+      r.selectNodeContents(blk);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      editor.format('bold', true);
+
+      const saved: Uint8Array = editor.save();
+      editor.close();
+      container.remove();
+
+      const h = D.DocxSessionBridge.OpenSession(saved, '{}');
+      const proj = JSON.parse(D.DocxSessionBridge.Project(h));
+      const id = Object.keys(proj.anchorIndex).find((k) => k.includes(':hdr'))!;
+      const xml = D.DocxSessionBridge.RawGetXml(h, id);
+      D.DocxSessionBridge.CloseSession(h);
+      return { hasText: xml.includes('DEFAULT HEAD PROBE'), bold: /<w:b[ />]/.test(xml) };
+    }, bytes);
+
+    expect(res.hasText).toBe(true);
+    expect(res.bold).toBe(true);
+  });
+
   test('bands survive a paginated toggle and keep their content', async ({ page }) => {
     const res = await page.evaluate(() => {
       const w = window as any;

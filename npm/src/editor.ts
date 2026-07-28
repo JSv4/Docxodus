@@ -343,10 +343,40 @@ function blockContentText(block: HTMLElement): string {
  * trimmed length keeps the split offset consistent with what was committed.
  */
 function trimmedSplitOffset(block: HTMLElement, domOffset: number): number {
-  const content = blockContentText(block);
-  const leading = content.length - content.replace(/^\s+/, "").length;
-  const trimmedLen = content.trim().length;
+  const { leading, trimmedLen } = trimBounds(block);
   return Math.max(0, Math.min(domOffset - Math.min(domOffset, leading), trimmedLen));
+}
+
+/** How far `block`'s DOM content text is offset from, and longer than, its committed form. */
+function trimBounds(block: HTMLElement): { leading: number; trimmedLen: number } {
+  const content = blockContentText(block);
+  return {
+    leading: content.length - content.replace(/^\s+/, "").length,
+    trimmedLen: content.trim().length,
+  };
+}
+
+/**
+ * Map a DOM content SPAN into the run-text space the session holds after a commit — the span
+ * analogue of {@link trimmedSplitOffset}, and for the same reason.
+ *
+ * A block rendered with edge whitespace produces a span longer than the text the commit stores:
+ * an empty header/footer story renders as a lone NBSP placeholder, so typing into it leaves a
+ * trailing NBSP that `serializeInlineMarkdown(...).trim()` removes (JS `trim()` treats U+00A0 as
+ * whitespace). "Select all, then Bold" then asks `ApplyFormat` for [0, len+1) — one past the
+ * committed end — and the op is REJECTED with OffsetOutOfRange, so the format silently does
+ * nothing. The demo's format buttons preventDefault on mousedown to keep the selection alive,
+ * which is exactly the path that computes the span before `syncBlock` commits, so this is the
+ * ordinary case rather than an edge one.
+ */
+function trimmedSpan(
+  block: HTMLElement,
+  span: { start: number; length: number },
+): { start: number; length: number } {
+  const { leading, trimmedLen } = trimBounds(block);
+  const start = Math.max(0, Math.min(span.start - Math.min(span.start, leading), trimmedLen));
+  const end = Math.max(start, Math.min(span.start + span.length - leading, trimmedLen));
+  return { start, length: end - start };
 }
 
 /**
@@ -432,7 +462,10 @@ function selectionSpanIn(block: HTMLElement): { start: number; length: number } 
   if (!block.contains(range.startContainer) || !block.contains(range.endContainer)) return null;
   const start = contentOffsetOf(block, range.startContainer, range.startOffset);
   const end = contentOffsetOf(block, range.endContainer, range.endOffset);
-  return { start: Math.min(start, end), length: Math.abs(end - start) };
+  // Normalized into the committed run-text space: every consumer feeds this straight to a
+  // DocxSession op, which rejects a span that overshoots the committed length.
+  const span = trimmedSpan(block, { start: Math.min(start, end), length: Math.abs(end - start) });
+  return span.length > 0 ? span : null;
 }
 
 /** Restore a content-text selection spanning [start, start+length) within `el` (skips markers). */
@@ -1264,16 +1297,18 @@ export class DocxEditor {
     const hasStart = block.contains(range.startContainer);
     const hasEnd = block.contains(range.endContainer);
     if (hasStart && hasEnd) return selectionSpanIn(block);
+    // Partial/whole slices are normalized into the committed run-text space for the same reason
+    // selectionSpanIn is (see trimmedSpan): a session op rejects a span past the committed end.
     const contentLen = blockContentText(block).length;
     if (hasStart) {
       const start = contentOffsetOf(block, range.startContainer, range.startOffset);
-      return { start, length: Math.max(0, contentLen - start) };
+      return trimmedSpan(block, { start, length: Math.max(0, contentLen - start) });
     }
     if (hasEnd) {
       const end = contentOffsetOf(block, range.endContainer, range.endOffset);
-      return { start: 0, length: end };
+      return trimmedSpan(block, { start: 0, length: end });
     }
-    return { start: 0, length: contentLen }; // fully-spanned middle block
+    return trimmedSpan(block, { start: 0, length: contentLen }); // fully-spanned middle block
   }
 
   /** Apply an inline ApplyFormat op to each block's slice of the selection, then reconcile

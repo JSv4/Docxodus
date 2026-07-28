@@ -4999,4 +4999,55 @@ public class DocxSessionTests
         var info = s2.GetSectionInfo(FirstBodyPara(s2))!;
         Assert.Equal(new[] { HeaderFooterKind.Default }, info.HeaderRefs.Select(r => r.Kind).ToArray());
     }
+
+    // Unids are CONTENT-ADDRESSED, so identical content in DIFFERENT parts yields the SAME unid —
+    // a document with empty default/first/even stories (Word writes exactly that) has one unid
+    // shared across several header parts. An EditResult's anchors are reverse-resolved from the
+    // fresh projection by unid; without scoping that lookup to the part the edit touched, the
+    // result named a DIFFERENT story, and a caller that addressed the returned anchor next (as the
+    // browser editor does) wrote into the wrong part. Found by driving the editor demo against
+    // HC031-Complicated-Document.docx: a page-number field aimed at the default footer landed in
+    // the even one.
+    [Fact]
+    public void DS267_EditResultAnchor_StaysInTheEditedPart_WhenUnidsCollideAcrossParts()
+    {
+        // A real Word document, not a synthesized one: stories the session creates get distinct
+        // unids, so only Word's own identical empty stories exercise the collision. HC031 carries
+        // default/first/even for both header and footer, all empty.
+        var path = Path.Combine("../../../../TestFiles/", "HC031-Complicated-Document.docx");
+        using var s = new DocxSession(File.ReadAllBytes(path));
+        var body = s.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h").Anchor.Id;
+
+        var info = s.GetSectionInfo(body)!;
+        var defaultUri = info.FooterRefs.Single(r => r.Kind == HeaderFooterKind.Default).PartUri;
+        var defaultAnchor = s.Project().AnchorIndex.Values
+            .First(t => t.PartUri == defaultUri && t.Anchor.Kind == "p").Anchor.Id;
+
+        // Only meaningful if the unids really do collide — assert the precondition explicitly so
+        // this test can't silently stop covering the case.
+        var footerUnids = info.FooterRefs
+            .Select(r => s.Project().AnchorIndex.Values.First(t => t.PartUri == r.PartUri).Unid)
+            .ToList();
+        Assert.True(footerUnids.Distinct().Count() < footerUnids.Count,
+            "precondition: this fixture's empty footer stories should share a content-addressed unid");
+
+        // A paragraph-format edit reports the edited anchor; it must name the DEFAULT footer.
+        var fmt = s.SetParagraphFormat(defaultAnchor,
+            new ParagraphFormatOp { Alignment = ParagraphAlignment.Center });
+        Assert.True(fmt.Success, fmt.Error?.Message);
+        var reported = fmt.Modified.Single().Id;
+
+        // Following the reported anchor (what an editor does next) must stay in the same part.
+        Assert.True(s.InsertPageNumberField(reported, PageNumberField.CurrentPage).Success);
+
+        using var saved = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(saved, false);
+        string XmlOf(string uri) => doc.MainDocumentPart!.FooterParts
+            .Single(f => f.Uri.ToString() == uri).Footer!.OuterXml;
+
+        Assert.Contains("PAGE", XmlOf(defaultUri));
+        foreach (var other in info.FooterRefs.Where(r => r.PartUri != defaultUri))
+            Assert.DoesNotContain("PAGE", XmlOf(other.PartUri));
+    }
 }
