@@ -95,6 +95,21 @@ internal enum IrEditOpKind
     /// coverage — no corpus deviation demands it (the two retained deviations are both splits).
     /// </summary>
     MergeBlock,
+
+    /// <summary>
+    /// A run of ≥2 ADJACENT word-matched Modified paragraph pairs rendered by ONE flat word+pilcrow
+    /// token-stream diff instead of per-pair token diffs — the cross-paragraph token-stream refinement
+    /// decoded from Word's compare output (gated by <see cref="IrDiffSettings.CrossParagraphTokenDiff"/>,
+    /// default off). The op carries the factored per-output-paragraph cells in
+    /// <see cref="IrEditOp.CrossParagraphCells"/> (each ≤1 left + ≤1 right paragraph, a slice-relative
+    /// token diff, and a pilcrow mark); <see cref="IrEditOp.LeftAnchor"/>/<see cref="IrEditOp.RightAnchor"/>
+    /// are set to the first left/right paragraph anchors for provenance only. Emitted ONLY on the markup
+    /// (<c>Compare</c>) path — the revision + JSON data paths and the composite merger never enable
+    /// <see cref="IrDiffSettings.CrossParagraphTokenDiff"/>, so those never see this kind. Round-trip
+    /// mirrors split/merge: accept keeps Ins pilcrow marks + drops Del ones (fusing), reject the inverse —
+    /// so accept ≡ the run's right paragraphs, reject ≡ its left paragraphs.
+    /// </summary>
+    CrossParagraphRunBlock,
 }
 
 /// <summary>
@@ -145,7 +160,49 @@ internal sealed record IrEditOp(
     IrNodeList<string>? SplitMergeAnchors = null,
     IrNodeList<IrTokenDiff>? SegmentDiffs = null,
     int? BodyFullRewriteGroupId = null,
-    bool RequiresWholeParagraphReplace = false);
+    bool RequiresWholeParagraphReplace = false,
+    IrNodeList<IrCrossParagraphCell>? CrossParagraphCells = null);
+
+/// <summary>
+/// One output-paragraph "cell" of a <see cref="IrEditOpKind.CrossParagraphRunBlock"/> — the factoring of
+/// a flat word+pilcrow token-stream diff over a run of adjacent word-matched paragraph pairs back into
+/// output paragraphs (2026-07-25). Each cell references AT MOST one left paragraph and one right
+/// paragraph (the pilcrow-boundary construction guarantees this; the segmenter also asserts it), plus a
+/// slice-relative token <see cref="Diff"/> and the pilcrow <see cref="Mark"/> that closed it.
+/// </summary>
+/// <remarks>
+/// <para><b>Slices.</b> <see cref="LeftAnchor"/>/<see cref="RightAnchor"/> are the left/right paragraph
+/// anchors (either may be null: a null left anchor is a pure-insert cell, a null right anchor a
+/// pure-delete cell). <see cref="LeftSliceStart"/>/<see cref="LeftSliceLen"/> address a contiguous
+/// sub-range of that left paragraph's diff-token stream (0-based within-paragraph token indices); the
+/// right slice likewise. <see cref="Diff"/> is <c>IrTokenDiffer.Diff(leftSlice, rightSlice)</c> —
+/// slice-relative (0-based into the slices), so the renderer's ins-before-del + rPrChange + Myers-order
+/// span walk comes for free, exactly as for a split/merge segment.</para>
+/// <para><b>Mark.</b> The status of the pilcrow token that closed this cell:
+/// <see cref="IrCrossParagraphMark.Equal"/> (a retained, matched pilcrow — no mark),
+/// <see cref="IrCrossParagraphMark.Inserted"/> (a right-only pilcrow — a new paragraph, <c>w:ins</c>
+/// mark), <see cref="IrCrossParagraphMark.Deleted"/> (a left-only pilcrow — a removed paragraph,
+/// <c>w:del</c> mark). Accept keeps Ins marks (the new paragraph stands) and drops Del ones (the cell
+/// fuses into the next paragraph); reject the inverse — reproducing the run's right / left paragraphs.</para>
+/// </remarks>
+internal sealed record IrCrossParagraphCell(
+    string? LeftAnchor, int LeftSliceStart, int LeftSliceLen,
+    string? RightAnchor, int RightSliceStart, int RightSliceLen,
+    IrTokenDiff Diff,
+    IrCrossParagraphMark Mark);
+
+/// <summary>The pilcrow status that closed a <see cref="IrCrossParagraphCell"/>.</summary>
+internal enum IrCrossParagraphMark
+{
+    /// <summary>A matched pilcrow — retained on both accept and reject; the cell paragraph gets no mark.</summary>
+    Equal,
+
+    /// <summary>A right-only pilcrow — a paragraph the stream introduced; <c>w:ins</c> mark (accept keeps it, reject fuses).</summary>
+    Inserted,
+
+    /// <summary>A left-only pilcrow — a removed paragraph; <c>w:del</c> mark (reject keeps it, accept fuses).</summary>
+    Deleted,
+}
 
 /// <summary>
 /// The nested inner-block diff of ONE textbox pair inside a Modified paragraph (M2.4 Task 1). A paragraph

@@ -49,7 +49,12 @@ internal static class IrEditScriptBuilder
         ArgumentNullException.ThrowIfNull(settings);
 
         var alignment = IrBlockAligner.Align(left, right, settings);
-        var bodyOps = ProjectAlignment(left.Body.Blocks, alignment, settings);
+        // Cross-paragraph token-stream fusion (IrDiffSettings.CrossParagraphTokenDiff) is enabled ONLY for
+        // the top-level BODY projection — the sole scope where it is round-trip-verified. Every OTHER caller
+        // of ProjectAlignment (notes, headers/footers, table cells via IrTableDiffer, textbox interiors) uses
+        // the default allowCrossParagraph=false, so a word-matched run in those scopes keeps today's exact
+        // per-pair behavior, and RenderCrossParagraphRun only ever runs on body blocks.
+        var bodyOps = ProjectAlignment(left.Body.Blocks, alignment, settings, allowCrossParagraph: true);
         var noteOps = BuildNoteOps(left, right, settings);
         var headerFooterOps = BuildHeaderFooterOps(left, right, settings);
         return new IrEditScript(IrNodeList.From(bodyOps),
@@ -757,7 +762,8 @@ internal static class IrEditScriptBuilder
     /// scoped to the cell, which is exactly right since a row/cell move never crosses cells in M2.2.
     /// </summary>
     public static List<IrEditOp> ProjectAlignment(
-        IrNodeList<IrBlock> leftBlocks, IrBlockAlignment alignment, IrDiffSettings settings)
+        IrNodeList<IrBlock> leftBlocks, IrBlockAlignment alignment, IrDiffSettings settings,
+        bool allowCrossParagraph = false)
     {
         // Left block index by reference identity → used to order move-source interleaving by left position.
         var leftIndex = BuildLeftIndexMap(leftBlocks);
@@ -796,14 +802,91 @@ internal static class IrEditScriptBuilder
         var pendingSources = new List<int>();
         StageSources(sourcesAfterLeft, -1, pendingSources); // sources preceding every in-place anchor
 
-        foreach (var entry in alignment.Entries)
+        var alignmentEntries = alignment.Entries;
+
+        // Story-final pair detection for the weak-pair flush (decoded 2026-07-27): the Modified pair
+        // whose left block is the story's LAST left block and whose entry carries the story's LAST
+        // right content is the tail-fusion construct of the per-pair path. Word flushes it to a whole
+        // del+ins when its only retention is a lone short word (see ApplyStoryFinalWeakPairFlush);
+        // interior pairs never flush (Word retains even a lone shared function word mid-story).
+        // Trailing section-break blocks are TRANSPARENT here, exactly as in the renderer's story-end
+        // test (the trailing section-break op renders nothing).
+        int lastRightEntryIndex = -1;
+        for (int i = 0; i < alignmentEntries.Count; i++)
         {
+            var e = alignmentEntries[i];
+            bool hasRight = (e.Right is not null && e.Right is not IrSectionBreak) ||
+                (e.Kind == IrAlignmentKind.Split && e.MultiBlocks is { Count: > 0 });
+            if (hasRight)
+                lastRightEntryIndex = i;
+        }
+        IrBlock? lastLeftBlock = null;
+        for (int i = leftBlocks.Count - 1; i >= 0; i--)
+        {
+            if (leftBlocks[i] is not IrSectionBreak)
+            {
+                lastLeftBlock = leftBlocks[i];
+                break;
+            }
+        }
+        for (int entryIndex = 0; entryIndex < alignmentEntries.Count; entryIndex++)
+        {
+            var entry = alignmentEntries[entryIndex];
             if (pendingSources.Count > 0)
             {
                 // A Deleted entry releases only the staged sources whose left index PRECEDES it; any
                 // other entry ends the anchor's deletion run and releases everything staged.
                 int limit = entry.Kind == IrAlignmentKind.Deleted ? leftIndex[entry.Left!] : int.MaxValue;
                 FlushPendingSources(pendingSources, limit, moves, ops);
+            }
+
+            // Cross-paragraph token-stream fusion (markup-only, gated by IrDiffSettings.CrossParagraphTokenDiff;
+            // default off ⇒ byte-identical). At a Modified paragraph entry, try to fuse the maximal streak of
+            // ADJACENT streamable Modified pairs starting here into ONE CrossParagraphRunBlock op — the flat
+            // word+pilcrow stream decoded from Word's compare output over word-matched regions. Runs of <2
+            // pairs, non-streamable members, and segmenter bails all fall straight through to the ordinary
+            // per-entry emission below. (Every pending move source was flushed above — a Modified entry flushes
+            // everything — and the streak collector stops before any member with sources staged UNDER it, so
+            // the source-op interleave order is untouched.)
+            if (allowCrossParagraph && settings.CrossParagraphTokenDiff &&
+                entry.Kind is IrAlignmentKind.Modified or IrAlignmentKind.Inserted or IrAlignmentKind.Deleted)
+            {
+                // At a Modified entry, the word-matched pair-run collector goes first (its behavior is
+                // pinned); the story-final MIXED-region collector (2026-07-27) then covers the decoded
+                // shapes the run path cannot own — zero-pair replace regions whose one-sided paragraphs
+                // share words, and regions where one-sided members PRECEDE the word-matched pair.
+                int consumed = 0;
+                List<IrEditOp>? trailingSectionOps = null;
+                var fused = entry.Kind == IrAlignmentKind.Modified
+                    ? TryBuildCrossParagraphRunOp(
+                        alignmentEntries, entryIndex, settings, sourcesAfterLeft, leftIndex, out consumed)
+                    : null;
+                if (fused is null && pendingSources.Count == 0)
+                    fused = TryBuildStoryFinalMixedRegionOp(
+                        alignmentEntries, entryIndex, settings, sourcesAfterLeft, leftIndex,
+                        out consumed, out trailingSectionOps);
+                if (fused is not null)
+                {
+                    ops.Add(fused);
+                    if (trailingSectionOps is not null)
+                        ops.AddRange(trailingSectionOps);
+                    // Stage the move-sources anchored under every consumed member exactly as the per-entry
+                    // path would (paired-in-place lefts, plus a consumed Merge entry's member lefts; only
+                    // the LAST consumed pair may carry any — the streak collector enforces it, and tail
+                    // absorption is refused outright when it does — so the staged list stays sorted
+                    // exactly as the per-entry path would leave it).
+                    for (int k = 0; k < consumed; k++)
+                    {
+                        var consumedEntry = alignmentEntries[entryIndex + k];
+                        if (consumedEntry.Left is not null && IsPairedInPlace(consumedEntry.Kind))
+                            StageSources(sourcesAfterLeft, leftIndex[consumedEntry.Left], pendingSources);
+                        if (consumedEntry.Kind == IrAlignmentKind.Merge && consumedEntry.MultiBlocks is { } consumedLefts)
+                            foreach (var lb in consumedLefts)
+                                StageSources(sourcesAfterLeft, leftIndex[lb], pendingSources);
+                    }
+                    entryIndex += consumed - 1; // -1: the for-loop's ++ advances past the last consumed entry.
+                    continue;
+                }
             }
 
             switch (entry.Kind)
@@ -827,7 +910,16 @@ internal static class IrEditScriptBuilder
                     break;
 
                 case IrAlignmentKind.Modified:
-                    ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings));
+                    // A story-final pair directly preceded by unpaired gap content (an Inserted/Deleted
+                    // entry) is part of a LARGER tail construct in the reference output — its window
+                    // carries the gap's matter too, and the reference retains the pair's lone word
+                    // there — so the flush applies only to a cleanly-paired tail.
+                    ops.Add(MakeModifyOp(entry.Left!, entry.Right!, settings,
+                        storyFinalPair: entryIndex == lastRightEntryIndex &&
+                                        ReferenceEquals(entry.Left, lastLeftBlock) &&
+                                        (entryIndex == 0 ||
+                                         alignmentEntries[entryIndex - 1].Kind is not
+                                             (IrAlignmentKind.Inserted or IrAlignmentKind.Deleted))));
                     break;
 
                 case IrAlignmentKind.Inserted:
@@ -862,7 +954,7 @@ internal static class IrEditScriptBuilder
                     ops.Add(new IrEditOp(IrEditOpKind.SplitBlock,
                         lp.Anchor.ToString(), null, null, null, null, null, null,
                         IrNodeList.From(members.Select(m => m.Anchor.ToString()).ToList()),
-                        IrSplitSegmenter.ComputeSegmentDiffs(lp, members, settings)));
+                        IrSplitSegmenter.ComputeSegmentDiffs(lp, members, settings, singularIsLeft: true)));
                     break;
                 }
 
@@ -882,7 +974,7 @@ internal static class IrEditScriptBuilder
                     // Segment diffs are computed singular-vs-members (rp sliced against each left
                     // member) then MIRRORED so each stored diff reads left-member → right-slice,
                     // keeping the universal "left = left document" orientation for every consumer.
-                    var sliced = IrSplitSegmenter.ComputeSegmentDiffs(rp, members, settings);
+                    var sliced = IrSplitSegmenter.ComputeSegmentDiffs(rp, members, settings, singularIsLeft: false);
                     ops.Add(new IrEditOp(IrEditOpKind.MergeBlock,
                         null, rp.Anchor.ToString(), null, null, null, null, null,
                         IrNodeList.From(members.Select(m => m.Anchor.ToString()).ToList()),
@@ -930,6 +1022,383 @@ internal static class IrEditScriptBuilder
         return ops;
     }
 
+    // --------------------------------------------------- cross-paragraph token-stream run (2026-07-25)
+
+    /// <summary>
+    /// Try to fuse the maximal streak of ADJACENT word-matched Modified paragraph pairs starting at
+    /// <paramref name="start"/> — plus, when the streak's following entries are a STORY-FINAL replace gap
+    /// (Inserted/Deleted streamable paragraphs) or ONE story-final split/merge group, that trailing tail
+    /// as one-sided stream members — into ONE <see cref="IrEditOpKind.CrossParagraphRunBlock"/> op.
+    /// Returns null (and leaves <paramref name="consumed"/> 0) — so the caller emits the ordinary
+    /// per-entry ops — when fewer than 2 eligible pairs are adjacent and no tail is absorbable, or when
+    /// the segmenter declines (structure gate / cell-invariant guard). A pair is eligible iff both sides
+    /// are <see cref="IrCrossParagraphSegmenter.IsStreamable"/> paragraphs with no structural carrier
+    /// (<see cref="HasStructuralCarrier"/> — the same digest gate split/merge uses; an inline
+    /// SDT/smartTag envelope or field carrier cannot be sliced across cells). The streak stops AFTER any
+    /// member with move-sources staged under its left block — and such a member also blocks tail
+    /// absorption — so the flat path's source-op interleave position is preserved exactly. When the TAIL
+    /// stream declines, the pure pair run is retried exactly as the tail-less path would have (the
+    /// ordinary replace-gap / split / merge grammar then renders the tail). On success
+    /// <paramref name="consumed"/> is the total ENTRY count the op replaces (pairs + tail entries).
+    /// </summary>
+    private static IrEditOp? TryBuildCrossParagraphRunOp(
+        IrNodeList<IrAlignedBlock> entries, int start, IrDiffSettings settings,
+        Dictionary<int, List<int>> sourcesAfterLeft, Dictionary<IrBlock, int> leftIndex, out int consumed)
+    {
+        consumed = 0;
+
+        var leftParas = new List<IrParagraph>();
+        var rightParas = new List<IrParagraph>();
+        bool lastPairHasSources = false;
+        for (int i = start; i < entries.Count && entries[i].Kind == IrAlignmentKind.Modified; i++)
+        {
+            if (entries[i].Left is not IrParagraph lp || entries[i].Right is not IrParagraph rp ||
+                !IrCrossParagraphSegmenter.IsStreamable(lp) || !IrCrossParagraphSegmenter.IsStreamable(rp) ||
+                HasStructuralCarrier(lp) || HasStructuralCarrier(rp))
+                break;
+            leftParas.Add(lp);
+            rightParas.Add(rp);
+            // Move-sources staged under this member's left block flush AFTER the member's op on the flat
+            // path. Fusing further members would displace them, so this member closes the streak.
+            if (sourcesAfterLeft.ContainsKey(leftIndex[lp]))
+            {
+                lastPairHasSources = true;
+                break;
+            }
+        }
+        int pairCount = leftParas.Count;
+        if (pairCount == 0)
+            return null;
+
+        // Absorb a story-final tail (replace gap / split / merge surplus) as one-sided stream members —
+        // unless the last pair carries staged move-sources (the flat path interleaves those with the
+        // tail's ops by left order; absorbing would displace them).
+        int pairedCount = pairCount;
+        int tailEntries = lastPairHasSources
+            ? 0
+            : TryCollectStoryFinalTail(entries, start + pairCount, leftParas, rightParas, ref pairedCount);
+        bool hasTail = leftParas.Count != pairedCount || rightParas.Count != pairedCount;
+        if (!hasTail && pairCount < 2)
+            return null; // the flat-stream shape is decoded for RUNS of ≥2 word-matched pairs (a lone pair streams only with a tail).
+
+        // Story-final run: nothing follows the consumed entries except section-break metadata. With a
+        // tail this is TRUE by construction (the collector demanded it); the segmenter then keeps the
+        // last pair's in-slot anchors (the fusion construct is the tail itself). Without one, the
+        // segmenter treats the run's LAST pair as the tail-fusion construct (no in-slot anchors — its
+        // retained tokens arrive only by forward cross-flow), per the decoded grammar.
+        bool runEndsStory = OnlySectionBreakEntriesFrom(entries, start + pairCount + tailEntries);
+
+        var cells = IrCrossParagraphSegmenter.Segment(leftParas, rightParas, settings, runEndsStory, pairedCount);
+        if (cells is null && hasTail)
+        {
+            // The tail stream declined (zero crossings, or a bail): retry the PURE pair run exactly as
+            // the tail-less path would have; the ordinary grammar renders the tail entries.
+            if (pairCount < 2)
+                return null;
+            leftParas.RemoveRange(pairCount, leftParas.Count - pairCount);
+            rightParas.RemoveRange(pairCount, rightParas.Count - pairCount);
+            tailEntries = 0;
+            runEndsStory = OnlySectionBreakEntriesFrom(entries, start + pairCount);
+            cells = IrCrossParagraphSegmenter.Segment(leftParas, rightParas, settings, runEndsStory, pairCount);
+        }
+        if (cells is null)
+            return null;
+
+        consumed = pairCount + tailEntries;
+        return new IrEditOp(IrEditOpKind.CrossParagraphRunBlock,
+            leftParas[0].Anchor.ToString(), rightParas[0].Anchor.ToString(),
+            TokenDiff: null, MoveGroupId: null, IsMoveSource: null,
+            CrossParagraphCells: IrNodeList.From(cells));
+    }
+
+    /// <summary>True iff every entry from <paramref name="from"/> on carries only section-break
+    /// metadata — the shared story-end test of the cross-paragraph constructs.</summary>
+    private static bool OnlySectionBreakEntriesFrom(IrNodeList<IrAlignedBlock> entries, int from)
+    {
+        for (int j = from; j < entries.Count; j++)
+        {
+            if (entries[j].Left is IrSectionBreak || entries[j].Right is IrSectionBreak)
+                continue;
+            return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Collect the story-final TAIL following a word-matched run, appending its paragraphs to the
+    /// member lists as one-sided stream members (decoded run+gap construct, 2026-07-27). Two shapes:
+    /// (a) a contiguous run of Inserted/Deleted entries — a replace gap — whose deleted paragraphs
+    /// join the LEFT members and inserted ones the RIGHT members, in entry (= document) order; or
+    /// (b) exactly ONE Split/Merge entry — the aligner's story-tail surplus (or a genuine story-final
+    /// split/merge) — whose singular↔first-member becomes the run's LAST pair
+    /// (<paramref name="pairedCount"/> grows by one) and whose surplus members become one-sided.
+    /// Either shape must reach the story end (only section-break entries after) and every touched
+    /// paragraph must be streamable with no structural carrier; anything else collects NOTHING (the
+    /// member lists are untouched and 0 is returned, keeping the tail-less behavior). Returns the
+    /// number of ENTRIES consumed.
+    /// </summary>
+    private static int TryCollectStoryFinalTail(
+        IrNodeList<IrAlignedBlock> entries, int tailStart,
+        List<IrParagraph> leftParas, List<IrParagraph> rightParas, ref int pairedCount)
+    {
+        static bool Eligible(IrBlock? block, out IrParagraph para)
+        {
+            para = null!;
+            if (block is not IrParagraph p || !IrCrossParagraphSegmenter.IsStreamable(p) || HasStructuralCarrier(p))
+                return false;
+            para = p;
+            return true;
+        }
+
+        if (tailStart >= entries.Count)
+            return 0;
+
+        var kind = entries[tailStart].Kind;
+        if (kind is IrAlignmentKind.Inserted or IrAlignmentKind.Deleted)
+        {
+            var dels = new List<IrParagraph>();
+            var inss = new List<IrParagraph>();
+            int j = tailStart;
+            for (; j < entries.Count &&
+                   entries[j].Kind is IrAlignmentKind.Inserted or IrAlignmentKind.Deleted; j++)
+            {
+                if (entries[j].Kind == IrAlignmentKind.Deleted)
+                {
+                    if (!Eligible(entries[j].Left, out var dp))
+                        return 0;
+                    dels.Add(dp);
+                }
+                else
+                {
+                    if (!Eligible(entries[j].Right, out var ip))
+                        return 0;
+                    inss.Add(ip);
+                }
+            }
+            if (!OnlySectionBreakEntriesFrom(entries, j))
+                return 0;
+            leftParas.AddRange(dels);
+            rightParas.AddRange(inss);
+            return j - tailStart;
+        }
+
+        if (kind is IrAlignmentKind.Split or IrAlignmentKind.Merge)
+        {
+            var entry = entries[tailStart];
+            if (!OnlySectionBreakEntriesFrom(entries, tailStart + 1) ||
+                entry.MultiBlocks is not { Count: >= 2 } members)
+                return 0;
+            var memberParas = new List<IrParagraph>(members.Count);
+            foreach (var m in members)
+            {
+                if (!Eligible(m, out var mp))
+                    return 0;
+                memberParas.Add(mp);
+            }
+            if (kind == IrAlignmentKind.Split)
+            {
+                if (!Eligible(entry.Left, out var singular))
+                    return 0;
+                leftParas.Add(singular);
+                rightParas.Add(memberParas[0]);
+                pairedCount++;
+                for (int m = 1; m < memberParas.Count; m++)
+                    rightParas.Add(memberParas[m]);
+            }
+            else
+            {
+                if (!Eligible(entry.Right, out var singular))
+                    return 0;
+                leftParas.Add(memberParas[0]);
+                rightParas.Add(singular);
+                pairedCount++;
+                for (int m = 1; m < memberParas.Count; m++)
+                    leftParas.Add(memberParas[m]);
+            }
+            return 1;
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Story-final MIXED-region collector (2026-07-27): the decoded gap-stream shapes the pair-run
+    /// collector cannot own. Collects the maximal run of streamable Inserted/Deleted/Modified
+    /// paragraph entries from <paramref name="start"/> that reaches the story end, builds the general
+    /// member lists + pair links, and segments them via
+    /// <see cref="IrCrossParagraphSegmenter.SegmentRegion"/>. Fires ONLY for configurations outside
+    /// the pair-run path's contract: a ZERO-pair region (a story-final replace gap whose one-sided
+    /// paragraphs share words — reference compare output streams function words through such gaps),
+    /// or a region with a one-sided member BEFORE its last pair (a leading deleted/inserted paragraph
+    /// joining the pair's stream). Pure pair-runs and pairs-then-trailing-gap shapes return null here
+    /// — they belong to <see cref="TryBuildCrossParagraphRunOp"/>. A 1×1 gap never enters (the
+    /// replace-gap grammar owns it); body-full-rewrite entries, structural carriers, non-streamable
+    /// paragraphs, and any member with staged move-sources all decline. The segmenter's structure
+    /// gates then require a genuine structural change (unpaired interior pilcrow / crossing match),
+    /// so a matchless region falls back to the ordinary per-entry grammar unchanged.
+    /// </summary>
+    private static IrEditOp? TryBuildStoryFinalMixedRegionOp(
+        IrNodeList<IrAlignedBlock> entries, int start, IrDiffSettings settings,
+        Dictionary<int, List<int>> sourcesAfterLeft, Dictionary<IrBlock, int> leftIndex, out int consumed,
+        out List<IrEditOp>? trailingSectionOps)
+    {
+        consumed = 0;
+        trailingSectionOps = null;
+
+        var leftParas = new List<IrParagraph>();
+        var rightParas = new List<IrParagraph>();
+        var pairs = new List<(int L, int R)>();
+        var sectionEntries = new List<IrAlignedBlock>();
+        int j = start;
+        for (; j < entries.Count; j++)
+        {
+            var e = entries[j];
+            // One-sided SECTION-BREAK entries are story-end metadata, not gap matter: when the two
+            // sides' section properties differ, the aligner emits a Deleted + an Inserted section
+            // break INTERLEAVED with the story's final replace region (the deleted one after the
+            // left paragraphs, the inserted one after the right). The stream looks straight through
+            // them — they are collected transparently and their ops re-emitted after the fused op,
+            // exactly as the per-entry path would render them (a section break op emits no body
+            // paragraph in place).
+            if (e.Kind == IrAlignmentKind.Deleted && e.Left is IrSectionBreak)
+            {
+                sectionEntries.Add(e);
+                continue;
+            }
+            if (e.Kind == IrAlignmentKind.Inserted && e.Right is IrSectionBreak)
+            {
+                sectionEntries.Add(e);
+                continue;
+            }
+            if (e.Kind == IrAlignmentKind.Deleted)
+            {
+                // A BodyFullRewriteGroupId-marked del/ins residue still joins the region: with no
+                // stream match the gates decline and the full-rewrite arrangement keeps it; with a
+                // genuine cross-flow match the reference output streams it (a leading rewrite's
+                // shared word lands retained inside the following pair's paragraph).
+                if (e.Left is not IrParagraph dp || !IrCrossParagraphSegmenter.IsStreamable(dp) ||
+                    HasStructuralCarrier(dp))
+                    break;
+                leftParas.Add(dp);
+            }
+            else if (e.Kind == IrAlignmentKind.Inserted)
+            {
+                if (e.Right is not IrParagraph ip || !IrCrossParagraphSegmenter.IsStreamable(ip) ||
+                    HasStructuralCarrier(ip))
+                    break;
+                rightParas.Add(ip);
+            }
+            else if (e.Kind == IrAlignmentKind.Modified)
+            {
+                if (e.Left is not IrParagraph lp || e.Right is not IrParagraph rp ||
+                    !IrCrossParagraphSegmenter.IsStreamable(lp) || !IrCrossParagraphSegmenter.IsStreamable(rp) ||
+                    HasStructuralCarrier(lp) || HasStructuralCarrier(rp))
+                    break;
+                pairs.Add((leftParas.Count, rightParas.Count));
+                leftParas.Add(lp);
+                rightParas.Add(rp);
+            }
+            else
+            {
+                break;
+            }
+        }
+        if (j <= start)
+            return null;
+        if (leftParas.Count == 0 || rightParas.Count == 0)
+            return null;
+        // MAXIMALITY: the stream owns whole regions, never fragments. If more one-sided gap matter
+        // directly precedes the start (an upstream non-streamable/table break) or the collection
+        // broke ON a one-sided entry (a mid-gap table or non-streamable paragraph), this run is a
+        // slice of a larger replace region — the replace-gap grammar arranges those as a whole.
+        // Section-break entries are transparent to this test on both sides (story-end metadata).
+        static bool IsOneSidedGapMatter(IrAlignedBlock e) =>
+            e.Kind is IrAlignmentKind.Inserted or IrAlignmentKind.Deleted &&
+            e.Left is not IrSectionBreak && e.Right is not IrSectionBreak;
+        int prev = start - 1;
+        while (prev >= 0 && !IsOneSidedGapMatter(entries[prev]) &&
+               entries[prev].Kind is IrAlignmentKind.Inserted or IrAlignmentKind.Deleted)
+            prev--;
+        if (prev >= 0 && IsOneSidedGapMatter(entries[prev]))
+            return null;
+        if (j < entries.Count && IsOneSidedGapMatter(entries[j]))
+            return null;
+        bool runEndsStory = OnlySectionBreakEntriesFrom(entries, j);
+
+        // Move-source discipline: the region op would displace the flat path's source/deletion
+        // interleave, so any member with sources staged under its left block declines outright.
+        foreach (var lp in leftParas)
+            if (sourcesAfterLeft.ContainsKey(leftIndex[lp]))
+                return null;
+
+        if (pairs.Count == 0)
+        {
+            // The 1×1 story-final del+ins belongs to the replace-gap grammar (its fused-tail re-diff
+            // already retains shared tokens); the stream only owns multi-member regions. INTERIOR
+            // zero-pair regions are admitted too — the segmenter ships them only on a count-equal
+            // boundary construct. LARGE regions never stream: a whole-document rewrite is one giant
+            // zero-pair gap whose scattered incidental shared words would otherwise ship a stream,
+            // while the reference compare output arranges such regions with the replace-gap grammar
+            // (the decoded stream constructs all live in small regions — the grammar corpus was
+            // validated on exactly the large ones).
+            if (leftParas.Count + rightParas.Count < 3)
+                return null;
+            if (leftParas.Count > 8 || rightParas.Count > 8)
+                return null;
+        }
+        else if (runEndsStory)
+        {
+            // Only shapes the pair-run collector cannot own: ≥1 one-sided member BEFORE the last
+            // pair (the run path already handles pairs + a trailing story-final tail).
+            var (lastL, lastR) = pairs[^1];
+            bool leadingOneSided = false;
+            for (int i = 0; i < lastL && !leadingOneSided; i++)
+                leadingOneSided = !pairs.Exists(pr => pr.L == i);
+            for (int i = 0; i < lastR && !leadingOneSided; i++)
+                leadingOneSided = !pairs.Exists(pr => pr.R == i);
+            if (!leadingOneSided)
+                return null;
+        }
+        else
+        {
+            // INTERIOR region with pairs: decoded (the mid-document construct) only when a
+            // one-sided DELETED member accompanies the pair(s) — the construct's signature is the
+            // pair's leading ins-residue hoisted into a preceding ¶DEL cell. Insert-only
+            // surroundings and pure interior pair runs stay with the per-entry grammar.
+            if (leftParas.Count == pairs.Count)
+                return null;
+        }
+
+        var cells = IrCrossParagraphSegmenter.SegmentRegion(
+            leftParas, rightParas, pairs, settings, runEndsStory);
+        if (cells is null)
+            return null;
+
+        // Transparently-collected section-break entries re-emit their per-entry ops AFTER the fused
+        // op, in entry order — a section break op renders no body paragraph in place, so its
+        // position among the region's paragraph content is immaterial; only its presence is.
+        if (sectionEntries.Count > 0)
+        {
+            trailingSectionOps = new List<IrEditOp>(sectionEntries.Count);
+            foreach (var se in sectionEntries)
+            {
+                trailingSectionOps.Add(se.Kind == IrAlignmentKind.Deleted
+                    ? new IrEditOp(IrEditOpKind.DeleteBlock,
+                        se.Left!.Anchor.ToString(), null, null, null, null,
+                        BodyFullRewriteGroupId: se.BodyFullRewriteGroupId)
+                    : new IrEditOp(IrEditOpKind.InsertBlock,
+                        null, se.Right!.Anchor.ToString(), null, null, null,
+                        BodyFullRewriteGroupId: se.BodyFullRewriteGroupId));
+            }
+        }
+
+        consumed = j - start;
+        return new IrEditOp(IrEditOpKind.CrossParagraphRunBlock,
+            leftParas[0].Anchor.ToString(), rightParas[0].Anchor.ToString(),
+            TokenDiff: null, MoveGroupId: null, IsMoveSource: null,
+            CrossParagraphCells: IrNodeList.From(cells));
+    }
+
     /// <summary>Append the move-source left indexes bucketed under <paramref name="anchorLeftIndex"/> to
     /// the staged list (ascending order preserved — buckets are disjoint ascending runs staged in
     /// anchor order).</summary>
@@ -966,7 +1435,8 @@ internal static class IrEditScriptBuilder
     /// edit surfaces as a token diff inside the cell, not a whole-table blob; any other non-paragraph
     /// pair (opaque / section break) carries neither.
     /// </summary>
-    private static IrEditOp MakeModifyOp(IrBlock leftBlock, IrBlock rightBlock, IrDiffSettings settings)
+    private static IrEditOp MakeModifyOp(
+        IrBlock leftBlock, IrBlock rightBlock, IrDiffSettings settings, bool storyFinalPair = false)
     {
         if (leftBlock is IrTable lt && rightBlock is IrTable rt)
             return new IrEditOp(IrEditOpKind.ModifyBlock,
@@ -974,7 +1444,7 @@ internal static class IrEditScriptBuilder
                 null, null, null, IrTableDiffer.Diff(lt, rt, settings));
 
         if (leftBlock is IrParagraph lp && rightBlock is IrParagraph rp)
-            return MakeParagraphModifyOp(lp, rp, settings);
+            return MakeParagraphModifyOp(lp, rp, settings, storyFinalPair);
 
         return new IrEditOp(IrEditOpKind.ModifyBlock,
             leftBlock.Anchor.ToString(), rightBlock.Anchor.ToString(),
@@ -990,7 +1460,8 @@ internal static class IrEditScriptBuilder
     /// placeholders share one constant key, so they pair as Equal) — the textbox change is reported once,
     /// through the nested ops, never also as an opaque-placeholder token op.
     /// </summary>
-    private static IrEditOp MakeParagraphModifyOp(IrParagraph lp, IrParagraph rp, IrDiffSettings settings)
+    private static IrEditOp MakeParagraphModifyOp(
+        IrParagraph lp, IrParagraph rp, IrDiffSettings settings, bool storyFinalPair = false)
     {
         var leftBoxes = CollectTextboxes(lp.Inlines);
         var rightBoxes = CollectTextboxes(rp.Inlines);
@@ -1006,7 +1477,11 @@ internal static class IrEditScriptBuilder
         var rightTokens = IrDiffTokenizer.Tokenize(rp, settings);
         var diffLeft = nest ? MaskTextboxKeys(leftTokens) : leftTokens;
         var diffRight = nest ? MaskTextboxKeys(rightTokens) : rightTokens;
-        var tokenDiff = IrTokenDiffer.Diff(diffLeft, diffRight, settings);
+        var tokenDiff = IrTokenDiffer.Diff(diffLeft, diffRight, settings,
+            suppressLonePunctuation: PlainTextPair(lp, rp));
+
+        if (storyFinalPair && !nest && PlainTextPair(lp, rp))
+            tokenDiff = ApplyStoryFinalWeakPairFlush(tokenDiff, diffLeft, diffRight);
 
         return new IrEditOp(IrEditOpKind.ModifyBlock,
             lp.Anchor.ToString(), rp.Anchor.ToString(),
@@ -1232,10 +1707,93 @@ internal static class IrEditScriptBuilder
         {
             var leftTokens = IrDiffTokenizer.Tokenize(lp, settings);
             var rightTokens = IrDiffTokenizer.Tokenize(rp, settings);
-            return IrTokenDiffer.Diff(leftTokens, rightTokens, settings);
+            return IrTokenDiffer.Diff(leftTokens, rightTokens, settings,
+                suppressLonePunctuation: PlainTextPair(lp, rp));
         }
 
         return null;
+    }
+
+    /// <summary>Both paragraphs are plain, sliceable direct-text-run content — the precondition for the
+    /// lone-punctuation anchor rule (dropping an anchor inside a transparent field/hyperlink region
+    /// re-tiles it into del+ins and double-emits the container's zero-width plumbing).</summary>
+    private static bool PlainTextPair(IrParagraph lp, IrParagraph rp) =>
+        IrCrossParagraphSegmenter.IsStreamable(lp) && IrCrossParagraphSegmenter.IsStreamable(rp);
+
+    /// <summary>Decoded corpus boundary for the lone-word flush: every flushing reference instance
+    /// retains a single word of at most 5 characters ("Red" 3, "font"/"text"/"bold" 4, "Green"/"Title" 5);
+    /// every retaining lone-word instance is 6+ ("Roboto" 6, "Calibri"/"tracked" 7, "document" 8,
+    /// "suggestions" 11). A char-FRACTION threshold ALONE provably cannot separate the classes (a kept
+    /// "Roboto" sits at 0.059 of its pair, a flushed "Title" at 0.143) — but every flushing instance is
+    /// ALSO a sliver of its pair (fraction &lt; 0.15), so the fraction is a necessary second condition:
+    /// it keeps a short word that dominates a SHORT pair ("delta four" ↔ "delta EDITED" retains "delta"
+    /// at 0.45; "same old" ↔ "same new" retains the format-tracked "same " at 0.5).</summary>
+    private const int StoryFinalLoneWordFlushMaxChars = 5;
+
+    /// <summary>See <see cref="StoryFinalLoneWordFlushMaxChars"/> — the sliver condition.</summary>
+    private const double StoryFinalLoneWordFlushMaxFraction = 0.15;
+
+    /// <summary>
+    /// The story-final weak-pair FLUSH (decoded 2026-07-27 from reference compare output): the story-final
+    /// word-matched pair — the per-pair form of the tail-fusion construct — drops ALL its retentions and
+    /// renders as one whole ins+del rewrite when its matched content is at most ONE word of at most
+    /// <see cref="StoryFinalLoneWordFlushMaxChars"/> characters that is also a sliver of the pair
+    /// (2·matched-word-chars / total token chars below <see cref="StoryFinalLoneWordFlushMaxFraction"/>).
+    /// "Red headings create…" ↔ "Red strikethrough text marks…" flushes even the shared leading "Red"
+    /// AND the end-anchored period; ten corpus instances, every one a lone short-word sliver. Any second
+    /// matched word keeps the retention (a lone shared " is … and " pair retains), as does a single LONG
+    /// word ("Roboto", "Calibri", "document" all retain in the reference) or a short word dominating a
+    /// SHORT pair ("delta" in "delta four" ↔ "delta EDITED"). INTERIOR pairs never flush — the reference
+    /// retains even a lone shared function word mid-story ("This ") — so the caller gates this on the
+    /// cleanly-paired story-final pair. Punctuation matches are anchoring artifacts, not content
+    /// evidence: they count for nothing and are flushed along with the lone word.
+    /// </summary>
+    private static IrTokenDiff ApplyStoryFinalWeakPairFlush(
+        IrTokenDiff diff, IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right)
+    {
+        int n = left.Count, m = right.Count;
+        if (n == 0 || m == 0)
+            return diff;
+
+        bool anyRetained = false;
+        int matchedWords = 0;
+        int matchedWordChars = 0;
+        int longestMatchedWord = 0;
+        foreach (var op in diff.Ops)
+        {
+            if (op.Kind is not (IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged))
+                continue;
+            anyRetained = true;
+            for (int i = 0; i < op.LeftLength; i++)
+            {
+                var lt = left[op.LeftStart + i];
+                if (lt.Kind != IrDiffTokenKind.Word)
+                    continue;
+                matchedWords++;
+                int chars = Math.Min(lt.Text.Length, right[op.RightStart + i].Text.Length);
+                matchedWordChars += chars;
+                longestMatchedWord = Math.Max(longestMatchedWord, chars);
+            }
+        }
+        if (!anyRetained)
+            return diff; // already a whole rewrite
+        if (matchedWords > 1 || longestMatchedWord > StoryFinalLoneWordFlushMaxChars)
+            return diff;
+
+        int totalChars = 0;
+        foreach (var t in left)
+            totalChars += t.Text.Length;
+        foreach (var t in right)
+            totalChars += t.Text.Length;
+        if (totalChars == 0 ||
+            2.0 * matchedWordChars / totalChars >= StoryFinalLoneWordFlushMaxFraction)
+            return diff;
+
+        return new IrTokenDiff(IrNodeList.From(new List<IrTokenOp>
+        {
+            new(IrTokenOpKind.Delete, 0, n, 0, 0),
+            new(IrTokenOpKind.Insert, n, n, 0, m),
+        }));
     }
 
     // ------------------------------------------------------------------ move interleave

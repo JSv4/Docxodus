@@ -734,10 +734,15 @@ public class IrBlockAlignerTests
     [Fact]
     public void Junction_growth_respects_size_parity()
     {
-        // Word-oracle data point (justify_alignment ↔ large_font_size): the titles pair on "Demo",
-        // but the 30-word justified body does NOT merge into the 7-word "This document demonstrates
-        // large 24pt font size." on the boilerplate "This document demonstrates" — Word deletes it
-        // wholesale. The growth size-parity guard (min ≥ ⅓·max word count) encodes that.
+        // Word-oracle data point (justify_alignment ↔ large_font_size), REFINED 2026-07-27: the
+        // earlier reading — "the 30-word justified body does NOT merge into the 7-word rewrite;
+        // Word deletes it wholesale" — was a block-level approximation. Word's own compare output
+        // shows the PAIR forms ("R:This document demonstrates | I:large 24pt font size." followed
+        // by the body's long TAIL crossing forward into the trailing insert's paragraph), so the
+        // size-parity veto applies only on LONE shared-content-word evidence: with ≥2 distinct
+        // shared content words ("document", "demonstrates") the slot pair stands regardless of
+        // bulk, and the story-tail surplus then absorbs the trailing insert as a split group. A
+        // lone shared word + bulk disparity still refuses (see Junction_growth_lone_word_still_vetoes).
         var l = Doc(
             "Justify Alignment Demo",
             "This document demonstrates justified text alignment which spreads text evenly across " +
@@ -750,11 +755,35 @@ public class IrBlockAlignerTests
         var a = Align(l, r);
 
         Assert.Equal(1, Count(a, IrAlignmentKind.Modified));
-        Assert.Equal(1, Count(a, IrAlignmentKind.Deleted));
-        Assert.Equal(2, Count(a, IrAlignmentKind.Inserted));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Deleted));
+        Assert.Equal(0, Count(a, IrAlignmentKind.Inserted));
         var modified = a.Entries.Single(e => e.Kind == IrAlignmentKind.Modified);
         Assert.Equal("Justify Alignment Demo", Text(modified.Left!));
         Assert.Equal("Large Font Size Demo", Text(modified.Right!));
+        // The justified body pairs with the short rewrite; the trailing insert joins them as the
+        // story-tail split group (1 left → 2 right members).
+        var split = a.Entries.Single(e => e.Kind == IrAlignmentKind.Split);
+        Assert.StartsWith("This document demonstrates justified", Text(split.Left!));
+        AssertInvariants(l, r, a);
+    }
+
+    [Fact]
+    public void Junction_growth_lone_word_still_vetoes()
+    {
+        // The surviving half of the size-parity guard: on a LONE shared content word the bulk
+        // disparity still reads as engulf risk — the 12-word body does not pair with the 3-word
+        // line on "recycling" alone; Word deletes it wholesale and inserts the new line.
+        var l = Doc(
+            "Shared Title Demo",
+            "one two three recycling four five six seven eight nine ten eleven");
+        var r = Doc(
+            "Shared Title Demo",
+            "recycling zz qq");
+        var a = Align(l, r);
+
+        Assert.DoesNotContain(a.Entries, e => e.Kind == IrAlignmentKind.Modified &&
+            Text(e.Left!).StartsWith("one two three") && Text(e.Right!) == "recycling zz qq");
+        Assert.DoesNotContain(a.Entries, e => e.Kind is IrAlignmentKind.Split or IrAlignmentKind.Merge);
         AssertInvariants(l, r, a);
     }
 

@@ -245,11 +245,15 @@ public class DocxDiffWordShapeTests
         var result = DocxDiff.Compare(left, right);
 
         var states = ParagraphStates(result);
+        // Interior replace gap: no fusion — Word's compare output fuses only where a gap reaches
+        // the story end (its final pilcrow is immutable); every interior replace keeps fully
+        // separate ¶INS / ¶DEL paragraphs, inserts first.
         var expected = new List<(string, string)>
         {
             ("plain", "Shared opening paragraph."),
             ("ins", "Neon fresh words."),
-            ("mixed", "Quantum modern words.Alpha ancient text."),
+            ("ins", "Quantum modern words."),
+            ("del", "Alpha ancient text."),
             ("del", "Bravo bygone text."),
             ("plain", "Shared closing paragraph."),
         };
@@ -264,8 +268,8 @@ public class DocxDiffWordShapeTests
     [Fact]
     public void SeamMerge_SingleDeletedParagraph_LiveMarkRoundTrips()
     {
-        // m=1: the seam consumes the only deleted paragraph; its mark stays LIVE so accept ends the
-        // inserted text at it (no bleed into following content) and reject restores the old paragraph.
+        // An INTERIOR 2×1 replace (a retained anchor follows): the deleted paragraph stays a
+        // separate ¶DEL — fusion is a story-end shape only. Accept/reject stay pilcrow-exact.
         var left = Doc("Common head.", "Obsolete removed prose.", "Common tail.");
         var right = Doc("Common head.", "Fresh writing appears.", "Second novel sentence.", "Common tail.");
 
@@ -276,7 +280,8 @@ public class DocxDiffWordShapeTests
         {
             ("plain", "Common head."),
             ("ins", "Fresh writing appears."),
-            ("mixed", "Second novel sentence.Obsolete removed prose."),
+            ("ins", "Second novel sentence."),
+            ("del", "Obsolete removed prose."),
             ("plain", "Common tail."),
         };
         Assert.Equal(expected, states);
@@ -760,10 +765,11 @@ public class DocxDiffWordShapeTests
     }
 
     [Fact]
-    public void Cell_full_rewrite_keeps_the_normal_seam()
+    public void Cell_interior_full_rewrite_stays_separate()
     {
-        // Cell alignment calls AlignBlocks, never the body-marking entry point. Even with real
-        // paired neighbors, a cell's full lexical rewrite therefore stays on the established seam.
+        // The replace gap sits INSIDE the cell's story (a retained trailing paragraph follows), so
+        // the same interior rule applies as in the body: separate ¶INS + ¶DEL paragraphs, no
+        // fusion. A gap reaching the CELL's end would fuse — the story-end rule is per story.
         var left = SingleCellTableDoc("Anchor title blue", "obsolete amber stanza", "shared trailing paragraph");
         var right = SingleCellTableDoc("Anchor title bold", "fresh quantum clause", "shared trailing paragraph");
 
@@ -771,9 +777,110 @@ public class DocxDiffWordShapeTests
         using var stream = new MemoryStream(result.DocumentByteArray);
         using var wdoc = WordprocessingDocument.Open(stream, false);
         var cell = wdoc.MainDocumentPart!.Document.Body!.Descendants<WTableCell>().Single();
-        var target = cell.Elements<Paragraph>().Single(p => p.InnerText.Contains("fresh quantum clause"));
-        Assert.NotEmpty(target.Descendants<InsertedRun>());
-        Assert.NotEmpty(target.Descendants<DeletedRun>());
+        var insPara = cell.Elements<Paragraph>().Single(p => p.InnerText.Contains("fresh quantum clause"));
+        Assert.NotEmpty(insPara.Descendants<InsertedRun>());
+        Assert.Empty(insPara.Descendants<DeletedRun>());
+        var delPara = cell.Elements<Paragraph>().Single(p => p.InnerText.Contains("obsolete amber stanza"));
+        Assert.NotEmpty(delPara.Descendants<DeletedRun>());
+        Assert.Empty(delPara.Descendants<InsertedRun>());
+
+        Assert.Equal(BodyTexts(right), BodyTexts(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal(BodyTexts(left), BodyTexts(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    // ---- story-final weak-pair flush (decoded 2026-07-27 from reference compare output) ----
+
+    /// <summary>Concatenated text of the paragraph's runs that sit OUTSIDE any w:ins/w:del wrapper.</summary>
+    private static string RetainedText(Paragraph p) => string.Concat(
+        p.Elements<Run>().SelectMany(r => r.Elements<Text>()).Select(t => t.Text));
+
+    [Fact]
+    public void StoryFinalWeakPair_FlushesToWholeRewrite()
+    {
+        // The story-final word-matched pair retains only the lone short word "Red" — at most one
+        // matched word of <= 5 chars that is also a sliver of the pair (< 0.15 of its chars) is the
+        // decoded flush condition. The reference output drops EVERY retention — the shared "Red" AND
+        // the end-anchored period — and renders one whole ins+del rewrite (ins first). Interior
+        // pairs never flush (see the interior pin below).
+        var left = Doc("Shared head paragraph.",
+            "Red headings create strong visual hierarchy in documents.");
+        var right = Doc("Shared head paragraph.",
+            "Red strikethrough text marks content as deleted or rejected.");
+
+        var result = DocxDiff.Compare(left, right);
+        using var stream = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var last = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>()
+            .Single(p => p.InnerText.Contains("strikethrough"));
+        Assert.Equal("", RetainedText(last));
+        Assert.NotEmpty(last.Descendants<InsertedRun>());
+        Assert.NotEmpty(last.Descendants<DeletedRun>());
+
+        Assert.Equal(BodyTexts(right), BodyTexts(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal(BodyTexts(left), BodyTexts(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void StoryFinalPair_LoneLongWord_StaysRetained()
+    {
+        // A single matched word of 6+ characters retains — every lone-word retaining reference
+        // instance is 6+ chars ("Roboto" 6, "Calibri" 7, "document" 8), every flushing one <= 5.
+        var left = Doc("Shared head paragraph.",
+            "Roboto is used in Material Design and Android apps.");
+        var right = Doc("Shared head paragraph.",
+            "Roboto underlined text creates a clean modern appearance.");
+
+        var result = DocxDiff.Compare(left, right);
+        using var stream = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var last = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>()
+            .Single(p => p.InnerText.Contains("Roboto underlined"));
+        Assert.Contains("Roboto", RetainedText(last));
+
+        Assert.Equal(BodyTexts(right), BodyTexts(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal(BodyTexts(left), BodyTexts(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void StoryFinalPair_RichRetention_StaysWordMatched()
+    {
+        // Multiple shared words ("font", "sizes", "readability") — any second matched word keeps the
+        // retention; the reference retains them (and the period).
+        var left = Doc("Shared head paragraph.",
+            "Medium-large font sizes balance readability and space.");
+        var right = Doc("Shared head paragraph.",
+            "Larger font sizes improve readability for presentations.");
+
+        var result = DocxDiff.Compare(left, right);
+        using var stream = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var last = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>()
+            .Single(p => p.InnerText.Contains("readability"));
+        Assert.Contains("font", RetainedText(last));
+        Assert.Contains("readability", RetainedText(last));
+
+        Assert.Equal(BodyTexts(right), BodyTexts(RevisionProcessor.AcceptRevisions(result)));
+        Assert.Equal(BodyTexts(left), BodyTexts(RevisionProcessor.RejectRevisions(result)));
+    }
+
+    [Fact]
+    public void InteriorWeakPair_NeverFlushes()
+    {
+        // The same weak pair mid-story: the reference retains even a lone shared word there (it
+        // flushes only the story-final tail-fusion construct), so the flush must NOT fire.
+        var left = Doc("Shared head paragraph.",
+            "Red headings create strong visual hierarchy in documents.",
+            "Shared tail paragraph.");
+        var right = Doc("Shared head paragraph.",
+            "Red strikethrough text marks content as deleted or rejected.",
+            "Shared tail paragraph.");
+
+        var result = DocxDiff.Compare(left, right);
+        using var stream = new MemoryStream(result.DocumentByteArray);
+        using var wdoc = WordprocessingDocument.Open(stream, false);
+        var mid = wdoc.MainDocumentPart!.Document.Body!.Elements<Paragraph>()
+            .Single(p => p.InnerText.Contains("strikethrough"));
+        Assert.Contains("Red", RetainedText(mid));
 
         Assert.Equal(BodyTexts(right), BodyTexts(RevisionProcessor.AcceptRevisions(result)));
         Assert.Equal(BodyTexts(left), BodyTexts(RevisionProcessor.RejectRevisions(result)));

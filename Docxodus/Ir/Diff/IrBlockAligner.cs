@@ -76,9 +76,9 @@ internal static class IrBlockAligner
         //     the stored fingerprint (lang/bCs/iCs/…) is reclassified Unchanged instead of FormatOnly.
         var candidates = new List<Candidate>();
         CollectAnchors(leftBlocks, rightBlocks, KeyAB, IrAlignmentKind.Unchanged,
-            leftMatch, rightMatch, candidates, settings);
+            leftMatch, rightMatch, candidates, settings, similarity);
         CollectAnchors(leftBlocks, rightBlocks, KeyContentOnly, IrAlignmentKind.FormatOnly,
-            leftMatch, rightMatch, candidates, settings);
+            leftMatch, rightMatch, candidates, settings, similarity);
 
         // --- Spine: longest increasing subsequence over candidates (sorted by left index) by right
         // index. On-spine candidates keep their anchor kind (Unchanged/FormatOnly); off-spine become a
@@ -200,7 +200,8 @@ internal static class IrBlockAligner
     private static void CollectAnchors(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
         Func<IrBlock, (IrHash, IrHash)> key, IrAlignmentKind anchorKind,
-        int[] leftMatch, int[] rightMatch, List<Candidate> candidates, IrDiffSettings settings)
+        int[] leftMatch, int[] rightMatch, List<Candidate> candidates, IrDiffSettings settings,
+        IrBlockSimilarity similarity)
     {
         var leftByKey = BuildUniqueIndex(leftBlocks, leftMatch, key);
         var rightByKey = BuildUniqueIndex(rightBlocks, rightMatch, key);
@@ -223,6 +224,14 @@ internal static class IrBlockAligner
                 ? (FormatEqual(leftBlocks[i], rightBlocks[rj], settings)
                     ? IrAlignmentKind.Unchanged : IrAlignmentKind.FormatOnly)
                 : anchorKind;
+
+            // A format-DIFFERING blank-spacer pair never anchors (decoded from Word's compare
+            // output): a blank's only identity IS its formatting, so a format-differing blank is a
+            // different blank — spine-anchoring one across unrelated content splits what Word
+            // processes as a single replace region. (Content-equal ⇒ both sides blank, so testing
+            // one side suffices. Format-EQUAL blanks still anchor as Unchanged.)
+            if (resolvedKind == IrAlignmentKind.FormatOnly && similarity.IsBlankSpacer(leftBlocks[i]))
+                continue;
 
             leftMatch[i] = rj;
             rightMatch[rj] = i;
@@ -486,14 +495,34 @@ internal static class IrBlockAligner
 
         // Refinement pass 1: in-order content-equal + format-equal pairing → Unchanged.
         InOrderRefine(leftBlocks, rightBlocks, freeLeft, freeRight, leftKind, rightKind, leftMatch, rightMatch,
-            requireFormatEqual: true, kind: IrAlignmentKind.Unchanged, settings: settings);
+            requireFormatEqual: true, kind: IrAlignmentKind.Unchanged, settings: settings, similarity: similarity);
         // Refinement pass 2: in-order content-equal + format-DIFFERING pairing → FormatOnly.
+        // Blank-spacer paragraphs are excluded from THIS pass (decoded from Word's compare
+        // output): a blank's only identity IS its formatting, so a format-DIFFERING blank is a
+        // different blank, not "the same paragraph, reformatted". Pairing such blanks manufactures
+        // mid-gap anchors between unrelated regions and FRAGMENTS what Word processes as ONE
+        // replace region (the deletions scatter between the false anchors instead of forming
+        // Word's single trailing delete block). Format-EQUAL blanks still anchor in pass 1.
         InOrderRefine(leftBlocks, rightBlocks, freeLeft, freeRight, leftKind, rightKind, leftMatch, rightMatch,
-            requireFormatEqual: false, kind: IrAlignmentKind.FormatOnly, settings: settings);
+            requireFormatEqual: false, kind: IrAlignmentKind.FormatOnly, settings: settings, similarity: similarity);
 
         // Drop the now-consumed entries, preserving order.
         freeLeft.RemoveAll(i => leftMatch[i] != -1);
         freeRight.RemoveAll(j => rightMatch[j] != -1);
+
+        // Same-slot positional pre-pairing (decoded from Word's compare output): Word's replace-gap
+        // matcher is POSITIONAL-FIRST — it pairs the k-th free base paragraph with the k-th free
+        // next paragraph whenever they share at least one non-function content word, even at
+        // word-Jaccard levels far below any similarity floor (e.g. 0.09), and only then folds the
+        // genuinely surplus paragraphs into adjacent pairs. Running this BEFORE the content-greedy
+        // similarity pass keeps that pass (and the later split/merge scan) from consuming a
+        // paragraph Word would have paired with its same-slot counterpart — without it, a
+        // greedy tail pair or an added-text merge eats the k-th base paragraph and every later
+        // pairing lands one slot displaced from Word's assignment.
+        int freeLeftBeforeSameSlot = freeLeft.Count;
+        SameSlotPair(leftBlocks, rightBlocks, leftFrom, leftTo,
+            freeLeft, freeRight, leftKind, rightKind, leftMatch, rightMatch, similarity);
+        bool gapHasContentEvidencedPair = freeLeft.Count != freeLeftBeforeSameSlot;
 
         // Similarity pairing of the remainder → Modified; leftovers → Deleted / Inserted.
         //
@@ -505,7 +534,8 @@ internal static class IrBlockAligner
         // bound the in-order refinement documents — and the per-call tokenization cache means every block
         // in the gap is tokenized at most once regardless of how many candidate pairs reference it.
         SimilarityPair(leftBlocks, rightBlocks, freeLeft, freeRight, leftKind, rightKind,
-            leftMatch, rightMatch, similarity, settings.BlockSimilarityThreshold);
+            leftMatch, rightMatch, similarity, settings.BlockSimilarityThreshold,
+            gapHasContentEvidencedPair);
 
         // Collect what the similarity pass left unpaired (still in ascending index order).
         var leftoverLeft = new List<int>();
@@ -588,6 +618,24 @@ internal static class IrBlockAligner
         JunctionPair(leftBlocks, rightBlocks, leftFrom, leftTo, rightFrom, rightTo,
             leftoverLeft, leftoverRight, leftKind, rightKind, leftMatch, rightMatch, similarity);
 
+        // Story-tail surplus absorption (decoded from Word's compare output): when a replace gap
+        // reaches the END of its story and exactly one surplus paragraph is left over directly
+        // after the gap's LAST formed pair, Word folds it into that pair rather than emitting a
+        // separate marked paragraph — the surplus side's pilcrow joins the pair (deleted pilcrow
+        // for a base surplus, inserted for a next surplus) and the token diff SPANS the joined
+        // text, retaining whatever words the surplus shares with the pair's counterpart. Rendering
+        // that shape is exactly the split/merge group machinery, so the surplus is absorbed as a
+        // synthesized 2-member group; the containment evidence the mid-document scan demands is
+        // deliberately not required here — at the story tail the pilcrow arithmetic leaves Word no
+        // separate-paragraph alternative. Mid-document surpluses stay separate (decoded: a deleted
+        // paragraph after a pair mid-story keeps its own deleted pilcrow).
+        if (settings.DetectSplitMerge)
+        {
+            AbsorbStoryTailSurplus(leftBlocks, rightBlocks, leftFrom, leftTo, rightFrom, rightTo,
+                leftKind, rightKind, leftMatch, rightMatch, leftoverLeft, leftoverRight,
+                splitGroups, mergeGroups, settings);
+        }
+
         // Unambiguous 1×1 residue → Modified. When exactly ONE free left and ONE free right survive
         // the threshold, there is no competing candidate to disambiguate: classifying the lone pair
         // as "the same block, edited" is the natural reading (and is what M2.1's positional pairing
@@ -667,13 +715,22 @@ internal static class IrBlockAligner
     /// consume both, repeat until no qualifying pair remains. Leaves the unpaired blocks for the caller to
     /// classify Deleted/Inserted. Deterministic: the pick is a pure function of the score grid + index
     /// tie-break, and scoring is cached so the grid is cheap to rescan each round.
+    /// <para>Evidence discipline (decoded from Word's compare output): a paragraph pair needs at
+    /// least one shared NON-FUNCTION content word — two same-length sentences sharing only a
+    /// scaffolding word ("This …" vs "This …") clear the separator-inflated score, yet Word treats
+    /// them as a full rewrite beside any real content-word pairing. But in a gap where NO
+    /// correspondence carries content evidence at all (neither the same-slot pass nor this pass
+    /// found one), whatever weak lexical overlap exists is what Word's flat matcher pairs on (a
+    /// lone shared "and" is retained inside an otherwise zero-overlap rewrite), so the pass reruns
+    /// at its historical any-shared-word grain.</para>
     /// </summary>
     private static void SimilarityPair(
         IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
         List<int> freeLeft, List<int> freeRight,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
         int[] leftMatch, int[] rightMatch,
-        IrBlockSimilarity similarity, double threshold)
+        IrBlockSimilarity similarity, double threshold,
+        bool gapHasContentEvidencedPair)
     {
         // Locality prior (calibrated against Word's compare output): Word's stream diff
         // anchors an insertion next to its matched neighbors and deletes distant old content
@@ -685,62 +742,73 @@ internal static class IrBlockAligner
         // threshold + λ — e.g. 0.65 — which a genuine edit clears); weak pairs only form near their
         // own position. Ranking subtracts the same penalty so near pairs beat far pairs on ties.
         var positions = GapRelativePositions(freeLeft, leftMatch, freeRight, rightMatch);
-        while (true)
-        {
-            double bestEffective = double.NegativeInfinity;
-            int bestLeft = -1, bestRight = -1;
-            foreach (int li in freeLeft)
-            {
-                if (leftMatch[li] != -1)
-                    continue;
-                foreach (int rj in freeRight)
-                {
-                    if (rightMatch[rj] != -1)
-                        continue;
-                    // Empty-vs-empty paragraphs score a vacuous 1.0 ("identical content") that
-                    // defeats the locality prior at any displacement — an empty freed elsewhere in
-                    // the gap would relocate here as a Modified pair. Word never fuzzy-pairs
-                    // empties; they belong to the in-order passes (which pair them monotonically)
-                    // or fall out as plain delete/insert.
-                    if (leftBlocks[li] is IrParagraph leftParagraph && rightBlocks[rj] is IrParagraph rightParagraph)
-                    {
-                        if (similarity.WordCount(leftParagraph) == 0 && similarity.WordCount(rightParagraph) == 0)
-                            continue;
 
-                        // The general score includes spaces and punctuation because it deliberately
-                        // shares the downstream token model.  At the lowered similarity threshold,
-                        // two unrelated prose paragraphs can therefore clear the score merely by
-                        // having the same separator skeleton (especially numbered lists).  Weak
-                        // in-gap pairing needs actual lexical evidence; the dedicated 1×1 residue
-                        // rule below still handles unambiguous labels and atomic-only paragraphs.
-                        //
-                        if (similarity.PairingWordOverlap(leftParagraph, rightParagraph).SharedWords == 0)
-                            continue;
-                    }
-                    double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
-                    double displacement = Math.Abs(positions.Left[li] - positions.Right[rj]);
-                    if (score < threshold + PairLocalityPenalty * displacement)
+        int GreedyRounds(bool requireContentWord)
+        {
+            int formed = 0;
+            while (true)
+            {
+                double bestEffective = double.NegativeInfinity;
+                int bestLeft = -1, bestRight = -1;
+                foreach (int li in freeLeft)
+                {
+                    if (leftMatch[li] != -1)
                         continue;
-                    double effective = score - PairLocalityPenalty * displacement;
-                    // Strictly-greater wins; on a tie keep the first seen (freeLeft / freeRight are in
-                    // ascending index order), which is exactly "smallest left, then smallest right".
-                    if (effective > bestEffective)
+                    foreach (int rj in freeRight)
                     {
-                        bestEffective = effective;
-                        bestLeft = li;
-                        bestRight = rj;
+                        if (rightMatch[rj] != -1)
+                            continue;
+                        // Empty-vs-empty paragraphs score a vacuous 1.0 ("identical content") that
+                        // defeats the locality prior at any displacement — an empty freed elsewhere in
+                        // the gap would relocate here as a Modified pair. Word never fuzzy-pairs
+                        // empties; they belong to the in-order passes (which pair them monotonically)
+                        // or fall out as plain delete/insert.
+                        if (leftBlocks[li] is IrParagraph leftParagraph && rightBlocks[rj] is IrParagraph rightParagraph)
+                        {
+                            if (similarity.WordCount(leftParagraph) == 0 && similarity.WordCount(rightParagraph) == 0)
+                                continue;
+
+                            // The general score includes spaces and punctuation because it deliberately
+                            // shares the downstream token model.  At the lowered similarity threshold,
+                            // two unrelated prose paragraphs can therefore clear the score merely by
+                            // having the same separator skeleton (especially numbered lists).  Weak
+                            // in-gap pairing needs actual lexical evidence; the dedicated 1×1 residue
+                            // rule below still handles unambiguous labels and atomic-only paragraphs.
+                            if (requireContentWord
+                                ? SharedContentWordCount(leftParagraph, rightParagraph, similarity) == 0
+                                : similarity.PairingWordOverlap(leftParagraph, rightParagraph).SharedWords == 0)
+                                continue;
+                        }
+                        double score = similarity.Score(leftBlocks[li], rightBlocks[rj]);
+                        double displacement = Math.Abs(positions.Left[li] - positions.Right[rj]);
+                        if (score < threshold + PairLocalityPenalty * displacement)
+                            continue;
+                        double effective = score - PairLocalityPenalty * displacement;
+                        // Strictly-greater wins; on a tie keep the first seen (freeLeft / freeRight are in
+                        // ascending index order), which is exactly "smallest left, then smallest right".
+                        if (effective > bestEffective)
+                        {
+                            bestEffective = effective;
+                            bestLeft = li;
+                            bestRight = rj;
+                        }
                     }
                 }
+
+                if (bestLeft == -1)
+                    return formed;
+
+                leftKind[bestLeft] = IrAlignmentKind.Modified;
+                rightKind[bestRight] = IrAlignmentKind.Modified;
+                leftMatch[bestLeft] = bestRight;
+                rightMatch[bestRight] = bestLeft;
+                formed++;
             }
-
-            if (bestLeft == -1)
-                return;
-
-            leftKind[bestLeft] = IrAlignmentKind.Modified;
-            rightKind[bestRight] = IrAlignmentKind.Modified;
-            leftMatch[bestLeft] = bestRight;
-            rightMatch[bestRight] = bestLeft;
         }
+
+        int contentPairs = GreedyRounds(requireContentWord: true);
+        if (contentPairs == 0 && !gapHasContentEvidencedPair)
+            GreedyRounds(requireContentWord: false);
     }
 
     /// <summary>λ of the similarity-pair locality prior — see the comment in
@@ -763,6 +831,406 @@ internal static class IrBlockAligner
         for (int j = 0; j < rs.Count; j++)
             right[rs[j]] = rs.Count == 1 ? 0 : (double)j / (rs.Count - 1);
         return (left, right);
+    }
+
+    // ------------------------------------------------------------------ same-slot positional pairing (Word matcher parity)
+
+    /// <summary>
+    /// Positional-first pairing of a replace gap's leftover paragraphs (decoded from Word's compare
+    /// output). Word pairs the k-th unmatched base paragraph with the k-th unmatched next paragraph
+    /// of the gap whenever the two share lexical evidence — at similarity levels far below the
+    /// fuzzy-pairing floor — so the slot correspondence, not content greed, decides the assignment.
+    /// Eligibility per slot k (each slot judged independently; a failed slot leaves both paragraphs
+    /// for the later passes):
+    /// <list type="bullet">
+    /// <item>≥ 1 shared content word that is not an English closed-class function word (the same
+    /// evidence bar the junction pass uses — punctuation, ordinals and stopword-grade overlap never
+    /// pair, and empty paragraphs can never qualify);</item>
+    /// <item>word-count size parity within <see cref="JunctionGrowRatio"/> on LONE shared-word
+    /// evidence only — with ≥2 distinct shared content words the pair stands regardless of bulk
+    /// (decoded from Word's compare output; the long side's tail overflow is the cross-paragraph
+    /// token stream's job, not a reason to refuse the slot pair);</item>
+    /// <item>the pair must not cross any already-formed non-Moved pair of this gap (same
+    /// order-preserving discipline every in-gap pass enforces).</item>
+    /// </list>
+    /// Accepted pairs become <see cref="IrAlignmentKind.Modified"/>; slots are counted over each
+    /// side's still-free paragraphs in document order, so the accepted pairs are mutually
+    /// non-crossing by construction.
+    /// </summary>
+    private static void SameSlotPair(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
+        int leftFrom, int leftTo,
+        List<int> leftoverLeft, List<int> leftoverRight,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
+        int[] leftMatch, int[] rightMatch,
+        IrBlockSimilarity similarity)
+    {
+        var ls = new List<int>();
+        foreach (int li in leftoverLeft)
+            if (leftBlocks[li] is IrParagraph)
+                ls.Add(li);
+        var rs = new List<int>();
+        foreach (int rj in leftoverRight)
+            if (rightBlocks[rj] is IrParagraph)
+                rs.Add(rj);
+        int slots = Math.Min(ls.Count, rs.Count);
+        if (slots == 0)
+            return;
+
+        // Count-parity guard (decoded from Word's compare output): the slot correspondence is only
+        // meaningful when the gap is a REWRITE — comparable paragraph counts on both sides. When one
+        // side dwarfs the other (a short document replaced by a long one), Word's matcher places the
+        // few base paragraphs wherever their words genuinely match inside the large insertion and
+        // deletes wholesale; k-th↔k-th carries no signal there, and pairing on it fragments the
+        // insert region around false anchors.
+        if (Math.Min(ls.Count, rs.Count) < JunctionGrowRatio * Math.Max(ls.Count, rs.Count))
+            return;
+
+        // Non-crossing bounds versus pairs already formed inside this gap (SimilarityPair pairs,
+        // table zips; Moved/MovedModified exempt) — same sweep as the junction pass. Computed once:
+        // same-slot picks ascend on both sides, so accepted pairs never cross each other.
+        var maxBelow = new int[ls.Count];
+        var minAbove = new int[ls.Count];
+        {
+            int running = int.MinValue, k = 0;
+            for (int i = leftFrom; i < leftTo && k < ls.Count; i++)
+            {
+                if (i == ls[k]) { maxBelow[k] = running; k++; continue; }
+                if (leftMatch[i] != -1 &&
+                    leftKind[i] != IrAlignmentKind.Moved && leftKind[i] != IrAlignmentKind.MovedModified)
+                    running = Math.Max(running, leftMatch[i]);
+            }
+            running = int.MaxValue; k = ls.Count - 1;
+            for (int i = leftTo - 1; i >= leftFrom && k >= 0; i--)
+            {
+                if (i == ls[k]) { minAbove[k] = running; k--; continue; }
+                if (leftMatch[i] != -1 &&
+                    leftKind[i] != IrAlignmentKind.Moved && leftKind[i] != IrAlignmentKind.MovedModified)
+                    running = Math.Min(running, leftMatch[i]);
+            }
+        }
+
+        for (int k = 0; k < slots; k++)
+        {
+            int li = ls[k], rj = rs[k];
+            if (rj <= maxBelow[k] || rj >= minAbove[k])
+                continue;
+            var lp = (IrParagraph)leftBlocks[li];
+            var rp = (IrParagraph)rightBlocks[rj];
+            int evidence = SharedContentWordCount(lp, rp, similarity);
+            if (evidence < 1)
+                continue;
+            // Size parity on RAW word counts: the guard's subject is bulk disparity, and the
+            // lexical-only PairingWordCount understates short numeric-bearing lines ("… large 24pt
+            // font size." loses its token), pushing genuine rewrites past the ratio. The guard is
+            // WAIVED on ≥2 distinct shared content words (decoded from Word's compare output): the
+            // 31-word justified body DOES pair with the 7-word "This document demonstrates large
+            // 24pt font size." — Word pairs on the shared leading phrase and lets the long side's
+            // tail overflow into the following paragraph (the cross-paragraph token stream's job),
+            // so only a LONE shared word + bulk disparity still reads as engulf risk.
+            if (evidence < 2)
+            {
+                int wl = similarity.WordCount(lp), wr = similarity.WordCount(rp);
+                if (Math.Min(wl, wr) < JunctionGrowRatio * Math.Max(wl, wr))
+                    continue;
+            }
+
+            // Competitor-evidence guard (decoded from Word's compare output): when a leading
+            // insertion or deletion SHIFTS the true correspondence off the slot diagonal, the k-th
+            // pair still shares boilerplate vocabulary (every list item shares "item") while the
+            // shifted counterpart shares strictly more. Word's matcher follows the stronger content
+            // diagonal in that case; the slot pair only claims its partners when NO still-free
+            // paragraph on either side offers strictly more shared content words (a tie keeps the
+            // slot pair — positional preference on equal evidence).
+            bool outbid = false;
+            foreach (int cl in ls)
+            {
+                if (cl == li || leftMatch[cl] != -1)
+                    continue;
+                if (SharedContentWordCount((IrParagraph)leftBlocks[cl], rp, similarity) > evidence)
+                {
+                    outbid = true;
+                    break;
+                }
+            }
+            if (!outbid)
+                foreach (int cr in rs)
+                {
+                    if (cr == rj || rightMatch[cr] != -1)
+                        continue;
+                    if (SharedContentWordCount(lp, (IrParagraph)rightBlocks[cr], similarity) > evidence)
+                    {
+                        outbid = true;
+                        break;
+                    }
+                }
+            if (outbid)
+                continue;
+
+            leftKind[li] = IrAlignmentKind.Modified;
+            rightKind[rj] = IrAlignmentKind.Modified;
+            leftMatch[li] = rj;
+            rightMatch[rj] = li;
+            leftoverLeft.Remove(li);
+            leftoverRight.Remove(rj);
+        }
+    }
+
+    /// <summary>Number of distinct shared word keys that are not English closed-class function
+    /// words — the lexical-evidence measure of the same-slot pass (shared "with" or "this" is
+    /// positional scaffolding, not evidence of correspondence).</summary>
+    private static int SharedContentWordCount(IrParagraph lp, IrParagraph rp, IrBlockSimilarity similarity)
+    {
+        var a = similarity.PairingWordKeys(lp);
+        var b = similarity.PairingWordKeys(rp);
+        var (small, large) = a.Count <= b.Count ? (a, b) : (b, a);
+        int shared = 0;
+        foreach (var kv in small)
+            if (large.ContainsKey(kv.Key) && !FunctionWords.Contains(kv.Key))
+                shared++;
+        return shared;
+    }
+
+    /// <summary>
+    /// Story-tail surplus absorption — see the call-site comment in <c>FillOneGap</c>. Fires only
+    /// when the gap reaches the end of its story (nothing but trailing section-break sentinels
+    /// after it on both sides), exactly ONE surplus paragraph is left over, it is the story's last
+    /// paragraph on its side, and the block directly before it is one member of a Modified
+    /// PARAGRAPH pair whose partner is the other side's last paragraph. The surplus then joins
+    /// that pair as a synthesized 2-member split/merge group (the split/merge renderer produces
+    /// Word's joined-pilcrow shape with the token diff spanning the joined text). Everything else
+    /// falls through unchanged.
+    /// </summary>
+    private static void AbsorbStoryTailSurplus(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
+        int leftFrom, int leftTo, int rightFrom, int rightTo,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
+        int[] leftMatch, int[] rightMatch,
+        List<int> leftoverLeft, List<int> leftoverRight,
+        List<(int SingularIndex, List<int> PluralIndexes)> splitGroups,
+        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups,
+        IrDiffSettings settings)
+    {
+        static bool OnlySectionBreaksFrom(IrNodeList<IrBlock> blocks, int from)
+        {
+            for (int i = from; i < blocks.Count; i++)
+                if (blocks[i] is not IrSectionBreak)
+                    return false;
+            return true;
+        }
+        if (!OnlySectionBreaksFrom(leftBlocks, leftTo) || !OnlySectionBreaksFrom(rightBlocks, rightTo))
+            return;
+
+        // Base-side surplus → absorbed as an N:1 merge (the surplus paragraph's text stays deleted,
+        // the pair paragraph's pilcrow carries the deletion mark, the story-final pilcrow lives).
+        // Leftovers ELSEWHERE in the gap (a separately-inserted head paragraph, say) do not affect
+        // the tail shape — the conditions are purely positional: the surplus is the story's last
+        // paragraph and its predecessor pairs with the other side's last paragraph.
+        if (leftoverLeft.Count > 0)
+        {
+            int li = leftoverLeft[^1];
+            int pairLeft = li - 1;
+            if (li == leftTo - 1 && pairLeft >= leftFrom &&
+                leftKind[pairLeft] == IrAlignmentKind.Modified &&
+                leftMatch[pairLeft] == rightTo - 1 && rightTo - 1 >= rightFrom &&
+                leftBlocks[li] is IrParagraph && leftBlocks[pairLeft] is IrParagraph &&
+                rightBlocks[rightTo - 1] is IrParagraph)
+            {
+                // MERGE-SLOT law (decoded 2026-07-27): before absorbing the surplus at the LAST
+                // pair, scan the consecutive Modified chain ending at the surplus for the FIRST
+                // pair whose next-side TAIL residue (unmatched words after the pair's last matched
+                // word) shares an unmatched content word with the FOLLOWING base paragraph — the
+                // reference compare output forms the 2:1 merge THERE (the next paragraph's tail
+                // keeps consuming forward into the following base paragraph), and every displaced
+                // pair re-slots one base paragraph forward, the last one consuming the surplus.
+                // Without such evidence the surplus keeps its decoded default: the last pair.
+                if (TryReslotBaseSurplusByTailEvidence(
+                        leftBlocks, rightBlocks, leftFrom, li,
+                        leftKind, rightKind, leftMatch, rightMatch,
+                        leftoverLeft, mergeGroups, settings))
+                    return;
+
+                int rj = rightTo - 1;
+                rightKind[rj] = IrAlignmentKind.Merge;
+                leftKind[pairLeft] = IrAlignmentKind.Merge;
+                leftKind[li] = IrAlignmentKind.Merge;
+                rightMatch[rj] = pairLeft;
+                leftMatch[pairLeft] = rj;
+                leftMatch[li] = rj;
+                mergeGroups.Add((rj, new List<int> { pairLeft, li }));
+                leftoverLeft.Remove(li);
+                return;
+            }
+        }
+
+        // Next-side surplus → absorbed as a 1:N split (the surplus paragraph's text stays inserted,
+        // the pair paragraph's pilcrow carries the insertion mark, the story-final pilcrow lives).
+        if (leftoverRight.Count > 0)
+        {
+            int rj = leftoverRight[^1];
+            int pairRight = rj - 1;
+            if (rj == rightTo - 1 && pairRight >= rightFrom &&
+                rightKind[pairRight] == IrAlignmentKind.Modified &&
+                rightMatch[pairRight] == leftTo - 1 && leftTo - 1 >= leftFrom &&
+                rightBlocks[rj] is IrParagraph && rightBlocks[pairRight] is IrParagraph &&
+                leftBlocks[leftTo - 1] is IrParagraph)
+            {
+                int li = leftTo - 1;
+                leftKind[li] = IrAlignmentKind.Split;
+                rightKind[pairRight] = IrAlignmentKind.Split;
+                rightKind[rj] = IrAlignmentKind.Split;
+                leftMatch[li] = pairRight;
+                rightMatch[pairRight] = li;
+                rightMatch[rj] = li;
+                splitGroups.Add((li, new List<int> { pairRight, rj }));
+                leftoverRight.Remove(rj);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The MERGE-SLOT law's scan (2026-07-27). Preconditions (checked by the caller): the story-tail
+    /// base surplus <paramref name="li"/> is the story's last base paragraph and its predecessor
+    /// pairs with the story's last next paragraph. Walks the CONSECUTIVE Modified paragraph chain
+    /// ending at li−1 (partners consecutive on the next side), and at the FIRST (earliest) pair
+    /// (b_k ↔ n_j) whose next-side tail residue shares an unmatched non-function word with base
+    /// paragraph b_k+1, restructures: merge (b_k, b_k+1 → n_j), then every following next paragraph
+    /// re-pairs one base paragraph forward (n_j+1 ↔ b_k+2, …), the last consuming the surplus.
+    /// Returns false untouched when no pair carries evidence (the caller's last-pair absorb then
+    /// applies).
+    /// </summary>
+    private static bool TryReslotBaseSurplusByTailEvidence(
+        IrNodeList<IrBlock> leftBlocks, IrNodeList<IrBlock> rightBlocks,
+        int leftFrom, int li,
+        IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
+        int[] leftMatch, int[] rightMatch,
+        List<int> leftoverLeft,
+        List<(int SingularIndex, List<int> PluralIndexes)> mergeGroups,
+        IrDiffSettings settings)
+    {
+        int pairLeft = li - 1;
+        int chainStart = pairLeft;
+        while (chainStart - 1 >= leftFrom &&
+               leftKind[chainStart - 1] == IrAlignmentKind.Modified &&
+               leftBlocks[chainStart - 1] is IrParagraph &&
+               leftMatch[chainStart - 1] == leftMatch[chainStart] - 1 &&
+               rightBlocks[leftMatch[chainStart - 1]] is IrParagraph)
+            chainStart--;
+
+        for (int k = chainStart; k < pairLeft; k++)
+        {
+            int nj = leftMatch[k];
+            if (!NextTailResidueSharesWordWith(
+                    (IrParagraph)leftBlocks[k], (IrParagraph)rightBlocks[nj],
+                    (IrParagraph)leftBlocks[k + 1], (IrParagraph)rightBlocks[nj + 1], settings))
+                continue;
+
+            rightKind[nj] = IrAlignmentKind.Merge;
+            leftKind[k] = IrAlignmentKind.Merge;
+            leftKind[k + 1] = IrAlignmentKind.Merge;
+            rightMatch[nj] = k;
+            leftMatch[k] = nj;
+            leftMatch[k + 1] = nj;
+            mergeGroups.Add((nj, new List<int> { k, k + 1 }));
+            for (int t = k + 2; t <= li; t++)
+            {
+                int nr = nj + (t - k - 1);
+                leftKind[t] = IrAlignmentKind.Modified;
+                rightKind[nr] = IrAlignmentKind.Modified;
+                leftMatch[t] = nr;
+                rightMatch[nr] = t;
+            }
+            leftoverLeft.Remove(li);
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>Evidence test of the merge-slot law: char-weighted word LCS of (b_k, n_j) finds
+    /// n_j's last matched word; any UNMATCHED n_j word AFTER it that also appears among b_k+1's
+    /// words left unmatched by the (b_k+1, n_j+1) LCS — function words excluded — is evidence the
+    /// next paragraph's tail consumes forward into b_k+1.</summary>
+    private static bool NextTailResidueSharesWordWith(
+        IrParagraph bk, IrParagraph nj, IrParagraph bk1, IrParagraph nj1, IrDiffSettings settings)
+    {
+        var bkWords = ParagraphWordKeys(bk, settings);
+        var njWords = ParagraphWordKeys(nj, settings);
+        var bk1Words = ParagraphWordKeys(bk1, settings);
+        var nj1Words = ParagraphWordKeys(nj1, settings);
+        if (njWords.Count == 0 || bk1Words.Count == 0)
+            return false;
+
+        var (_, njMatched) = WordLcsFlags(bkWords, njWords);
+        int wlast = -1;
+        for (int i = 0; i < njMatched.Length; i++)
+            if (njMatched[i])
+                wlast = i;
+
+        var (bk1Matched, _) = WordLcsFlags(bk1Words, nj1Words);
+        var bk1Free = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < bk1Words.Count; i++)
+            if (!bk1Matched[i])
+                bk1Free.Add(bk1Words[i].Key);
+
+        for (int i = wlast + 1; i < njWords.Count; i++)
+        {
+            if (njMatched[i])
+                continue;
+            string key = njWords[i].Key;
+            if (!FunctionWords.Contains(key) && bk1Free.Contains(key))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>The paragraph's WORD tokens as (match key, visible char count), in order.</summary>
+    private static List<(string Key, int Chars)> ParagraphWordKeys(IrParagraph p, IrDiffSettings settings)
+    {
+        var words = new List<(string, int)>();
+        foreach (var t in IrDiffTokenizer.Tokenize(p, settings))
+            if (t.Kind == IrDiffTokenKind.Word)
+                words.Add((t.MatchKey, t.Text.Length));
+        return words;
+    }
+
+    /// <summary>Char-weighted LCS over word-key sequences; returns per-index matched flags for both
+    /// sides. Degenerate or oversized inputs return all-false (no evidence, never a wrong claim).</summary>
+    private static (bool[] MatchedA, bool[] MatchedB) WordLcsFlags(
+        List<(string Key, int Chars)> a, List<(string Key, int Chars)> b)
+    {
+        var matchedA = new bool[a.Count];
+        var matchedB = new bool[b.Count];
+        if (a.Count == 0 || b.Count == 0 || (long)a.Count * b.Count > 250_000)
+            return (matchedA, matchedB);
+        var dp = new int[a.Count + 1, b.Count + 1];
+        for (int i = a.Count - 1; i >= 0; i--)
+            for (int j = b.Count - 1; j >= 0; j--)
+            {
+                int best = Math.Max(dp[i + 1, j], dp[i, j + 1]);
+                if (a[i].Key == b[j].Key)
+                    best = Math.Max(best, dp[i + 1, j + 1] + Math.Max(1, Math.Min(a[i].Chars, b[j].Chars)));
+                dp[i, j] = best;
+            }
+        for (int i = 0, j = 0; i < a.Count && j < b.Count;)
+        {
+            if (a[i].Key == b[j].Key &&
+                dp[i, j] == dp[i + 1, j + 1] + Math.Max(1, Math.Min(a[i].Chars, b[j].Chars)))
+            {
+                matchedA[i] = true;
+                matchedB[j] = true;
+                i++;
+                j++;
+            }
+            else if (dp[i + 1, j] >= dp[i, j + 1])
+            {
+                i++;
+            }
+            else
+            {
+                j++;
+            }
+        }
+        return (matchedA, matchedB);
     }
 
     // ------------------------------------------------------------------ junction pairing (Word matcher parity)
@@ -793,9 +1261,11 @@ internal static class IrBlockAligner
     private const double JunctionDispLambda = 0.3;
 
     /// <summary>Growth size-parity guard: on shared-word-only evidence a paragraph does not pair
-    /// with one more than ~3× its word count (oracle: the 30-word justified body does NOT merge
-    /// into the 7-word "This document demonstrates large 24pt font size." although they share
-    /// "This document demonstrates").</summary>
+    /// with one more than ~3× its word count. Refined decode (2026-07-27): the boundary is LONE
+    /// shared-word evidence — with ≥2 distinct shared content words Word pairs regardless of bulk
+    /// (the 31-word justified body pairs with the 7-word "This document demonstrates large 24pt
+    /// font size." on the shared leading phrase, the tail overflowing into the next paragraph), so
+    /// <see cref="SameSlotPair"/> waives this ratio at evidence ≥2 and keeps it for evidence 1.</summary>
     private const double JunctionGrowRatio = 1.0 / 3;
 
     /// <summary>
@@ -1058,6 +1528,10 @@ internal static class IrBlockAligner
     /// <see cref="JunctionPair"/>). Non-English text simply finds no members here, so the
     /// discipline degrades to "any shared word" for such corpora (documented scope).
     /// </summary>
+    /// <summary>Closed-class function-word test shared with the cross-paragraph segmenter's
+    /// count-equal construct gate (a lone same-ordinal function-word match never forms one).</summary>
+    internal static bool IsFunctionWordKey(string key) => FunctionWords.Contains(key);
+
     private static readonly HashSet<string> FunctionWords = new(StringComparer.OrdinalIgnoreCase)
     {
         "a", "an", "the", "and", "or", "but", "nor", "so", "yet",
@@ -1388,7 +1862,8 @@ internal static class IrBlockAligner
         List<int> freeLeft, List<int> freeRight,
         IrAlignmentKind?[] leftKind, IrAlignmentKind?[] rightKind,
         int[] leftMatch, int[] rightMatch,
-        bool requireFormatEqual, IrAlignmentKind kind, IrDiffSettings settings)
+        bool requireFormatEqual, IrAlignmentKind kind, IrDiffSettings settings,
+        IrBlockSimilarity similarity)
     {
         // Phase 1 — SAME-UNID identity reservation (M2.6 Task 2). Before any first-fit, pair every free right
         // block with a free left block that shares BOTH its key (ContentHash + this pass's format gate) AND its
@@ -1458,6 +1933,10 @@ internal static class IrBlockAligner
         {
             if (rightMatch[rj] != -1)
                 continue;
+            // Blank-spacer FormatOnly gate — see the pass-2 call-site comment in FillOneGap. (A
+            // blank can only be content-equal to another blank, so gating one side gates the pair.)
+            if (!requireFormatEqual && similarity.IsBlankSpacer(rightBlocks[rj]))
+                continue;
             foreach (int candLeft in freeLeft)
             {
                 if (leftMatch[candLeft] != -1)
@@ -1485,6 +1964,8 @@ internal static class IrBlockAligner
         foreach (int rj in freeRight)
         {
             if (rightMatch[rj] != -1)
+                continue;
+            if (!requireFormatEqual && similarity.IsBlankSpacer(rightBlocks[rj]))
                 continue;
             foreach (int candLeft in freeLeft)
             {

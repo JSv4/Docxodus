@@ -2155,8 +2155,19 @@ namespace Docxodus
         /// <paramref name="wDocFrom"/>. Returns the numId translation table for source definitions
         /// that had to be RENUMBERED around an id collision (source numId → destination numId);
         /// references to those ids in content cloned from the source document must be rebound by
-        /// the caller — the ids they carry resolve to the destination's (different) definition.</summary>
-        internal static Dictionary<int, int> CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo)
+        /// the caller — the ids they carry resolve to the destination's (different) definition.
+        /// <para>When <paramref name="alignedNumIdPairs"/> is non-null the copy switches to the
+        /// alignment-aware Word-parity rule (see <see cref="CopyNumberingPreservingListIdentity"/>):
+        /// a USED imported source list instance gets its own FRESH cloned <c>w:abstractNum</c> unless
+        /// the evidence proves it is the SAME list as a destination instance;
+        /// <paramref name="usedFromNumIds"/> (null ⇒ treat every instance as used) says which source
+        /// numIds surviving output content actually references — unreferenced definitions keep the
+        /// legacy content-dedup treatment, so they are not needlessly duplicated. Null
+        /// <paramref name="alignedNumIdPairs"/> keeps the legacy content-dedup behavior for the
+        /// WmlComparer and Consolidate call sites.</para></summary>
+        internal static Dictionary<int, int> CopyMissingNumberingFromOneDocToAnother(WordprocessingDocument wDocFrom, WordprocessingDocument wDocTo,
+            IReadOnlyCollection<(int FromNumId, int ToNumId)> alignedNumIdPairs = null,
+            IReadOnlySet<int> usedFromNumIds = null)
         {
             var numIdMap = new Dictionary<int, int>();
             var fromNumberingPart = wDocFrom.MainDocumentPart.NumberingDefinitionsPart;
@@ -2183,6 +2194,14 @@ namespace Docxodus
             }
 
             var fromNumberingXDoc = fromNumberingPart.GetXDocument();
+
+            if (alignedNumIdPairs != null)
+            {
+                var identityNumIdMap = CopyNumberingPreservingListIdentity(
+                    fromNumberingXDoc, toNumberingXDoc, alignedNumIdPairs, usedFromNumIds);
+                toNumberingPart.PutXDocument(toNumberingXDoc);
+                return identityNumIdMap;
+            }
 
             // Find the maximum IDs in the destination document to avoid conflicts
             int maxAbstractNumId = toNumberingXDoc.Root
@@ -2302,6 +2321,178 @@ namespace Docxodus
             }
 
             toNumberingPart.PutXDocument(toNumberingXDoc);
+            return numIdMap;
+        }
+
+        /// <summary>
+        /// Alignment-aware numbering import (the IR diff renderer's variant of
+        /// <see cref="CopyMissingNumberingFromOneDocToAnother"/>). Word's compare output gives every
+        /// imported foreign list instance its own FRESH cloned <c>w:abstractNum</c>; it never
+        /// deduplicates an imported definition onto a content-equal destination abstractNum. That
+        /// matters because LibreOffice keys list COUNTERS by abstractNumId — mapping two different
+        /// list instances (one destination-native, one imported) onto one shared abstractNum makes it
+        /// CONTINUE numbering across them where Word's output RESTARTS each list. The one exception
+        /// is a source list that is genuinely the SAME list as a surviving destination list:
+        /// <paramref name="alignedNumIdPairs"/> carries (source numId, destination numId) pairs
+        /// harvested from paragraph pairs the diff aligned as present on BOTH sides; when such a
+        /// pair exists and the two definitions agree, the destination definition is reused so the
+        /// counter continues across an inserted item joining that list (recording a numId rebind
+        /// when the two ids differ). Imported instances preserve the SOURCE document's own
+        /// num→abstractNum topology (source nums sharing one abstract share its clone), so the
+        /// accepted output renders like the source document.
+        /// <para>The fresh-clone rule applies only to instances surviving output content actually
+        /// REFERENCES (<paramref name="usedFromNumIds"/>; null ⇒ all). An unreferenced source
+        /// definition cannot exhibit the counter defect, so it keeps the legacy content-dedup
+        /// treatment — forking it would only duplicate definitions (and any schema noise they
+        /// carry) to no rendering effect.</para>
+        /// </summary>
+        private static Dictionary<int, int> CopyNumberingPreservingListIdentity(
+            XDocument fromNumberingXDoc, XDocument toNumberingXDoc,
+            IReadOnlyCollection<(int FromNumId, int ToNumId)> alignedNumIdPairs,
+            IReadOnlySet<int> usedFromNumIds)
+        {
+            var numIdMap = new Dictionary<int, int>();
+
+            // Seed the id high-water marks with BOTH sides' maxima so a freshly-allocated id can
+            // never collide with a source id processed later in the loop.
+            int maxAbstractNumId = toNumberingXDoc.Root
+                .Elements(W.abstractNum)
+                .Concat(fromNumberingXDoc.Root.Elements(W.abstractNum))
+                .Select(e => (int?)e.Attribute(W.abstractNumId) ?? 0)
+                .DefaultIfEmpty(0)
+                .Max();
+
+            int maxNumId = toNumberingXDoc.Root
+                .Elements(W.num)
+                .Concat(fromNumberingXDoc.Root.Elements(W.num))
+                .Select(e => (int?)e.Attribute(W.numId) ?? 0)
+                .DefaultIfEmpty(0)
+                .Max();
+
+            static XElement FindAbstract(XDocument numberingXDoc, int id) => numberingXDoc.Root
+                .Elements(W.abstractNum)
+                .FirstOrDefault(e => GetIntAttribute(e, W.abstractNumId) == id);
+
+            static XElement FindNum(XDocument numberingXDoc, int id) => numberingXDoc.Root
+                .Elements(W.num)
+                .FirstOrDefault(e => GetIntAttribute(e, W.numId) == id);
+
+            // One clone per SOURCE abstractNum, not per instance: source nums that shared an
+            // abstract keep sharing its clone, preserving the source's own counter topology.
+            // Forked (used) and deduped (unused) resolutions are cached separately — a used
+            // instance must never land on a content-matched destination abstract.
+            var forkedAbstractIds = new Dictionary<int, int>();
+            var dedupedAbstractIds = new Dictionary<int, int>();
+
+            int ResolveTargetAbstractId(XElement fromAbstract, int fromAbstractId, bool allowContentDedup)
+            {
+                var cache = allowContentDedup ? dedupedAbstractIds : forkedAbstractIds;
+                if (cache.TryGetValue(fromAbstractId, out var cached))
+                    return cached;
+
+                if (allowContentDedup)
+                {
+                    var normalized = NormalizeAbstractNumForComparison(fromAbstract);
+                    var matchingByContent = toNumberingXDoc.Root
+                        .Elements(W.abstractNum)
+                        .FirstOrDefault(e => XNode.DeepEquals(NormalizeAbstractNumForComparison(e), normalized));
+                    var matchingId = matchingByContent == null
+                        ? null
+                        : GetIntAttribute(matchingByContent, W.abstractNumId);
+                    if (matchingId != null)
+                    {
+                        cache[fromAbstractId] = matchingId.Value;
+                        return matchingId.Value;
+                    }
+                }
+
+                var targetId = FindAbstract(toNumberingXDoc, fromAbstractId) == null
+                    ? fromAbstractId
+                    : ++maxAbstractNumId;
+                var clonedAbstract = new XElement(fromAbstract);
+                clonedAbstract.SetAttributeValue(W.abstractNumId, targetId);
+                AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, clonedAbstract);
+                cache[fromAbstractId] = targetId;
+                return targetId;
+            }
+
+            foreach (var num in fromNumberingXDoc.Root.Elements(W.num).ToList())
+            {
+                var fromNumId = GetIntAttribute(num, W.numId);
+                var fromAbstractRef = GetIntAttribute(num.Element(W.abstractNumId), W.val);
+                if (fromNumId == null || fromAbstractRef == null)
+                    continue; // Skip malformed elements
+
+                var fromAbstract = FindAbstract(fromNumberingXDoc, fromAbstractRef.Value);
+                if (fromAbstract == null)
+                    continue; // Dangling source reference — nothing to import (the caller's repair pass owns refs)
+
+                var normalizedFrom = NormalizeAbstractNumForComparison(fromAbstract);
+
+                // Identity test: this source instance is "the same list" as a destination instance
+                // when the diff aligned at least one surviving paragraph pair carrying both numIds
+                // AND the definitions agree. Prefer the same-id pairing (no rebind needed), then
+                // the smallest destination id, for determinism.
+                int? sameListNumId = null;
+                foreach (var candidateId in alignedNumIdPairs
+                             .Where(p => p.FromNumId == fromNumId.Value)
+                             .Select(p => p.ToNumId)
+                             .Distinct()
+                             .OrderBy(id => id == fromNumId.Value ? 0 : 1)
+                             .ThenBy(id => id))
+                {
+                    var candidateNum = FindNum(toNumberingXDoc, candidateId);
+                    if (candidateNum == null)
+                        continue;
+                    var candidateAbstractRef = GetIntAttribute(candidateNum.Element(W.abstractNumId), W.val);
+                    if (candidateAbstractRef == null)
+                        continue;
+                    var candidateAbstract = FindAbstract(toNumberingXDoc, candidateAbstractRef.Value);
+                    if (candidateAbstract != null &&
+                        XNode.DeepEquals(NormalizeAbstractNumForComparison(candidateAbstract), normalizedFrom))
+                    {
+                        sameListNumId = candidateId;
+                        break;
+                    }
+                }
+
+                if (sameListNumId != null)
+                {
+                    // Same list: keep the destination definition so the counter continues.
+                    if (sameListNumId.Value != fromNumId.Value)
+                        numIdMap[fromNumId.Value] = sameListNumId.Value;
+                    continue;
+                }
+
+                // A USED foreign instance imports under its own cloned abstractNum — NEVER onto a
+                // content-equal destination abstract. An UNREFERENCED definition keeps the legacy
+                // content-dedup import (it cannot render, so forking it is pure duplication).
+                var isUsed = usedFromNumIds == null || usedFromNumIds.Contains(fromNumId.Value);
+                var targetAbstractId = ResolveTargetAbstractId(
+                    fromAbstract, fromAbstractRef.Value, allowContentDedup: !isUsed);
+
+                int targetNumId;
+                var existingNum = FindNum(toNumberingXDoc, fromNumId.Value);
+                if (existingNum == null)
+                {
+                    targetNumId = fromNumId.Value;
+                }
+                else
+                {
+                    if (GetIntAttribute(existingNum.Element(W.abstractNumId), W.val) == targetAbstractId)
+                        continue; // The destination already carries this exact instance.
+                    targetNumId = ++maxNumId;
+                    numIdMap[fromNumId.Value] = targetNumId;
+                }
+
+                var clonedNum = new XElement(num);
+                clonedNum.SetAttributeValue(W.numId, targetNumId);
+                var abstractNumIdElement = clonedNum.Element(W.abstractNumId);
+                if (abstractNumIdElement != null)
+                    abstractNumIdElement.SetAttributeValue(W.val, targetAbstractId);
+                AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, clonedNum);
+            }
+
             return numIdMap;
         }
 

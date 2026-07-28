@@ -292,4 +292,30 @@ public class IrTableDifferTests
         Assert.Null(cells[2].LeftCellAnchor);
         Assert.NotNull(cells[2].RightCellAnchor);
     }
+
+    [Fact]
+    public void Fully_rewritten_table_pairs_rows_positionally_with_surplus_inserted_last()
+    {
+        // Decoded 2026-07-27 from reference compare output (a wholly rewritten grown table): with no
+        // real content affinity anywhere, rows pair POSITIONALLY from the top and the surplus next
+        // row is a clean [rowINS] at the END. The affinity-only fill let noise-level signature ratios
+        // (a one-character row-length difference on zero-overlap rows) clean-insert a MIDDLE row and
+        // slide every base row down one slot instead — the row analogue of the cell positional
+        // tie-break ("keeping a rewritten row's base cells in place").
+        var left = FromXml(Table(
+            Row(Cell("Task"), Cell("Owner"), Cell("Status")),
+            Row(Cell("Design UI"), Cell("Alice"), Cell("In Progress")),
+            Row(Cell("Write Tests"), Cell("Bob"), Cell("Pending"))));
+        var right = FromXml(Table(
+            Row(Cell("Region"), Cell("Revenue"), Cell("Target")),
+            Row(Cell("North"), Cell("$450,000"), Cell("$400,000")),
+            Row(Cell("South"), Cell("$380,000"), Cell("$350,000")),
+            Row(Cell("West"), Cell("$520,000"), Cell("$500,000"))));
+
+        var op = TableOp(left, right);
+        var kinds = op.TableDiff!.RowOps.Select(r => r.Kind).ToList();
+        Assert.Equal(
+            new[] { IrRowOpKind.ModifyRow, IrRowOpKind.ModifyRow, IrRowOpKind.ModifyRow, IrRowOpKind.InsertRow },
+            kinds);
+    }
 }

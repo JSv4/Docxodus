@@ -330,13 +330,16 @@ public class BlockFormatChangeTests
     }
 
     [Fact]
-    public void Split_members_do_not_emit_pPrChange_declined_v1()
+    public void Split_last_member_stamps_pPrChange_new_members_do_not()
     {
-        // A4 / D1: split (and merge) members are NOT eligible for w:pPrChange — a split's members are
-        // brand-new paragraphs already tracked by the inserted pilcrow mark; a pPr "change" against the
-        // single left paragraph is not well-defined and would fight the reject-fuse. This pins the decline:
-        // whatever the aligner classifies the edit as (split or del/ins), NO pPrChange is emitted, and it
-        // still round-trips.
+        // Supersedes the v1 decline ("split/merge members don't emit pPrChange", pinned here until
+        // 2026-07-27): the v1 rationale was right for the NEW pilcrows (¶INS members are brand-new
+        // paragraphs tracked by their mark — the reference output carries no pPrChange on them) but
+        // wrong for the LAST member, which owns the ORIGINAL left pilcrow. The reference compare
+        // output stamps the surviving member's pPrChange against the single left paragraph (merge
+        // survivors show "was jc=center"), and the reject-fuse concern does not apply to a mark that
+        // survives reject. So: exactly ONE pPrChange, on the LAST member, archiving the left pPr
+        // (empty inner here — the left paragraph had no direct props).
         var left = IrTestDocuments.FromBodyXml(
             "<w:p><w:r><w:t>The quick brown fox jumps over the lazy dog every single day.</w:t></w:r></w:p>");
         var right = IrTestDocuments.FromBodyXml(
@@ -344,7 +347,13 @@ public class BlockFormatChangeTests
             "<w:p><w:pPr><w:jc w:val=\"center\"/></w:pPr><w:r><w:t>over the lazy dog every single day.</w:t></w:r></w:p>");
 
         var result = DocxDiff.Compare(left, right, ModeledOnly);
-        Assert.Empty(BodyOf(result).Descendants(W + "pPrChange"));                          // the decline
+        var body = BodyOf(result);
+        var paras = body.Elements(W + "p").ToList();
+        var changes = body.Descendants(W + "pPrChange").ToList();
+        Assert.Single(changes);
+        Assert.Same(paras[^1], changes[0].Ancestors(W + "p").First()); // on the LAST member only
+        Assert.False(changes[0].Element(W + "pPr")!.HasElements); // left had no direct props → empty archive
+        Assert.Null(paras[0].Element(W + "pPr")?.Element(W + "pPrChange")); // ¶INS member carries none
 
         // Content round-trips: accept ≡ right two paragraphs, reject ≡ left one paragraph.
         static string[] Texts(WmlDocument d) => BodyOf(d).Elements(W + "p")
@@ -352,6 +361,8 @@ public class BlockFormatChangeTests
             .Where(s => s.Length > 0).ToArray();
         Assert.Equal(Texts(right), Texts(RevisionProcessor.AcceptRevisions(result)));
         Assert.Equal(Texts(left), Texts(RevisionProcessor.RejectRevisions(result)));
+        // Property round-trip: reject restores the left pPr (no jc on the reconstructed paragraph).
+        Assert.Empty(BodyOf(RevisionProcessor.RejectRevisions(result)).Descendants(W + "jc"));
     }
 
     // ------------------------------------------------------------------ Consolidate pPr merge (sub-project B)
@@ -1174,5 +1185,109 @@ public class BlockFormatChangeTests
         var revisions = WmlComparer.GetRevisions(compared, settings);
         Assert.Empty(revisions);
         Assert.Empty(BodyOf(compared).Descendants(W + "pPrChange"));
+    }
+
+    // ------------- pPrChange PRESENCE laws (decoded 2026-07-27 from reference compare output) -------------
+
+    /// <summary>
+    /// The merge SURVIVOR (the member owning the surviving pilcrow) is the paired-paragraph analogue
+    /// and stamps <c>w:pPrChange</c> against its own left member ("was jc=center" in the reference
+    /// output); the ¶DEL members keep their left pPr verbatim with no marker.
+    /// </summary>
+    [Fact]
+    public void Merge_survivor_stamps_pPrChange_against_its_last_left_member()
+    {
+        const string centered = "<w:pPr><w:jc w:val=\"center\"/></w:pPr>";
+        var left = IrTestDocuments.FromBodyXml(
+            $"<w:p>{centered}<w:r><w:t xml:space=\"preserve\">alpha bravo charlie delta.</w:t></w:r></w:p>" +
+            $"<w:p>{centered}<w:r><w:t xml:space=\"preserve\">echo foxtrot golf hotel.</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">alpha bravo charlie delta. echo foxtrot golf hotel EXTRA.</w:t></w:r></w:p>");
+        var redline = DocxDiff.Compare(left, right);
+
+        var paras = BodyOf(redline).Elements(W + "p").ToList();
+        Assert.Equal(2, paras.Count);
+
+        // ¶DEL member: left pPr verbatim (jc=center), no pPrChange.
+        var delPPr = paras[0].Element(W + "pPr")!;
+        Assert.NotNull(delPPr.Element(W + "rPr")?.Element(W + "del"));
+        Assert.Equal("center", (string?)delPPr.Element(W + "jc")?.Attribute(W + "val"));
+        Assert.Null(delPPr.Element(W + "pPrChange"));
+
+        // Survivor: right pPr (no jc) + pPrChange archiving the left member's jc=center.
+        var survivorChange = paras[1].Element(W + "pPr")?.Element(W + "pPrChange");
+        Assert.NotNull(survivorChange);
+        Assert.Equal("center",
+            (string?)survivorChange!.Element(W + "pPr")?.Element(W + "jc")?.Attribute(W + "val"));
+
+        // Round trip: accept ≡ right, reject ≡ left (block text level).
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(redline)));
+    }
+
+    /// <summary>
+    /// Explicit-default fold: <c>w:jc val="left"</c> is the flow default and the reference compare
+    /// treats it as absent — losing it is NOT a paragraph-format change (no pPrChange), while losing
+    /// jc=center IS.
+    /// </summary>
+    [Fact]
+    public void Jc_left_explicit_default_is_not_a_format_change()
+    {
+        static WmlDocument Doc(string? jc, string text) => IrTestDocuments.FromBodyXml(
+            (jc is null ? "<w:p>" : $"<w:p><w:pPr><w:jc w:val=\"{jc}\"/></w:pPr>") +
+            $"<w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>");
+
+        var folded = DocxDiff.Compare(
+            Doc("left", "alpha bravo charlie"), Doc(null, "alpha bravo charlie MORE"));
+        Assert.Empty(BodyOf(folded).Descendants(W + "pPrChange"));
+
+        var real = DocxDiff.Compare(
+            Doc("center", "alpha bravo charlie"), Doc(null, "alpha bravo charlie MORE"));
+        Assert.NotEmpty(BodyOf(real).Descendants(W + "pPrChange"));
+    }
+
+    /// <summary>
+    /// Unresolvable-style fold: a right-side <c>w:pStyle</c> the left universe cannot resolve is
+    /// dropped from the emitted pPr — so it must not count in the format comparison either (the
+    /// reference emits no pPrChange whose old and new payloads would be property-identical after
+    /// the drop).
+    /// </summary>
+    [Fact]
+    public void Unresolvable_style_ref_is_not_a_format_change()
+    {
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">alpha bravo charlie</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:pPr><w:pStyle w:val=\"GhostStyle\"/></w:pPr>" +
+            "<w:r><w:t xml:space=\"preserve\">alpha bravo charlie MORE</w:t></w:r></w:p>");
+        var body = BodyOf(DocxDiff.Compare(left, right));
+        Assert.Empty(body.Descendants(W + "pPrChange"));
+        Assert.Empty(body.Descendants(W + "pStyle"));
+    }
+
+    /// <summary>
+    /// Shared-pilcrow pPrChange with an EMPTY archive (re-decoded 2026-07-27): when a story-final
+    /// replace pair's modeled properties differ and the base side simply had NO direct properties,
+    /// the reference output still stamps <c>w:pPrChange</c> — with an empty <c>&lt;w:pPr/&gt;</c>
+    /// inner — on the surviving paragraph (an earlier decode suppressed the empty archive; its
+    /// evidence pairs were modeled-EQUAL, which the shared comparison now reports directly).
+    /// </summary>
+    [Fact]
+    public void Replace_pair_with_no_base_props_stamps_empty_inner_pPrChange()
+    {
+        var left = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">HEAD retained words</w:t></w:r></w:p>" +
+            "<w:p><w:r><w:t xml:space=\"preserve\">alpha bravo charlie</w:t></w:r></w:p>");
+        var right = IrTestDocuments.FromBodyXml(
+            "<w:p><w:r><w:t xml:space=\"preserve\">HEAD retained words</w:t></w:r></w:p>" +
+            "<w:p><w:pPr><w:spacing w:line=\"240\" w:lineRule=\"auto\"/></w:pPr>" +
+            "<w:r><w:t xml:space=\"preserve\">xray yankee zulu</w:t></w:r></w:p>");
+        var last = BodyOf(DocxDiff.Compare(left, right)).Elements(W + "p").Last(p =>
+            p.Descendants(W + "t").Any() || p.Descendants(W + "delText").Any());
+        var pPr = last.Element(W + "pPr")!;
+        Assert.Equal("240", (string?)pPr.Element(W + "spacing")?.Attribute(W + "line"));
+        var change = pPr.Element(W + "pPrChange");
+        Assert.NotNull(change);
+        Assert.False(change!.Element(W + "pPr")!.HasElements); // empty archive — base had no props
     }
 }

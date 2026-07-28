@@ -43,6 +43,13 @@ internal static class IrCompositeMerger
         // block-level conflict path (never a silent format drop). Pinned by ConsolidateBlockFormatB2Tests.
         settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true };
 
+        // v1 ceiling (cross-paragraph token-stream campaign, 2026-07-25): the cross-paragraph fusion is a
+        // two-way MARKUP-only feature. The composite merger consumes the per-reviewer edit scripts as DATA
+        // (it lowers, composes, and re-renders ops), and has no CrossParagraphRunBlock handling — force it
+        // OFF here so a reviewer's word-matched run stays the per-pair ModifyBlocks the composer understands
+        // (never a silent drop).
+        settings = settings with { CrossParagraphTokenDiff = false };
+
         // 1. Raw pairwise scripts, NOT yet lowered — so PlanMoves can inspect every reviewer's move groups
         //    against the shared base anchor space before any move is collapsed to del/ins.
         var rawScripts = reviewers

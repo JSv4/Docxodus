@@ -33,14 +33,24 @@ internal static class IrTokenDiffer
 {
     /// <summary>
     /// Diff <paramref name="left"/> against <paramref name="right"/> by <see cref="IrDiffToken.MatchKey"/>,
-    /// producing format-refined token ops.
+    /// producing format-refined token ops. <paramref name="endsAtRetainedMark"/> declares whether the END of
+    /// both token streams abuts a RETAINED paragraph-mark pair (true for an ordinary Modified pair — Task 3
+    /// treats every Modify as a same-mark edit — and for the final member of a split/merge or the Equal-mark
+    /// cell of a cross-paragraph run; false for a slice that closes on a ¶INS/¶DEL mark).
+    /// <paramref name="suppressLonePunctuation"/> gates the lone-punctuation anchor rule (see
+    /// <see cref="SuppressUnanchoredPunctuation"/>): callers must pass false when either source paragraph
+    /// carries anything but direct text runs — dropping an anchor inside a transparent field/hyperlink
+    /// region re-tiles that region into del+ins, and the renderer then emits the container's zero-width
+    /// plumbing for BOTH sides (a REF field surviving Accept twice — same containment discipline as the
+    /// renderer's whitespace re-anchoring gate).
     /// </summary>
     public static IrTokenDiff Diff(
-        IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right, IrDiffSettings settings)
+        IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right, IrDiffSettings settings,
+        bool endsAtRetainedMark = true, bool suppressLonePunctuation = true)
     {
         // 1. Raw token-grain edits via Myers, already coalesced into same-kind spans. (MatchKey/Format
         // were precomputed by the tokenizer under these settings; the Myers walk keys on MatchKey.)
-        var spans = MyersSpans(left, right);
+        var spans = MyersSpans(left, right, endsAtRetainedMark, suppressLonePunctuation);
 
         // 2. Format post-pass: split each Equal span into Equal / FormatChanged sub-spans. The
         // FormatComparison policy (M2.2 Task 4) decides whether unmodeled rPr noise (lang/bCs/iCs/…)
@@ -82,7 +92,8 @@ internal static class IrTokenDiffer
     /// adjacent whitespace Equal and consecutive Delete/Insert merge into maximal spans.
     /// </remarks>
     private static List<IrTokenOp> MyersSpans(
-        IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right)
+        IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right,
+        bool endsAtRetainedMark, bool suppressLonePunctuation)
     {
         int n = left.Count, m = right.Count;
         var spans = new List<IrTokenOp>();
@@ -111,6 +122,16 @@ internal static class IrTokenDiffer
         // crowding is the problem this pass exists to fix — take the content-anchored path.
         bool anchorAll = HasAtomic(left) || HasAtomic(right);
         var anchors = ContentAnchors(left, right, anchorAll);
+
+        // 1b. Lone-punctuation rule (decoded 2026-07-27 from reference compare output): an isolated
+        // matched PUNCTUATION token does not stand as an anchor — Word duplicates it into both the
+        // ins and del regions ("margin." / "italic." each keep their own period) — UNLESS the match is
+        // ANCHORED: contiguous (bridging equal whitespace) with a matched word pair, with another
+        // anchored punctuation pair, or with the retained paragraph-mark pair at the end of both
+        // streams. Skipped on the atomic (all-token) path, which pairs tokens in full context already,
+        // and when the caller declares a non-plain source paragraph (transparent containers).
+        if (!anchorAll && suppressLonePunctuation)
+            SuppressUnanchoredPunctuation(anchors, left, right, endsAtRetainedMark);
 
         // 2. Partition at anchors: for each anchor, emit the segment before it, then the anchor as Equal.
         var edits = new List<(IrTokenOpKind Kind, int Left, int Right)>();
@@ -174,6 +195,94 @@ internal static class IrTokenDiffer
         foreach (var (a, b) in pairs)
             anchors.Add((leftContent[a], rightContent[b]));
         return anchors;
+    }
+
+    /// <summary>
+    /// Drop matched punctuation anchors that are NOT anchored to solid context, mutating
+    /// <paramref name="anchors"/> in place. Decoded from Word's compare output (2026-07-27): word matches
+    /// always stand, but an isolated punctuation match ("margin." vs "italic." sharing only the period) is
+    /// duplicated into both changed regions. A punctuation anchor STANDS iff — walking over pairwise
+    /// key-equal whitespace on both sides — it reaches (a) a matched WORD anchor, (b) another standing
+    /// punctuation anchor, or (c) the end of BOTH streams when <paramref name="endsAtRetainedMark"/>
+    /// (the retained paragraph-mark pair is the anchor there: "size 24." vs "size 18 point text." retains
+    /// the final period because both periods abut the retained pilcrow). Chains of punctuation resolve by
+    /// fixed-point propagation from the solid ends; a pure punctuation island with changed words on both
+    /// sides and a marked/absent terminal never stands.
+    /// </summary>
+    private static void SuppressUnanchoredPunctuation(
+        List<(int Left, int Right)> anchors,
+        IReadOnlyList<IrDiffToken> left, IReadOnlyList<IrDiffToken> right,
+        bool endsAtRetainedMark)
+    {
+        if (anchors.Count == 0)
+            return;
+
+        // Any punctuation anchors at all? (Words are the overwhelming majority; exit cheap.)
+        bool anyPunct = false;
+        foreach (var (al, _) in anchors)
+            anyPunct |= left[al].Kind == IrDiffTokenKind.Separator;
+        if (!anyPunct)
+            return;
+
+        int n = left.Count, m = right.Count;
+        var solid = new bool[anchors.Count];             // words are solid from the start
+        for (int i = 0; i < anchors.Count; i++)
+            solid[i] = left[anchors[i].Left].Kind == IrDiffTokenKind.Word;
+
+        var pairIndex = new Dictionary<(int, int), int>(anchors.Count);
+        for (int i = 0; i < anchors.Count; i++)
+            pairIndex[anchors[i]] = i;
+
+        // Walk from (l, r) one step at a time over pairwise key-equal connective whitespace in the given
+        // direction; return the first non-connective position pair (or (-1,-1) when the sides desync).
+        (int L, int R) BridgeFrom(int l, int r, int dir)
+        {
+            while (true)
+            {
+                l += dir;
+                r += dir;
+                if (l < 0 && r < 0)
+                    return (l, r);                       // start of both streams
+                if (l >= n && r >= m)
+                    return (l, r);                       // end of both streams
+                if (l < 0 || r < 0 || l >= n || r >= m)
+                    return (-1, -1);                     // one side ran out — no bridge
+                if (!IsConnective(left[l]) || !IsConnective(right[r]))
+                    return (l, r);
+                if (left[l].MatchKey != right[r].MatchKey)
+                    return (-1, -1);
+            }
+        }
+
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (int i = 0; i < anchors.Count; i++)
+            {
+                if (solid[i] || left[anchors[i].Left].Kind == IrDiffTokenKind.Word)
+                    continue;
+
+                var back = BridgeFrom(anchors[i].Left, anchors[i].Right, -1);
+                bool anchoredBack = back != (-1, -1) &&
+                    pairIndex.TryGetValue(back, out var bi) && solid[bi];
+
+                var fwd = BridgeFrom(anchors[i].Left, anchors[i].Right, +1);
+                bool anchoredFwd = fwd != (-1, -1) &&
+                    ((fwd.L >= n && fwd.R >= m && endsAtRetainedMark) ||
+                     (pairIndex.TryGetValue(fwd, out var fi) && solid[fi]));
+
+                if (anchoredBack || anchoredFwd)
+                {
+                    solid[i] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        for (int i = anchors.Count - 1; i >= 0; i--)
+            if (!solid[i])
+                anchors.RemoveAt(i);
     }
 
     /// <summary>

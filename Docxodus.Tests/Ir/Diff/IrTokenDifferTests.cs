@@ -181,6 +181,59 @@ public class IrTokenDifferTests
         Assert.Contains("a", retained);   // interior shared content word must be RETAINED, not dropped
     }
 
+    // --- lone-punctuation anchor rule (decoded 2026-07-27 from reference compare output) -----------
+
+    private static IrTokenDiff DiffUnretainedMark(IReadOnlyList<IrDiffToken> l, IReadOnlyList<IrDiffToken> r)
+    {
+        var d = IrTokenDiffer.Diff(l, r, Default, endsAtRetainedMark: false);
+        IrTokenDiffAsserts.AssertInvariants(l, r, d);
+        return d;
+    }
+
+    /// <summary>All left-token raw texts covered by Equal/FormatChanged spans.</summary>
+    private static List<string> RetainedTexts(IrTokenDiff d, IReadOnlyList<IrDiffToken> left) =>
+        d.Ops.Where(o => o.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged)
+             .SelectMany(o => Enumerable.Range(o.LeftStart, o.LeftLength).Select(i => left[i].Text))
+             .ToList();
+
+    [Fact]
+    public void Stream_final_period_retains_under_a_retained_mark()
+    {
+        // "… size 18 point text." vs "… size 24.": both periods abut the pair's RETAINED paragraph
+        // mark, so the period match is anchored and stands (reference output keeps ins "24" +
+        // del "18 point text" + a retained ".").
+        var left = Concat(Words("size", "18", "point", "text"), new List<IrDiffToken> { Sep(".") });
+        var right = Concat(Words("size", "24"), new List<IrDiffToken> { Sep(".") });
+        var d = Diff(left, right);
+        Assert.Contains(".", RetainedTexts(d, left));
+    }
+
+    [Fact]
+    public void Stream_final_period_duplicates_when_the_mark_is_not_retained()
+    {
+        // The same shape closing on a ¶INS/¶DEL mark (a cross-paragraph cell or non-final split/merge
+        // member): no retained pilcrow anchors the period, the words before it differ on both sides,
+        // so the lone punctuation match is SUPPRESSED — each side keeps its own period inside its
+        // changed region ("… margin." / "… italic." in the reference output).
+        var left = Concat(Words("size", "18", "point", "text"), new List<IrDiffToken> { Sep(".") });
+        var right = Concat(Words("size", "24"), new List<IrDiffToken> { Sep(".") });
+        var d = DiffUnretainedMark(left, right);
+        Assert.DoesNotContain(".", RetainedTexts(d, left));
+    }
+
+    [Fact]
+    public void Period_anchored_by_an_adjacent_word_match_stands_without_a_retained_mark()
+    {
+        // "… italic combined." vs "… underline combined.": the period is contiguous with the matched
+        // word "combined" on both sides, so it is anchored regardless of the closing mark.
+        var left = Concat(Words("italic", "combined"), new List<IrDiffToken> { Sep(".") });
+        var right = Concat(Words("underline", "combined"), new List<IrDiffToken> { Sep(".") });
+        var d = DiffUnretainedMark(left, right);
+        var retained = RetainedTexts(d, left);
+        Assert.Contains("combined", retained);
+        Assert.Contains(".", retained);
+    }
+
     [Fact]
     public void All_changed_no_common_tokens()
     {

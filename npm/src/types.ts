@@ -519,6 +519,15 @@ export interface DocxDiffSettings {
    * (Consolidate ignores block-format changes regardless.)
    */
   trackBlockFormatChanges?: boolean;
+
+  /**
+   * Render a run of >=2 adjacent word-matched modified paragraph pairs via a single cross-paragraph
+   * word+pilcrow token-stream diff — the within-run flat-stream shape decoded from Word's compare
+   * output (retained words may cross the pilcrow; paragraph marks are ins/del stream tokens; the
+   * output paragraph count follows the token-level interleave). Markup (`docxDiffCompare`) only —
+   * the revision list and edit-script JSON are unaffected. Default false.
+   */
+  crossParagraphTokenDiff?: boolean;
 }
 
 /**

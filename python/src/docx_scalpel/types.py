@@ -817,6 +817,12 @@ class DocxDiffSettings:
     #: Word markup. Default True; False restores the untracked-right-apply behavior. Consolidate ignores
     #: block-format changes regardless.
     track_block_format_changes: bool = True
+    #: Render a run of >=2 adjacent word-matched modified paragraph pairs via a single cross-paragraph
+    #: word+pilcrow token-stream diff (the within-run flat-stream shape decoded from Word's compare
+    #: output: retained words may cross the pilcrow, paragraph marks are ins/del stream tokens, and the
+    #: output paragraph count follows the token-level interleave). Markup (``docx_diff_compare``) only —
+    #: the revision list and edit-script JSON are unaffected. Default False.
+    cross_paragraph_token_diff: bool = True
 
     def to_wire(self) -> dict[str, Any]:
         """camelCase keys the host's ``DocxDiffOps.ParseSettings`` reads. Only
@@ -856,6 +862,8 @@ class DocxDiffSettings:
             wire["compareHeadersFooters"] = False
         if not self.track_block_format_changes:
             wire["trackBlockFormatChanges"] = False
+        if not self.cross_paragraph_token_diff:
+            wire["crossParagraphTokenDiff"] = False
         return wire
 
 
