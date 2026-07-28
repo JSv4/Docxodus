@@ -217,6 +217,9 @@ internal static class DocxSessionOps
     public static string InsertPageNumberField(int handle, string anchorId, PageNumberField field) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertPageNumberField(anchorId, field));
 
+    public static string EnsureHeaderFooterVisible(int handle, string anchorId, HeaderFooterKind kind) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).EnsureHeaderFooterVisible(anchorId, kind));
+
     // ─── Tier C: formatting ─────────────────────────────────────────────
 
     public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp op) =>

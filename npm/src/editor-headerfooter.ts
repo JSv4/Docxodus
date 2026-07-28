@@ -33,6 +33,7 @@ export interface HeaderFooterBridge {
   SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
   SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
   InsertPageNumberField: (handle: number, anchor: string, field: string) => string;
+  EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
   RenderBlockHtml: (
     handle: number,
     anchorId: string,
@@ -87,6 +88,15 @@ const EVEN_WARNING =
   "w:evenAndOddHeaders is document-global and governs footers too — even pages stop " +
   "inheriting the Default stories, so a section with only a Default footer shows no footer " +
   "at all on even pages.";
+
+/**
+ * `w:titlePg` is per-section but has the same shape of surprise: once set, page 1 uses its OWN
+ * header AND footer, so an empty first-page footer means page 1 shows no footer even though the
+ * Default one is populated.
+ */
+const FIRST_WARNING =
+  "w:titlePg makes page 1 use its own first-page header AND footer instead of the Default " +
+  "ones, so an empty first-page footer leaves page 1 with no footer.";
 
 /** Kinds/scopes the markdown projection addresses as editable text blocks. */
 const STORY_BLOCK_KINDS = new Set(["p", "h", "li"]);
@@ -161,13 +171,21 @@ export class HeaderFooterRegion {
     this.renderBand("footer");
   }
 
-  /** Select (and, if absent, create) the story kind a band edits. */
+  /** Select (and, if absent, create) the story kind a band edits, and make it render. */
   setKind(which: BandWhich, kind: HeaderFooterKind): void {
     this.kinds[which] = kind;
     const select = this.bandFor(which).querySelector<HTMLSelectElement>("[data-hf-kind]");
     if (select && select.value !== kind) select.value = kind;
 
     if (!this.partUriFor(which, kind)) this.seedStory(which, kind);
+    // Selecting first/even IS the user saying "use a different first/even page", so the section's
+    // visibility flag must be set even when the part already exists — seedStory (which sets it as
+    // a side effect of writing content) doesn't run then. Word leaves first/even parts behind when
+    // those options are switched off, so a real document commonly has the reference WITHOUT the
+    // flag; without this the typed story is saved but never rendered.
+    if (this.bodyAnchorId && kind !== "default") {
+      this.bridge.EnsureHeaderFooterVisible(this.handle, this.bodyAnchorId, kind);
+    }
     this.refresh(which);
   }
 
@@ -367,7 +385,7 @@ export class HeaderFooterRegion {
     const select = band.querySelector<HTMLSelectElement>("[data-hf-kind]");
     if (select && select.value !== kind) select.value = kind;
 
-    this.renderEvenWarning(which);
+    this.renderKindWarning(which);
 
     body.innerHTML = "";
     const partUri = this.partUriFor(which, kind);
@@ -436,30 +454,36 @@ export class HeaderFooterRegion {
   }
 
   /**
-   * Show the even-pages caveat on a band set to `even` while the OTHER band has no even story.
-   * The fix button creates the matching one, which is what a user almost always wants.
+   * Surface the caveat that comes with the selected kind. Turning on first/even means those pages
+   * stop using the Default stories entirely, which bites hardest on the OTHER band: enabling an
+   * even header with no even footer leaves even pages footer-less, and enabling a first-page
+   * header with an empty first-page footer leaves page 1 footer-less. The note is shown whenever
+   * first/even is selected (the behavior change is real either way); the fix button appears only
+   * when the counterpart story is missing entirely, which is what a user almost always wants next.
    */
-  private renderEvenWarning(which: BandWhich): void {
+  private renderKindWarning(which: BandWhich): void {
     const band = this.bandFor(which);
     const warning = band.querySelector<HTMLElement>("[data-hf-warning]");
     if (!warning) return;
 
-    const other: BandWhich = which === "header" ? "footer" : "header";
-    const show = this.kinds[which] === "even" && !this.partUriFor(other, "even");
-    if (!show) {
+    const kind = this.kinds[which];
+    if (kind === "default") {
       warning.hidden = true;
       warning.textContent = "";
       return;
     }
+    const other: BandWhich = which === "header" ? "footer" : "header";
     warning.hidden = false;
-    warning.textContent = `${EVEN_WARNING} `;
+    warning.textContent = `${kind === "even" ? EVEN_WARNING : FIRST_WARNING} `;
+    if (this.partUriFor(other, kind)) return; // counterpart exists — nothing to offer
+
     const fix = document.createElement("button");
     fix.type = "button";
     fix.setAttribute("data-hf-fix-even-footer", "");
-    fix.textContent = `Also create an even ${other}`;
+    fix.textContent = `Also create a ${kind === "even" ? "matching even" : "first-page"} ${other}`;
     fix.addEventListener("click", () => {
-      this.setKind(other, "even");
-      this.renderEvenWarning(which);
+      this.setKind(other, kind);
+      this.renderKindWarning(which);
     });
     warning.appendChild(fix);
   }

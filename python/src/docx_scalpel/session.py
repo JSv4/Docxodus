@@ -936,6 +936,25 @@ class DocxSession:
             )
         )
 
+    def ensure_header_footer_visible(
+        self, anchor_id: str, kind: HeaderFooterKind
+    ) -> EditResult:
+        """Make the ``kind`` header/footer stories of the section owning ``anchor_id`` actually
+        render: ``FIRST`` sets ``w:titlePg``, ``EVEN`` the document-global ``w:evenAndOddHeaders``;
+        ``DEFAULT`` needs no flag and is a successful no-op. Idempotent.
+
+        ``set_header_text``/``set_footer_text`` set these flags while writing content, which covers
+        authoring a story from scratch — but not a document that already carries a first/even
+        reference with the flag absent (Word leaves exactly that behind when "Different first page"
+        is switched off), where the story's content would be present but invisible.
+        """
+        return EditResult._from_wire(
+            self._call(
+                "ensure_header_footer_visible",
+                {"anchorId": anchor_id, "kind": kind.value},
+            )
+        )
+
     # -- Tier C: formatting -----------------------------------------------
 
     def apply_format(

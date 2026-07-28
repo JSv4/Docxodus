@@ -246,6 +246,22 @@ export class DocxSession {
     return JSON.parse(this.wasm.InsertPageNumberField(this.handle, anchorId, field)) as EditResult;
   }
 
+  /**
+   * Make the `kind` header/footer stories of the section that owns `anchorId` actually RENDER:
+   * `"first"` sets `w:titlePg`, `"even"` sets the document-global `w:evenAndOddHeaders`;
+   * `"default"` needs no flag and succeeds as a no-op. Idempotent.
+   *
+   * {@link setHeaderText}/{@link setFooterText} set these flags while writing content, which covers
+   * authoring a story from scratch — but NOT a document that already carries a first/even reference
+   * with the flag absent (Word leaves exactly that behind when "Different first page" is switched
+   * off). Editing such a story through the text ops otherwise yields header content that is present
+   * but invisible. Note the `"even"` caveat from {@link setHeaderText}: the flag is document-global
+   * and governs footers too.
+   */
+  ensureHeaderFooterVisible(anchorId: string, kind: HeaderFooterKind): EditResult {
+    return JSON.parse(this.wasm.EnsureHeaderFooterVisible(this.handle, anchorId, kind)) as EditResult;
+  }
+
   // ─── Tier C: formatting ──────────────────────────────────────────────
 
   applyFormat(anchorId: string, span: CharSpan | null, op: FormatOp): EditResult {

@@ -1,11 +1,43 @@
 import { test, expect, Page } from '@playwright/test';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as zlib from 'zlib';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const TEST_FILES_DIR = path.join(__dirname, '../../TestFiles');
+
+/**
+ * Read one entry out of a DOCX (zip) without a dependency: walk the central directory from the
+ * EOCD record, then inflate the entry's raw deflate stream. Needed because some assertions are
+ * about package-level OOXML (`w:titlePg` in a mid-document sectPr, `w:evenAndOddHeaders` in the
+ * settings part) that no client API surfaces.
+ */
+function readZipEntry(zip: Buffer, name: string): string {
+  const eocd = zip.lastIndexOf(Buffer.from('PK\x05\x06', 'latin1'));
+  if (eocd < 0) throw new Error('not a zip');
+  const count = zip.readUInt16LE(eocd + 10);
+  let p = zip.readUInt32LE(eocd + 16);
+  for (let i = 0; i < count; i++) {
+    const nameLen = zip.readUInt16LE(p + 28);
+    const extraLen = zip.readUInt16LE(p + 30);
+    const commentLen = zip.readUInt16LE(p + 32);
+    const entry = zip.toString('latin1', p + 46, p + 46 + nameLen);
+    if (entry === name) {
+      const method = zip.readUInt16LE(p + 10);
+      const compSize = zip.readUInt32LE(p + 20);
+      const localOff = zip.readUInt32LE(p + 42);
+      const lNameLen = zip.readUInt16LE(localOff + 26);
+      const lExtraLen = zip.readUInt16LE(localOff + 28);
+      const start = localOff + 30 + lNameLen + lExtraLen;
+      const data = zip.subarray(start, start + compSize);
+      return (method === 0 ? data : zlib.inflateRawSync(data)).toString('utf8');
+    }
+    p += 46 + nameLen + extraLen + commentLen;
+  }
+  throw new Error(`entry not found: ${name}`);
+}
 
 function readTestFile(relativePath: string): number[] {
   // Plain array: page.evaluate serializes structured-clone data, and a Uint8Array survives the
@@ -295,23 +327,35 @@ test.describe('DocxEditor — header/footer region', () => {
       const fix = warn.querySelector('[data-hf-fix-even-footer]') as HTMLButtonElement;
       const hadFix = !!fix;
       fix?.click();
+      const warnAfter = container.querySelector(
+        '[data-hf-band="header"] [data-hf-warning]',
+      ) as HTMLElement;
       const after = {
-        hidden: (
-          container.querySelector('[data-hf-band="header"] [data-hf-warning]') as HTMLElement
-        ).hidden,
+        // The note STAYS: turning even pages on really does stop them using the Default
+        // stories, whether or not an even footer now exists. Only the offer goes away.
+        hidden: warnAfter.hidden,
+        stillHasFix: !!warnAfter.querySelector('[data-hf-fix-even-footer]'),
         footerKind: editor.headerFooterKind('footer'),
       };
 
+      // Selecting Default carries no caveat, so the note clears entirely.
+      editor.setHeaderFooterKind('header', 'default');
+      const onDefault = (
+        container.querySelector('[data-hf-band="header"] [data-hf-warning]') as HTMLElement
+      ).hidden;
+
       editor.close();
       container.remove();
-      return { before, hadFix, after };
+      return { before, hadFix, after, onDefault };
     });
 
     expect(res.before.hidden).toBe(false);
     expect(res.before.text).toMatch(/even pages/i);
     expect(res.hadFix).toBe(true);
     expect(res.after.footerKind).toBe('even');
-    expect(res.after.hidden).toBe(true);
+    expect(res.after.hidden).toBe(false);
+    expect(res.after.stillHasFix).toBe(false);
+    expect(res.onDefault).toBe(true);
   });
 
   /**
@@ -467,6 +511,64 @@ test.describe('DocxEditor — header/footer region', () => {
 
     expect(res.hasText).toBe(true);
     expect(res.bold).toBe(true);
+  });
+
+  /**
+   * Selecting First/Even must make the section actually RENDER that story. Word leaves a
+   * first/even part + reference behind when "Different first page" / "Different odd & even pages"
+   * is switched back off, dropping only `w:titlePg` / `w:evenAndOddHeaders` — HC031 is exactly
+   * that shape. The band's seed path only runs when the part is ABSENT, so without an explicit
+   * ensure-visible the typed story is saved but never rendered (confirmed by a LibreOffice render
+   * of the saved file: content present in header1/header3, neither shown).
+   */
+  test('selecting first/even sets the section flags so the story actually renders', async ({
+    page,
+  }) => {
+    const bytes = readTestFile('HC031-Complicated-Document.docx');
+    const res = await page.evaluate((raw: number[]) => {
+      const w = window as any;
+      const { container, editor } = w.__hfMount(new Uint8Array(raw), { headerFooter: true });
+
+      editor.setHeaderFooterKind('header', 'first');
+      w.__hfType(
+        container.querySelector('[data-hf-band="header"] [data-anchor][contenteditable="true"]'),
+        'COVER PAGE ONLY',
+      );
+      editor.setHeaderFooterKind('header', 'even');
+      w.__hfType(
+        container.querySelector('[data-hf-band="header"] [data-anchor][contenteditable="true"]'),
+        'ACME CORP — CONFIDENTIAL',
+      );
+
+      const saved: Uint8Array = editor.save();
+      editor.close();
+      container.remove();
+
+      const doc = w.__hfInspect(saved);
+      const headers: Record<string, string> = {};
+      for (const r of doc.sectionInfo.headerRefs) headers[r.kind] = doc.textInPart(r.partUri).trim();
+      doc.close();
+      let b64 = '';
+      for (let i = 0; i < saved.length; i++) b64 += String.fromCharCode(saved[i]);
+      return { headers, b64: btoa(b64) };
+    }, bytes);
+
+    expect(res.headers.first).toBe('COVER PAGE ONLY');
+    expect(res.headers.even).toBe('ACME CORP — CONFIDENTIAL');
+
+    // Content alone is not enough — without the section flags Word renders neither story.
+    const zip = Buffer.from(res.b64, 'base64');
+    const documentXml = readZipEntry(zip, 'word/document.xml');
+    const settingsXml = readZipEntry(zip, 'word/settings.xml');
+
+    // w:titlePg must sit in the sectPr that actually carries the first-page reference.
+    const sectPrs = documentXml.match(/<w:sectPr\b[\s\S]*?<\/w:sectPr>/g) ?? [];
+    const firstRefSection = sectPrs.find((s) =>
+      /<w:headerReference[^>]*w:type="first"/.test(s),
+    );
+    expect(firstRefSection).toBeDefined();
+    expect(firstRefSection!).toMatch(/<w:titlePg\b/);
+    expect(settingsXml).toMatch(/<w:evenAndOddHeaders\b/);
   });
 
   test('bands survive a paginated toggle and keep their content', async ({ page }) => {

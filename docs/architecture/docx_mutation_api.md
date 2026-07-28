@@ -261,6 +261,20 @@ WASM/npm, and stdio/`docx-scalpel`.
 | `SetHeaderText(anchorId, HeaderFooterKind, markdown)` | Set the running header story for the section that owns `anchorId`. |
 | `SetFooterText(anchorId, HeaderFooterKind, markdown)` | Same, for the footer. |
 | `InsertPageNumberField(anchorId, PageNumberField = CurrentPage)` | Append a `PAGE`/`NUMPAGES` field to a paragraph (usually a header/footer one). |
+| `EnsureHeaderFooterVisible(anchorId, HeaderFooterKind)` | Make the section's first/even stories actually render (`w:titlePg` / `w:evenAndOddHeaders`). |
+
+**Why `EnsureHeaderFooterVisible` exists.** `SetHeaderText`/`SetFooterText` set the visibility
+flags *while writing content*, which covers authoring a story from scratch. It does not cover a
+document that already carries a first/even reference with the flag absent — and that is exactly
+what Word leaves behind when "Different first page" / "Different odd & even pages" is switched
+back off: the part and its reference stay, only the flag goes. Editing such a pre-existing story
+through the anchor-addressed text ops then yields a file whose header content is present but
+never rendered. The flags belong to the **section**, not to a content write, so this is its own
+operation: `First` → `w:titlePg`, `Even` → the document-global `w:evenAndOddHeaders`, `Default`
+→ a successful no-op. Idempotent; a non-body anchor is `AnchorWrongKind`.
+
+`TestFiles/HC031-Complicated-Document.docx` is the canonical example — all six stories present,
+neither flag set (`DS268`).
 
 **Addressing.** `SetHeaderText`/`SetFooterText` take *any body block* in the target
 section — the governing `w:sectPr` is resolved the same way `GetSectionInfo` resolves

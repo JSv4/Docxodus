@@ -5050,4 +5050,71 @@ public class DocxSessionTests
         foreach (var other in info.FooterRefs.Where(r => r.PartUri != defaultUri))
             Assert.DoesNotContain("PAGE", XmlOf(other.PartUri));
     }
+
+    // Word leaves a first/even header part + reference behind when "Different first page" /
+    // "Different odd & even pages" is switched back off, dropping only w:titlePg /
+    // w:evenAndOddHeaders. SetHeaderText sets those flags while WRITING content, so a caller that
+    // edits such a pre-existing story through the text ops saves content Word never renders.
+    // EnsureHeaderFooterVisible is the section-level operation that closes it.
+    [Fact]
+    public void DS268_EnsureHeaderFooterVisible_SetsFlagsForPreExistingStories()
+    {
+        // HC031 carries first/even header and footer references with NEITHER flag set.
+        var path = Path.Combine("../../../../TestFiles/", "HC031-Complicated-Document.docx");
+        using var s = new DocxSession(File.ReadAllBytes(path));
+        var body = s.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h").Anchor.Id;
+
+        // The references live in a MID-DOCUMENT sectPr here (HC031 has four sections), so the flag
+        // must land in the section that actually carries the first-page reference — not merely
+        // somewhere in the document, and not only in the body-level trailing sectPr.
+        static bool FirstRefSectionHasTitlePg(byte[] b)
+        {
+            using var ms = new MemoryStream(b);
+            using var d = WordprocessingDocument.Open(ms, false);
+            return d.MainDocumentPart!.Document.Descendants<SectionProperties>()
+                .Where(sp => sp.Elements<HeaderReference>()
+                    .Any(hr => hr.Type is not null && hr.Type == HeaderFooterValues.First))
+                .Any(sp => sp.Elements<TitlePage>().Any());
+        }
+        static int TitlePgCount(byte[] b)
+        {
+            using var ms = new MemoryStream(b);
+            using var d = WordprocessingDocument.Open(ms, false);
+            return d.MainDocumentPart!.Document.Descendants<TitlePage>().Count();
+        }
+        static bool HasEvenOdd(byte[] b)
+        {
+            using var ms = new MemoryStream(b);
+            using var d = WordprocessingDocument.Open(ms, false);
+            return d.MainDocumentPart!.DocumentSettingsPart!.Settings
+                .Elements<EvenAndOddHeaders>().Any();
+        }
+
+        // Precondition: the fixture really does have the references but not the flags.
+        var info = s.GetSectionInfo(body)!;
+        Assert.Contains(info.HeaderRefs, r => r.Kind == HeaderFooterKind.First);
+        Assert.Contains(info.HeaderRefs, r => r.Kind == HeaderFooterKind.Even);
+        Assert.False(FirstRefSectionHasTitlePg(s.Save()));
+        Assert.False(HasEvenOdd(s.Save()));
+
+        Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.First).Success);
+        Assert.True(FirstRefSectionHasTitlePg(s.Save()));
+
+        Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.Even).Success);
+        Assert.True(HasEvenOdd(s.Save()));
+
+        // Idempotent — a second call adds no duplicate.
+        Assert.Equal(1, TitlePgCount(s.Save()));
+        Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.First).Success);
+        Assert.Equal(1, TitlePgCount(s.Save()));
+
+        // Default needs no flag and must still succeed; a non-body anchor is rejected.
+        Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.Default).Success);
+        var hdrAnchor = s.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope.StartsWith("hdr", StringComparison.Ordinal)).Anchor.Id;
+        var bad = s.EnsureHeaderFooterVisible(hdrAnchor, HeaderFooterKind.First);
+        Assert.False(bad.Success);
+        Assert.Equal(EditErrorCode.AnchorWrongKind, bad.Error!.Code);
+    }
 }

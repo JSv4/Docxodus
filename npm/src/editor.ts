@@ -81,6 +81,7 @@ export interface DocxEditorExports {
     SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     InsertPageNumberField: (handle: number, anchor: string, field: string) => string;
+    EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
   };
   DocumentConverter: {
     ConvertDocxToHtmlComplete: (...args: any[]) => string;

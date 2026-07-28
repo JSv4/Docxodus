@@ -814,6 +814,78 @@ single author; the leak when the flag is off.
 
 ---
 
+## Headers/footers: a first/even part can outlive its `w:titlePg` / `w:evenAndOddHeaders` flag
+
+### The behavior
+
+A `w:headerReference`/`w:footerReference` of type `first` or `even` is **inert on its own**. Word
+renders the first-page stories only when the governing `w:sectPr` carries `w:titlePg`, and the
+even-page stories only when the settings part carries `w:evenAndOddHeaders`.
+
+The trap is what Word does when the user turns those options back **off** in the UI ("Different
+first page" / "Different odd & even pages"): it removes only the flag. The header/footer parts and
+their references stay in the package. A document can therefore carry a complete set of six stories
+— default/first/even for both header and footer — with neither flag set, which is exactly the shape
+of `TestFiles/HC031-Complicated-Document.docx`.
+
+### Minimal reproducer
+
+```xml
+<!-- word/document.xml — references present, no w:titlePg -->
+<w:sectPr>
+  <w:headerReference w:type="first"   r:id="rId15"/>
+  <w:headerReference w:type="default" r:id="rId12"/>
+  <!-- no <w:titlePg/> -->
+</w:sectPr>
+```
+
+`word/header3.xml` (the `first` part) can hold arbitrary content and **no renderer will show it**.
+
+### Renderer comparison
+
+| Renderer | Result |
+|---|---|
+| Word | First-page header ignored; the Default header renders on page 1. |
+| LibreOffice | Identical — verified by converting to PDF; the first/even content never appears. |
+| Docxodus (`WmlToHtmlConverter`, pagination) | Same: `selectHeader`/`selectFooter` only pick the first/even story when the flags resolve. |
+
+So all three agree. The hazard is not a rendering divergence — it is that **writing content into
+such a story appears to succeed and silently produces an invisible result**.
+
+### Why it bites a mutation API
+
+`DocxSession.SetHeaderText`/`SetFooterText` set the flags as a side effect of writing content, so
+authoring a story from scratch is fine. But a caller that *edits an existing* first/even story —
+via `ReplaceText`/`ApplyFormat` on the story's paragraph anchor, which is what an anchor-addressed
+editor does — never goes through that path, and the flag is never added. The saved file then
+contains the user's text in the right part, rendered nowhere.
+
+### Relevant code
+
+- `Docxodus/DocxSession.cs` — `EnsureHeaderFooterVisible` (the section-level operation that sets
+  the flags independently of a content write); `SetHeaderFooterText` (the create-time path).
+- `Docxodus/WordprocessingMLUtil.cs` — `EnsureEvenAndOddHeaders` (inserts the settings child at its
+  CT_Settings schema slot; see the settings-ordering note above).
+- `npm/src/editor-headerfooter.ts` — the editor band calls the op whenever `first`/`even` is
+  selected, because selecting that kind *is* the user asking for a different first/even page.
+
+### The second-order surprise (worth surfacing in a UI)
+
+Turning either flag on means those pages stop inheriting the Default stories **entirely**, and
+`w:evenAndOddHeaders` is document-global and governs footers as well as headers. A section with a
+populated Default footer but an empty even footer therefore shows *no footer at all* on even
+pages, and enabling `w:titlePg` with an empty first-page footer leaves page 1 without one. This is
+spec-correct and reproduces identically in Word and LibreOffice; the editor's header/footer bands
+show an inline note for both cases.
+
+### Tests
+
+`Docxodus.Tests/DocxSessionTests.cs` — `DS268` (flags set for pre-existing stories, idempotent,
+lands in the section that carries the reference rather than merely the trailing `sectPr`);
+`npm/tests/editor-headerfooter.spec.ts` — the end-to-end assertion over the saved package.
+
+---
+
 ## Contributing
 
 When adding new corner cases to this document:

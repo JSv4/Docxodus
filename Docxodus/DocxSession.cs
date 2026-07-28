@@ -4337,6 +4337,77 @@ public sealed class DocxSession : IDisposable
     public EditResult SetFooterText(string anchorId, HeaderFooterKind kind, string markdownPayload)
         => SetHeaderFooterText(isHeader: false, anchorId, kind, markdownPayload);
 
+    /// <summary>
+    /// Ensure Word will actually RENDER the <paramref name="kind"/> header/footer stories of the
+    /// section that owns <paramref name="anchorId"/> (any body block, resolved as
+    /// <see cref="GetSectionInfo"/> resolves it): sets <c>w:titlePg</c> for
+    /// <see cref="HeaderFooterKind.First"/> and the document-global <c>w:evenAndOddHeaders</c>
+    /// for <see cref="HeaderFooterKind.Even"/>. <see cref="HeaderFooterKind.Default"/> needs no
+    /// flag and is a successful no-op. Idempotent.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="SetHeaderText"/>/<see cref="SetFooterText"/> set these flags as a side effect of
+    /// writing content, which covers authoring a story from scratch. It does NOT cover a document
+    /// that already carries a first/even reference with the flag absent — Word writes exactly that
+    /// when "Different first page" / "Different odd &amp; even pages" is turned back off, leaving
+    /// the part behind. Editing such a story through the anchor-addressed text ops then produces a
+    /// document whose header content is present but invisible. An editor offering a
+    /// first/even story selector needs this as its own operation, because the flags belong to the
+    /// SECTION, not to a content write.
+    /// </para>
+    /// <para>
+    /// See <see cref="SetHeaderText"/> for the <c>w:evenAndOddHeaders</c> caveat: it is
+    /// document-global and governs footers too, so enabling it without an even FOOTER means even
+    /// pages show no footer at all.
+    /// </para>
+    /// </remarks>
+    public EditResult EnsureHeaderFooterVisible(string anchorId, HeaderFooterKind kind)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Scope != "body")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "EnsureHeaderFooterVisible requires a body block anchor (the section the header/footer belongs to)",
+                anchorId);
+        if (kind == HeaderFooterKind.Default)
+            return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no main document part", anchorId);
+
+        var sectPr = Internal.BlockMetadataOps.FindGoverningSectPr(element);
+        if (sectPr is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no governing section properties", anchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            if (kind == HeaderFooterKind.First)
+            {
+                if (sectPr.Element(W.titlePg) is null) InsertSectPrTitlePg(sectPr);
+            }
+            else
+            {
+                WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
+            }
+            InvalidateProjectionCache();
+            return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RestoreSnapshot(_history.PopForUndo().snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
     private EditResult SetHeaderFooterText(bool isHeader, string anchorId, HeaderFooterKind kind, string markdownPayload)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
