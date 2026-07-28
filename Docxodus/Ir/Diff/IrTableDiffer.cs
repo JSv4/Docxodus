@@ -295,8 +295,16 @@ internal static class IrTableDiffer
                 return false;
         }
 
+        // Positional tie-break — the row analogue of the cell rule below (decoded from reference
+        // compare output on a fully rewritten table): with no real content affinity anywhere, Word
+        // pairs rows POSITIONALLY from the top and appends the surplus as inserted/deleted rows at
+        // the END; the affinity-only fill let noise-level signature ratios (a one-character row-length
+        // difference on zero-overlap rows) pick an interleave that clean-inserts a MIDDLE row and
+        // slides every base row down one slot. The bias is tiny per row of displacement, so any real
+        // body affinity still wins — it only decides otherwise-noise-tied gaps.
         alignment = BuildMonotoneAlignment(freeLeft.Count, freeRight.Count,
-            (i, j) => BodyAffinity(leftBodies[i], rightBodies[j], leftSignatures[i], rightSignatures[j]));
+            (i, j) => BodyAffinity(leftBodies[i], rightBodies[j], leftSignatures[i], rightSignatures[j])
+                      - CellPositionalTieBreak * Math.Abs(i - j));
         return true;
     }
 

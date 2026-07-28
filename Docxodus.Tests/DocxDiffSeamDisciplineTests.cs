@@ -48,14 +48,15 @@ public class DocxDiffSeamDisciplineTests
     }
 
     [Fact]
-    public void SeamTerminator_CarriesEmptyPPr_WordShape()
+    public void SharedPilcrowParagraph_CarriesNextPPr_ArchivesLeftInPPrChange()
     {
         // Middle paragraphs share tokens (ModifyBlock); the outer two are ~0.2 Jaccard, so they
-        // lower to Delete+Insert (a 2x2 gap — no 1x1 force-pair) and render through the seam.
-        // Word's seam shape (every decoded oracle sighting): the surviving seam paragraph carries
-        // an EMPTY pPr — no style, no props, no pPrChange — so neither side's paragraph
-        // formatting outlives the seam. (Word itself gives up property-level round-trip here;
-        // text-level accept ≡ right / reject ≡ left still holds.)
+        // lower to Delete+Insert. The HEAD gap is interior (separate ¶INS/¶DEL); the TAIL gap
+        // reaches the story end and fuses under a shared (unmarked) pilcrow. Word's shared-pilcrow
+        // shape: the paragraph carries the NEXT side's direct props (here: none — the right is
+        // uncentered) with w:pPrChange archiving the BASE side's (the left centering), so accept
+        // keeps the right formatting and reject restores the left's. Marked (¶INS/¶DEL)
+        // paragraphs never carry a pPrChange.
         var left = ParaDoc(centered: true,
             "Alpha ancient prose.", "This document demonstrates the old body.", "Omega bygone prose.");
         var right = ParaDoc(centered: false,
@@ -64,7 +65,7 @@ public class DocxDiffSeamDisciplineTests
         var redline = DocxDiff.Compare(left, right);
 
         // accept ≡ right at the property level: the right has no centered paragraphs, and the
-        // LEFT's centering must not leak through the surviving seam paragraphs.
+        // LEFT's centering must not leak through the surviving shared paragraphs.
         var accepted = RevisionProcessor.AcceptRevisions(redline);
         using (var s = new MemoryStream(accepted.DocumentByteArray))
         using (var d = WordprocessingDocument.Open(s, false))
@@ -75,19 +76,32 @@ public class DocxDiffSeamDisciplineTests
             Assert.Equal(0, centeredAfterAccept);
         }
 
-        // The redline itself: surviving mixed ins+del (seam) paragraphs carry NO pPr content.
         using (var s = new MemoryStream(redline.DocumentByteArray))
         using (var d = WordprocessingDocument.Open(s, false))
         {
             var mixed = d.MainDocumentPart!.Document.Body!.Elements<Paragraph>()
                 .Where(p => p.Descendants<InsertedRun>().Any() && p.Descendants<DeletedRun>().Any())
                 .Where(p => p.ParagraphProperties?.ParagraphMarkRunProperties?.GetFirstChild<Deleted>() is null)
-                .Where(p => p.ParagraphProperties?.GetFirstChild<ParagraphPropertiesChange>() is null)
                 .ToList();
             Assert.NotEmpty(mixed);
             foreach (var p in mixed)
-                Assert.True(p.ParagraphProperties is null || !p.ParagraphProperties.HasChildren,
-                    $"seam paragraph '{p.InnerText}' must carry an empty pPr, got: {p.ParagraphProperties?.OuterXml}");
+            {
+                // No CURRENT direct props beyond the pPrChange archive (the next side had none),
+                // and the archive records the left side's centering for reject.
+                var current = p.ParagraphProperties!;
+                Assert.True(current.Elements().All(e => e is ParagraphPropertiesChange),
+                    $"shared paragraph '{p.InnerText}' must carry only the pPrChange archive, got: {current.OuterXml}");
+                var change = current.GetFirstChild<ParagraphPropertiesChange>();
+                Assert.NotNull(change);
+                Assert.Equal(JustificationValues.Center,
+                    change!.Descendants<Justification>().Single().Val!.Value);
+            }
+            // Marked gap paragraphs never carry a pPrChange.
+            var marked = d.MainDocumentPart!.Document.Body!.Elements<Paragraph>()
+                .Where(p => p.ParagraphProperties?.ParagraphMarkRunProperties is { } mark &&
+                            (mark.GetFirstChild<Deleted>() is not null || mark.GetFirstChild<Inserted>() is not null));
+            foreach (var p in marked)
+                Assert.Null(p.ParagraphProperties?.GetFirstChild<ParagraphPropertiesChange>());
         }
     }
 
@@ -129,12 +143,18 @@ public class DocxDiffSeamDisciplineTests
 
         var redline = DocxDiff.Compare(left, right);
 
+        // A SHARED-pilcrow (unmarked) paragraph expresses its format within the LEFT style
+        // universe: the unresolvable pStyle is dropped from its current pPr. An INSERTED (¶INS)
+        // paragraph keeps its own side's pPr verbatim — its style rides the right-only style
+        // import — so the assertion is scoped to unmarked paragraphs.
         using var s = new MemoryStream(redline.DocumentByteArray);
         using var d = WordprocessingDocument.Open(s, false);
         var refs = d.MainDocumentPart!.Document.Body!
             .Descendants<ParagraphStyleId>()
             .Where(id => id.Val?.Value == "GrandTitle" &&
                          id.Ancestors<ParagraphPropertiesChange>().FirstOrDefault() is null)
+            .Where(id => id.Ancestors<Paragraph>().First().ParagraphProperties
+                             ?.ParagraphMarkRunProperties?.GetFirstChild<Inserted>() is null)
             .ToList();
         Assert.Empty(refs);
     }

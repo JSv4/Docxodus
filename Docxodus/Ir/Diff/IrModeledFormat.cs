@@ -70,7 +70,14 @@ internal static class IrModeledFormat
 
         var sb = new StringBuilder();
         Append(sb, "PStyleId", f.StyleId);
-        Append(sb, "Jc", f.Justification?.ToString());
+        // Explicit-default fold (decoded 2026-07-27 from reference compare output): w:jc val="left" is
+        // the flow default and Word's compare treats it as ABSENT — a paragraph gaining/losing an
+        // explicit jc=left is NOT a format change (the reference emits no pPrChange for "jc=left ↔ no
+        // jc" pairs and ARCHIVES old pPrs without their jc=left). Fold it out of the modeled key so
+        // every ModeledOnly comparison site (FormatOnly classification, pPrChange stamping, revision
+        // reporting, composite compose) agrees. Approximation: in a bidi paragraph the flow default is
+        // right, but the modeled key does not carry w:bidi — LTR corpus evidence only.
+        Append(sb, "Jc", f.Justification == IrJustification.Left ? null : f.Justification?.ToString());
         Append(sb, "IndL", f.IndentLeftTwips);
         Append(sb, "IndR", f.IndentRightTwips);
         Append(sb, "IndFL", f.IndentFirstLineTwips);

@@ -2526,6 +2526,27 @@ namespace Docxodus
                                  c.ThisBlockContentElement.Name == W.sdt ||
                                  c.ThisBlockContentElement.Name.Namespace == M.m)
                         {
+                            // A table that accept REMOVES ENTIRELY (every row deleted, no surviving
+                            // content) is transparent to paragraph-mark coalescing: a deleted
+                            // paragraph mark before it merges its content into the next surviving
+                            // paragraph AFTER it, exactly as if the table were already gone.
+                            // Without this, a redline that deletes [para ¶DEL][table][para] strands
+                            // the coalesced content before the table and leaves a stray empty
+                            // paragraph behind it in the accepted output. The table element itself
+                            // rides along in the group and is removed by the row-deletion pass.
+                            if (state == 1 &&
+                                c.ThisBlockContentElement.Name == W.tbl &&
+                                TableIsEntirelyDeleted(c.ThisBlockContentElement))
+                            {
+                                deletedParagraphGroupingInfo.Add(
+                                    new GroupingInfo()
+                                    {
+                                        GroupingType = GroupingType.DeletedRange,
+                                        GroupingKey = currentKey,
+                                    });
+                                continue;
+                            }
+
                             currentKey += 1;
                             deletedParagraphGroupingInfo.Add(
                                 new GroupingInfo()
@@ -2566,6 +2587,22 @@ namespace Docxodus
                         {
                             if (g.First().GroupingInfo.GroupingType == GroupingType.DeletedRange)
                             {
+                                // A transparent fully-deleted TABLE riding in the group is emitted
+                                // separately ahead of the coalesced paragraph — the row-deletion
+                                // pass removes it, so its interim position is immaterial; only the
+                                // PARAGRAPH members coalesce.
+                                var paragraphMembers = g
+                                    .Where(z => z.BlockLevelContent.ThisBlockContentElement.Name == W.p)
+                                    .ToList();
+                                var tableMembers = g
+                                    .Where(z => z.BlockLevelContent.ThisBlockContentElement.Name == W.tbl)
+                                    .Select(z => (object)new XElement(
+                                        z.BlockLevelContent.ThisBlockContentElement.Name,
+                                        z.BlockLevelContent.ThisBlockContentElement.Attributes(),
+                                        z.BlockLevelContent.ThisBlockContentElement.Nodes()
+                                            .Select(n => AcceptDeletedAndMoveFromParagraphMarksTransform(n))))
+                                    .ToList();
+
                                 XElement newParagraph = new XElement(W.p,
 #if false
                                     // previously, this was set to g.First()
@@ -2574,20 +2611,23 @@ namespace Docxodus
                                     // in the sequence of coalesced paragraph.  It is possible that we should take Last when accepting revisions, but First when rejecting revisions.
                                     g.First().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr),
 #endif
-                                    g.Last().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr),
-                                    g.Select(z => CollapseParagraphTransform(z.BlockLevelContent.ThisBlockContentElement)));
+                                    paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr),
+                                    paragraphMembers.Select(z => CollapseParagraphTransform(z.BlockLevelContent.ThisBlockContentElement)));
 
                                 // if this contains the last paragraph in the document, and if there is no content,
                                 // and if the paragraph mark is deleted, then nuke the paragraph.
                                 var allIsDeleted = AllParaContentIsDeleted(newParagraph);
                                 if (allIsDeleted &&
-                                    g.Last().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr).Elements(W.rPr).Elements(W.del).Any() &&
+                                    paragraphMembers.Last().BlockLevelContent.ThisBlockContentElement.Elements(W.pPr).Elements(W.rPr).Elements(W.del).Any() &&
                                     (g.Last().BlockLevelContent.NextBlockContentElement == null ||
                                      g.Last().BlockLevelContent.NextBlockContentElement.Name == W.tbl ||
                                      g.Last().BlockLevelContent.NextBlockContentElement.Name == W.sdt))
-                                    return null;
+                                    return tableMembers.Count > 0 ? (object)tableMembers : null;
 
-                                return (object)newParagraph;
+                                if (tableMembers.Count == 0)
+                                    return (object)newParagraph;
+                                tableMembers.Add(newParagraph);
+                                return (object)tableMembers;
                             }
                             else
                             {
@@ -2612,6 +2652,19 @@ namespace Docxodus
             }
             return node;
         }
+
+        /// <summary>
+        /// True when accept removes this table ENTIRELY: every row carries a deleted-row marker
+        /// (<c>w:trPr/w:del</c>) and no descendant text or insertion survives acceptance. Strict on
+        /// purpose — only a table that is provably gone after accept may be treated as transparent
+        /// by the deleted-paragraph-mark coalescing above.
+        /// </summary>
+        private static bool TableIsEntirelyDeleted(XElement tbl) =>
+            tbl.Elements(W.tr).Any() &&
+            tbl.Elements(W.tr).All(tr => tr.Elements(W.trPr).Elements(W.del).Any()) &&
+            !tbl.Descendants(W.ins).Any() &&
+            !tbl.Descendants(W.t).Any(t =>
+                !t.Ancestors(W.del).Any() && !t.Ancestors(W.moveFrom).Any());
 
         // Determine if the paragraph contains any content that is not deleted.
         private static bool AllParaContentIsDeleted(XElement p)

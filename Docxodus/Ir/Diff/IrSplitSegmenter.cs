@@ -89,13 +89,15 @@ internal static class IrSplitSegmenter
     }
 
     /// <summary>
-    /// Per-segment diffs for a confirmed split (singular = LEFT) — or, with the arguments mirrored by
-    /// the caller, a merge (singular = RIGHT; the caller then flips each diff via
+    /// Per-segment diffs for a confirmed split (singular = LEFT, <paramref name="singularIsLeft"/>
+    /// true) — or, with the arguments mirrored by the caller, a merge (singular = RIGHT,
+    /// <paramref name="singularIsLeft"/> false; the caller then flips each diff via
     /// <see cref="MirrorDiff"/>). Returns one COMPLETE IrTokenDiff per run member: slice-local
     /// singular-side spans, full member-side spans.
     /// </summary>
     public static IrNodeList<IrTokenDiff> ComputeSegmentDiffs(
-        IrParagraph singular, IReadOnlyList<IrParagraph> run, IrDiffSettings settings)
+        IrParagraph singular, IReadOnlyList<IrParagraph> run, IrDiffSettings settings,
+        bool singularIsLeft = true)
     {
         var single = IrDiffTokenizer.Tokenize(singular, settings);
         var memberTokens = run.Select(p => IrDiffTokenizer.Tokenize(p, settings)).ToList();
@@ -108,22 +110,111 @@ internal static class IrSplitSegmenter
                 memberOfFlat.Add(m);
             }
 
-        var partner = LcsMatch(single, flat, out _);
+        var partner = LcsMatchWeighted(single, flat);
 
-        // Assign every singular token to a member segment: a matched token goes to its partner's
-        // member; an unmatched token to the nearest preceding matched token's segment (leading → 0).
-        var segmentOf = new int[single.Count];
-        int current = 0;
+        // Assign every singular token to a member segment (decoded 2026-07-27 from reference compare
+        // output — the same merged-stream expansion arrangement the cross-paragraph segmenter renders:
+        // between two anchors the right side's one-sided items emit BEFORE the boundary event and the
+        // left side's AFTER it). A segment is defined by SOLID matches only: matched content tokens,
+        // plus matched separators CHAINED to a solid neighbor by partner adjacency (the cross-paragraph
+        // flanking-separator law — "ddd. " keeps its period and trailing space with "ddd"). An
+        // UNCHAINED separator match must not drag the boundary (it is connective; counting it pulled
+        // "which" into the following member). Unmatched singular tokens — and unchained separator
+        // matches — are the residue, and the residue's SIDE decides its member:
+        //  - singular = RIGHT (merge): the residue renders as INSERTED text, which the expansion emits
+        //    directly after the preceding anchor — nearest PRECEDING solid match's member (leading → 0);
+        //  - singular = LEFT (split): the residue renders as DELETED text, which the expansion emits
+        //    directly before the FOLLOWING anchor, past any ¶INS boundary — nearest FOLLOWING solid
+        //    match's member (trailing → the LAST member, whose retained mark closes the stream).
+        var solid = new bool[single.Count];
         for (int i = 0; i < single.Count; i++)
+            solid[i] = partner[i] >= 0 && IsContent(single[i]);
+        for (int i = 1; i < single.Count; i++)
+            if (!solid[i] && partner[i] >= 0 && solid[i - 1] && partner[i] == partner[i - 1] + 1)
+                solid[i] = true;
+        for (int i = single.Count - 2; i >= 0; i--)
+            if (!solid[i] && partner[i] >= 0 && solid[i + 1] && partner[i] == partner[i + 1] - 1)
+                solid[i] = true;
+
+        var segmentOf = new int[single.Count];
+        if (singularIsLeft)
         {
-            if (partner[i] >= 0)
-                current = memberOfFlat[partner[i]];
-            segmentOf[i] = current;
+            int next = run.Count - 1;
+            for (int i = single.Count - 1; i >= 0; i--)
+            {
+                if (solid[i])
+                    next = memberOfFlat[partner[i]];
+                segmentOf[i] = next;
+            }
+        }
+        else
+        {
+            // TRAILING inserted residue (beyond the LAST solid match) goes to the FINAL member. Every
+            // reference-output example of trailing insert residue has its preceding solid match in the
+            // final member already, so "preceding" and "final member" are indistinguishable on the
+            // decoded evidence — and when the aligner's merge slot disagrees with the reference's (the
+            // ¶DEL-slot family), the final-member branch keeps the trailing insert beside the surviving
+            // mark, which measures strictly better. Interior residue follows the expansion law: nearest
+            // PRECEDING solid member (leading → 0).
+            int lastSolid = -1;
+            for (int i = single.Count - 1; i >= 0 && lastSolid < 0; i--)
+                if (solid[i])
+                    lastSolid = i;
+            int current = 0;
+            for (int i = 0; i < single.Count; i++)
+            {
+                if (solid[i])
+                    current = memberOfFlat[partner[i]];
+                segmentOf[i] = lastSolid >= 0 && i > lastSolid ? run.Count - 1 : current;
+            }
         }
         // The LCS is in-order, so segments are non-decreasing; enforce defensively anyway.
         for (int i = 1; i < single.Count; i++)
             if (segmentOf[i] < segmentOf[i - 1])
                 segmentOf[i] = segmentOf[i - 1];
+
+        // Separator attachment at segment boundaries (decoded 2026-07-27 from reference compare output):
+        // the whitespace separating an UNMATCHED word from a following cross-boundary matched word rides
+        // with the MATCH — Word retains " and " (leading space included) in the later output paragraph,
+        // while our nearest-preceding rule dumped that separator into the earlier slice's ins/del run
+        // ("…outcomes ", " and" split). Move the maximal run of connective singular tokens directly
+        // before a segment-opening matched token into that token's segment, but only while the member
+        // side has pairwise key-equal connectives directly before the partner (re-pairable — the slice
+        // re-diff below then retains them via its whitespace prefix/suffix rule) and the singular token
+        // preceding the run is NOT a matched content token (trailing attachment to a matched word wins
+        // over leading attachment — the decoded precedence).
+        for (int i = 1; i < single.Count; i++)
+        {
+            if (segmentOf[i] == segmentOf[i - 1] || partner[i] < 0)
+                continue;
+            int seg = segmentOf[i];
+            if (memberOfFlat[partner[i]] != seg)
+                continue;                                // defensively bumped segment — leave untouched
+            int j = i;                                   // tokens [j..i) move into segment `seg`
+            int k = partner[i];                          // flat counterpart cursor (exclusive)
+            while (j - 1 >= 0 && segmentOf[j - 1] < seg &&
+                   IsConnective(single[j - 1]) &&
+                   k - 1 >= 0 && memberOfFlat[k - 1] == memberOfFlat[partner[i]] &&
+                   IsConnective(flat[k - 1]) &&
+                   single[j - 1].MatchKey == flat[k - 1].MatchKey)
+            {
+                j--;
+                k--;
+            }
+            if (j == i)
+                continue;
+            // Precedence guard: leave the run in place when it trails a matched content token.
+            if (j - 1 >= 0 && partner[j - 1] >= 0 && IsContent(single[j - 1]))
+                continue;
+            for (int t = j; t < i; t++)
+                segmentOf[t] = seg;
+        }
+
+        // Lone-punctuation suppression precondition: every source paragraph is plain direct text
+        // (the split/merge lowering already excludes field carriers, but hyperlinks/atomics pass it).
+        bool plain = IrCrossParagraphSegmenter.IsStreamable(singular);
+        foreach (var member in run)
+            plain &= IrCrossParagraphSegmenter.IsStreamable(member);
 
         var diffs = new List<IrTokenDiff>(run.Count);
         int cursor = 0;
@@ -132,7 +223,8 @@ internal static class IrSplitSegmenter
             int start = cursor;
             while (cursor < single.Count && segmentOf[cursor] == m)
                 cursor++;
-            diffs.Add(IrTokenDiffer.Diff(Slice(single, start, cursor), memberTokens[m], settings));
+            diffs.Add(IrTokenDiffer.Diff(Slice(single, start, cursor), memberTokens[m], settings,
+                endsAtRetainedMark: m == run.Count - 1, suppressLonePunctuation: plain));
         }
         Debug.Assert(cursor == single.Count,
             "segment assignment must consume the whole singular token stream");
@@ -167,6 +259,11 @@ internal static class IrSplitSegmenter
     private static bool IsContent(IrDiffToken t) =>
         t.Kind is not (IrDiffTokenKind.Separator or IrDiffTokenKind.Textbox);
 
+    /// <summary>Connective whitespace — the tokens that re-pair across a moved segment boundary
+    /// (same definition as <c>IrTokenDiffer.IsConnective</c>).</summary>
+    private static bool IsConnective(IrDiffToken t) =>
+        t.Kind == IrDiffTokenKind.Separator && string.IsNullOrWhiteSpace(t.Text);
+
     private static int CountContent(IReadOnlyList<IrDiffToken> tokens)
     {
         int n = 0;
@@ -174,6 +271,59 @@ internal static class IrSplitSegmenter
             if (IsContent(t))
                 n++;
         return n;
+    }
+
+    /// <summary>
+    /// CHAR-WEIGHTED LCS over MatchKeys for the SEGMENTATION pass (decoded 2026-07-27): a word match
+    /// weighs its visible characters and a separator match 1, the same matched-character objective as
+    /// the ordinary differ and the cross-paragraph segmenter. The token-count LCS (<see cref="LcsMatch"/>,
+    /// kept verbatim for <see cref="Score"/> so DETECTION thresholds are untouched) ties between "match
+    /// the crossing word" and "match one more separator", and its singular-side-advance tie-break
+    /// dropped the word — the reference output matches the word ("for" retained in the following member
+    /// while our slice inserted "for document" wholesale). Front-walk prefers the match on equal dp.
+    /// </summary>
+    private static int[] LcsMatchWeighted(IReadOnlyList<IrDiffToken> a, IReadOnlyList<IrDiffToken> b)
+    {
+        int n = a.Count, m = b.Count;
+        var partner = new int[n];
+        Array.Fill(partner, -1);
+        if (n == 0 || m == 0)
+            return partner;
+
+        int Weight(int i, int j) =>
+            a[i].MatchKey != b[j].MatchKey ? 0
+            : a[i].Kind == IrDiffTokenKind.Word ? Math.Max(1, a[i].Text.Length)
+            : 1;
+
+        var dp = new int[n + 1, m + 1];
+        for (int i = n - 1; i >= 0; i--)
+            for (int j = m - 1; j >= 0; j--)
+            {
+                int w = Weight(i, j);
+                int best = Math.Max(dp[i + 1, j], dp[i, j + 1]);
+                if (w > 0)
+                    best = Math.Max(best, dp[i + 1, j + 1] + w);
+                dp[i, j] = best;
+            }
+        for (int i = 0, j = 0; i < n && j < m;)
+        {
+            int w = Weight(i, j);
+            if (w > 0 && dp[i, j] == dp[i + 1, j + 1] + w)
+            {
+                partner[i] = j;
+                i++;
+                j++;
+            }
+            else if (dp[i + 1, j] >= dp[i, j + 1])
+            {
+                i++;
+            }
+            else
+            {
+                j++;
+            }
+        }
+        return partner;
     }
 
     /// <summary>Standard LCS DP over MatchKeys. Returns the per-singular-index partner flat index

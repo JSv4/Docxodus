@@ -296,6 +296,26 @@ internal sealed record IrDiffSettings
     public double SplitAddedTextMinCoverage { get; init; } = 0.30;
 
     /// <summary>
+    /// MARKUP-RENDER setting (cross-paragraph token-stream campaign, 2026-07-25). When true, a run of
+    /// ≥2 ADJACENT word-matched Modified paragraph pairs (the in-gap SimilarityPair/SameSlotPair/
+    /// JunctionPair/positional pairings — <see cref="IrAlignmentKind.Modified"/> is produced by no other
+    /// path) is rendered by ONE flat word+pilcrow token-stream diff instead of per-pair token diffs:
+    /// paragraph marks become stream tokens (marked ¶INS/¶DEL by side), retained words from base
+    /// paragraph k may land in output paragraph k±1, and the output paragraph count follows the
+    /// token-level LCS interleave (a 2×2 word-matched region can emit 3 paragraphs) — the within-run
+    /// flat-stream shape decoded from Word's compare output, which no per-paragraph model reproduces
+    /// (<see cref="IrEditOpKind.CrossParagraphRunBlock"/>, factored by <see cref="IrCrossParagraphSegmenter"/>).
+    /// Default <b>false</b> at THIS layer — the public <see cref="DocxDiffSettings.CrossParagraphTokenDiff"/>
+    /// enables it for the markup (<c>Compare</c>) path only; the revision/JSON data paths and the
+    /// composite merger always leave it off, so the new op kind never reaches those consumers. Purely a
+    /// rendering refinement: classification, the aligner, the revision list and the edit-script JSON are
+    /// unchanged. Falls back to the ordinary per-pair path whenever a run member is not plain sliceable
+    /// text or the factoring violates its cell invariants. The round-trip contract (<c>accept ≡ right</c>,
+    /// <c>reject ≡ left</c>) holds exactly as for split/merge, whose renderer machinery it reuses.
+    /// </summary>
+    public bool CrossParagraphTokenDiff { get; init; }
+
+    /// <summary>
     /// DIFF-TIME setting (header/footer campaign, 2026-07-03). When true (the DEFAULT — Word's own
     /// Compare "Headers and footers" granularity default), <see cref="IrEditScriptBuilder"/> diffs the
     /// header/footer stories (paired per section ordinal × occurrence kind, with Word's

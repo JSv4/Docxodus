@@ -433,7 +433,17 @@ internal static class IrMarkupRenderer
                 // rendering as the left's bullets). Deleted (left-sourced) paragraphs — the ones
                 // whose paragraph mark carries w:del — keep the left id untouched, as do archived
                 // left properties inside *Change elements.
-                var numIdMap = WmlComparer.CopyMissingNumberingFromOneDocToAnother(wDocRight, wDoc);
+                // The copy runs under the alignment-aware Word-parity rule: a right list instance
+                // reuses a LEFT definition ONLY when the diff aligned a surviving paragraph pair
+                // carrying both numIds (the counter must continue across an inserted item joining
+                // a surviving list); every other USED imported instance gets its own fresh cloned
+                // abstractNum, like Word's compare output — content-based dedup onto a left
+                // abstractNum would make LibreOffice (which keys list counters by abstractNumId)
+                // CONTINUE numbering across two genuinely different lists where Word RESTARTS.
+                // Definitions nothing in the output references keep the legacy dedup treatment.
+                var numIdMap = WmlComparer.CopyMissingNumberingFromOneDocToAnother(
+                    wDocRight, wDoc, CollectAlignedNumIdPairs(script, state),
+                    CollectRightNumberingUsage(wDocRight.MainDocumentPart, rightImportedStyles));
                 RebindRightNumberingReferences(main, numIdMap, state);
                 RebindRightImportedStyleNumberingReferences(
                     main.StyleDefinitionsPart, rightImportedStyles, numIdMap);
@@ -725,26 +735,38 @@ internal static class IrMarkupRenderer
     // ----------------------------------------------------------------- block-op dispatch
 
     /// <summary>
-    /// Render a sequence of block ops with Microsoft Word's replace-gap arrangement (the grammar Word's
-    /// own compare output uses at every site where old blocks are deleted and new blocks inserted):
+    /// Render a sequence of block ops with Microsoft Word's replace-gap arrangement, decoded from
+    /// Word's own compare output as a purely STRUCTURAL grammar (no content-similarity choice):
     /// <list type="number">
-    /// <item>INSERTED blocks render before the deleted ones (Word emits new content first, struck old
-    /// content after it) — deletes are buffered until the run of pure Delete/Insert ops ends.</item>
-    /// <item>The SEAM: the last inserted paragraph and the first deleted paragraph share one
-    /// <c>w:p</c> — Word renders the old text inline right after the new text. The seam paragraph keeps
-    /// the deleted paragraph's <c>pPr</c> (whose tracked paragraph mark makes reject restore the old
-    /// paragraph exactly); the inserted paragraph's own mark-ins is dropped (the new side contributes
-    /// n−1 inserted marks, exactly as Word does).</item>
-    /// <item>The TERMINATOR: the last deleted paragraph of a seam-merged gap keeps a LIVE (untracked)
-    /// mark, so accepting ends the inserted text at it instead of bleeding into the following block,
-    /// and rejecting still restores that paragraph under its own mark.</item>
+    /// <item>ORDER: within one gap all inserted blocks render before all deleted ones (Word emits
+    /// the new content first, the struck old content after it), each under its own tracked
+    /// paragraph mark (¶INS / ¶DEL).</item>
+    /// <item>SHARED PILCROWS: fusion (a mixed ins+del paragraph) and live (unmarked) paragraph
+    /// marks exist only where the gap reaches the END of its story — the story's final pilcrow is
+    /// immutable — or via the empty-paragraph tail chain below. An interior wordful↔wordful
+    /// replace always stays fully separate marked paragraphs.</item>
+    /// <item>PAIRING: scanning backward from the gap's right edge, the final base/next paragraphs
+    /// pair structurally when the gap ends the story (virtually, when one side ends with a table);
+    /// further pairs chain only while the candidates are paragraphs, OPENING solely on an
+    /// empty↔empty pair and CONTINUING while at least one side is empty. Tables block the chain.</item>
+    /// <item>EMISSION per shared pair, head-most first: the unshared next items (¶INS), then the
+    /// pair's next-side runs FUSED into the first unshared deleted paragraph (which keeps its own
+    /// pPr and ¶DEL mark), then the remaining unshared deleted items (¶DEL), then the pair's
+    /// base-side runs under the SHARED unmarked pilcrow. With no unshared deletes the two members
+    /// share one paragraph outright. No fusion across a leading deleted table — the next side then
+    /// closes with its own ¶INS.</item>
+    /// <item>pPr DISCIPLINE: a shared-pilcrow paragraph carries the NEXT side's direct paragraph
+    /// props (minus a style reference the left universe cannot resolve), with <c>w:pPrChange</c>
+    /// recording the base side's when they differ; marked paragraphs keep their own side's pPr and
+    /// never a pPrChange.</item>
     /// </list>
-    /// Every other op kind (Equal/FormatOnly/Modify/Move/Split/Merge) flushes the buffer and renders in
-    /// script order, so single-sided gaps and non-gap ops render exactly as before. The seam mutates the
-    /// last inserted paragraph IN PLACE (it may be registered as a right-sourced clone for the
-    /// post-assembly media/relationship import — the registered instance must stay the live tree node);
-    /// deleted blocks are left-sourced and safe to consume. The accept ≡ right / reject ≡ left contract
-    /// is preserved in both directions (proof: DocxDiffWordShapeTests).
+    /// Accept ≡ right and reject ≡ left hold by pilcrow arithmetic: reject removes ¶INS pilcrows,
+    /// accept removes ¶DEL pilcrows, shared pilcrows survive both. Fusion mutates the inserted
+    /// paragraph IN PLACE (it may be registered as a right-sourced clone for the post-assembly
+    /// media/relationship import — the registered instance must stay the live tree node); deleted
+    /// blocks are left-sourced and safe to consume. Guards: a paragraph whose pPr carries an
+    /// inline <c>w:sectPr</c>, or that carries a page break, never fuses or swaps pPr (a deleted
+    /// page break must keep paginating). Proof: DocxDiffGapArrangementTests, DocxDiffWordShapeTests.
     /// </summary>
     internal static void RenderBlockOpsWordShaped(
         IEnumerable<IrEditOp> ops, RenderState state, List<XElement> sink)
@@ -764,142 +786,399 @@ internal static class IrMarkupRenderer
 
         try
         {
+        var pendingInserts = new List<IrEditOp>();
         var pendingDeletes = new List<IrEditOp>();
-        int gapInsertStart = -1;   // sink index where the current gap's inserted elements begin
-        int? lastInsertedBodyFullRewriteGroupId = null;
 
-        void FlushGap()
+        // The trailing section-break op renders nothing (last-section metadata is preserved on the
+        // package separately), so it is transparent for the story-end test: a gap flushed by it — or
+        // by the end of the op list — reaches the story end.
+        int lastRenderableIndex = opList.Count - 1;
+        while (lastRenderableIndex >= 0 && IsSectionBreakOp(opList[lastRenderableIndex], state))
+            lastRenderableIndex--;
+
+        void FlushGap(bool storyEnd)
         {
-            if (pendingDeletes.Count == 0)
-            {
-                gapInsertStart = -1;
-                lastInsertedBodyFullRewriteGroupId = null;
+            if (pendingInserts.Count == 0 && pendingDeletes.Count == 0)
                 return;
-            }
-            int? firstDeletedBodyFullRewriteGroupId = pendingDeletes[0].BodyFullRewriteGroupId;
-            var delEls = new List<XElement>();
-            foreach (var d in pendingDeletes)
-                RenderBlockOp(d, state, delEls);
+
+            // Render each op into its own element group, marks stamped as usual (¶INS / ¶DEL).
+            // Insert order = next order, delete order = base order.
+            var insGroups = RenderGapGroups(pendingInserts, state);
+            var delGroups = RenderGapGroups(pendingDeletes, state);
+            pendingInserts.Clear();
             pendingDeletes.Clear();
 
-            var hasInserts = gapInsertStart >= 0 && sink.Count > gapInsertStart;
-            var lastIns = hasInserts ? sink[^1] : null;
-            var firstDel = delEls.Count > 0 ? delEls[0] : null;
-            // Seam-merge guard: both boundary blocks must be plain paragraphs; neither paragraph's
-            // pPr may carry an inline w:sectPr (swapping the pPr would silently move a section
-            // break); and the deleted paragraph must not carry a PAGE BREAK (pageBreakBefore or a
-            // w:br type="page" run) — Word keeps a deleted page break PAGINATING, so the deleted
-            // paragraph stays standalone and the following struck content still starts its own page.
-            static bool CarriesPageBreak(XElement p) =>
-                p.Element(W.pPr)?.Element(W.pageBreakBefore) is not null ||
-                p.Descendants(W.br).Any(b => (string?)b.Attribute(W.type) == "page");
-            // This is intentionally explicit alignment provenance, never a renderer guess based on
-            // a 1×1 cardinality or textual heuristic. The builder can set it only for a body-level,
-            // non-tail full lexical rewrite, where Word Compare keeps two physical marked paragraphs.
-            // Cell/textbox/note/header/footer ops remain unmarked and retain the normal seam.
-            bool suppressSeam = lastInsertedBodyFullRewriteGroupId is { } groupId &&
-                firstDeletedBodyFullRewriteGroupId == groupId;
-            if (lastIns is not null && firstDel is not null &&
-                !suppressSeam &&
-                lastIns.Name == W.p && firstDel.Name == W.p &&
-                lastIns.Element(W.pPr)?.Element(W.sectPr) is null &&
-                firstDel.Element(W.pPr)?.Element(W.sectPr) is null &&
-                !CarriesPageBreak(firstDel) && !CarriesPageBreak(lastIns))
-            {
-                // Capture the ins-side pPr before it is dropped: Word's seam-terminator carries the
-                // RIGHT side's DIRECT paragraph props (real spacing/indents survive) but never a
-                // style reference the left universe can't resolve, and never format-change bars.
-                XElement? insPPr = null;
-                if (lastIns.Element(W.pPr) is { } insSrc)
-                {
-                    insPPr = StripUnids(new XElement(insSrc));
-                    insPPr.Elements(W.rPr).Elements(W.ins).Remove();
-                    insPPr.Elements(W.rPr).Where(r => !r.HasElements && !r.HasAttributes).Remove();
-                    DropUnresolvableStyleRef(insPPr, state);
-                    if (!insPPr.HasElements && !insPPr.HasAttributes)
-                        insPPr = null;
-                }
-
-                // Mutate lastIns in place into the seam: drop its pPr (and with it the mark-ins),
-                // adopt the deleted paragraph's pPr (carrying the tracked mark + old paragraph props),
-                // and move the deleted paragraph's content in AFTER the inserted runs.
-                lastIns.Element(W.pPr)?.Remove();
-                if (firstDel.Element(W.pPr) is { } delPPr)
-                {
-                    delPPr.Remove();
-                    lastIns.AddFirst(delPPr);
-                }
-                foreach (var child in firstDel.Elements().ToList())
-                {
-                    child.Remove();
-                    lastIns.Add(child);
-                }
-                delEls.RemoveAt(0);
-
-                // Live terminator: the last deleted paragraph of the CONTIGUOUS paragraph chain that
-                // starts at the seam (the seam itself when no deleted paragraph follows it directly)
-                // keeps an untracked mark — accept coalesces the chain into it, ending the inserted
-                // text there. A deleted TABLE breaks the chain: paragraphs beyond it are disconnected
-                // from the seam's accept-time coalescing, so they keep their tracked marks (accept
-                // removes them via the deleted-range rules; a live mark there would leave a stray
-                // empty paragraph behind).
-                var terminator = lastIns;
-                foreach (var el in delEls)
-                {
-                    if (el.Name != W.p)
-                        break;
-                    terminator = el;
-                }
-                terminator.Element(W.pPr)?.Element(W.rPr)?.Elements(W.del).Remove();
-
-                // Word's seam-terminator shape (decoded across Word's compare output): the surviving
-                // paragraph carries the INS side's DIRECT props — real spacing/indent survive —
-                // but never a style reference the left universe can't resolve (a Title/Heading on
-                // the right renders plain in Word's own compare output when the left lacks the
-                // style), never the del side's pPr (the left's style must not outlive accept),
-                // and never a w:pPrChange (Word puts no format-change bars on seam lines).
-                // Skipped when the del-side pPr carries an inline w:sectPr — replacing it would
-                // silently move a section break (the seam guard above only vets firstDel/lastIns,
-                // not a chain terminator).
-                if (terminator.Element(W.pPr) is not { } termPPr || termPPr.Element(W.sectPr) is null)
-                {
-                    terminator.Element(W.pPr)?.Remove();
-                    if (insPPr is not null)
-                        terminator.AddFirst(new XElement(insPPr));
-                }
-            }
-            sink.AddRange(delEls);
-            gapInsertStart = -1;
-            lastInsertedBodyFullRewriteGroupId = null;
+            EmitGapArranged(insGroups, delGroups, storyEnd, state, sink);
         }
-
-        foreach (var op in opList)
+        for (int i = 0; i < opList.Count; i++)
         {
+            var op = opList[i];
             if (op.Kind == IrEditOpKind.DeleteBlock || op.Kind == IrEditOpKind.InsertBlock)
             {
-                if (gapInsertStart < 0)
-                {
-                    gapInsertStart = sink.Count;
-                    lastInsertedBodyFullRewriteGroupId = null;
-                }
                 if (op.Kind == IrEditOpKind.DeleteBlock)
-                    pendingDeletes.Add(op);       // buffered: renders after the gap's inserts
+                    pendingDeletes.Add(op);
                 else
-                {
-                    RenderBlockOp(op, state, sink); // insert leapfrogs the buffered deletes of its gap
-                    lastInsertedBodyFullRewriteGroupId = op.BodyFullRewriteGroupId;
-                }
+                    pendingInserts.Add(op);
                 continue;
             }
-            FlushGap();
+            FlushGap(storyEnd: i > lastRenderableIndex);
             RenderBlockOp(op, state, sink);
         }
-        FlushGap();
+        FlushGap(storyEnd: true);
         }
         finally
         {
             state.ActiveMoveSourceAnchors = previousMoveSources;
         }
+    }
+
+    /// <summary>One gap op's rendered elements plus the facts the arrangement grammar keys on.</summary>
+    private sealed class GapGroup
+    {
+        public required List<XElement> Elements { get; init; }
+
+        /// <summary>The single rendered <c>w:p</c>, when this group is exactly one paragraph.</summary>
+        public XElement? Paragraph { get; init; }
+
+        /// <summary>Exactly one paragraph, with no inline <c>w:sectPr</c> and no page break — the only
+        /// shape the pilcrow pairing may fuse or unmark (tables, SDT envelopes, multi-element groups
+        /// and section/page carriers all block the chain and stay fully marked).</summary>
+        public bool IsPlainParagraph { get; init; }
+
+        /// <summary>Any non-whitespace visible text (<c>w:t</c>/<c>w:delText</c>). A break-only
+        /// paragraph counts as empty for the chain rule.</summary>
+        public bool Wordful { get; init; }
+    }
+
+    private static List<GapGroup> RenderGapGroups(List<IrEditOp> ops, RenderState state)
+    {
+        var groups = new List<GapGroup>(ops.Count);
+        foreach (var op in ops)
+        {
+            var els = new List<XElement>();
+            RenderBlockOp(op, state, els);
+            if (els.Count == 0)
+                continue; // a section-break op renders nothing
+            var para = els.Count == 1 && els[0].Name == W.p ? els[0] : null;
+            bool plain = para is not null &&
+                para.Element(W.pPr)?.Element(W.sectPr) is null &&
+                !GapParagraphCarriesPageBreak(para);
+            groups.Add(new GapGroup
+            {
+                Elements = els,
+                Paragraph = para,
+                IsPlainParagraph = plain,
+                Wordful = para is null || ParagraphHasVisibleContent(para),
+            });
+        }
+        return groups;
+    }
+
+    /// <summary>Word keeps a deleted page break PAGINATING: the carrier paragraph stays standalone so
+    /// the following struck content still starts its own page — it never fuses or loses its mark.</summary>
+    private static bool GapParagraphCarriesPageBreak(XElement p) =>
+        p.Element(W.pPr)?.Element(W.pageBreakBefore) is not null ||
+        p.Descendants(W.br).Any(b => (string?)b.Attribute(W.type) == "page");
+
+    /// <summary>"Wordful" for the pilcrow-pairing chain: any visible content — non-whitespace text,
+    /// math, a drawing/object/picture, or a symbol. A paragraph carrying only breaks or invisible
+    /// markers (bookmarks, comment ranges) counts as EMPTY for the chain rule, exactly like a truly
+    /// blank one.</summary>
+    private static bool ParagraphHasVisibleContent(XElement p) =>
+        p.Descendants().Any(e =>
+            ((e.Name == W.t || e.Name == W.delText) && !string.IsNullOrWhiteSpace(e.Value)) ||
+            e.Name == W.sym || e.Name == W.drawing || e.Name == W._object || e.Name == W.pict ||
+            e.Name.Namespace == M.m);
+
+    /// <summary>
+    /// Arrange one gap's rendered insert/delete groups per the decoded replace-gap grammar (see
+    /// <see cref="RenderBlockOpsWordShaped"/>): backward pilcrow pairing (structural final pair at
+    /// story end, empty-opening chain), then per-pair emission with fusion and shared unmarked
+    /// pilcrows; everything outside a pair stays a fully marked ¶INS / ¶DEL block, inserts first.
+    /// </summary>
+    private static void EmitGapArranged(
+        List<GapGroup> insGroups, List<GapGroup> delGroups, bool storyEnd,
+        RenderState state, List<XElement> sink)
+    {
+        // ---- pilcrow pairing. B/N = index into delGroups/insGroups; -1 = virtual (that side ends
+        // with a table at the story end, so the other side's final pilcrow is retained alone).
+        var pairs = new List<(int B, int N)>();
+        int bi = delGroups.Count - 1;
+        int ni = insGroups.Count - 1;
+        if (storyEnd)
+        {
+            // Structural final pair: both stories end with a plain paragraph. Fully-deleted
+            // TABLES between the fusion site and the shared pilcrow are fine — accept-time
+            // paragraph-mark coalescing treats a table it removes entirely as transparent
+            // (RevisionProcessor), so the fused inserted runs still land on the live pilcrow.
+            // When the boundary is guard-blocked, there is NO pair.
+            bool bP = bi >= 0 && delGroups[bi].IsPlainParagraph;
+            bool nP = ni >= 0 && insGroups[ni].IsPlainParagraph;
+            if (bP && nP)
+            {
+                pairs.Add((bi, ni));
+                bi--;
+                ni--;
+            }
+            else if (nP && bi >= 0 && insGroups[ni].Wordful &&
+                     IsWholeTableGroup(delGroups[bi]) && delGroups[0].IsPlainParagraph)
+            {
+                // VIRTUAL structural pair (decoded from Word's compare output): the base story
+                // physically ENDS with a table, so no live pilcrow may follow it — a live empty
+                // there survives BOTH accept and reject, and reject would strand it after the
+                // restored table. Word still pairs: the last next paragraph's runs fuse into the
+                // FIRST deleted paragraph, the whole base side stays marked (¶DEL paragraphs,
+                // deleted tables), and the NEXT side's final pilcrow is retained AFTER the deleted
+                // table as an empty paragraph. Word leaves that pilcrow LIVE and tolerates its own
+                // reject infidelity (base + one stray trailing empty); our exact contract marks it
+                // ¶INS instead — reject removes it (reject ≡ left), accept keeps it and the fused
+                // inserted runs coalesce forward onto it across the fully-deleted chain
+                // (accept ≡ right) — while rendering identically (an empty final line).
+                for (int k = 0; k < ni; k++)
+                    sink.AddRange(insGroups[k].Elements);
+                var insEl = insGroups[ni].Paragraph!;
+                var nextPPr = DetachNextSidePPr(insEl, state);
+                var firstDel = delGroups[0].Paragraph!;
+                if (firstDel.Element(W.pPr) is { } delPPr)
+                {
+                    delPPr.Remove();
+                    insEl.AddFirst(delPPr);
+                }
+                foreach (var child in firstDel.Elements().ToList())
+                {
+                    child.Remove();
+                    insEl.Add(child);
+                }
+                sink.Add(insEl);
+                for (int k = 1; k < delGroups.Count; k++)
+                    sink.AddRange(delGroups[k].Elements);
+                sink.Add(BuildInsertedTailPilcrow(nextPPr, state));
+                return;
+            }
+        }
+        // The structural pair does not by itself open a chain: further pairs OPEN only on an
+        // empty↔empty candidate and CONTINUE while at least one side is empty.
+        bool chain = false;
+        while (bi >= 0 && ni >= 0)
+        {
+            if (!delGroups[bi].IsPlainParagraph || !insGroups[ni].IsPlainParagraph)
+                break;
+            bool baseEmpty = !delGroups[bi].Wordful;
+            bool nextEmpty = !insGroups[ni].Wordful;
+            if (!chain)
+            {
+                if (baseEmpty && nextEmpty)
+                    chain = true;
+                else
+                    break;
+            }
+            else if (!(baseEmpty || nextEmpty))
+            {
+                break;
+            }
+            pairs.Add((bi, ni));
+            bi--;
+            ni--;
+        }
+        pairs.Reverse(); // head-most first
+
+        // Fusability veto: only the HEAD pair's segment can contain unshared deleted items, and
+        // when the pair's next member is wordful its runs must fuse into the FIRST of them. If that
+        // fusion target is a table or a section/page-break carrier, fusing would swallow the break
+        // (or the table would orphan the inserted runs), and leaving the shared pilcrow live
+        // without the fusion breaks the pilcrow arithmetic (accept would keep a stray empty
+        // paragraph). Abandon the pairing outright: the gap emits fully marked, which is exactly
+        // the shape the guards produced before.
+        if (pairs.Count > 0)
+        {
+            var (pb0, pn0) = pairs[0];
+            if (pb0 > 0 && pn0 >= 0 && insGroups[pn0].Wordful && !delGroups[0].IsPlainParagraph)
+                pairs.Clear();
+        }
+
+        // ---- emission
+        int bStart = 0, nStart = 0;
+        foreach (var (pb, pn) in pairs)
+        {
+            for (int k = nStart; k < pn; k++)
+                sink.AddRange(insGroups[k].Elements);
+            var delItems = new List<GapGroup>();
+            for (int k = bStart; k < pb; k++)
+                delItems.Add(delGroups[k]);
+
+            var sharedIns = insGroups[pn];
+            var sharedDel = delGroups[pb];
+            bool fuseIns = sharedIns.Wordful;
+            // (A leading deleted TABLE or break-carrier as the fusion target was vetoed above —
+            // Word's own shape there keeps the next side's ¶INS and tolerates a stray live empty
+            // on accept, an infidelity we deliberately do not reproduce.)
+
+            if (fuseIns && delItems.Count > 0)
+            {
+                // Fuse the pair's next-side runs into the FIRST unshared deleted paragraph, which
+                // keeps its own pPr (¶DEL mark + base props). The inserted paragraph is mutated in
+                // place — it may be a registered right-sourced clone.
+                var insEl = sharedIns.Paragraph!;
+                var nextPPr = DetachNextSidePPr(insEl, state);
+                var firstDel = delItems[0].Paragraph!;
+                if (firstDel.Element(W.pPr) is { } delPPr)
+                {
+                    delPPr.Remove();
+                    insEl.AddFirst(delPPr);
+                }
+                foreach (var child in firstDel.Elements().ToList())
+                {
+                    child.Remove();
+                    insEl.Add(child);
+                }
+                sink.Add(insEl);
+                for (int k = 1; k < delItems.Count; k++)
+                    sink.AddRange(delItems[k].Elements);
+                EmitSharedBasePilcrow(sharedDel, nextPPr, state, sink);
+            }
+            else if (fuseIns)
+            {
+                // No unshared deletes: the two members share ONE paragraph under an unmarked pilcrow.
+                var insEl = sharedIns.Paragraph!;
+                var nextPPr = DetachNextSidePPr(insEl, state);
+                var delEl = sharedDel.Paragraph!;
+                var basePPr = delEl.Element(W.pPr);
+                foreach (var child in delEl.Elements().Where(e => e.Name != W.pPr).ToList())
+                {
+                    child.Remove();
+                    insEl.Add(child);
+                }
+                ApplySharedPilcrowPPr(insEl, nextPPr, basePPr, state);
+                sink.Add(insEl);
+            }
+            else
+            {
+                // The pair's next member is (visibly) EMPTY: its pilcrow is the shared one and the
+                // base member carries it alone. Its element is NOT emitted — but any children it
+                // does carry (inserted breaks, bookmarks, comment-range markers) must ride into
+                // the shared paragraph, ahead of the deleted runs, or they would be silently lost.
+                foreach (var g in delItems)
+                    sink.AddRange(g.Elements);
+                var insEl = sharedIns.Paragraph!;
+                var nextPPr = DetachNextSidePPr(insEl, state);
+                var carried = insEl.Elements().Where(e => e.Name != W.pPr).ToList();
+                foreach (var child in carried)
+                    child.Remove();
+                EmitSharedBasePilcrow(sharedDel, nextPPr, state, sink);
+                if (carried.Count > 0)
+                {
+                    var sharedEl = sink[^1];
+                    var afterPPr = sharedEl.Element(W.pPr);
+                    if (afterPPr is not null)
+                        afterPPr.AddAfterSelf(carried);
+                    else
+                        sharedEl.AddFirst(carried);
+                }
+            }
+            bStart = pb + 1;
+            nStart = pn + 1;
+        }
+
+        // Terminal (anchored) part: everything marked, inserts first.
+        for (int k = nStart; k < insGroups.Count; k++)
+            sink.AddRange(insGroups[k].Elements);
+        for (int k = bStart; k < delGroups.Count; k++)
+            sink.AddRange(delGroups[k].Elements);
+    }
+
+    /// <summary>A gap group that renders exactly one whole table — the shape the virtual structural
+    /// pair keys on (the base story physically ends with a table).</summary>
+    private static bool IsWholeTableGroup(GapGroup g) =>
+        g.Elements.Count == 1 && g.Elements[0].Name == W.tbl;
+
+    /// <summary>The virtual pair's tail: the NEXT side's final pilcrow as an empty paragraph whose
+    /// mark is tracked-inserted (¶INS), carrying the next paragraph's own pPr and — like every
+    /// marked paragraph — no pPrChange.</summary>
+    private static XElement BuildInsertedTailPilcrow(XElement? nextPPr, RenderState state)
+    {
+        var pPr = nextPPr is null ? new XElement(W.pPr) : new XElement(nextPPr);
+        var rPr = pPr.Element(W.rPr);
+        if (rPr is null)
+        {
+            rPr = new XElement(W.rPr);
+            pPr.Add(rPr); // rPr follows the paragraph-property children in CT_PPr order
+        }
+        rPr.AddFirst(new XElement(W.ins, state.RevisionAttributes()));
+        return new XElement(W.p, pPr);
+    }
+
+    /// <summary>Detach and clean the inserted paragraph's pPr for use on a shared pilcrow: strip the
+    /// mark-ins (the pilcrow is no longer inserted), engine bookkeeping, and a style reference the
+    /// left universe cannot resolve. Returns null when nothing survives.</summary>
+    private static XElement? DetachNextSidePPr(XElement insEl, RenderState state)
+    {
+        XElement? nextPPr = null;
+        if (insEl.Element(W.pPr) is { } insSrc)
+        {
+            nextPPr = StripUnids(new XElement(insSrc));
+            nextPPr.Elements(W.rPr).Elements(W.ins).Remove();
+            nextPPr.Elements(W.rPr).Where(r => !r.HasElements && !r.HasAttributes).Remove();
+            DropUnresolvableStyleRef(nextPPr, state);
+            if (!nextPPr.HasElements && !nextPPr.HasAttributes)
+                nextPPr = null;
+            insSrc.Remove();
+        }
+        return nextPPr;
+    }
+
+    /// <summary>Emit the pair's base paragraph under the SHARED (unmarked) pilcrow: its deleted runs
+    /// stay, its ¶DEL mark is removed, and it adopts the next side's pPr with <c>w:pPrChange</c>
+    /// recording its own when they differ.</summary>
+    private static void EmitSharedBasePilcrow(
+        GapGroup sharedDel, XElement? nextPPr, RenderState state, List<XElement> sink)
+    {
+        var el = sharedDel.Paragraph!;
+        el.Element(W.pPr)?.Element(W.rPr)?.Elements(W.del).Remove();
+        var basePPr = el.Element(W.pPr);
+        ApplySharedPilcrowPPr(el, nextPPr, basePPr, state);
+        sink.Add(el);
+    }
+
+    /// <summary>
+    /// Stamp the shared-pilcrow paragraph's pPr: the NEXT side's direct props are current, with
+    /// <c>w:pPrChange</c> recording the BASE side's when their comparable projections differ (gated
+    /// on <see cref="IrDiffSettings.TrackParagraphFormatChanges"/>). A base pPr carrying an inline
+    /// <c>w:sectPr</c> is never replaced (that would silently move a section break) — it only loses
+    /// its tracked mark.
+    /// </summary>
+    private static void ApplySharedPilcrowPPr(
+        XElement el, XElement? nextPPr, XElement? basePPr, RenderState state)
+    {
+        if (basePPr is not null && basePPr.Element(W.sectPr) is not null)
+            return;
+
+        // The SAME policy-gated comparison as every other surviving-pilcrow path (PPrChangeDiffers):
+        // an earlier decode suppressed the empty-archive stamp here, but the reference compare output
+        // DOES stamp a shared-pilcrow pPrChange with an empty <w:pPr/> inner when the pair's modeled
+        // properties differ and the base side simply had none to restore (re-decoded 2026-07-27,
+        // "no-pPr base ↔ spacing-carrying next" replace-gap pair) — the earlier evidence pairs were
+        // modeled-EQUAL, which this comparison now reports directly.
+        bool differs = state.Settings.TrackParagraphFormatChanges &&
+            PPrChangeDiffers(basePPr, nextPPr, state);
+
+        var archived = differs
+            ? StripUnids(new XElement(W.pPr,
+                  basePPr?.Attributes() ?? Enumerable.Empty<XAttribute>(),
+                  basePPr?.Elements().Where(e =>
+                      e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange)
+                      ?? Enumerable.Empty<XElement>()))
+            : null;
+
+        basePPr?.Remove();
+        XElement? pPr = nextPPr is null ? null : new XElement(nextPPr);
+        if (archived is not null)
+        {
+            pPr ??= new XElement(W.pPr);
+            pPr.Elements(W.pPrChange).Remove();
+            pPr.Add(new XElement(W.pPrChange, state.RevisionAttributes(), archived));
+        }
+        if (pPr is not null)
+            el.AddFirst(pPr);
     }
 
     internal static void RenderBlockOp(IrEditOp op, RenderState state, List<XElement> sink)
@@ -999,6 +1278,10 @@ internal static class IrMarkupRenderer
 
             case IrEditOpKind.MergeBlock:
                 RenderMergeBlock(op, state, sink);
+                break;
+
+            case IrEditOpKind.CrossParagraphRunBlock:
+                RenderCrossParagraphRun(op, state, sink);
                 break;
         }
     }
@@ -1109,6 +1392,11 @@ internal static class IrMarkupRenderer
             var rightPPr = memberPara.Element(W.pPr);
             if (rightPPr != null)
                 newPara.Add(StripUnids(new XElement(rightPPr)));
+            // The LAST member owns the ORIGINAL left pilcrow (its mark stays unmarked), so it is the
+            // paired-paragraph analogue: stamp pPrChange/mark-rPr history against the left paragraph
+            // (reference compare output does — the ¶INS members are new paragraphs and carry none).
+            if (s == anchors.Count - 1)
+                ApplyBlockFormatChanges(newPara, leftPara, memberPara, state);
             newPara.Add(BuildTokenOpContent(diff, slice, memberTokens, leftRuns, rightRuns, state));
             if (s < anchors.Count - 1)
                 MarkParagraphMark(newPara, RevKind.Ins, state); // the new pilcrow (RevKind.Ins — spec §3.3 nit)
@@ -1164,6 +1452,12 @@ internal static class IrMarkupRenderer
             var pPrSource = last ? rightPPr : memberPara.Element(W.pPr);
             if (pPrSource != null)
                 newPara.Add(StripUnids(new XElement(pPrSource)));
+            // The LAST member is the SURVIVING pilcrow (the accepted state's paragraph mark): it is the
+            // paired-paragraph analogue and stamps pPrChange/mark-rPr history against its own LEFT
+            // member — reference compare output does ("was jc=center" on the merge survivor) — while
+            // the ¶DEL members keep their left pPr verbatim and carry none.
+            if (last)
+                ApplyBlockFormatChanges(newPara, memberPara, rightPara, state);
             newPara.Add(BuildTokenOpContent(diff, memberTokens, slice, leftRuns, rightRuns, state));
             if (!last)
                 MarkParagraphMark(newPara, RevKind.Del, state); // the joining mark accept removes
@@ -1196,6 +1490,112 @@ internal static class IrMarkupRenderer
         for (int i = offset; i < offset + len && i < tokens.Count; i++)
             list.Add(tokens[i]);
         return list;
+    }
+
+    // ------------------------------------------- cross-paragraph token-stream run markup (2026-07-25)
+
+    /// <summary>
+    /// Render a run of adjacent word-matched Modified pairs as its factored output paragraphs (the
+    /// cross-paragraph token-stream refinement, gated by <see cref="IrDiffSettings.CrossParagraphTokenDiff"/>).
+    /// For each <see cref="IrCrossParagraphCell"/> emit ONE <c>w:p</c>:
+    /// <list type="bullet">
+    /// <item>An EQUAL-mark cell is the paired-paragraph analogue — exactly <see cref="RenderModifiedParagraph"/>'s
+    /// recipe: the RIGHT paragraph's pPr (unresolvable style ref dropped) plus
+    /// <see cref="ApplyBlockFormatChanges"/> stamping <c>w:pPrChange</c>/mark-rPr history against the cell's
+    /// LEFT paragraph, so reject restores the left properties at the property-byte level.</item>
+    /// <item>An INSERTED-mark cell mirrors a split member: the RIGHT paragraph's pPr and an inserted
+    /// paragraph mark (<see cref="RevKind.Ins"/>) — no property history on a mark that vanishes on reject.</item>
+    /// <item>A DELETED-mark cell mirrors a merge member: the LEFT paragraph's pPr and a deleted mark
+    /// (<see cref="RevKind.Del"/>) — accept fuses it into the next paragraph, reject restores it whole.</item>
+    /// </list>
+    /// Cell run content is the slice-relative token diff via the shared <see cref="BuildTokenOpContent"/>
+    /// span walk (ins-before-del + rPrChange for free). The segmenter guarantees the LAST cell closes on a
+    /// matched Equal pilcrow, so the boundary to the block AFTER the run is never touched. ACCEPT keeps Ins
+    /// marks + drops Del marks (fusing) + keeps right slices + drops left → the run's right paragraphs;
+    /// REJECT the inverse → its left paragraphs. Falls back to a whole-block del/ins sweep if any cell's
+    /// source paragraph is unresolvable (defensive — the anchors come from the same IR).
+    /// </summary>
+    private static void RenderCrossParagraphRun(IrEditOp op, RenderState state, List<XElement> sink)
+    {
+        if (op.CrossParagraphCells is not { Count: > 0 } cells)
+            return; // the builder never emits a CrossParagraphRunBlock without cells.
+
+        foreach (var cell in cells)
+        {
+            if ((cell.LeftAnchor != null && SourceElement(cell.LeftAnchor, state.Left) == null) ||
+                (cell.RightAnchor != null && SourceElement(cell.RightAnchor, state.RightSource) == null))
+            {
+                RenderCrossParagraphFallback(cells, state, sink);
+                return;
+            }
+        }
+
+        foreach (var cell in cells)
+        {
+            var leftPara = cell.LeftAnchor is null ? null : SourceElement(cell.LeftAnchor, state.Left);
+            var rightPara = cell.RightAnchor is null ? null : SourceElement(cell.RightAnchor, state.RightSource);
+
+            var leftTokens = cell.LeftAnchor is null
+                ? (IReadOnlyList<IrDiffToken>)Array.Empty<IrDiffToken>()
+                : SubTokens(ParagraphTokens(cell.LeftAnchor, state.Left, state.Settings),
+                    cell.LeftSliceStart, cell.LeftSliceLen);
+            var rightTokens = cell.RightAnchor is null
+                ? (IReadOnlyList<IrDiffToken>)Array.Empty<IrDiffToken>()
+                : SubTokens(ParagraphTokens(cell.RightAnchor, state.RightSource, state.Settings),
+                    cell.RightSliceStart, cell.RightSliceLen);
+
+            var leftRuns = new SourceRunModel(leftPara ?? new XElement(W.p));
+            var rightRuns = new SourceRunModel(rightPara ?? new XElement(W.p));
+
+            var newPara = new XElement(W.p);
+            var pPrSource = cell.Mark == IrCrossParagraphMark.Deleted
+                ? (leftPara ?? rightPara)   // the paragraph vanishes on accept — keep left props for reject.
+                : (rightPara ?? leftPara);  // accepted-state properties (Equal shared pilcrow / Ins split member).
+            var pPr = pPrSource?.Element(W.pPr);
+            if (pPr != null)
+            {
+                var stamped = StripUnids(new XElement(pPr));
+                // A right-sourced pPr on a PAIRED (Equal) pilcrow follows the paired-paragraph style rule:
+                // a right pStyle the left universe cannot resolve is dropped (Word expresses the format
+                // change in direct props only). Ins/Del cells keep their own side's pPr verbatim, exactly
+                // like split/merge members.
+                if (cell.Mark == IrCrossParagraphMark.Equal)
+                    DropUnresolvableStyleRef(stamped, state);
+                newPara.Add(stamped);
+            }
+            if (cell.Mark == IrCrossParagraphMark.Equal && leftPara != null && rightPara != null)
+                ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
+
+            newPara.Add(BuildTokenOpContent(cell.Diff, leftTokens, rightTokens, leftRuns, rightRuns, state));
+
+            switch (cell.Mark)
+            {
+                case IrCrossParagraphMark.Inserted:
+                    MarkParagraphMark(newPara, RevKind.Ins, state);
+                    break;
+                case IrCrossParagraphMark.Deleted:
+                    MarkParagraphMark(newPara, RevKind.Del, state);
+                    break;
+                // Equal → retained pilcrow, no mark.
+            }
+            sink.Add(newPara);
+        }
+    }
+
+    /// <summary>Conservative whole-run fallback: delete every distinct left paragraph and insert every
+    /// distinct right paragraph the cells reference (each side in document order) — the shape the ordinary
+    /// ModifyBlock fallback produces per pair. Used only when a cell's source paragraph is unresolvable.</summary>
+    private static void RenderCrossParagraphFallback(
+        IrNodeList<IrCrossParagraphCell> cells, RenderState state, List<XElement> sink)
+    {
+        var seenLeft = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var cell in cells)
+            if (cell.LeftAnchor is { } la && seenLeft.Add(la))
+                EmitWholeBlock(la, state.Left, state, sink, RevKind.Del, fromRight: false);
+        var seenRight = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var cell in cells)
+            if (cell.RightAnchor is { } ra && seenRight.Add(ra))
+                EmitWholeBlock(ra, state.RightSource, state, sink, RevKind.Ins, fromRight: true);
     }
 
     /// <summary>
@@ -5062,10 +5462,7 @@ internal static class IrMarkupRenderer
         // Policy-gated pPr delta: ModeledOnly compares the modeled ParaKey (the delta a consumer-grade
         // report can describe; unmodeled-only deltas stay untracked — the documented rPr-parallel blind
         // spot); Full compares canonically (unid/rsid-stripped, rPr/sectPr/pPrChange excluded).
-        bool pPrDiffers = trackPPr && (state.Settings.FormatComparison == IrFormatComparison.ModeledOnly
-            ? IrModeledFormat.ParaKey(IrReader.MapParaFormat(leftPPr)) !=
-              IrModeledFormat.ParaKey(IrReader.MapParaFormat(rightPPr))
-            : !IrHasher.CanonicalHash(PPrForCompare(leftPPr)).Equals(IrHasher.CanonicalHash(PPrForCompare(rightPPr))));
+        bool pPrDiffers = trackPPr && PPrChangeDiffers(leftPPr, rightPPr, state);
 
         // The paragraph-MARK rPr is outside pPrChange by schema; Word tracks it as w:pPr/w:rPr/w:rPrChange.
         // Compared canonically under both policies (the mark has no token to carry a run-level rPrChange).
@@ -5125,6 +5522,37 @@ internal static class IrMarkupRenderer
         if (sectDiffers)
             // output (rightInlineSect) currently holds the RIGHT props; old = leftInlineSect.
             ApplySectPrChange(rightInlineSect!, leftInlineSect!, rightInlineSect!, state);
+    }
+
+    /// <summary>
+    /// The shared pPr-differs test of every surviving-pilcrow path (paired paragraph, cross-paragraph
+    /// Equal cell, split/merge survivor, replace-gap shared pilcrow): policy-gated — ModeledOnly compares
+    /// the modeled <see cref="IrModeledFormat.ParaKey"/>, Full compares canonically. Both sides are first
+    /// normalized by the SAME rule the emitted output obeys (decoded 2026-07-27 from reference compare
+    /// output): a <c>w:pStyle</c> the LEFT universe cannot resolve is ignored — the renderer drops it from
+    /// the emitted pPr via <see cref="DropUnresolvableStyleRef"/>, and counting it in the comparison
+    /// stamped a pPrChange whose old and new payloads were property-identical (the reference emits none).
+    /// The jc=left explicit-default fold lives inside <see cref="IrModeledFormat.ParaKey"/> itself.
+    /// </summary>
+    private static bool PPrChangeDiffers(XElement? leftPPr, XElement? rightPPr, RenderState state)
+    {
+        if (state.Settings.FormatComparison == IrFormatComparison.ModeledOnly)
+            return IrModeledFormat.ParaKey(IrReader.MapParaFormat(DropUnresolvableForCompare(leftPPr, state))) !=
+                   IrModeledFormat.ParaKey(IrReader.MapParaFormat(DropUnresolvableForCompare(rightPPr, state)));
+        return !IrHasher.CanonicalHash(PPrForCompare(leftPPr)).Equals(IrHasher.CanonicalHash(PPrForCompare(rightPPr)));
+    }
+
+    /// <summary>A pPr clone with an unresolvable <c>w:pStyle</c> removed, for comparison purposes only
+    /// (the original is never mutated); pass-through when the style resolves or no registry exists.</summary>
+    private static XElement? DropUnresolvableForCompare(XElement? pPr, RenderState state)
+    {
+        if (pPr is null || state.LeftStyleIds is not { } known)
+            return pPr;
+        if (pPr.Element(W.pStyle) is not { } pStyle || (string?)pStyle.Attribute(W.val) is not { } id || known.Contains(id))
+            return pPr;
+        var clone = new XElement(pPr);
+        clone.Elements(W.pStyle).Remove();
+        return clone;
     }
 
     /// <summary>The pPrChange-comparable projection of a pPr: its property children only (no mark rPr, no
@@ -6529,6 +6957,226 @@ internal static class IrMarkupRenderer
             if (changed)
                 part.PutXDocument();
         }
+    }
+
+    /// <summary>
+    /// Harvest list-identity evidence for the numbering import: every (right numId, left numId)
+    /// pair carried by a paragraph pair the diff aligned as present on BOTH sides — equal,
+    /// format-only, modified, moved, or a split/merge member, including paragraphs inside aligned
+    /// table rows/cells and the note/header/footer scopes. The numbering copy reuses a LEFT list
+    /// definition only for a right numId with such evidence (and an agreeing definition) — a right
+    /// list instance the diff proved to be a surviving left list, whose counter must therefore
+    /// continue across inserted items. Every other imported instance gets its own fresh cloned
+    /// abstractNum, matching Word's compare output (see
+    /// <see cref="WmlComparer.CopyMissingNumberingFromOneDocToAnother"/>).
+    /// </summary>
+    private static IReadOnlyCollection<(int FromNumId, int ToNumId)> CollectAlignedNumIdPairs(
+        IrEditScript script, RenderState state)
+    {
+        var pairs = new HashSet<(int FromNumId, int ToNumId)>();
+
+        void AddBlockPair(IrBlock? left, IrBlock? right)
+        {
+            if (left is IrParagraph leftPara && right is IrParagraph rightPara)
+            {
+                var leftNumId = leftPara.List?.NumId ?? leftPara.Format.NumId;
+                var rightNumId = rightPara.List?.NumId ?? rightPara.Format.NumId;
+                if (leftNumId is int toNumId && rightNumId is int fromNumId)
+                    pairs.Add((fromNumId, toNumId));
+            }
+            else if (left is IrTable leftTable && right is IrTable rightTable)
+            {
+                // Only content-aligned table pairs reach this path (equal/format-only, or an
+                // equal row resolved below), so the grids correspond positionally.
+                foreach (var (leftRow, rightRow) in leftTable.Rows.Zip(rightTable.Rows))
+                    AddRowPair(leftRow, rightRow);
+            }
+        }
+
+        void AddRowPair(IrRow leftRow, IrRow rightRow)
+        {
+            foreach (var (leftCell, rightCell) in leftRow.Cells.Zip(rightRow.Cells))
+                foreach (var (leftBlock, rightBlock) in leftCell.Blocks.Zip(rightCell.Blocks))
+                    AddBlockPair(leftBlock, rightBlock);
+        }
+
+        void AddAnchorPair(string? leftAnchor, string? rightAnchor)
+        {
+            if (leftAnchor is null || rightAnchor is null)
+                return;
+            state.Left.AnchorIndex.TryGetValue(leftAnchor, out var left);
+            state.Right.AnchorIndex.TryGetValue(rightAnchor, out var right);
+            AddBlockPair(left, right);
+        }
+
+        Dictionary<string, IrRow> RowsByAnchor(IrDocument doc, string? tableAnchor)
+        {
+            var rows = new Dictionary<string, IrRow>(StringComparer.Ordinal);
+            if (tableAnchor is not null &&
+                doc.AnchorIndex.TryGetValue(tableAnchor, out var block) && block is IrTable table)
+                foreach (var row in table.Rows)
+                    rows[row.Anchor.ToString()] = row;
+            return rows;
+        }
+
+        void WalkTableDiff(IrTableDiff tableDiff, string? leftTableAnchor, string? rightTableAnchor)
+        {
+            // Row anchors are not block anchors (no AnchorIndex entry); resolve them inside the
+            // two table pair members. Moved rows pair by group id, like blocks.
+            var leftRows = RowsByAnchor(state.Left, leftTableAnchor);
+            var rightRows = RowsByAnchor(state.Right, rightTableAnchor);
+            var movedSources = new Dictionary<int, string>();
+            var movedDests = new Dictionary<int, string>();
+            void AddRowAnchorPair(string? leftAnchor, string? rightAnchor)
+            {
+                if (leftAnchor is not null && rightAnchor is not null &&
+                    leftRows.TryGetValue(leftAnchor, out var leftRow) &&
+                    rightRows.TryGetValue(rightAnchor, out var rightRow))
+                    AddRowPair(leftRow, rightRow);
+            }
+            foreach (var rowOp in tableDiff.RowOps)
+            {
+                switch (rowOp.Kind)
+                {
+                    case IrRowOpKind.EqualRow:
+                        AddRowAnchorPair(rowOp.LeftRowAnchor, rowOp.RightRowAnchor);
+                        break;
+                    case IrRowOpKind.ModifyRow:
+                        if (rowOp.CellOps is { } cellOps)
+                            foreach (var cellOp in cellOps)
+                                if (cellOp.BlockOps is { } blockOps)
+                                    WalkOps(blockOps);
+                        break;
+                    case IrRowOpKind.MovedRow when rowOp.MoveGroupId is int groupId:
+                        if (rowOp.IsMoveSource == true && rowOp.LeftRowAnchor is { } source)
+                            movedSources[groupId] = source;
+                        else if (rowOp.IsMoveSource == false && rowOp.RightRowAnchor is { } dest)
+                            movedDests[groupId] = dest;
+                        break;
+                }
+            }
+            foreach (var (groupId, source) in movedSources)
+                if (movedDests.TryGetValue(groupId, out var dest))
+                    AddRowAnchorPair(source, dest);
+        }
+
+        void WalkOps(IEnumerable<IrEditOp> ops)
+        {
+            // Move-group ids are scope-local, so source/destination joining stays per op list.
+            var moveSources = new Dictionary<int, string>();
+            var moveDests = new Dictionary<int, string>();
+            foreach (var op in ops)
+            {
+                switch (op.Kind)
+                {
+                    case IrEditOpKind.EqualBlock:
+                    case IrEditOpKind.FormatOnlyBlock:
+                        AddAnchorPair(op.LeftAnchor, op.RightAnchor);
+                        break;
+                    case IrEditOpKind.ModifyBlock:
+                        // A modified table's rows may have shifted — pair through the row diff,
+                        // never positionally.
+                        if (op.TableDiff is { } tableDiff)
+                            WalkTableDiff(tableDiff, op.LeftAnchor, op.RightAnchor);
+                        else if (op.TokenDiff is not null)
+                            AddAnchorPair(op.LeftAnchor, op.RightAnchor);
+                        if (op.TextboxDiffs is { } textboxDiffs)
+                            foreach (var textboxDiff in textboxDiffs)
+                                WalkOps(textboxDiff.Ops);
+                        break;
+                    case IrEditOpKind.MoveBlock:
+                    case IrEditOpKind.MoveModifyBlock:
+                        if (op.MoveGroupId is int groupId)
+                        {
+                            if (op.IsMoveSource == true && op.LeftAnchor is { } source)
+                                moveSources[groupId] = source;
+                            else if (op.IsMoveSource == false && op.RightAnchor is { } dest)
+                                moveDests[groupId] = dest;
+                        }
+                        break;
+                    case IrEditOpKind.SplitBlock:
+                        if (op.SplitMergeAnchors is { } rightAnchors)
+                            foreach (var rightAnchor in rightAnchors)
+                                AddAnchorPair(op.LeftAnchor, rightAnchor);
+                        break;
+                    case IrEditOpKind.MergeBlock:
+                        if (op.SplitMergeAnchors is { } leftAnchors)
+                            foreach (var leftAnchor in leftAnchors)
+                                AddAnchorPair(leftAnchor, op.RightAnchor);
+                        break;
+                    case IrEditOpKind.CrossParagraphRunBlock:
+                        // Every two-sided cell is evidence its left/right paragraphs are one surviving
+                        // block (the fused word-matched pair) — same list-identity semantics as Modify.
+                        if (op.CrossParagraphCells is { } crossCells)
+                            foreach (var cell in crossCells)
+                                AddAnchorPair(cell.LeftAnchor, cell.RightAnchor);
+                        break;
+                }
+            }
+            foreach (var (groupId, source) in moveSources)
+                if (moveDests.TryGetValue(groupId, out var dest))
+                    AddAnchorPair(source, dest);
+        }
+
+        WalkOps(script.Operations);
+        if (script.NoteOps is { } noteOps)
+            foreach (var noteDiff in noteOps)
+                WalkOps(noteDiff.Ops);
+        if (script.HeaderFooterOps is { } headerFooterOps)
+            foreach (var storyDiff in headerFooterOps)
+                WalkOps(storyDiff.Ops);
+        return pairs;
+    }
+
+    /// <summary>
+    /// The RIGHT-side numIds surviving output content can actually reference: every
+    /// <c>w:numPr/w:numId</c> in the right package's story parts (the output emits right XML for
+    /// all equal/inserted/modified content, so any such reference survives), plus the numbering
+    /// references owned by right styles the output imports. Instances outside this set are
+    /// definitions nothing renders through — the numbering copy gives THEM the legacy content-dedup
+    /// treatment instead of a fresh forked abstractNum (see
+    /// <see cref="WmlComparer.CopyMissingNumberingFromOneDocToAnother"/>).
+    /// </summary>
+    private static IReadOnlySet<int> CollectRightNumberingUsage(
+        MainDocumentPart? rightMain, IReadOnlySet<StyleIdentity> rightImportedStyles)
+    {
+        var used = new HashSet<int>();
+        if (rightMain is null)
+            return used;
+
+        var parts = new List<OpenXmlPart> { rightMain };
+        parts.AddRange(rightMain.HeaderParts);
+        parts.AddRange(rightMain.FooterParts);
+        if (rightMain.FootnotesPart is not null)
+            parts.Add(rightMain.FootnotesPart);
+        if (rightMain.EndnotesPart is not null)
+            parts.Add(rightMain.EndnotesPart);
+        foreach (var part in parts)
+        {
+            var root = part.GetXDocument().Root;
+            if (root is null)
+                continue;
+            foreach (var numIdEl in root.Descendants(W.numPr).Select(numPr => numPr.Element(W.numId)))
+                if (numIdEl is not null && int.TryParse((string?)numIdEl.Attribute(W.val), out var id))
+                    used.Add(id);
+        }
+
+        // Style-owned list membership counts only for styles the output imports from the right —
+        // pre-existing LEFT styles keep resolving through the LEFT numbering definitions.
+        var stylesRoot = rightMain.StyleDefinitionsPart?.GetXDocument().Root;
+        if (stylesRoot is not null)
+            foreach (var style in stylesRoot.Elements(W.style))
+            {
+                var type = (string?)style.Attribute(W.type);
+                var styleId = (string?)style.Attribute(W.styleId);
+                if (type is null || styleId is null ||
+                    !rightImportedStyles.Contains(new StyleIdentity(type, styleId)))
+                    continue;
+                foreach (var numIdEl in style.Descendants(W.numPr).Select(numPr => numPr.Element(W.numId)))
+                    if (numIdEl is not null && int.TryParse((string?)numIdEl.Attribute(W.val), out var id))
+                        used.Add(id);
+            }
+        return used;
     }
 
     /// <summary>

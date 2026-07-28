@@ -147,6 +147,8 @@ internal static class DocxDiffOps
             settings.PreserveInputRevisions = preserveInputRevisions;
         if (TryGetBool(root, "normalizeRevisionAuthors", out var normalizeRevisionAuthors))
             settings.NormalizeRevisionAuthors = normalizeRevisionAuthors;
+        if (TryGetBool(root, "crossParagraphTokenDiff", out var crossParagraphTokenDiff))
+            settings.CrossParagraphTokenDiff = crossParagraphTokenDiff;
 
         return settings;
     }

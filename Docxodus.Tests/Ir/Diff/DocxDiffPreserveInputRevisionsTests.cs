@@ -711,7 +711,29 @@ public class DocxDiffPreserveInputRevisionsTests
         var off = DocxDiff.Compare(left, right, new DocxDiffSettings { AuthorForRevisions = "TheDiff" });
         var on = DocxDiff.Compare(left, right, Preserve());
 
-        Assert.Equal(off.DocumentByteArray, on.DocumentByteArray);
+        AssertPackagePayloadsIdentical(off, on);
+    }
+
+    /// <summary>Byte-identity at the PACKAGE-PAYLOAD level: every zip entry's name and content equal.
+    /// Raw archive bytes are NOT comparable across two Compare calls — OPC zip entries carry DOS
+    /// timestamps with 2-second granularity, so two payload-identical packages produced across a clock
+    /// tick differ in a handful of header bytes (measured; the assertion flaked under full-suite load).
+    /// The payload map is the same strength for the byte-identical-output contracts pinned here.</summary>
+    private static void AssertPackagePayloadsIdentical(WmlDocument expected, WmlDocument actual)
+    {
+        using var ea = new System.IO.Compression.ZipArchive(new MemoryStream(expected.DocumentByteArray));
+        using var aa = new System.IO.Compression.ZipArchive(new MemoryStream(actual.DocumentByteArray));
+        var expectedEntries = ea.Entries.OrderBy(e => e.FullName, StringComparer.Ordinal).ToList();
+        var actualEntries = aa.Entries.OrderBy(e => e.FullName, StringComparer.Ordinal).ToList();
+        Assert.Equal(expectedEntries.Select(e => e.FullName), actualEntries.Select(e => e.FullName));
+        foreach (var (ee, ae) in expectedEntries.Zip(actualEntries))
+        {
+            using var es = new MemoryStream();
+            using var @as = new MemoryStream();
+            ee.Open().CopyTo(es);
+            ae.Open().CopyTo(@as);
+            Assert.True(es.ToArray().SequenceEqual(@as.ToArray()), $"payload differs: {ee.FullName}");
+        }
     }
 
     [Fact]
@@ -728,8 +750,8 @@ public class DocxDiffPreserveInputRevisionsTests
         });
         var preserveOnly = DocxDiff.Compare(left, right, Preserve());
 
-        // Preserve wins: pre-accept is skipped, byte-identical to preserve-only.
-        Assert.Equal(preserveOnly.DocumentByteArray, both.DocumentByteArray);
+        // Preserve wins: pre-accept is skipped, payload-identical to preserve-only.
+        AssertPackagePayloadsIdentical(preserveOnly, both);
         Assert.NotEmpty(RevisionWrappersBy(both, "Reviewer B"));
     }
 

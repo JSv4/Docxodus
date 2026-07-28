@@ -347,10 +347,20 @@ internal static class IrDiffTokenizer
         bool IsSeparator(int index)
         {
             char c = text[index];
-            // WmlComparer's GetComparisonUnitList gives '.' and ',' priority over the static separator
-            // set: either stays in a word when immediately adjacent to a digit. Precomputed run edges make
-            // that test correct across formatted, field, and hyperlink boundaries without looking through
-            // a non-text atom.
+            // '.' and ',' get priority over the static separator set: either stays in a word only as a
+            // TRUE interior numeric separator — a digit on BOTH sides ("3.14", "1,234"). WmlComparer's
+            // GetComparisonUnitList keeps them in-word when EITHER neighbor is a digit, but Word's own
+            // compare output splits the trailing case: "font size 24." diffs as ins "24" + a retained
+            // "." anchored by the paragraph mark, which is only possible if "24." lexes as "24" + "."
+            // (decoded 2026-07-27 against reference compare output; the "18 point text." ↔ "24." pair).
+            // ASCII ':' splits UNCONDITIONALLY — even between digits: the reference output diffs
+            // "10:30 AM" ↔ "10:00 AM" as retained "10:" + ins "00" + del "30" + retained " AM", which
+            // requires "10:30" to lex as "10" + ":" + "30" (and "superscript:" as "superscript" + ":" —
+            // the standalone ins ":" instance). The fullwidth '：' was already in the static set; ASCII
+            // ':' was not. Precomputed run edges make the digit test correct across formatted, field,
+            // and hyperlink boundaries without looking through a non-text atom.
+            if (c == ':')
+                return true;
             if (c is '.' or ',')
             {
                 bool previousIsDigit = index > 0
@@ -359,7 +369,7 @@ internal static class IrDiffTokenizer
                 bool nextIsDigit = index < text.Length - 1
                     ? char.IsDigit(text[index + 1])
                     : nextTextChar is char next && char.IsDigit(next);
-                return !(previousIsDigit || nextIsDigit);
+                return !(previousIsDigit && nextIsDigit);
             }
 
             return settings.WordSeparators.Contains(c) || (nbspIsSeparator && c == '\u00A0');

@@ -1721,6 +1721,72 @@ public class IrMarkupRendererTests
             $"{blockedNowPassing.Count} Task-4-allowlisted pairs now pass — remove them from Task4BlockedPairs.");
     }
 
+    /// <summary>
+    /// The SAME corpus round-trip battery with the cross-paragraph token-stream fusion ON
+    /// (<see cref="IrDiffSettings.CrossParagraphTokenDiff"/> — the shipped
+    /// <see cref="DocxDiffSettings.CrossParagraphTokenDiff"/> markup mode): every run of adjacent
+    /// word-matched Modified pairs that fuses into a <see cref="IrEditOpKind.CrossParagraphRunBlock"/>
+    /// must STILL satisfy accept ≡ right / reject ≡ left over content, format signatures and notes, in
+    /// both directions. Same allowlist as the OFF-mode battery (the blocked pairs fail for unrelated
+    /// pre-existing reasons); no ratchet check here — the OFF-mode test owns the allowlist lifecycle.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Corpus")]
+    public void WC_corpus_markup_accept_reject_round_trips_with_cross_paragraph_fusion()
+    {
+        var pairs = WcCorpus.BuildPairs();
+        Assert.True(pairs.Count >= 30, $"Expected a substantial WC pair list; inferred {pairs.Count}.");
+
+        var settings = new IrDiffSettings { CrossParagraphTokenDiff = true };
+        int passed = 0;
+        var failures = new List<string>();
+
+        foreach (var (baseName, variantName) in pairs)
+        {
+            string key = $"{baseName}↔{variantName}";
+            if (Task4BlockedPairs.Contains(key))
+                continue;
+            var baseDoc = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, baseName));
+            var variantDoc = new WmlDocument(Path.Combine(WcCorpus.WcDir.FullName, variantName));
+
+            foreach (var (l, r, dir) in new[] { (baseDoc, variantDoc, "fwd"), (variantDoc, baseDoc, "rev") })
+            {
+                string? failure = null;
+                try
+                {
+                    var rendered = RenderMarkup(l, r, settings);
+                    var acceptedDoc = RevisionProcessor.AcceptRevisions(rendered);
+                    var rejectedDoc = RevisionProcessor.RejectRevisions(rendered);
+                    if (!BodyContentHashes(acceptedDoc).SequenceEqual(BodyContentHashes(r)))
+                        failure = $"{key} [{dir}] ACCEPT≠RIGHT";
+                    else if (!BodyContentHashes(rejectedDoc).SequenceEqual(BodyContentHashes(l)))
+                        failure = $"{key} [{dir}] REJECT≠LEFT";
+                    else if (!BodyFormatSignatures(acceptedDoc).SequenceEqual(BodyFormatSignatures(r)))
+                        failure = $"{key} [{dir}] ACCEPT-FORMAT≠RIGHT";
+                    else if (!BodyFormatSignatures(rejectedDoc).SequenceEqual(BodyFormatSignatures(l)))
+                        failure = $"{key} [{dir}] REJECT-FORMAT≠LEFT";
+                    else if (!NoteContentHashes(acceptedDoc).SequenceEqual(NoteContentHashes(r)))
+                        failure = $"{key} [{dir}] ACCEPT-NOTES≠RIGHT";
+                    else if (!NoteContentHashes(rejectedDoc).SequenceEqual(NoteContentHashes(l)))
+                        failure = $"{key} [{dir}] REJECT-NOTES≠LEFT";
+                }
+                catch (Exception ex)
+                {
+                    failure = $"{key} [{dir}] THREW {ex.GetType().Name}: {ex.Message}";
+                }
+
+                if (failure == null) passed++;
+                else failures.Add(failure);
+            }
+        }
+
+        _out.WriteLine($"WC corpus markup invariant (cross-paragraph fusion ON): {passed} round-trips passed.");
+        foreach (var f in failures.Take(40))
+            _out.WriteLine("  UNEXPECTED FAIL " + f);
+        Assert.True(failures.Count == 0,
+            $"{failures.Count} corpus round-trips failed with cross-paragraph fusion ON (see output).");
+    }
+
     // ----------------------------------------------------------------- fuzz invariant (50 seeds)
 
     [Fact]
@@ -1764,6 +1830,52 @@ public class IrMarkupRendererTests
             _out.WriteLine("  FAIL " + f);
 
         Assert.True(failures.Count == 0, $"{failures.Count}/{seedCount} fuzz seeds failed (see output).");
+    }
+
+    /// <summary>The SAME 50-seed fuzz battery with the cross-paragraph token-stream fusion ON — the fuzzer
+    /// produces move/delete/empty-paragraph interleaves around word-matched runs that the WC corpus lacks,
+    /// so this stresses the builder's streak/move-source-staging discipline and the fused renderer's
+    /// pilcrow arithmetic under adversarial shapes.</summary>
+    [Fact]
+    [Trait("Category", "Fuzz")]
+    public void Fuzz_markup_accept_reject_round_trips_with_cross_paragraph_fusion()
+    {
+        const int seedCount = 50;
+        var settings = new IrDiffSettings { CrossParagraphTokenDiff = true };
+        int passed = 0;
+        var failures = new List<string>();
+
+        for (int seed = 1; seed <= seedCount; seed++)
+        {
+            var fuzzCase = DiffFuzzer.Generate(seed);
+            try
+            {
+                var rendered = RenderMarkup(fuzzCase.Left, fuzzCase.Right, settings);
+                var acceptedDoc = RevisionProcessor.AcceptRevisions(rendered);
+                var rejectedDoc = RevisionProcessor.RejectRevisions(rendered);
+                if (!BodyContentHashes(acceptedDoc).SequenceEqual(BodyContentHashes(fuzzCase.Right)))
+                    failures.Add($"seed {seed}: ACCEPT≠RIGHT [{fuzzCase.DescribeMutations()}]");
+                else if (!BodyContentHashes(rejectedDoc).SequenceEqual(BodyContentHashes(fuzzCase.Left)))
+                    failures.Add($"seed {seed}: REJECT≠LEFT [{fuzzCase.DescribeMutations()}]");
+                else if (!BodyFormatSignatures(acceptedDoc).SequenceEqual(BodyFormatSignatures(fuzzCase.Right)))
+                    failures.Add($"seed {seed}: ACCEPT-FORMAT≠RIGHT [{fuzzCase.DescribeMutations()}]");
+                else if (!BodyFormatSignatures(rejectedDoc).SequenceEqual(BodyFormatSignatures(fuzzCase.Left)))
+                    failures.Add($"seed {seed}: REJECT-FORMAT≠LEFT [{fuzzCase.DescribeMutations()}]");
+                else
+                    passed++;
+            }
+            catch (Exception ex)
+            {
+                failures.Add($"seed {seed}: THREW {ex.GetType().Name}: {ex.Message} [{fuzzCase.DescribeMutations()}]");
+            }
+        }
+
+        _out.WriteLine($"Fuzz markup invariant (cross-paragraph fusion ON): {passed}/{seedCount} seeds passed.");
+        foreach (var f in failures.Take(40))
+            _out.WriteLine("  FAIL " + f);
+
+        Assert.True(failures.Count == 0,
+            $"{failures.Count}/{seedCount} fuzz seeds failed with cross-paragraph fusion ON (see output).");
     }
 
     // ----------------------------------------------------------------- validation baseline vs output

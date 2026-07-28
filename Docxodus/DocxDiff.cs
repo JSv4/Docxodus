@@ -117,7 +117,10 @@ public static class DocxDiff
         left = PreAccept(s, left);
         right = PreAccept(s, right);
         PreflightCompatibility(s, left, right);
-        var diff = s.ToIrDiffSettings();
+        // CrossParagraphTokenDiff is a MARKUP-only refinement (see DocxDiffSettings.CrossParagraphTokenDiff):
+        // the revision list is projected off the un-fused edit script, so force it off here — a
+        // CrossParagraphRunBlock op never reaches the revision renderer.
+        var diff = s.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
         var irLeft = IrReader.Read(left, ReadOpts);
         var irRight = IrReader.Read(right, ReadOpts);
         var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
@@ -146,7 +149,10 @@ public static class DocxDiff
         left = PreAccept(s, left);
         right = PreAccept(s, right);
         PreflightCompatibility(s, left, right);
-        var diff = s.ToIrDiffSettings();
+        // CrossParagraphTokenDiff is a MARKUP-only refinement (see DocxDiffSettings.CrossParagraphTokenDiff):
+        // the edit script as data stays un-fused (the JSON serializer has no cross-paragraph cell shape),
+        // so force it off here.
+        var diff = s.ToIrDiffSettings() with { CrossParagraphTokenDiff = false };
         var irLeft = IrReader.Read(left, ReadOpts);
         var irRight = IrReader.Read(right, ReadOpts);
         var script = IrEditScriptBuilder.Build(irLeft, irRight, diff);
@@ -779,6 +785,23 @@ public sealed class DocxDiffSettings
     /// </summary>
     public bool TrackBlockFormatChanges { get; set; } = true;
 
+    /// <summary>
+    /// Render a run of ≥2 ADJACENT word-matched modified paragraph pairs via a single cross-paragraph
+    /// word+pilcrow token-stream diff — the within-run flat-stream shape decoded from Word's compare
+    /// output: retained words from base paragraph k may land in output paragraph k±1 (crossing the
+    /// pilcrow), paragraph marks are stream tokens marked ¶INS/¶DEL by side, and the output paragraph
+    /// count follows the token-level LCS interleave (a 2×2 word-matched region can emit 3 paragraphs).
+    /// Default <c>true</c> (validated against Word's compare output; set false to keep each
+    /// word-matched pair's independent per-paragraph token diff). Purely a
+    /// <see cref="DocxDiff.Compare"/> (markup) refinement:
+    /// <see cref="DocxDiff.GetRevisions"/> and <see cref="DocxDiff.GetEditScriptJson"/> force it off
+    /// internally, so the revision list and edit-script-as-data are unaffected regardless of this value,
+    /// and <c>Consolidate</c> forces it off too. When false, each word-matched pair keeps its independent
+    /// per-paragraph token diff (byte-identical to before). The <c>accept ≡ right</c> / <c>reject ≡ left</c>
+    /// round-trip contract holds in both modes.
+    /// </summary>
+    public bool CrossParagraphTokenDiff { get; set; } = true;
+
     /// <summary>Map this public settings object onto the internal <c>IrDiffSettings</c>.</summary>
     internal IrDiffSettings ToIrDiffSettings()
     {
@@ -834,6 +857,7 @@ public sealed class DocxDiffSettings
             TrackParagraphFormatChanges = TrackBlockFormatChanges,
             TrackTableFormatChanges = TrackBlockFormatChanges,
             TrackSectionFormatChanges = TrackBlockFormatChanges,
+            CrossParagraphTokenDiff = CrossParagraphTokenDiff,
         };
     }
 }

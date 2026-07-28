@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml.Linq;
 using Docxodus.Ir;
 using Docxodus.Ir.Diff;
 using Docxodus.Tests.Ir;
@@ -209,6 +210,38 @@ public class IrSplitMergeTests
         }
     }
 
+    [Fact]
+    public void Segment_boundary_separator_rides_with_a_cross_member_match() // decoded 2026-07-27
+    {
+        // Merge-shaped fixture (the caller mirrors; the singular side is the merged paragraph): the
+        // singular's " and success." tail matches into member 1 ("… readability AND document design.").
+        // Decoded law: the whitespace separating an UNMATCHED word ("outcomes") from a following
+        // cross-boundary matched word ("and") rides WITH the match — the reference output retains
+        // " and " (leading space included) in the later output paragraph. The nearest-preceding rule
+        // alone dumps that separator into segment 0's changed run.
+        var (_, sp) = ReadParas("Green bold text signals positive outcomes and success.");
+        var (_, mp) = ReadParas(
+            "This text uses a larger font size of 18pt.",
+            "Font size impacts readability and document design.");
+        var members = new List<IrParagraph> { mp[0], mp[1] };
+        var diffs = IrSplitSegmenter.ComputeSegmentDiffs(sp[0], members, S, singularIsLeft: false);
+        Assert.Equal(2, diffs.Count);
+
+        // Slice 1 opens with the separator + "and": its Equal spans retain " and " (space, and, space)
+        // and the final period (anchored by the retained mark of the LAST member — Diff gets
+        // endsAtRetainedMark: true there), i.e. left-slice tokens [·][and][·] and [.] are Equal.
+        var single = IrDiffTokenizer.Tokenize(sp[0], S);
+        var slice0Len = diffs[0].Ops.Where(o => o.Kind != IrTokenOpKind.Insert).Sum(o => o.LeftLength);
+        var retained1 = diffs[1].Ops
+            .Where(o => o.Kind is IrTokenOpKind.Equal or IrTokenOpKind.FormatChanged)
+            .SelectMany(o => Enumerable.Range(o.LeftStart, o.LeftLength).Select(i => single[slice0Len + i].Text))
+            .ToList();
+        Assert.Equal(new[] { " ", "and", " ", "." }, retained1);
+
+        // And segment 0 must NOT have swallowed the boundary separator: its slice ends at "outcomes".
+        Assert.Equal("outcomes", single[slice0Len - 1].Text);
+    }
+
     // -------- Task 4 Step 1: permanent fixture diagnostic (evidence for the detection design) --------
 
     /// <summary>
@@ -377,8 +410,14 @@ public class IrSplitMergeTests
     [Fact]
     public void Detection_does_not_fire_on_keyword_coincidence()
     {
-        var (l, _) = ReadParas("the contract terminates on delivery of the goods.");
-        var (r, _) = ReadParas("the parties agree on many things today.", "delivery of pizza is unrelated to goods.");
+        // The gap is kept MID-STORY (trailing shared anchor): at the story tail the decoded
+        // surplus-absorption law joins a lone leftover into the adjacent pair regardless of
+        // overlap, which is a different (positional) mechanism than the containment scan this
+        // pin disciplines.
+        var (l, _) = ReadParas("the contract terminates on delivery of the goods.",
+            "closing anchor paragraph stays put.");
+        var (r, _) = ReadParas("the parties agree on many things today.", "delivery of pizza is unrelated to goods.",
+            "closing anchor paragraph stays put.");
         var a = Align(l, r, S);
         Assert.Empty(a.Entries.Where(e => e.Kind is IrAlignmentKind.Split or IrAlignmentKind.Merge));
     }
@@ -630,4 +669,95 @@ public class IrSplitMergeTests
         var revs = IrRevisionRenderer.Render(script, l, r, compat);
         Assert.Empty(revs); // the empty-mark insert in a CELL is pruned (body-scope anchor)
     }
+
+    // -------- stream-expansion segment arrangement + survivor format history (decoded 2026-07-27) --------
+
+    private static readonly XNamespace WNs =
+        "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    /// <summary>Per-paragraph revision-state token stream of a rendered redline body — "R:" retained,
+    /// "I:" inserted, "D:" deleted text, in document order (whitespace-trimmed, empty texts dropped).</summary>
+    private static List<List<string>> BodyStreams(WmlDocument doc)
+    {
+        using var ms = new MemoryStream(doc.DocumentByteArray);
+        using var wd = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(ms, false);
+        var root = XElement.Load(wd.MainDocumentPart!.GetStream());
+        var paras = new List<List<string>>();
+        foreach (var p in root.Element(WNs + "body")!.Elements(WNs + "p"))
+        {
+            var toks = new List<string>();
+            void Walk(XElement node, string state)
+            {
+                foreach (var c in node.Elements())
+                {
+                    var t = c.Name.LocalName;
+                    if (t == "ins") Walk(c, "I");
+                    else if (t == "del") Walk(c, "D");
+                    else if (t is "t" or "delText")
+                    {
+                        if (c.Value.Trim().Length > 0)
+                            toks.Add($"{state}:{c.Value.Trim()}");
+                    }
+                    else if (t != "pPr") Walk(c, state);
+                }
+            }
+            Walk(p, "R");
+            paras.Add(toks);
+        }
+        return paras;
+    }
+
+    private static void AssertRoundTrip(WmlDocument left, WmlDocument right, WmlDocument redline)
+    {
+        Assert.Equal(Docs.PlainText(right), Docs.PlainText(RevisionProcessor.AcceptRevisions(redline)));
+        Assert.Equal(Docs.PlainText(left), Docs.PlainText(RevisionProcessor.RejectRevisions(redline)));
+    }
+
+    /// <summary>
+    /// Merge arrangement (decoded 2026-07-27 from reference compare output — the merged-stream
+    /// expansion law applied to N:1 segmentation): an INSERTED residue between a ¶DEL member's last
+    /// solid match and the next member's first emits in the ¶DEL member, BEFORE its trailing delete
+    /// ("… justified text alignment | I:which | D:."), never at the head of the survivor.
+    /// </summary>
+    [Fact]
+    public void Merge_boundary_insert_attaches_to_the_del_member_before_its_trailing_delete()
+    {
+        var left = Docs.Para(
+            "Justify Alignment Demo",
+            "This document demonstrates justified text alignment.",
+            "Justified text spreads evenly across the full width of the line.");
+        var right = Docs.Para(
+            "Justify Alignment Demo",
+            "This document demonstrates justified text alignment which spreads text evenly across the full width of the line, creating clean edges.");
+        var redline = DocxDiff.Compare(left, right);
+        var streams = BodyStreams(redline);
+        Assert.Contains("I:which", streams[1]);            // rides with the ¶DEL member …
+        Assert.DoesNotContain("I:which", streams[2]);      // … not the survivor's head
+        Assert.Contains("D:.", streams[1]);                // ins-before-del: the insert precedes the member's deleted period
+        AssertRoundTrip(left, right, redline);
+    }
+
+    /// <summary>
+    /// Split arrangement (same decode, 1:N direction): the DELETED residue of the singular side flows
+    /// FORWARD past the ¶INS boundary into the FINAL member — the ¶INS member stays clean and the
+    /// residue lands beside the final member's retained terminal period.
+    /// </summary>
+    [Fact]
+    public void Split_trailing_deleted_residue_flows_to_the_final_member()
+    {
+        var left = Docs.Para(
+            "Font Color Demo",
+            "This text is in red color.");
+        var right = Docs.Para(
+            "Font Color Demo",
+            "This text uses Times New Roman font.",
+            "Different fonts create different visual impressions.");
+        var redline = DocxDiff.Compare(left, right);
+        var streams = BodyStreams(redline);
+        Assert.DoesNotContain(streams[1], s => s.StartsWith("D:", StringComparison.Ordinal)); // ¶INS member clean
+        Assert.Contains(streams[2], s => s.StartsWith("D:is in red color", StringComparison.Ordinal));
+        Assert.Contains("R:.", streams[2]);                // terminal period retained beside the surviving mark
+        AssertRoundTrip(left, right, redline);
+    }
+
 }

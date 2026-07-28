@@ -41,6 +41,7 @@ internal static class WordCompareFontTableBackfill
         ["Symbol"] = "<w:panose1 w:val=\"05050102010706020507\"/><w:charset w:val=\"02\"/><w:family w:val=\"decorative\"/><w:pitch w:val=\"variable\"/><w:sig w:usb0=\"00000000\" w:usb1=\"10000000\" w:usb2=\"00000000\" w:usb3=\"00000000\" w:csb0=\"80000000\" w:csb1=\"00000000\"/>",
         ["Courier New"] = "<w:panose1 w:val=\"02070309020205020404\"/><w:charset w:val=\"00\"/><w:family w:val=\"modern\"/><w:pitch w:val=\"fixed\"/><w:sig w:usb0=\"E0002AFF\" w:usb1=\"C0007843\" w:usb2=\"00000009\" w:usb3=\"00000000\" w:csb0=\"000001FF\" w:csb1=\"00000000\"/>",
         ["Cambria"] = "<w:panose1 w:val=\"02040503050406030204\"/><w:charset w:val=\"00\"/><w:family w:val=\"roman\"/><w:pitch w:val=\"variable\"/><w:sig w:usb0=\"E00002FF\" w:usb1=\"400004FF\" w:usb2=\"00000000\" w:usb3=\"00000000\" w:csb0=\"0000019F\" w:csb1=\"00000000\"/>",
+        ["Courier"] = "<w:panose1 w:val=\"02070309020205020404\"/><w:charset w:val=\"00\"/><w:family w:val=\"auto\"/><w:pitch w:val=\"variable\"/><w:sig w:usb0=\"00000003\" w:usb1=\"00000000\" w:usb2=\"00000000\" w:usb3=\"00000000\" w:csb0=\"00000001\" w:csb1=\"00000000\"/>",
     };
 
     /// <summary>Generic descriptor for an unlisted font.
@@ -74,13 +75,59 @@ internal static class WordCompareFontTableBackfill
     }
 
     /// <summary>Emit fontTable.xml (if absent) and webSettings.xml (if absent) into <paramref name="main"/>,
-    /// listing Word's stock fonts plus every font the document/styles actually reference.</summary>
+    /// listing Word's stock fonts plus every font the document/styles actually reference. When a fontTable
+    /// is CARRIED THROUGH from the source instead, normalize its known-font declarations to the same stock
+    /// metadata — Word never copies an input fontTable verbatim; it regenerates every declaration from its
+    /// installed-font metadata, so a degraded input declaration (family="auto", zeroed panose) must not
+    /// survive into the output or LibreOffice substitutes the font differently than it does for Word's
+    /// own compare output.</summary>
     public static void Backfill(MainDocumentPart main)
     {
         if (main.FontTablePart is null)
             BackfillFontTable(main);
+        else
+            NormalizeCarriedFontTable(main.FontTablePart);
         if (main.WebSettingsPart is null)
             BackfillWebSettings(main);
+    }
+
+    /// <summary>
+    /// Rewrite the descriptor children of every KNOWN font declaration in a carried-through fontTable to
+    /// Word's exact metadata (the same <see cref="KnownFontInner"/> table the from-scratch backfill uses).
+    /// Unknown fonts are left byte-untouched (their declarations may be the only substitution hint a
+    /// custom face has), and relationship-backed embedded-font children (<c>w:embedRegular</c> etc.) are
+    /// preserved — only the metrics metadata is normalized.
+    /// </summary>
+    private static void NormalizeCarriedFontTable(FontTablePart part)
+    {
+        var xdoc = part.GetXDocument();
+        var root = xdoc.Root;
+        if (root is null)
+            return;
+
+        bool changed = false;
+        foreach (var font in root.Elements(W + "font"))
+        {
+            var name = (string?)font.Attribute(W + "name");
+            if (name is null || !KnownFontInner.TryGetValue(name, out var inner))
+                continue;
+
+            var embeds = font.Elements()
+                .Where(e => e.Name.Namespace == W && e.Name.LocalName.StartsWith("embed", System.StringComparison.Ordinal))
+                .ToList();
+            var replacement = XElement.Parse(
+                "<w:font xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" " +
+                "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">" +
+                inner + "</w:font>");
+
+            font.RemoveNodes();
+            font.Add(replacement.Elements());
+            font.Add(embeds);
+            changed = true;
+        }
+
+        if (changed)
+            part.PutXDocument();
     }
 
     private static void BackfillFontTable(MainDocumentPart main)

@@ -79,10 +79,12 @@ public class IrDiffTokenizerTests
     }
 
     [Fact]
-    public void Period_and_comma_split_only_when_not_adjacent_to_a_digit()
+    public void Period_and_comma_stay_in_word_only_between_digits()
     {
-        // WmlComparer's atom grouping isolates sentence punctuation, but keeps decimal/thousands punctuation
-        // in its numeric word even though comma is also a configured static separator.
+        // '.'/',' stay in a numeric word only as a TRUE interior separator — a digit on BOTH sides
+        // ("3.14", "1,234"). WmlComparer keeps them in-word when EITHER neighbor is a digit, but Word's
+        // own compare output splits the trailing case (see the word-final pin below), so sentence
+        // punctuation is isolated even though comma is also a configured static separator.
         var tokens = Tok(TextPara("This. 3.14 1,234 end,"));
         Assert.Equal(
             new[] { "This", ".", " ", "3.14", " ", "1,234", " ", "end", "," },
@@ -93,6 +95,44 @@ public class IrDiffTokenizerTests
                 IrDiffTokenKind.Word, IrDiffTokenKind.Separator, IrDiffTokenKind.Separator,
                 IrDiffTokenKind.Word, IrDiffTokenKind.Separator, IrDiffTokenKind.Word,
                 IrDiffTokenKind.Separator, IrDiffTokenKind.Word, IrDiffTokenKind.Separator,
+            },
+            tokens.Select(t => t.Kind));
+    }
+
+    [Fact]
+    public void Word_final_period_after_a_digit_splits_off()
+    {
+        // Decoded 2026-07-27 from Word's own compare output: "font size 24." diffs as ins "24" plus a
+        // RETAINED "." anchored by the paragraph mark — only possible if "24." lexes as "24" + ".".
+        // A digit on one side alone (word-final "24.", word-initial ".5") does not keep the
+        // punctuation in the word; only a digit on BOTH sides does.
+        var tokens = Tok(TextPara("size 24."));
+        Assert.Equal(new[] { "size", " ", "24", "." }, tokens.Select(t => t.Text));
+        Assert.Equal(
+            new[]
+            {
+                IrDiffTokenKind.Word, IrDiffTokenKind.Separator,
+                IrDiffTokenKind.Word, IrDiffTokenKind.Separator,
+            },
+            tokens.Select(t => t.Kind));
+    }
+
+    [Fact]
+    public void Colon_splits_unconditionally_even_between_digits()
+    {
+        // Decoded 2026-07-27 from Word's own compare output, two instances: "superscript
+        // formatting." ↔ "superscript:" retains "superscript" and inserts a STANDALONE ":" (so
+        // "superscript:" lexes as "superscript" + ":"), and "10:30 AM" ↔ "10:00 AM" diffs as
+        // retained "10:" + ins "00" + del "30" (so "10:30" lexes as "10" + ":" + "30" — no
+        // digit-interior exception, unlike '.'/','). The fullwidth '：' was already a static
+        // separator; ASCII ':' was not.
+        var tokens = Tok(TextPara("note: 12:30"));
+        Assert.Equal(new[] { "note", ":", " ", "12", ":", "30" }, tokens.Select(t => t.Text));
+        Assert.Equal(
+            new[]
+            {
+                IrDiffTokenKind.Word, IrDiffTokenKind.Separator, IrDiffTokenKind.Separator,
+                IrDiffTokenKind.Word, IrDiffTokenKind.Separator, IrDiffTokenKind.Word,
             },
             tokens.Select(t => t.Kind));
     }
