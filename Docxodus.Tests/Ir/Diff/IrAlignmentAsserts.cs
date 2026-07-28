@@ -122,6 +122,62 @@ internal static class IrAlignmentAsserts
         // Every left/right body block appears in exactly one entry (totality + no duplication).
         AssertSameMultiset(left.Body.Blocks, leftSeen, "left");
         AssertSameMultiset(right.Body.Blocks, rightSeen, "right");
+
+        AssertLeftOrderReconstructible(left, a);
+    }
+
+    /// <summary>
+    /// ORDER invariant (issue #288). Rejecting a redline materializes each entry's LEFT content in ENTRY
+    /// order, so <c>reject ≡ left</c> holds EXACTLY — not merely as a word multiset — only when the left
+    /// blocks the alignment owns in place appear in ascending LEFT-document order.
+    /// <para><see cref="IrAlignmentKind.Moved"/>/<see cref="IrAlignmentKind.MovedModified"/> entries are
+    /// exempt: a move's single entry sits at its DESTINATION, and the edit script re-emits a separate
+    /// source op back at the left position. Every other left-owning entry must ascend —
+    /// Unchanged/FormatOnly/Modified/Deleted, a <see cref="IrAlignmentKind.Split"/>'s singular left, and a
+    /// <see cref="IrAlignmentKind.Merge"/>'s members in member order.</para>
+    /// <para>A violation is exactly the #288 failure mode: content survives both directions, but reject
+    /// reconstructs the paragraphs permuted.</para>
+    /// </summary>
+    public static void AssertLeftOrderReconstructible(IrDocument left, IrBlockAlignment a)
+    {
+        // Reference identity, not record equality: duplicate-content blocks are value-EQUAL records, and
+        // telling the two occurrences apart is the whole point of this invariant.
+        var indexOf = new Dictionary<IrBlock, int>(BlockReferenceComparer.Instance);
+        for (int i = 0; i < left.Body.Blocks.Count; i++)
+            indexOf[left.Body.Blocks[i]] = i;
+
+        int previous = -1;
+        string previousLabel = "<start>";
+        foreach (var e in a.Entries)
+        {
+            if (e.Kind is IrAlignmentKind.Moved or IrAlignmentKind.MovedModified)
+                continue;
+
+            var owned = new List<IrBlock>();
+            if (e.Kind == IrAlignmentKind.Merge)
+                owned.AddRange(e.MultiBlocks!);
+            else if (e.Left is { } single)
+                owned.Add(single);
+
+            foreach (var block in owned)
+            {
+                if (!indexOf.TryGetValue(block, out int index))
+                    continue; // a nested-scope block cannot appear here; totality above already proved that
+                Assert.True(index > previous,
+                    $"Alignment emits left block {index} ({e.Kind}) after left block {previous} " +
+                    $"({previousLabel}) — reject would reconstruct the left document out of order.");
+                previous = index;
+                previousLabel = e.Kind.ToString();
+            }
+        }
+    }
+
+    private sealed class BlockReferenceComparer : IEqualityComparer<IrBlock>
+    {
+        public static readonly BlockReferenceComparer Instance = new();
+        public bool Equals(IrBlock? x, IrBlock? y) => ReferenceEquals(x, y);
+        public int GetHashCode(IrBlock obj) =>
+            System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
     }
 
     private static void AssertSameMultiset(IReadOnlyList<IrBlock> expected, List<IrBlock> seen, string side)

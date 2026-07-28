@@ -610,20 +610,77 @@ public class IrSplitMergeTests
         Assert.Equal(direct, afterFine);
     }
 
-    // Skipped: known pre-existing regression (from the alignment-evidence hardening) — WC023 fully
-    // duplicates its prose across BOTH the leading paragraphs AND the table cells, so no block content is
-    // uniquely anchorable and the aligner collapses the whole body to a delete+insert (2 revisions) instead
-    // of the fine-grained 7. No content is lost (accept/reject round-trip holds); it is a granularity/shape
-    // regression rooted in the duplicate-content pairing ambiguity. Tracked in #289; unskip when the
-    // aligner's positional-fallback fix lands.
-    [Fact(Skip = "Pre-existing duplicate-content aligner collapse; tracked in #289")]
-    public void WC1450_compat_revisions_match_oracle_count()
+    /// <summary>
+    /// WC-1450 (issue #289). This case was skipped on the belief that WC023's fully-duplicated prose —
+    /// the same sample text sits in BOTH the two leading body paragraphs AND the table cells, so no block
+    /// content is uniquely anchorable — collapsed the aligner into a whole-body delete + re-insert. It does
+    /// not. The body aligns cleanly (3 equal paragraphs, the table as ONE Modified pair, the trailing
+    /// paragraph and section break equal) and <see cref="IrTableDiffer"/> resolves the table to exactly the
+    /// authored edit: DeleteRow(row 0) + ModifyRow(row 1 gains "Second ") + two EqualRows. The two
+    /// revisions are that edit reported at the engine's row grain — a whole deleted ROW is ONE revision,
+    /// which is also what the WmlComparer oracle does for every other whole-row case in the corpus
+    /// (WC-1140/1150/1460/1660/1670/1750/1760 all pin it).
+    /// <para>The oracle's SEVEN revisions here are not a finer reading of the same edit: WmlComparer
+    /// mis-aligns this fixture, reporting content as INSERTED that is present unchanged on both sides, plus
+    /// two revisions with null text. <see cref="IrParityScoreboardTests"/> already adjudicates WC-1450 as a
+    /// documented coarser-grain deviation and holds the ratchet floor for it, so a second hard-count copy
+    /// of the same case here only re-litigated a settled decision. This test now pins the ENGINE truth —
+    /// what the redline actually says about the document — which is the property that would regress if the
+    /// duplicate-content alignment ever did collapse.</para>
+    /// </summary>
+    [Fact]
+    public void WC1450_compat_revisions_report_the_deleted_row_and_the_cell_edit()
     {
         var revs = FixtureRevisions("WC/WC023-Table-4-Row-Image-Before.docx",
             "WC/WC023-Table-4-Row-Image-After-Delete-1-Row.docx");
-        Assert.True(revs.Count == 7,
-            $"expected 7 revisions, got {revs.Count}:\n" +
-            string.Join("\n", revs.Select(rv => $"  {rv.Type}: [{rv.Text}]")));
+        string dump = string.Join("\n", revs.Select(rv => $"  {rv.Type}: [{rv.Text}]"));
+
+        Assert.True(revs.Count == 2, $"expected 2 revisions, got {revs.Count}:\n{dump}");
+
+        // The deleted row, reported at the row anchor that IrTableDiffer's DeleteRow op carries.
+        var deleted = Assert.Single(revs, rv => rv.Type == IrRevisionType.Deleted);
+        Assert.StartsWith("tr:", deleted.LeftAnchor);
+        Assert.Contains("Video provides a powerful way", deleted.Text);
+
+        // The one authored cell edit — NOT a whole-document re-insertion.
+        var inserted = Assert.Single(revs, rv => rv.Type == IrRevisionType.Inserted);
+        Assert.Equal("Second ", inserted.Text);
+    }
+
+    /// <summary>
+    /// The structural half of the #289 claim, pinned directly: WC023's duplicate-everywhere content must
+    /// not drive <see cref="IrBlockAligner"/> into deleting the body and re-inserting it. Asserting the
+    /// alignment (rather than only the revision count) is what would actually catch a future collapse —
+    /// a collapse and a coarse-but-correct diff can produce similar counts.
+    /// </summary>
+    [Fact]
+    public void WC1450_duplicate_content_body_does_not_collapse_to_delete_plus_insert()
+    {
+        var settings = IrWmlComparerAdapter.MapSettings(new WmlComparerSettings()) with { DetectSplitMerge = true };
+        var left = IrReader.Read(
+            new WmlDocument(Path.Combine("../../../../TestFiles/", "WC/WC023-Table-4-Row-Image-Before.docx")),
+            WcCorpus.ReadOpts);
+        var right = IrReader.Read(
+            new WmlDocument(Path.Combine("../../../../TestFiles/", "WC/WC023-Table-4-Row-Image-After-Delete-1-Row.docx")),
+            WcCorpus.ReadOpts);
+
+        var alignment = IrBlockAligner.Align(left, right, settings);
+        string histogram = IrAlignmentAsserts.Histogram(alignment);
+
+        Assert.Equal(0, IrAlignmentAsserts.Count(alignment, IrAlignmentKind.Deleted));
+        Assert.Equal(0, IrAlignmentAsserts.Count(alignment, IrAlignmentKind.Inserted));
+        // The table is the ONE changed block; every other body block pairs unchanged.
+        Assert.True(IrAlignmentAsserts.Count(alignment, IrAlignmentKind.Modified) == 1, histogram);
+        Assert.True(IrAlignmentAsserts.Count(alignment, IrAlignmentKind.Unchanged) == 5, histogram);
+        IrAlignmentAsserts.AssertInvariants(left, right, alignment, settings);
+
+        var tableDiff = IrTableDiffer.Diff(
+            left.Body.Blocks.OfType<IrTable>().Single(),
+            right.Body.Blocks.OfType<IrTable>().Single(),
+            settings);
+        Assert.Equal(
+            new[] { IrRowOpKind.DeleteRow, IrRowOpKind.ModifyRow, IrRowOpKind.EqualRow, IrRowOpKind.EqualRow },
+            tableDiff.RowOps.Select(r => r.Kind).ToArray());
     }
 
     [Fact]

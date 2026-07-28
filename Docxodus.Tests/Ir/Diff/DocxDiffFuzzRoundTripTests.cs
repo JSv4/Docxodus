@@ -29,7 +29,13 @@ namespace Docxodus.Tests.Ir.Diff;
 /// </summary>
 public class DocxDiffFuzzRoundTripTests
 {
-    private const int DefaultSeedCount = 50;
+    /// <summary>
+    /// Default sweep width. Raised from 50 with the order assertion (issue #288): the reordering seeds are
+    /// rare — 3 in the first 2000 — and 50 seeds never reached one, so the bug lived under a green fuzzer.
+    /// 250 seeds (~8s) covers seed 184, the canonical duplicate-paragraph-crossing-a-merge repro; the wide
+    /// 2000-seed sweep that also finds 760 and 1714 runs via <c>DOCXODUS_FUZZ_SEEDS</c>.
+    /// </summary>
+    private const int DefaultSeedCount = 250;
     private readonly ITestOutputHelper _out;
 
     public DocxDiffFuzzRoundTripTests(ITestOutputHelper output) => _out = output;
@@ -81,13 +87,54 @@ public class DocxDiffFuzzRoundTripTests
             if (!WordBagEqual(gotRight: Docs.PlainTextWithTables(rejected), expectedLeft))
                 failures.Add($"seed {seed}: REJECT lost/added content vs left  [{c.DescribeMutations()}]\n" +
                              BagDelta(expectedLeft, Docs.PlainTextWithTables(rejected)));
+
+            // EXACT-ORDER guarantee (issue #288). The word-bag checks above are order-INDEPENDENT by
+            // design, so they cannot see a redline that restores every word but rebuilds the blocks
+            // permuted — which is precisely what a duplicate-content pairing crossing a split/merge group
+            // used to do (seeds 184, 760 and 1714 of the first 2000). Comparing the whole-body
+            // BLOCK SEQUENCE, not just the multiset, is what turns `accept ≡ right` / `reject ≡ left` into
+            // the exact contract a consumer relies on.
+            if (BlockSequence(accepted) != BlockSequence(c.Right))
+                failures.Add($"seed {seed}: ACCEPT block ORDER differs from right  [{c.DescribeMutations()}]\n" +
+                             FirstOrderDelta(BlockSequence(c.Right), BlockSequence(accepted)));
+            if (BlockSequence(rejected) != BlockSequence(c.Left))
+                failures.Add($"seed {seed}: REJECT block ORDER differs from left  [{c.DescribeMutations()}]\n" +
+                             FirstOrderDelta(BlockSequence(c.Left), BlockSequence(rejected)));
         }
 
-        _out.WriteLine($"Byte-level round-trip content fuzz: {seedCount} seeds ({withTable} with a table), " +
-                       $"zero content loss. env DOCXODUS_FUZZ_SEEDS overrides (default {DefaultSeedCount}).");
+        _out.WriteLine($"Byte-level round-trip fuzz: {seedCount} seeds ({withTable} with a table), " +
+                       $"zero content loss AND exact block order. " +
+                       $"env DOCXODUS_FUZZ_SEEDS overrides (default {DefaultSeedCount}).");
         Assert.True(failures.Count == 0,
-            $"{failures.Count} byte-level accept/reject CONTENT-LOSS failures:\n" +
+            $"{failures.Count} byte-level accept/reject CONTENT or ORDER failures:\n" +
             string.Join("\n", failures.Take(15)));
+    }
+
+    /// <summary>
+    /// The document's whole body as one newline-joined, whitespace-normalized BLOCK sequence — the
+    /// order-SENSITIVE projection <see cref="WordBagEqual"/> deliberately discards. Empty lines are dropped
+    /// so a redline is judged on the blocks that carry content, not on paragraph-mark bookkeeping (an
+    /// inserted or deleted bare mark is a separate, already-covered concern).
+    /// </summary>
+    private static string BlockSequence(WmlDocument d) =>
+        string.Join("\n", Docs.PlainTextWithTables(d)
+            .Split('\n')
+            .Select(line => string.Join(" ", line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)))
+            .Where(line => line.Length > 0));
+
+    /// <summary>The first differing block of two <see cref="BlockSequence"/> projections, for the repro dump.</summary>
+    private static string FirstOrderDelta(string expected, string actual)
+    {
+        var e = expected.Split('\n');
+        var a = actual.Split('\n');
+        for (int i = 0; i < Math.Max(e.Length, a.Length); i++)
+        {
+            string ei = i < e.Length ? e[i] : "<none>";
+            string ai = i < a.Length ? a[i] : "<none>";
+            if (ei != ai)
+                return $"      first divergence at block {i}:\n        expected: [{ei}]\n        actual:   [{ai}]";
+        }
+        return $"      block counts differ: expected {e.Length}, actual {a.Length}";
     }
 
     private static bool WordBagEqual(string gotRight, string expected)
