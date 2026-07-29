@@ -992,6 +992,63 @@ public class IrBlockAlignerTests
         AssertInvariants(l, r, a);
     }
 
+    // ------------------------------------------------------------------ duplicate-content order (#288)
+
+    /// <summary>
+    /// Issue #288 repro, reduced from fuzz seed 184. "boilerplate" appears TWICE on the left, so it never
+    /// anchors (<c>BuildUniqueIndex</c> keys on content unique to each side) and the in-gap refinement is
+    /// what decides which occurrence pairs with the single right one. It picks the FIRST — and the merge
+    /// scan then runs and fuses the two paragraphs BETWEEN them into one right paragraph that sits BEFORE
+    /// the right "boilerplate". The merge group therefore straddles a pairing formed before it existed.
+    /// <para>Nothing is lost either way — the aligner's totality invariant always held — but with the
+    /// crossing retained the right-order emit puts the merged pair's left content ahead of left block 0,
+    /// and REJECT rebuilds the paragraphs permuted. The monotonicity pass releases the lighter unit (the
+    /// 1:1 duplicate pair, weight 2, versus the 3-block merge group) and the move detector immediately
+    /// re-forms it as a relocation, which reject reproduces at the left position.</para>
+    /// </summary>
+    [Fact]
+    public void Duplicate_paragraph_pairing_never_crosses_a_merge_group()
+    {
+        var l = Doc(
+            "boilerplate footer notice alpha",
+            "first sentence about bravo charlie",
+            "second sentence about delta echo",
+            "boilerplate footer notice alpha",
+            "unique tail anchor foxtrot golf hotel");
+        var r = Doc(
+            "first sentence about bravo charlie second sentence about delta echo",
+            "boilerplate footer notice alpha",
+            "unique tail anchor foxtrot golf hotel");
+
+        var a = Align(l, r);
+
+        // The merge is the point of the fixture: it must survive (it holds the most content).
+        Assert.Equal(1, Count(a, IrAlignmentKind.Merge));
+        // AssertInvariants runs AssertLeftOrderReconstructible — the actual #288 guard.
+        AssertInvariants(l, r, a);
+    }
+
+    /// <summary>
+    /// The general form of the invariant the fuzzer exercised: whatever the aligner decides about a
+    /// document whose paragraphs are verbatim duplicates of one another, the entries must still emit the
+    /// left blocks in left order, because that is what makes reject reproduce the left document exactly.
+    /// </summary>
+    [Fact]
+    public void Fully_duplicated_body_still_emits_left_blocks_in_left_order()
+    {
+        const string dup = "the same paragraph repeated verbatim throughout";
+        var l = Doc(dup, dup, dup, dup, dup);
+        var r = Doc(dup, dup, dup + " with a tail edit", dup);
+
+        var a = Align(l, r);
+
+        // Not a collapse: a document of verbatim duplicates still pairs its blocks in place rather than
+        // deleting the whole body and re-inserting it (issue #289's stated failure mode).
+        Assert.True(Count(a, IrAlignmentKind.Deleted) < l.Body.Blocks.Count,
+            $"whole-body collapse: {IrAlignmentAsserts.Histogram(a)}");
+        AssertInvariants(l, r, a);
+    }
+
     // ------------------------------------------------------------------ determinism
 
     [Fact]
