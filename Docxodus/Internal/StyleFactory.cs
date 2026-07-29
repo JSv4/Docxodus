@@ -75,6 +75,67 @@ internal static class StyleFactory
     }
 
     /// <summary>
+    /// Ensure the two styles a footnote (<paramref name="isFootnote"/>) or endnote definition
+    /// references exist: the <c>FootnoteText</c>/<c>EndnoteText</c> paragraph style the note body
+    /// uses, and the <c>FootnoteReference</c>/<c>EndnoteReference</c> superscript character style
+    /// worn by both the body-side reference run and the note's auto-number mark. Same find-or-create
+    /// contract as <see cref="EnsureCodeCharacterStyle"/>: a style the document already defines is
+    /// left untouched, so a house footnote style survives. Without this the style references are
+    /// phantoms and Word renders the citation as ordinary full-size text.
+    /// </summary>
+    public static void EnsureNoteStyles(WordprocessingDocument doc, bool isFootnote)
+    {
+        var main = doc.MainDocumentPart;
+        if (main is null) return;
+
+        var part = EnsureStylesPart(main);
+        var root = part.GetXDocument().Root!;
+        var prefix = isFootnote ? "Footnote" : "Endnote";
+        var word = isFootnote ? "footnote" : "endnote";
+        bool added = false;
+
+        added |= AddStyleIfMissing(root, $"{prefix}Text", NoteTextStyle($"{prefix}Text", $"{word} text"));
+        added |= AddStyleIfMissing(root, $"{prefix}Reference", NoteReferenceStyle($"{prefix}Reference", $"{word} reference"));
+
+        // Flush to the part stream — Save only persists the projected parts, not styles.
+        if (added) part.PutXDocument();
+    }
+
+    private static bool AddStyleIfMissing(XElement stylesRoot, string styleId, XElement definition)
+    {
+        bool exists = stylesRoot.Elements(W + "style")
+            .Any(st => (string?)st.Attribute(W + "styleId") == styleId);
+        if (exists) return false;
+        stylesRoot.Add(definition);
+        return true;
+    }
+
+    /// <summary>Word's note-body paragraph style: Normal at 10pt with single, un-spaced lines.</summary>
+    private static XElement NoteTextStyle(string styleId, string name) =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "paragraph"),
+            new XAttribute(W + "styleId", styleId),
+            new XElement(W + "name", new XAttribute(W + "val", name)),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "pPr",
+                new XElement(W + "spacing",
+                    new XAttribute(W + "after", "0"),
+                    new XAttribute(W + "line", "240"),
+                    new XAttribute(W + "lineRule", "auto"))),
+            new XElement(W + "rPr",
+                new XElement(W + "sz", new XAttribute(W + "val", "20")),
+                new XElement(W + "szCs", new XAttribute(W + "val", "20"))));
+
+    /// <summary>Word's note-citation character style: superscript, nothing else.</summary>
+    private static XElement NoteReferenceStyle(string styleId, string name) =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "character"),
+            new XAttribute(W + "styleId", styleId),
+            new XElement(W + "name", new XAttribute(W + "val", name)),
+            new XElement(W + "rPr",
+                new XElement(W + "vertAlign", new XAttribute(W + "val", "superscript"))));
+
+    /// <summary>
     /// Ensure a <em>paragraph</em> style with id <paramref name="styleId"/> exists, synthesizing a
     /// canonical definition for the well-known Word built-ins (<c>Title</c>, <c>Subtitle</c>,
     /// <c>Heading1</c>–<c>Heading9</c>) when missing. Returns <c>true</c> if the style now exists

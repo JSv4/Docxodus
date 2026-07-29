@@ -955,6 +955,56 @@ class DocxSession:
             )
         )
 
+    # -- Footnotes / endnotes ---------------------------------------------
+
+    def insert_footnote(
+        self, anchor_id: str, character_offset: int, markdown: str
+    ) -> EditResult:
+        """Create a footnote with body ``markdown`` and cite it from the body paragraph
+        ``anchor_id``, at ``character_offset`` characters into that paragraph's text (0 = before
+        all text, text length = after all of it).
+
+        On a document with no footnotes yet this also creates the footnotes part, Word's two
+        reserved separator notes, the ``FootnoteText``/``FootnoteReference`` styles and the
+        ``w:footnotePr`` settings declaration; otherwise the existing part is reused. The note id
+        is allocated above every id already used in the package, so non-contiguous ids can't
+        collide.
+
+        The created note anchors come back in ``EditResult.created`` — the definition (kind
+        ``fn``) and its paragraphs (kind ``p``, scope ``fn``) — so the note can immediately be
+        edited with :meth:`replace_text` or removed with :meth:`delete_block` (which also drops
+        the body-side reference).
+
+        Body paragraphs only: Word does not allow a note reference inside a header/footer story or
+        inside another note, so a non-body anchor fails with ``ANCHOR_WRONG_KIND``.
+        """
+        return EditResult._from_wire(
+            self._call(
+                "insert_footnote",
+                {
+                    "anchorId": anchor_id,
+                    "characterOffset": character_offset,
+                    "markdown": markdown,
+                },
+            )
+        )
+
+    def insert_endnote(
+        self, anchor_id: str, character_offset: int, markdown: str
+    ) -> EditResult:
+        """Create an endnote — see :meth:`insert_footnote`; writes the endnotes part and a
+        ``w:endnoteReference``, and the created definition anchor has kind ``en``."""
+        return EditResult._from_wire(
+            self._call(
+                "insert_endnote",
+                {
+                    "anchorId": anchor_id,
+                    "characterOffset": character_offset,
+                    "markdown": markdown,
+                },
+            )
+        )
+
     # -- Tier C: formatting -----------------------------------------------
 
     def apply_format(

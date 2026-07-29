@@ -4633,6 +4633,303 @@ public sealed class DocxSession : IDisposable
         else firstTail.AddBeforeSelf(titlePg);
     }
 
+    // ─── Footnotes / endnotes ─────────────────────────────────────────────────
+    //
+    // Author a note: write the definition into the FootnotesPart/EndnotesPart (creating the part
+    // and Word's two reserved separator notes when it doesn't exist yet) and cite it from a body
+    // paragraph at a character offset. Undo/redo of the part creation is handled by the note-part
+    // reconcile in RestoreSnapshot, mirroring the header/footer one above.
+    //
+    // Editing and deleting an authored note need no new op: ReplaceText already accepts the note's
+    // p:fn/p:en paragraph anchor, and DeleteBlock already removes an fn/en definition together with
+    // every reference to it anywhere in the package (DS140/DS141). InsertFootnote/InsertEndnote
+    // were the only missing verb.
+
+    /// <summary>
+    /// Create a <b>footnote</b> whose body is <paramref name="markdownPayload"/> and cite it from the
+    /// paragraph named by <paramref name="anchorId"/> at <paramref name="characterOffset"/> characters
+    /// into that paragraph's text (0 = before all text, text length = after all of it). Creates the
+    /// <c>FootnotesPart</c>, Word's two reserved separator notes, the <c>FootnoteText</c>/
+    /// <c>FootnoteReference</c> styles, and the <c>w:footnotePr</c> settings declaration if the document
+    /// has no footnotes yet; otherwise the existing part is reused and only a fresh definition is added.
+    /// The note id is allocated above every id already used in the package, so a document with
+    /// non-contiguous note ids can't collide. Returns the created note anchors — the definition
+    /// (kind <c>fn</c>) and its paragraphs (kind <c>p</c>, scope <c>fn</c>) — in
+    /// <see cref="EditResult.Created"/>, so a caller can immediately edit the note with
+    /// <see cref="ReplaceText"/> or remove it with <see cref="DeleteBlock"/>.
+    /// </summary>
+    /// <remarks>
+    /// Body paragraphs only. Word does not allow a note reference inside a header/footer story or
+    /// inside another note, and the projection's <c>fn</c>/<c>en</c> scopes are note <em>definitions</em>,
+    /// not legal citation hosts — a non-body anchor is rejected with
+    /// <see cref="EditErrorCode.AnchorWrongKind"/> rather than silently producing a document Word repairs.
+    /// </remarks>
+    public EditResult InsertFootnote(string anchorId, int characterOffset, string markdownPayload)
+        => InsertNote(isFootnote: true, anchorId, characterOffset, markdownPayload);
+
+    /// <summary>
+    /// Create an <b>endnote</b> and cite it from a body paragraph. Behaves exactly like
+    /// <see cref="InsertFootnote"/> but writes into the <c>EndnotesPart</c>, emits a
+    /// <c>w:endnoteReference</c>, and uses the <c>EndnoteText</c>/<c>EndnoteReference</c> styles;
+    /// the created definition anchor has kind <c>en</c> and its paragraphs scope <c>en</c>.
+    /// </summary>
+    public EditResult InsertEndnote(string anchorId, int characterOffset, string markdownPayload)
+        => InsertNote(isFootnote: false, anchorId, characterOffset, markdownPayload);
+
+    private EditResult InsertNote(bool isFootnote, string anchorId, int characterOffset, string markdownPayload)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var opName = isFootnote ? "InsertFootnote" : "InsertEndnote";
+
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"{opName} requires a paragraph/heading/list-item anchor; got kind={target.Anchor.Kind}", anchorId);
+        if (target.Anchor.Scope != "body")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"{opName} requires a body paragraph anchor; Word does not allow a note reference in the " +
+                $"'{target.Anchor.Scope}' story", anchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no main document part", anchorId);
+
+        var totalText = ParagraphText(element);
+        if (characterOffset < 0 || characterOffset > totalText.Length)
+            return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                $"offset {characterOffset} out of [0, {totalText.Length}]", anchorId);
+
+        // Parse the note body BEFORE snapshotting so a malformed payload is a clean no-op
+        // (no part created, no undo entry pushed).
+        var paras = new List<XElement>();
+        if (!string.IsNullOrEmpty(markdownPayload))
+        {
+            var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
+            if (!parsed.Success)
+                return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
+            foreach (var block in parsed.Blocks)
+                paras.Add(BuildParagraphFromParsedBlock(block));
+        }
+        if (paras.Count == 0) paras.Add(new XElement(W.p));
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var part = EnsureNotePart(main, isFootnote);
+            Internal.StyleFactory.EnsureNoteStyles(_doc!, isFootnote);
+
+            var noteName = isFootnote ? W.footnote : W.endnote;
+            var root = part.GetXDocument().Root!;
+            var id = NextNoteId(main, root, noteName);
+
+            ApplyNoteBodyStyle(paras, isFootnote);
+            var note = new XElement(noteName,
+                new XAttribute(W.id, id.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                paras);
+            root.Add(note);
+            UnidHelper.AssignToSelfAndDescendants(note);
+            part.PutXDocument();
+
+            // Body-side citation. Split first so no run or hyperlink straddles the offset — the
+            // same offset mechanism SplitParagraph and ApplyFormat use, not a second walker.
+            SplitRunsAtOffset(element, characterOffset);
+            SplitInlineContainersAtOffset(element, characterOffset);
+            var refRun = BuildNoteReferenceRun(isFootnote, id);
+            UnidHelper.AssignToSelfAndDescendants(refRun);
+            InsertInlineAtOffset(element, characterOffset, refRun);
+
+            InvalidateProjectionCache();
+
+            var created = new List<Anchor>();
+            var notePartUri = part.Uri.ToString();
+            if (AnchorForUnid((string?)note.Attribute(PtOpenXml.Unid), notePartUri) is { } noteAnchor)
+                created.Add(noteAnchor);
+            foreach (var p in note.Elements(W.p))
+                if (AnchorForUnid((string?)p.Attribute(PtOpenXml.Unid), notePartUri) is { } pa)
+                    created.Add(pa);
+
+            return new EditResult
+            {
+                Success = true,
+                Created = created,
+                Modified = new[] { target.Anchor },
+                Patch = ProjectScope(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RestoreSnapshot(_history.PopForUndo().snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>
+    /// Find-or-create the footnotes/endnotes part. A part created here is seeded with the two
+    /// notes Word reserves for page-rendering scaffolding (<c>type="separator"</c> at id -1 and
+    /// <c>type="continuationSeparator"</c> at id 0) and declared in <c>settings.xml</c>, which is
+    /// what Word itself writes for a document's first note — a part holding only user notes opens,
+    /// but has no separator rule above the note area.
+    /// </summary>
+    private static OpenXmlPart EnsureNotePart(MainDocumentPart main, bool isFootnote)
+    {
+        OpenXmlPart? existing = isFootnote ? main.FootnotesPart : main.EndnotesPart;
+        if (existing is not null) return existing;
+
+        var part = isFootnote ? main.AddNewPart<FootnotesPart>() : (OpenXmlPart)main.AddNewPart<EndnotesPart>();
+        part.PutXDocument(new XDocument(BuildNotePartRoot(isFootnote)));
+        DeclareNoteSeparatorsInSettings(main, isFootnote);
+        return part;
+    }
+
+    /// <summary>A fresh <c>w:footnotes</c>/<c>w:endnotes</c> root holding only Word's two reserved notes.</summary>
+    private static XElement BuildNotePartRoot(bool isFootnote)
+    {
+        var noteName = isFootnote ? W.footnote : W.endnote;
+        // The separator marks are shared between footnotes and endnotes (there is no w:endnoteSeparator).
+        XElement Reserved(string type, int id, XName mark) =>
+            new XElement(noteName,
+                new XAttribute(W.type, type),
+                new XAttribute(W.id, id.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                new XElement(W.p,
+                    new XElement(W.pPr,
+                        new XElement(W.spacing,
+                            new XAttribute(W.after, "0"),
+                            new XAttribute(W.line, "240"),
+                            new XAttribute(W.lineRule, "auto"))),
+                    new XElement(W.r, new XElement(mark))));
+
+        return new XElement(isFootnote ? W.footnotes : W.endnotes,
+            new XAttribute(XNamespace.Xmlns + "w", W.w),
+            new XAttribute(XNamespace.Xmlns + "r", R.r),
+            Reserved("separator", -1, W.separator),
+            Reserved("continuationSeparator", 0, W.continuationSeparator));
+    }
+
+    /// <summary>
+    /// Declare the reserved separator notes in <c>settings.xml</c> (<c>w:footnotePr</c>/
+    /// <c>w:endnotePr</c>), the form Word writes. Uses the shared schema-slot insert so the
+    /// settings part is never wholesale reordered (see <c>EnsureSettingsChildInOrder</c>); an
+    /// existing <c>w:footnotePr</c> carrying the document's own numbering options is left alone.
+    /// </summary>
+    private static void DeclareNoteSeparatorsInSettings(MainDocumentPart main, bool isFootnote)
+    {
+        var settingsPart = main.DocumentSettingsPart ?? main.AddNewPart<DocumentSettingsPart>();
+        var xDoc = settingsPart.GetXDocument();
+        var root = xDoc.Root;
+        if (root is null)
+        {
+            root = new XElement(W.settings, new XAttribute(XNamespace.Xmlns + "w", W.w));
+            xDoc.Add(root);
+        }
+
+        var noteName = isFootnote ? W.footnote : W.endnote;
+        var pr = new XElement(isFootnote ? W.footnotePr : W.endnotePr,
+            new XElement(noteName, new XAttribute(W.id, "-1")),
+            new XElement(noteName, new XAttribute(W.id, "0")));
+        if (WordprocessingMLUtil.EnsureSettingsChildInOrder(root, pr))
+            settingsPart.PutXDocument();
+    }
+
+    /// <summary>
+    /// The next free note id: one above the highest id used by any definition in
+    /// <paramref name="notePartRoot"/> <em>or</em> by any reference to a note of this kind anywhere
+    /// in the package. Counting definitions would alias an existing note in a document whose ids are
+    /// non-contiguous (Word leaves gaps whenever a note is deleted).
+    /// </summary>
+    private static int NextNoteId(MainDocumentPart main, XElement notePartRoot, XName noteName)
+    {
+        int max = 0;
+        foreach (var n in notePartRoot.Elements(noteName))
+            if (int.TryParse((string?)n.Attribute(W.id), out var id) && id > max) max = id;
+
+        var refName = noteName == W.footnote ? W.footnoteReference : W.endnoteReference;
+        foreach (var part in NoteReferenceHostParts(main))
+        {
+            var root = part.GetXDocument().Root;
+            if (root is null) continue;
+            foreach (var r in root.Descendants(refName))
+                if (int.TryParse((string?)r.Attribute(W.id), out var id) && id > max) max = id;
+        }
+        return max + 1;
+    }
+
+    /// <summary>Every part whose XML can carry a note reference, for id-collision scanning.</summary>
+    private static IEnumerable<OpenXmlPart> NoteReferenceHostParts(MainDocumentPart main)
+    {
+        yield return main;
+        foreach (var h in main.HeaderParts) yield return h;
+        foreach (var f in main.FooterParts) yield return f;
+        if (main.FootnotesPart is not null) yield return main.FootnotesPart;
+        if (main.EndnotesPart is not null) yield return main.EndnotesPart;
+    }
+
+    /// <summary>
+    /// Shape the note body the way Word does: every paragraph gets the note-text style (unless the
+    /// payload already set one) and the first paragraph opens with the auto-number mark
+    /// (<c>w:footnoteRef</c>/<c>w:endnoteRef</c>) followed by a separating space, so the note reads
+    /// "1 Text" rather than "1Text".
+    /// </summary>
+    private static void ApplyNoteBodyStyle(List<XElement> paras, bool isFootnote)
+    {
+        var styleId = isFootnote ? "FootnoteText" : "EndnoteText";
+        foreach (var p in paras)
+        {
+            var pPr = p.Element(W.pPr);
+            if (pPr is null) { pPr = new XElement(W.pPr); p.AddFirst(pPr); }
+            if (pPr.Element(W.pStyle) is null)
+                pPr.AddFirst(new XElement(W.pStyle, new XAttribute(W.val, styleId)));
+        }
+
+        // The loop above guarantees a w:pPr on every paragraph, so the mark + its separating
+        // space go straight after the first paragraph's — schema-ordered, ahead of the payload.
+        var firstPPr = paras[0].Element(W.pPr)!;
+        firstPPr.AddAfterSelf(
+            new XElement(W.r,
+                new XElement(W.rPr,
+                    new XElement(W.rStyle, new XAttribute(W.val, NoteReferenceStyleId(isFootnote)))),
+                new XElement(isFootnote ? W.footnoteRef : W.endnoteRef)),
+            new XElement(W.r,
+                new XElement(W.t, new XAttribute(XNamespace.Xml + "space", "preserve"), " ")));
+    }
+
+    /// <summary>The body-side citation run: a superscript-styled <c>w:footnoteReference</c>/
+    /// <c>w:endnoteReference</c> pointing at <paramref name="id"/>.</summary>
+    private static XElement BuildNoteReferenceRun(bool isFootnote, int id) =>
+        new XElement(W.r,
+            new XElement(W.rPr,
+                new XElement(W.rStyle, new XAttribute(W.val, NoteReferenceStyleId(isFootnote)))),
+            new XElement(isFootnote ? W.footnoteReference : W.endnoteReference,
+                new XAttribute(W.id, id.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+
+    private static string NoteReferenceStyleId(bool isFootnote) =>
+        isFootnote ? "FootnoteReference" : "EndnoteReference";
+
+    /// <summary>
+    /// Insert <paramref name="newChild"/> into <paramref name="paragraph"/> at
+    /// <paramref name="offset"/> characters into its text — before the first child that starts at
+    /// or past the offset, else appended. Callers must have cleared the boundary first
+    /// (<see cref="SplitRunsAtOffset"/> + <see cref="SplitInlineContainersAtOffset"/>); this is the
+    /// insert-side counterpart of <see cref="MoveInlineChildrenAfter"/> and counts positions the
+    /// same way, so zero-width markers sandwiched at the offset keep the ref inside their range.
+    /// </summary>
+    private static void InsertInlineAtOffset(XElement paragraph, int offset, XElement newChild)
+    {
+        int consumed = 0;
+        foreach (var child in paragraph.Elements().ToList())
+        {
+            if (child.Name == W.pPr) continue;
+            if (consumed >= offset) { child.AddBeforeSelf(newChild); return; }
+            consumed += IsInlineChild(child) ? InlineChildTextLength(child) : 0;
+        }
+        paragraph.Add(newChild);
+    }
+
     /// <summary>
     /// Insert a <paramref name="rows"/>×<paramref name="cols"/> table before/after the block named
     /// by <paramref name="anchorId"/>. <paramref name="options"/> controls borders, per-cell markdown
@@ -5439,9 +5736,12 @@ public sealed class DocxSession : IDisposable
     /// existed at snapshot time. Drives create/delete reconciliation in <see cref="RestoreSnapshot"/>
     /// so ops that add a header/footer part (SetHeaderText/SetFooterText) undo/redo cleanly; the
     /// content is read back from <see cref="Parts"/> by URI when a part must be re-created.</param>
+    /// <param name="NoteParts">The same, for the footnotes/endnotes parts, which
+    /// InsertFootnote/InsertEndnote create on a document that had no notes.</param>
     internal sealed record DocumentSnapshot(
         System.Collections.Generic.IReadOnlyList<(string PartUri, XDocument Xml)> Parts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsHeader, string PartUri)> HeaderFooterParts);
+        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsHeader, string PartUri)> HeaderFooterParts,
+        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts);
 
     internal DocumentSnapshot TakeSnapshot()
     {
@@ -5450,13 +5750,18 @@ public sealed class DocxSession : IDisposable
             parts.Add((part.Uri.ToString(), new XDocument(part.GetXDocument())));
 
         var hfParts = new System.Collections.Generic.List<(string, bool, string)>();
+        var noteParts = new System.Collections.Generic.List<(string, bool, string)>();
         var main = _doc!.MainDocumentPart;
         if (main is not null)
         {
             foreach (var h in main.HeaderParts) hfParts.Add((main.GetIdOfPart(h), true, h.Uri.ToString()));
             foreach (var f in main.FooterParts) hfParts.Add((main.GetIdOfPart(f), false, f.Uri.ToString()));
+            if (main.FootnotesPart is not null)
+                noteParts.Add((main.GetIdOfPart(main.FootnotesPart), true, main.FootnotesPart.Uri.ToString()));
+            if (main.EndnotesPart is not null)
+                noteParts.Add((main.GetIdOfPart(main.EndnotesPart), false, main.EndnotesPart.Uri.ToString()));
         }
-        return new DocumentSnapshot(parts, hfParts);
+        return new DocumentSnapshot(parts, hfParts, noteParts);
     }
 
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
@@ -5481,12 +5786,17 @@ public sealed class DocxSession : IDisposable
         // re-create (with the snapshot's relationship id, so the restored sectPr reference resolves)
         // the ones it does. Content restore above already handled parts present in both by URI.
         if (main is not null)
+        {
             ReconcileHeaderFooterParts(main, snapshot, byUri);
+            // Same reconcile for the footnotes/endnotes parts, which InsertFootnote/InsertEndnote
+            // create on a document that had no notes.
+            ReconcileNoteParts(main, snapshot, byUri);
+        }
 
         // The annotations CustomXmlPart is reconciled the same way (its own factory) — see
         // EnumerateProjectedPartsForSnapshot for why AddCustomXmlPart(CustomXml) is unsafe for
         // non-annotation custom-xml parts (wrong content type, no CustomXmlPropertiesPart partner).
-        // FootnotesPart / EndnotesPart / CommentsPart are still content-only (no op adds/removes them).
+        // CommentsPart is still content-only (no op adds/removes it).
         if (main is not null)
         {
             var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
@@ -5550,6 +5860,40 @@ public sealed class DocxSession : IDisposable
             OpenXmlPart np = kv.Value.IsHeader
                 ? main.AddNewPart<HeaderPart>(kv.Key)
                 : main.AddNewPart<FooterPart>(kv.Key);
+            np.PutXDocument(new XDocument(xml));
+        }
+    }
+
+    /// <summary>
+    /// The <see cref="ReconcileHeaderFooterParts"/> twin for the footnotes/endnotes parts: delete a
+    /// part created since <paramref name="snapshot"/> (undo of an InsertFootnote/InsertEndnote that
+    /// introduced notes) and re-create one the live document has since lost (redo), keeping the
+    /// original relationship id so the package relationship the restored XML expects still resolves.
+    /// Parts present in both keep their content, restored by URI in <see cref="RestoreSnapshot"/>.
+    /// </summary>
+    private static void ReconcileNoteParts(
+        MainDocumentPart main, DocumentSnapshot snapshot,
+        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+    {
+        var snapByRel = new System.Collections.Generic.Dictionary<string, (bool IsFootnote, string PartUri)>(StringComparer.Ordinal);
+        foreach (var (relId, isFootnote, partUri) in snapshot.NoteParts)
+            snapByRel[relId] = (isFootnote, partUri);
+
+        var live = new System.Collections.Generic.Dictionary<string, OpenXmlPart>(StringComparer.Ordinal);
+        if (main.FootnotesPart is not null) live[main.GetIdOfPart(main.FootnotesPart)] = main.FootnotesPart;
+        if (main.EndnotesPart is not null) live[main.GetIdOfPart(main.EndnotesPart)] = main.EndnotesPart;
+
+        foreach (var kv in live)
+            if (!snapByRel.ContainsKey(kv.Key))
+                main.DeletePart(kv.Value);
+
+        foreach (var kv in snapByRel)
+        {
+            if (live.ContainsKey(kv.Key)) continue;
+            if (!byUri.TryGetValue(kv.Value.PartUri, out var xml)) continue;
+            OpenXmlPart np = kv.Value.IsFootnote
+                ? main.AddNewPart<FootnotesPart>(kv.Key)
+                : main.AddNewPart<EndnotesPart>(kv.Key);
             np.PutXDocument(new XDocument(xml));
         }
     }

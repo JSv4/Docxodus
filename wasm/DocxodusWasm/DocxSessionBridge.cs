@@ -181,6 +181,22 @@ public static partial class DocxSessionBridge
     public static string EnsureHeaderFooterVisible(int h, string anchor, string kind) =>
         DocxSessionOps.EnsureHeaderFooterVisible(h, anchor, DocxSessionJson.ParseHeaderFooterKind(kind));
 
+    /// <summary>
+    /// Create a footnote with body <paramref name="markdown"/> and cite it from the body paragraph
+    /// <paramref name="anchor"/> at <paramref name="characterOffset"/> characters into its text.
+    /// Creates the footnotes part + Word's reserved separator notes on first use. Returns the created
+    /// note anchors (kind <c>fn</c> plus its <c>p</c>/scope <c>fn</c> paragraphs) in <c>created</c>.
+    /// </summary>
+    [JSExport]
+    public static string InsertFootnote(int h, string anchor, int characterOffset, string markdown) =>
+        DocxSessionOps.InsertFootnote(h, anchor, characterOffset, markdown);
+
+    /// <summary>Create an endnote — see <see cref="InsertFootnote"/>; writes the endnotes part and a
+    /// <c>w:endnoteReference</c>, and the created definition anchor has kind <c>en</c>.</summary>
+    [JSExport]
+    public static string InsertEndnote(int h, string anchor, int characterOffset, string markdown) =>
+        DocxSessionOps.InsertEndnote(h, anchor, characterOffset, markdown);
+
     [JSExport]
     public static string ApplyFormat(int h, string anchor, string spanJson, string opJson) =>
         DocxSessionOps.ApplyFormat(h, anchor, ParseSpan(spanJson), DocxSessionJson.ParseFormatOp(opJson));

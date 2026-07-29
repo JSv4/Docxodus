@@ -72,7 +72,8 @@ This is symmetric by design: anything the projector can emit, the parser can acc
 
 - If you can see it in the projection output, you can write it in a payload.
 - If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`), then edit cells with `ReplaceCellContent` or address each cell-paragraph anchor; reshape with `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` (by a cell-paragraph anchor; v1 assumes a rectangular grid, no `w:gridSpan`).
-- If you need a footnote, comment, or image → those are v2 ops, currently rejected with a clear error.
+- If you need a footnote or endnote → `InsertFootnote(anchor, offset, markdown)` / `InsertEndnote(...)`; a `[^label]` reference in a *payload* stays rejected, because a label can't name a note the payload doesn't define.
+- If you need a comment or image → those are v2 ops, currently rejected with a clear error.
 - For everything OOXML can do that markdown can't (complex tables, math, content controls, drawings) → `session.Raw.*`.
 
 We didn't pick CommonMark or GFM as the input language because the projector's subset is small and well-defined; running a full parser against that subset would import surprise (e.g., GFM tables silently splitting paragraphs, autolinks mis-classifying spans). The hand-rolled parser is ~300 LOC, has no dependencies, and gives us complete control over what gets rejected and why.
@@ -101,6 +102,7 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `ReplaceCellContent(tc, md)` | — | descendant inline anchors (rare) | `tc` | `tc` |
 | `SetHeaderText(p, kind, md)` / `SetFooterText(...)` | the new header/footer paragraph anchors (scope `hdr{N}`/`ftr{N}`) | — (reused-part old paragraphs cease to exist; not separately reported in v1) | — | whole document |
 | `InsertPageNumberField(p, field?)` | — | — | `p` (the paragraph the field is appended to) | `p` |
+| `InsertFootnote(p, offset, md)` / `InsertEndnote(...)` | the note definition (`fn`/`en`) + its paragraphs (scope `fn`/`en`) | — | `p` (the citing paragraph) | whole document |
 | `Raw.InsertXml(a, pos, xml)` | every block in the new XML | — | — | enclosing parent |
 | `Raw.ReplaceXml(a, xml)` | unids present in the new XML but not the old (typical for caller-authored XML) | unids present in the old element but not the new (when `a` itself is gone) | unids present in both (typical for the `GetXml → mutate → ReplaceXml` round trip, which preserves Unids) | enclosing parent |
 | `Undo()` / `Redo()` | (diff vs current) | (diff vs current) | (diff vs current) | `null` — caller re-projects |
@@ -156,6 +158,11 @@ What am I editing?
 │
 ├── Putting a page number in a header/footer paragraph?
 │       → InsertPageNumberField(hdrOrFtrAnchor, PageNumberField.CurrentPage|TotalPages)
+│
+├── Adding a footnote/endnote (cited from a body paragraph at a character offset)?
+│       → InsertFootnote(bodyAnchor, offset, markdown)
+│       → InsertEndnote(bodyAnchor, offset, markdown)   # Created lists the fn/en anchors
+│   …then edit it with ReplaceText(notePara, md) or drop it with DeleteBlock(noteDef)
 │
 ├── Inserting/deleting table rows or columns, merging cells,
 │   embedding a chart, inserting a math equation,
@@ -397,9 +404,122 @@ which every text/format mutation on this page already accepts.
   assigns Unids to the main document part only, so header/footer content carries no
   `data-anchor`; and pagination clones one header node onto every page, so N pages would
   mean N DOM nodes sharing one anchor. The docked bands avoid both.
-- **Footnote/endnote authoring** is tracked separately (still `FootnoteRefNotSupported`).
 - **Page-number formatting** (`w:pgNumType` start/format, `PAGE \* roman`) — v1 emits a
   plain `PAGE`/`NUMPAGES`; field switches are a follow-up.
+
+## Tier B: footnotes & endnotes (issue #276)
+
+The projection has always *read* notes — the `fn`/`en` scopes, `EditSummary.FootnoteCount`,
+`ReplaceText` on a note's paragraph, `DeleteBlock` on a note definition (which also strips
+every reference to it). What was missing was the verb that *creates* one. `InsertFootnote` /
+`InsertEndnote` close that; there is no separate "edit note" or "delete note" op because the
+existing anchor-addressed ops already are those.
+
+### Methods
+
+| Method | What it does |
+|---|---|
+| `InsertFootnote(anchorId, characterOffset, markdown)` | Create a footnote with body `markdown` and cite it from body paragraph `anchorId`, `characterOffset` characters into its text. |
+| `InsertEndnote(anchorId, characterOffset, markdown)` | Same, into the endnotes part, emitting a `w:endnoteReference`. |
+
+**Addressing.** A **body** paragraph/heading/list-item anchor, plus a character offset in
+`[0, len(paragraph text)]` — `0` places the citation before all text, `len` after all of it.
+An out-of-range offset is `OffsetOutOfRange`. Non-body anchors are `AnchorWrongKind`: Word does
+not allow a note reference inside a header/footer story or inside another note, and the `fn`/`en`
+scopes are note *definitions*, not citation hosts. Rejecting is deliberate — the alternative is
+emitting a document Word offers to repair.
+
+The offset is resolved through the same `SplitRunsAtOffset` + `SplitInlineContainersAtOffset`
+pair that `SplitParagraph` and `ApplyFormat` use, so a citation lands cleanly mid-run and inside
+a hyperlink without a second offset walker to drift.
+
+**What the first note in a document creates.** On a package with no `FootnotesPart` (or
+`EndnotesPart`), the op writes the whole scaffold Word writes, not just the definition:
+
+- the part itself, holding the two notes Word reserves for page-rendering scaffolding —
+  `w:type="separator"` at id `-1` and `w:type="continuationSeparator"` at id `0`. The
+  projector already filters these out of the anchor index (`IsBoilerplateNote`), and
+  `DeleteBlock` already refuses to remove them.
+- the `w:footnotePr`/`w:endnotePr` settings declaration naming those two ids, inserted at
+  its CT_Settings schema slot via the shared `EnsureSettingsChildInOrder` — the settings part
+  is never wholesale reordered (same discipline as `w:evenAndOddHeaders`; see the header/footer
+  section for the document this protects).
+- the `FootnoteText`/`EndnoteText` paragraph style and the superscript
+  `FootnoteReference`/`EndnoteReference` character style, find-or-create via `StyleFactory`, so
+  a house style already in the document wins and a document that had neither doesn't render the
+  citation as full-size body text.
+
+A second note reuses all of it and only appends a definition.
+
+**Note id allocation.** One above the highest id used by any definition in the note part *or*
+by any reference to a note of that kind anywhere in the package (body, headers, footers, both
+note parts). Counting definitions would alias an existing note the moment ids are
+non-contiguous — which is the normal state of a document that has ever had a note deleted, since
+Word leaves the gap. `DS322` pins this with a fixture whose user notes are ids 1, 5 and 9.
+
+**Markup.** Word-faithful on both sides:
+
+```xml
+<!-- body -->
+<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="1"/></w:r>
+
+<!-- footnotes.xml -->
+<w:footnote w:id="1">
+  <w:p>
+    <w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>
+    <w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>
+    <w:r><w:t xml:space="preserve"> </w:t></w:r>
+    <w:r><w:t>Source: 2025 annual report.</w:t></w:r>
+  </w:p>
+</w:footnote>
+```
+
+The `w:footnoteRef`/`w:endnoteRef` auto-number mark plus its separating space go on the first
+paragraph of the note only, so the note reads "1 Source: …" rather than "1Source: …".
+The body is the same markdown subset as `InsertParagraph`; an empty payload yields one empty
+note paragraph.
+
+**Return shape.** `Created` carries the note **definition** anchor (kind `fn`/`en`) followed by
+its paragraph anchors (kind `p`, scope `fn`/`en`); `Modified` carries the citing body paragraph.
+That is the whole lifecycle handoff:
+
+```csharp
+var made = session.InsertFootnote(bodyAnchor, 0, "Source: 2025 annual report.");
+var notePara = made.Created.First(a => a.Kind == "p" && a.Scope == "fn").Id;
+var noteDef  = made.Created.First(a => a.Kind == "fn").Id;
+
+session.ReplaceText(notePara, "Source: 2026 annual report.");  // edit the note
+session.DeleteBlock(noteDef);                                  // drop it + the body citation
+```
+
+### Undo/redo and the snapshot reconcile
+
+Creating the first note *adds an OOXML part*, the same problem `SetHeaderText`/`SetFooterText`
+solved. `DocumentSnapshot` therefore records the footnotes/endnotes parts' relationship ids
+alongside the header/footer ones, and `RestoreSnapshot` runs a `ReconcileNoteParts` twin of
+`ReconcileHeaderFooterParts`: undo deletes a part the snapshot lacks, redo re-creates it with its
+original relationship id (`AddNewPart<FootnotesPart>(relId)`). Content of surviving parts restores
+by URI as before. `DS328` pins undo-removes-part / redo-restores-part.
+
+### `FootnoteRefNotSupported` — narrowed, not retired
+
+A `[^label]` reference inside a **markdown payload** is still rejected. The error code stays
+(it is public surface and clients switch on it); only its meaning narrowed: a bare label can't
+be resolved to a note the payload doesn't define, so the message now names the dedicated op.
+Authoring a note is `InsertFootnote`/`InsertEndnote`; the payload subset is for a note's *body*,
+not for minting citations.
+
+### Not yet
+
+- **Moving a citation** without deleting and re-creating the note.
+- **Note numbering options** (`w:numFmt`, restart-per-page/section, custom marks) — the
+  `w:footnotePr` written on part creation declares only the separators; everything else is
+  Word's default (`1, 2, 3…`, continuous).
+- **Citing an existing note twice.** Each call creates a new definition; there is no
+  "reference note N again" op.
+- **Tracked-changes mode.** `Settings.TrackedChanges = RenderInline` does not wrap the citation
+  in `w:ins` — consistent with every other insert op (`InsertParagraph`, `InsertTable`,
+  `InsertHorizontalRule`, `SetHeaderText`); only `ReplaceText`/`DeleteBlock`/`DeleteRange` track.
 
 ## Tier E: Annotations
 

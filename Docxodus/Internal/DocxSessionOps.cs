@@ -220,6 +220,14 @@ internal static class DocxSessionOps
     public static string EnsureHeaderFooterVisible(int handle, string anchorId, HeaderFooterKind kind) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).EnsureHeaderFooterVisible(anchorId, kind));
 
+    // ─── Footnotes / endnotes ───────────────────────────────────────────
+
+    public static string InsertFootnote(int handle, string anchorId, int characterOffset, string markdown) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertFootnote(anchorId, characterOffset, markdown));
+
+    public static string InsertEndnote(int handle, string anchorId, int characterOffset, string markdown) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertEndnote(anchorId, characterOffset, markdown));
+
     // ─── Tier C: formatting ─────────────────────────────────────────────
 
     public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp op) =>
