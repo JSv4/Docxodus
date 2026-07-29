@@ -379,6 +379,162 @@ public class DocxSessionNoteAuthoringTests
                  && r.Elements(W + "t").Any(t => (string)t == "Jones"));
     }
 
+    /// <summary>
+    /// Note ids must ascend in REFERENCE order, the invariant every Word-authored document holds
+    /// (verified across the TestFiles corpus, gaps and all). Renderers depend on it: LibreOffice
+    /// numbers the body markers by citation position but pairs them with the id-sorted definition
+    /// list, so a first-cited note holding the highest id silently renders the WRONG note text —
+    /// the marker says "1" and points at somebody else's footnote. Allocating max(id)+1 is only
+    /// correct when the new citation follows every existing one.
+    /// </summary>
+    [Fact]
+    public void DS336_InsertingBeforeExistingCitations_KeepsIdsAscendingInReferenceOrder()
+    {
+        using var session = new DocxSession(BuildDocWithTwoCitedFootnotes());
+        var first = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && (t.TextPreview ?? "").StartsWith("Alpha")).Anchor.Id;
+
+        // Cite a new note from the FIRST paragraph — ahead of both existing citations.
+        Assert.True(session.InsertFootnote(first, 5, "BRAND NEW.").Success);
+
+        var body = BodyXml(session.Save());
+        var refsInDocumentOrder = body.Descendants(W + "footnoteReference")
+            .Select(r => int.Parse((string)r.Attribute(W + "id")!))
+            .ToList();
+
+        Assert.Equal(3, refsInDocumentOrder.Count);
+        Assert.Equal(refsInDocumentOrder.OrderBy(i => i).ToList(), refsInDocumentOrder);
+
+        // …and the new note's id still resolves to the new note's text, not a shifted neighbour.
+        var footnotes = PartXml(session.Save(), m => m.FootnotesPart);
+        var newNote = footnotes.Elements(W + "footnote")
+            .First(n => (string?)n.Attribute(W + "id") == refsInDocumentOrder[0].ToString());
+        Assert.Contains("BRAND NEW.", newNote.Descendants(W + "t").Select(t => (string)t));
+
+        // Every id is still unique and every citation still resolves to a definition.
+        var defIds = footnotes.Elements(W + "footnote")
+            .Select(n => (string)n.Attribute(W + "id")!).ToList();
+        Assert.Equal(defIds.Count, defIds.Distinct().Count());
+        foreach (var r in refsInDocumentOrder) Assert.Contains(r.ToString(), defIds);
+    }
+
+    [Fact]
+    public void DS337_ShiftedNotes_KeepTheirOwnText()
+    {
+        using var session = new DocxSession(BuildDocWithTwoCitedFootnotes());
+        var first = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && (t.TextPreview ?? "").StartsWith("Alpha")).Anchor.Id;
+        Assert.True(session.InsertFootnote(first, 5, "BRAND NEW.").Success);
+
+        var saved = session.Save();
+        var body = BodyXml(saved);
+        var footnotes = PartXml(saved, m => m.FootnotesPart);
+        string TextOf(string id) => string.Concat(footnotes.Elements(W + "footnote")
+            .First(n => (string?)n.Attribute(W + "id") == id)
+            .Descendants(W + "t").Select(t => (string)t));
+
+        // Walk each citing paragraph and assert its citation resolves to the right note.
+        var paras = body.Descendants(W + "p")
+            .Where(p => p.Descendants(W + "footnoteReference").Any()).ToList();
+        foreach (var p in paras)
+        {
+            var text = string.Concat(p.Descendants(W + "t").Select(t => (string)t));
+            var id = (string)p.Descendants(W + "footnoteReference").First().Attribute(W + "id")!;
+            var expected = text.StartsWith("Alpha") ? "BRAND NEW."
+                         : text.StartsWith("Beta") ? "EXISTING ONE."
+                         : "EXISTING TWO.";
+            Assert.Contains(expected, TextOf(id));
+        }
+    }
+
+    /// <summary>
+    /// The renumbering shift has to reach references that live OUTSIDE the main document part.
+    /// An endnote can be cited from inside a footnote body, so inserting an endnote ahead of that
+    /// citation must renumber the reference sitting in <c>footnotes.xml</c> too — and flush that
+    /// part. If it didn't, the footnote's citation would silently point at the wrong endnote.
+    /// </summary>
+    [Fact]
+    public void DS338_ShiftRenumbersNoteReferencesInPeerParts()
+    {
+        using var session = new DocxSession(BuildDocWithEndnoteCitedFromAFootnote());
+        var first = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && (t.TextPreview ?? "").StartsWith("Alpha")).Anchor.Id;
+
+        // Insert an endnote in the FIRST paragraph — ahead of the body's existing endnote citation.
+        Assert.True(session.InsertEndnote(first, 5, "NEW ENDNOTE.").Success);
+
+        var saved = session.Save();
+        var endnotes = PartXml(saved, m => m.EndnotesPart);
+        string EndnoteText(string id) => string.Concat(endnotes.Elements(W + "endnote")
+            .First(n => (string?)n.Attribute(W + "id") == id)
+            .Descendants(W + "t").Select(t => (string)t));
+
+        // The body's own citation still resolves to the endnote it always meant.
+        var body = BodyXml(saved);
+        var bodyRefs = body.Descendants(W + "endnoteReference")
+            .Select(r => (string)r.Attribute(W + "id")!).ToList();
+        Assert.Equal(2, bodyRefs.Count);
+        Assert.Contains("NEW ENDNOTE.", EndnoteText(bodyRefs[0]));
+        Assert.Contains("BODY-CITED ENDNOTE.", EndnoteText(bodyRefs[1]));
+
+        // …and so does the one buried inside the footnote body, in a different part.
+        var footnotes = PartXml(saved, m => m.FootnotesPart);
+        var inNote = footnotes.Descendants(W + "endnoteReference")
+            .Select(r => (string)r.Attribute(W + "id")!).ToList();
+        var citedFromFootnote = Assert.Single(inNote);
+        Assert.Contains("NOTE-CITED ENDNOTE.", EndnoteText(citedFromFootnote));
+    }
+
+    /// <summary>
+    /// Two endnotes: one cited from the body, one cited from inside a footnote's body — the
+    /// cross-part citation the renumbering shift has to follow.
+    /// </summary>
+    private static byte[] BuildDocWithEndnoteCitedFromAFootnote()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new DocumentFormat.OpenXml.Wordprocessing.Document(
+                new DocumentFormat.OpenXml.Wordprocessing.Body(
+                    new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
+                        new DocumentFormat.OpenXml.Wordprocessing.Run(
+                            new DocumentFormat.OpenXml.Wordprocessing.Text("Alpha paragraph with no note."))),
+                    new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
+                        new DocumentFormat.OpenXml.Wordprocessing.Run(
+                            new DocumentFormat.OpenXml.Wordprocessing.Text("Beta cites a footnote and an endnote.")),
+                        new DocumentFormat.OpenXml.Wordprocessing.Run(
+                            new DocumentFormat.OpenXml.Wordprocessing.FootnoteReference { Id = 1 }),
+                        new DocumentFormat.OpenXml.Wordprocessing.Run(
+                            new DocumentFormat.OpenXml.Wordprocessing.EndnoteReference { Id = 1 }))));
+
+            // The footnote's body cites endnote 2 — a reference in a peer part.
+            var fnPart = main.AddNewPart<FootnotesPart>();
+            using (var s = fnPart.GetStream(FileMode.Create))
+            using (var w = new StreamWriter(s))
+                w.Write("""
+                    <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                      <w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
+                      <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
+                      <w:footnote w:id="1"><w:p><w:r><w:t>Footnote body.</w:t></w:r><w:r><w:endnoteReference w:id="2"/></w:r></w:p></w:footnote>
+                    </w:footnotes>
+                    """);
+
+            var enPart = main.AddNewPart<EndnotesPart>();
+            using (var s = enPart.GetStream(FileMode.Create))
+            using (var w = new StreamWriter(s))
+                w.Write("""
+                    <w:endnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                      <w:endnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:endnote>
+                      <w:endnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:endnote>
+                      <w:endnote w:id="1"><w:p><w:r><w:t>BODY-CITED ENDNOTE.</w:t></w:r></w:p></w:endnote>
+                      <w:endnote w:id="2"><w:p><w:r><w:t>NOTE-CITED ENDNOTE.</w:t></w:r></w:p></w:endnote>
+                    </w:endnotes>
+                    """);
+        }
+        return ms.ToArray();
+    }
+
     [Fact]
     public void DS334_AuthoredNotes_ProduceASchemaValidDocument()
     {
@@ -395,6 +551,49 @@ public class DocxSessionNoteAuthoringTests
             .Select(e => $"{e.Part?.Uri}: {e.Description}")
             .ToList();
         Assert.Empty(errors);
+    }
+
+    /// <summary>
+    /// Three paragraphs; the second and third each cite a footnote (ids 1 and 2, ascending in
+    /// reference order as every Word document does). The first cites nothing — inserting there
+    /// puts a new citation AHEAD of both existing ones.
+    /// </summary>
+    private static byte[] BuildDocWithTwoCitedFootnotes()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = WordprocessingDocument.Create(ms, DocumentFormat.OpenXml.WordprocessingDocumentType.Document))
+        {
+            var main = doc.AddMainDocumentPart();
+            main.Document = new DocumentFormat.OpenXml.Wordprocessing.Document(
+                new DocumentFormat.OpenXml.Wordprocessing.Body(
+                    new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
+                        new DocumentFormat.OpenXml.Wordprocessing.Run(
+                            new DocumentFormat.OpenXml.Wordprocessing.Text("Alpha paragraph with no note."))),
+                    new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
+                        new DocumentFormat.OpenXml.Wordprocessing.Run(
+                            new DocumentFormat.OpenXml.Wordprocessing.Text("Beta cites one.")),
+                        new DocumentFormat.OpenXml.Wordprocessing.Run(
+                            new DocumentFormat.OpenXml.Wordprocessing.FootnoteReference { Id = 1 })),
+                    new DocumentFormat.OpenXml.Wordprocessing.Paragraph(
+                        new DocumentFormat.OpenXml.Wordprocessing.Run(
+                            new DocumentFormat.OpenXml.Wordprocessing.Text("Gamma cites two.")),
+                        new DocumentFormat.OpenXml.Wordprocessing.Run(
+                            new DocumentFormat.OpenXml.Wordprocessing.FootnoteReference { Id = 2 }))));
+
+            var fnPart = main.AddNewPart<FootnotesPart>();
+            var fnXml = """
+                <w:footnotes xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                  <w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote>
+                  <w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote>
+                  <w:footnote w:id="1"><w:p><w:r><w:t>EXISTING ONE.</w:t></w:r></w:p></w:footnote>
+                  <w:footnote w:id="2"><w:p><w:r><w:t>EXISTING TWO.</w:t></w:r></w:p></w:footnote>
+                </w:footnotes>
+                """;
+            using var s = fnPart.GetStream(FileMode.Create);
+            using var w = new StreamWriter(s);
+            w.Write(fnXml);
+        }
+        return ms.ToArray();
     }
 
     /// <summary>

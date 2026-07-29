@@ -4725,7 +4725,20 @@ public sealed class DocxSession : IDisposable
 
             var noteName = isFootnote ? W.footnote : W.endnote;
             var root = part.GetXDocument().Root!;
-            var id = NextNoteId(main, root, noteName);
+
+            // Body-side citation FIRST, carrying a placeholder id — the note's real id is chosen
+            // from where this citation lands among the existing ones (see NextNoteIdInReferenceOrder).
+            // Split before inserting so no run or hyperlink straddles the offset: the same offset
+            // mechanism SplitParagraph and ApplyFormat use, not a second walker.
+            SplitRunsAtOffset(element, characterOffset);
+            SplitInlineContainersAtOffset(element, characterOffset);
+            var refRun = BuildNoteReferenceRun(isFootnote, NoteIdPlaceholder);
+            UnidHelper.AssignToSelfAndDescendants(refRun);
+            InsertInlineAtOffset(element, characterOffset, refRun);
+
+            var id = NextNoteIdInReferenceOrder(main, root, noteName);
+            refRun.Descendants(isFootnote ? W.footnoteReference : W.endnoteReference).First()
+                .SetAttributeValue(W.id, id.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
             ApplyNoteBodyStyle(paras, isFootnote);
             var note = new XElement(noteName,
@@ -4734,14 +4747,6 @@ public sealed class DocxSession : IDisposable
             root.Add(note);
             UnidHelper.AssignToSelfAndDescendants(note);
             part.PutXDocument();
-
-            // Body-side citation. Split first so no run or hyperlink straddles the offset — the
-            // same offset mechanism SplitParagraph and ApplyFormat use, not a second walker.
-            SplitRunsAtOffset(element, characterOffset);
-            SplitInlineContainersAtOffset(element, characterOffset);
-            var refRun = BuildNoteReferenceRun(isFootnote, id);
-            UnidHelper.AssignToSelfAndDescendants(refRun);
-            InsertInlineAtOffset(element, characterOffset, refRun);
 
             InvalidateProjectionCache();
 
@@ -4837,18 +4842,57 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>
-    /// The next free note id: one above the highest id used by any definition in
-    /// <paramref name="notePartRoot"/> <em>or</em> by any reference to a note of this kind anywhere
-    /// in the package. Counting definitions would alias an existing note in a document whose ids are
-    /// non-contiguous (Word leaves gaps whenever a note is deleted).
+    /// Sentinel id the citation run carries until its real id is known. Negative and far below any
+    /// legal note id (Word reserves -1 and 0), so it can never be mistaken for a real citation.
     /// </summary>
-    private static int NextNoteId(MainDocumentPart main, XElement notePartRoot, XName noteName)
+    private const int NoteIdPlaceholder = int.MinValue;
+
+    /// <summary>
+    /// The id for a note whose citation (marked by <see cref="NoteIdPlaceholder"/>) is already in
+    /// the body — chosen so ids stay ascending in <em>reference</em> order, shifting the notes cited
+    /// after it up by one when necessary. Returns the new note's id.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Ascending-in-reference-order is an invariant every Word-authored document holds (verified
+    /// across the TestFiles corpus — including documents whose ids have gaps, e.g. 17/21/26 — and
+    /// the 94-footnote NVCA model certificate). Renderers rely on it: LibreOffice numbers the body
+    /// markers by citation position but pairs them against the <em>id-sorted</em> definition list,
+    /// so a first-cited note holding the highest id renders the WRONG note text — the marker reads
+    /// "1" and points at somebody else's footnote. Nothing errors; the document is simply wrong.
+    /// </para>
+    /// <para>
+    /// Appending <c>max(id) + 1</c> is therefore correct only when the citation follows every
+    /// existing one — the common case, and the one that costs nothing here. Otherwise the new note
+    /// takes the smallest id cited after it and everything at or above that shifts up, which leaves
+    /// the notes cited *earlier* untouched. Taking the minimum of the following ids (rather than the
+    /// first) keeps this correct even if the input document already violated the invariant.
+    /// </para>
+    /// </remarks>
+    private static int NextNoteIdInReferenceOrder(MainDocumentPart main, XElement notePartRoot, XName noteName)
     {
+        var refName = noteName == W.footnote ? W.footnoteReference : W.endnoteReference;
+
+        // Citations in document order; the placeholder marks where the new one landed.
+        var ordered = main.GetXDocument().Root!.Descendants(refName)
+            .Select(r => int.TryParse((string?)r.Attribute(W.id), out var v) ? v : 0)
+            .ToList();
+        var following = ordered.SkipWhile(v => v != NoteIdPlaceholder).Skip(1)
+            .Where(v => v != NoteIdPlaceholder).ToList();
+
+        if (following.Count > 0)
+        {
+            var slot = following.Min();
+            ShiftNoteIdsAtOrAbove(main, notePartRoot, noteName, slot);
+            return slot;
+        }
+
+        // Cited after every existing note — appending keeps ids ascending, so no shift is needed.
+        // Scan definitions AND references (a note may be cited from a header/footer or another
+        // note) so a document with gaps can't alias an existing definition.
         int max = 0;
         foreach (var n in notePartRoot.Elements(noteName))
             if (int.TryParse((string?)n.Attribute(W.id), out var id) && id > max) max = id;
-
-        var refName = noteName == W.footnote ? W.footnoteReference : W.endnoteReference;
         foreach (var part in NoteReferenceHostParts(main))
         {
             var root = part.GetXDocument().Root;
@@ -4857,6 +4901,42 @@ public sealed class DocxSession : IDisposable
                 if (int.TryParse((string?)r.Attribute(W.id), out var id) && id > max) max = id;
         }
         return max + 1;
+    }
+
+    /// <summary>
+    /// Renumber every user note with id &gt;= <paramref name="threshold"/> up by one — both the
+    /// definitions and every reference to them anywhere in the package — to open that id for a
+    /// newly inserted note. Word-reserved notes (any <c>w:type</c>: separator,
+    /// continuationSeparator, continuationNotice) are never touched; their ids sit below any user
+    /// id, so shifting upward can't collide with them.
+    /// </summary>
+    private static void ShiftNoteIdsAtOrAbove(
+        MainDocumentPart main, XElement notePartRoot, XName noteName, int threshold)
+    {
+        static void Bump(XElement el)
+        {
+            var v = int.Parse((string)el.Attribute(W.id)!, System.Globalization.CultureInfo.InvariantCulture);
+            el.SetAttributeValue(W.id, (v + 1).ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        foreach (var n in notePartRoot.Elements(noteName))
+        {
+            if (n.Attribute(W.type) is not null) continue; // Word-reserved scaffolding
+            if (int.TryParse((string?)n.Attribute(W.id), out var v) && v >= threshold) Bump(n);
+        }
+
+        var refName = noteName == W.footnote ? W.footnoteReference : W.endnoteReference;
+        foreach (var part in NoteReferenceHostParts(main))
+        {
+            var root = part.GetXDocument().Root;
+            if (root is null) continue;
+            bool any = false;
+            foreach (var r in root.Descendants(refName).ToList())
+                if (int.TryParse((string?)r.Attribute(W.id), out var v) && v >= threshold) { Bump(r); any = true; }
+            // The main part is flushed by Save with the rest of the edit; peer parts (headers,
+            // footers, the other note part) are written back here, as RemoveCrossReferences does.
+            if (any && !ReferenceEquals(part, main)) part.PutXDocument();
+        }
     }
 
     /// <summary>Every part whose XML can carry a note reference, for id-collision scanning.</summary>

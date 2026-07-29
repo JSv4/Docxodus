@@ -451,11 +451,32 @@ a hyperlink without a second offset walker to drift.
 
 A second note reuses all of it and only appends a definition.
 
-**Note id allocation.** One above the highest id used by any definition in the note part *or*
-by any reference to a note of that kind anywhere in the package (body, headers, footers, both
-note parts). Counting definitions would alias an existing note the moment ids are
-non-contiguous — which is the normal state of a document that has ever had a note deleted, since
-Word leaves the gap. `DS322` pins this with a fixture whose user notes are ids 1, 5 and 9.
+**Note id allocation — ids must ascend in REFERENCE order.** This is an invariant every
+Word-authored document holds (verified across the `TestFiles` corpus — including documents whose
+ids have gaps, e.g. 17/21/26 — and a 94-footnote real-world model certificate). Renderers depend
+on it: LibreOffice numbers the body markers by citation position but pairs them against the
+**id-sorted** definition list, so a first-cited note holding the highest id renders the *wrong
+note text* — the marker reads "1" and points at somebody else's footnote. Nothing errors; the
+document is simply, silently wrong.
+
+So the allocator works in two cases:
+
+- **Citation follows every existing one** (the common case): take one above the highest id used by
+  any definition in the note part *or* any reference anywhere in the package (body, headers,
+  footers, both note parts). Appending keeps ids ascending, so nothing else moves. Scanning
+  references too — not just definitions — is what stops a document with gaps from aliasing an
+  existing definition. `DS322` pins this with a fixture whose user notes are ids 1, 5 and 9.
+- **Citation lands before an existing one**: the new note takes the smallest id cited after it, and
+  every user note at or above that id shifts up by one — definitions *and* every reference to them
+  in every part. Notes cited earlier keep their ids. Word-reserved notes (any `w:type`:
+  `separator`, `continuationSeparator`, `continuationNotice`) are never renumbered; their ids sit
+  below every user id, so shifting upward cannot collide. Taking the *minimum* of the following ids
+  rather than the first keeps this correct even on an input document that already violated the
+  invariant. `DS336`/`DS337` pin the ordering and that each shifted note keeps its own text.
+
+Because a shift rewrites `w:id` on renumbered definitions, and the note-definition anchor's unid is
+derived from that id, the shifted notes' `fn`/`en` anchors change. Their paragraph anchors — and
+every body anchor — are unaffected.
 
 **Markup.** Word-faithful on both sides:
 
