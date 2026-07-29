@@ -745,10 +745,23 @@ public static class WmlToMarkdownConverter
         }
     }
 
+    /// <summary>
+    /// True for a Word-reserved footnote/endnote — page-rendering scaffolding with no user content,
+    /// which must not reach the anchor index or the projection.
+    /// </summary>
+    /// <remarks>
+    /// A typed note (<c>w:type</c> present) is reserved by definition: ECMA-376 §17.11.17 defines
+    /// the type as <c>normal</c> | <c>separator</c> | <c>continuationSeparator</c> |
+    /// <c>continuationNotice</c>, and only <c>normal</c> — which Word omits rather than writes — is
+    /// user content. Enumerating just separator/continuationSeparator let <c>continuationNotice</c>
+    /// through, and real documents carry one (the NVCA model certificate has it at id 1): it
+    /// projected as a user note and, once the editor started rendering notes, showed up as a stray
+    /// empty footnote with no citation. Testing for *any* type covers the whole reserved set.
+    /// </remarks>
     internal static bool IsBoilerplateNote(XElement note)
     {
         var type = (string?)note.Attribute(W.type);
-        return type is "separator" or "continuationSeparator";
+        return type is not null && type != "normal";
     }
 
     private static void EmitComments(ScopeInfo scope, EmitContext ctx, bool precedingContent)

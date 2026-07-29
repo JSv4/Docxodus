@@ -53,6 +53,31 @@ internal sealed class HtmlConversionOptions
 /// </summary>
 internal static class HtmlConversionOps
 {
+    /// <summary>
+    /// Assign the deterministic, content-addressable Unids that editor anchors are derived from —
+    /// identical to the markdown projector / <see cref="DocxSession"/>, so anchors line up across
+    /// surfaces. Covers the main document part <em>and</em> the footnotes/endnotes parts: note
+    /// bodies render as ordinary blocks in the footnotes section, so their paragraphs need
+    /// <c>data-anchor</c> stamps exactly like body paragraphs — without them a rendered footnote is
+    /// visible but not addressable, so an editor can show it and not edit it.
+    /// </summary>
+    /// <remarks>
+    /// Header/footer parts are deliberately NOT stamped here. Paginated output clones one header
+    /// node onto every page, so a stamped header anchor would exist N times in the DOM; the editor's
+    /// header/footer bands compose per story paragraph through <see cref="RenderBlockHtml(DocxSession, string, HtmlConversionOptions)"/>
+    /// instead. Footnotes have no such problem — each note renders exactly once.
+    /// </remarks>
+    private static void AssignAnchorUnids(WordprocessingDocument doc)
+    {
+        var main = doc.MainDocumentPart;
+        if (main is null) return;
+        UnidHelper.AssignToAllElementsDeterministic(main.GetXDocument().Root!);
+        if (main.FootnotesPart?.GetXDocument().Root is { } fn)
+            UnidHelper.AssignToAllElementsDeterministic(fn);
+        if (main.EndnotesPart?.GetXDocument().Root is { } en)
+            UnidHelper.AssignToAllElementsDeterministic(en);
+    }
+
     /// <summary>Render raw DOCX bytes to a self-contained HTML string.</summary>
     public static string ConvertToHtml(byte[] docxBytes, HtmlConversionOptions options)
     {
@@ -72,11 +97,7 @@ internal static class HtmlConversionOps
         using var wordDoc = WordprocessingDocument.Open(memoryStream, true);
 
         if (options.StampAnchors)
-        {
-            // Deterministic, content-addressable Unids — identical to the markdown
-            // projector / DocxSession, so editor anchors line up across surfaces.
-            UnidHelper.AssignToAllElementsDeterministic(wordDoc.MainDocumentPart!.GetXDocument().Root!);
-        }
+            AssignAnchorUnids(wordDoc);
 
         var renderComments = options.CommentRenderMode >= 0;
         bool renderPagination = options.PaginationMode == (int)PaginationMode.Paginated;
@@ -165,8 +186,9 @@ internal static class HtmlConversionOps
         using var sourceDoc = WordprocessingDocument.Open(sourceStream, true);
 
         // Stateless path: no live session, so assign deterministic Unids here (the same
-        // call the full render uses) so the anchor resolves by construction.
-        UnidHelper.AssignToAllElementsDeterministic(sourceDoc.MainDocumentPart!.GetXDocument().Root!);
+        // call the full render uses) so the anchor resolves by construction — note parts
+        // included, else a footnote-paragraph anchor could never resolve on this path.
+        AssignAnchorUnids(sourceDoc);
 
         var unid = AnchorUnid(anchorId);
         var blockElement = FindByUnid(sourceDoc, unid)
@@ -239,12 +261,23 @@ internal static class HtmlConversionOps
 
         var hit = main.GetXDocument().Root?.DescendantsAndSelf().FirstOrDefault(Match);
         if (hit != null) return hit;
-        foreach (var part in main.HeaderParts.Cast<OpenXmlPart>().Concat(main.FooterParts))
+        // Peer stories that can own an addressable block: header/footer parts, and the
+        // footnotes/endnotes parts (note bodies render as editable blocks in the notes section).
+        foreach (var part in NoteAndStoryParts(main))
         {
             hit = part.GetXDocument().Root?.DescendantsAndSelf().FirstOrDefault(Match);
             if (hit != null) return hit;
         }
         return null;
+    }
+
+    /// <summary>Non-main parts that can own a block an anchor addresses.</summary>
+    private static IEnumerable<OpenXmlPart> NoteAndStoryParts(MainDocumentPart main)
+    {
+        foreach (var h in main.HeaderParts) yield return h;
+        foreach (var f in main.FooterParts) yield return f;
+        if (main.FootnotesPart is not null) yield return main.FootnotesPart;
+        if (main.EndnotesPart is not null) yield return main.EndnotesPart;
     }
 
     /// <summary>

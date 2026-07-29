@@ -530,6 +530,57 @@ be resolved to a note the payload doesn't define, so the message now names the d
 Authoring a note is `InsertFootnote`/`InsertEndnote`; the payload subset is for a note's *body*,
 not for minting citations.
 
+### Rendering notes in the editor
+
+An editor that can author a footnote has to be able to *show* it. The browser `DocxEditor` renders
+notes as ordinary editable content, which took three things:
+
+- **The render profile emits notes.** `DocxSessionOps.RenderHtml` and the editor's first-paint
+  `completeArgs` both set `RenderFootnotesAndEndnotes`. They must stay in step — the remount output
+  is required to match the first paint byte-for-byte. Footnotes are document *content*, not an
+  editing affordance, so unlike the header/footer bands this is not opt-in: a document that has
+  notes shows them.
+- **Note paragraphs are anchor-stamped.** `HtmlConversionOps.AssignAnchorUnids` assigns the
+  deterministic Unids to the footnotes/endnotes parts as well as the main part, so note paragraphs
+  carry `data-anchor` and the editor wires them as ordinary blocks — no new command code, the whole
+  ribbon works inside a note. `FindByUnid` searches the note parts too, so the stateless
+  `RenderBlockHtml` can re-render a single note after an edit. Header/footer parts are deliberately
+  *not* stamped: paginated output clones one header node onto every page, so a stamped header anchor
+  would exist N times in the DOM. Each note renders exactly once, so notes have no such problem.
+- **The citation marker is inert chrome.** A citation is a zero-width `w:footnoteReference`; the
+  displayed number is computed by the renderer from document order, and the note backref (`↩`) is
+  generated too. None of it is in the session's run text, so the editor excludes all of it from its
+  content-offset space via one `GENERATED_CHROME_SELECTOR` (shared with generated list markers).
+  Each place that has to honour it fails differently if missed: offsets drift (`OffsetOutOfRange`,
+  silently dropped edits); the display number gets **committed as literal text**, destroying the
+  citation run; or the user deletes a marker outright and orphans its note.
+
+**Both editor modes show notes, differently.** Continuous mode renders the converter's
+`<section class="footnotes">` at the end of the body flow. Paginated mode is richer: `pagination.ts`
+already had a footnote engine (per-page distribution, continuations, splitting), and turning the
+render flag on activates it — notes land in a note area at the bottom of the page that cites them,
+above a separator rule, and a note too long for its page continues onto the next. Endnotes render as
+a `section.endnotes` appended after the page stack rather than on their own final page, which is a
+layout imperfection, not a correctness one: they are visible and editable. A note split across pages
+puts a *different paragraph* of the note in each half, so each half stays independently addressable
+— no two editable nodes ever share one anchor.
+
+Note content lives inside the body flow, so anything that walks "the body blocks" must exclude
+`section.footnotes`, `section.endnotes` and `.footnote-item` — the header/footer band already does
+the equivalent by ignoring an anchor `GetSectionInfo` can't resolve to a body section (focusing a
+note leaves the bands on the last body section rather than blanking them).
+
+`DS340`–`DS345` pin the engine half (marker + section emitted, note paragraphs stamped, stamped
+anchors resolve through the session, edit-then-re-render, the stateless path, and reserved-note
+filtering); `npm/tests/editor-footnotes.spec.ts` pins the browser half.
+
+**Word-reserved notes never surface as editable blocks.** `IsBoilerplateNote` now treats *any*
+typed note as reserved: ECMA-376 §17.11.17 defines the type as `normal` | `separator` |
+`continuationSeparator` | `continuationNotice`, and only `normal` — which Word omits rather than
+writes — is user content. Enumerating just separator/continuationSeparator let `continuationNotice`
+through (real documents carry one), where it projected as a user note and, once the editor started
+rendering notes, appeared as a stray empty footnote with no citation.
+
 ### Not yet
 
 - **Moving a citation** without deleting and re-creating the note.

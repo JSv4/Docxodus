@@ -203,9 +203,11 @@ test.describe('DocxEditor — incremental multi-block formatting (perf)', () => 
       // Old remount path: marshal saved bytes to JS, convert bytes → HTML.
       let start = performance.now();
       const saved: Uint8Array = D.DocxSessionBridge.Save(handle);
+      // The 14th arg is renderFootnotesAndEndnotes: it must match the editor's profile
+      // (completeArgs in editor.ts) and DocxSessionOps.RenderHtml, which both render notes.
       const viaBytes = D.DocumentConverter.ConvertDocxToHtmlComplete(
         saved, 'Document', 'docx-', false, '', -1, 'comment-',
-        0, 1, 'page-', false, 0, 'annot-', false, false, false, true, true, false, null, true,
+        0, 1, 'page-', false, 0, 'annot-', true, false, false, true, true, false, null, true,
       );
       const bytesMs = performance.now() - start;
 

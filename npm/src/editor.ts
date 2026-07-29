@@ -146,8 +146,9 @@ function escapeInlineMarkdown(text: string): string {
 
 function collectInlineSegments(node: Node, out: InlineSeg[]): void {
   node.childNodes.forEach((child) => {
-    // Skip generated list-marker spans — they aren't part of the paragraph's content.
-    if (child.nodeType === 1 && (child as HTMLElement).hasAttribute?.("data-list-marker")) return;
+    // Skip converter-generated chrome (list markers, note citation markers, note backrefs) —
+    // it isn't part of the paragraph's content and must never be committed as text.
+    if (isGeneratedChrome(child)) return;
     if (child.nodeType === 3 /* TEXT_NODE */) {
       const text = child.textContent ?? "";
       if (!text) return;
@@ -241,11 +242,30 @@ function isListBlock(block: HTMLElement): boolean {
   return !!block.querySelector(":scope > [data-list-marker]");
 }
 
-/** True if `node` is, or is inside, a generated list-marker span (not editable content). */
+/**
+ * Inline chrome the CONVERTER generates that is not part of a paragraph's run text: list
+ * number/bullet markers, footnote/endnote citation markers
+ * (`<a class="footnote-ref"><sup>1</sup></a>`), and the note backrefs (`↩`).
+ *
+ * The session's run text contains none of it. A citation is a zero-width
+ * `w:footnoteReference` — the displayed number is computed by the renderer from document order —
+ * so every character of chrome the editor fails to exclude shifts its content-offset space away
+ * from the session's. Each omission has its own failure mode: excluded from offsets but not from
+ * serialization and the display number gets COMMITTED as literal text (destroying the citation
+ * run); left editable and the user can delete a marker outright, orphaning the note.
+ */
+const GENERATED_CHROME_SELECTOR =
+  '[data-list-marker], a.footnote-ref, a.endnote-ref, a[class$="-backref"]';
+
+function isGeneratedChrome(node: Node | null | undefined): boolean {
+  return node?.nodeType === 1 && !!(node as Element).matches?.(GENERATED_CHROME_SELECTOR);
+}
+
+/** True if `node` is, or is inside, generated chrome (not editable content). */
 function isInMarker(node: Node | null): boolean {
-  let el: HTMLElement | null = node && node.nodeType === 1 ? (node as HTMLElement) : node?.parentElement ?? null;
+  let el: Element | null = node && node.nodeType === 1 ? (node as Element) : node?.parentElement ?? null;
   while (el) {
-    if (el.hasAttribute && el.hasAttribute("data-list-marker")) return true;
+    if (isGeneratedChrome(el)) return true;
     el = el.parentElement;
   }
   return false;
@@ -554,7 +574,10 @@ function completeArgs(
     bytes, "Document", cssPrefix, fabricate, "", -1, "comment-",
     /* paginationMode */ paginated ? 1 : 0, /* paginationScale */ scale, "page-",
     false, 0, "annot-",
-    /* renderFootnotesAndEndnotes */ false, /* renderHeadersAndFooters */ paginated,
+    // Footnotes/endnotes ON: they are document content, and the editor makes the rendered note
+    // paragraphs editable. Must stay in step with DocxSessionOps.RenderHtml (the remount path),
+    // whose output has to match this first paint byte-for-byte.
+    /* renderFootnotesAndEndnotes */ true, /* renderHeadersAndFooters */ paginated,
     false, true, true, false, null, /* stampAnchors */ true,
   ];
 }
@@ -894,9 +917,11 @@ export class DocxEditor {
     // resolves that unid to a different part (content-addressed unids collide across parts).
     if (!unid || !this.anchorIdOf(el)) return;
     el.setAttribute("contenteditable", "true");
-    // Generated list markers (number/bullet + suffix) are not editable content — keep the
-    // caret out of them so offsets stay aligned with the paragraph's run text.
-    el.querySelectorAll<HTMLElement>("[data-list-marker]").forEach((m) => m.setAttribute("contenteditable", "false"));
+    // Generated chrome (list number/bullet, footnote/endnote citation markers, note backrefs) is
+    // not editable content — keep the caret out so offsets stay aligned with the run text, and so
+    // a citation marker can't be deleted directly (which would orphan its note definition).
+    el.querySelectorAll<HTMLElement>(GENERATED_CHROME_SELECTOR)
+      .forEach((m) => m.setAttribute("contenteditable", "false"));
     // Baseline for the commit diff: CONTENT text (list markers + injected bidi marks excluded),
     // matching the session's flat run-text offset space.
     el.dataset.committedText = blockContentText(el);

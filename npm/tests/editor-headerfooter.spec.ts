@@ -590,9 +590,13 @@ test.describe('DocxEditor — header/footer region', () => {
         container.querySelector('[data-hf-band="header"] [data-anchor][contenteditable="true"]'),
         'RUNNING HEAD',
       );
-      const bodyBlocks = Array.from(
-        container.querySelectorAll('.docx-body-flow [data-anchor][contenteditable="true"]'),
-      ) as HTMLElement[];
+      // Body blocks only: the rendered footnotes/endnotes sections also live in the body flow,
+      // but their paragraphs belong to the note parts and so have no governing body section.
+      const bodyBlocks = (
+        Array.from(
+          container.querySelectorAll('.docx-body-flow [data-anchor][contenteditable="true"]'),
+        ) as HTMLElement[]
+      ).filter((e) => !e.closest('section.footnotes, section.endnotes, .footnote-item'));
       bodyBlocks[bodyBlocks.length - 1].focus();
 
       const band = container.querySelector('[data-hf-band="header"]') as HTMLElement;

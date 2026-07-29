@@ -3071,16 +3071,14 @@ public sealed class DocxSession : IDisposable
         if (element is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
 
-        // Word reserves a couple of footnote/endnote definitions (the "separator" and
-        // "continuationSeparator" types) for page-rendering scaffolding; they have no
-        // user-content meaning and removing them corrupts the doc. Refuse explicitly.
-        if (target.Anchor.Kind is "fn" or "en")
-        {
-            var typeAttr = (string?)element.Attribute(W.type);
-            if (typeAttr is "separator" or "continuationSeparator")
-                return EditResult.Fail(EditErrorCode.AnchorWrongKind,
-                    $"cannot delete a Word-reserved {target.Anchor.Kind} of type='{typeAttr}'", anchorId);
-        }
+        // Word reserves the TYPED footnote/endnote definitions (separator, continuationSeparator,
+        // continuationNotice) for page-rendering scaffolding; they carry no user content and
+        // removing one corrupts the document. Same predicate the projector filters on, so the two
+        // can't drift over which types count as reserved.
+        if (target.Anchor.Kind is "fn" or "en" && WmlToMarkdownConverter.IsBoilerplateNote(element))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"cannot delete a Word-reserved {target.Anchor.Kind} of type='{(string?)element.Attribute(W.type)}'",
+                anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try

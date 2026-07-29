@@ -58,6 +58,12 @@ internal static class DocxSessionOps
             PaginationMode = paginated ? 1 : 0,
             PaginationScale = scale,
             RenderHeadersAndFooters = paginated,
+            // Footnotes/endnotes are document CONTENT, not an editing affordance: a document that
+            // has them must show them, and each note renders exactly once so its paragraphs are
+            // uniquely addressable (AssignAnchorUnids stamps the note parts). Must stay in step
+            // with the editor's first-paint profile in npm/src/editor.ts `completeArgs`, which the
+            // remount output is required to match byte-for-byte.
+            RenderFootnotesAndEndnotes = true,
             StampAnchors = true,
         });
 
