@@ -82,9 +82,9 @@ dotnet test            # Run .NET tests
 
 ## Release Process
 
-Releases are **CHANGELOG + annotated git tag only** — no version bump in
-`Docxodus.csproj` (`<Version>` is intentionally left at `1.0.0`) or
-`npm/package.json`; those are not tied to the release tags.
+A release is **a CHANGELOG section + an annotated git tag + a GitHub Release** —
+and *no* version bump in `Docxodus.csproj` (`<Version>` is intentionally left at
+`1.0.0`) or `npm/package.json`; those are not tied to the release tags.
 
 Versioning is **semver** on tags of the form `vMAJOR.MINOR.PATCH` (e.g.
 `v6.3.0`). Pick the bump from what landed in `[Unreleased]` since the last tag:
@@ -105,6 +105,22 @@ To cut a release from an up-to-date `main`:
 3. Create an **annotated** tag whose message is the version string:
    `git tag -a vX.Y.Z -m vX.Y.Z`.
 4. `git push origin main` then `git push origin vX.Y.Z`.
+5. Publish the **GitHub Release** on that tag — every tag back to `v5.x` has one,
+   so a tag without one is an incomplete release:
+   `gh release create vX.Y.Z --title vX.Y.Z --notes-file <body.md> --latest --verify-tag`.
+
+The release body follows one of two shapes, both opening with a one-line lead that
+links the CHANGELOG anchor (`…/CHANGELOG.md#XYZ---YYYY-MM-DD`, digits only, e.g.
+`#800---2026-07-29`):
+
+| Bump | Body |
+|------|------|
+| Patch / minor | `Minor release. Full details in [CHANGELOG.md](…).` then the `### Added`/`### Changed`/`### Fixed` sections verbatim (see `v7.1.0`). |
+| Major | `Major release rolling up all changes accumulated since **vX.Y.Z**. Full details in [CHANGELOG.md](…).` then `### Highlights` and `### Breaking changes` — a *summary*, not the whole changelog, because a major's accumulated entries are far too long to dump (see `v7.0.0`, `v8.0.0`). |
+
+`### Breaking changes` must name what silently changes for a caller who passes
+nothing, and how to pin the old behavior — that is the whole reason the bump is
+major.
 
 Prior release-cut commits (`#206`, `#209`) and tags (`v6.1.0`, `v6.2.0`) are the
 reference for the exact diff shape.
