@@ -75,6 +75,9 @@ internal static class Dispatcher
         "insert_page_number_field" => DocxSessionOps.InsertPageNumberField(
             Handle(args), Str(args, "anchorId"),
             DocxSessionJson.ParsePageNumberField(Str(args, "field"))),
+        "ensure_header_footer_visible" => DocxSessionOps.EnsureHeaderFooterVisible(
+            Handle(args), Str(args, "anchorId"),
+            DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind"))),
 
         "apply_format" => DocxSessionOps.ApplyFormat(
             Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"), ParseFormatOp(args, "op")),

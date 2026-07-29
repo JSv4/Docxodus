@@ -32,6 +32,33 @@
     .ribbon button { min-width: 30px; padding: 5px 8px; }
     .ribbon button.active { background: #d9e7ff; border-color: #4c8bf5; }
     .ribbon select { font: inherit; padding: 5px 6px; border: 1px solid #c3c7cc; border-radius: 6px; background: #f6f7f8; }
+
+    /* ── Header/footer bands (issue #275) ────────────────────────────────────────────
+       Header/footer stories live in their own OOXML parts outside the body, so they are
+       docked as their own regions rather than being part of the body flow. Presented as
+       page-width sheets so they read as "the running head/foot of this document". */
+    .docx-hf-band { background: #fff; border: 1px dashed #c3c7cc; border-radius: 4px;
+      padding: 8px 72px 12px; margin: 0 0 14px; }
+    #editor .docx-hf-band + .docx-body-flow { margin-top: 0; }
+    .docx-hf-band[data-hf-band="footer"] { margin: 14px 0 0; }
+    .docx-hf-chrome { display: flex; gap: 8px; align-items: center; margin: 0 0 6px -60px;
+      font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8a8d91; }
+    .docx-hf-chrome select { font: inherit; text-transform: none; letter-spacing: normal;
+      padding: 2px 4px; border: 1px solid #d7dade; border-radius: 4px; background: #f6f7f8;
+      color: #1c1e21; }
+    .docx-hf-label { font-weight: 600; }
+    .docx-hf-warning { margin: 0 0 8px -60px; padding: 6px 8px; font-size: 12px; line-height: 1.4;
+      background: #fff7e6; border: 1px solid #f0d9a8; border-radius: 4px; color: #6b4e00; }
+    .docx-hf-warning button { margin-left: 6px; padding: 2px 8px; font-size: 12px; }
+    .docx-hf-placeholder { font-style: italic; color: #a3a6aa; }
+    .docx-hf-inherited { text-transform: none; letter-spacing: normal; font-style: italic; color: #8a8d91; }
+    .docx-hf-band[data-hf-inherited] { border-style: dotted; }
+    /* With bands docked, the page sheet moves from #editor onto the body wrapper — otherwise the
+       bands would sit INSIDE the body's sheet. Scoped with :has() so the region-off layout (no
+       .docx-body-flow wrapper at all) keeps the original rule untouched. */
+    #editor.continuous:has(.docx-body-flow) { padding: 0; background: transparent; box-shadow: none; }
+    #editor.continuous .docx-body-flow { background: #fff; padding: 56px 72px; border-radius: 4px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.12); }
   </style>
 </head>
 <body>
@@ -108,6 +135,7 @@
       <button id="redo" title="Redo (Ctrl+Shift+Z)">&#8635;</button>
     </div>
     <label class="toggle"><input id="paginated" type="checkbox" /> Paginated</label>
+    <label class="toggle"><input id="headerfooter" type="checkbox" checked /> Header/Footer</label>
     <span class="spacer"></span>
     <span id="status">Booting WASM…</span>
   </header>
@@ -116,6 +144,9 @@
     <b>Enter</b> splits a block, <b>Backspace</b> at the start merges with the previous one; <b>Ctrl+Z</b> undoes.
     Edits re-render only the affected block. Table <b>cell text is editable</b> (structure is fixed —
     Enter/Tab inside a cell are inert). <b>Save</b> downloads a lossless .docx.
+    The <b>Header</b>/<b>Footer</b> bands above and below the page edit the document's running
+    stories — pick <i>Default</i>/<i>First page</i>/<i>Even pages</i>, type, format with the same
+    ribbon, and use <i>Page №</i> to drop in a live page-number field.
   </p>
   <div id="editor" class="continuous"></div>
 
@@ -157,6 +188,7 @@
     const fileEl = document.getElementById('file');
     const saveEl = document.getElementById('save');
     const paginatedEl = document.getElementById('paginated');
+    const headerFooterEl = document.getElementById('headerfooter');
     const editorEl = document.getElementById('editor');
     const ribbonEl = document.getElementById('ribbon');
     const styleEl = document.getElementById('style');
@@ -362,7 +394,10 @@
       editorEl.className = paginated ? 'paginated' : 'continuous';
       editorEl.innerHTML = '';
       const t0 = performance.now();
-      editor = window.DocxodusEditor.DocxEditor.open(editorEl, bytes, exports, { paginated });
+      editor = window.DocxodusEditor.DocxEditor.open(editorEl, bytes, exports, {
+        paginated,
+        headerFooter: headerFooterEl.checked,
+      });
       saveEl.disabled = false;
       ribbonEl.setAttribute('aria-disabled', 'false');
       setStatus(`Rendered in ${Math.round(performance.now() - t0)} ms — edit away.`);
@@ -389,6 +424,15 @@
       editorEl.className = paginatedEl.checked ? 'paginated' : 'continuous';
       editor.setPaginated(paginatedEl.checked);
       setStatus(paginatedEl.checked ? 'Paginated — edits preserved.' : 'Continuous — edits preserved.');
+    });
+
+    // The header/footer region is chosen at open time (it changes the edit-root layout), so
+    // toggling it re-opens the LIVE session's bytes rather than the originally loaded file —
+    // edits made so far survive the toggle.
+    headerFooterEl.addEventListener('change', () => {
+      if (!editor) { if (currentBytes) openDoc(currentBytes); return; }
+      openDoc(editor.save());
+      setStatus(headerFooterEl.checked ? 'Header/footer bands on.' : 'Header/footer bands off.');
     });
 
     saveEl.addEventListener('click', () => {

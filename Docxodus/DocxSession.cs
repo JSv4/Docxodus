@@ -659,6 +659,31 @@ public sealed record BlockMetadata
 }
 
 /// <summary>
+/// A <c>w:headerReference</c>/<c>w:footerReference</c> on a section: which story kind it
+/// supplies and the URI of the part holding that story. Lets a caller map a
+/// <see cref="HeaderFooterKind"/> to a part — and thence to that part's projection anchors,
+/// which carry the same <c>PartUri</c> — instead of guessing from part-collection order,
+/// which carries no kind information.
+/// </summary>
+public sealed record HeaderFooterRef
+{
+    /// <summary>The reference's <c>w:type</c>. The attribute is optional in OOXML; an absent
+    /// (or unrecognized) value means <see cref="HeaderFooterKind.Default"/>.</summary>
+    required public HeaderFooterKind Kind { get; init; }
+
+    /// <summary>URI of the header/footer part this reference points at.</summary>
+    required public string PartUri { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when this section declares no reference of <see cref="Kind"/> itself and the
+    /// story is INHERITED from the nearest preceding section that does (ECMA-376 §17.6.17 — a
+    /// section without a reference of a type continues the previous section's). Editing an
+    /// inherited story edits the part both sections share, which is what Word does.
+    /// </summary>
+    public bool Inherited { get; init; }
+}
+
+/// <summary>
 /// Page-layout snapshot for the <c>w:sectPr</c> that governs an anchor.
 /// Returned by <see cref="DocxSession.GetSectionInfo"/>; <c>null</c> for
 /// anchors outside the body part (footnotes/endnotes/headers/footers/comments).
@@ -684,6 +709,20 @@ public sealed record SectionInfo
 
     /// <summary>URIs of the footer parts referenced by this section, in declaration order.</summary>
     required public IReadOnlyList<string> FooterPartUris { get; init; }
+
+    /// <summary>
+    /// The header stories that EFFECTIVELY apply to this section: its own
+    /// <c>w:headerReference</c>s (in declaration order, each with its <c>w:type</c>) plus, for any
+    /// kind it does not declare, the one it inherits from the nearest preceding section that does
+    /// — flagged <see cref="HeaderFooterRef.Inherited"/>. This is what a renderer shows, so it is
+    /// what a caller asking "which header applies here?" needs. <see cref="HeaderPartUris"/>
+    /// remains this section's OWN references only.
+    /// </summary>
+    required public IReadOnlyList<HeaderFooterRef> HeaderRefs { get; init; }
+
+    /// <summary>The footer stories that effectively apply to this section — see
+    /// <see cref="HeaderRefs"/>.</summary>
+    required public IReadOnlyList<HeaderFooterRef> FooterRefs { get; init; }
 }
 
 /// <summary>
@@ -1103,6 +1142,49 @@ public sealed class DocxSession : IDisposable
         }
         return null;
     }
+
+    /// <summary>
+    /// Reverse-resolve an <see cref="Anchor"/> from the current projection by Unid, preferring
+    /// the entry that lives in <paramref name="preferPartUri"/>.
+    /// </summary>
+    /// <remarks>
+    /// Unids are CONTENT-ADDRESSED, so identical content in DIFFERENT package parts yields the
+    /// SAME unid — a document with empty default/first/even header stories has one unid shared
+    /// across several header parts (Word writes exactly that). A bare-unid reverse lookup then
+    /// returns whichever part the projection happened to index first, so an <see cref="EditResult"/>
+    /// would report an anchor pointing at the WRONG story, and a caller that addressed the
+    /// returned anchor next (as an editor does) would silently write into the wrong part.
+    /// Scoping by the part the edit actually touched keeps the round trip unambiguous; the
+    /// unid-only fallback preserves behavior when the part isn't known.
+    /// </remarks>
+    private Anchor? AnchorForUnid(string? unid, string? preferPartUri)
+    {
+        if (unid is null) return null;
+        AnchorTarget? fallback = null;
+        foreach (var t in Project().AnchorIndex.Values)
+        {
+            if (t.Unid != unid) continue;
+            if (preferPartUri is not null && t.PartUri == preferPartUri) return t.Anchor;
+            fallback ??= t;
+        }
+        return fallback?.Anchor;
+    }
+
+    /// <summary>URI of the package part that owns <paramref name="element"/>, or <c>null</c>
+    /// when it belongs to no projected part (e.g. a detached element).</summary>
+    private string? PartUriOf(XElement element)
+    {
+        var root = element.AncestorsAndSelf().Last();
+        foreach (var part in EnumerateProjectedParts())
+        {
+            if (ReferenceEquals(part.GetXDocument().Root, root)) return part.Uri.ToString();
+        }
+        return null;
+    }
+
+    /// <summary>Reverse-resolve the anchor of a live element, scoped to its owning part.</summary>
+    private Anchor? AnchorForElement(XElement element) =>
+        AnchorForUnid((string?)element.Attribute(PtOpenXml.Unid), PartUriOf(element));
 
     public bool Exists(string anchorId)
     {
@@ -3495,7 +3577,7 @@ public sealed class DocxSession : IDisposable
             // next-paragraph style), so resolve its anchor from the fresh projection rather than
             // assuming the original kind.
             var secondAnchor =
-                Project().AnchorIndex.Values.FirstOrDefault(t => t.Unid == secondUnid)?.Anchor
+                AnchorForUnid(secondUnid, target.PartUri)
                 ?? new Anchor(
                     $"{target.Anchor.Kind}:{target.Anchor.Scope}:{secondUnid}",
                     target.Anchor.Kind, target.Anchor.Scope, secondUnid);
@@ -3680,8 +3762,8 @@ public sealed class DocxSession : IDisposable
             var created = new List<Anchor>();
             foreach (var unid in CollectUnids(parsedXml))
             {
-                var hit = freshIndex.Values.FirstOrDefault(t => t.Unid == unid);
-                if (hit is not null) created.Add(hit.Anchor);
+                var hit = AnchorForUnid(unid, target.PartUri);
+                if (hit is { } h) created.Add(h);
             }
 
             return new EditResult
@@ -3744,8 +3826,8 @@ public sealed class DocxSession : IDisposable
 
             if (newUnids.Contains(target.Unid))
             {
-                var hit = freshIndex.Values.FirstOrDefault(t => t.Unid == target.Unid);
-                if (hit is not null) modified.Add(hit.Anchor);
+                var hit = AnchorForUnid(target.Unid, target.PartUri);
+                if (hit is { } h) modified.Add(h);
             }
             else
             {
@@ -3754,8 +3836,8 @@ public sealed class DocxSession : IDisposable
             foreach (var unid in newUnids)
             {
                 if (unid == target.Unid) continue;
-                var hit = freshIndex.Values.FirstOrDefault(t => t.Unid == unid);
-                if (hit is not null) created.Add(hit.Anchor);
+                var hit = AnchorForUnid(unid, target.PartUri);
+                if (hit is { } h) created.Add(h);
             }
 
             return new EditResult
@@ -4009,7 +4091,7 @@ public sealed class DocxSession : IDisposable
             InvalidateProjectionCache();
             // Anchor kind may have flipped (e.g., p → h); look it up in the fresh index.
             var freshIndex = Project().AnchorIndex;
-            var updated = freshIndex.Values.FirstOrDefault(t => t.Unid == target.Unid)?.Anchor ?? target.Anchor;
+            var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
 
             return new EditResult
             {
@@ -4157,7 +4239,7 @@ public sealed class DocxSession : IDisposable
 
             InvalidateProjectionCache();
             var freshIndex = Project().AnchorIndex;
-            var updated = freshIndex.Values.FirstOrDefault(t => t.Unid == target.Unid)?.Anchor ?? target.Anchor;
+            var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
 
             return new EditResult
             {
@@ -4215,7 +4297,7 @@ public sealed class DocxSession : IDisposable
 
             var unid = (string)p.Attribute(PtOpenXml.Unid)!;
             InvalidateProjectionCache();
-            var created = Project().AnchorIndex.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor
+            var created = AnchorForUnid(unid, target.PartUri)
                 ?? new Anchor($"p:{target.Anchor.Scope}:{unid}", "p", target.Anchor.Scope, unid);
 
             return new EditResult
@@ -4266,6 +4348,80 @@ public sealed class DocxSession : IDisposable
     /// </summary>
     public EditResult SetFooterText(string anchorId, HeaderFooterKind kind, string markdownPayload)
         => SetHeaderFooterText(isHeader: false, anchorId, kind, markdownPayload);
+
+    /// <summary>
+    /// Ensure Word will actually RENDER the <paramref name="kind"/> header/footer stories of the
+    /// section that owns <paramref name="anchorId"/> (any body block, resolved as
+    /// <see cref="GetSectionInfo"/> resolves it): sets <c>w:titlePg</c> for
+    /// <see cref="HeaderFooterKind.First"/> and the document-global <c>w:evenAndOddHeaders</c>
+    /// for <see cref="HeaderFooterKind.Even"/>. <see cref="HeaderFooterKind.Default"/> needs no
+    /// flag and is a successful no-op. Idempotent.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="SetHeaderText"/>/<see cref="SetFooterText"/> set these flags as a side effect of
+    /// writing content, which covers authoring a story from scratch. It does NOT cover a document
+    /// that already carries a first/even reference with the flag absent — Word writes exactly that
+    /// when "Different first page" / "Different odd &amp; even pages" is turned back off, leaving
+    /// the part behind. Editing such a story through the anchor-addressed text ops then produces a
+    /// document whose header content is present but invisible. An editor offering a
+    /// first/even story selector needs this as its own operation, because the flags belong to the
+    /// SECTION, not to a content write.
+    /// </para>
+    /// <para>
+    /// See <see cref="SetHeaderText"/> for the <c>w:evenAndOddHeaders</c> caveat: it is
+    /// document-global and governs footers too, so enabling it without an even FOOTER means even
+    /// pages show no footer at all.
+    /// </para>
+    /// </remarks>
+    public EditResult EnsureHeaderFooterVisible(string anchorId, HeaderFooterKind kind)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Scope != "body")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "EnsureHeaderFooterVisible requires a body block anchor (the section the header/footer belongs to)",
+                anchorId);
+        if (kind == HeaderFooterKind.Default)
+            return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no main document part", anchorId);
+
+        var sectPr = Internal.BlockMetadataOps.FindGoverningSectPr(element);
+        if (sectPr is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no governing section properties", anchorId);
+
+        // Already set? Return BEFORE snapshotting. A UI that calls this on every kind selection
+        // (the editor's band does) would otherwise push a no-op snapshot per click into the
+        // bounded undo ring and evict the user's real history.
+        bool alreadySet = kind == HeaderFooterKind.First
+            ? sectPr.Element(W.titlePg) is not null
+            : main.DocumentSettingsPart?.GetXDocument().Root?.Element(W.evenAndOddHeaders) is not null;
+        if (alreadySet)
+            return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            if (kind == HeaderFooterKind.First) InsertSectPrTitlePg(sectPr);
+            else WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
+            InvalidateProjectionCache();
+            return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RestoreSnapshot(_history.PopForUndo().snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
 
     private EditResult SetHeaderFooterText(bool isHeader, string anchorId, HeaderFooterKind kind, string markdownPayload)
     {
@@ -4361,8 +4517,8 @@ public sealed class DocxSession : IDisposable
             {
                 var unid = (string?)p.Attribute(PtOpenXml.Unid);
                 if (unid is null) continue;
-                var t = index.Values.FirstOrDefault(v => v.Unid == unid);
-                if (t is not null) created.Add(t.Anchor);
+                var t = AnchorForUnid(unid, PartUriOf(p));
+                if (t is { } a) created.Add(a);
             }
 
             return new EditResult
@@ -4573,7 +4729,7 @@ public sealed class DocxSession : IDisposable
             foreach (var p in cellParagraphs)
             {
                 var unid = (string)p.Attribute(PtOpenXml.Unid)!;
-                if (index.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor is { } a)
+                if (AnchorForUnid(unid, PartUriOf(p)) is { } a)
                     created.Add(a);
             }
 
@@ -4674,7 +4830,7 @@ public sealed class DocxSession : IDisposable
         foreach (var para in paras)
         {
             var unid = (string?)para.Attribute(PtOpenXml.Unid);
-            if (unid is not null && index.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor is { } a)
+            if (unid is not null && AnchorForUnid(unid, PartUriOf(para)) is { } a)
                 result.Add(a);
         }
         return result;
@@ -4791,8 +4947,8 @@ public sealed class DocxSession : IDisposable
         try
         {
             var index = Project().AnchorIndex;
-            var removed = CellParagraphAnchorsIn(tr!, index);
-            if (tbl!.Elements(W.tr).Count() <= 1) { foreach (var a in CellParagraphAnchorsIn(tbl, index)) if (!removed.Contains(a)) removed.Add(a); tbl.Remove(); }
+            var removed = CellParagraphAnchorsIn(tr!);
+            if (tbl!.Elements(W.tr).Count() <= 1) { foreach (var a in CellParagraphAnchorsIn(tbl)) if (!removed.Contains(a)) removed.Add(a); tbl.Remove(); }
             else tr!.Remove();
 
             InvalidateProjectionCache();
@@ -4821,14 +4977,14 @@ public sealed class DocxSession : IDisposable
             int colCount = grid?.Elements(W.gridCol).Count() ?? tbl.Elements(W.tr).First().Elements(W.tc).Count();
 
             var removed = new List<Anchor>();
-            if (colCount <= 1) { foreach (var a in CellParagraphAnchorsIn(tbl, index)) removed.Add(a); tbl.Remove(); }
+            if (colCount <= 1) { foreach (var a in CellParagraphAnchorsIn(tbl)) removed.Add(a); tbl.Remove(); }
             else
             {
                 foreach (var tr in tbl.Elements(W.tr).ToList())
                 {
                     var cells = tr.Elements(W.tc).ToList();
                     if (colIndex >= cells.Count) continue;
-                    foreach (var a in CellParagraphAnchorsIn(cells[colIndex], index)) removed.Add(a);
+                    foreach (var a in CellParagraphAnchorsIn(cells[colIndex])) removed.Add(a);
                     cells[colIndex].Remove();
                 }
                 var cols = grid?.Elements(W.gridCol).ToList();
@@ -4846,15 +5002,15 @@ public sealed class DocxSession : IDisposable
         }
     }
 
-    /// <summary>The cell-paragraph anchors under <paramref name="scope"/> (a tc/tr/tbl), in document order.</summary>
-    private static List<Anchor> CellParagraphAnchorsIn(XElement scope, IReadOnlyDictionary<string, AnchorTarget> index)
+    /// <summary>The cell-paragraph anchors under <paramref name="scope"/> (a tc/tr/tbl), in document order.
+    /// Resolved via <see cref="AnchorForElement"/> so a table inside a header/footer story cannot
+    /// report a body paragraph's anchor through a colliding content-addressed unid.</summary>
+    private List<Anchor> CellParagraphAnchorsIn(XElement scope)
     {
         var result = new List<Anchor>();
         foreach (var para in scope.Descendants(W.p))
         {
-            var unid = (string?)para.Attribute(PtOpenXml.Unid);
-            if (unid is not null && index.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor is { } a)
-                result.Add(a);
+            if (AnchorForElement(para) is { } a) result.Add(a);
         }
         return result;
     }
@@ -4976,7 +5132,7 @@ public sealed class DocxSession : IDisposable
         element.Element(W.pPr)?.Element(W.numPr)?.Remove();
         InvalidateProjectionCache();
         var fresh = Project().AnchorIndex;
-        var updated = fresh.Values.FirstOrDefault(t => t.Unid == target.Unid)?.Anchor ?? target.Anchor;
+        var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
         return new EditResult
         {
             Success = true,
@@ -5025,7 +5181,7 @@ public sealed class DocxSession : IDisposable
 
             InvalidateProjectionCache();
             var freshIndex = Project().AnchorIndex;
-            var updated = freshIndex.Values.FirstOrDefault(t => t.Unid == target.Unid)?.Anchor ?? target.Anchor;
+            var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
             return new EditResult
             {
                 Success = true,

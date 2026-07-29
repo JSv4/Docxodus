@@ -4931,4 +4931,205 @@ public class DocxSessionTests
             .ToList();
         Assert.True(schemaErrors.Count == 0, string.Join("; ", schemaErrors));
     }
+
+    // The projection numbers header/footer scopes hdr1/hdr2… by part-collection order, which
+    // carries no kind information — so without w:type a client (the editor's band chrome) cannot
+    // tell an existing document's Default story from its First or Even one. SectionInfo.HeaderRefs
+    // / FooterRefs close that gap.
+    [Fact]
+    public void DS265_SectionInfo_ReportsHeaderFooterRefKinds()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.Default, "Default header").Success);
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.First, "First header").Success);
+        Assert.True(s.SetFooterText(body, HeaderFooterKind.Even, "Even footer").Success);
+
+        var info = s.GetSectionInfo(body)!;
+
+        Assert.Equal(
+            new[] { HeaderFooterKind.Default, HeaderFooterKind.First },
+            info.HeaderRefs.Select(r => r.Kind).OrderBy(k => k).ToArray());
+        Assert.Equal(new[] { HeaderFooterKind.Even }, info.FooterRefs.Select(r => r.Kind).ToArray());
+
+        // The refs and the legacy URI lists must describe exactly the same parts.
+        Assert.Equal(
+            info.HeaderPartUris.OrderBy(u => u, StringComparer.Ordinal).ToArray(),
+            info.HeaderRefs.Select(r => r.PartUri).OrderBy(u => u, StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            info.FooterPartUris.ToArray(),
+            info.FooterRefs.Select(r => r.PartUri).ToArray());
+        Assert.All(info.HeaderRefs, r => Assert.False(string.IsNullOrEmpty(r.PartUri)));
+
+        // Each ref's part must be the one actually holding that kind's story.
+        var firstUri = info.HeaderRefs.Single(r => r.Kind == HeaderFooterKind.First).PartUri;
+        using var saved = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(saved, false);
+        var firstPart = doc.MainDocumentPart!.HeaderParts
+            .Single(p => p.Uri.ToString() == firstUri);
+        Assert.Contains("First header", firstPart.Header!.InnerText);
+    }
+
+    // A document whose header reference omits the optional w:type attribute means "default"
+    // (ECMA-376 §17.6.10) — the parser must not treat the absent attribute as unknown.
+    [Fact]
+    public void DS266_SectionInfo_AbsentRefType_ReadsAsDefaultKind()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.Default, "No explicit type").Success);
+
+        // Strip the w:type Word writes, leaving a bare reference.
+        var raw = s.Save();
+        using (var ms = new MemoryStream())
+        {
+            ms.Write(raw, 0, raw.Length);
+            ms.Position = 0;
+            using (var doc = WordprocessingDocument.Open(ms, true))
+            {
+                var sectPr = LastSectPr(doc);
+                foreach (var hr in sectPr.Elements<HeaderReference>()) hr.Type = null;
+                doc.MainDocumentPart!.Document.Save();
+            }
+            raw = ms.ToArray();
+        }
+
+        using var s2 = new DocxSession(raw);
+        var info = s2.GetSectionInfo(FirstBodyPara(s2))!;
+        Assert.Equal(new[] { HeaderFooterKind.Default }, info.HeaderRefs.Select(r => r.Kind).ToArray());
+    }
+
+    // Unids are CONTENT-ADDRESSED, so identical content in DIFFERENT parts yields the SAME unid —
+    // a document with empty default/first/even stories (Word writes exactly that) has one unid
+    // shared across several header parts. An EditResult's anchors are reverse-resolved from the
+    // fresh projection by unid; without scoping that lookup to the part the edit touched, the
+    // result named a DIFFERENT story, and a caller that addressed the returned anchor next (as the
+    // browser editor does) wrote into the wrong part. Found by driving the editor demo against
+    // HC031-Complicated-Document.docx: a page-number field aimed at the default footer landed in
+    // the even one.
+    [Fact]
+    public void DS267_EditResultAnchor_StaysInTheEditedPart_WhenUnidsCollideAcrossParts()
+    {
+        // A real Word document, not a synthesized one: stories the session creates get distinct
+        // unids, so only Word's own identical empty stories exercise the collision. HC031 carries
+        // default/first/even for both header and footer, all empty.
+        var path = Path.Combine("../../../../TestFiles/", "HC031-Complicated-Document.docx");
+        using var s = new DocxSession(File.ReadAllBytes(path));
+        var body = s.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h").Anchor.Id;
+
+        var info = s.GetSectionInfo(body)!;
+        var defaultUri = info.FooterRefs.Single(r => r.Kind == HeaderFooterKind.Default).PartUri;
+        var defaultAnchor = s.Project().AnchorIndex.Values
+            .First(t => t.PartUri == defaultUri && t.Anchor.Kind == "p").Anchor.Id;
+
+        // Only meaningful if the unids really do collide — assert the precondition explicitly so
+        // this test can't silently stop covering the case.
+        var footerUnids = info.FooterRefs
+            .Select(r => s.Project().AnchorIndex.Values.First(t => t.PartUri == r.PartUri).Unid)
+            .ToList();
+        Assert.True(footerUnids.Distinct().Count() < footerUnids.Count,
+            "precondition: this fixture's empty footer stories should share a content-addressed unid");
+
+        // A paragraph-format edit reports the edited anchor; it must name the DEFAULT footer.
+        var fmt = s.SetParagraphFormat(defaultAnchor,
+            new ParagraphFormatOp { Alignment = ParagraphAlignment.Center });
+        Assert.True(fmt.Success, fmt.Error?.Message);
+        var reported = fmt.Modified.Single().Id;
+
+        // Following the reported anchor (what an editor does next) must stay in the same part.
+        Assert.True(s.InsertPageNumberField(reported, PageNumberField.CurrentPage).Success);
+
+        using var saved = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(saved, false);
+        string XmlOf(string uri) => doc.MainDocumentPart!.FooterParts
+            .Single(f => f.Uri.ToString() == uri).Footer!.OuterXml;
+
+        Assert.Contains("PAGE", XmlOf(defaultUri));
+        foreach (var other in info.FooterRefs.Where(r => r.PartUri != defaultUri))
+            Assert.DoesNotContain("PAGE", XmlOf(other.PartUri));
+    }
+
+    // Word leaves a first/even header part + reference behind when "Different first page" /
+    // "Different odd & even pages" is switched back off, dropping only w:titlePg /
+    // w:evenAndOddHeaders. SetHeaderText sets those flags while WRITING content, so a caller that
+    // edits such a pre-existing story through the text ops saves content Word never renders.
+    // EnsureHeaderFooterVisible is the section-level operation that closes it.
+    [Fact]
+    public void DS268_EnsureHeaderFooterVisible_SetsFlagsForPreExistingStories()
+    {
+        // HC031 carries first/even header and footer references with NEITHER flag set.
+        var path = Path.Combine("../../../../TestFiles/", "HC031-Complicated-Document.docx");
+        using var s = new DocxSession(File.ReadAllBytes(path));
+        var body = s.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h").Anchor.Id;
+
+        // The references live in a MID-DOCUMENT sectPr here (HC031 has four sections), so the flag
+        // must land in the section that actually carries the first-page reference — not merely
+        // somewhere in the document, and not only in the body-level trailing sectPr.
+        static bool FirstRefSectionHasTitlePg(byte[] b)
+        {
+            using var ms = new MemoryStream(b);
+            using var d = WordprocessingDocument.Open(ms, false);
+            return d.MainDocumentPart!.Document.Descendants<SectionProperties>()
+                .Where(sp => sp.Elements<HeaderReference>()
+                    .Any(hr => hr.Type is not null && hr.Type == HeaderFooterValues.First))
+                .Any(sp => sp.Elements<TitlePage>().Any());
+        }
+        static int TitlePgCount(byte[] b)
+        {
+            using var ms = new MemoryStream(b);
+            using var d = WordprocessingDocument.Open(ms, false);
+            return d.MainDocumentPart!.Document.Descendants<TitlePage>().Count();
+        }
+        static bool HasEvenOdd(byte[] b)
+        {
+            using var ms = new MemoryStream(b);
+            using var d = WordprocessingDocument.Open(ms, false);
+            return d.MainDocumentPart!.DocumentSettingsPart!.Settings
+                .Elements<EvenAndOddHeaders>().Any();
+        }
+
+        // Precondition: the fixture really does have the references but not the flags.
+        var info = s.GetSectionInfo(body)!;
+        Assert.Contains(info.HeaderRefs, r => r.Kind == HeaderFooterKind.First);
+        Assert.Contains(info.HeaderRefs, r => r.Kind == HeaderFooterKind.Even);
+        Assert.False(FirstRefSectionHasTitlePg(s.Save()));
+        Assert.False(HasEvenOdd(s.Save()));
+
+        Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.First).Success);
+        Assert.True(FirstRefSectionHasTitlePg(s.Save()));
+
+        Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.Even).Success);
+        Assert.True(HasEvenOdd(s.Save()));
+
+        // Idempotent — a second call adds no duplicate.
+        Assert.Equal(1, TitlePgCount(s.Save()));
+        Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.First).Success);
+        Assert.Equal(1, TitlePgCount(s.Save()));
+
+        // …and a no-op call must not consume undo history. A kind selector calls this on every
+        // click, so snapshotting unconditionally would evict the user's real edits from the
+        // bounded ring. Undo after redundant calls must still reach the text edit before them.
+        var storyAnchor = s.Project().AnchorIndex.Values
+            .First(t => t.PartUri == info.HeaderRefs.Single(r => r.Kind == HeaderFooterKind.First).PartUri
+                        && t.Anchor.Kind == "p").Anchor.Id;
+        Assert.True(s.ReplaceText(storyAnchor, "UNDO PROBE").Success);
+        for (int i = 0; i < 6; i++)
+        {
+            Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.First).Success);
+            Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.Even).Success);
+        }
+        Assert.True(s.Undo());
+        Assert.DoesNotContain("UNDO PROBE", s.Project().Markdown);
+
+        // Default needs no flag and must still succeed; a non-body anchor is rejected.
+        Assert.True(s.EnsureHeaderFooterVisible(body, HeaderFooterKind.Default).Success);
+        var hdrAnchor = s.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope.StartsWith("hdr", StringComparison.Ordinal)).Anchor.Id;
+        var bad = s.EnsureHeaderFooterVisible(hdrAnchor, HeaderFooterKind.First);
+        Assert.False(bad.Success);
+        Assert.Equal(EditErrorCode.AnchorWrongKind, bad.Error!.Code);
+    }
 }

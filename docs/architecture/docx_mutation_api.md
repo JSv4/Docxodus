@@ -261,6 +261,20 @@ WASM/npm, and stdio/`docx-scalpel`.
 | `SetHeaderText(anchorId, HeaderFooterKind, markdown)` | Set the running header story for the section that owns `anchorId`. |
 | `SetFooterText(anchorId, HeaderFooterKind, markdown)` | Same, for the footer. |
 | `InsertPageNumberField(anchorId, PageNumberField = CurrentPage)` | Append a `PAGE`/`NUMPAGES` field to a paragraph (usually a header/footer one). |
+| `EnsureHeaderFooterVisible(anchorId, HeaderFooterKind)` | Make the section's first/even stories actually render (`w:titlePg` / `w:evenAndOddHeaders`). |
+
+**Why `EnsureHeaderFooterVisible` exists.** `SetHeaderText`/`SetFooterText` set the visibility
+flags *while writing content*, which covers authoring a story from scratch. It does not cover a
+document that already carries a first/even reference with the flag absent — and that is exactly
+what Word leaves behind when "Different first page" / "Different odd & even pages" is switched
+back off: the part and its reference stay, only the flag goes. Editing such a pre-existing story
+through the anchor-addressed text ops then yields a file whose header content is present but
+never rendered. The flags belong to the **section**, not to a content write, so this is its own
+operation: `First` → `w:titlePg`, `Even` → the document-global `w:evenAndOddHeaders`, `Default`
+→ a successful no-op. Idempotent; a non-body anchor is `AnchorWrongKind`.
+
+`TestFiles/HC031-Complicated-Document.docx` is the canonical example — all six stories present,
+neither flag set (`DS268`).
 
 **Addressing.** `SetHeaderText`/`SetFooterText` take *any body block* in the target
 section — the governing `w:sectPr` is resolved the same way `GetSectionInfo` resolves
@@ -327,11 +341,62 @@ documented as intentional: the `w:evenAndOddHeaders` settings flag (only set by 
 `Even` kind) isn't reverted by undo — it's idempotent and has no visual effect without
 an even story.
 
+### Which part supplies which kind — `SectionInfo.HeaderRefs`/`FooterRefs`
+
+`HeaderPartUris`/`FooterPartUris` report *which* parts a section references but not which
+story kind each one supplies, and the projection's `hdr{N}`/`ftr{N}` numbering is by
+part-collection order, which carries no kind information either. A client that wants to
+show or edit "this document's **first-page** header" therefore cannot resolve it from
+those lists.
+
+`SectionInfo.HeaderRefs` and `FooterRefs` close that: each entry is a
+`HeaderFooterRef { HeaderFooterKind Kind; string PartUri; bool Inherited; }`, in the
+references' declaration order. `w:type` is optional in OOXML, so an absent (or
+unrecognized) value reads as `Default` per ECMA-376 §17.6.10.
+
+**They report the stories that EFFECTIVELY apply, not just the section's own.** A section
+that declares no reference of a given type *continues the previous section's*
+(ECMA-376 §17.6.17), which is why a multi-section document typically defines its headers
+once in the first section and leaves the rest empty — `HC031-Complicated-Document.docx`
+has four sections and only the first declares anything. Reporting own references alone
+would tell a caller "this part of the document has no header" when it visibly does, and an
+editor acting on that would mint a redundant part and break the inheritance. Inherited
+entries carry `Inherited = true`; editing one edits the part both sections share, which is
+what Word does. `HeaderPartUris`/`FooterPartUris` keep their original meaning — this
+section's **own** references only.
+
+Combined with the `partUri` each projection anchor already carries, this gives a client
+the full kind → part → story-paragraph-anchors chain:
+
+```csharp
+var info = session.GetSectionInfo(body)!;
+var firstHeaderPart = info.HeaderRefs.First(r => r.Kind == HeaderFooterKind.First).PartUri;
+var storyParas = session.Project().AnchorIndex.Values
+    .Where(t => t.PartUri == firstHeaderPart && t.Anchor.Kind == "p")
+    .Select(t => t.Anchor.Id);
+```
+
+Wire: `headerRefs`/`footerRefs` (npm `SectionInfo.headerRefs`/`footerRefs`, `HeaderFooterRef`;
+`docx-scalpel` `SectionInfo.header_refs`/`footer_refs`). This is exactly what the browser
+editor's band chrome uses to label its kind selector.
+
+### The editor region
+
+The browser `DocxEditor` ships the visual affordance as **docked bands** — see
+`docs/architecture/ir_editor_feasibility.md` § "Header/footer editing region". Story
+paragraphs there are ordinary editable blocks addressed by their `p:hdr1:<unid>` anchors,
+which every text/format mutation on this page already accepts.
+
 ### Not yet
 
-- **A visual header/footer editing region in the browser `DocxEditor`.** The engine +
-  wire ship here; the editor UI (a separate editable region, since the parts live
-  outside the body) is a deliberate follow-up.
+- **Deleting a header/footer story.** `SetHeaderText`/`SetFooterText` create or replace;
+  there is no operation that removes a part and its reference. An empty payload yields an
+  empty story, which is not the same thing.
+- **The in-page-margin editing overlay** (editing the running head *inside* the page box's
+  top margin in `{ paginated: true }` mode). Two things block it: the full-document render
+  assigns Unids to the main document part only, so header/footer content carries no
+  `data-anchor`; and pagination clones one header node onto every page, so N pages would
+  mean N DOM nodes sharing one anchor. The docked bands avoid both.
 - **Footnote/endnote authoring** is tracked separately (still `FootnoteRefNotSupported`).
 - **Page-number formatting** (`w:pgNumType` start/format, `PAGE \* roman`) — v1 emits a
   plain `PAGE`/`NUMPAGES`; field switches are a follow-up.

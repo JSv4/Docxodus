@@ -18,6 +18,9 @@
  */
 
 import { paginateHtml } from "./pagination.js";
+import { HeaderFooterRegion } from "./editor-headerfooter.js";
+import type { BandWhich } from "./editor-headerfooter.js";
+import type { HeaderFooterKind } from "./types.js";
 
 /** The subset of WASM bridge exports the editor needs (as exposed on `window.Docxodus`). */
 export interface DocxEditorExports {
@@ -73,6 +76,12 @@ export interface DocxEditorExports {
     Save: (handle: number) => Uint8Array;
     Undo: (handle: number) => boolean;
     Redo: (handle: number) => boolean;
+    /** Header/footer region: the section a body anchor belongs to (kind → part mapping). */
+    GetSectionInfo: (handle: number, anchorId: string) => string;
+    SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
+    SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
+    InsertPageNumberField: (handle: number, anchor: string, field: string) => string;
+    EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
   };
   DocumentConverter: {
     ConvertDocxToHtmlComplete: (...args: any[]) => string;
@@ -95,6 +104,13 @@ export interface DocxEditorOptions {
   paginated?: boolean;
   /** Page render scale for paginated mode (1.0 = 100%). Default 1. */
   scale?: number;
+  /**
+   * Render docked Header/Footer editing bands around the body flow. Default FALSE — with it off
+   * the editor's DOM is unchanged, so existing consumers are unaffected. When on, the body flow
+   * is wrapped in a `.docx-body-flow` element that becomes the edit root, keeping band blocks out
+   * of the body's block list (which indexes remount focus).
+   */
+  headerFooter?: boolean;
   /** Called after a block edit commits (with the affected anchor). */
   onEdit?: (info: { anchorId: string; unid: string }) => void;
 }
@@ -328,10 +344,40 @@ function blockContentText(block: HTMLElement): string {
  * trimmed length keeps the split offset consistent with what was committed.
  */
 function trimmedSplitOffset(block: HTMLElement, domOffset: number): number {
-  const content = blockContentText(block);
-  const leading = content.length - content.replace(/^\s+/, "").length;
-  const trimmedLen = content.trim().length;
+  const { leading, trimmedLen } = trimBounds(block);
   return Math.max(0, Math.min(domOffset - Math.min(domOffset, leading), trimmedLen));
+}
+
+/** How far `block`'s DOM content text is offset from, and longer than, its committed form. */
+function trimBounds(block: HTMLElement): { leading: number; trimmedLen: number } {
+  const content = blockContentText(block);
+  return {
+    leading: content.length - content.replace(/^\s+/, "").length,
+    trimmedLen: content.trim().length,
+  };
+}
+
+/**
+ * Map a DOM content SPAN into the run-text space the session holds after a commit — the span
+ * analogue of {@link trimmedSplitOffset}, and for the same reason.
+ *
+ * A block rendered with edge whitespace produces a span longer than the text the commit stores:
+ * an empty header/footer story renders as a lone NBSP placeholder, so typing into it leaves a
+ * trailing NBSP that `serializeInlineMarkdown(...).trim()` removes (JS `trim()` treats U+00A0 as
+ * whitespace). "Select all, then Bold" then asks `ApplyFormat` for [0, len+1) — one past the
+ * committed end — and the op is REJECTED with OffsetOutOfRange, so the format silently does
+ * nothing. The demo's format buttons preventDefault on mousedown to keep the selection alive,
+ * which is exactly the path that computes the span before `syncBlock` commits, so this is the
+ * ordinary case rather than an edge one.
+ */
+function trimmedSpan(
+  block: HTMLElement,
+  span: { start: number; length: number },
+): { start: number; length: number } {
+  const { leading, trimmedLen } = trimBounds(block);
+  const start = Math.max(0, Math.min(span.start - Math.min(span.start, leading), trimmedLen));
+  const end = Math.max(start, Math.min(span.start + span.length - leading, trimmedLen));
+  return { start, length: end - start };
 }
 
 /**
@@ -417,7 +463,10 @@ function selectionSpanIn(block: HTMLElement): { start: number; length: number } 
   if (!block.contains(range.startContainer) || !block.contains(range.endContainer)) return null;
   const start = contentOffsetOf(block, range.startContainer, range.startOffset);
   const end = contentOffsetOf(block, range.endContainer, range.endOffset);
-  return { start: Math.min(start, end), length: Math.abs(end - start) };
+  // Normalized into the committed run-text space: every consumer feeds this straight to a
+  // DocxSession op, which rejects a span that overshoots the committed length.
+  const span = trimmedSpan(block, { start: Math.min(start, end), length: Math.abs(end - start) });
+  return span.length > 0 ? span : null;
 }
 
 /** Restore a content-text selection spanning [start, start+length) within `el` (skips markers). */
@@ -539,6 +588,9 @@ export class DocxEditor {
    */
   private lastSelection: { unid: string; span: { start: number; length: number } } | null = null;
 
+  /** The docked header/footer bands, when `options.headerFooter` is on. */
+  private region: HeaderFooterRegion | null = null;
+
   private constructor(
     container: HTMLElement,
     exports: DocxEditorExports,
@@ -572,12 +624,42 @@ export class DocxEditor {
     if (span) this.lastSelection = { unid, span };
   };
 
-  /** The editable block (contenteditable [data-anchor]) containing `node`, if any, within this editor. */
+  /** The editable block (contenteditable [data-anchor]) containing `node`, if any, within this editor.
+   *  Fenced by `container`, not `editRoot`, so header/footer band blocks — which live outside the
+   *  body edit root by design — also register. The fence still rejects other editors on the page. */
   private editableBlockOf(node: Node | null): HTMLElement | null {
     if (!node) return null;
     const start = node.nodeType === 1 ? (node as HTMLElement) : node.parentElement;
     const block = start?.closest<HTMLElement>('[data-anchor][contenteditable="true"]') ?? null;
-    return block && this.editRoot.contains(block) ? block : null;
+    return block && this.container.contains(block) ? block : null;
+  }
+
+  /**
+   * The root owning `el`'s sibling block list: its header/footer band's story container, else the
+   * body edit root. Keeps a multi-block selection from spanning a band and the body, whose block
+   * lists belong to different OOXML parts.
+   */
+  private ownerRoot(el: HTMLElement): HTMLElement {
+    return this.region?.blockRootOf(el) ?? this.editRoot;
+  }
+
+  /** True when `el` is a header/footer band block rather than a body block. */
+  private isBandBlock(el: HTMLElement): boolean {
+    return !!this.region?.contains(el);
+  }
+
+  /**
+   * Repaint after an edit to `block` that would otherwise remount the whole document: a band
+   * repaints only itself (a story is one to three paragraphs), leaving the body DOM — and the
+   * user's place in it — untouched.
+   */
+  private refreshAfter(block: HTMLElement, focusIndex: number, caretAtEnd = false): void {
+    const band = this.region?.bandOf(block);
+    if (band) {
+      this.region!.refresh(this.region!.whichOf(band));
+      return;
+    }
+    this.remount(focusIndex, caretAtEnd);
   }
 
   /** Open a document, render it into `container`, and wire up editing. */
@@ -593,6 +675,7 @@ export class DocxEditor {
       editable: options.editable ?? true,
       paginated: options.paginated ?? false,
       scale: options.scale ?? 1,
+      headerFooter: options.headerFooter ?? false,
       onEdit: options.onEdit,
     };
     // persistAnchorIds=true keeps PtOpenXml:Unid attributes in Save() output, so a remount's
@@ -602,11 +685,13 @@ export class DocxEditor {
     const handle = exports.DocxSessionBridge.OpenSession(bytes, '{"persistAnchorIds":true}');
     const editor = new DocxEditor(container, exports, handle, opts);
     editor.refreshAnchorMap();
+    if (opts.headerFooter) editor.createRegion();
     const fullHtml = exports.DocumentConverter.ConvertDocxToHtmlComplete(
       ...completeArgs(bytes, opts.cssPrefix, opts.fabricateClasses, opts.paginated, opts.scale),
     );
     if (opts.paginated) editor.mountPaginated(fullHtml);
     else editor.mountHtml(fullHtml);
+    editor.syncRegionToBody();
     return editor;
   }
 
@@ -661,15 +746,80 @@ export class DocxEditor {
     if (this.closed) throw new Error("DocxEditor is closed");
   }
 
-  /** Rebuild unid → full-anchor-id from the live session projection. */
+  /**
+   * Rebuild unid → full-anchor-id from the live session projection.
+   *
+   * Unids are CONTENT-ADDRESSED, so blocks with identical content in DIFFERENT parts collide —
+   * e.g. a document with empty default/first/even header stories has one unid for several
+   * header parts. A collision must resolve to the BODY entry: body blocks carry only
+   * `data-anchor` (the bare unid) and have nothing else to resolve through, whereas a
+   * header/footer band block carries its full anchor in `data-hf-anchor` and is resolved from
+   * that (see `anchorIdOf`). Letting a non-body scope win here would silently redirect a body
+   * edit into a header part.
+   */
   private refreshAnchorMap(): void {
     const proj = JSON.parse(this.exports.DocxSessionBridge.Project(this.handle)) as {
       anchorIndex: Record<string, AnchorTargetLite>;
     };
     this.unidToFullId.clear();
+    const bodyOwned = new Set<string>();
     for (const [fullId, target] of Object.entries(proj.anchorIndex)) {
+      const isBody = target.scope === "body";
+      if (!isBody && bodyOwned.has(target.unid)) continue;
       this.unidToFullId.set(target.unid, fullId);
+      if (isBody) bodyOwned.add(target.unid);
     }
+  }
+
+  /**
+   * The full `kind:scope:unid` anchor for a rendered block. A header/footer band block carries
+   * its own — the unid map cannot disambiguate one, since several parts' story paragraphs can
+   * share a content-addressed unid (a real Word document with empty default/first/even stories
+   * does exactly that, and a unid-keyed lookup would land the edit in the wrong header part).
+   */
+  private anchorIdOf(el: HTMLElement): string | undefined {
+    const stamped = el.getAttribute("data-hf-anchor");
+    if (stamped) return stamped;
+    const unid = el.getAttribute("data-anchor");
+    return unid ? this.unidToFullId.get(unid) : undefined;
+  }
+
+  /** Build the header/footer region (called once, before the first mount). */
+  private createRegion(): void {
+    this.region = new HeaderFooterRegion(
+      this.exports.DocxSessionBridge,
+      this.handle,
+      { cssPrefix: this.options.cssPrefix, fabricateClasses: this.options.fabricateClasses },
+      {
+        wireBlock: (el) => this.wireBlock(el),
+        refreshAnchorMap: () => this.refreshAnchorMap(),
+      },
+    );
+  }
+
+  /**
+   * Point the bands at the section governing the current focus (or the first body block).
+   * Called after every mount, and on focus of a body block, so a multi-section document shows
+   * the stories that actually apply where the caret is.
+   */
+  private syncRegionToBody(fromBlock?: HTMLElement): void {
+    if (!this.region) return;
+    const block = fromBlock ?? this.editableList()[0];
+    const unid = block?.getAttribute("data-anchor");
+    const id = unid ? this.unidToFullId.get(unid) : undefined;
+    this.region.syncToBody(id ?? null);
+  }
+
+  /**
+   * Insert the bands around `bodyRoot` and make `bodyRoot` the edit root. Band blocks must stay
+   * OUT of the edit root: `editableList()`/`blockIndex()` enumerate it to compute remount focus
+   * indices, and band blocks in that list would shift every index.
+   */
+  private dockBands(bodyRoot: HTMLElement): void {
+    if (!this.region) return;
+    bodyRoot.before(this.region.headerBand);
+    bodyRoot.after(this.region.footerBand);
+    this.region.refreshAll();
   }
 
   /** Continuous (non-paginated) mount: inject the converter's styles + body, wire blocks. */
@@ -678,16 +828,37 @@ export class DocxEditor {
     const styles = Array.from(parsed.querySelectorAll("style"))
       .map((s) => s.outerHTML)
       .join("");
-    this.container.innerHTML = styles + parsed.body.innerHTML;
-    this.editRoot = this.container;
-    if (this.options.editable) this.wireBlocks(this.container);
+    if (!this.region) {
+      this.container.innerHTML = styles + parsed.body.innerHTML;
+      this.editRoot = this.container;
+      if (this.options.editable) this.wireBlocks(this.container);
+      return;
+    }
+    // With bands docked, the body flow needs its own wrapper to be the edit root.
+    this.container.innerHTML = styles;
+    const flow = document.createElement("div");
+    flow.className = "docx-body-flow";
+    flow.innerHTML = parsed.body.innerHTML;
+    this.container.appendChild(flow);
+    this.editRoot = flow;
+    if (this.options.editable) this.wireBlocks(flow);
+    this.dockBands(flow);
   }
 
   /** Paginated mount: flow blocks into page boxes via pagination.ts, wire the page clones. */
   private mountPaginated(fullHtml: string): void {
+    // With bands docked, pagination writes into its own wrapper so the bands can sit outside the
+    // page stack (and so pagination's innerHTML reset can never eat them).
+    let target = this.container;
+    if (this.region) {
+      this.container.innerHTML = "";
+      target = document.createElement("div");
+      target.className = "docx-body-flow";
+      this.container.appendChild(target);
+    }
     // Fragmented paragraphs intentionally have only one addressable head and
     // are therefore unsuitable for the editor's one-block editing model.
-    paginateHtml(fullHtml, this.container, {
+    paginateHtml(fullHtml, target, {
       scale: this.options.scale,
       cssPrefix: "page-",
       fragmentParagraphs: false,
@@ -700,10 +871,12 @@ export class DocxEditor {
     // is a transient measurement scaffold; drop it so the page-box copies are the single source of
     // truth. A remount (setPaginated, list/undo edits) rebuilds staging fresh from the live session.
     this.container.querySelector("#pagination-staging, .page-staging")?.remove();
-    const pageRoot =
-      this.container.querySelector<HTMLElement>("#pagination-container") ?? this.container;
+    const pageRoot = target.querySelector<HTMLElement>("#pagination-container") ?? target;
     this.editRoot = pageRoot;
     if (this.options.editable) this.wireBlocks(pageRoot);
+    // The page boxes render their own (read-only) header/footer margins; the editable bands dock
+    // around the page stack, so there is still exactly one addressable node per story paragraph.
+    if (this.region) this.dockBands(target);
   }
 
   private wireBlocks(root: HTMLElement): void {
@@ -717,7 +890,9 @@ export class DocxEditor {
     // table-cell paragraphs (the projection indexes them), so cell text IS editable — but structural
     // keys are kept inert inside a cell (see onKeydown / GAP3) so single-block editing can't corrupt
     // table structure. Anything the projection does not index (unstamped content) stays read-only.
-    if (!unid || !this.unidToFullId.has(unid)) return;
+    // A band block is authoritative via its stamped `data-hf-anchor` even when the unid map
+    // resolves that unid to a different part (content-addressed unids collide across parts).
+    if (!unid || !this.anchorIdOf(el)) return;
     el.setAttribute("contenteditable", "true");
     // Generated list markers (number/bullet + suffix) are not editable content — keep the
     // caret out of them so offsets stay aligned with the paragraph's run text.
@@ -725,9 +900,19 @@ export class DocxEditor {
     // Baseline for the commit diff: CONTENT text (list markers + injected bidi marks excluded),
     // matching the session's flat run-text offset space.
     el.dataset.committedText = blockContentText(el);
-    el.addEventListener("focus", () => { this.activeBlock = el; });
+    el.addEventListener("focus", () => {
+      this.activeBlock = el;
+      // Follow the caret's section so a cover-page-plus-body document shows the stories that
+      // actually apply. Focusing a BAND block must not re-sync: it has no governing section of
+      // its own, and re-resolving would clobber the user's kind selection.
+      if (this.region && !this.isBandBlock(el)) this.syncRegionToBody(el);
+    });
     el.addEventListener("blur", () => this.commitBlock(el));
     el.addEventListener("keydown", (ev) => this.onKeydown(el, ev as KeyboardEvent));
+    // A band block re-rendered by an incremental swap is a fresh DOM node; re-adopt it (with the
+    // anchor its caller already stamped) so the band chrome can still address it.
+    const stamped = el.getAttribute("data-hf-anchor");
+    if (stamped && this.region?.contains(el)) this.region.adoptBlock(el, stamped);
   }
 
   /**
@@ -759,7 +944,7 @@ export class DocxEditor {
     if (this.closed || this.replacing) return;
     const unid = el.getAttribute("data-anchor");
     if (!unid) return;
-    const fullId = this.unidToFullId.get(unid);
+    const fullId = this.anchorIdOf(el);
     if (!fullId) return;
 
     const result = this.commitTextChange(el, fullId);
@@ -797,9 +982,16 @@ export class DocxEditor {
     );
     if (html.charCodeAt(0) !== 0x7b /* not an error object */) {
       const fresh = new DOMParser().parseFromString(html, "text/html").body.firstElementChild as HTMLElement | null;
+      const inBand = this.isBandBlock(el);
       if (fresh && this.replaceNode(el, fresh)) {
-        this.unidToFullId.delete(unid);
-        this.unidToFullId.set(newUnid, newAnchor);
+        // Band blocks resolve through `data-hf-anchor`; their unid can collide with another
+        // part's, so writing it into the map would corrupt that entry (see anchorIdOf).
+        if (inBand) {
+          this.region!.adoptBlock(fresh, newAnchor);
+        } else {
+          this.unidToFullId.delete(unid);
+          this.unidToFullId.set(newUnid, newAnchor);
+        }
         this.wireBlock(fresh);
         if (this.activeBlock === el) this.activeBlock = fresh; // keep ribbon target valid
       }
@@ -881,7 +1073,7 @@ export class DocxEditor {
     const rawOffset = caretOffsetIn(el);
     const unid = el.getAttribute("data-anchor");
     if (rawOffset == null || !unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(el);
     if (!fullId) return;
     // The session commits trimmed text, so map the DOM caret offset into the trimmed run-text
     // offset (else an overshoot — e.g. a placeholder leading space — is rejected and Enter is lost).
@@ -902,7 +1094,7 @@ export class DocxEditor {
     // document re-render so numbering continues / border <div>s regroup correctly. An in-place node
     // swap would leave the new paragraph inside the old border div (the rule's line under its text).
     if (this.affectsList(res) || wrappedInBorder) {
-      this.remount(idx + 1, false);
+      this.refreshAfter(el, idx + 1, false);
       this.options.onEdit?.({ anchorId: second.id, unid: second.unid });
       return;
     }
@@ -913,10 +1105,17 @@ export class DocxEditor {
 
     // el is the focused block — replaceNode guards the re-entrant blur→commit and tolerates a
     // node detached mid-focus-transfer; replacing with both new blocks at once keeps them adjacent.
+    const inBand = this.isBandBlock(el);
     if (!this.replaceNode(el, firstEl, secondEl)) return;
-    this.unidToFullId.delete(unid);
-    this.unidToFullId.set(first.unid, first.id);
-    this.unidToFullId.set(second.unid, second.id);
+    // Band blocks resolve through `data-hf-anchor` (their unids can collide across parts).
+    if (inBand) {
+      this.region!.adoptBlock(firstEl, first.id);
+      this.region!.adoptBlock(secondEl, second.id);
+    } else {
+      this.unidToFullId.delete(unid);
+      this.unidToFullId.set(first.unid, first.id);
+      this.unidToFullId.set(second.unid, second.id);
+    }
     this.wireBlock(firstEl);
     this.wireBlock(secondEl);
     placeCaretAtOffset(secondEl, 0);
@@ -928,8 +1127,8 @@ export class DocxEditor {
     const prevUnid = prev.getAttribute("data-anchor");
     const thisUnid = el.getAttribute("data-anchor");
     if (!prevUnid || !thisUnid) return;
-    let prevId = this.unidToFullId.get(prevUnid);
-    let thisId = this.unidToFullId.get(thisUnid);
+    let prevId = this.anchorIdOf(prev);
+    let thisId = this.anchorIdOf(el);
     if (!prevId || !thisId) return;
 
     const prevIdx = this.blockIndex(prev); // capture before the op
@@ -948,7 +1147,7 @@ export class DocxEditor {
     // Merging list items renumbers the list, and merging across a border <div> boundary changes the
     // border grouping — both need a whole-document re-render (caret at the merge boundary).
     if (this.affectsList(res) || wrappedInBorder) {
-      this.remount(prevIdx, true);
+      this.refreshAfter(el, prevIdx, true);
       this.options.onEdit?.({ anchorId: merged.id, unid: merged.unid });
       return;
     }
@@ -957,11 +1156,17 @@ export class DocxEditor {
     if (!mergedEl) return;
 
     // prev may be focused — replaceNode guards re-entrancy and tolerates a detached node.
+    const inBand = this.isBandBlock(prev);
     if (!this.replaceNode(prev, mergedEl)) return;
     el.remove();
-    this.unidToFullId.delete(prevUnid);
-    this.unidToFullId.delete(thisUnid);
-    this.unidToFullId.set(merged.unid, merged.id);
+    // Band blocks resolve through `data-hf-anchor` (their unids can collide across parts).
+    if (inBand) {
+      this.region!.adoptBlock(mergedEl, merged.id);
+    } else {
+      this.unidToFullId.delete(prevUnid);
+      this.unidToFullId.delete(thisUnid);
+      this.unidToFullId.set(merged.unid, merged.id);
+    }
     this.wireBlock(mergedEl);
     placeCaretAtOffset(mergedEl, caret);
     this.options.onEdit?.({ anchorId: merged.id, unid: merged.unid });
@@ -1034,10 +1239,10 @@ export class DocxEditor {
     return new DOMParser().parseFromString(html, "text/html").body.firstElementChild as HTMLElement | null;
   }
 
-  /** The editable block immediately before `el` in document order, or null. */
+  /** The editable block immediately before `el` within its own root, or null. */
   private previousEditable(el: HTMLElement): HTMLElement | null {
     const all = Array.from(
-      this.editRoot.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'),
+      this.ownerRoot(el).querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'),
     );
     const i = all.indexOf(el);
     return i > 0 ? all[i - 1] : null;
@@ -1061,8 +1266,11 @@ export class DocxEditor {
    *  A collapsed or single-block selection yields just the active block. */
   private selectedBlocks(): HTMLElement[] {
     const sel = typeof window !== "undefined" ? window.getSelection() : null;
+    // Enumerate the ACTIVE block's own root — a band's story container, else the body edit root —
+    // so a selection can never span a band and the body (different OOXML parts).
+    const root = this.activeBlock ? this.ownerRoot(this.activeBlock) : this.editRoot;
     const all = Array.from(
-      this.editRoot.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'),
+      root.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'),
     );
     if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
       const range = sel.getRangeAt(0);
@@ -1090,16 +1298,18 @@ export class DocxEditor {
     const hasStart = block.contains(range.startContainer);
     const hasEnd = block.contains(range.endContainer);
     if (hasStart && hasEnd) return selectionSpanIn(block);
+    // Partial/whole slices are normalized into the committed run-text space for the same reason
+    // selectionSpanIn is (see trimmedSpan): a session op rejects a span past the committed end.
     const contentLen = blockContentText(block).length;
     if (hasStart) {
       const start = contentOffsetOf(block, range.startContainer, range.startOffset);
-      return { start, length: Math.max(0, contentLen - start) };
+      return trimmedSpan(block, { start, length: Math.max(0, contentLen - start) });
     }
     if (hasEnd) {
       const end = contentOffsetOf(block, range.endContainer, range.endOffset);
-      return { start: 0, length: end };
+      return trimmedSpan(block, { start: 0, length: end });
     }
-    return { start: 0, length: contentLen }; // fully-spanned middle block
+    return trimmedSpan(block, { start: 0, length: contentLen }); // fully-spanned middle block
   }
 
   /** Apply an inline ApplyFormat op to each block's slice of the selection, then reconcile
@@ -1156,7 +1366,7 @@ export class DocxEditor {
       return {
         block: b,
         unid,
-        fullId: unid ? this.unidToFullId.get(unid) : undefined,
+        fullId: this.anchorIdOf(b),
         span: this.blockSpanForSelection(b),
         res: null,
       };
@@ -1188,7 +1398,7 @@ export class DocxEditor {
     // need a reflow — keep the (pre-existing) full remount there until M4 lands a scoped
     // re-paginate. Continuous mode reconciles incrementally.
     if (forceRemount || this.options.paginated || edited.some((t) => this.affectsList(t.res!))) {
-      this.remount();
+      this.refreshAfter(edited[0].block, -1, false);
       return;
     }
     const swapped: Array<{ el: HTMLElement; span: { start: number; length: number } | null }> = [];
@@ -1236,7 +1446,7 @@ export class DocxEditor {
     }
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(block);
     if (!fullId) return;
 
     const span = selectionSpanIn(block);
@@ -1256,7 +1466,7 @@ export class DocxEditor {
       ),
     );
     if (!res.success) return;
-    if (this.affectsList(res)) { this.remount(this.blockIndex(block), false); return; }
+    if (this.affectsList(res)) { this.refreshAfter(block, this.blockIndex(block), false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
     if (fresh && span) selectRange(fresh, span.start, span.length);
     else fresh?.focus();
@@ -1274,7 +1484,7 @@ export class DocxEditor {
     if (blocks.length > 1 && this.applyInlineOpAcrossBlocks(blocks, { fontSizePts: pts })) return;
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(block);
     if (!fullId) return;
     // Use the live selection; if the font-size combobox stole focus and collapsed it, fall back to
     // the last real selection cached for this block so a sub-range still sizes (finding 3).
@@ -1290,7 +1500,7 @@ export class DocxEditor {
       ),
     );
     if (!res.success) return;
-    if (this.affectsList(res)) { this.remount(this.blockIndex(block), false); return; }
+    if (this.affectsList(res)) { this.refreshAfter(block, this.blockIndex(block), false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
     if (fresh && span) selectRange(fresh, span.start, span.length);
     else fresh?.focus();
@@ -1310,7 +1520,7 @@ export class DocxEditor {
     if (blocks.length > 1 && this.applyInlineOpAcrossBlocks(blocks, { fontFamily: name })) return;
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(block);
     if (!fullId) return;
     let span = selectionSpanIn(block);
     if (!span && this.lastSelection && this.lastSelection.unid === unid) span = this.lastSelection.span;
@@ -1324,7 +1534,7 @@ export class DocxEditor {
       ),
     );
     if (!res.success) return;
-    if (this.affectsList(res)) { this.remount(this.blockIndex(block), false); return; }
+    if (this.affectsList(res)) { this.refreshAfter(block, this.blockIndex(block), false); return; }
     const fresh = this.swapBlock(block, unid, res.modified?.[0]);
     if (fresh && span) selectRange(fresh, span.start, span.length);
     else fresh?.focus();
@@ -1345,7 +1555,7 @@ export class DocxEditor {
     if (this.closed || !block) return;
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(block);
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
@@ -1360,7 +1570,7 @@ export class DocxEditor {
     if (!res.success) return;
     // remount from the active block's index re-renders the new rule whether it landed just
     // above (at idx) or just below (at idx+1) the active block.
-    this.remount(idx, false);
+    this.refreshAfter(block, idx, false);
   }
 
   /**
@@ -1382,7 +1592,7 @@ export class DocxEditor {
     if (this.closed || !block) return;
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(block);
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
@@ -1402,7 +1612,7 @@ export class DocxEditor {
       ),
     );
     if (!res.success) return;
-    this.remount(idx, false);
+    this.refreshAfter(block, idx, false);
   }
 
   // ─── Table row / column editing (active block must be inside a table cell) ──────────
@@ -1413,13 +1623,13 @@ export class DocxEditor {
     if (this.closed || !block || !block.closest("table")) return;
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(block);
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId); // flush uncommitted cell text first
     const res = this.parseEdit(run(fullId));
     if (!res.success) return;
-    this.remount(idx, false);
+    this.refreshAfter(block, idx, false);
   }
 
   /** Insert a row above/below the active cell's row. No-op outside a table. */
@@ -1466,7 +1676,7 @@ export class DocxEditor {
     if (this.closed || !block) return;
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(block);
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
@@ -1474,7 +1684,7 @@ export class DocxEditor {
     if (!res.success) return;
     // A level change ripples through the whole list's numbering — re-render with full document
     // context (a single-block render can't compute nested numbering), keeping the caret in place.
-    this.remount(idx, false);
+    this.refreshAfter(block, idx, false);
   }
 
   /** Toggle (or set) page-break-before on the active block. */
@@ -1491,7 +1701,7 @@ export class DocxEditor {
     if (this.closed || !block) return;
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(block);
     if (!fullId) return;
 
     let membership: { format?: string } | null = null;
@@ -1510,7 +1720,7 @@ export class DocxEditor {
     if (!res.success) return;
     // Numbering continuation across the list needs whole-document context — re-render fully
     // (a single-block render would show every numbered item as "1.").
-    this.remount(idx, false);
+    this.refreshAfter(block, idx, false);
   }
 
   /** Clear all paragraph borders (e.g. remove an inserted horizontal rule) on the active block —
@@ -1534,12 +1744,12 @@ export class DocxEditor {
     if (this.editableList().length <= 1) return; // never delete the last editable block
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    const fullId = this.unidToFullId.get(unid);
+    const fullId = this.anchorIdOf(block);
     if (!fullId) return;
     const idx = this.blockIndex(block);
     const res = this.parseEdit(this.exports.DocxSessionBridge.DeleteBlock(this.handle, fullId));
     if (!res.success) return;
-    this.remount(Math.max(0, idx - 1), true);
+    this.refreshAfter(block, Math.max(0, idx - 1), true);
   }
 
   private applyParagraphFormat(op: {
@@ -1563,7 +1773,7 @@ export class DocxEditor {
       return;
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(block);
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
@@ -1573,7 +1783,7 @@ export class DocxEditor {
     if (!res.success) return;
     // A border change adds/removes the wrapping border <div>, so a single-block swap can't restructure
     // it correctly — re-render fully (like list edits) so the wrapper appears/disappears cleanly.
-    if (this.affectsList(res) || op.clearBorders) { this.remount(idx, false); return; }
+    if (this.affectsList(res) || op.clearBorders) { this.refreshAfter(block, idx, false); return; }
     this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 
@@ -1592,13 +1802,13 @@ export class DocxEditor {
       return;
     const unid = block.getAttribute("data-anchor");
     if (!unid) return;
-    let fullId = this.unidToFullId.get(unid);
+    let fullId = this.anchorIdOf(block);
     if (!fullId) return;
     const idx = this.blockIndex(block);
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(this.exports.DocxSessionBridge.SetParagraphStyle(this.handle, fullId, styleId));
     if (!res.success) return;
-    if (this.affectsList(res)) { this.remount(idx, false); return; }
+    if (this.affectsList(res)) { this.refreshAfter(block, idx, false); return; }
     this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 
@@ -1612,6 +1822,42 @@ export class DocxEditor {
   redo(): void {
     if (this.closed) return;
     if (this.exports.DocxSessionBridge.Redo(this.handle)) this.remount();
+  }
+
+  // ─── Header/footer region commands (no-ops unless `headerFooter` is on) ───────────────
+
+  /**
+   * Select which story kind a band edits (`"default"` / `"first"` / `"even"`). A kind with no
+   * existing part is created empty, so the band always presents something editable. `"first"`
+   * sets the section's `w:titlePg`; `"even"` sets the document-global `w:evenAndOddHeaders`
+   * (which also governs footers — the band surfaces that caveat inline).
+   */
+  setHeaderFooterKind(which: BandWhich, kind: HeaderFooterKind): void {
+    this.assertOpen();
+    this.region?.setKind(which, kind);
+  }
+
+  /** The story kind a band is currently editing, or null when the region is off. */
+  headerFooterKind(which: BandWhich): HeaderFooterKind | null {
+    return this.region?.kindOf(which) ?? null;
+  }
+
+  /**
+   * Append a page-number field to the focused header/footer story paragraph (falling back to the
+   * band's last paragraph — Word's convention). No-op outside a band.
+   */
+  insertPageNumber(field: "currentPage" | "totalPages" = "currentPage"): void {
+    this.assertOpen();
+    if (!this.region) return;
+    const block = this.activeBlock;
+    const band = block ? this.region.bandOf(block) : null;
+    const anchorId = block?.getAttribute("data-hf-anchor");
+    if (band && anchorId) {
+      this.region.insertPageNumber(this.region.whichOf(band), anchorId, field);
+      return;
+    }
+    // No band block focused — target the footer, where page numbers overwhelmingly live.
+    this.region.insertPageNumberInBand("footer", field);
   }
 
   /** Which inline formats the current selection carries — for ribbon button highlighting. */
@@ -1630,13 +1876,20 @@ export class DocxEditor {
 
   /** Re-render one block from the live session by EditResult ref, swapping it in place. */
   private swapBlock(oldEl: HTMLElement, oldUnid: string, ref?: AnchorRef): HTMLElement | null {
-    const anchorId = ref?.id ?? this.unidToFullId.get(oldUnid);
+    const inBand = this.isBandBlock(oldEl);
+    const anchorId = ref?.id ?? this.anchorIdOf(oldEl);
     const newUnid = ref?.unid ?? oldUnid;
     if (!anchorId) return null;
     const fresh = this.renderInto(anchorId);
     if (!fresh || !this.replaceNode(oldEl, fresh)) return null;
-    this.unidToFullId.delete(oldUnid);
-    this.unidToFullId.set(newUnid, anchorId);
+    // A band block resolves through its stamped `data-hf-anchor`, never the unid map — and its
+    // unid can collide with another part's, so writing it here would corrupt that entry.
+    if (!inBand) {
+      this.unidToFullId.delete(oldUnid);
+      this.unidToFullId.set(newUnid, anchorId);
+    }
+    // Stamp BEFORE wiring so wireBlock's own resolution sees the authoritative id.
+    if (inBand) this.region!.adoptBlock(fresh, anchorId);
     this.wireBlock(fresh);
     this.activeBlock = fresh;
     this.options.onEdit?.({ anchorId, unid: newUnid });
@@ -1668,13 +1921,15 @@ export class DocxEditor {
     );
   }
 
-  /** Editable blocks in document order. */
+  /** Editable BODY blocks in document order (band blocks are enumerated by `ownerRoot`). */
   private editableList(): HTMLElement[] {
     return Array.from(this.editRoot.querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'));
   }
 
   private blockIndex(el: HTMLElement): number {
-    return this.editableList().indexOf(el);
+    return Array.from(
+      this.ownerRoot(el).querySelectorAll<HTMLElement>('[data-anchor][contenteditable="true"]'),
+    ).indexOf(el);
   }
 
   /**
@@ -1706,5 +1961,8 @@ export class DocxEditor {
         placeCaretAtOffset(target, caretAtEnd ? (target.textContent ?? "").length : 0);
       }
     }
+    // A remount rebuilds the body from the live session; re-resolve the section so undo/redo of a
+    // section-affecting edit (or a pagination toggle) leaves the bands describing the right one.
+    this.syncRegionToBody(this.activeBlock ?? undefined);
   }
 }

@@ -1068,4 +1068,51 @@ public class HtmlConversionOpsTests
         }
         return ms.ToArray();
     }
+
+    // Unids are CONTENT-ADDRESSED, so identical content in DIFFERENT parts shares one unid.
+    // HC031 carries default/first/even footer stories, all empty, which collide. Resolving a
+    // block by bare unid then renders whichever part the scan reaches first, so an editor's
+    // header/footer band would DISPLAY one story while editing another. The session-attached
+    // path must resolve through the anchor index, which knows the owning part.
+    [Fact]
+    public void HCO080_RenderBlockHtml_ResolvesTheAnchorsOwnPart_WhenUnidsCollide()
+    {
+        var bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "HC031-Complicated-Document.docx"));
+        using var session = new DocxSession(bytes);
+        var body = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope == "body" && t.Anchor.Kind is "p" or "h").Anchor.Id;
+
+        var refs = session.GetSectionInfo(body)!.FooterRefs;
+        var markers = new System.Collections.Generic.Dictionary<HeaderFooterKind, string>
+        {
+            [HeaderFooterKind.Default] = "DDD-DEFAULT",
+            [HeaderFooterKind.First] = "FFF-FIRST",
+            [HeaderFooterKind.Even] = "EEE-EVEN",
+        };
+
+        // Precondition: the stories really do collide, or this test covers nothing.
+        var unids = refs
+            .Select(r => session.Project().AnchorIndex.Values.First(t => t.PartUri == r.PartUri).Unid)
+            .ToList();
+        Assert.True(unids.Distinct().Count() < unids.Count,
+            "precondition: this fixture's empty footer stories should share a content-addressed unid");
+
+        var anchorOf = refs.ToDictionary(
+            r => r.Kind,
+            r => session.Project().AnchorIndex.Values
+                     .First(t => t.PartUri == r.PartUri && t.Anchor.Kind == "p").Anchor.Id);
+
+        foreach (var (kind, text) in markers)
+            Assert.True(session.ReplaceText(anchorOf[kind], text).Success);
+
+        var opts = new HtmlConversionOptions { StampAnchors = true, FabricateCssClasses = false };
+        foreach (var (kind, text) in markers)
+        {
+            var html = HtmlConversionOps.RenderBlockHtml(session, anchorOf[kind], opts);
+            Assert.Contains(text, html);
+            foreach (var (otherKind, otherText) in markers)
+                if (otherKind != kind) Assert.DoesNotContain(otherText, html);
+        }
+    }
 }

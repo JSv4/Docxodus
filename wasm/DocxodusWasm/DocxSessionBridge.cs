@@ -173,6 +173,14 @@ public static partial class DocxSessionBridge
     public static string InsertPageNumberField(int h, string anchor, string field) =>
         DocxSessionOps.InsertPageNumberField(h, anchor, DocxSessionJson.ParsePageNumberField(field));
 
+    /// <summary>Make the <paramref name="kind"/> ("first" | "even") header/footer stories of the
+    /// section owning <paramref name="anchor"/> actually render — sets <c>w:titlePg</c> /
+    /// <c>w:evenAndOddHeaders</c>. "default" is a no-op. Needed when a document already carries a
+    /// first/even reference with the flag absent, which content writes alone don't fix.</summary>
+    [JSExport]
+    public static string EnsureHeaderFooterVisible(int h, string anchor, string kind) =>
+        DocxSessionOps.EnsureHeaderFooterVisible(h, anchor, DocxSessionJson.ParseHeaderFooterKind(kind));
+
     [JSExport]
     public static string ApplyFormat(int h, string anchor, string spanJson, string opJson) =>
         DocxSessionOps.ApplyFormat(h, anchor, ParseSpan(spanJson), DocxSessionJson.ParseFormatOp(opJson));

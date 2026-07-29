@@ -83,7 +83,8 @@ internal static class BlockMetadataOps
         if (cols is not null && int.TryParse((string?)cols.Attribute(W.num), out var parsedCols))
             colCount = parsedCols;
 
-        var (headerUris, footerUris) = ResolveSectionHeaderFooterUris(doc, sectPr);
+        var (ownHeaderRefs, ownFooterRefs) = ResolveSectionHeaderFooterRefs(doc, sectPr);
+        var (headerRefs, footerRefs) = AddInheritedRefs(doc, element, sectPr, ownHeaderRefs, ownFooterRefs);
 
         // The sectPr itself doesn't carry a stable Unid in every fixture; fall back
         // to a deterministic synthetic id derived from element position so the field
@@ -102,8 +103,12 @@ internal static class BlockMetadataOps
             MarginLeftTwips = left,
             MarginRightTwips = right,
             Columns = colCount,
-            HeaderPartUris = headerUris,
-            FooterPartUris = footerUris,
+            // The URI lists keep their original meaning — this section's OWN references — so only
+            // the (new) *Refs lists carry inherited stories.
+            HeaderPartUris = ownHeaderRefs.Select(r => r.PartUri).ToList(),
+            FooterPartUris = ownFooterRefs.Select(r => r.PartUri).ToList(),
+            HeaderRefs = headerRefs,
+            FooterRefs = footerRefs,
         };
     }
 
@@ -137,29 +142,83 @@ internal static class BlockMetadataOps
         return body.Element(W.sectPr);
     }
 
-    private static (IReadOnlyList<string> headers, IReadOnlyList<string> footers)
-        ResolveSectionHeaderFooterUris(WordprocessingDocument doc, XElement sectPr)
+    /// <summary>
+    /// Extend a section's own references with the ones it INHERITS. Per ECMA-376 §17.6.17 a
+    /// section that declares no reference of a given type continues the nearest preceding
+    /// section's, which is why a multi-section document commonly defines its headers once, in
+    /// the first section, and leaves the rest empty. Reporting only a section's own references
+    /// would tell a caller "this part of the document has no header" when it visibly does — and
+    /// an editor acting on that would mint a redundant part and break the inheritance.
+    /// </summary>
+    private static (IReadOnlyList<HeaderFooterRef> headers, IReadOnlyList<HeaderFooterRef> footers)
+        AddInheritedRefs(WordprocessingDocument doc, XElement element, XElement governing,
+            IReadOnlyList<HeaderFooterRef> ownHeaders, IReadOnlyList<HeaderFooterRef> ownFooters)
+    {
+        var body = element.AncestorsAndSelf(W.body).FirstOrDefault();
+        if (body is null) return (ownHeaders, ownFooters);
+
+        // Every sectPr in document order — inline section breaks (w:pPr/w:sectPr) followed by the
+        // body's trailing one, which is exactly the order sections apply in.
+        var all = body.Descendants(W.sectPr).ToList();
+        int idx = all.IndexOf(governing);
+        if (idx <= 0) return (ownHeaders, ownFooters);
+
+        var headers = ownHeaders.ToList();
+        var footers = ownFooters.ToList();
+        for (int i = idx - 1; i >= 0 && (headers.Count < 3 || footers.Count < 3); i--)
+        {
+            var (prevHeaders, prevFooters) = ResolveSectionHeaderFooterRefs(doc, all[i]);
+            foreach (var r in prevHeaders)
+                if (!headers.Any(h => h.Kind == r.Kind))
+                    headers.Add(r with { Inherited = true });
+            foreach (var r in prevFooters)
+                if (!footers.Any(f => f.Kind == r.Kind))
+                    footers.Add(r with { Inherited = true });
+        }
+        return (headers, footers);
+    }
+
+    /// <summary>The story kind a <c>w:headerReference</c>/<c>w:footerReference</c> supplies.
+    /// <c>w:type</c> is optional; an absent or unrecognized value means the default story.</summary>
+    private static HeaderFooterKind ParseRefKind(XElement reference)
+        => (string?)reference.Attribute(W.type) switch
+        {
+            "first" => HeaderFooterKind.First,
+            "even" => HeaderFooterKind.Even,
+            _ => HeaderFooterKind.Default,
+        };
+
+    private static (IReadOnlyList<HeaderFooterRef> headers, IReadOnlyList<HeaderFooterRef> footers)
+        ResolveSectionHeaderFooterRefs(WordprocessingDocument doc, XElement sectPr)
     {
         var main = doc.MainDocumentPart;
         if (main is null)
-            return (System.Array.Empty<string>(), System.Array.Empty<string>());
+            return (System.Array.Empty<HeaderFooterRef>(), System.Array.Empty<HeaderFooterRef>());
 
-        var headers = new List<string>();
-        var footers = new List<string>();
+        var headers = new List<HeaderFooterRef>();
+        var footers = new List<HeaderFooterRef>();
 
         foreach (var headerRef in sectPr.Elements(W.headerReference))
         {
             var rId = (string?)headerRef.Attribute(R.id);
             if (rId is null) continue;
-            var part = main.GetPartById(rId) as HeaderPart;
-            if (part is not null) headers.Add(part.Uri.ToString());
+            if (main.GetPartById(rId) is HeaderPart part)
+                headers.Add(new HeaderFooterRef
+                {
+                    Kind = ParseRefKind(headerRef),
+                    PartUri = part.Uri.ToString(),
+                });
         }
         foreach (var footerRef in sectPr.Elements(W.footerReference))
         {
             var rId = (string?)footerRef.Attribute(R.id);
             if (rId is null) continue;
-            var part = main.GetPartById(rId) as FooterPart;
-            if (part is not null) footers.Add(part.Uri.ToString());
+            if (main.GetPartById(rId) is FooterPart part)
+                footers.Add(new HeaderFooterRef
+                {
+                    Kind = ParseRefKind(footerRef),
+                    PartUri = part.Uri.ToString(),
+                });
         }
         return (headers, footers);
     }

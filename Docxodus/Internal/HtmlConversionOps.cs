@@ -187,16 +187,24 @@ internal static class HtmlConversionOps
             throw new ArgumentException("No anchor id provided", nameof(anchorId));
         ArgumentNullException.ThrowIfNull(options);
 
-        var unid = AnchorUnid(anchorId);
         var liveDoc = session.LiveDocument;
 
-        var blockElement = FindByUnid(liveDoc, unid);
+        // Resolve through the session's anchor index FIRST: it knows which PART the anchor lives
+        // in. Unids are content-addressed, so identical content in different parts shares one unid
+        // — a document with empty default/first/even header stories has one unid across several
+        // header parts — and the unid-only scan below would render whichever part it reached
+        // first. An editor showing a header band would then display a different story than the
+        // one it is editing.
+        var blockElement = session.FindAnchor(anchorId)?.Resolve(liveDoc);
+
+        var unid = AnchorUnid(anchorId);
+        blockElement ??= FindByUnid(liveDoc, unid);
         if (blockElement is null)
         {
             // Anchor not on the live tree yet — ensure Unids are assigned/persisted
             // (one projection) and retry once.
             session.Project();
-            blockElement = FindByUnid(liveDoc, unid);
+            blockElement = session.FindAnchor(anchorId)?.Resolve(liveDoc) ?? FindByUnid(liveDoc, unid);
         }
         if (blockElement is null)
             throw new ArgumentException($"anchor not found: {anchorId}", nameof(anchorId));

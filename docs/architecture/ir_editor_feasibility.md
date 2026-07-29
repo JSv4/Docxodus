@@ -445,6 +445,68 @@ Per the repo's single-owner-facade convention, any new cross-boundary surface
 (`RenderBlockHtml`) lands in its `*Ops` facade first, then ripples to the WASM
 bridge + TS client.
 
+## 7a. Header/footer editing region (issue #275)
+
+Header and footer stories live in their own OOXML parts (`HeaderPart`/`FooterPart`) *outside* the
+body, so they cannot be another block in the body flow. `DocxEditor` therefore renders them as two
+**docked bands** — one above the body flow, one below — enabled by `DocxEditorOptions.headerFooter`
+(default **false**, so the editor's DOM is unchanged for existing consumers).
+
+**Why bands rather than an in-page-margin overlay.** Two facts rule the overlay out:
+
+1. The full-document render assigns Unids to the **main document part only**
+   (`UnidHelper.AssignToAllElementsDeterministic` in `HtmlConversionOps`), so header/footer content
+   carries no `data-anchor`. The editor's continuous mode does not even request header/footer
+   rendering (`completeArgs` passes `renderHeadersAndFooters: paginated`).
+2. Paginated mode clones **one header node onto every page** (`selectHeader`/`selectFooter` return
+   the same registry element per qualifying page), so page-margin nodes would share one anchor — the
+   same ambiguity already documented for `#pagination-staging`.
+
+Bands keep exactly one DOM node per story paragraph in both modes. The overlay remains a possible
+follow-up once anchor stamping and per-page dedup are solved.
+
+**How they are built.** `npm/src/editor-headerfooter.ts` owns the region. Kind → part comes from
+`SectionInfo.HeaderRefs`/`FooterRefs` (each reference's `w:type`); part → story anchors comes from
+the `partUri` each projection anchor already carries. Each story paragraph is rendered with the
+**session-attached `RenderBlockHtml`** — the same renderer the post-edit incremental swap uses, so
+first paint and repaint cannot drift.
+
+**Editing is reuse, not a parallel path.** Band paragraphs are wired by the existing `wireBlock`,
+and every mutation op accepts a `p:hdr1:<unid>` anchor (`FindAnchor` indexes all scopes;
+`AnchorTarget.PartUri` routes resolution), so the whole ribbon works inside a band with no new
+command code. Three seams make that safe:
+
+- `editableBlockOf` is fenced by `container`, not `editRoot`, so a band block registers as active;
+- `ownerRoot(el)` returns the band's story container or the body edit root, so a multi-block
+  selection never spans two OOXML parts, and `blockIndex` counts within the right list;
+- `refreshAfter(block, …)` repaints just the band where the body would have remounted.
+
+With the region on, the body flow is wrapped in `.docx-body-flow`, which becomes `editRoot` —
+band blocks must stay out of the body's block list because `editableList()`/`blockIndex()` index
+remount focus by position.
+
+**Three defects the live smoke test surfaced** (each now pinned by a test that fails without its
+fix), all rooted in the same place — a real Word document's header/footer parts are far more
+adversarial than a synthesized one:
+
+- *Edits landed in the wrong part.* Unids are content-addressed, so several empty stories in
+  different parts share one unid; every element→anchor reverse lookup resolved by bare unid.
+  Fixed with `DocxSession.AnchorForUnid(unid, preferPartUri)` and part-scoped resolution in
+  `RenderBlockHtml`'s session path.
+- *Formatting a just-typed paragraph did nothing.* An empty story renders as a lone NBSP
+  placeholder that the commit's `.trim()` removes, so the selection span overshot the committed
+  text and `ApplyFormat` rejected it. Fixed with `trimmedSpan()`, the span analogue of the existing
+  `trimmedSplitOffset()`.
+- *Later sections showed an empty band.* HC031 has four sections and only the first declares
+  header/footer references; OOXML says the rest **inherit** them, so the band offered to create a
+  redundant part that would have broken the inheritance. Fixed in the engine: `SectionInfo`'s
+  `HeaderRefs`/`FooterRefs` now report the *effective* stories, inherited entries flagged, and the
+  band shows the inherited story marked as such.
+- *First/even stories saved but never rendered.* Word leaves those parts behind without
+  `w:titlePg`/`w:evenAndOddHeaders`; the band's seed path only runs when the part is absent. Fixed
+  with the new `DocxSession.EnsureHeaderFooterVisible`, which the band calls on kind selection. See
+  `docs/ooxml_corner_cases.md`.
+
 ## 8. Risks & unknowns the PoC will settle
 
 - **Single-block faithful render out of whole-doc context** (the big one —
