@@ -241,6 +241,34 @@ public class DocxSessionNoteAuthoringTests
         }
     }
 
+    [Fact]
+    public void DS335_Undo_OfASecondNote_KeepsThePartAndRollsBackOnlyThatDefinition()
+    {
+        // The other half of the note-part reconcile: when the snapshot HAS the part, undo must
+        // leave it alone and let content-restore drop just the second definition.
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        Assert.True(session.InsertFootnote(anchor, 0, "Keep me.").Success);
+        Assert.True(session.InsertFootnote(anchor, 1, "Roll me back.").Success);
+
+        Assert.True(session.Undo());
+
+        using var ms = new MemoryStream(session.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var main = doc.MainDocumentPart!;
+        Assert.NotNull(main.FootnotesPart);
+
+        var user = main.FootnotesPart!.GetXDocument().Root!
+            .Elements(W + "footnote")
+            .Where(n => n.Attribute(W + "type") is null)
+            .ToList();
+        var surviving = Assert.Single(user);
+        Assert.Contains("Keep me.", surviving.Descendants(W + "t").Select(t => (string)t));
+        Assert.DoesNotContain("Roll me back.", surviving.Descendants(W + "t").Select(t => (string)t));
+        Assert.Single(main.GetXDocument().Root!.Descendants(W + "footnoteReference"));
+    }
+
     // ─── Word-faithful markup ───────────────────────────────────────────
 
     [Fact]

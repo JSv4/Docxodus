@@ -520,6 +520,10 @@ not for minting citations.
 - **Tracked-changes mode.** `Settings.TrackedChanges = RenderInline` does not wrap the citation
   in `w:ins` — consistent with every other insert op (`InsertParagraph`, `InsertTable`,
   `InsertHorizontalRule`, `SetHeaderText`); only `ReplaceText`/`DeleteBlock`/`DeleteRange` track.
+- **Narrowed projection scopes.** A session opened with `ProjectionSettings.Scopes` excluding
+  `Footnotes`/`Endnotes` still writes the note correctly, but `Created` comes back without the
+  note anchors — they resolve against a projection that omits the part. Family behavior, identical
+  to `SetHeaderText` with `Headers` excluded.
 
 ## Tier E: Annotations
 
