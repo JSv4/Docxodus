@@ -570,6 +570,23 @@ Note content lives inside the body flow, so anything that walks "the body blocks
 the equivalent by ignoring an anchor `GetSectionInfo` can't resolve to a body section (focusing a
 note leaves the bands on the last body section rather than blanking them).
 
+**Paginated mode's footnote engine.** `pagination.ts` already had per-page distribution, splitting
+and continuations; turning the render flag on exercised it against a dense real document for the
+first time and it needed four fixes, each worth knowing about because each failed *silently*:
+
+- an unfitted note was held in a **single** continuation slot assigned once per note in a page's
+  citation list, so a second unfitted note on the same page overwrote the first and it rendered
+  nowhere — notes now queue and are *merged* into the next page's list, never replaced;
+- the stylesheet's `>` combinators were XML-escaped (the CSS is the value of an `h:style` element),
+  so the rule keeping a note's number and first line together was dropped by every browser;
+- a note that couldn't be split was re-wrapped inside its own content, nesting a complete
+  `.footnote-item` in another's content span;
+- the content area spanned the full text height while the note block grew upward into it, so body
+  and note glyphs could be painted on top of each other. The content area is now shrunk to what the
+  notes leave, making that impossible by construction — worst case is a clean clip — and note
+  heights are measured in the `.page-footnotes` styling context they render in so the reserve
+  matches the paint.
+
 `DS340`–`DS345` pin the engine half (marker + section emitted, note paragraphs stamped, stamped
 anchors resolve through the session, edit-then-re-render, the stateless path, and reserved-note
 filtering); `npm/tests/editor-footnotes.spec.ts` pins the browser half.
