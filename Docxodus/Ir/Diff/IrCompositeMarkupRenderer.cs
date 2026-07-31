@@ -158,6 +158,11 @@ internal static class IrCompositeMarkupRenderer
                         reviewerCommentIds.Add(id);
                 IrMarkupRenderer.NormalizeComments(main, IrMarkupRenderer.BodyCommentIds(baseIr),
                     reviewerCommentIds, state);
+
+                // A reviewer's changed shape/textbox is emitted as del+ins copies here exactly as in the
+                // two-way renderer, so the same drawing-id duplication applies — and with N reviewers there
+                // can be more than two copies of one id.
+                IrMarkupRenderer.NormalizeDrawingIds(main);
             }
             return streamDoc.GetModifiedWmlDocument();
         }

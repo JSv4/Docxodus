@@ -1066,6 +1066,63 @@ compression cost on every XML save.
 
 ---
 
+## Drawing-object ids are document-unique, so duplicating a shape duplicates a constraint violation
+
+**Context.** A tracked change that replaces a drawing emits it **twice** — the deleted copy and the inserted
+copy — and both keep the source's ids. Comparing two revisions of one document therefore duplicates ids that
+were unique in each input, because both revisions descend from the same original.
+
+Three id spaces are policed by the validator (`Sem_UniqueAttributeValue`):
+
+| Id | Family | Referenced by |
+|----|--------|---------------|
+| `wp:docPr/@id` | DrawingML (what Word authors) | nothing |
+| `v:shape/@id` — shared with `v:group`/`rect`/`oval`/`roundrect`/`line`/`polyline`/`arc`/`curve`/`image` | VML | `o:OLEObject/@ShapeID`, `w:control/@shapeid` |
+| `v:shapetype/@id` | VML | `v:shape/@type="#id"` |
+
+Minimal reproducer — the same paragraph on both sides with only the textbox text differing:
+
+```xml
+<w:p><w:r><w:drawing><wp:inline>
+  <wp:docPr id="7" name="Text Box 7"/>
+  <a:graphic><a:graphicData uri="…wordprocessingShape">
+    <wps:wsp><wps:txbx><w:txbxContent><w:p><w:r><w:t>box one</w:t></w:r></w:p></w:txbxContent></wps:txbx></wps:wsp>
+  </a:graphicData></a:graphic>
+</wp:inline></w:drawing></w:r></w:p>
+```
+
+| Renderer | Result before the fix |
+|----------|----------------------|
+| OpenXmlValidator | `Attribute 'id' should have unique value. Its current value '7' duplicates with others.` |
+| Word | Rejects the document |
+| Docxodus (before) | Emitted both copies with `id="7"` |
+| Docxodus (after) | First copy keeps `7`, the second is re-issued |
+
+**The non-obvious part is *which* copy keeps the id, and it is not document order.** A `v:shapetype` is
+referenced by `v:shape/@type`, and references cannot always be rewritten:
+
+- References are rebound by **revision side** (reject-only / accept-only / bare), document-wide — *not* by
+  container. Word declares a shapetype **once** and references it from later `w:pict`s, so a declaration and
+  its reference routinely sit in different `w:del`/`w:ins` wrappers while surviving the same view. Scoping the
+  rewrite to the `w:pict` (or to the nearest revision wrapper) leaves a cross-pict reference bound to a copy
+  that survives only one view — and **the validator is silent about that**, so it looks correct.
+- A **bare** reference (in unchanged content) belongs to no side and cannot be rebound at all. It keeps the
+  original id, so that id must live on the copy surviving the most views: bare, else the accept side, else
+  reject. Keeping it on the *first* copy puts it on a `w:del` copy whenever the earlier pict was the changed
+  one, and the accepted document — the deliverable — then dangles.
+- With **both** copies revision-bound, no id assignment satisfies both views; the reject view loses the preset
+  geometry. Avoidable only by relocating a declaration into the bare pict, which v1 declines.
+
+`w:object` is an opaque inline the renderer keeps **once**, so its shape id never duplicates for well-formed
+input; the `o:OLEObject`/`w:control` rebinding is robustness for input that already shares one. `pic:cNvPr`,
+`wps:cNvPr`, `wp14:anchorId` and `docPr/@name` duplicates are **not** policed and are deliberately left alone.
+
+**Relevant code.** `IrMarkupRenderer.NormalizeDrawingIds` (per-part, after every scope is rebuilt, mirroring
+`NormalizeBookmarks`/`NormalizeComments`), also called by `IrCompositeMarkupRenderer` for `Consolidate`.
+**Tests.** `Docxodus.Tests/DocxDiffDrawingIdCollisionTests.cs`.
+
+---
+
 ## Contributing
 
 When adding new corner cases to this document:

@@ -410,6 +410,14 @@ internal static class IrMarkupRenderer
                 // for a wholly deleted/inserted field.
                 NormalizeFields(main);
 
+                // Drawing-object id uniqueness. A changed shape/textbox/image is rendered as a deleted COPY
+                // plus an inserted copy, and both copies carry the source's drawing ids verbatim — so two
+                // revisions of the same document (which naturally share those ids) produce duplicates that
+                // are schema-invalid (Sem_UniqueAttributeValue): wp:docPr/@id for DrawingML, v:shape/@id and
+                // v:shapetype/@id for VML. Re-id the later copies, exactly as NormalizeBookmarks/
+                // NormalizeComments do for their own id spaces.
+                NormalizeDrawingIds(main);
+
                 // Style-definition provenance (decoded from Word's compare output): the result
                 // keeps the LEFT document's styles part — docDefaults/theme/latentStyles byte-identical
                 // to the left — while each style whose RAW definition formatting differs between the
@@ -3776,6 +3784,264 @@ internal static class IrMarkupRenderer
         if (main.FootnotesPart != null) Scan(main.FootnotesPart.GetXDocument().Root);
         if (main.EndnotesPart != null) Scan(main.EndnotesPart.GetXDocument().Root);
         return max;
+    }
+
+    // ----------------------------------------------------------------- drawing-object id uniqueness
+
+    /// <summary>
+    /// Make drawing-object ids unique in every rendered story. Duplicates arise whenever a drawing is
+    /// emitted twice (the deleted copy plus the inserted copy of a changed shape or textbox) because both
+    /// copies keep the source's ids — and two revisions of one document share them. ONE occurrence of each
+    /// value keeps it and the rest are re-issued: the first occurrence for an unreferenced id, and for a
+    /// REFERENCED one the copy that survives the most revision views (see the keeper selection in
+    /// <see cref="UniquifyVmlShapeTypeIds"/>).
+    /// </summary>
+    /// <remarks>
+    /// Only ids the validator actually polices are re-issued, plus the references that must follow them:
+    /// <list type="bullet">
+    /// <item><c>wp:docPr/@id</c> — DrawingML's non-visual object id (the case Word authors). Unsigned-int
+    /// valued and referenced by nothing, so a fresh number suffices. <c>pic:cNvPr</c>/<c>wps:cNvPr</c>/
+    /// <c>wp14:anchorId</c>/<c>docPr/@name</c> duplicates are NOT policed and are left alone.</item>
+    /// <item>The VML shape-id space, shared by <c>v:shape</c> AND its sibling shape elements
+    /// (<c>v:group</c>/<c>rect</c>/<c>oval</c>/<c>roundrect</c>/<c>line</c>/<c>polyline</c>/<c>arc</c>/
+    /// <c>curve</c>/<c>image</c>) — they must be de-duplicated together, not per element name. A re-issued
+    /// shape under <c>w:object</c> carries its sibling <c>o:OLEObject/@ShapeID</c> — and a
+    /// <c>w:control/@shapeid</c> — with it, or the object binds to the other copy's shape. (A well-formed
+    /// document never duplicates one: <c>w:object</c> is an opaque inline the renderer keeps once, so this
+    /// path is robustness against malformed input that already shares a shape id.)</item>
+    /// <item><c>v:shapetype/@id</c>, referenced by <c>v:shape/@type="#id"</c>. Word declares a shapetype ONCE
+    /// and references it from other <c>w:pict</c>s, so references are rebound by REVISION SIDE, document-wide
+    /// — not by container: a declaration in one pict and its reference in another sit in different
+    /// <c>w:del</c>/<c>w:ins</c> wrappers yet survive together, so both pict scoping and nearest-wrapper
+    /// scoping leave the reference bound to a copy that survives only one view, which the validator does not
+    /// catch. Two declarations on the SAME side fall back to pict scope (side cannot separate them, and the
+    /// kept one already serves that view). Which duplicate KEEPS the id is chosen by survival, not document
+    /// order — see the keeper selection below.</item>
+    /// <item><c>o:spid</c> in its own right, not merely when the shape id also collides: two shapes claiming
+    /// one spid alias each other regardless.</item>
+    /// </list>
+    /// Runs after every scope is rebuilt, so body, header and note drawings cannot collide within a part.
+    /// Uniqueness is per part, which is what the validator requires.
+    /// </remarks>
+    internal static void NormalizeDrawingIds(MainDocumentPart main)
+    {
+        var parts = new List<OpenXmlPart> { main };
+        parts.AddRange(main.HeaderParts);
+        parts.AddRange(main.FooterParts);
+        if (main.FootnotesPart is not null)
+            parts.Add(main.FootnotesPart);
+        if (main.EndnotesPart is not null)
+            parts.Add(main.EndnotesPart);
+
+        foreach (var part in parts.Distinct())
+        {
+            var root = part.GetXDocument().Root;
+            if (root is not null && NormalizeDrawingIdsInRoot(root))
+                part.PutXDocument();
+        }
+    }
+
+    /// <summary>The VML elements sharing one shape-id space.</summary>
+    private static readonly XName[] VmlShapeElements =
+    {
+        VML.shape, VML.group, VML.rect, VML.oval, VML.roundrect,
+        VML.line, VML.polyline, VML.arc, VML.curve, VML.image,
+    };
+
+    internal static bool NormalizeDrawingIdsInRoot(XElement root)
+    {
+        var changed = UniquifyDocPrIds(root);
+        changed |= UniquifyVmlShapeIds(root);
+        changed |= UniquifyVmlShapeTypeIds(root);
+        changed |= UniquifySpids(root);
+        return changed;
+    }
+
+    private static bool UniquifyDocPrIds(XElement root)
+    {
+        var changed = false;
+        var seen = new HashSet<string>();
+        uint next = 1;
+        foreach (var docPr in root.Descendants(WP.docPr))
+        {
+            var id = (string)docPr.Attribute("id");
+            if (id is null || seen.Add(id))
+                continue;
+            string fresh;
+            do
+            {
+                fresh = next.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                next++;
+            }
+            while (!seen.Add(fresh));
+            docPr.SetAttributeValue("id", fresh);
+            changed = true;
+        }
+        return changed;
+    }
+
+    private static bool UniquifyVmlShapeIds(XElement root)
+    {
+        var changed = false;
+        var seen = new HashSet<string>();
+        var suffix = 0;
+        foreach (var shape in VmlShapes(root))
+        {
+            var id = (string)shape.Attribute("id");
+            if (id is null || seen.Add(id))
+                continue;
+            var fresh = FreshDrawingId(id, seen, ref suffix);
+            shape.SetAttributeValue("id", fresh);
+            // An embedded OLE object / ActiveX control addresses its shape BY ID — move the binding with it,
+            // or the object binds to the other copy's shape.
+            var container = shape.Ancestors(W._object).FirstOrDefault() ?? shape.Ancestors(W.pict).FirstOrDefault();
+            if (container is not null)
+            {
+                // o:OLEObject/@ShapeID is unqualified; w:control/@shapeid is w-namespaced.
+                foreach (var ole in container.Descendants(O.OLEObject).ToList())
+                {
+                    if ((string)ole.Attribute(NoNamespace.ShapeID) == id)
+                        ole.SetAttributeValue(NoNamespace.ShapeID, fresh);
+                }
+                foreach (var control in container.DescendantsAndSelf().Where(e => e.Name == W.control).ToList())
+                {
+                    if ((string)control.Attribute(W.shapeid) == id)
+                        control.SetAttributeValue(W.shapeid, fresh);
+                }
+            }
+            changed = true;
+        }
+        return changed;
+    }
+
+    private static bool UniquifyVmlShapeTypeIds(XElement root)
+    {
+        var changed = false;
+        var seen = new HashSet<string>();
+        var keptSide = new Dictionary<string, int>();
+        var suffix = 0;
+        var declarations = root.Descendants(VML.shapetype).ToList();
+
+        // Decide which declaration KEEPS each contested id before re-issuing any of them. A BARE reference
+        // cannot be rebound — it belongs to no revision side — so it stays on the original id, and that id
+        // must therefore live on the declaration surviving the MOST views: bare first, else the accept side
+        // (the produced document's primary view), else reject. Letting the first occurrence win instead put
+        // the id on a w:del copy whenever the earlier pict was the changed one, so a bare reference from an
+        // untouched paragraph resolved only in the rejected view — trading a loud validator error for a
+        // silent one. Residual ceiling: with both copies revision-bound, a bare reference necessarily
+        // dangles in ONE view — no id ASSIGNMENT can satisfy both — so it is the reject view and the accepted
+        // document, the deliverable, always resolves. (Avoidable only by RELOCATING a declaration copy into
+        // the bare pict that holds the unrebindable reference, which v1 declines: the residual costs the
+        // rejected view a preset geometry, Word still renders the shape, and the validator is silent.)
+        var keepers = new Dictionary<string, XElement>();
+        foreach (var declaration in declarations)
+        {
+            var declaredId = (string)declaration.Attribute("id");
+            if (declaredId is null)
+                continue;
+            // Every declared id is taken from the start: a keeper may sit LATER in document order than a
+            // duplicate, so minting against only the ids visited so far can claim one it still holds.
+            seen.Add(declaredId);
+            if (!keepers.TryGetValue(declaredId, out var incumbent) ||
+                SurvivalRank(RevisionSide(declaration)) > SurvivalRank(RevisionSide(incumbent)))
+            {
+                keepers[declaredId] = declaration;
+            }
+        }
+
+        foreach (var shapeType in declarations)
+        {
+            var id = (string)shapeType.Attribute("id");
+            if (id is null)
+                continue;
+            var side = RevisionSide(shapeType);
+            if (keepers.TryGetValue(id, out var keeper) && keeper == shapeType)
+            {
+                keptSide[id] = side;
+                continue;
+            }
+
+            var fresh = FreshDrawingId(id, seen, ref suffix);
+            shapeType.SetAttributeValue("id", fresh);
+
+            // Rebind the references belonging to THIS declaration. When it survives a different revision view
+            // from the kept one, side is the right scope and must be document-wide: a changed run pair emits
+            // its own w:del/w:ins, so a declaration in the first pict and a cross-pict reference in the second
+            // sit in DIFFERENT wrappers yet survive together. When both declarations survive the SAME view,
+            // side cannot separate them — the kept one serves that view — so stay inside this copy's pict
+            // rather than stealing the kept declaration's references.
+            var scope = keptSide.TryGetValue(id, out var kept) && kept == side
+                ? shapeType.Ancestors(W.pict).FirstOrDefault() ?? shapeType.Parent ?? shapeType
+                : root;
+            foreach (var shape in scope.Descendants(VML.shape))
+            {
+                if ((string)shape.Attribute("type") != "#" + id)
+                    continue;
+                if (scope == root && RevisionSide(shape) != side)
+                    continue;
+                shape.SetAttributeValue("type", "#" + fresh);
+            }
+            changed = true;
+        }
+        return changed;
+    }
+
+    private static bool UniquifySpids(XElement root)
+    {
+        var changed = false;
+        var seen = new HashSet<string>();
+        var suffix = 0;
+        foreach (var shape in VmlShapes(root))
+        {
+            var spid = (string)shape.Attribute(O.spid);
+            if (spid is null || seen.Add(spid))
+                continue;
+            shape.SetAttributeValue(O.spid, FreshDrawingId(spid, seen, ref suffix));
+            changed = true;
+        }
+        return changed;
+    }
+
+    private static List<XElement> VmlShapes(XElement root) =>
+        root.Descendants().Where(d => VmlShapeElements.Contains(d.Name)).ToList();
+
+    /// <summary>How many revision views a side survives, for choosing which duplicate keeps a referenced
+    /// id: bare (2) survives both, accept-only (1) is the produced document's primary view, reject-only (0)
+    /// last.</summary>
+    private static int SurvivalRank(int side) => side switch { 0 => 2, 1 => 1, _ => 0 };
+
+    /// <summary>
+    /// Which revision views an element survives into: <c>-1</c> reject-only (<c>w:del</c>/<c>w:moveFrom</c>),
+    /// <c>1</c> accept-only (<c>w:ins</c>/<c>w:moveTo</c>), <c>0</c> both (bare). Two elements sharing a side
+    /// survive together, which is what makes a declaration and its reference belong to each other. Move
+    /// markup counts: a relocated paragraph's two copies are a moveFrom/moveTo pair, not bare content, and
+    /// treating them as bare rebinds both copies' references to one declaration.
+    /// <para>Nearest wrapper wins, so content nested del-in-ins (which survives neither view) reports its
+    /// inner side. That shape is not emitted here — the renderer never nests opposite-kind wrappers — and a
+    /// reference pairing within it would be self-consistent anyway.</para>
+    /// </summary>
+    private static int RevisionSide(XElement element)
+    {
+        foreach (var ancestor in element.Ancestors())
+        {
+            if (ancestor.Name == W.del || ancestor.Name == W.moveFrom)
+                return -1;
+            if (ancestor.Name == W.ins || ancestor.Name == W.moveTo)
+                return 1;
+        }
+        return 0;
+    }
+
+    private static string FreshDrawingId(string original, HashSet<string> seen, ref int suffix)
+    {
+        string candidate;
+        do
+        {
+            suffix++;
+            candidate = original + "_ptdup" + suffix.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        while (!seen.Add(candidate));
+        return candidate;
     }
 
     // ----------------------------------------------------------------- field-context normalization
