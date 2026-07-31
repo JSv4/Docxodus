@@ -121,6 +121,59 @@ When the .NET comparison engine is enhanced, the TypeScript types should be upda
 
 ---
 
+## 6. Word Compare "Comparison settings" parity
+
+Word's Compare dialog exposes a checkbox per comparison category. Mapped onto `WmlComparerSettings`:
+
+| Word option | `WmlComparerSettings` | State |
+|-------------|----------------------|-------|
+| Insertions and deletions | — (always on) | ✅ core |
+| Moves | `DetectMoves` (default true) | ✅ |
+| Case changes | `CaseInsensitive` (inverted: `true` = Word's box *unchecked*) | ✅ |
+| White space | `CompareWhitespace` (default true) | ✅ (see ceiling below) |
+| Formatting | `DetectFormatChanges` (run-level only) | ~ partial — block-level (`w:pPrChange`, table shells, section) exists only in `DocxDiff` |
+| Tables | — | ~ compared, correctness issues remain |
+| Headers and footers | — | ❌ ignored entirely (`DocxDiff.CompareHeadersFooters` covers this) |
+| Footnotes and endnotes | — | ~ partial |
+| Textboxes | — | ~ compared |
+| Fields | — | ❌ |
+| Comments | — | ❌ |
+| Output target (Original/Revised/New) | — | ❌ only "New document" |
+
+### `CompareWhitespace`
+
+Set false and both inputs are whitespace-canonicalized **before** comparison
+(`NormalizeWhitespaceForComparison`, applied to the main document part plus the footnotes/endnotes
+parts): per paragraph, runs of whitespace — across run boundaries, including non-breaking and other
+Unicode spaces — collapse to one ordinary space, and the paragraph's leading and trailing whitespace
+is dropped. A run-level `w:tab`/`w:br` acts as a paragraph-edge-like boundary — the spaces beside it
+fold away — but the element itself is never touched, and a tab is never equated with a space, so
+**tab-vs-space and tab-count differences still register**. Only content that survives the comparer's
+`AcceptRevisions` pass may join a whitespace run: `w:delText`, and a `w:tab`/`w:br` under
+`w:del`/`w:moveFrom`, are excluded, because folding them in would swallow a space the accepted text
+still needs. `xml:space="preserve"` is maintained on every rewritten `w:t`.
+
+`Consolidate` canonicalizes the original once up front as well, because it splices each reviewer's
+delta into a copy of that original by unid — normalizing only inside each per-reviewer
+`CompareInternal` would mix canonical deltas into a non-canonical base.
+
+The normalization is applied to *both* sides, which is what makes it safe: `FlattenToComparisonUnitAtomList`
+pairs an `Equal` correlated sequence's two atom streams with `Zip`, so a side holding more atoms than
+the other silently truncates and misaligns the reassembled content. Normalizing the inputs keeps the
+streams the same length wherever the canonical text matches, instead of teaching the atom-alignment
+core to tolerate a length mismatch.
+
+**Ceiling:** the produced document carries the canonicalized whitespace rather than either input's
+verbatim spacing. This only happens when the caller opts out of whitespace comparison, and Word's own
+output is not byte-faithful to either input either — but it means `CompareWhitespace = false` is not a
+pure read-only comparison knob.
+
+### `CaseInsensitive`
+
+Already at parity, and inverted relative to Word: `CaseInsensitive = true` corresponds to Word's
+**Case changes** box *unchecked*. The flag alone is sufficient — `CultureInfo` is optional and only
+selects culture-specific casing rules (`WC005` in `WmlComparerTests` sets it, which read as required).
+
 ## Summary of Priority Improvements
 
 ### Completed ✅

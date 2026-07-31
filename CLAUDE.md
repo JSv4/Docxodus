@@ -237,7 +237,8 @@ DocumentBuilder.BuildDocument(sources, outputPath);
 **WmlComparer.cs** - Compare two DOCX files, producing a document with tracked revisions. Supports nested tables and text boxes. Key settings in `WmlComparerSettings`:
 - `AuthorForRevisions` - Author name for tracked changes
 - `DetailThreshold` - 0.0-1.0, lower = more detailed comparison (default: 0.15)
-- `CaseInsensitive` - Case-insensitive comparison
+- `CaseInsensitive` - Case-insensitive comparison (Word Compare's "Case changes" box, inverted)
+- `CompareWhitespace` - Word Compare's "White space" option (default: true). False canonicalizes whitespace in **both inputs** before comparing (whitespace runs → one space, paragraph edges trimmed), so whitespace-only differences produce no revisions; the output then carries the canonicalized spacing. `WmlComparer` only — not mapped to `DocxDiff`
 - `DetectMoves` - Enable move detection in `GetRevisions()` (default: true)
 - `SimplifyMoveMarkup` - Convert move markup to del/ins (default: false)
 - `MoveSimilarityThreshold` - Jaccard similarity threshold for moves (default: 0.8)
