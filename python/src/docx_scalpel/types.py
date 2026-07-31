@@ -996,6 +996,10 @@ class DocxDiffSettings:
     case_insensitive: bool = False
     culture: str | None = None
     conflate_breaking_and_nonbreaking_spaces: bool = True
+    #: Word Compare's "White space" option (default True). When False, both inputs are
+    #: whitespace-canonicalized before the diff runs, so whitespace-only differences produce no
+    #: revisions; the output carries the canonical spacing. A tab is never equated with a space.
+    compare_whitespace: bool = True
     word_separators: str | None = None
     detect_moves: bool = True
     move_similarity_threshold: float = 0.8
@@ -1040,6 +1044,8 @@ class DocxDiffSettings:
             wire["culture"] = self.culture
         if not self.conflate_breaking_and_nonbreaking_spaces:
             wire["conflateBreakingAndNonbreakingSpaces"] = False
+        if not self.compare_whitespace:
+            wire["compareWhitespace"] = False
         if self.word_separators is not None:
             wire["wordSeparators"] = self.word_separators
         if not self.detect_moves:

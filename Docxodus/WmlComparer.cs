@@ -12,7 +12,6 @@ using System.Globalization;
 using System.IO;
 using System.IO.Packaging;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml.Packaging;
 using System.Security.Cryptography;
@@ -163,104 +162,13 @@ namespace Docxodus
             return CompareInternal(source1, source2, settings, true);
         }
 
-        private static readonly Regex s_WhitespaceRun = new Regex(@"\s+", RegexOptions.Compiled);
-
-        /// <summary>
-        /// Applied identically to both inputs: <c>FlattenToComparisonUnitAtomList</c> zips an Equal
-        /// sequence's two atom streams, so a side carrying more whitespace atoms than the other would
-        /// truncate and misalign the reassembled content.
-        /// </summary>
-        private static WmlDocument NormalizeWhitespaceForComparison(WmlDocument doc)
-        {
-            using (var streamDoc = new OpenXmlMemoryStreamDocument(doc))
-            {
-                var anyChanged = false;
-                using (var wDoc = streamDoc.GetWordprocessingDocument())
-                {
-                    var mainPart = wDoc.MainDocumentPart;
-                    var parts = new List<OpenXmlPart> { mainPart };
-                    if (mainPart.FootnotesPart != null)
-                        parts.Add(mainPart.FootnotesPart);
-                    if (mainPart.EndnotesPart != null)
-                        parts.Add(mainPart.EndnotesPart);
-
-                    foreach (var part in parts)
-                    {
-                        var xDoc = part.GetXDocument();
-                        var changed = false;
-                        foreach (var para in xDoc.Descendants(W.p))
-                            changed |= NormalizeParagraphWhitespace(para);
-                        if (changed)
-                            part.PutXDocument();
-                        anyChanged |= changed;
-                    }
-                }
-                return anyChanged ? streamDoc.GetModifiedWmlDocument() : doc;
-            }
-        }
-
-        private static bool NormalizeParagraphWhitespace(XElement para)
-        {
-            // Only content that survives the comparer's AcceptRevisions pass may join a whitespace run —
-            // w:delText, or a w:tab/w:br under w:del/w:moveFrom, would swallow a space the accepted text
-            // still needs.
-            var inlines = para
-                .Descendants()
-                .Where(d => d.Parent != null && d.Parent.Name == W.r)
-                .Where(d => d.Name == W.t || d.Name == W.tab || d.Name == W.br)
-                .Where(d => d.Ancestors(W.p).First() == para)
-                .Where(SurvivesAccept)
-                .ToList();
-
-            var changed = false;
-            var previousWasSpace = true;    // also trims the paragraph's leading whitespace
-            XElement lastText = null;
-            foreach (var inline in inlines)
-            {
-                if (inline.Name != W.t)
-                {
-                    if (lastText != null)
-                        changed |= SetTextValue(lastText, lastText.Value.TrimEnd(' '));
-                    previousWasSpace = true;
-                    continue;
-                }
-
-                var collapsed = s_WhitespaceRun.Replace(inline.Value, " ");
-                if (previousWasSpace && collapsed.Length != 0 && collapsed[0] == ' ')
-                    collapsed = collapsed.Substring(1);
-                if (collapsed.Length != 0)
-                    previousWasSpace = collapsed[collapsed.Length - 1] == ' ';
-                changed |= SetTextValue(inline, collapsed);
-                if (collapsed.Length != 0)
-                    lastText = inline;
-            }
-
-            if (lastText != null)
-                changed |= SetTextValue(lastText, lastText.Value.TrimEnd(' '));
-
-            return changed;
-        }
-
-        private static bool SurvivesAccept(XElement element) =>
-            !element.Ancestors().Any(a => a.Name == W.del || a.Name == W.moveFrom);
-
-        private static bool SetTextValue(XElement text, string value)
-        {
-            if (text.Value == value)
-                return false;
-            text.SetValue(value);
-            var needsPreserve = value.Length != 0 && (value[0] == ' ' || value[value.Length - 1] == ' ');
-            text.SetAttributeValue(XNamespace.Xml + "space", needsPreserve ? "preserve" : null);
-            return true;
-        }
-
         private static WmlDocument CompareInternal(WmlDocument source1, WmlDocument source2, WmlComparerSettings settings,
             bool preProcessMarkupInOriginal)
         {
             if (!settings.CompareWhitespace)
             {
-                source1 = NormalizeWhitespaceForComparison(source1);
-                source2 = NormalizeWhitespaceForComparison(source2);
+                source1 = Internal.WhitespaceCanonicalizer.Canonicalize(source1);
+                source2 = Internal.WhitespaceCanonicalizer.Canonicalize(source2);
             }
 
             if (preProcessMarkupInOriginal)
@@ -815,7 +723,7 @@ namespace Docxodus
             // The consolidated document is built from the original, and each delta is spliced into it by
             // unid — so the base has to be canonicalized here too, not only inside each CompareInternal.
             if (!settings.CompareWhitespace)
-                original = NormalizeWhitespaceForComparison(original);
+                original = Internal.WhitespaceCanonicalizer.Canonicalize(original);
             var originalWithUnids = PreProcessMarkup(original, settings.StartingIdForFootnotesEndnotes, settings.Log);
             WmlDocument consolidated = new WmlDocument(originalWithUnids);
 

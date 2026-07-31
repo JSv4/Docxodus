@@ -117,6 +117,8 @@ internal static class DocxDiffOps
         }
         if (TryGetBool(root, "conflateBreakingAndNonbreakingSpaces", out var conflate))
             settings.ConflateBreakingAndNonbreakingSpaces = conflate;
+        if (TryGetBool(root, "compareWhitespace", out var compareWhitespace))
+            settings.CompareWhitespace = compareWhitespace;
         if (root.TryGetProperty("wordSeparators", out var seps) && seps.ValueKind == JsonValueKind.String)
         {
             var s = seps.GetString();

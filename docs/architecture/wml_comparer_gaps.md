@@ -130,7 +130,7 @@ Word's Compare dialog exposes a checkbox per comparison category. Mapped onto `W
 | Insertions and deletions | — (always on) | ✅ core |
 | Moves | `DetectMoves` (default true) | ✅ |
 | Case changes | `CaseInsensitive` (inverted: `true` = Word's box *unchecked*) | ✅ |
-| White space | `CompareWhitespace` (default true) | ✅ (see ceiling below) |
+| White space | `CompareWhitespace` (default true) | ✅ (see ceiling below) — same option on `DocxDiffSettings`, shared implementation |
 | Formatting | `DetectFormatChanges` (run-level only) | ~ partial — block-level (`w:pPrChange`, table shells, section) exists only in `DocxDiff` |
 | Tables | — | ~ compared, correctness issues remain |
 | Headers and footers | — | ❌ ignored entirely (`DocxDiff.CompareHeadersFooters` covers this) |
@@ -143,8 +143,9 @@ Word's Compare dialog exposes a checkbox per comparison category. Mapped onto `W
 ### `CompareWhitespace`
 
 Set false and both inputs are whitespace-canonicalized **before** comparison
-(`NormalizeWhitespaceForComparison`, applied to the main document part plus the footnotes/endnotes
-parts): per paragraph, runs of whitespace — across run boundaries, including non-breaking and other
+(`Docxodus/Internal/WhitespaceCanonicalizer.cs`, applied to the main document part plus the
+footnotes/endnotes parts — shared with `DocxDiffSettings.CompareWhitespace`, which hooks it into
+`DocxDiff.PreAccept` so every entry point and every consolidate reviewer is canonicalized alike): per paragraph, runs of whitespace — across run boundaries, including non-breaking and other
 Unicode spaces — collapse to one ordinary space, and the paragraph's leading and trailing whitespace
 is dropped. A run-level `w:tab`/`w:br` acts as a paragraph-edge-like boundary — the spaces beside it
 fold away — but the element itself is never touched, and a tab is never equated with a space, so
@@ -162,6 +163,13 @@ pairs an `Equal` correlated sequence's two atom streams with `Zip`, so a side ho
 the other silently truncates and misaligns the reassembled content. Normalizing the inputs keeps the
 streams the same length wherever the canonical text matches, instead of teaching the atom-alignment
 core to tolerate a length mismatch.
+
+`DocxDiff` canonicalizes its inputs for the same structural reason, not merely for symmetry:
+`IrTokenDiffer`'s edit stream is **1:1 per token** — an `Equal` edit is a `(leftIndex, rightIndex)`
+pair — so "one space ≡ two spaces" is not expressible without making `IrTokenOp` length-asymmetric,
+which would ripple through every op consumer (markup renderer slicing, revision renderer, edit-script
+JSON, split/merge and cross-paragraph segmenters, the composite merger). A token-level fold was
+evaluated and rejected on that basis.
 
 **Ceiling:** the produced document carries the canonicalized whitespace rather than either input's
 verbatim spacing. This only happens when the caller opts out of whitespace comparison, and Word's own

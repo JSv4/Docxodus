@@ -238,7 +238,7 @@ DocumentBuilder.BuildDocument(sources, outputPath);
 - `AuthorForRevisions` - Author name for tracked changes
 - `DetailThreshold` - 0.0-1.0, lower = more detailed comparison (default: 0.15)
 - `CaseInsensitive` - Case-insensitive comparison (Word Compare's "Case changes" box, inverted)
-- `CompareWhitespace` - Word Compare's "White space" option (default: true). False canonicalizes whitespace in **both inputs** before comparing (whitespace runs → one space, paragraph edges trimmed), so whitespace-only differences produce no revisions; the output then carries the canonicalized spacing. `WmlComparer` only — not mapped to `DocxDiff`
+- `CompareWhitespace` - Word Compare's "White space" option (default: true). False canonicalizes whitespace in **both inputs** before comparing (whitespace runs → one space, paragraph edges trimmed, a run-level `w:tab`/`w:br` acting as an edge), so whitespace-only differences produce no revisions; the output then carries the canonicalized spacing. Shared with `DocxDiffSettings.CompareWhitespace` via `Docxodus/Internal/WhitespaceCanonicalizer.cs`, and mapped by `DocxCompare.ToDocxDiffSettings`
 - `DetectMoves` - Enable move detection in `GetRevisions()` (default: true)
 - `SimplifyMoveMarkup` - Convert move markup to del/ins (default: false)
 - `MoveSimilarityThreshold` - Jaccard similarity threshold for moves (default: 0.8)

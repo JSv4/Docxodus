@@ -492,6 +492,13 @@ export interface DocxDiffSettings {
   culture?: string;
   /** Fold NBSP (U+00A0) to ordinary space in match keys (default true). */
   conflateBreakingAndNonbreakingSpaces?: boolean;
+  /**
+   * Word Compare's "White space" option (default true). When false, both inputs are
+   * whitespace-canonicalized before the diff runs, so whitespace-only differences produce no
+   * revisions; the output then carries the canonical spacing rather than either input's verbatim
+   * spacing. A tab is never equated with a space, so tab-vs-space differences still register.
+   */
+  compareWhitespace?: boolean;
   /** Override the word/separator split characters (default: engine's set). */
   wordSeparators?: string;
   /** Report relocations as native move pairs (default true). */

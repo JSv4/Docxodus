@@ -120,6 +120,7 @@ A `ModifyBlock` over a paragraph carries a `tokenDiff`; over a table, a `tableDi
 | `DateTimeForRevisions` | `null` → epoch or `DateTime.Now` | `IrDiffSettings.DateTimeForRevisions` | explicit value always wins |
 | `CaseInsensitive` / `Culture` | `false` / `null` | `CaseInsensitive` / `Culture` | |
 | `ConflateBreakingAndNonbreakingSpaces` | `true` | same | |
+| `CompareWhitespace` | `true` | *(none — INPUT transform)* | Word Compare's "White space" box. False canonicalizes both inputs in `PreAccept` via `Internal/WhitespaceCanonicalizer`, so every entry point and every consolidate reviewer is folded alike. Round trip holds against the canonicalized inputs (`accept ≡ canonical(right)`, `reject ≡ canonical(left)`); the output carries canonical spacing. A token-level fold was rejected — `IrTokenDiffer`'s edit stream is 1:1 per token, so a length-asymmetric `Equal` would ripple through every op consumer. |
 | `WordSeparators` | `null` → default set | `WordSeparators` | |
 | `DetectMoves` | `true` | `RenderMoves` | render-time relabel: the engine always ALIGNS a relocation as a move; this controls whether it is REPORTED as one |
 | `MoveSimilarityThreshold` | `0.8` | same | |

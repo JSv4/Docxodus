@@ -477,9 +477,11 @@ public static class DocxDiff
         // on open and its compare output carries the resolved content. No-op when nothing matches.
         doc = MarkupCompatibilityNormalizer.Normalize(doc);
         // The byte-level accept-flatten is skipped under Preserve; the normalizers above always apply.
-        return settings.PreAcceptInputRevisions && !settings.PreserveInputRevisions
+        doc = settings.PreAcceptInputRevisions && !settings.PreserveInputRevisions
             ? RevisionProcessor.AcceptRevisions(doc)
             : doc;
+        // Word Compare's "White space" option — canonicalize every side alike (default: no-op).
+        return settings.CompareWhitespace ? doc : Internal.WhitespaceCanonicalizer.Canonicalize(doc);
     }
 
     /// <summary>Per-reviewer <see cref="PreAccept(DocxDiffSettings, WmlDocument)"/> for the N-way entry points
@@ -626,6 +628,25 @@ public sealed class DocxDiffSettings
     /// folded. Mirrors <see cref="WmlComparerSettings.ConflateBreakingAndNonbreakingSpaces"/>.
     /// </summary>
     public bool ConflateBreakingAndNonbreakingSpaces { get; set; } = true;
+
+    /// <summary>
+    /// Word Compare's "White space" comparison option (default true), mirroring
+    /// <see cref="WmlComparerSettings.CompareWhitespace"/>. When false, both inputs are
+    /// whitespace-canonicalized before the diff runs: whitespace runs collapse to one space across run
+    /// boundaries, paragraph edges are trimmed, and a
+    /// run-level <c>w:tab</c>/<c>w:br</c> acts as an edge so the spaces beside it fold away. A tab is
+    /// never equated with a space, so tab-vs-space and tab-count differences still register.
+    /// <para>This is an INPUT transform, not a diff-time policy — hence no <c>IrDiffSettings</c> mirror.
+    /// The round-trip contract holds against the canonicalized inputs: <c>accept ≡ canonical(right)</c>
+    /// and <c>reject ≡ canonical(left)</c>, so the output carries canonical whitespace rather than
+    /// either input's verbatim spacing. Applies to <see cref="DocxDiff.Compare"/>,
+    /// <see cref="DocxDiff.GetRevisions"/>, <see cref="DocxDiff.GetEditScriptJson"/> and the
+    /// Consolidate family (whose base and every reviewer are canonicalized alike). A no-op comparison
+    /// keeps its input verbatim: the identical-BYTES fast path returns before canonicalization, so
+    /// <c>Compare(d, d)</c> yields <c>d</c>'s spacing while a byte-differing whitespace-only pair yields
+    /// canonical spacing.</para>
+    /// </summary>
+    public bool CompareWhitespace { get; set; } = true;
 
     /// <summary>
     /// Characters that split a run's text into word vs. separator tokens; each separator character becomes
