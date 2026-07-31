@@ -1644,6 +1644,8 @@ internal static class IrEditScriptBuilder
     private static List<IrTextboxDiff>? BuildTextboxDiffs(
         List<IrTextbox> leftBoxes, List<IrTextbox> rightBoxes, IrDiffSettings settings)
     {
+        if (!settings.CompareTextboxes)
+            return null;
         if (leftBoxes.Count == 0 && rightBoxes.Count == 0)
             return null;
 

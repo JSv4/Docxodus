@@ -328,6 +328,19 @@ internal sealed record IrDiffSettings
     public bool CompareHeadersFooters { get; init; } = true;
 
     /// <summary>
+    /// DIFF-TIME setting (Word Compare "Textboxes" granularity, default-on like Word's own box). A
+    /// GRANULARITY switch, not a suppression: when true (the DEFAULT) a paragraph's textboxes are paired
+    /// positionally and their inner blocks diffed into <see cref="IrEditOp.TextboxDiffs"/>; when false no
+    /// inner diff is produced — the same state <see cref="IrEditScriptBuilder"/> already reaches when every
+    /// paired textbox is content-equal — and the box is deleted-and-reinserted wholesale by its host
+    /// paragraph's ordinary run diff instead.
+    /// <para>So the CHANGE stays in the markup either way (round trip unaffected); what goes quiet is the
+    /// edit script's per-box detail and the fine revision list. The textbox placeholder token participates in
+    /// the host paragraph's content hash regardless, which is what makes the host compare unequal.</para>
+    /// </summary>
+    public bool CompareTextboxes { get; init; } = true;
+
+    /// <summary>
     /// RENDER-TIME setting (Word-parity input-revision preservation). When true, the markup renderer
     /// carries the RIGHT input's pre-existing tracked-revision markup through into the output for
     /// content-EQUAL blocks (verbatim from the ORIGINAL right element rather than the accepted working

@@ -796,6 +796,19 @@ public sealed class DocxDiffSettings
     public bool CompareHeadersFooters { get; set; } = true;
 
     /// <summary>
+    /// Word Compare's "Textboxes" comparison option (default true, matching Word's own box). Governs the
+    /// GRANULARITY of a textbox change, not whether it is tracked. When true, a paragraph's textboxes are
+    /// paired positionally and their inner blocks diffed, so an edit inside a box is reported per-block in
+    /// <see cref="DocxDiff.GetEditScriptJson"/>'s <c>textboxDiffs</c> and as revisions. When false no inner
+    /// diff is produced: the box is instead deleted-and-reinserted wholesale as part of its host paragraph's
+    /// ordinary run diff, so the CHANGE is still in the markup (and <c>accept ≡ right</c> / <c>reject ≡ left</c>
+    /// still hold) — what goes quiet is the edit script's per-box detail and the fine revision list.
+    /// <para>A textbox contributes a placeholder token to its host paragraph's content hash either way, which
+    /// is why the host paragraph still compares unequal and the wholesale del/ins happens.</para>
+    /// </summary>
+    public bool CompareTextboxes { get; set; } = true;
+
+    /// <summary>
     /// Track paragraph-and-above property changes (block-format-change family) as native Word markup —
     /// <c>w:pPrChange</c>/<c>w:tcPrChange</c>/<c>w:trPrChange</c>/<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/
     /// <c>w:tblPrExChange</c>/<c>w:sectPrChange</c>. Default <c>true</c>. Set <c>false</c> to restore the
@@ -869,6 +882,7 @@ public sealed class DocxDiffSettings
                 ? IrFormatComparison.Full
                 : IrFormatComparison.ModeledOnly,
             CompareHeadersFooters = CompareHeadersFooters,
+            CompareTextboxes = CompareTextboxes,
             PreserveInputRevisions = PreserveInputRevisions,
             NormalizeRevisionAuthors = NormalizeRevisionAuthors,
             TrackBlockFormatChanges = TrackBlockFormatChanges,

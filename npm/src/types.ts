@@ -501,6 +501,13 @@ export interface DocxDiffSettings {
   compareWhitespace?: boolean;
   /** Override the word/separator split characters (default: engine's set). */
   wordSeparators?: string;
+  /**
+   * Word Compare's "Textboxes" option (default true) — a granularity switch, not a suppression. When
+   * false, no per-textbox inner diff is produced and a changed box is deleted-and-reinserted wholesale
+   * by its host paragraph instead, so the change stays in the markup; what goes quiet is the edit
+   * script's `textboxDiffs` detail and the fine revision list.
+   */
+  compareTextboxes?: boolean;
   /** Report relocations as native move pairs (default true). */
   detectMoves?: boolean;
   /** Jaccard similarity threshold for a fuzzy move 0.0-1.0 (default 0.8). */

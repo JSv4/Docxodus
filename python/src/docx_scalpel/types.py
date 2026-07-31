@@ -1000,6 +1000,11 @@ class DocxDiffSettings:
     #: whitespace-canonicalized before the diff runs, so whitespace-only differences produce no
     #: revisions; the output carries the canonical spacing. A tab is never equated with a space.
     compare_whitespace: bool = True
+    #: Word Compare's "Textboxes" option (default True) - a granularity switch, not a suppression.
+    #: When False no per-textbox inner diff is produced and a changed box is deleted-and-reinserted
+    #: wholesale by its host paragraph, so the change stays in the markup; the edit script's per-box
+    #: detail and the fine revision list go quiet.
+    compare_textboxes: bool = True
     word_separators: str | None = None
     detect_moves: bool = True
     move_similarity_threshold: float = 0.8
@@ -1046,6 +1051,8 @@ class DocxDiffSettings:
             wire["conflateBreakingAndNonbreakingSpaces"] = False
         if not self.compare_whitespace:
             wire["compareWhitespace"] = False
+        if not self.compare_textboxes:
+            wire["compareTextboxes"] = False
         if self.word_separators is not None:
             wire["wordSeparators"] = self.word_separators
         if not self.detect_moves:

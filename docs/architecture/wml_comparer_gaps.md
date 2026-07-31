@@ -132,10 +132,10 @@ Word's Compare dialog exposes a checkbox per comparison category. Mapped onto `W
 | Case changes | `CaseInsensitive` (inverted: `true` = Word's box *unchecked*) | ✅ |
 | White space | `CompareWhitespace` (default true) | ✅ (see ceiling below) — same option on `DocxDiffSettings`, shared implementation |
 | Formatting | `DetectFormatChanges` (run-level only) | ~ partial — block-level (`w:pPrChange`, table shells, section) exists only in `DocxDiff` |
-| Tables | — | ~ compared, correctness issues remain |
+| Tables | — | ~ compared, correctness issues remain; no toggle on either engine |
 | Headers and footers | — | ❌ ignored entirely (`DocxDiff.CompareHeadersFooters` covers this) |
-| Footnotes and endnotes | — | ~ partial |
-| Textboxes | — | ~ compared |
+| Footnotes and endnotes | — | ~ partial; **no toggle** — attempted and reverted, see `ir_diff_engine.md` (gating the note-store diff dangles a right-added note's reference) |
+| Textboxes | — | ~ compared; `DocxDiffSettings.CompareTextboxes` is the toggle (granularity: off ⇒ wholesale box del/ins instead of an inner diff) |
 | Fields | — | ❌ |
 | Comments | — | ❌ |
 | Output target (Original/Revised/New) | — | ❌ only "New document" |
