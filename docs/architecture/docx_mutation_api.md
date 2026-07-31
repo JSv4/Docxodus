@@ -72,7 +72,8 @@ This is symmetric by design: anything the projector can emit, the parser can acc
 
 - If you can see it in the projection output, you can write it in a payload.
 - If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`), then edit cells with `ReplaceCellContent` or address each cell-paragraph anchor; reshape with `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` (by a cell-paragraph anchor; v1 assumes a rectangular grid, no `w:gridSpan`).
-- If you need a footnote, comment, or image → those are v2 ops, currently rejected with a clear error.
+- If you need a footnote or endnote → `InsertFootnote(anchor, offset, markdown)` / `InsertEndnote(...)`; a `[^label]` reference in a *payload* stays rejected, because a label can't name a note the payload doesn't define.
+- If you need a comment or image → those are v2 ops, currently rejected with a clear error.
 - For everything OOXML can do that markdown can't (complex tables, math, content controls, drawings) → `session.Raw.*`.
 
 We didn't pick CommonMark or GFM as the input language because the projector's subset is small and well-defined; running a full parser against that subset would import surprise (e.g., GFM tables silently splitting paragraphs, autolinks mis-classifying spans). The hand-rolled parser is ~300 LOC, has no dependencies, and gives us complete control over what gets rejected and why.
@@ -101,6 +102,7 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `ReplaceCellContent(tc, md)` | — | descendant inline anchors (rare) | `tc` | `tc` |
 | `SetHeaderText(p, kind, md)` / `SetFooterText(...)` | the new header/footer paragraph anchors (scope `hdr{N}`/`ftr{N}`) | — (reused-part old paragraphs cease to exist; not separately reported in v1) | — | whole document |
 | `InsertPageNumberField(p, field?)` | — | — | `p` (the paragraph the field is appended to) | `p` |
+| `InsertFootnote(p, offset, md)` / `InsertEndnote(...)` | the note definition (`fn`/`en`) + its paragraphs (scope `fn`/`en`) | — | `p` (the citing paragraph) | whole document |
 | `Raw.InsertXml(a, pos, xml)` | every block in the new XML | — | — | enclosing parent |
 | `Raw.ReplaceXml(a, xml)` | unids present in the new XML but not the old (typical for caller-authored XML) | unids present in the old element but not the new (when `a` itself is gone) | unids present in both (typical for the `GetXml → mutate → ReplaceXml` round trip, which preserves Unids) | enclosing parent |
 | `Undo()` / `Redo()` | (diff vs current) | (diff vs current) | (diff vs current) | `null` — caller re-projects |
@@ -156,6 +158,11 @@ What am I editing?
 │
 ├── Putting a page number in a header/footer paragraph?
 │       → InsertPageNumberField(hdrOrFtrAnchor, PageNumberField.CurrentPage|TotalPages)
+│
+├── Adding a footnote/endnote (cited from a body paragraph at a character offset)?
+│       → InsertFootnote(bodyAnchor, offset, markdown)
+│       → InsertEndnote(bodyAnchor, offset, markdown)   # Created lists the fn/en anchors
+│   …then edit it with ReplaceText(notePara, md) or drop it with DeleteBlock(noteDef)
 │
 ├── Inserting/deleting table rows or columns, merging cells,
 │   embedding a chart, inserting a math equation,
@@ -397,9 +404,215 @@ which every text/format mutation on this page already accepts.
   assigns Unids to the main document part only, so header/footer content carries no
   `data-anchor`; and pagination clones one header node onto every page, so N pages would
   mean N DOM nodes sharing one anchor. The docked bands avoid both.
-- **Footnote/endnote authoring** is tracked separately (still `FootnoteRefNotSupported`).
 - **Page-number formatting** (`w:pgNumType` start/format, `PAGE \* roman`) — v1 emits a
   plain `PAGE`/`NUMPAGES`; field switches are a follow-up.
+
+## Tier B: footnotes & endnotes (issue #276)
+
+The projection has always *read* notes — the `fn`/`en` scopes, `EditSummary.FootnoteCount`,
+`ReplaceText` on a note's paragraph, `DeleteBlock` on a note definition (which also strips
+every reference to it). What was missing was the verb that *creates* one. `InsertFootnote` /
+`InsertEndnote` close that; there is no separate "edit note" or "delete note" op because the
+existing anchor-addressed ops already are those.
+
+### Methods
+
+| Method | What it does |
+|---|---|
+| `InsertFootnote(anchorId, characterOffset, markdown)` | Create a footnote with body `markdown` and cite it from body paragraph `anchorId`, `characterOffset` characters into its text. |
+| `InsertEndnote(anchorId, characterOffset, markdown)` | Same, into the endnotes part, emitting a `w:endnoteReference`. |
+
+**Addressing.** A **body** paragraph/heading/list-item anchor, plus a character offset in
+`[0, len(paragraph text)]` — `0` places the citation before all text, `len` after all of it.
+An out-of-range offset is `OffsetOutOfRange`. Non-body anchors are `AnchorWrongKind`: Word does
+not allow a note reference inside a header/footer story or inside another note, and the `fn`/`en`
+scopes are note *definitions*, not citation hosts. Rejecting is deliberate — the alternative is
+emitting a document Word offers to repair.
+
+The offset is resolved through the same `SplitRunsAtOffset` + `SplitInlineContainersAtOffset`
+pair that `SplitParagraph` and `ApplyFormat` use, so a citation lands cleanly mid-run and inside
+a hyperlink without a second offset walker to drift.
+
+**What the first note in a document creates.** On a package with no `FootnotesPart` (or
+`EndnotesPart`), the op writes the whole scaffold Word writes, not just the definition:
+
+- the part itself, holding the two notes Word reserves for page-rendering scaffolding —
+  `w:type="separator"` at id `-1` and `w:type="continuationSeparator"` at id `0`. The
+  projector already filters these out of the anchor index (`IsBoilerplateNote`), and
+  `DeleteBlock` already refuses to remove them.
+- the `w:footnotePr`/`w:endnotePr` settings declaration naming those two ids, inserted at
+  its CT_Settings schema slot via the shared `EnsureSettingsChildInOrder` — the settings part
+  is never wholesale reordered (same discipline as `w:evenAndOddHeaders`; see the header/footer
+  section for the document this protects).
+- the `FootnoteText`/`EndnoteText` paragraph style and the superscript
+  `FootnoteReference`/`EndnoteReference` character style, find-or-create via `StyleFactory`, so
+  a house style already in the document wins and a document that had neither doesn't render the
+  citation as full-size body text.
+
+A second note reuses all of it and only appends a definition.
+
+**Note id allocation — ids must ascend in REFERENCE order.** This is an invariant every
+Word-authored document holds (verified across the `TestFiles` corpus — including documents whose
+ids have gaps, e.g. 17/21/26 — and a 94-footnote real-world model certificate). Renderers depend
+on it: LibreOffice numbers the body markers by citation position but pairs them against the
+**id-sorted** definition list, so a first-cited note holding the highest id renders the *wrong
+note text* — the marker reads "1" and points at somebody else's footnote. Nothing errors; the
+document is simply, silently wrong.
+
+So the allocator works in two cases:
+
+- **Citation follows every existing one** (the common case): take one above the highest id used by
+  any definition in the note part *or* any reference anywhere in the package (body, headers,
+  footers, both note parts). Appending keeps ids ascending, so nothing else moves. Scanning
+  references too — not just definitions — is what stops a document with gaps from aliasing an
+  existing definition. `DS322` pins this with a fixture whose user notes are ids 1, 5 and 9.
+- **Citation lands before an existing one**: the new note takes the smallest id cited after it, and
+  every user note at or above that id shifts up by one — definitions *and* every reference to them
+  in every part. Notes cited earlier keep their ids. Word-reserved notes (any `w:type`:
+  `separator`, `continuationSeparator`, `continuationNotice`) are never renumbered; their ids sit
+  below every user id, so shifting upward cannot collide. Taking the *minimum* of the following ids
+  rather than the first keeps this correct even on an input document that already violated the
+  invariant. `DS336`/`DS337` pin the ordering and that each shifted note keeps its own text.
+
+Because a shift rewrites `w:id` on renumbered definitions, and the note-definition anchor's unid is
+derived from that id, the shifted notes' `fn`/`en` anchors change. Their paragraph anchors — and
+every body anchor — are unaffected.
+
+**Markup.** Word-faithful on both sides:
+
+```xml
+<!-- body -->
+<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="1"/></w:r>
+
+<!-- footnotes.xml -->
+<w:footnote w:id="1">
+  <w:p>
+    <w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr>
+    <w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>
+    <w:r><w:t xml:space="preserve"> </w:t></w:r>
+    <w:r><w:t>Source: 2025 annual report.</w:t></w:r>
+  </w:p>
+</w:footnote>
+```
+
+The `w:footnoteRef`/`w:endnoteRef` auto-number mark plus its separating space go on the first
+paragraph of the note only, so the note reads "1 Source: …" rather than "1Source: …".
+The body is the same markdown subset as `InsertParagraph`; an empty payload yields one empty
+note paragraph.
+
+**Return shape.** `Created` carries the note **definition** anchor (kind `fn`/`en`) followed by
+its paragraph anchors (kind `p`, scope `fn`/`en`); `Modified` carries the citing body paragraph.
+That is the whole lifecycle handoff:
+
+```csharp
+var made = session.InsertFootnote(bodyAnchor, 0, "Source: 2025 annual report.");
+var notePara = made.Created.First(a => a.Kind == "p" && a.Scope == "fn").Id;
+var noteDef  = made.Created.First(a => a.Kind == "fn").Id;
+
+session.ReplaceText(notePara, "Source: 2026 annual report.");  // edit the note
+session.DeleteBlock(noteDef);                                  // drop it + the body citation
+```
+
+### Undo/redo and the snapshot reconcile
+
+Creating the first note *adds an OOXML part*, the same problem `SetHeaderText`/`SetFooterText`
+solved. `DocumentSnapshot` therefore records the footnotes/endnotes parts' relationship ids
+alongside the header/footer ones, and `RestoreSnapshot` runs a `ReconcileNoteParts` twin of
+`ReconcileHeaderFooterParts`: undo deletes a part the snapshot lacks, redo re-creates it with its
+original relationship id (`AddNewPart<FootnotesPart>(relId)`). Content of surviving parts restores
+by URI as before. `DS328` pins undo-removes-part / redo-restores-part.
+
+### `FootnoteRefNotSupported` — narrowed, not retired
+
+A `[^label]` reference inside a **markdown payload** is still rejected. The error code stays
+(it is public surface and clients switch on it); only its meaning narrowed: a bare label can't
+be resolved to a note the payload doesn't define, so the message now names the dedicated op.
+Authoring a note is `InsertFootnote`/`InsertEndnote`; the payload subset is for a note's *body*,
+not for minting citations.
+
+### Rendering notes in the editor
+
+An editor that can author a footnote has to be able to *show* it. The browser `DocxEditor` renders
+notes as ordinary editable content, which took three things:
+
+- **The render profile emits notes.** `DocxSessionOps.RenderHtml` and the editor's first-paint
+  `completeArgs` both set `RenderFootnotesAndEndnotes`. They must stay in step — the remount output
+  is required to match the first paint byte-for-byte. Footnotes are document *content*, not an
+  editing affordance, so unlike the header/footer bands this is not opt-in: a document that has
+  notes shows them.
+- **Note paragraphs are anchor-stamped.** `HtmlConversionOps.AssignAnchorUnids` assigns the
+  deterministic Unids to the footnotes/endnotes parts as well as the main part, so note paragraphs
+  carry `data-anchor` and the editor wires them as ordinary blocks — no new command code, the whole
+  ribbon works inside a note. `FindByUnid` searches the note parts too, so the stateless
+  `RenderBlockHtml` can re-render a single note after an edit. Header/footer parts are deliberately
+  *not* stamped: paginated output clones one header node onto every page, so a stamped header anchor
+  would exist N times in the DOM. Each note renders exactly once, so notes have no such problem.
+- **The citation marker is inert chrome.** A citation is a zero-width `w:footnoteReference`; the
+  displayed number is computed by the renderer from document order, and the note backref (`↩`) is
+  generated too. None of it is in the session's run text, so the editor excludes all of it from its
+  content-offset space via one `GENERATED_CHROME_SELECTOR` (shared with generated list markers).
+  Each place that has to honour it fails differently if missed: offsets drift (`OffsetOutOfRange`,
+  silently dropped edits); the display number gets **committed as literal text**, destroying the
+  citation run; or the user deletes a marker outright and orphans its note.
+
+**Both editor modes show notes, differently.** Continuous mode renders the converter's
+`<section class="footnotes">` at the end of the body flow. Paginated mode is richer: `pagination.ts`
+already had a footnote engine (per-page distribution, continuations, splitting), and turning the
+render flag on activates it — notes land in a note area at the bottom of the page that cites them,
+above a separator rule, and a note too long for its page continues onto the next. Endnotes render as
+a `section.endnotes` appended after the page stack rather than on their own final page, which is a
+layout imperfection, not a correctness one: they are visible and editable. A note split across pages
+puts a *different paragraph* of the note in each half, so each half stays independently addressable
+— no two editable nodes ever share one anchor.
+
+Note content lives inside the body flow, so anything that walks "the body blocks" must exclude
+`section.footnotes`, `section.endnotes` and `.footnote-item` — the header/footer band already does
+the equivalent by ignoring an anchor `GetSectionInfo` can't resolve to a body section (focusing a
+note leaves the bands on the last body section rather than blanking them).
+
+**Paginated mode's footnote engine.** `pagination.ts` already had per-page distribution, splitting
+and continuations; turning the render flag on exercised it against a dense real document for the
+first time and it needed four fixes, each worth knowing about because each failed *silently*:
+
+- an unfitted note was held in a **single** continuation slot assigned once per note in a page's
+  citation list, so a second unfitted note on the same page overwrote the first and it rendered
+  nowhere — notes now queue and are *merged* into the next page's list, never replaced;
+- the stylesheet's `>` combinators were XML-escaped (the CSS is the value of an `h:style` element),
+  so the rule keeping a note's number and first line together was dropped by every browser;
+- a note that couldn't be split was re-wrapped inside its own content, nesting a complete
+  `.footnote-item` in another's content span;
+- the content area spanned the full text height while the note block grew upward into it, so body
+  and note glyphs could be painted on top of each other. The content area is now shrunk to what the
+  notes leave, making that impossible by construction — worst case is a clean clip — and note
+  heights are measured in the `.page-footnotes` styling context they render in so the reserve
+  matches the paint.
+
+`DS340`–`DS345` pin the engine half (marker + section emitted, note paragraphs stamped, stamped
+anchors resolve through the session, edit-then-re-render, the stateless path, and reserved-note
+filtering); `npm/tests/editor-footnotes.spec.ts` pins the browser half.
+
+**Word-reserved notes never surface as editable blocks.** `IsBoilerplateNote` now treats *any*
+typed note as reserved: ECMA-376 §17.11.17 defines the type as `normal` | `separator` |
+`continuationSeparator` | `continuationNotice`, and only `normal` — which Word omits rather than
+writes — is user content. Enumerating just separator/continuationSeparator let `continuationNotice`
+through (real documents carry one), where it projected as a user note and, once the editor started
+rendering notes, appeared as a stray empty footnote with no citation.
+
+### Not yet
+
+- **Moving a citation** without deleting and re-creating the note.
+- **Note numbering options** (`w:numFmt`, restart-per-page/section, custom marks) — the
+  `w:footnotePr` written on part creation declares only the separators; everything else is
+  Word's default (`1, 2, 3…`, continuous).
+- **Citing an existing note twice.** Each call creates a new definition; there is no
+  "reference note N again" op.
+- **Tracked-changes mode.** `Settings.TrackedChanges = RenderInline` does not wrap the citation
+  in `w:ins` — consistent with every other insert op (`InsertParagraph`, `InsertTable`,
+  `InsertHorizontalRule`, `SetHeaderText`); only `ReplaceText`/`DeleteBlock`/`DeleteRange` track.
+- **Narrowed projection scopes.** A session opened with `ProjectionSettings.Scopes` excluding
+  `Footnotes`/`Endnotes` still writes the note correctly, but `Created` comes back without the
+  note anchors — they resolve against a projection that omits the part. Family behavior, identical
+  to `SetHeaderText` with `Headers` excluded.
 
 ## Tier E: Annotations
 

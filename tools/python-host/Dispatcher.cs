@@ -79,6 +79,11 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId"),
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind"))),
 
+        "insert_footnote" => DocxSessionOps.InsertFootnote(
+            Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
+        "insert_endnote" => DocxSessionOps.InsertEndnote(
+            Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
+
         "apply_format" => DocxSessionOps.ApplyFormat(
             Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"), ParseFormatOp(args, "op")),
         "apply_format_by_substring" => DocxSessionOps.ApplyFormatBySubstring(

@@ -58,6 +58,12 @@ internal static class DocxSessionOps
             PaginationMode = paginated ? 1 : 0,
             PaginationScale = scale,
             RenderHeadersAndFooters = paginated,
+            // Footnotes/endnotes are document CONTENT, not an editing affordance: a document that
+            // has them must show them, and each note renders exactly once so its paragraphs are
+            // uniquely addressable (AssignAnchorUnids stamps the note parts). Must stay in step
+            // with the editor's first-paint profile in npm/src/editor.ts `completeArgs`, which the
+            // remount output is required to match byte-for-byte.
+            RenderFootnotesAndEndnotes = true,
             StampAnchors = true,
         });
 
@@ -219,6 +225,14 @@ internal static class DocxSessionOps
 
     public static string EnsureHeaderFooterVisible(int handle, string anchorId, HeaderFooterKind kind) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).EnsureHeaderFooterVisible(anchorId, kind));
+
+    // ─── Footnotes / endnotes ───────────────────────────────────────────
+
+    public static string InsertFootnote(int handle, string anchorId, int characterOffset, string markdown) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertFootnote(anchorId, characterOffset, markdown));
+
+    public static string InsertEndnote(int handle, string anchorId, int characterOffset, string markdown) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertEndnote(anchorId, characterOffset, markdown));
 
     // ─── Tier C: formatting ─────────────────────────────────────────────
 

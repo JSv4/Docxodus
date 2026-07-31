@@ -1799,13 +1799,21 @@ namespace Docxodus
 
             // Make first paragraph in footnote content inline to flow with number
             // Use :first-of-type instead of :first-child because XML serialization adds
-            // whitespace text nodes that would prevent :first-child from matching
-            sb.AppendLine(".footnote-content > p:first-of-type {");
+            // whitespace text nodes that would prevent :first-child from matching.
+            //
+            // NOTE: descendant selectors, NOT the `>` child combinator these rules used to use.
+            // The stylesheet is the VALUE of an h:style element, so serializing the XHTML escapes
+            // `>` to `&gt;` — `.footnote-content &gt; p:first-of-type` is not a valid selector and
+            // every browser silently drops the rule. The symptom was subtle and looked like a
+            // layout bug rather than a broken stylesheet: in paginated mode every footnote rendered
+            // its number alone on one line with the text beginning on the next. Generated CSS must
+            // therefore avoid characters XML escapes; NoGeneratedCssIsXmlEscaped pins that.
+            sb.AppendLine(".footnote-content p:first-of-type {");
             sb.AppendLine("    display: inline;");
             sb.AppendLine("}");
 
             // Subsequent paragraphs in footnote get normal block display with indent
-            sb.AppendLine(".footnote-content > p:not(:first-of-type) {");
+            sb.AppendLine(".footnote-content p:not(:first-of-type) {");
             sb.AppendLine("    display: block;");
             sb.AppendLine("    margin-top: 2pt;");
             sb.AppendLine("    margin-left: 12pt;");

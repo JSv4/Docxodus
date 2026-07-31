@@ -1080,6 +1080,8 @@ export interface DocxodusWasmExports {
     SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     InsertPageNumberField: (handle: number, anchor: string, field: string) => string;
     EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
+    InsertFootnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
+    InsertEndnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
     ApplyFormat: (handle: number, anchor: string, spanJson: string, opJson: string) => string;
     ApplyFormatBySubstring: (handle: number, anchor: string, substring: string, opJson: string) => string;
     SetParagraphStyle: (handle: number, anchor: string, styleId: string) => string;

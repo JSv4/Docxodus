@@ -298,7 +298,9 @@ internal static class MarkdownPayloadParser
                     {
                         throw new MarkdownPayloadException(
                             EditErrorCode.FootnoteRefNotSupported,
-                            "Footnote/endnote references are output-only in v1. AddFootnote(anchor, md) is planned for v2.");
+                            "A [^label] footnote/endnote reference cannot be resolved from the markdown subset — " +
+                            "the label names a note this payload does not define. Use the dedicated ops instead: " +
+                            "DocxSession.InsertFootnote(anchor, offset, markdown) / InsertEndnote(...).");
                     }
                 }
                 int rb = text.IndexOf(']', i + 1);

@@ -323,8 +323,15 @@ test.describe('DocxEditor — smoke-test gap regressions', () => {
       }
       const duplicated = Array.from(counts.entries()).filter(([, c]) => c > 1).length;
 
-      // Pick a real editable anchor and confirm a single, page-box-resident match.
-      const sample = anchored.find((e) => e.getAttribute('contenteditable') === 'true');
+      // Pick a real editable BODY anchor and confirm a single, page-box-resident match.
+      // Note content is excluded deliberately: footnotes are placed in a per-page note area and
+      // endnotes render as a section after the page stack, so neither is page-box-resident — this
+      // assertion is about the body blocks pagination flows into page boxes.
+      const sample = anchored.find(
+        (e) =>
+          e.getAttribute('contenteditable') === 'true' &&
+          !e.closest('.footnote-item, section.footnotes, section.endnotes'),
+      );
       const sampleAnchor = sample?.getAttribute('data-anchor') || '';
       const matchesForSample = sampleAnchor
         ? container.querySelectorAll(`[data-anchor="${sampleAnchor}"]`).length

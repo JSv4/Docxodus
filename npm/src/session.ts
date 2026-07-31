@@ -262,6 +262,37 @@ export class DocxSession {
     return JSON.parse(this.wasm.EnsureHeaderFooterVisible(this.handle, anchorId, kind)) as EditResult;
   }
 
+  // ─── Footnotes / endnotes ────────────────────────────────────────────
+
+  /**
+   * Create a footnote whose body is `markdown` and cite it from the body paragraph `anchorId`, at
+   * `characterOffset` characters into that paragraph's text (0 = before all text, text length =
+   * after all of it). On a document with no footnotes yet this also creates the footnotes part,
+   * Word's two reserved separator notes, the `FootnoteText`/`FootnoteReference` styles and the
+   * `w:footnotePr` settings declaration; otherwise the existing part is reused. The note id is
+   * allocated above every id already used in the package, so non-contiguous ids can't collide.
+   *
+   * Returns the created note anchors in `EditResult.created` — the definition (kind `fn`) and its
+   * paragraphs (kind `p`, scope `fn`) — so the note can immediately be edited with
+   * {@link replaceText} or removed with {@link deleteBlock} (which also drops the body reference).
+   *
+   * Body paragraphs only: Word does not allow a note reference inside a header/footer story or
+   * inside another note, so a non-body anchor fails with `anchorWrongKind`.
+   */
+  insertFootnote(anchorId: string, characterOffset: number, markdown: string): EditResult {
+    return JSON.parse(
+      this.wasm.InsertFootnote(this.handle, anchorId, characterOffset, markdown),
+    ) as EditResult;
+  }
+
+  /** Create an endnote — see {@link insertFootnote}; writes the endnotes part and a
+   * `w:endnoteReference`, and the created definition anchor has kind `en`. */
+  insertEndnote(anchorId: string, characterOffset: number, markdown: string): EditResult {
+    return JSON.parse(
+      this.wasm.InsertEndnote(this.handle, anchorId, characterOffset, markdown),
+    ) as EditResult;
+  }
+
   // ─── Tier C: formatting ──────────────────────────────────────────────
 
   applyFormat(anchorId: string, span: CharSpan | null, op: FormatOp): EditResult {

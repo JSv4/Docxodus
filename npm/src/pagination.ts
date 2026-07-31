@@ -1043,12 +1043,16 @@ export class PaginationEngine {
       return 0;
     }
 
+    // Measure in the SAME styling context the notes render in: `.page-footnotes` carries
+    // font-size 0.85em and line-height 1.4, so measuring without the class sizes the note
+    // block against body type and the reserve can never match what is drawn.
     // Create a temporary measurement container
     const measureContainer = document.createElement("div");
     measureContainer.style.position = "absolute";
     measureContainer.style.visibility = "hidden";
     measureContainer.style.width = `${contentWidth}pt`;
     measureContainer.style.left = "-9999px";
+    measureContainer.className = this.cssPrefix + "footnotes";
 
     // Add separator line (same as will be rendered)
     const hr = document.createElement("hr");
@@ -1101,6 +1105,7 @@ export class PaginationEngine {
     measureContainer.style.visibility = "hidden";
     measureContainer.style.width = `${contentWidth}pt`;
     measureContainer.style.left = "-9999px";
+    measureContainer.className = this.cssPrefix + "footnotes";
 
     // Add separator line
     const hr = document.createElement("hr");
@@ -1128,17 +1133,30 @@ export class PaginationEngine {
     availableHeightPt: number,
     contentWidth: number
   ): { fits: HTMLElement[]; overflow: HTMLElement[] } {
-    // Get child elements (paragraphs) of the footnote content
+    // Get child elements (paragraphs) of the footnote content.
+    //
+    // `fits` is spliced into a freshly built `.footnote-item` > `.footnote-content` wrapper by
+    // addPageFootnotes, so it must contain the note's CONTENT, never the note element itself.
+    // Returning the whole `.footnote-item` here nested a complete item (number span and all)
+    // inside another item's content span; the inner block-level div then broke the line, so the
+    // note's number rendered alone above its text — the same visible symptom as the escaped-CSS
+    // bug, from an unrelated cause, on the notes that happened to take a can't-split path.
     const footnoteContent = footnoteElement.querySelector(".footnote-content");
     if (!footnoteContent) {
-      // No content structure, can't split - return whole footnote
-      return { fits: [footnoteElement.cloneNode(true) as HTMLElement], overflow: [] };
+      // No content structure to split — hand back the element's own children.
+      return {
+        fits: Array.from(footnoteElement.children).map((el) => el.cloneNode(true) as HTMLElement),
+        overflow: [],
+      };
     }
 
     const children = Array.from(footnoteContent.children) as HTMLElement[];
     if (children.length <= 1) {
-      // Single paragraph, can't split at paragraph level
-      return { fits: [footnoteElement.cloneNode(true) as HTMLElement], overflow: [] };
+      // Single paragraph: can't split at paragraph level, but the whole content still fits.
+      return {
+        fits: children.map((el) => el.cloneNode(true) as HTMLElement),
+        overflow: [],
+      };
     }
 
     const fits: HTMLElement[] = [];
@@ -1151,6 +1169,7 @@ export class PaginationEngine {
     hrMeasure.style.visibility = "hidden";
     hrMeasure.style.width = `${contentWidth}pt`;
     hrMeasure.style.left = "-9999px";
+    hrMeasure.className = this.cssPrefix + "footnotes";
     const hr = document.createElement("hr");
     hrMeasure.appendChild(hr);
     this.stagingElement.appendChild(hrMeasure);
@@ -1171,6 +1190,7 @@ export class PaginationEngine {
       measureContainer.style.visibility = "hidden";
       measureContainer.style.width = `${contentWidth}pt`;
       measureContainer.style.left = "-9999px";
+      measureContainer.className = this.cssPrefix + "footnotes";
       measureContainer.appendChild(child.cloneNode(true));
       this.stagingElement.appendChild(measureContainer);
       const childHeight = pxToPt(measureContainer.getBoundingClientRect().height);
@@ -1203,6 +1223,7 @@ export class PaginationEngine {
     measureContainer.style.visibility = "hidden";
     measureContainer.style.width = `${contentWidth}pt`;
     measureContainer.style.left = "-9999px";
+    measureContainer.className = this.cssPrefix + "footnotes";
     measureContainer.appendChild(footnote.cloneNode(true));
 
     this.stagingElement.appendChild(measureContainer);
@@ -1489,6 +1510,18 @@ export class PaginationEngine {
     let currentContinuation: FootnoteContinuation | null = this.pendingFootnoteContinuation;
     // Track any new continuation that will carry to next page
     let nextPageContinuation: FootnoteContinuation | null = null;
+    /**
+     * Whole notes that could not be started on this page and must render on the next one.
+     *
+     * `nextPageContinuation` is a single slot, but the code that fills it runs once per note in a
+     * page's citation list — so when two notes on the same page both failed to fit, the second
+     * overwrote the first and that note was never rendered anywhere. On a 94-footnote document
+     * four notes disappeared from the output entirely. A deferral queue keeps the single-slot
+     * continuation for its real meaning (the tail of a note that was SPLIT) and carries
+     * never-started notes forward as ordinary footnote ids, which the next page already knows how
+     * to lay out.
+     */
+    let deferredFootnoteIds: string[] = [];
     // Track partial footnotes for current page (footnotes that were split)
     let currentPartialFootnotes: PartialFootnote[] = [];
 
@@ -1532,11 +1565,23 @@ export class PaginationEngine {
       currentContinuation = nextPageContinuation;
       nextPageContinuation = null;
 
+      // Notes that never got started land at the top of the new page's note area. They are
+      // ordinary footnotes from here on, so the normal fitting path handles them — and because
+      // this page is fresh, the space they were denied now exists.
+      if (deferredFootnoteIds.length > 0) {
+        currentFootnoteIds = [...deferredFootnoteIds];
+        deferredFootnoteIds = [];
+      }
+
       // Account for continuation height on new page
       if (currentContinuation && currentContinuation.remainingElements.length > 0) {
         currentFootnoteHeight = this.measureContinuationHeight(currentContinuation, dims.contentWidth);
       } else {
         currentFootnoteHeight = 0;
+      }
+      if (currentFootnoteIds.length > 0) {
+        currentFootnoteHeight += this.measureFootnotesHeight(
+          currentFootnoteIds, dims.contentWidth, null);
       }
     };
 
@@ -1757,26 +1802,13 @@ export class PaginationEngine {
                   }
                   currentFootnoteHeight = availableForFootnotes;
                 } else {
-                  // Nothing fits, entire footnote continues to next page
-                  nextPageContinuation = {
-                    footnoteId,
-                    remainingElements: Array.from(footnote.querySelectorAll(".footnote-content > *"))
-                      .map(el => el.cloneNode(true) as HTMLElement)
-                  };
-                  if (nextPageContinuation.remainingElements.length === 0) {
-                    nextPageContinuation.remainingElements = [footnote.cloneNode(true) as HTMLElement];
-                  }
+                  // Nothing of this note fits: defer the WHOLE note rather than assigning the
+                  // single continuation slot, which a later note on this page would overwrite.
+                  deferredFootnoteIds.push(footnoteId);
                 }
               } else {
-                // Not enough space to start footnote - continue whole thing
-                nextPageContinuation = {
-                  footnoteId,
-                  remainingElements: Array.from(footnote.querySelectorAll(".footnote-content > *"))
-                    .map(el => el.cloneNode(true) as HTMLElement)
-                };
-                if (nextPageContinuation.remainingElements.length === 0) {
-                  nextPageContinuation.remainingElements = [footnote.cloneNode(true) as HTMLElement];
-                }
+                // Not enough space to even start the note — same deferral.
+                deferredFootnoteIds.push(footnoteId);
               }
             }
           }
@@ -1790,8 +1822,14 @@ export class PaginationEngine {
           const bodySpaceAfterExpansion = effectiveContentHeight - expandedFootnoteSpace;
 
           if (blockSpaceWithoutFootnotes <= bodySpaceAfterExpansion - bodyContentUsed) {
-            // Block fits after expanding footnote area
+            // Block fits after expanding footnote area.
             currentContent.push(block.element.cloneNode(true) as HTMLElement);
+            // `remainingHeight` tracks BODY consumption only — every other branch maintains it
+            // that way, and the footnote reserve is applied separately via `effectiveRemainingHeight`
+            // at the top of each iteration. Assigning `bodySpaceAfterExpansion - …` here folded the
+            // reserve in a second time, so a later block would see a body budget short by the whole
+            // footnote area. Consistency fix: no measurable difference on the documents tested, but
+            // the two meanings must not coexist or the next change here inherits a latent bug.
             remainingHeight = bodySpaceAfterExpansion - bodyContentUsed - blockSpaceWithoutFootnotes;
             prevMarginBottomPt = block.marginBottomPt;
             currentFootnoteIds.push(...newFootnoteIds);
@@ -1806,7 +1844,9 @@ export class PaginationEngine {
             currentContent.push(block.element.cloneNode(true) as HTMLElement);
             remainingHeight = effectiveContentHeight - newPageSpace;
             prevMarginBottomPt = block.marginBottomPt;
-            currentFootnoteIds = [...allBlockFootnoteIds];
+            // Merge, never replace: finishPage() may have just seeded this page with notes deferred
+          // from the previous one, and overwriting here dropped them from the document.
+          currentFootnoteIds = [...currentFootnoteIds, ...allBlockFootnoteIds];
             currentFootnoteHeight = newPageFootnoteHeight;
           }
         } else {
@@ -1822,7 +1862,9 @@ export class PaginationEngine {
           currentContent.push(block.element.cloneNode(true) as HTMLElement);
           remainingHeight = effectiveContentHeight - newPageSpace;
           prevMarginBottomPt = block.marginBottomPt;
-          currentFootnoteIds = [...allBlockFootnoteIds];
+          // Merge, never replace: finishPage() may have just seeded this page with notes deferred
+          // from the previous one, and overwriting here dropped them from the document.
+          currentFootnoteIds = [...currentFootnoteIds, ...allBlockFootnoteIds];
           currentFootnoteHeight = newPageFootnoteHeight;
         }
       } else {
@@ -1845,7 +1887,9 @@ export class PaginationEngine {
           finishPage();
         }
         currentContent.push(block.element.cloneNode(true) as HTMLElement);
-        currentFootnoteIds = [...allBlockFootnoteIds];
+        // Merge, never replace: finishPage() may have just seeded this page with notes deferred
+          // from the previous one, and overwriting here dropped them from the document.
+          currentFootnoteIds = [...currentFootnoteIds, ...allBlockFootnoteIds];
         finishPage();
       }
     }
@@ -1957,6 +2001,7 @@ export class PaginationEngine {
     const hasContinuation = continuation && continuation.remainingElements.length > 0;
     if (footnoteIds.length > 0 || hasContinuation) {
       this.addPageFootnotes(pageBox, footnoteIds, dims, footnoteHeight, continuation, partialFootnotes);
+
     }
 
     // Add footer if available for this section/page
@@ -1992,6 +2037,25 @@ export class PaginationEngine {
 
     // Add to container
     this.containerElement.appendChild(pageBox);
+
+    // Body and notes must occupy DISJOINT bands. The note block is absolutely positioned against
+    // the page bottom and grows upward, while the content area spans the whole text height — so
+    // nothing but the layout loop's arithmetic keeps them apart, and any disagreement between the
+    // height the loop reserved and the height the notes actually render at draws body text and note
+    // text on top of each other (observed on a 94-footnote document: ~134pt of superimposed,
+    // illegible glyphs). Shrinking the content area to the space the notes actually left removes
+    // the failure mode by construction — the worst case becomes a clean clip by the content area's
+    // existing `overflow: hidden`, which is obvious and recoverable rather than silent corruption.
+    //
+    // This runs AFTER the append on purpose: `getBoundingClientRect()` on a detached node is all
+    // zeroes, so measuring while building the page silently did nothing.
+    const notesEl = pageBox.querySelector<HTMLElement>(`.${this.cssPrefix}footnotes`);
+    if (notesEl) {
+      const notesHeightPt = pxToPt(notesEl.getBoundingClientRect().height);
+      if (notesHeightPt > 0) {
+        contentArea.style.height = `${Math.max(0, contentAreaHeight - notesHeightPt)}pt`;
+      }
+    }
 
     return {
       pageNumber,
