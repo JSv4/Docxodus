@@ -885,6 +885,32 @@ public sealed record DiffEntry
 
 public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown);
 
+/// <summary>One top-level render unit in a <see cref="RenderPlan"/> — a body block
+/// (<c>p</c>/<c>h</c>/<c>li</c>), one whole table (<c>tbl</c>, its rows/cells/cell
+/// paragraphs subsumed), or one footnote/endnote definition (<c>fn</c>/<c>en</c>).</summary>
+public sealed record RenderUnit(string Id, string Kind);
+
+/// <summary>
+/// The ordered top-level render units per scope container — the authority for "what
+/// blocks exist, in what order" that an incremental renderer diffs its DOM against.
+/// The projection's flat <c>AnchorIndex</c> cannot express table containment (a cell
+/// paragraph and a body paragraph are both kind <c>p</c>); this plan can.
+/// </summary>
+public sealed record RenderPlan(
+    System.Collections.Generic.IReadOnlyList<RenderUnit> Body,
+    System.Collections.Generic.IReadOnlyList<RenderUnit> Footnotes,
+    System.Collections.Generic.IReadOnlyList<RenderUnit> Endnotes);
+
+/// <summary>
+/// One footnote/endnote in citation order. <see cref="Id"/> is the note's
+/// <c>w:id</c> as written in the XML; <see cref="Ordinal"/> is its 1-based
+/// citation position — which IS its displayed number (ids ascend in reference
+/// order, the invariant every Word file holds). A client that renumbers rendered
+/// note chrome (markers, hrefs, list values) after an insert walks its markers in
+/// document order and applies the k-th entry to the k-th marker.
+/// </summary>
+public sealed record NoteListEntry(string Id, string DefAnchorId, int Ordinal);
+
 /// <summary>Summary returned by <see cref="DocxSession.CompactRuns"/>.</summary>
 public sealed record CompactResult
 {
@@ -1203,6 +1229,97 @@ public sealed class DocxSession : IDisposable
     }
 
     private IReadOnlyDictionary<string, AnchorTarget>? _cachedAnchorIndex;
+
+    /// <summary>
+    /// The ordered top-level render units per scope container — see <see cref="RenderPlan"/>.
+    /// Body = the main body's direct children in document order (each <c>w:p</c> under its
+    /// projected kind, each <c>w:tbl</c> as ONE <c>tbl</c> unit); Footnotes/Endnotes = the
+    /// non-boilerplate note definitions in part order. Elements the projection does not
+    /// address (e.g. <c>w:sectPr</c>) are skipped. Unlike the projection itself, empty
+    /// paragraphs are ALWAYS listed — the plan mirrors the rendered DOM, which contains
+    /// every block regardless of <see cref="EmptyParagraphMode"/>.
+    /// </summary>
+    public RenderPlan ListBlocks()
+    {
+        ThrowIfDisposed();
+        _ = AnchorIndex(); // guarantees Unids are assigned on every projected part
+
+        var body = new List<RenderUnit>();
+        var bodyEl = _doc!.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
+        if (bodyEl is not null)
+        {
+            foreach (var el in bodyEl.Elements())
+            {
+                string? kind =
+                    el.Name == W.tbl ? "tbl" :
+                    el.Name == W.p ? WmlToMarkdownConverter.KindFor(el) : null;
+                var unid = (string?)el.Attribute(PtOpenXml.Unid);
+                if (kind is null || unid is null) continue;
+                body.Add(new RenderUnit($"{kind}:body:{unid}", kind));
+            }
+        }
+
+        List<RenderUnit> Notes(XElement? root, XName noteName, string kindScope)
+        {
+            var list = new List<RenderUnit>();
+            if (root is null) return list;
+            foreach (var n in root.Elements(noteName))
+            {
+                if (WmlToMarkdownConverter.IsBoilerplateNote(n)) continue;
+                var unid = (string?)n.Attribute(PtOpenXml.Unid);
+                if (unid is null) continue;
+                list.Add(new RenderUnit($"{kindScope}:{kindScope}:{unid}", kindScope));
+            }
+            return list;
+        }
+
+        var main = _doc!.MainDocumentPart;
+        return new RenderPlan(
+            body,
+            Notes(main?.FootnotesPart?.GetXDocument().Root, W.footnote, "fn"),
+            Notes(main?.EndnotesPart?.GetXDocument().Root, W.endnote, "en"));
+    }
+
+    /// <summary>
+    /// The document's footnotes (or endnotes) in citation order — see
+    /// <see cref="NoteListEntry"/>. References are collected from the main body in
+    /// document order (Word disallows note references anywhere else this API can
+    /// author them); a reference whose definition is missing is skipped.
+    /// </summary>
+    public IReadOnlyList<NoteListEntry> ListNotes(bool endnotes = false)
+    {
+        ThrowIfDisposed();
+        _ = AnchorIndex(); // guarantees Unids on the note parts
+
+        var result = new List<NoteListEntry>();
+        var main = _doc!.MainDocumentPart;
+        var bodyRoot = main?.GetXDocument().Root;
+        var notesRoot = endnotes
+            ? main?.EndnotesPart?.GetXDocument().Root
+            : main?.FootnotesPart?.GetXDocument().Root;
+        if (bodyRoot is null || notesRoot is null) return result;
+
+        var refName = endnotes ? W.endnoteReference : W.footnoteReference;
+        var defName = endnotes ? W.endnote : W.footnote;
+        var kindScope = endnotes ? "en" : "fn";
+
+        var defsById = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var def in notesRoot.Elements(defName))
+        {
+            var defId = (string?)def.Attribute(W.id);
+            if (defId is not null) defsById[defId] = def;
+        }
+
+        foreach (var r in bodyRoot.Descendants(refName))
+        {
+            var id = (string?)r.Attribute(W.id);
+            if (id is null || !defsById.TryGetValue(id, out var def)) continue;
+            var unid = (string?)def.Attribute(PtOpenXml.Unid);
+            if (unid is null) continue;
+            result.Add(new NoteListEntry(id, $"{kindScope}:{kindScope}:{unid}", result.Count + 1));
+        }
+        return result;
+    }
 
     internal AnchorTarget? FindAnchor(string? anchorId)
     {

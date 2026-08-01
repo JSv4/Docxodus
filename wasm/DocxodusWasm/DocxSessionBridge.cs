@@ -38,6 +38,24 @@ public static partial class DocxSessionBridge
     public static string Project(int handle) => DocxSessionOps.Project(handle);
 
     /// <summary>
+    /// Ordered top-level render units per scope container (body / footnotes /
+    /// endnotes), as JSON: <c>{"body":[{"id","kind"},…],"footnotes":[…],"endnotes":[…]}</c>.
+    /// A table is ONE body unit; a note definition is one notes unit. The editor's
+    /// incremental reconciler diffs its DOM against this after a structural op.
+    /// </summary>
+    [JSExport]
+    public static string ListBlocks(int handle) => DocxSessionOps.ListBlocks(handle);
+
+    /// <summary>
+    /// Citation-ordered footnotes (or endnotes) as JSON
+    /// <c>[{"id","defAnchorId","ordinal"},…]</c> — the id↔ordinal authority the
+    /// editor's reconciler walks when it renumbers rendered note chrome (marker
+    /// sup text, hrefs, list values) after a note insert/delete.
+    /// </summary>
+    [JSExport]
+    public static string ListNotes(int handle, bool endnotes) => DocxSessionOps.ListNotes(handle, endnotes);
+
+    /// <summary>
     /// Bridge for <see cref="DocxSession.ProjectAnchor"/>. <paramref name="depth"/>
     /// uses the numeric layout of <see cref="ProjectionDepth"/> (SelfOnly=0,
     /// Subtree=1, SubtreeAndFollowingSiblings=2). Returns a JSON object with

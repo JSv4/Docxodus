@@ -1050,6 +1050,14 @@ export interface DocxodusWasmExports {
     CreateBlankDocx: () => Uint8Array;
     Project: (handle: number) => string;
     ProjectAnchor: (handle: number, anchorId: string, depth: number) => string;
+    /** Ordered top-level render units per scope container (JSON {@link RenderPlan}) —
+     *  what the editor's incremental reconciler diffs its DOM against. Optional:
+     *  absent on older WASM bundles. */
+    ListBlocks?: (handle: number) => string;
+    /** Citation-ordered footnotes/endnotes (JSON {@link NoteListEntry}[]) — the
+     *  id↔ordinal authority for renumbering rendered note chrome. Optional:
+     *  absent on older WASM bundles. */
+    ListNotes?: (handle: number, endnotes: boolean) => string;
     RenderBlockHtml: (
       handle: number,
       anchorId: string,
@@ -1347,6 +1355,29 @@ export interface DocxSessionSettings {
    * Set to `false` to skip the ~200ms upfront cost if you don't plan to diff.
    */
   captureInitialProjection?: boolean;
+}
+
+/** One top-level render unit in a {@link RenderPlan}: a body block (`p`/`h`/`li`),
+ *  one whole table (`tbl`), or one footnote/endnote definition (`fn`/`en`). */
+export interface RenderUnit {
+  id: string;
+  kind: string;
+}
+
+/** Ordered top-level render units per scope container — the authority for "what
+ *  blocks exist, in what order" that the incremental reconciler diffs against. */
+export interface RenderPlan {
+  body: RenderUnit[];
+  footnotes: RenderUnit[];
+  endnotes: RenderUnit[];
+}
+
+/** One footnote/endnote in citation order. `id` is the note's `w:id`; `ordinal`
+ *  is its 1-based citation position — which IS its displayed number. */
+export interface NoteListEntry {
+  id: string;
+  defAnchorId: string;
+  ordinal: number;
 }
 
 export interface DocxSessionProjection {

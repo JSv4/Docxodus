@@ -605,6 +605,46 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    public static string SerializeRenderPlan(RenderPlan plan)
+    {
+        var sb = new StringBuilder(256);
+        void Units(string key, System.Collections.Generic.IReadOnlyList<RenderUnit> units)
+        {
+            sb.Append('"').Append(key).Append("\":[");
+            for (int i = 0; i < units.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"id\":").Append(JsonString(units[i].Id))
+                  .Append(",\"kind\":").Append(JsonString(units[i].Kind)).Append('}');
+            }
+            sb.Append(']');
+        }
+        sb.Append('{');
+        Units("body", plan.Body);
+        sb.Append(',');
+        Units("footnotes", plan.Footnotes);
+        sb.Append(',');
+        Units("endnotes", plan.Endnotes);
+        sb.Append('}');
+        return sb.ToString();
+    }
+
+    public static string SerializeNoteList(IReadOnlyList<NoteListEntry> notes)
+    {
+        var sb = new StringBuilder(64 + notes.Count * 64);
+        sb.Append('[');
+        for (int i = 0; i < notes.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append("{\"id\":").Append(JsonString(notes[i].Id))
+              .Append(",\"defAnchorId\":").Append(JsonString(notes[i].DefAnchorId))
+              .Append(",\"ordinal\":").Append(notes[i].Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture))
+              .Append('}');
+        }
+        sb.Append(']');
+        return sb.ToString();
+    }
+
     public static string SerializeAnchorTargets(IReadOnlyList<AnchorTarget> targets)
     {
         var sb = new StringBuilder(targets.Count * 128 + 2);

@@ -39,6 +39,18 @@ internal static class DocxSessionOps
     public static string Project(int handle) =>
         DocxSessionJson.SerializeProjection(SessionRegistry.Get(handle).Project());
 
+    /// <summary>
+    /// Ordered top-level render units per scope container — what an incremental
+    /// renderer diffs its DOM against after a structural op. See <see cref="RenderPlan"/>.
+    /// </summary>
+    public static string ListBlocks(int handle) =>
+        DocxSessionJson.SerializeRenderPlan(SessionRegistry.Get(handle).ListBlocks());
+
+    /// <summary>Citation-ordered footnotes/endnotes — the id↔ordinal authority a client
+    /// renumbering rendered note chrome walks. See <see cref="NoteListEntry"/>.</summary>
+    public static string ListNotes(int handle, bool endnotes) =>
+        DocxSessionJson.SerializeNoteList(SessionRegistry.Get(handle).ListNotes(endnotes));
+
     public static string ProjectAnchor(int handle, string anchorId, ProjectionDepth depth) =>
         DocxSessionJson.SerializeProjection(SessionRegistry.Get(handle).ProjectAnchor(anchorId, depth));
 
