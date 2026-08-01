@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { diffUnits, needsRemount, unidOf } from "../src/editor-reconcile";
+import { diffUnits, needsRemount, tokenOf, unidOf } from "../src/editor-reconcile";
 import type { RenderUnit } from "../src/editor-reconcile";
 
 const U = (ids: string) => ids.split(" ").filter(Boolean);
@@ -108,5 +108,20 @@ test.describe("editor-reconcile unit diff", () => {
   test("unidOf", () => {
     expect(unidOf("p:body:abc123")).toBe("abc123");
     expect(unidOf("tbl:body:ff00")).toBe("ff00");
+  });
+
+  test("container sig change diffs as substitution even with a stable unid", () => {
+    // A row insert keeps the table's unid but changes its content signature —
+    // the diff must see remove+add at that position, not a keep.
+    const oldTokens = ["a", "T|sig1", "b"];
+    const next: RenderUnit[] = [
+      { id: "p:body:a", kind: "p" },
+      { id: "tbl:body:T", kind: "tbl", sig: "sig2" },
+      { id: "p:body:b", kind: "p" },
+    ];
+    const d = diffUnits(oldTokens, next);
+    expect(d.substituted).toEqual([{ oldIndex: 1, newIndex: 1 }]);
+    expect(d.keep.size).toBe(2);
+    expect(tokenOf(next[1])).toBe("T|sig2");
   });
 });

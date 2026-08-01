@@ -149,6 +149,37 @@ internal static class UnidHelper
         }
     }
 
+    /// <summary>
+    /// Content hash of an element's full subtree — names, attributes (minus the
+    /// <c>PtOpenXml.Unid</c> bookkeeping) and text — for change DETECTION, not identity.
+    /// In-session a block element keeps its Unid attribute across edits (ops rebuild
+    /// its children, not the element), so a renderer diffing by Unid alone would keep
+    /// stale DOM for any in-place edit; this hash moves whenever anything inside the
+    /// unit changes. One tree walk, no serialization allocation beyond the builder.
+    /// </summary>
+    internal static string ContentHash(XElement element)
+    {
+        var sb = new StringBuilder(1024);
+        void Walk(XElement e)
+        {
+            sb.Append('<').Append(e.Name.LocalName);
+            foreach (var a in e.Attributes())
+            {
+                if (a.Name == PtOpenXml.Unid || a.IsNamespaceDeclaration) continue;
+                sb.Append(' ').Append(a.Name.LocalName).Append('=').Append(a.Value);
+            }
+            sb.Append('>');
+            foreach (var n in e.Nodes())
+            {
+                if (n is XElement ce) Walk(ce);
+                else if (n is XText t) sb.Append(t.Value);
+            }
+            sb.Append("</").Append('>');
+        }
+        Walk(element);
+        return ShortHash(sb.ToString(), hexChars: 16);
+    }
+
     // ─── Deterministic derivation internals ──────────────────────────────
 
     private static void AssignDescendantsDeterministic(XElement parent, string parentUnid, HashSet<XElement> live)
@@ -248,7 +279,7 @@ internal static class UnidHelper
         return ShortHash(input, hexChars: 32);
     }
 
-    private static string ShortHash(string input, int hexChars)
+    internal static string ShortHash(string input, int hexChars)
     {
         using var sha = SHA256.Create();
         var bytes = sha.ComputeHash(Encoding.UTF8.GetBytes(input));

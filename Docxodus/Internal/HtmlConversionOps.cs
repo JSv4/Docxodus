@@ -427,8 +427,23 @@ internal static class HtmlConversionOps
         foreach (var e in htmlElement.Descendants())
         {
             var u = (string?)e.Attribute("data-anchor");
-            if (u is not null && wantedUnids.Contains(u) && !htmlByUnid.ContainsKey(u))
-                htmlByUnid[u] = e.ToString(SaveOptions.DisableFormatting);
+            if (u is null || !wantedUnids.Contains(u) || htmlByUnid.ContainsKey(u)) continue;
+            // A table always renders inside a generated single-child alignment <div>
+            // (see the converter's tableDiv). Return that wrapper so an incremental
+            // renderer inserts the same node shape a full render produces — a bare
+            // <table> would lose alignment and leave wrapper husks on replace. Only
+            // tables: paragraph wrappers (border <div>s) can GROUP several blocks, so
+            // they are the client's remount-fallback territory, not extraction chrome.
+            var outer = e;
+            if (e.Name.LocalName == "table"
+                && e.Parent is { } p
+                && p.Name.LocalName == "div"
+                && p.Attribute("data-anchor") is null
+                && p.Elements().Count() == 1)
+            {
+                outer = p;
+            }
+            htmlByUnid[u] = outer.ToString(SaveOptions.DisableFormatting);
         }
         return htmlByUnid;
     }

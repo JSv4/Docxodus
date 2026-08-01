@@ -887,8 +887,16 @@ public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown);
 
 /// <summary>One top-level render unit in a <see cref="RenderPlan"/> — a body block
 /// (<c>p</c>/<c>h</c>/<c>li</c>), one whole table (<c>tbl</c>, its rows/cells/cell
-/// paragraphs subsumed), or one footnote/endnote definition (<c>fn</c>/<c>en</c>).</summary>
-public sealed record RenderUnit(string Id, string Kind);
+/// paragraphs subsumed), or one footnote/endnote definition (<c>fn</c>/<c>en</c>).
+/// <para><see cref="Sig"/> is a content signature carried ONLY by container units
+/// (<c>tbl</c>/<c>fn</c>/<c>en</c>): a container's unid is structural (tag-name
+/// signature) and survives edits INSIDE it — a row insert or a note text edit keeps
+/// the container's unid — so a renderer diffing by unid alone would keep a stale
+/// node. The signature hashes the descendant unids, which any inner content or
+/// structure change re-derives, so a changed container diffs as an in-place
+/// substitution. <c>null</c> for leaf blocks, whose own unid IS their content
+/// signature.</para></summary>
+public sealed record RenderUnit(string Id, string Kind, string? Sig = null);
 
 /// <summary>
 /// The ordered top-level render units per scope container — the authority for "what
@@ -1255,7 +1263,7 @@ public sealed class DocxSession : IDisposable
                     el.Name == W.p ? WmlToMarkdownConverter.KindFor(el) : null;
                 var unid = (string?)el.Attribute(PtOpenXml.Unid);
                 if (kind is null || unid is null) continue;
-                body.Add(new RenderUnit($"{kind}:body:{unid}", kind));
+                body.Add(new RenderUnit($"{kind}:body:{unid}", kind, UnidHelper.ContentHash(el)));
             }
         }
 
@@ -1263,12 +1271,18 @@ public sealed class DocxSession : IDisposable
         {
             var list = new List<RenderUnit>();
             if (root is null) return list;
-            foreach (var n in root.Elements(noteName))
+            // CITATION order, not part order: the rendered notes section lists notes in
+            // the order they are cited, and ids ascend in reference order (the invariant
+            // every Word file holds), so numeric id order IS citation order — while the
+            // part can hold a freshly inserted definition appended at the end.
+            var ordered = root.Elements(noteName)
+                .Where(n => !WmlToMarkdownConverter.IsBoilerplateNote(n))
+                .OrderBy(n => int.TryParse((string?)n.Attribute(W.id), out var id) ? id : int.MaxValue);
+            foreach (var n in ordered)
             {
-                if (WmlToMarkdownConverter.IsBoilerplateNote(n)) continue;
                 var unid = (string?)n.Attribute(PtOpenXml.Unid);
                 if (unid is null) continue;
-                list.Add(new RenderUnit($"{kindScope}:{kindScope}:{unid}", kindScope));
+                list.Add(new RenderUnit($"{kindScope}:{kindScope}:{unid}", kindScope, UnidHelper.ContentHash(n)));
             }
             return list;
         }

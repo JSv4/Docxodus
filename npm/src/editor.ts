@@ -21,6 +21,8 @@ import { paginateHtml } from "./pagination.js";
 import { HeaderFooterRegion } from "./editor-headerfooter.js";
 import type { BandWhich } from "./editor-headerfooter.js";
 import type { HeaderFooterKind, NumberFormat } from "./types.js";
+import { diffUnits, needsRemount, tokenOf, unidOf } from "./editor-reconcile.js";
+import type { RenderPlan, RenderUnit, UnitDiff } from "./editor-reconcile.js";
 
 /** The subset of WASM bridge exports the editor needs (as exposed on `window.Docxodus`). */
 export interface DocxEditorExports {
@@ -99,6 +101,16 @@ export interface DocxEditorExports {
       anchor: string,
       characterOffset: number,
       markdown: string,
+    ) => string;
+    /** Incremental-reconcile trio (optional: older WASM bundles predate them; the
+     *  editor falls back to full remounts without them). */
+    ListBlocks?: (handle: number) => string;
+    ListNotes?: (handle: number, endnotes: boolean) => string;
+    RenderBlocksHtml?: (
+      handle: number,
+      anchorIdsJson: string,
+      cssPrefix: string,
+      fabricateClasses: boolean,
     ) => string;
   };
   DocumentConverter: {
@@ -692,15 +704,19 @@ export class DocxEditor {
   /**
    * Repaint after an edit to `block` that would otherwise remount the whole document: a band
    * repaints only itself (a story is one to three paragraphs), leaving the body DOM — and the
-   * user's place in it — untouched.
+   * user's place in it — untouched; a body edit reconciles incrementally. `forceRemount` is
+   * for ops whose repaint provably needs whole-document context the reconciler cannot see:
+   * list membership/level changes (sibling numbering shifts without sibling XML changing)
+   * and border-div regrouping (HR insert, clearBorders).
    */
-  private refreshAfter(block: HTMLElement, focusIndex: number, caretAtEnd = false): void {
+  private refreshAfter(block: HTMLElement, focusIndex: number, caretAtEnd = false, forceRemount = false): void {
     const band = this.region?.bandOf(block);
     if (band) {
       this.region!.refresh(this.region!.whichOf(band));
       return;
     }
-    this.remount(focusIndex, caretAtEnd);
+    if (forceRemount) this.remount(focusIndex, caretAtEnd);
+    else this.reconcile(focusIndex, caretAtEnd);
   }
 
   /** Open a document, render it into `container`, and wire up editing. */
@@ -875,6 +891,7 @@ export class DocxEditor {
       this.container.innerHTML = styles + parsed.body.innerHTML;
       this.editRoot = this.container;
       if (this.options.editable) this.wireBlocks(this.container);
+      this.stampPlanState();
       return;
     }
     // With bands docked, the body flow needs its own wrapper to be the edit root.
@@ -885,6 +902,7 @@ export class DocxEditor {
     this.container.appendChild(flow);
     this.editRoot = flow;
     if (this.options.editable) this.wireBlocks(flow);
+    this.stampPlanState();
     this.dockBands(flow);
   }
 
@@ -1039,6 +1057,8 @@ export class DocxEditor {
         }
         this.wireBlock(fresh);
         if (this.activeBlock === el) this.activeBlock = fresh; // keep ribbon target valid
+        // The throwaway render numbers citation markers from 1 — repair in place.
+        this.maybeRenumberNotes(fresh);
       }
     }
 
@@ -1613,9 +1633,10 @@ export class DocxEditor {
       ),
     );
     if (!res.success) return;
-    // remount from the active block's index re-renders the new rule whether it landed just
-    // above (at idx) or just below (at idx+1) the active block.
-    this.refreshAfter(block, idx, false);
+    // Remount from the active block's index re-renders the new rule whether it landed just
+    // above (at idx) or just below (at idx+1) the active block. Forced: a rule is a bordered
+    // paragraph, and border-div grouping is whole-document render context.
+    this.refreshAfter(block, idx, false, /* forceRemount */ true);
   }
 
   /**
@@ -1728,8 +1749,8 @@ export class DocxEditor {
     const res = this.parseEdit(this.exports.DocxSessionBridge.SetListLevel(this.handle, fullId, delta));
     if (!res.success) return;
     // A level change ripples through the whole list's numbering — re-render with full document
-    // context (a single-block render can't compute nested numbering), keeping the caret in place.
-    this.refreshAfter(block, idx, false);
+    // context (sibling numbers shift without sibling XML changing), keeping the caret in place.
+    this.refreshAfter(block, idx, false, /* forceRemount */ true);
   }
 
   /** Toggle (or set) page-break-before on the active block. */
@@ -1764,8 +1785,8 @@ export class DocxEditor {
     );
     if (!res.success) return;
     // Numbering continuation across the list needs whole-document context — re-render fully
-    // (a single-block render would show every numbered item as "1.").
-    this.refreshAfter(block, idx, false);
+    // (sibling numbers shift without sibling XML changing).
+    this.refreshAfter(block, idx, false, /* forceRemount */ true);
   }
 
   /** Clear all paragraph borders (e.g. remove an inserted horizontal rule) on the active block —
@@ -1834,7 +1855,7 @@ export class DocxEditor {
     if (!call) return; // bridge predates note authoring
     const res = this.parseEdit(call.call(bridge, this.handle, fullId, offset, markdown));
     if (!res.success) return;
-    this.remount(idx, false);
+    this.reconcile(idx, false);
   }
 
   private applyParagraphFormat(op: {
@@ -1868,7 +1889,7 @@ export class DocxEditor {
     if (!res.success) return;
     // A border change adds/removes the wrapping border <div>, so a single-block swap can't restructure
     // it correctly — re-render fully (like list edits) so the wrapper appears/disappears cleanly.
-    if (this.affectsList(res) || op.clearBorders) { this.refreshAfter(block, idx, false); return; }
+    if (this.affectsList(res) || op.clearBorders) { this.refreshAfter(block, idx, false, true); return; }
     this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 
@@ -1893,20 +1914,20 @@ export class DocxEditor {
     fullId = this.syncBlock(block, fullId);
     const res = this.parseEdit(this.exports.DocxSessionBridge.SetParagraphStyle(this.handle, fullId, styleId));
     if (!res.success) return;
-    if (this.affectsList(res)) { this.refreshAfter(block, idx, false); return; }
+    if (this.affectsList(res)) { this.refreshAfter(block, idx, false, true); return; }
     this.swapBlock(block, unid, res.modified?.[0])?.focus();
   }
 
-  /** Undo the last edit (re-renders the document). */
+  /** Undo the last edit (incremental repaint; falls back to a full re-render). */
   undo(): void {
     if (this.closed) return;
-    if (this.exports.DocxSessionBridge.Undo(this.handle)) this.remount();
+    if (this.exports.DocxSessionBridge.Undo(this.handle)) this.reconcile();
   }
 
-  /** Redo the last undone edit (re-renders the document). */
+  /** Redo the last undone edit (incremental repaint; falls back to a full re-render). */
   redo(): void {
     if (this.closed) return;
-    if (this.exports.DocxSessionBridge.Redo(this.handle)) this.remount();
+    if (this.exports.DocxSessionBridge.Redo(this.handle)) this.reconcile();
   }
 
   // ─── Header/footer region commands (no-ops unless `headerFooter` is on) ───────────────
@@ -2005,6 +2026,8 @@ export class DocxEditor {
     if (inBand) this.region!.adoptBlock(fresh, anchorId);
     this.wireBlock(fresh);
     this.activeBlock = fresh;
+    // The throwaway render numbers citation markers from 1 — repair in place.
+    this.maybeRenumberNotes(fresh);
     this.options.onEdit?.({ anchorId, unid: newUnid });
     return fresh;
   }
@@ -2059,6 +2082,430 @@ export class DocxEditor {
    */
   private affectsList(res: EditResultLite): boolean {
     return [...(res.modified ?? []), ...(res.created ?? [])].some((r) => r.kind === "li");
+  }
+
+  // ─── Incremental structural reconcile ─────────────────────────────────
+  //
+  // After a structural op (insert table/row/col, footnote, delete block, undo/redo)
+  // the DOM is patched from a unit-sequence diff against the session's render plan
+  // instead of remounting the whole document (~3 s of full-document conversion on a
+  // 350-block file). Full remount remains the universal FALLBACK: any ambiguity,
+  // unsupported bridge, paginated mode, list-membership change, or thrown error
+  // lands there — correctness never depends on the diff being right.
+
+  /** True when the bridge carries the reconcile trio and the mode allows patching. */
+  private canReconcile(): boolean {
+    const b = this.exports.DocxSessionBridge;
+    return (
+      !this.options.paginated &&
+      typeof b.ListBlocks === "function" &&
+      typeof b.RenderBlocksHtml === "function" &&
+      typeof b.ListNotes === "function"
+    );
+  }
+
+  /** The body's top-level unit nodes in document order: `[data-anchor]` elements not
+   *  nested in another unit (cell paragraphs collapse into their table) and not in the
+   *  notes sections. */
+  private bodyUnitNodes(): HTMLElement[] {
+    const all = Array.from(this.editRoot.querySelectorAll<HTMLElement>("[data-anchor]"));
+    return all.filter((el) => {
+      if (el.closest("section.footnotes, section.endnotes")) return false;
+      const ancestor = el.parentElement?.closest("[data-anchor]");
+      return !(ancestor && this.editRoot.contains(ancestor));
+    });
+  }
+
+  /** The DOM diff token for a body unit node (see editor-reconcile.tokenOf). */
+  private static domTokenOf(el: HTMLElement): string {
+    const unid = el.getAttribute("data-anchor") ?? "";
+    const sig = el.getAttribute("data-render-sig");
+    return sig ? `${unid}|${sig}` : unid;
+  }
+
+  /** The kind a body unit node would have in the plan (only 'li'/'tbl' matter to the
+   *  remount guard). */
+  private static domKindOf(el: HTMLElement): string {
+    if (el.tagName === "TABLE") return "tbl";
+    return el.querySelector(":scope > [data-list-marker]") ? "li" : "p";
+  }
+
+  private static listMarkerText(el: Element | null): string | null {
+    const m = el?.querySelector(":scope > [data-list-marker]");
+    return m ? m.textContent : null;
+  }
+
+  /**
+   * Incrementally patch the DOM from the session's render plan; falls back to
+   * {@link remount} whenever it cannot prove the patch correct. Same focus contract
+   * as remount.
+   */
+  private reconcile(focusIndex = -1, caretAtEnd = false): void {
+    if (!this.canReconcile()) {
+      this.remount(focusIndex, caretAtEnd);
+      return;
+    }
+    try {
+      if (!this.reconcileCore()) {
+        this.remount(focusIndex, caretAtEnd);
+        return;
+      }
+    } catch {
+      this.remount(focusIndex, caretAtEnd);
+      return;
+    }
+    if (focusIndex >= 0) {
+      const blocks = this.editableList();
+      const target = blocks[Math.min(focusIndex, blocks.length - 1)];
+      if (target) {
+        this.activeBlock = target;
+        placeCaretAtOffset(target, caretAtEnd ? (target.textContent ?? "").length : 0);
+      }
+    }
+    this.syncRegionToBody(this.activeBlock ?? undefined);
+  }
+
+  /** The patch itself. Returns false to request the remount fallback. */
+  private reconcileCore(): boolean {
+    const bridge = this.exports.DocxSessionBridge;
+    // Refresh the unid → anchor map FIRST: wiring freshly rendered nodes (wireBlock)
+    // resolves through it, and the map must reflect the post-op session.
+    this.refreshAnchorMap();
+    const plan = JSON.parse(bridge.ListBlocks!(this.handle)) as RenderPlan & { error?: string };
+    if (plan.error) return false;
+
+    const oldNodes = this.bodyUnitNodes();
+    const oldTokens = oldNodes.map(DocxEditor.domTokenOf);
+    const oldKinds = oldNodes.map(DocxEditor.domKindOf);
+    const bodyDiff = diffUnits(oldTokens, plan.body);
+    if (needsRemount(bodyDiff, plan.body, oldKinds)) return false;
+
+    const fnState = this.notesDiff("footnotes", plan.footnotes);
+    const enState = this.notesDiff("endnotes", plan.endnotes);
+    if (fnState === null || enState === null) return false;
+
+    // One batch render for everything that needs fresh HTML.
+    const addedBodyIds = bodyDiff.added.map((j) => plan.body[j].id);
+    const addedNoteIds = fnState.diff.added
+      .map((j) => plan.footnotes[j].id)
+      .concat(enState.diff.added.map((j) => plan.endnotes[j].id));
+    const allIds = addedBodyIds.concat(addedNoteIds);
+    let rendered: Record<string, string | null> = {};
+    if (allIds.length > 0) {
+      rendered = JSON.parse(
+        bridge.RenderBlocksHtml!(
+          this.handle,
+          JSON.stringify(allIds),
+          this.options.cssPrefix,
+          this.options.fabricateClasses,
+        ),
+      );
+      if ((rendered as { error?: string }).error) return false;
+      for (const id of allIds) if (!rendered[id]) return false;
+    }
+
+    // A substituted list item may only swap in place if its rendered marker matches
+    // the old node's — a marker change (level/membership/numbering) means sibling
+    // numbers shifted too, which only a remount repaints.
+    const parse = (html: string): HTMLElement | null => {
+      const el = new DOMParser().parseFromString(html, "text/html").body
+        .firstElementChild as HTMLElement | null;
+      // Per-block converter output carries the XHTML xmlns; a full render only has it
+      // on the document root, so drop it to keep reconciled DOM ≡ remounted DOM.
+      el?.removeAttribute("xmlns");
+      return el;
+    };
+    const freshBody = new Map<number, HTMLElement>();
+    for (const j of bodyDiff.added) {
+      const el = parse(rendered[plan.body[j].id]!);
+      if (!el) return false;
+      freshBody.set(j, el);
+    }
+    for (const { oldIndex, newIndex } of bodyDiff.substituted) {
+      const freshRoot = freshBody.get(newIndex);
+      const oldMarker = DocxEditor.listMarkerText(oldNodes[oldIndex]);
+      const newMarker = DocxEditor.listMarkerText(
+        freshRoot ? DocxEditor.anchorElOf(freshRoot) : null,
+      );
+      if (oldMarker !== newMarker) return false;
+    }
+
+    if (!this.applyBodyDiff(oldNodes, plan.body, bodyDiff, freshBody)) return false;
+    this.applyNotesDiff("footnotes", plan.footnotes, fnState, rendered);
+    this.applyNotesDiff("endnotes", plan.endnotes, enState, rendered);
+
+    // Note chrome (marker sup text / hrefs / li values) is position-derived and NOT
+    // covered by the unit diff — renumber whenever notes changed or any fresh body
+    // node carries a citation marker.
+    const freshHasMarker = [...freshBody.values()].some((el) =>
+      el.querySelector("a.footnote-ref, a.endnote-ref"),
+    );
+    if (fnState.diff.added.length + fnState.diff.removed.length > 0 || freshHasMarker)
+      this.renumberNoteChrome("footnote");
+    if (enState.diff.added.length + enState.diff.removed.length > 0 || freshHasMarker)
+      this.renumberNoteChrome("endnote");
+    return true;
+  }
+
+  /** The generated single-child wrapper chain around a unit node (a table's alignment
+   *  <div>). Climbs while the parent is an anchor-less DIV whose ONLY element child is
+   *  the current node — never a section div (multi-child) or the edit root. */
+  private unitWrapperOf(el: HTMLElement): HTMLElement {
+    let n: HTMLElement = el;
+    while (
+      n.parentElement &&
+      n.parentElement !== this.editRoot &&
+      n.parentElement.tagName === "DIV" &&
+      !n.parentElement.hasAttribute("data-anchor") &&
+      n.parentElement.childElementCount === 1
+    ) {
+      n = n.parentElement;
+    }
+    return n;
+  }
+
+  /** The `[data-anchor]` element of a fresh render root (the root itself for a leaf
+   *  block, its descendant for a wrapper-shaped render like a table's align div). */
+  private static anchorElOf(root: HTMLElement): HTMLElement | null {
+    return root.hasAttribute("data-anchor")
+      ? root
+      : root.querySelector<HTMLElement>("[data-anchor]");
+  }
+
+  /** Insert/remove/swap body unit nodes per the diff. Returns false to bail (parent
+   *  ambiguity, order violation, wrapper semantics) — the session is already correct,
+   *  so bailing just means a full repaint. */
+  private applyBodyDiff(
+    oldNodes: HTMLElement[],
+    units: RenderUnit[],
+    diff: UnitDiff,
+    fresh: Map<number, HTMLElement>,
+  ): boolean {
+    // Kept nodes must appear in increasing old order (no move support in v1).
+    let lastOld = -1;
+    for (let j = 0; j < units.length; j++) {
+      const oi = diff.keep.get(j);
+      if (oi === undefined) continue;
+      if (oi < lastOld) return false;
+      lastOld = oi;
+    }
+
+    // In-place substitutions first: replace at WRAPPER level so a table swaps with its
+    // alignment div. A LEAF render replacing a wrapped node would break the wrapper's
+    // semantics (border <div> grouping) — that is remount territory.
+    const subOldByNew = new Map(diff.substituted.map((s) => [s.newIndex, s.oldIndex]));
+    for (const [nj, oi] of subOldByNew) {
+      const freshRoot = fresh.get(nj)!;
+      const oldWrapper = this.unitWrapperOf(oldNodes[oi]);
+      if (!freshRoot.hasAttribute("data-anchor")) {
+        oldWrapper.replaceWith(freshRoot); // wrapper-shaped render (table) ⇄ wrapper
+      } else if (oldWrapper === oldNodes[oi]) {
+        oldNodes[oi].replaceWith(freshRoot);
+      } else {
+        return false; // leaf render into a wrapped slot — border-div semantics, remount
+      }
+      this.wireUnit(freshRoot, units[nj]);
+    }
+
+    // Pure inserts against kept/substituted neighbors (at wrapper level).
+    const pureAdded = diff.added.filter((j) => !subOldByNew.has(j));
+    const pureRemoved = diff.removed.filter(
+      (i) => !diff.substituted.some((s) => s.oldIndex === i),
+    );
+    const nodeAt = (j: number): HTMLElement | null => {
+      const oi = diff.keep.get(j);
+      if (oi !== undefined) return oldNodes[oi];
+      if (subOldByNew.has(j)) return fresh.get(j)!;
+      const f = fresh.get(j);
+      return f && f.isConnected ? f : null;
+    };
+    for (const j of pureAdded) {
+      const el = fresh.get(j)!;
+      let prev: HTMLElement | null = null;
+      for (let k = j - 1; k >= 0 && !prev; k--) prev = nodeAt(k);
+      let next: HTMLElement | null = null;
+      for (let k = j + 1; k < units.length && !next; k++) {
+        const oi = diff.keep.get(k);
+        if (oi !== undefined) next = oldNodes[oi];
+        else if (subOldByNew.has(k)) next = fresh.get(k)!;
+      }
+      const prevW = prev ? this.unitWrapperOf(prev) : null;
+      const nextW = next ? this.unitWrapperOf(next) : null;
+      if (prevW && nextW && prevW.parentElement !== nextW.parentElement) return false;
+      if (prevW) prevW.after(el);
+      else if (nextW) nextW.before(el);
+      else return false; // empty container — nowhere provably correct to insert
+      this.wireUnit(el, units[j]);
+    }
+
+    // Pure removals last, taking now-empty generated wrappers with them.
+    for (const i of pureRemoved) {
+      const wrapper = this.unitWrapperOf(oldNodes[i]);
+      wrapper.remove();
+    }
+    return true;
+  }
+
+  /** Wire a freshly rendered unit root (and its nested blocks) and stamp the unit's
+   *  content signature on its `[data-anchor]` element — the element the next
+   *  reconcile's DOM walk reads tokens from. */
+  private wireUnit(root: HTMLElement, unit: RenderUnit): void {
+    const anchorEl = DocxEditor.anchorElOf(root);
+    if (anchorEl && unit.sig) anchorEl.setAttribute("data-render-sig", unit.sig);
+    if (anchorEl) this.wireBlock(anchorEl);
+    root.querySelectorAll<HTMLElement>("[data-anchor]").forEach((b) => this.wireBlock(b));
+  }
+
+  /** Old-sequence diff state for one notes section. `null` requests remount (DOM not
+   *  stampable/consistent). */
+  private notesDiff(
+    sectionClass: "footnotes" | "endnotes",
+    units: RenderUnit[],
+  ): { lis: HTMLElement[]; diff: UnitDiff } | null {
+    const ol = this.editRoot.querySelector<HTMLElement>(`section.${sectionClass} > ol`);
+    const lis = ol ? (Array.from(ol.children).filter((c) => c.tagName === "LI") as HTMLElement[]) : [];
+    if (units.length === 0 && lis.length === 0) return { lis, diff: diffUnits([], []) };
+    // A document that gains its FIRST note has no section to patch — remount builds it.
+    if (!ol) return null;
+    const tokens: string[] = [];
+    for (const li of lis) {
+      const unid = li.getAttribute("data-note-anchor");
+      if (!unid) return null; // unstamped DOM (older mount) — remount restamps
+      const sig = li.getAttribute("data-render-sig");
+      tokens.push(sig ? `${unid}|${sig}` : unid);
+    }
+    return { lis, diff: diffUnits(tokens, units) };
+  }
+
+  /** Apply a notes-section diff: rebuild the `<ol>`'s li list, preserving kept nodes. */
+  private applyNotesDiff(
+    sectionClass: "footnotes" | "endnotes",
+    units: RenderUnit[],
+    state: { lis: HTMLElement[]; diff: UnitDiff },
+    rendered: Record<string, string | null>,
+  ): void {
+    if (state.diff.added.length === 0 && state.diff.removed.length === 0) return;
+    // Removing the LAST note removes the whole section — a full render emits no
+    // section for a document without notes, and equivalence with remount is the pin.
+    if (units.length === 0) {
+      this.editRoot.querySelector(`section.${sectionClass}`)?.remove();
+      return;
+    }
+    const ol = this.editRoot.querySelector<HTMLElement>(`section.${sectionClass} > ol`)!;
+    const prefix = sectionClass === "footnotes" ? "fn" : "en";
+    const nodes: HTMLElement[] = [];
+    for (let j = 0; j < units.length; j++) {
+      const oi = state.diff.keep.get(j);
+      if (oi !== undefined) {
+        nodes.push(state.lis[oi]);
+        continue;
+      }
+      nodes.push(this.buildNoteLi(prefix, units[j], rendered[units[j].id]!));
+    }
+    ol.replaceChildren(...nodes);
+  }
+
+  /** Build a notes-section `<li>` for a freshly rendered note — replicating the
+   *  converter's chrome (id/value are re-stamped by the renumber pass; the backref
+   *  goes inside the last paragraph, matching RenderFootnoteItem). */
+  private buildNoteLi(prefix: "fn" | "en", unit: RenderUnit, html: string): HTMLElement {
+    const li = document.createElement("li");
+    li.setAttribute("data-note-anchor", unidOf(unit.id));
+    if (unit.sig) li.setAttribute("data-render-sig", unit.sig);
+    li.innerHTML = html;
+    const paras = li.querySelectorAll<HTMLElement>(":scope > p");
+    const last = paras[paras.length - 1];
+    if (last) {
+      const backref = document.createElement("a");
+      backref.setAttribute("class", `${prefix}-backref`);
+      backref.setAttribute("contenteditable", "false");
+      backref.textContent = "↩";
+      last.append(" ", backref);
+    }
+    li.querySelectorAll<HTMLElement>("[data-anchor]").forEach((b) => this.wireBlock(b));
+    return li;
+  }
+
+  /**
+   * Rewrite position-derived note chrome from the session's citation-ordered note
+   * list: the k-th marker in document order IS note k (ids ascend in reference
+   * order), so marker sup text, hrefs/ids, li ids/values and backref hrefs are all
+   * re-derived positionally. Pure attribute/text patching of generated chrome.
+   */
+  private renumberNoteChrome(kind: "footnote" | "endnote"): void {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.ListNotes !== "function") return;
+    const prefix = kind === "footnote" ? "fn" : "en";
+    let notes: Array<{ id: string; defAnchorId: string; ordinal: number }>;
+    try {
+      notes = JSON.parse(bridge.ListNotes(this.handle, kind === "endnote"));
+    } catch {
+      return;
+    }
+    if (!Array.isArray(notes)) return;
+    const markers = Array.from(
+      this.editRoot.querySelectorAll<HTMLElement>(`a.${kind}-ref`),
+    ).filter((a) => !a.closest("section.footnotes, section.endnotes"));
+    markers.forEach((a, k) => {
+      const n = notes[k];
+      if (!n) return;
+      a.setAttribute("href", `#${prefix}-${n.id}`);
+      a.id = `${prefix}-ref-${n.id}`;
+      if (kind === "footnote") a.setAttribute("data-footnote-id", n.id);
+      const sup = a.querySelector("sup");
+      if (sup) sup.textContent = String(n.ordinal);
+    });
+    const lis = this.editRoot.querySelectorAll<HTMLElement>(`section.${kind}s > ol > li`);
+    lis.forEach((li, k) => {
+      const n = notes[k];
+      if (!n) return;
+      li.id = `${prefix}-${n.id}`;
+      li.setAttribute("value", String(n.ordinal));
+      li.querySelectorAll<HTMLElement>(`a.${prefix}-backref`).forEach((b) =>
+        b.setAttribute("href", `#${prefix}-ref-${n.id}`),
+      );
+    });
+  }
+
+  /** After an incremental block swap, stale marker chrome in the swapped node (the
+   *  throwaway render numbers citations from 1) is repaired in place. */
+  private maybeRenumberNotes(fresh: HTMLElement): void {
+    if (fresh.querySelector("a.footnote-ref")) this.renumberNoteChrome("footnote");
+    if (fresh.querySelector("a.endnote-ref")) this.renumberNoteChrome("endnote");
+  }
+
+  /** Stamp the DOM state the reconciler diffs against: container signatures on body
+   *  tables and `data-note-anchor` + signature on notes-section items. Called after
+   *  every full mount; reconcile stamps its own insertions. */
+  private stampPlanState(): void {
+    const bridge = this.exports.DocxSessionBridge;
+    if (typeof bridge.ListBlocks !== "function") return;
+    try {
+      const plan = JSON.parse(bridge.ListBlocks(this.handle)) as RenderPlan & { error?: string };
+      if (plan.error) return;
+      // Positional pairing: a fresh full mount renders exactly the plan's units in
+      // order (verified invariant). On any mismatch, leave unstamped — an unstamped
+      // unit just diffs as changed and re-renders once.
+      const nodes = this.bodyUnitNodes();
+      if (nodes.length === plan.body.length) {
+        nodes.forEach((el, k) => {
+          if (plan.body[k].sig && el.getAttribute("data-anchor") === unidOf(plan.body[k].id))
+            el.setAttribute("data-render-sig", plan.body[k].sig!);
+        });
+      }
+      const stampNotes = (sectionClass: string, units: RenderUnit[]): void => {
+        const lis = this.editRoot.querySelectorAll<HTMLElement>(`section.${sectionClass} > ol > li`);
+        if (lis.length !== units.length) return; // inconsistent — leave unstamped (reconcile will remount)
+        lis.forEach((li, k) => {
+          li.setAttribute("data-note-anchor", unidOf(units[k].id));
+          if (units[k].sig) li.setAttribute("data-render-sig", units[k].sig!);
+        });
+      };
+      stampNotes("footnotes", plan.footnotes);
+      stampNotes("endnotes", plan.endnotes);
+    } catch {
+      /* stamping is best-effort; unstamped DOM just falls back to remount */
+    }
   }
 
   /**

@@ -1163,6 +1163,28 @@ public class HtmlConversionOpsTests
         }
     }
 
+    // Regression: rendering a block AFTER a structural edit added a paragraph used to
+    // throw "should never set ilvl more than once" — re-initializing ListItemRetriever
+    // over a partially annotated live document was not idempotent, and the editor's
+    // Enter-split silently dropped the split when the subsequent block render errored.
+    [Fact]
+    public void HCO083_RenderBlockHtml_AfterSplit_OnListBearingDocument()
+    {
+        byte[] bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "HC031-Complicated-Document.docx"));
+        using var session = new DocxSession(bytes);
+        var options = new HtmlConversionOptions { FabricateCssClasses = false, StampAnchors = true };
+
+        var target = session.ListBlocks().Body.First(u => u.Kind == "p");
+        var res = session.SplitParagraph(target.Id, 6);
+        Assert.True(res.Success, res.Error?.Message);
+
+        var first = HtmlConversionOps.RenderBlockHtml(session, res.Modified[0].Id, options);
+        var second = HtmlConversionOps.RenderBlockHtml(session, res.Created[0].Id, options);
+        Assert.StartsWith("<p", first);
+        Assert.StartsWith("<p", second);
+    }
+
     // Error contract: an unresolvable anchor maps to JSON null; good anchors in the
     // same call still render. (The reconciler falls back to a full remount per null.)
     [Fact]

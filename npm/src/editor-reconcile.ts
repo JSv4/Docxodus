@@ -13,10 +13,21 @@
 
 /** One top-level render unit: a body block (`p`/`h`/`li`), one whole table
  *  (`tbl`), or one footnote/endnote definition (`fn`/`en`). Mirrors the wire
- *  shape of `DocxSessionBridge.ListBlocks`. */
+ *  shape of `DocxSessionBridge.ListBlocks`. `sig` (container units only) is a
+ *  content signature: a table or note keeps its unid when content INSIDE it
+ *  changes, so the diff tokens must include it or a changed container would be
+ *  kept stale. */
 export interface RenderUnit {
   id: string;
   kind: string;
+  sig?: string;
+}
+
+/** The diff token for a unit: unid plus the container content signature. The DOM
+ *  side composes the same token from a node's `data-anchor` + `data-render-sig`
+ *  stamp, so a container whose inside changed diffs as an in-place substitution. */
+export function tokenOf(unit: RenderUnit): string {
+  return unidOf(unit.id) + (unit.sig ? "|" + unit.sig : "");
 }
 
 /** Per-container render plan — the wire shape of `DocxSessionBridge.ListBlocks`. */
@@ -48,15 +59,16 @@ export function unidOf(id: string): string {
 }
 
 /**
- * LCS diff of the DOM's unid sequence against the new plan's. Equal unids are
- * interchangeable (they are content-addressed, so equal unid ⇒ equal content ⇒
- * equal rendering, up to position-dependent chrome the caller handles). O(n·m)
- * — sequences are document block counts, a few hundred.
+ * LCS diff of the DOM's unit-token sequence against the new plan's. Old entries
+ * are tokens (see {@link tokenOf} — bare unids for leaf blocks, `unid|sig` for
+ * containers). Equal tokens are interchangeable (content-addressed: equal token
+ * ⇒ equal content ⇒ equal rendering, up to position-dependent chrome the caller
+ * handles). O(n·m) — sequences are document block counts, a few hundred.
  */
 export function diffUnits(oldUnids: string[], newUnits: RenderUnit[]): UnitDiff {
   const n = oldUnids.length;
   const m = newUnits.length;
-  const newUnids = newUnits.map((u) => unidOf(u.id));
+  const newUnids = newUnits.map(tokenOf);
 
   // lcs[i][j] = LCS length of oldUnids[i..] vs newUnids[j..]
   const lcs: Int32Array[] = Array.from({ length: n + 1 }, () => new Int32Array(m + 1));

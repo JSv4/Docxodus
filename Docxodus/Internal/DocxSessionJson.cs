@@ -615,7 +615,10 @@ internal static class DocxSessionJson
             {
                 if (i > 0) sb.Append(',');
                 sb.Append("{\"id\":").Append(JsonString(units[i].Id))
-                  .Append(",\"kind\":").Append(JsonString(units[i].Kind)).Append('}');
+                  .Append(",\"kind\":").Append(JsonString(units[i].Kind));
+                if (units[i].Sig is { } sig)
+                    sb.Append(",\"sig\":").Append(JsonString(sig));
+                sb.Append('}');
             }
             sb.Append(']');
         }
