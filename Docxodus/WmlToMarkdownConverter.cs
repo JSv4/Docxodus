@@ -374,8 +374,20 @@ public static class WmlToMarkdownConverter
             : text;
     }
 
+    /// <summary>
+    /// The projection's <c>AnchorIndex</c> WITHOUT the per-entry enrichment
+    /// (<see cref="AnchorTarget.TextPreview"/> stays empty, <see cref="AnchorTarget.AutoNumberPrefix"/>
+    /// stays null) and without emitting any markdown. Same walk, same keys, same Unid
+    /// assignment/persistence as the full projection — this is the cheap index mutation
+    /// ops resolve anchors through (<see cref="DocxSession.AnchorIndex"/>), so an edit
+    /// doesn't pay a whole-document markdown render just to look up one anchor id.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, AnchorTarget> BuildAnchorIndexOnly(
+        WordprocessingDocument doc, WmlToMarkdownConverterSettings settings) =>
+        BuildAnchorIndex(doc, settings, enrich: false).Index;
+
     private static (IReadOnlyDictionary<string, AnchorTarget> Index, List<ScopeInfo> Scopes, AnchorIdMap RenderMap)
-        BuildAnchorIndex(WordprocessingDocument doc, WmlToMarkdownConverterSettings settings)
+        BuildAnchorIndex(WordprocessingDocument doc, WmlToMarkdownConverterSettings settings, bool enrich = true)
     {
         var main = doc.MainDocumentPart
             ?? throw new InvalidOperationException("Document has no MainDocumentPart.");
@@ -409,7 +421,7 @@ public static class WmlToMarkdownConverter
             // anchor ids across sessions. WmlComparer continues to use the random
             // path via AssignToAllElements — see UnidHelper class doc for why
             // the two consumers stay split.
-            UnidHelper.AssignToAllElementsDeterministic(scope.Root);
+            bool assignedAny = UnidHelper.AssignToAllElementsDeterministic(scope.Root);
             // Stash the owning part on the root so downstream emitters (hyperlinks, etc.)
             // can resolve relationship-bound URIs without threading the part through every call.
             if (scope.Root.Annotation<OpenXmlPart>() == null)
@@ -456,13 +468,17 @@ public static class WmlToMarkdownConverter
                     Anchor = anchor,
                     PartUri = scope.Part.Uri.ToString(),
                     Unid = unid,
-                    TextPreview = ComputeTextPreview(el),
-                    AutoNumberPrefix = kind is "p" or "h" or "li" && scope.Name == "body"
+                    TextPreview = enrich ? ComputeTextPreview(el) : string.Empty,
+                    AutoNumberPrefix = enrich && kind is "p" or "h" or "li" && scope.Name == "body"
                         ? Internal.ListNumberResolver.Resolve(el, doc)
                         : null,
                 };
             }
-            scope.Part.PutXDocument();
+            // Persist newly-assigned Unids to the part. Skipped when nothing was
+            // assigned — the flush is ~19 ms/part on a large document, per rebuild.
+            // Content mutations no longer depend on this flush: DocxSession.Save
+            // flushes every projected part itself on BOTH its paths.
+            if (assignedAny) scope.Part.PutXDocument();
         }
 
         // Build the AnchorIdMap based on the requested rendering mode.

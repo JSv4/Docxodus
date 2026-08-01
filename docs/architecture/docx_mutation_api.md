@@ -1251,6 +1251,43 @@ session.Undo();
 
 These are aspirations. Microbenchmarks aren't in CI by default — flag in PR if you measure 2× above target.
 
+## Render-plan endpoints (the editor's incremental repaint)
+
+Added for the browser editor's incremental structural repaint; useful to any renderer
+that diffs a view against the session.
+
+- **`ListBlocks()` → `RenderPlan { Body, Footnotes, Endnotes }`** — the ordered
+  top-level render units per scope container: each body `w:p` under its projected kind
+  (`p`/`h`/`li`, via the projector's `KindFor`), each `w:tbl` as ONE `tbl` unit (its
+  rows/cells/cell paragraphs subsumed), and note definitions mirroring **exactly what
+  the HTML renderer's notes section shows** (with ≥1 citation: the cited notes in
+  citation order; with none: every non-separator note in part order — a rendered-but-
+  uncited `continuationNotice` behaves differently in the two cases). Every
+  `RenderUnit` carries `Sig`, a content hash (`UnidHelper.ContentHash`): in-session an
+  element keeps its Unid across edits (ops rebuild children, not the block element),
+  so unid alone cannot reveal an undone text edit or a row insert. Note ids —
+  reference AND definition — are excluded from the hash: a footnote insert shifts
+  every later note's `w:id` with no rendered-content change (marker/list numbering is
+  position-derived chrome).
+- **`ListNotes(endnotes = false)` → `IReadOnlyList<NoteListEntry { Id, DefAnchorId,
+  Ordinal }>`** — footnotes/endnotes in citation order. The k-th marker in document
+  order IS note k (ids ascend in reference order), so a client renumbers rendered note
+  chrome (marker `sup` text, hrefs, `li` ids/values, backrefs) positionally instead of
+  re-rendering every citing block.
+- **`DocxSessionSettings.EmitMarkdownPatch`** (default `true`; wire
+  `emitMarkdownPatch`) — when `false`, mutation ops return `Patch = null` and skip the
+  per-op whole-document re-projection that builds it. Clients that re-render from HTML
+  (the editor) should turn it off.
+- **WASM-only companions** (`DocxSessionBridge`; not in the stdio host, same as
+  `RenderHtml`/`RenderBlockHtml`): `ListAnchors` (the `{anchorIndex}` object without
+  the markdown payload — the editor's per-op anchor-map refresh) and
+  `RenderBlocksHtml(handle, anchorIdsJson, cssPrefix, fabricateClasses)` (batch block
+  render: one throwaway document per call, each target cloned with its real siblings so
+  `w:contextualSpacing` resolves, live `ListItemRetriever` annotations transplanted so
+  an isolated list item renders its true number; a table returns with its generated
+  alignment-`div` wrapper; `fn:`/`en:` anchors return their note paragraphs
+  concatenated; a per-anchor failure maps to JSON `null`).
+
 ## Known limits and open questions
 
 - **`MarkdownPatch.Markdown` is currently the full re-projection.** The `ScopeAnchorId` field correctly identifies the smallest enclosing block, but the payload is the whole document re-projected. A future optimization (per the spec's open questions) is to emit only the markdown for the named scope. Cheap mitigation: callers that care can splice using their cached projection.

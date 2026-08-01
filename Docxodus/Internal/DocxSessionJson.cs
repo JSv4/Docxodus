@@ -95,6 +95,7 @@ internal static class DocxSessionJson
         var revisionAuthor = TryGetString(root, "revisionAuthor", null);
         bool persistAnchorIds = TryGetBool(root, "persistAnchorIds", false);
         bool smartQuotes = TryGetBool(root, "smartQuotes", false);
+        bool emitMarkdownPatch = TryGetBool(root, "emitMarkdownPatch", true);
         bool captureInitialProjection = TryGetBool(root, "captureInitialProjection", true);
         var projectionSettings = root.TryGetProperty("projectionSettings", out var ps) && ps.ValueKind == JsonValueKind.Object
             ? ParseProjectionSettings(ps)
@@ -107,6 +108,7 @@ internal static class DocxSessionJson
             RevisionAuthor = revisionAuthor,
             PersistAnchorIds = persistAnchorIds,
             SmartQuotes = smartQuotes,
+            EmitMarkdownPatch = emitMarkdownPatch,
             CaptureInitialProjection = captureInitialProjection,
             ProjectionSettings = projectionSettings,
         };
@@ -600,6 +602,75 @@ internal static class DocxSessionJson
             if (i > 0 && char.IsUpper(s[i])) sb.Append('_');
             sb.Append(char.ToLowerInvariant(s[i]));
         }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The projection's anchor index WITHOUT the markdown payload — the shape the
+    /// editor's anchor-map refresh needs. Emits the same <c>{"anchorIndex":{…}}</c>
+    /// object <see cref="SerializeProjection"/> nests, so clients parse identically;
+    /// serialized from the cheap index-only entries (previews empty).
+    /// </summary>
+    public static string SerializeAnchorIndex(IReadOnlyDictionary<string, AnchorTarget> index)
+    {
+        var sb = new StringBuilder(64 + index.Count * 96);
+        sb.Append("{\"anchorIndex\":{");
+        bool first = true;
+        foreach (var kv in index)
+        {
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append(JsonString(kv.Key)).Append(":{")
+              .Append("\"partUri\":").Append(JsonString(kv.Value.PartUri))
+              .Append(",\"unid\":").Append(JsonString(kv.Value.Unid))
+              .Append(",\"kind\":").Append(JsonString(kv.Value.Anchor.Kind))
+              .Append(",\"scope\":").Append(JsonString(kv.Value.Anchor.Scope))
+              .Append('}');
+        }
+        sb.Append("}}");
+        return sb.ToString();
+    }
+
+    public static string SerializeRenderPlan(RenderPlan plan)
+    {
+        var sb = new StringBuilder(256);
+        void Units(string key, System.Collections.Generic.IReadOnlyList<RenderUnit> units)
+        {
+            sb.Append('"').Append(key).Append("\":[");
+            for (int i = 0; i < units.Count; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append("{\"id\":").Append(JsonString(units[i].Id))
+                  .Append(",\"kind\":").Append(JsonString(units[i].Kind));
+                if (units[i].Sig is { } sig)
+                    sb.Append(",\"sig\":").Append(JsonString(sig));
+                sb.Append('}');
+            }
+            sb.Append(']');
+        }
+        sb.Append('{');
+        Units("body", plan.Body);
+        sb.Append(',');
+        Units("footnotes", plan.Footnotes);
+        sb.Append(',');
+        Units("endnotes", plan.Endnotes);
+        sb.Append('}');
+        return sb.ToString();
+    }
+
+    public static string SerializeNoteList(IReadOnlyList<NoteListEntry> notes)
+    {
+        var sb = new StringBuilder(64 + notes.Count * 64);
+        sb.Append('[');
+        for (int i = 0; i < notes.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append("{\"id\":").Append(JsonString(notes[i].Id))
+              .Append(",\"defAnchorId\":").Append(JsonString(notes[i].DefAnchorId))
+              .Append(",\"ordinal\":").Append(notes[i].Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture))
+              .Append('}');
+        }
+        sb.Append(']');
         return sb.ToString();
     }
 

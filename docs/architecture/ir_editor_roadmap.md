@@ -59,6 +59,25 @@ block(s), insert/remove nodes, update the `unid → fullId` map, place the caret
 restored exactly), and round-trips through save. Insert-at-doc-start and block delete/reorder
 remain follow-ups (Enter-split + Backspace-merge cover the core authoring loop).
 
+### M2.6 — Incremental STRUCTURAL repaint (reconcile replaces remount)  · effort L · ✅ **DONE**
+**Problem:** every structural op (insert table/row/col, footnote/endnote, delete block,
+undo/redo) paid a full remount — ~5–6 s on a 346-block document — and the engine ops
+themselves carried ~1 s of per-op projection overhead (patch generation + full-projection
+anchor lookup + unpruned Unid pass).
+**Shipped (two tracks):** engine — `EmitMarkdownPatch` opt-out, index-only anchor lookup,
+pruned deterministic Unid pass + conditional part flush (per-op rebuild 74 → 2 ms native);
+client — `DocxEditor.reconcile()`: LCS diff of DOM unit sequence vs `ListBlocks` render
+plan (`unid|contentHash` tokens; content hashes because in-session unids survive edits),
+batched `RenderBlocksHtml` (one throwaway doc; real sibling context so contextualSpacing
+resolves; live `ListItemRetriever` annotations transplanted so an isolated list item
+renders its TRUE number — the M9 numbering-continuation gap, closed for swaps), and
+positional note-chrome renumbering from `ListNotes`. Full remount remains the universal
+fallback (paginated mode, pure li insert/remove, border-div regrouping, any error), with
+`lastReconcileFallback` recording why. NVCA measured: insert table 6.1 s → 225 ms, insert
+footnote 6.2 s → 210 ms, undo/redo 5.6 s → 200–360 ms, delete block 93 ms.
+Pinned by `editor-reconcile-unit.spec.ts` + `editor-reconcile.spec.ts` (node identity,
+remount equivalence, chrome renumber, save/reopen).
+
 ### M2.5 — Incremental multi-block ops + session-attached remount  · effort S · ✅ **DONE**
 **Problem:** every multi-block ribbon action (`format`/`setAlignment`/`setFontSize`/… over a
 multi-paragraph selection) fell back to `remount()` — a full-document convert (~1–2.5 s) per
@@ -162,10 +181,14 @@ columns — still via `session.Raw.*` for now.
 `npm/src/react.ts`.
 **Acceptance:** a React app mounts the editor with one component.
 
-### M9 — Single-block render fidelity  · effort M
-**Approach:** copy image parts into the throwaway render doc; resolve list-numbering
-continuation for a block rendered in isolation.
-**Acceptance:** re-rendering an image-bearing or list-item block matches the full render.
+### M9 — Single-block render fidelity  · effort M · ◐ list numbering DONE
+**Approach:** copy image parts into the throwaway render doc; ~~resolve list-numbering
+continuation for a block rendered in isolation~~ (done in M2.6: the batch render
+transplants the live document's `ListItemRetriever` annotations onto the clones, so an
+isolated list item renders its true number; `HCO081` pins element-identical output vs
+the full render across li/p/h units).
+**Remaining:** image parts (an inline image still loses its uncopied part).
+**Acceptance:** re-rendering an image-bearing block matches the full render.
 
 ## Recommended sequencing
 

@@ -39,6 +39,26 @@ internal static class DocxSessionOps
     public static string Project(int handle) =>
         DocxSessionJson.SerializeProjection(SessionRegistry.Get(handle).Project());
 
+    /// <summary>
+    /// Ordered top-level render units per scope container — what an incremental
+    /// renderer diffs its DOM against after a structural op. See <see cref="RenderPlan"/>.
+    /// </summary>
+    public static string ListBlocks(int handle) =>
+        DocxSessionJson.SerializeRenderPlan(SessionRegistry.Get(handle).ListBlocks());
+
+    /// <summary>Citation-ordered footnotes/endnotes — the id↔ordinal authority a client
+    /// renumbering rendered note chrome walks. See <see cref="NoteListEntry"/>.</summary>
+    public static string ListNotes(int handle, bool endnotes) =>
+        DocxSessionJson.SerializeNoteList(SessionRegistry.Get(handle).ListNotes(endnotes));
+
+    /// <summary>
+    /// The anchor index alone (no markdown emission or marshaling) — the editor's
+    /// per-op anchor-map refresh. Same <c>{"anchorIndex":{…}}</c> shape as
+    /// <see cref="Project"/>, an order of magnitude cheaper on a large document.
+    /// </summary>
+    public static string ListAnchors(int handle) =>
+        DocxSessionJson.SerializeAnchorIndex(SessionRegistry.Get(handle).AnchorIndex());
+
     public static string ProjectAnchor(int handle, string anchorId, ProjectionDepth depth) =>
         DocxSessionJson.SerializeProjection(SessionRegistry.Get(handle).ProjectAnchor(anchorId, depth));
 
@@ -49,7 +69,31 @@ internal static class DocxSessionOps
     /// </summary>
     public static string RenderBlockHtml(int handle, string anchorId, string cssPrefix, bool fabricateClasses) =>
         HtmlConversionOps.RenderBlockHtml(SessionRegistry.Get(handle), anchorId,
-            new HtmlConversionOptions { CssClassPrefix = cssPrefix ?? "docx-", FabricateCssClasses = fabricateClasses });
+            EditorBlockRenderOptions(cssPrefix, fabricateClasses));
+
+    /// <summary>
+    /// Batch single-block render: N anchors, one throwaway document, one converter run.
+    /// Returns a JSON object mapping each anchor id to its HTML (null for an anchor that
+    /// failed to resolve). See <see cref="HtmlConversionOps.RenderBlocksHtml(DocxSession, System.Collections.Generic.IReadOnlyList{string}, HtmlConversionOptions)"/>.
+    /// </summary>
+    public static string RenderBlocksHtml(int handle, string anchorIdsJson, string cssPrefix, bool fabricateClasses) =>
+        HtmlConversionOps.RenderBlocksHtml(handle, anchorIdsJson,
+            EditorBlockRenderOptions(cssPrefix, fabricateClasses));
+
+    /// <summary>
+    /// The block-render option profile for the editor's incremental swaps. Must agree
+    /// with <see cref="RenderHtml"/>'s full-render profile wherever a setting affects
+    /// WITHIN-BLOCK output — footnote/endnote citation markers in particular: with
+    /// RenderFootnotesAndEndnotes off, a re-rendered citing paragraph silently loses
+    /// its citation marker from the DOM.
+    /// </summary>
+    private static HtmlConversionOptions EditorBlockRenderOptions(string cssPrefix, bool fabricateClasses) =>
+        new HtmlConversionOptions
+        {
+            CssClassPrefix = cssPrefix ?? "docx-",
+            FabricateCssClasses = fabricateClasses,
+            RenderFootnotesAndEndnotes = true,
+        };
 
     /// <summary>
     /// Render the live session's current state to a complete anchor-stamped HTML document —
