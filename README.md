@@ -256,16 +256,19 @@ reading first:
 dotnet build Docxodus.sln            # build
 dotnet test Docxodus.Tests/Docxodus.Tests.csproj   # 1,900+ tests
 
-cd npm && npm install && npm run build && npm test  # WASM + Playwright browser tests
+cd npm && npm install && npx playwright install chromium
+npm run build && npm test           # WASM + Playwright browser tests
 ```
 
 `npm run build` compiles the library to WebAssembly (`scripts/build-wasm.sh`) and bundles the
-TypeScript. Release builds treat warnings as errors. See
+TypeScript — re-run it after touching C#, TypeScript, or the test harness, or the browser tests will
+run against stale artifacts. Release builds treat warnings as errors. See
 [`CLAUDE.md`](CLAUDE.md) for the full development workflow and repository layout.
 
 ## Requirements
 
-.NET 10.0 SDK to build. Consumers of the npm and PyPI packages need neither.
+The .NET 10.0 SDK, to build from source. Consumers of the npm and PyPI packages need no .NET
+install of their own.
 
 ## License
 
