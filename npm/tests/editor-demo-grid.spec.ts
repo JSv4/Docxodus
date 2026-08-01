@@ -18,6 +18,8 @@ test.describe('Demo — visual table grid picker', () => {
     });
 
     // Open the picker and choose 3×3 (the cell at row index 2, col index 2).
+    // The table control lives on the ribbon's Insert tab, so activate that tab first.
+    await page.evaluate(() => (window as any).__selectTab('insert'));
     await page.click('#table');
     await expect(page.locator('#gridpicker')).toBeVisible();
     await expect(page.locator('#gridcells [data-r="2"][data-c="2"]')).toBeVisible();
@@ -50,6 +52,8 @@ test.describe('Demo — visual table grid picker', () => {
       p.focus();
     });
 
+    // The table control lives on the ribbon's Insert tab, so activate that tab first.
+    await page.evaluate(() => (window as any).__selectTab('insert'));
     await page.click('#table');
     await expect(page.locator('#gridpicker')).toBeVisible();
     await page.selectOption('#gridalign', 'left');
