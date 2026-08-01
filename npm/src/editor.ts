@@ -723,7 +723,9 @@ export class DocxEditor {
     // projector's Unid bookkeeping into the bytes the USER downloads — ~6x the file size for
     // attributes no renderer reads. Only the remount's re-render needs id stability across a
     // save/re-render hop, and it asks for that per call via SaveWithAnchorIds.
-    const handle = exports.DocxSessionBridge.OpenSession(bytes, '{}');
+    // emitMarkdownPatch off: the editor re-renders from HTML, never from markdown patches,
+    // so paying a whole-document re-projection per op would be dead weight.
+    const handle = exports.DocxSessionBridge.OpenSession(bytes, '{"emitMarkdownPatch":false}');
     const editor = new DocxEditor(container, exports, handle, opts);
     editor.refreshAnchorMap();
     if (opts.headerFooter) editor.createRegion();

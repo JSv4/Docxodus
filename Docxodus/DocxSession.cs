@@ -1002,6 +1002,14 @@ public sealed class DocxSessionSettings
     public bool SmartQuotes { get; init; } = false;
 
     /// <summary>
+    /// When <c>false</c>, mutation ops return <c>Patch = null</c> and skip the per-op
+    /// scope re-projection that builds it. For clients that re-render from HTML (the
+    /// browser editor) the patch is dead weight — on a 350-block document it is a large
+    /// share of every op's latency. Default <c>true</c> (wire-compatible).
+    /// </summary>
+    public bool EmitMarkdownPatch { get; init; } = true;
+
+    /// <summary>
     /// When <c>true</c> (default), the session projects the document at construction
     /// time and stashes the result so <see cref="DocxSession.GetDiff"/> can compare
     /// initial vs. current. Costs ~200ms at construction for a 100-page doc; turn
@@ -1921,7 +1929,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
             return Enumerable.Repeat(success, matches.Count).ToArray();
         }
@@ -2036,7 +2044,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3120,7 +3128,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3170,7 +3178,7 @@ public sealed class DocxSession : IDisposable
                 {
                     Success = true,
                     Modified = new[] { target.Anchor },
-                    Patch = ProjectScope(target),
+                    Patch = PatchFor(target),
                 };
             }
 
@@ -3204,7 +3212,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Removed = removed,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3379,7 +3387,7 @@ public sealed class DocxSession : IDisposable
                 {
                     Success = true,
                     Modified = modified,
-                    Patch = ProjectScope(anchorForPatchScope),
+                    Patch = PatchFor(anchorForPatchScope),
                 };
             }
 
@@ -3395,7 +3403,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Removed = removed,
-                Patch = ProjectScope(anchorForPatchScope),
+                Patch = PatchFor(anchorForPatchScope),
             };
         }
         catch (Exception ex)
@@ -3552,7 +3560,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = created,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3659,7 +3667,7 @@ public sealed class DocxSession : IDisposable
                 Success = true,
                 Modified = new[] { target.Anchor },
                 Created = new[] { secondAnchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3739,7 +3747,7 @@ public sealed class DocxSession : IDisposable
                 Success = true,
                 Modified = new[] { firstTarget.Anchor },
                 Removed = new[] { secondTarget.Anchor },
-                Patch = ProjectScope(firstTarget),
+                Patch = PatchFor(firstTarget),
             };
         }
         catch (Exception ex)
@@ -3842,7 +3850,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = created,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3918,7 +3926,7 @@ public sealed class DocxSession : IDisposable
                 Removed = removed,
                 Created = created,
                 Modified = modified,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4015,7 +4023,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4123,7 +4131,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4169,7 +4177,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { updated },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4317,7 +4325,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { updated },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4376,7 +4384,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = new[] { created },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4597,7 +4605,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = created,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4658,7 +4666,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4980,7 +4988,7 @@ public sealed class DocxSession : IDisposable
                 Success = true,
                 Created = created,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -5331,7 +5339,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = created,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -5467,7 +5475,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = ResolveAnchorsForParagraphs(newParas),
-                Patch = ProjectScope(target!),
+                Patch = PatchFor(target!),
             };
         }
         catch (Exception ex)
@@ -5519,7 +5527,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = ResolveAnchorsForParagraphs(newParas),
-                Patch = ProjectScope(target!),
+                Patch = PatchFor(target!),
             };
         }
         catch (Exception ex)
@@ -5546,7 +5554,7 @@ public sealed class DocxSession : IDisposable
             else tr!.Remove();
 
             InvalidateProjectionCache();
-            return new EditResult { Success = true, Removed = removed, Patch = ProjectScope(target!) };
+            return new EditResult { Success = true, Removed = removed, Patch = PatchFor(target!) };
         }
         catch (Exception ex)
         {
@@ -5586,7 +5594,7 @@ public sealed class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
-            return new EditResult { Success = true, Removed = removed, Patch = ProjectScope(target!) };
+            return new EditResult { Success = true, Removed = removed, Patch = PatchFor(target!) };
         }
         catch (Exception ex)
         {
@@ -5678,7 +5686,7 @@ public sealed class DocxSession : IDisposable
         {
             Success = true,
             Modified = new[] { target.Anchor },
-            Patch = ProjectScope(target),
+            Patch = PatchFor(target),
         };
     }
 
@@ -5731,7 +5739,7 @@ public sealed class DocxSession : IDisposable
         {
             Success = true,
             Modified = new[] { updated },
-            Patch = ProjectScope(target),
+            Patch = PatchFor(target),
         };
     }
 
@@ -5780,7 +5788,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { updated },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -6203,6 +6211,14 @@ public sealed class DocxSession : IDisposable
     }
 
     // ─── Mutation helpers (shared across tiers) ───────────────────────────
+
+    /// <summary>
+    /// The per-op patch, or <c>null</c> when <see cref="DocxSessionSettings.EmitMarkdownPatch"/>
+    /// is off — every mutation's <c>Patch =</c> site routes through here so the opt-out
+    /// cannot be missed by a new op.
+    /// </summary>
+    private MarkdownPatch? PatchFor(AnchorTarget target) =>
+        _settings.EmitMarkdownPatch ? ProjectScope(target) : null;
 
     internal MarkdownPatch ProjectScope(AnchorTarget target)
     {

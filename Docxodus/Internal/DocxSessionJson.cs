@@ -95,6 +95,7 @@ internal static class DocxSessionJson
         var revisionAuthor = TryGetString(root, "revisionAuthor", null);
         bool persistAnchorIds = TryGetBool(root, "persistAnchorIds", false);
         bool smartQuotes = TryGetBool(root, "smartQuotes", false);
+        bool emitMarkdownPatch = TryGetBool(root, "emitMarkdownPatch", true);
         bool captureInitialProjection = TryGetBool(root, "captureInitialProjection", true);
         var projectionSettings = root.TryGetProperty("projectionSettings", out var ps) && ps.ValueKind == JsonValueKind.Object
             ? ParseProjectionSettings(ps)
@@ -107,6 +108,7 @@ internal static class DocxSessionJson
             RevisionAuthor = revisionAuthor,
             PersistAnchorIds = persistAnchorIds,
             SmartQuotes = smartQuotes,
+            EmitMarkdownPatch = emitMarkdownPatch,
             CaptureInitialProjection = captureInitialProjection,
             ProjectionSettings = projectionSettings,
         };

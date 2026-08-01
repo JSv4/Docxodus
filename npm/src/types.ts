@@ -1335,6 +1335,13 @@ export interface DocxSessionSettings {
    */
   smartQuotes?: boolean;
   /**
+   * When false, mutation EditResults omit the markdown patch and skip the per-op
+   * scope re-projection that builds it — the fast path for clients that re-render
+   * from HTML (the browser editor) rather than consuming markdown patches.
+   * Default true.
+   */
+  emitMarkdownPatch?: boolean;
+  /**
    * When `true` (default), the session projects the document at construction
    * time so {@link DocxSession.getDiff} can compare initial vs. current.
    * Set to `false` to skip the ~200ms upfront cost if you don't plan to diff.
