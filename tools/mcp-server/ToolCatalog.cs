@@ -26,7 +26,7 @@ internal static class ToolCatalog
             {
               "type": "object",
               "properties": {
-                "path": { "type": "string", "description": "Filesystem path to a .docx file." },
+                "path": { "type": "string", "description": "Location of the .docx within this server's configured document scope. Relative locations resolve under the scope root; an absolute path is accepted only if it falls inside that root. A location outside it is rejected — the scope is set by whoever launched the server and cannot be widened from here." },
                 "trackedChanges": { "type": "string", "enum": ["accept", "render_inline", "strip_deletions"], "description": "How mutating ops record their own edits. 'accept' (default) applies them directly; 'render_inline' wraps them as w:ins/w:del tracked changes; 'strip_deletions' drops deleted content outright." },
                 "revisionAuthor": { "type": "string", "description": "Author name stamped on tracked-change markup when trackedChanges is render_inline." },
                 "undoDepth": { "type": "integer", "description": "Bounded undo-ring depth. Default 50." }
@@ -36,13 +36,13 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_save",
-            "Write a session's current in-memory state back to disk.",
+            "Write a session's current in-memory state back to the document store.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "path": { "type": "string", "description": "Destination path. Defaults to the path docxodus_open was given (overwrite in place)." }
+                "path": { "type": "string", "description": "Destination within the server's document scope, resolved the same way docxodus_open resolves its path. Defaults to the location the session was opened from (overwrite in place)." }
               },
               "required": ["sessionId"]
             }

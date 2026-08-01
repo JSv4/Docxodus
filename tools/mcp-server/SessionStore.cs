@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using Docxodus;
 using Docxodus.Internal;
 
@@ -8,7 +9,7 @@ namespace Docxodus.McpServer;
 
 /// <summary>
 /// One open document. Wraps the raw <see cref="DocxSessionOps"/> integer handle with the
-/// bookkeeping a stdio tool server needs that the handle alone doesn't carry: the file path
+/// bookkeeping a stdio tool server needs that the handle alone doesn't carry: the store location
 /// it was opened from (so <c>docxodus_save</c> can default to "write back"), and the settings
 /// it was opened with (so a whole-document transform — see <see cref="Rebind"/> — can reopen
 /// an equivalent session instead of losing tracked-change/undo configuration).
@@ -17,7 +18,12 @@ internal sealed class DocSession
 {
     required public string Id { get; init; }
     public int Handle { get; set; }
-    public string? Path { get; set; }
+
+    /// <summary>Store-resolved location this session was opened from — already checked to be in
+    /// scope, so a save back to it needs no re-validation. Null only if a session was opened from
+    /// bytes with no origin.</summary>
+    public string? Location { get; set; }
+
     public DocxSessionSettings Settings { get; set; } = new();
 }
 
@@ -31,16 +37,39 @@ internal sealed class DocSession
 internal sealed class SessionStore
 {
     private readonly ConcurrentDictionary<string, DocSession> _sessions = new();
-    private long _nextId;
 
-    public DocSession Open(byte[] bytes, string? path, DocxSessionSettings settings)
+    /// <param name="documents">Backing document store. Defaults to a local store rooted at the
+    /// process's current directory, which is only appropriate for tests — the server proper
+    /// passes the environment-configured store from <see cref="DocumentStores.FromEnvironment"/>.</param>
+    public SessionStore(IDocumentStore? documents = null) =>
+        Documents = documents ?? new LocalFileDocumentStore(System.IO.Directory.GetCurrentDirectory());
+
+    /// <summary>Where this server's documents are read from and written to. Every session in the
+    /// process shares it, and it is already rooted at the configured scope.</summary>
+    public IDocumentStore Documents { get; }
+
+    public DocSession Open(byte[] bytes, string? location, DocxSessionSettings settings)
     {
         var handle = DocxSessionOps.OpenSession(bytes, settings);
-        var id = "s" + System.Threading.Interlocked.Increment(ref _nextId).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        var session = new DocSession { Id = id, Handle = handle, Path = path, Settings = settings };
-        _sessions[id] = session;
+        var session = new DocSession
+        {
+            Id = NewSessionId(),
+            Handle = handle,
+            Location = location,
+            Settings = settings,
+        };
+        _sessions[session.Id] = session;
         return session;
     }
+
+    /// <summary>
+    /// Unguessable session id. These are capabilities, not just names: holding one is what lets a
+    /// caller act on that document, so a sequential counter would let anything able to make tool
+    /// calls address a session it was never given (including one belonging to another concurrent
+    /// caller, in any future non-stdio transport where that is possible).
+    /// </summary>
+    private static string NewSessionId() =>
+        "s_" + System.Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
     public DocSession Get(string sessionId)
     {

@@ -38,6 +38,44 @@ dotnet run --project tools/mcp-server
 The server speaks newline-delimited JSON-RPC 2.0 on stdin/stdout (the MCP stdio transport).
 All diagnostic logging goes to stderr, never stdout.
 
+## Document storage and scoping
+
+Every document the server reads or writes goes through a scoped store. A session cannot name a
+document outside its scope — that's a property of how locations are resolved, not a check the
+tool layer performs, so it holds for every operation.
+
+| Variable | Meaning |
+|---|---|
+| `DOCXODUS_STORAGE_BACKEND` | Backend id. Only `file` is implemented; defaults to `file`. |
+| `DOCXODUS_STORAGE_ROOT` | Directory every location must resolve inside. Defaults to your home directory, so an agent can open `~/Downloads/contract.docx` naturally while the rest of the machine stays out of reach. Narrow it to confine the server; set it to `/` to opt out. |
+| `DOCXODUS_STORAGE_SCOPE` | Optional single path segment appended to the root (`{root}/{scope}`). Two servers launched with different scopes cannot see each other's documents. |
+
+Relative locations resolve under the root; an absolute path is accepted only if the root contains
+it. Symlinks are followed before the containment check, so a link inside the root pointing outside
+it is rejected rather than followed.
+
+Scope is chosen by whoever launches the server, never by the agent — it has no argument through
+which to name one. Because the scope is just a stable path segment, passing the same value next
+time reaches the same documents; persistence is the filesystem's, with no registry or token to
+manage. One server process serves exactly one scope.
+
+To confine a server to a project directory:
+
+```json
+{
+  "mcpServers": {
+    "docxodus": {
+      "command": "docxodus-mcp",
+      "env": { "DOCXODUS_STORAGE_ROOT": "/srv/documents", "DOCXODUS_STORAGE_SCOPE": "acme-corp" }
+    }
+  }
+}
+```
+
+Adding a different backend (object storage, a content repository) means implementing
+`IDocumentStore` and adding a case to `DocumentStores` — the tool surface and every session code
+path stay as they are.
+
 ## Tool surface
 
 Three lifecycle tools plus ten grouped-intent tools, each addressed by the anchor ids the

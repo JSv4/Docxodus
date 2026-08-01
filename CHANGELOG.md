@@ -34,6 +34,35 @@ All notable changes to this project will be documented in this file.
   `docs/architecture/docx_agent_server.md` for the full tool contract and gap list. Coverage:
   `Docxodus.Tests/McpServerDispatcherTests.cs` (`MCP###`).
 
+- **Scoped document storage for the agent server (`IDocumentStore`).** Everything the server reads
+  or writes goes through one three-method interface — `Resolve` a caller-supplied location to a
+  canonical in-scope identifier, then byte-level `Read`/`Write` — with `DocumentStores` as the
+  single owner of "which backend, rooted where," built once at startup from the environment
+  (`DOCXODUS_STORAGE_BACKEND`, `DOCXODUS_STORAGE_ROOT`, `DOCXODUS_STORAGE_SCOPE`). The point of
+  the seam is that a future backend (object storage, a content repository) is a new
+  implementation plus one case in `DocumentStores.Create`, with no change to the dispatcher, the
+  tool schemas, or any session logic; the interface takes opaque location *strings* rather than a
+  filesystem-shaped API so a backend without directories needn't pretend to have them. Today the
+  one implementation is `LocalFileDocumentStore`. **Isolation is structural rather than a check:**
+  a store is constructed already rooted at its scope and there is no read/write path that skips
+  `Resolve`, so a session cannot name a document outside it — relative locations resolve under the
+  root, an absolute path is accepted only if the root contains it (which is what keeps
+  `~/Downloads/contract.docx` working under the permissive default root while a narrower root
+  confines the identical tool surface), and containment is checked against symlink-resolved paths
+  with every component resolved from the volume root down. That last part is load-bearing and was
+  wrong in the first cut: resolving only the leaf missed `{root}/link → /elsewhere` followed by
+  `{root}/link/secret.docx`, whose own leaf is not a link — the regression test for it is
+  `MCP125`. Dangling links are detected by reading rather than following the link, so one can't be
+  used as a write escape, and segment boundaries are respected so `/srv/base-2` is not inside
+  `/srv/base`. Backend and root are operator configuration and never tool arguments — if the agent
+  could name a root per call, the scope would be chosen by the thing it exists to contain — and
+  `DOCXODUS_STORAGE_SCOPE` comes from whoever launches the process, which is the only trust
+  boundary stdio MCP actually has (there is no in-band authentication; the spawn *is* the
+  authorization). Because a scope is just a stable path segment, passing the same value next
+  session reaches the same documents with no registry, token format, or revocation list; one
+  process serves exactly one scope. Session ids became 16 random bytes rather than a counter, since
+  the id is the capability. Coverage: `MCP120`–`MCP131` plus `MCP003`.
+
 ### Changed
 - **`DocxSession` mutation ops no longer rebuild the full markdown projection per edit.** Anchor resolution (`FindAnchor` and the post-apply re-resolution inside every mutation op) now goes through a cached index-only build — same walk, same keys, same Unid assignment as the full projection, minus markdown emission and per-entry `TextPreview`/`AutoNumberPrefix` numbering resolution. `ProjectScope` caches the projection it builds (it runs post-invalidation, so it IS the post-op state). The deterministic Unid pass prunes to subtrees that actually contain an unassigned element (it recursed the whole tree computing content signatures even when fully assigned — 36 ms of every 74 ms rebuild on a 15k-element document), and the per-scope part flush is skipped when nothing was assigned, with `Save(persistAnchorIds: true)` now flushing projected parts itself so neither save path depends on rebuild side effects. Net (NVCA, native, editor profile): per-op index rebuild 74 ms → 2 ms; `ReplaceText` ~130 → ~40 ms, `InsertFootnote` ~190 → ~40 ms, `InsertTable` ~245 → ~28 ms, `SetPageNumbering` ~90 → ~8 ms.
 - **`ListItemRetriever.InitListItemInfo` is idempotent.** Re-initializing a partially annotated live document — any session that gained a paragraph since its first initialization — used to hit `SetParagraphLevel`'s double-set guard and throw `"should never set ilvl more than once"`; every caller but the projector's catch-all swallowed it, and the editor's Enter-split silently dropped its DOM update when the follow-up block render errored on list-bearing documents. Already-annotated paragraphs are now skipped (first-added annotations win on read, preserving exactly the values earlier passes computed).

@@ -26,7 +26,21 @@ internal static class Program
 
     public static int Main(string[] args)
     {
-        var store = new SessionStore();
+        SessionStore store;
+        IDocumentStore documents;
+        try
+        {
+            documents = DocumentStores.FromEnvironment();
+            store = new SessionStore(documents);
+        }
+        catch (McpToolException ex)
+        {
+            // Misconfigured storage is fatal at startup rather than surfaced per tool call: a
+            // server that answered tools/list and then failed every open would be far harder for
+            // an operator to diagnose than one that refuses to start with the reason.
+            Console.Error.WriteLine($"[mcp:fatal] storage configuration: {ex.Message}");
+            return 1;
+        }
 
         using var stdin = new StreamReader(Console.OpenStandardInput(), Encoding.UTF8);
         using var stdout = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false))
@@ -35,7 +49,8 @@ internal static class Program
             AutoFlush = false,
         };
 
-        Console.Error.WriteLine("docxodus-mcp ready");
+        Console.Error.WriteLine(
+            $"docxodus-mcp ready (storage: {documents.Kind}, root: {documents.RootDescription})");
 
         string? line;
         while ((line = stdin.ReadLine()) is not null)

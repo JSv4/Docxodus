@@ -17,19 +17,26 @@ namespace Docxodus.Tests;
 /// </summary>
 public class McpServerDispatcherTests : IDisposable
 {
+    private readonly string _root;
     private readonly string _tempPath;
-    private readonly SessionStore _store = new();
+    private readonly SessionStore _store;
 
     public McpServerDispatcherTests()
     {
-        _tempPath = Path.Combine(Path.GetTempPath(), $"mcp-dispatcher-test-{Guid.NewGuid():N}.docx");
+        // Each test class instance gets its own scope root, so the dispatcher runs against a
+        // realistically-confined store rather than an unbounded filesystem.
+        _root = Path.Combine(Path.GetTempPath(), $"mcp-dispatcher-test-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(_root);
+        _store = new SessionStore(new LocalFileDocumentStore(_root));
+
+        _tempPath = Path.Combine(_root, "document.docx");
         File.WriteAllBytes(_tempPath, DocxSession.CreateBlankDocxBytes());
     }
 
     public void Dispose()
     {
         _store.CloseAll();
-        if (File.Exists(_tempPath)) File.Delete(_tempPath);
+        if (Directory.Exists(_root)) Directory.Delete(_root, recursive: true);
     }
 
     private static JsonElement J(string json)
@@ -93,9 +100,24 @@ public class McpServerDispatcherTests : IDisposable
     [Fact]
     public void MCP002_Open_UnreadablePath_ThrowsToolException()
     {
-        var missingPath = Path.Combine(Path.GetTempPath(), $"does-not-exist-{Guid.NewGuid():N}.docx");
+        var missingPath = Path.Combine(_root, $"does-not-exist-{Guid.NewGuid():N}.docx");
         Assert.Throws<McpToolException>(() =>
             Dispatcher.Call(_store, "docxodus_open", J($$"""{"path":{{JsonSerializer.Serialize(missingPath)}}}""")));
+    }
+
+    [Fact]
+    public void MCP003_SessionIds_AreUnguessableAndDistinct()
+    {
+        var first = OpenSession();
+        var second = OpenSession();
+
+        Assert.NotEqual(first, second);
+        foreach (var id in new[] { first, second })
+        {
+            Assert.StartsWith("s_", id);
+            Assert.Equal(2 + 32, id.Length);            // "s_" + 16 random bytes as hex
+            Assert.Matches("^s_[0-9a-f]{32}$", id);
+        }
     }
 
     // ─── Content ────────────────────────────────────────────────────────
@@ -424,6 +446,148 @@ public class McpServerDispatcherTests : IDisposable
             using var schema = JsonDocument.Parse(tool.InputSchemaJson); // must be valid JSON
             Assert.Equal("object", schema.RootElement.GetProperty("type").GetString());
         }
+    }
+
+    // ─── Document store: scoping and isolation ─────────────────────────
+
+    [Fact]
+    public void MCP120_Store_ResolvesRelativeLocationUnderRoot()
+    {
+        var resolved = _store.Documents.Resolve("document.docx");
+        Assert.Equal(Path.Combine(_root, "document.docx"), resolved);
+    }
+
+    [Fact]
+    public void MCP121_Store_AcceptsAbsolutePathInsideRoot()
+    {
+        // The property that keeps ordinary local use working: an agent may name a file by its
+        // natural absolute path, so long as the configured scope contains it.
+        Assert.Equal(_tempPath, _store.Documents.Resolve(_tempPath));
+    }
+
+    [Fact]
+    public void MCP122_Store_RejectsAbsolutePathOutsideRoot()
+    {
+        var outside = Path.Combine(Path.GetTempPath(), $"outside-{Guid.NewGuid():N}.docx");
+        var ex = Assert.Throws<McpToolException>(() => _store.Documents.Resolve(outside));
+        Assert.Contains("outside this server's document scope", ex.Message);
+    }
+
+    [Fact]
+    public void MCP123_Store_RejectsParentTraversal()
+    {
+        Assert.Throws<McpToolException>(() => _store.Documents.Resolve(Path.Combine("..", "escaped.docx")));
+        Assert.Throws<McpToolException>(() =>
+            _store.Documents.Resolve(Path.Combine("sub", "..", "..", "escaped.docx")));
+    }
+
+    [Fact]
+    public void MCP124_Store_RejectsSiblingRootSharingAPrefix()
+    {
+        // Segment-boundary check: "<root>-sibling" starts with the root as a raw string but is
+        // not inside it.
+        Assert.Throws<McpToolException>(() => _store.Documents.Resolve(_root + "-sibling/doc.docx"));
+    }
+
+    [Fact]
+    public void MCP125_Store_RejectsSymlinkEscapingRoot()
+    {
+        var outsideDir = Path.Combine(Path.GetTempPath(), $"mcp-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outsideDir);
+        var secret = Path.Combine(outsideDir, "secret.docx");
+        File.WriteAllBytes(secret, DocxSession.CreateBlankDocxBytes());
+
+        var link = Path.Combine(_root, "link");
+        try
+        {
+            Directory.CreateSymbolicLink(link, outsideDir);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or PlatformNotSupportedException)
+        {
+            return; // environment doesn't permit symlink creation; nothing to assert
+        }
+
+        try
+        {
+            // Lexically this is inside the root; only following the link reveals that it isn't.
+            var ex = Assert.Throws<McpToolException>(() =>
+                _store.Documents.Resolve(Path.Combine("link", "secret.docx")));
+            Assert.Contains("outside this server's document scope", ex.Message);
+        }
+        finally
+        {
+            Directory.Delete(link);
+            Directory.Delete(outsideDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void MCP126_Store_ReadWriteRoundTrips()
+    {
+        var bytes = DocxSession.CreateBlankDocxBytes();
+        var location = _store.Documents.Resolve(Path.Combine("nested", "created.docx"));
+
+        _store.Documents.Write(location, bytes);       // creates the intermediate directory
+        Assert.Equal(bytes, _store.Documents.Read(location));
+    }
+
+    [Fact]
+    public void MCP127_Open_OutsideScope_IsRejectedBeforeReading()
+    {
+        // A readable file the store must still refuse, proving the rejection is the scope check
+        // rather than an incidental IO failure.
+        var outside = Path.Combine(Path.GetTempPath(), $"mcp-outside-{Guid.NewGuid():N}.docx");
+        File.WriteAllBytes(outside, DocxSession.CreateBlankDocxBytes());
+        try
+        {
+            var ex = Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_open",
+                J($$"""{"path":{{JsonSerializer.Serialize(outside)}}}""")));
+            Assert.Contains("outside this server's document scope", ex.Message);
+        }
+        finally
+        {
+            File.Delete(outside);
+        }
+    }
+
+    [Fact]
+    public void MCP128_Save_ToLocationOutsideScope_IsRejected()
+    {
+        var sessionId = OpenSession();
+        var outside = Path.Combine(Path.GetTempPath(), $"mcp-outside-{Guid.NewGuid():N}.docx");
+        var ex = Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_save", J(
+            $$"""{"sessionId":{{JsonSerializer.Serialize(sessionId)}},"path":{{JsonSerializer.Serialize(outside)}}}""")));
+        Assert.Contains("outside this server's document scope", ex.Message);
+        Assert.False(File.Exists(outside));
+    }
+
+    [Fact]
+    public void MCP129_DocumentStores_ScopeSegmentNestsUnderRoot()
+    {
+        var scoped = DocumentStores.Create(backend: null, root: _root, scope: "tenant-42");
+        Assert.Equal(Path.Combine(_root, "tenant-42"), scoped.RootDescription);
+
+        // Two scopes under one root cannot reach each other.
+        var other = DocumentStores.Create(backend: null, root: _root, scope: "tenant-7");
+        var otherDoc = Path.Combine(scoped.RootDescription, "doc.docx");
+        Assert.Throws<McpToolException>(() => other.Resolve(otherDoc));
+    }
+
+    [Theory]
+    [InlineData("../escape")]
+    [InlineData("/absolute")]
+    [InlineData("nested/segment")]
+    public void MCP130_DocumentStores_RejectsUnsafeScopeSegment(string scope)
+    {
+        Assert.Throws<McpToolException>(() => DocumentStores.Create(backend: null, root: _root, scope: scope));
+    }
+
+    [Fact]
+    public void MCP131_DocumentStores_RejectsUnknownBackend()
+    {
+        var ex = Assert.Throws<McpToolException>(() =>
+            DocumentStores.Create(backend: "s3", root: _root, scope: null));
+        Assert.Contains("unsupported", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     // ─── Unknown tool / action ──────────────────────────────────────────

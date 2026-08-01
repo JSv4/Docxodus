@@ -1,8 +1,10 @@
 # Agent-Facing DOCX Editing Server (MCP)
 
 **Status:** Implemented. Source: `tools/mcp-server/` (`Program.cs`, `Dispatcher.cs`, `SessionStore.cs`,
-`ToolCatalog.cs`, `JsonRpc.cs`). Tests: `Docxodus.Tests/McpServerDispatcherTests.cs` (`MCP###`).
-Packaged as the `dotnet tool` `docxodus-mcp`.
+`ToolCatalog.cs`, `JsonRpc.cs`, plus the storage layer `IDocumentStore.cs`,
+`LocalFileDocumentStore.cs`, `DocumentStores.cs`). Tests:
+`Docxodus.Tests/McpServerDispatcherTests.cs` (`MCP###`). Packaged as the `dotnet tool`
+`docxodus-mcp`.
 
 ## What this is
 
@@ -45,7 +47,10 @@ tools/mcp-server/Program.cs        — JSON-RPC transport: initialize, tools/lis
      ▼
 tools/mcp-server/Dispatcher.cs     — (tool, action) → Docxodus API call; arg parsing only
      │                                also: tools/mcp-server/SessionStore.cs (external session_id
-     │                                → DocxSessionOps handle + opened-from path + settings)
+     │                                → DocxSessionOps handle + opened-from location + settings)
+     │
+     ├──▶ IDocumentStore  ─────────  where bytes come from and go to (see Document storage)
+     │      LocalFileDocumentStore    scope-rooted local filesystem — the only backend today
      ▼
 Docxodus.Internal.DocxSessionOps / DocxDiffOps   (the same facade the WASM bridge and
      │                                             tools/python-host route through)
@@ -54,14 +59,18 @@ Docxodus.DocxSession   (the real work — see docs/architecture/docx_mutation_ap
 ```
 
 `SessionStore` is the one piece of state this server owns that `DocxSessionOps` doesn't: a
-string `session_id` → `{ handle, path, settings }` map. It exists for two reasons:
+string `session_id` → `{ handle, location, settings }` map. It exists for two reasons:
 
-1. `docxodus_save` needs to remember the path a session was opened from so "save" can mean
-   "write back to the same file" without the caller repeating it.
+1. `docxodus_save` needs to remember the location a session was opened from so "save" can mean
+   "write back to the same document" without the caller repeating it.
 2. `docxodus_track_changes`'s `accept_all`/`reject_all` need to swap a session's entire
    underlying document for a whole-document byte transform (`RevisionProcessor.AcceptRevisions`/
    `RejectRevisions`, which operate on bytes, not a live session) while the caller keeps
    addressing the same `session_id` — see `SessionStore.Rebind`.
+
+Session ids are 16 random bytes, not a counter. The id **is** the capability — holding one is
+what lets a caller act on that document — so a guessable id would let anything able to make tool
+calls address a session it was never handed.
 
 ## Wire protocol
 
@@ -98,6 +107,85 @@ across mutations per the anchor-lifecycle contract in `docs/architecture/docx_mu
 assume an anchor you haven't seen invalidated is still resolvable forever, but do trust that
 list).
 
+## Document storage
+
+Everything this server reads or writes goes through one small interface, `IDocumentStore`:
+`Resolve` (turn a caller-supplied location into the canonical in-scope identifier, or reject it),
+then byte-level `Read`/`Write` of an already-resolved location. `DocumentStores` is the single
+owner of "which backend, rooted where," built once at startup from the environment — the same
+single-owner-facade shape the core library uses for `DocxSessionOps`/`DocxDiffOps`.
+
+Today there is exactly one backend, `LocalFileDocumentStore`. The seam exists so that adding
+another — object storage, a content repository — is a new `IDocumentStore` implementation plus a
+case in `DocumentStores.Create`, with no change to the dispatcher, the tool schemas, or any
+session logic. The interface is deliberately three methods over opaque location *strings* rather
+than a filesystem-shaped API, so a backend without directories doesn't have to pretend to have
+them.
+
+### Isolation is a property, not a check
+
+A store is constructed **already rooted at its scope**, and every location a tool call names
+passes through `Resolve` before anything touches it. There is no read or write path that skips
+resolution, so a session physically cannot name a document outside its scope — the guarantee
+doesn't depend on remembering to write an `if` in the dispatcher.
+
+The rules `LocalFileDocumentStore` enforces:
+
+- A **relative** location resolves under the scope root.
+- An **absolute** location is accepted only if it canonicalizes to something inside that root.
+  This is what keeps ordinary local use working — with the default root, an agent can open
+  `~/Downloads/contract.docx` by its natural path — while a narrower root confines the exact same
+  unmodified tool surface completely.
+- Containment is checked against **symlink-resolved** paths, both root and candidate, resolving
+  every component from the volume root down rather than just the leaf. The case that motivates
+  it: `{root}/link → /elsewhere`, then naming `{root}/link/secret.docx`, whose own leaf is not a
+  link at all — leaf-only resolution (and deepest-existing-ancestor resolution) both miss it.
+  Dangling links are detected by reading the link rather than following it, so a link to a
+  not-yet-existing directory can't be used as a write escape.
+- Segment boundaries are respected, so `/srv/base-2` is not inside `/srv/base`. The check uses
+  `Path.GetRelativePath` rather than a string prefix test, which also gets the platform's case
+  rules right.
+
+### Configuration
+
+Backend and root are **operator configuration, never tool arguments** — if the agent could name
+a backend or a root per call, the scope would be chosen by the very thing it exists to contain.
+The only storage input a tool call carries is a location *within* the configured store.
+
+| Variable | Meaning |
+|---|---|
+| `DOCXODUS_STORAGE_BACKEND` | Backend id. Only `file` is implemented; defaults to `file`. |
+| `DOCXODUS_STORAGE_ROOT` | Directory every location must resolve inside. Defaults to the user's home directory — permissive enough for real local work, still a genuine boundary. Set it narrower to confine the server; set it to the filesystem root to opt out of confinement entirely. |
+| `DOCXODUS_STORAGE_SCOPE` | Optional single path segment appended to the root, making the effective root `{root}/{scope}`. Two processes launched with different scopes cannot see each other's documents. |
+
+Misconfigured storage is fatal at startup rather than surfaced per call: a server that answered
+`tools/list` and then failed every open would be harder to diagnose than one that refuses to
+start with the reason on stderr.
+
+### How scope reaches the server
+
+`DOCXODUS_STORAGE_SCOPE` is supplied by **whoever launches the server**, not by the agent, which
+never learns it and has no argument through which to name one. That is deliberate: stdio MCP has
+no in-band authentication — there is no channel on which a caller proves who it is, because the
+process was spawned by the client and whatever env and credentials it was spawned with *is* the
+authorization. Server-side ACL logic would only ever be checking a self-asserted identity, so the
+scope belongs at the trust boundary that actually exists: process spawn.
+
+Two consequences worth stating plainly:
+
+- **Persistence is free.** The scope is a stable path segment, so passing the same value next
+  session reaches the same documents. There is no scope registry, no token format, and no
+  revocation list — persistence is the filesystem's.
+- **One process spans exactly one scope.** A caller needing documents from two scopes runs two
+  server processes. That is a real constraint, and the right one: it keeps the isolation boundary
+  identical to the process boundary rather than introducing an in-process notion of "current
+  tenant" that a confused agent could be talked across.
+
+This design assumes the launching client is trusted to pick its own scope. Handing a scope to
+something *not* trusted to choose one would need a verifiable capability token (signed, so the
+server can confirm it issued it) — deliberately not built, since it also brings a revocation
+problem that has no good answer at this layer.
+
 ## Tool reference
 
 Three lifecycle tools, ten grouped-intent tools. Every grouped tool takes `sessionId` plus an
@@ -108,8 +196,8 @@ Three lifecycle tools, ten grouped-intent tools. Every grouped tool takes `sessi
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `docxodus_open` | `path`, `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?` | `{ sessionId, path }` |
-| `docxodus_save` | `sessionId`, `path?` (defaults to the open path) | `{ path, bytesWritten }` |
+| `docxodus_open` | `path` (a location within the configured scope — see Document storage), `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?` | `{ sessionId, path }` — `path` is the **resolved** location |
+| `docxodus_save` | `sessionId`, `path?` (resolved the same way; defaults to the location the session was opened from) | `{ path, bytesWritten }` |
 | `docxodus_close` | `sessionId` | `{ closed: true }` |
 
 ### `docxodus_get_content` — read
@@ -243,6 +331,17 @@ never claiming a capability it doesn't have:
 transport in the loop — `Program.cs` is a thin JSON-RPC wrapper around it) against a blank
 document from `DocxSession.CreateBlankDocxBytes()`, covering the full lifecycle, every grouped
 tool's primary actions, the tracked-changes accept/reject round trip, and the mutations
-batch/preview paths. `tools/mcp-server` also has an `InternalsVisibleTo` grant to
-`Docxodus.Tests` (mirroring `Docxodus.csproj`'s existing grants to `docxodus-pyhost` and
-`DocxodusWasm`) so the test project can call the dispatcher's internals directly.
+batch/preview paths. Each test class instance is given its own scope root, so the dispatcher runs
+against a realistically-confined store rather than an unbounded filesystem.
+`tools/mcp-server` also has an `InternalsVisibleTo` grant to `Docxodus.Tests` (mirroring
+`Docxodus.csproj`'s existing grants to `docxodus-pyhost` and `DocxodusWasm`) so the test project
+can call the dispatcher's internals directly.
+
+The storage layer's isolation rules are covered as their own group (`MCP120`–`MCP131`): relative
+and in-scope-absolute locations resolve, out-of-scope absolutes and `..` traversal are rejected, a
+sibling directory sharing a name prefix is not treated as inside, a **symlink escaping the root is
+rejected**, read/write round-trips (creating intermediate directories), `docxodus_open` and
+`docxodus_save` both refuse out-of-scope locations, two scopes under one root cannot reach each
+other, and unsafe `DOCXODUS_STORAGE_SCOPE` values and unknown backends are rejected at
+construction. The symlink case is worth keeping: it failed against the first implementation, which
+resolved only the leaf component and so missed a link in the middle of the path.

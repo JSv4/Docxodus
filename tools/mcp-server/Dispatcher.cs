@@ -48,16 +48,10 @@ internal static class Dispatcher
 
     private static string Open(SessionStore store, JsonElement args)
     {
-        var path = Str(args, "path");
-        byte[] bytes;
-        try
-        {
-            bytes = File.ReadAllBytes(path);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
-        {
-            throw new McpToolException($"could not read '{path}': {ex.Message}");
-        }
+        // Resolve THROUGH the store: this is where an out-of-scope location is rejected, and the
+        // canonical form it returns is what the session records for a later write-back.
+        var location = store.Documents.Resolve(Str(args, "path"));
+        var bytes = store.Documents.Read(location);
 
         var tracked = OptStr(args, "trackedChanges") switch
         {
@@ -72,18 +66,23 @@ internal static class Dispatcher
             UndoDepth = IntOpt(args, "undoDepth", 50),
         };
 
-        var session = store.Open(bytes, path, settings);
-        return $"{{\"sessionId\":{JsonRpcIo.JsonString(session.Id)},\"path\":{JsonRpcIo.JsonString(path)}}}";
+        var session = store.Open(bytes, location, settings);
+        return $"{{\"sessionId\":{JsonRpcIo.JsonString(session.Id)},\"path\":{JsonRpcIo.JsonString(location)}}}";
     }
 
     private static string Save(SessionStore store, JsonElement args)
     {
         var session = Session(store, args);
-        var outPath = OptStr(args, "path") ?? session.Path
-            ?? throw new McpToolException("session was not opened from a path; pass \"path\" explicitly");
+        // An explicit destination is re-resolved (so it is scope-checked like any other location);
+        // the recorded one already is.
+        var destination = OptStr(args, "path") is { } requested
+            ? store.Documents.Resolve(requested)
+            : session.Location
+              ?? throw new McpToolException("session was not opened from a location; pass \"path\" explicitly");
+
         var bytes = DocxSessionOps.Save(session.Handle);
-        File.WriteAllBytes(outPath, bytes);
-        return $"{{\"path\":{JsonRpcIo.JsonString(outPath)},\"bytesWritten\":{bytes.Length}}}";
+        store.Documents.Write(destination, bytes);
+        return $"{{\"path\":{JsonRpcIo.JsonString(destination)},\"bytesWritten\":{bytes.Length}}}";
     }
 
     private static string Close(SessionStore store, JsonElement args)
