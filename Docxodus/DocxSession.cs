@@ -3005,6 +3005,17 @@ public sealed class DocxSession : IDisposable
 
         if (persistAnchorIds)
         {
+            // Flush every projected part's cached XDocument to its stream first.
+            // Ops mutate the cached XDocument only; historically the per-op
+            // projection rebuild flushed for them (scope.Part.PutXDocument in
+            // BuildAnchorIndex), but that flush is now conditional on Unid
+            // assignment — this path must not depend on it, or an op that changes
+            // content without creating a new Unid (e.g. SetPageNumbering) could
+            // serialize stale bytes.
+            foreach (var part in EnumerateProjectedParts())
+            {
+                if (part.GetXDocument().Root is not null) part.PutXDocument();
+            }
             _doc!.Save();
             _stream!.Flush();
             _stream.Position = 0;

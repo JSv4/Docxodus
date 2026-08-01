@@ -421,7 +421,7 @@ public static class WmlToMarkdownConverter
             // anchor ids across sessions. WmlComparer continues to use the random
             // path via AssignToAllElements — see UnidHelper class doc for why
             // the two consumers stay split.
-            UnidHelper.AssignToAllElementsDeterministic(scope.Root);
+            bool assignedAny = UnidHelper.AssignToAllElementsDeterministic(scope.Root);
             // Stash the owning part on the root so downstream emitters (hyperlinks, etc.)
             // can resolve relationship-bound URIs without threading the part through every call.
             if (scope.Root.Annotation<OpenXmlPart>() == null)
@@ -474,7 +474,11 @@ public static class WmlToMarkdownConverter
                         : null,
                 };
             }
-            scope.Part.PutXDocument();
+            // Persist newly-assigned Unids to the part. Skipped when nothing was
+            // assigned — the flush is ~19 ms/part on a large document, per rebuild.
+            // Content mutations no longer depend on this flush: DocxSession.Save
+            // flushes every projected part itself on BOTH its paths.
+            if (assignedAny) scope.Part.PutXDocument();
         }
 
         // Build the AnchorIdMap based on the requested rendering mode.

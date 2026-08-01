@@ -86,8 +86,12 @@ internal static class UnidHelper
     /// derived deterministically from element content + structural position so the
     /// same bytes produce the same Unids across sessions.
     /// </summary>
-    internal static void AssignToAllElementsDeterministic(XElement contentParent)
+    /// <returns><c>true</c> when at least one Unid was assigned — callers use this to
+    /// skip persistence work (part flushes) on the no-op passes that dominate per-op
+    /// index rebuilds.</returns>
+    internal static bool AssignToAllElementsDeterministic(XElement contentParent)
     {
+        bool assignedRoot = false;
         if (contentParent.Name == W.footnote || contentParent.Name == W.endnote)
         {
             if (contentParent.Attribute(PtOpenXml.Unid) == null)
@@ -95,11 +99,35 @@ internal static class UnidHelper
                 var noteId = (string?)contentParent.Attribute(W.id) ?? string.Empty;
                 contentParent.Add(new XAttribute(PtOpenXml.Unid,
                     DeriveUnid(rootSeed: contentParent.Name.LocalName, tag: "id", sig: noteId, dupIndex: 0)));
+                assignedRoot = true;
             }
         }
 
+        // Prune the recursion to subtrees that actually contain an element missing a
+        // Unid. After the first assignment over a document, the common case (an edit
+        // touched one block) leaves 99%+ of the tree fully assigned — recursing into
+        // it only to recompute content signatures for dup-index bookkeeping nobody
+        // needs is the dominant cost of every per-op index rebuild (36 ms of a 74 ms
+        // rebuild on a 15k-element document). `live` = every element whose subtree
+        // (self or descendants) holds a missing Unid; parents outside it are skipped
+        // wholesale. Assigned values are IDENTICAL to the unpruned walk: dup-index
+        // bookkeeping only ever influences an assignment within a parent that has a
+        // missing child, and such parents are always in `live`.
+        HashSet<XElement>? live = null;
+        foreach (var el in contentParent.DescendantsAndSelf())
+        {
+            if (el.Attribute(PtOpenXml.Unid) is not null || el == contentParent) continue;
+            live ??= new HashSet<XElement>();
+            for (XElement? a = el.Parent; a is not null; a = a.Parent)
+            {
+                if (!live.Add(a)) break; // ancestors above are already marked
+            }
+        }
+        if (live is null) return assignedRoot; // fully assigned — nothing to do
+
         var parentUnid = (string?)contentParent.Attribute(PtOpenXml.Unid) ?? contentParent.Name.LocalName;
-        AssignDescendantsDeterministic(contentParent, parentUnid);
+        AssignDescendantsDeterministic(contentParent, parentUnid, live);
+        return true;
     }
 
     /// <summary>
@@ -123,21 +151,30 @@ internal static class UnidHelper
 
     // ─── Deterministic derivation internals ──────────────────────────────
 
-    private static void AssignDescendantsDeterministic(XElement parent, string parentUnid)
+    private static void AssignDescendantsDeterministic(XElement parent, string parentUnid, HashSet<XElement> live)
     {
-        var dup = new Dictionary<(string Tag, string Sig), int>();
+        // Signature/dup-index bookkeeping is only needed when THIS parent has a child
+        // to assign — for fully-assigned parents (the overwhelming majority after the
+        // first pass) it would be pure waste, so it is gated on a cheap presence scan.
+        bool anyMissing = false;
+        foreach (var c in parent.Elements())
+        {
+            if (c.Attribute(PtOpenXml.Unid) == null) { anyMissing = true; break; }
+        }
+
+        var dup = anyMissing ? new Dictionary<(string Tag, string Sig), int>() : null;
         foreach (var child in parent.Elements())
         {
             if (child.Attribute(PtOpenXml.Unid) == null)
             {
                 var sig = ContentSignature(child);
                 var key = (child.Name.LocalName, sig);
-                dup.TryGetValue(key, out var dupIndex);
+                dup!.TryGetValue(key, out var dupIndex);
                 dup[key] = dupIndex + 1;
                 child.Add(new XAttribute(PtOpenXml.Unid,
                     DeriveUnid(rootSeed: parentUnid, tag: child.Name.LocalName, sig: sig, dupIndex: dupIndex)));
             }
-            else
+            else if (anyMissing)
             {
                 // Pre-existing Unid (persisted across save, or freshly-inserted via
                 // AssignToSelfAndDescendants). Still count it for dup-index of its
@@ -145,12 +182,19 @@ internal static class UnidHelper
                 // consistent index regardless of which subset already had Unids.
                 var sig = ContentSignature(child);
                 var key = (child.Name.LocalName, sig);
-                dup.TryGetValue(key, out var dupIndex);
+                dup!.TryGetValue(key, out var dupIndex);
                 dup[key] = dupIndex + 1;
             }
 
-            var childUnid = (string?)child.Attribute(PtOpenXml.Unid)!;
-            AssignDescendantsDeterministic(child, childUnid);
+            // Recurse only where something below still needs assignment: `live` holds
+            // every ancestor of a missing element, so a child with any unassigned
+            // descendant — including one just assigned above whose own children are
+            // still missing — is a member; anything else has a fully-assigned subtree.
+            if (live.Contains(child))
+            {
+                var childUnid = (string?)child.Attribute(PtOpenXml.Unid)!;
+                AssignDescendantsDeterministic(child, childUnid, live);
+            }
         }
     }
 
