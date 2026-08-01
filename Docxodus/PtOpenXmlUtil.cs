@@ -1272,6 +1272,59 @@ decimalSymbol
 listSeparator
 #endif
 
+        /// <summary>
+        /// The CT_SectPr child sequence (ECMA-376 §17.6.18). The header/footer references are an
+        /// unbounded leading group (EG_HdrFtrReferences), then the CT_SectPrBase properties in this
+        /// fixed order. Word rejects a sectPr whose children are out of sequence, so anything that
+        /// ADDS a child must place it by rank rather than appending — see
+        /// <see cref="InsertSectPrChildInOrder"/>.
+        /// </summary>
+        private static Dictionary<XName, int> Order_sectPr = new Dictionary<XName, int>
+        {
+            { W.headerReference, 10 },
+            { W.footerReference, 10 },   // interleaved with headerReference in one leading group
+            { W.footnotePr, 20 },
+            { W.endnotePr, 30 },
+            { W.type, 40 },
+            { W.pgSz, 50 },
+            { W.pgMar, 60 },
+            { W.paperSrc, 70 },
+            { W.pgBorders, 80 },
+            { W.lnNumType, 90 },
+            { W.pgNumType, 100 },
+            { W.cols, 110 },
+            { W.formProt, 120 },
+            { W.vAlign, 130 },
+            { W.noEndnote, 140 },
+            { W.titlePg, 150 },
+            { W.textDirection, 160 },
+            { W.bidi, 170 },
+            { W.rtlGutter, 180 },
+            { W.docGrid, 190 },
+            { W.printerSettings, 200 },
+            { W.sectPrChange, 210 },
+        };
+
+        /// <summary>
+        /// Insert <paramref name="child"/> into <paramref name="sectPr"/> at its CT_SectPr schema
+        /// slot: before the first sibling <c>Order_sectPr</c> ranks strictly later, else at the end.
+        /// </summary>
+        /// <remarks>
+        /// Same slot-insert discipline as <see cref="EnsureSettingsChildInOrder"/>, and for the same
+        /// reason: siblings the table does not know must never be MOVED. Sorting the whole element
+        /// would relocate extension content out of its own slot, so only the new child is placed.
+        /// </remarks>
+        internal static void InsertSectPrChildInOrder(XElement sectPr, XElement child)
+        {
+            var rank = Order_sectPr[child.Name];
+            var firstLater = sectPr.Elements().FirstOrDefault(e =>
+                Order_sectPr.TryGetValue(e.Name, out var laterRank) && laterRank > rank);
+            if (firstLater == null)
+                sectPr.Add(child);
+            else
+                firstLater.AddBeforeSelf(child);
+        }
+
         private static Dictionary<XName, int> Order_pPr = new Dictionary<XName, int>
         {
             { W.pStyle, 10 },

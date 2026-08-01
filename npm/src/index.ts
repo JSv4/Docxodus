@@ -78,6 +78,8 @@ export type {
   ListMembership,
   MarkdownPatch,
   NumberFormat,
+  PageNumberField,
+  PageNumberingOp,
   SectionInfo,
 } from "./types.js";
 export type { FillOptions, BulkEditResult } from "./types.js";

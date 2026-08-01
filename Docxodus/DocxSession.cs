@@ -142,6 +142,36 @@ public enum HeaderFooterKind { Default, First, Even }
 public enum PageNumberField { CurrentPage, TotalPages }
 
 /// <summary>
+/// Section-level page-numbering setup for <see cref="DocxSession.SetPageNumbering"/> — the
+/// <c>w:pgNumType</c> element, which is what Word's <i>Format Page Numbers…</i> dialog writes.
+/// Each field is tri-state: <c>null</c> leaves that attribute exactly as it is (present or absent).
+/// Use <see cref="DocxSession.ClearPageNumbering"/> to remove them.
+/// </summary>
+/// <remarks>
+/// This governs how a <b>plain</b> <c>PAGE</c> field renders anywhere in the section, which is the
+/// normal way to number pages: set the section once, insert unswitched fields. It is distinct from
+/// the per-field <c>\*</c> switch <see cref="DocxSession.InsertPageNumberField"/> can stamp — that
+/// overrides the section for one field, and a field carrying one stops following this setting.
+/// </remarks>
+public sealed record PageNumberingOp
+{
+    /// <summary>
+    /// The page number this section starts at (<c>w:start</c>) — e.g. <c>1</c> to restart numbering
+    /// at the section break, which is what front-matter/body splits need. <c>null</c> leaves the
+    /// attribute unchanged; absent means the section continues the previous one's numbering.
+    /// </summary>
+    public int? Start { get; init; }
+
+    /// <summary>
+    /// The number format for this section's pages (<c>w:fmt</c>) — e.g.
+    /// <see cref="NumberFormat.LowerRoman"/> for <c>i, ii, iii</c> front matter. <c>null</c> leaves
+    /// the attribute unchanged; absent means Word's default (<c>1, 2, 3</c>).
+    /// <see cref="NumberFormat.Bullet"/> is rejected — pages cannot be bulleted.
+    /// </summary>
+    public NumberFormat? Format { get; init; }
+}
+
+/// <summary>
 /// Paragraph-level formatting for <see cref="DocxSession.SetParagraphFormat"/>. Each field
 /// is tri-state: null leaves it unchanged. Alignment sets w:jc; PageBreakBefore toggles
 /// w:pageBreakBefore (false removes); IndentDelta adjusts w:ind/@w:left by a twips delta
@@ -723,6 +753,21 @@ public sealed record SectionInfo
     /// <summary>The footer stories that effectively apply to this section — see
     /// <see cref="HeaderRefs"/>.</summary>
     required public IReadOnlyList<HeaderFooterRef> FooterRefs { get; init; }
+
+    /// <summary>
+    /// The page number this section starts at (<c>w:pgNumType/@w:start</c>), or <c>null</c> when the
+    /// attribute is absent — meaning the section continues the previous section's numbering. Read
+    /// counterpart of <see cref="PageNumberingOp.Start"/>.
+    /// </summary>
+    public int? PageNumberStart { get; init; }
+
+    /// <summary>
+    /// This section's page-number format (<c>w:pgNumType/@w:fmt</c>), or <c>null</c> when the
+    /// attribute is absent — meaning Word's default (<c>1, 2, 3</c>). Deliberately NOT defaulted to
+    /// <see cref="NumberFormat.Decimal"/>: a UI needs to tell "inherits the default" from
+    /// "explicitly decimal" to avoid writing an attribute the document never had.
+    /// </summary>
+    public NumberFormat? PageNumberFormat { get; init; }
 }
 
 /// <summary>
@@ -871,6 +916,11 @@ public enum EditErrorCode
 
     UnknownStyle,
     InvalidListLevel,
+
+    /// <summary>A page-numbering value that OOXML cannot express: a start page below zero, or
+    /// <see cref="NumberFormat.Bullet"/> as a page-number format (neither <c>w:pgNumType/@w:fmt</c>
+    /// nor the field <c>\*</c> switch has a bullet notion).</summary>
+    InvalidPageNumbering,
 
     MalformedXml,
     DisallowedNamespace,
@@ -2897,11 +2947,35 @@ public sealed class DocxSession : IDisposable
         };
     }
 
-    public byte[] Save()
+    /// <summary>
+    /// Serialize the current document state. Anchor-id bookkeeping is stripped unless the session
+    /// was opened with <see cref="DocxSessionSettings.PersistAnchorIds"/>.
+    /// </summary>
+    public byte[] Save() => Save(_settings.PersistAnchorIds);
+
+    /// <summary>
+    /// Serialize with an explicit choice about the projector's <c>PtOpenXml:Unid</c> bookkeeping,
+    /// overriding <see cref="DocxSessionSettings.PersistAnchorIds"/> for this call.
+    /// </summary>
+    /// <param name="persistAnchorIds">
+    /// <c>true</c> keeps the Unid attributes in the output so a re-render of these bytes resolves to
+    /// the SAME anchors the live session holds. That is an internal round-trip contract, not a
+    /// document feature: the attributes are ~50 bytes each on every projected element (roughly 6x
+    /// the file size of a real document), and while Word and LibreOffice both ignore them, bytes
+    /// produced this way should not be handed to a user or written to disk as "the document".
+    /// <c>false</c> — what a save-to-disk wants — strips them.
+    /// </param>
+    /// <remarks>
+    /// The distinction exists because the two consumers genuinely differ: the browser editor's
+    /// remount re-renders saved bytes and needs id stability across that hop, while its
+    /// <c>save()</c> produces the file the user downloads. Making it a per-CALL choice rather than a
+    /// session-wide setting is what keeps one from contaminating the other.
+    /// </remarks>
+    public byte[] Save(bool persistAnchorIds)
     {
         ThrowIfDisposed();
 
-        if (_settings.PersistAnchorIds)
+        if (persistAnchorIds)
         {
             _doc!.Save();
             _stream!.Flush();
@@ -4539,13 +4613,27 @@ public sealed class DocxSession : IDisposable
     /// header/footer paragraph (e.g. one returned by <see cref="SetFooterText"/>), though any paragraph
     /// is accepted. <see cref="PageNumberField.CurrentPage"/> emits a <c>PAGE</c> field,
     /// <see cref="PageNumberField.TotalPages"/> a <c>NUMPAGES</c> field, both as a native Word complex
-    /// field (<c>fldChar</c>/<c>instrText</c>) with a cached "1" result. Center the number by setting the
+    /// field (<c>fldChar</c>/<c>instrText</c>) with a cached result. Center the number by setting the
     /// paragraph alignment (<see cref="SetParagraphFormat"/>) or by relying on the Header/Footer style's
     /// centre tab. Returns the affected paragraph anchor in <see cref="EditResult.Modified"/>.
     /// </summary>
-    public EditResult InsertPageNumberField(string anchorId, PageNumberField field = PageNumberField.CurrentPage)
+    /// <param name="format">
+    /// Optional per-field number format, written as the field's <c>\*</c> general-formatting switch
+    /// (<c>PAGE \* roman</c> → <c>i, ii, iii</c>). <c>null</c> — the default — emits a plain field,
+    /// which is what Word inserts and what follows the SECTION's format
+    /// (<see cref="SetPageNumbering"/>). Prefer the section setting for ordinary page numbering; a
+    /// switch here OVERRIDES it for this one field and keeps overriding it if the section later
+    /// changes. <see cref="NumberFormat.Bullet"/> is rejected.
+    /// </param>
+    public EditResult InsertPageNumberField(
+        string anchorId,
+        PageNumberField field = PageNumberField.CurrentPage,
+        NumberFormat? format = null)
     {
         if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (format is { } f && !Internal.NumberFormats.IsPageNumberFormat(f))
+            return EditResult.Fail(EditErrorCode.InvalidPageNumbering,
+                $"{f} cannot format a page number", anchorId);
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
@@ -4559,7 +4647,7 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            foreach (var r in BuildPageNumberFieldRuns(field))
+            foreach (var r in BuildPageNumberFieldRuns(field, format))
             {
                 UnidHelper.AssignToSelfAndDescendants(r);
                 element.Add(r);
@@ -4603,33 +4691,164 @@ public sealed class DocxSession : IDisposable
         }
     }
 
-    /// <summary>The runs of a native complex page-number field (PAGE / NUMPAGES) with a cached "1"
-    /// result — the form Word emits, so it renders and updates like a hand-authored field.</summary>
-    private static XElement[] BuildPageNumberFieldRuns(PageNumberField field)
+    /// <summary>The runs of a native complex page-number field (PAGE / NUMPAGES) with a cached
+    /// result — the form Word emits, so it renders and updates like a hand-authored field. With a
+    /// <paramref name="format"/> the instruction carries the <c>\*</c> general-formatting switch and
+    /// the cached result is page 1 rendered in that format, so a renderer that does not recompute
+    /// fields shows a number consistent with the switch instead of always "1".</summary>
+    private static XElement[] BuildPageNumberFieldRuns(PageNumberField field, NumberFormat? format)
     {
-        var instr = field == PageNumberField.TotalPages ? " NUMPAGES " : " PAGE ";
+        var name = field == PageNumberField.TotalPages ? "NUMPAGES" : "PAGE";
+        var instr = format is { } f && Internal.NumberFormats.ToFieldSwitch(f) is { } sw
+            ? $" {name} \\* {sw} "
+            : $" {name} ";
+        var cached = format is { } cf ? Internal.NumberFormats.Render(1, cf) : "1";
         return new[]
         {
             new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "begin"))),
             new XElement(W.r, new XElement(W.instrText, new XAttribute(XNamespace.Xml + "space", "preserve"), instr)),
             new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "separate"))),
-            new XElement(W.r, new XElement(W.t, "1")),
+            new XElement(W.r, new XElement(W.t, cached)),
             new XElement(W.r, new XElement(W.fldChar, new XAttribute(W.fldCharType, "end"))),
         };
     }
 
-    // Elements that FOLLOW w:titlePg in the CT_SectPr sequence; an insertion lands before the first
-    // of these (or at the end), keeping the sectPr schema-ordered (mirrors IrMarkupRenderer).
-    private static readonly XName[] SectPrAfterTitlePg =
-        { W.textDirection, W.bidi, W.rtlGutter, W.docGrid, W.printerSettings, W.sectPrChange };
+    // ─── Section page numbering (w:pgNumType, issue #277) ─────────────────────
+    //
+    // The section-level half of page numbering: which number the section starts at and which format
+    // its pages are numbered in. A plain PAGE field renders through this, so it — not the field —
+    // is the normal place to say "front matter is i, ii, iii and the body restarts at 1".
+    // Addressed by any body block in the target section, resolving the governing w:sectPr exactly
+    // as GetSectionInfo does.
 
-    private static void InsertSectPrTitlePg(XElement sectPr)
+    /// <summary>
+    /// Set the page-numbering properties (<c>w:pgNumType</c>) of the section that owns
+    /// <paramref name="anchorId"/> (any body block in that section). Null fields on
+    /// <paramref name="op"/> leave that attribute alone, so a caller can set the start without
+    /// disturbing the format and vice versa. Creates the element, and a trailing <c>w:sectPr</c>,
+    /// if absent. Idempotent.
+    /// </summary>
+    /// <remarks>
+    /// Applying values the section already has is a successful no-op that does NOT consume undo
+    /// history — a format dropdown firing on every selection must not evict the user's real edits
+    /// from the bounded ring (same reasoning as <see cref="EnsureHeaderFooterVisible"/>).
+    /// </remarks>
+    public EditResult SetPageNumbering(string anchorId, PageNumberingOp op)
     {
-        var titlePg = new XElement(W.titlePg);
-        var firstTail = sectPr.Elements().FirstOrDefault(e => SectPrAfterTitlePg.Contains(e.Name));
-        if (firstTail is null) sectPr.Add(titlePg);
-        else firstTail.AddBeforeSelf(titlePg);
+        if (op.Start is { } s && s < 0)
+            return EditResult.Fail(EditErrorCode.InvalidPageNumbering,
+                "page-number start cannot be negative", anchorId);
+        if (op.Format is { } f && !Internal.NumberFormats.IsPageNumberFormat(f))
+            return EditResult.Fail(EditErrorCode.InvalidPageNumbering,
+                $"{f} cannot format a page number", anchorId);
+
+        return EditSectionPageNumbering(anchorId, "SetPageNumbering", sectPr =>
+        {
+            var existing = sectPr.Element(W.pgNumType);
+            var start = op.Start?.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var fmt = op.Format is { } pf ? Internal.NumberFormats.ToOoxml(pf) : null;
+
+            if (existing is not null
+                && (start is null || (string?)existing.Attribute(W.start) == start)
+                && (fmt is null || (string?)existing.Attribute(W.fmt) == fmt))
+                return false;
+            if (existing is null && start is null && fmt is null)
+                return false;
+
+            var pgNumType = existing;
+            if (pgNumType is null)
+            {
+                pgNumType = new XElement(W.pgNumType);
+                WordprocessingMLUtil.InsertSectPrChildInOrder(sectPr, pgNumType);
+            }
+            if (start is not null) pgNumType.SetAttributeValue(W.start, start);
+            if (fmt is not null) pgNumType.SetAttributeValue(W.fmt, fmt);
+            return true;
+        });
     }
+
+    /// <summary>
+    /// Remove the page-numbering setup written by <see cref="SetPageNumbering"/> from the section
+    /// that owns <paramref name="anchorId"/>: the section reverts to continuing the previous
+    /// section's numbering in Word's default <c>1, 2, 3</c> format.
+    /// </summary>
+    /// <remarks>
+    /// Narrowed to <c>w:start</c> and <c>w:fmt</c> — the chapter-numbering attributes
+    /// (<c>w:chapStyle</c>/<c>w:chapSep</c>), which this surface never writes, are preserved, and
+    /// the <c>w:pgNumType</c> element is removed only once nothing is left on it. A section with no
+    /// page numbering to clear is a successful no-op that consumes no undo history.
+    /// </remarks>
+    public EditResult ClearPageNumbering(string anchorId) =>
+        EditSectionPageNumbering(anchorId, "ClearPageNumbering", sectPr =>
+        {
+            var pgNumType = sectPr.Element(W.pgNumType);
+            if (pgNumType is null) return false;
+            var start = pgNumType.Attribute(W.start);
+            var fmt = pgNumType.Attribute(W.fmt);
+            if (start is null && fmt is null) return false;
+
+            start?.Remove();
+            fmt?.Remove();
+            // Only w:-namespaced attributes are CT_PageNumberType content; the element may also
+            // carry pt: bookkeeping (Unid), which must not keep an otherwise-empty element alive.
+            if (!pgNumType.Attributes().Any(a => a.Name.Namespace == W.w)) pgNumType.Remove();
+            return true;
+        });
+
+    /// <summary>
+    /// Shared body of the section page-numbering verbs: resolve a body anchor to its governing
+    /// <c>w:sectPr</c> (synthesizing the document-final one if the body has none, as
+    /// <see cref="SetHeaderText"/> does), then apply <paramref name="mutate"/>. The mutator returns
+    /// false when the document already says what was asked, and NOTHING is snapshotted in that case.
+    /// </summary>
+    private EditResult EditSectionPageNumbering(string anchorId, string opName, Func<XElement, bool> mutate)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Scope != "body")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"{opName} requires a body block anchor (the section the page numbering belongs to)",
+                anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        var body = element.AncestorsAndSelf(W.body).FirstOrDefault();
+        if (body is null)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "anchor is not in the document body", anchorId);
+
+        var sectPr = Internal.BlockMetadataOps.FindGoverningSectPr(element);
+        var succeeded = new EditResult { Success = true, Modified = new[] { target.Anchor } };
+
+        // Decide on a detached COPY first. Returning before TakeSnapshot is what keeps a no-op out
+        // of the bounded undo ring — and it also stops a no-op from synthesizing a sectPr that the
+        // document did not ask for.
+        if (!mutate(sectPr is null ? new XElement(W.sectPr) : new XElement(sectPr)))
+            return succeeded;
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            if (sectPr is null)
+            {
+                sectPr = new XElement(W.sectPr);
+                body.Add(sectPr);
+            }
+            mutate(sectPr);
+            InvalidateProjectionCache();
+            return succeeded;
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RestoreSnapshot(_history.PopForUndo().snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    private static void InsertSectPrTitlePg(XElement sectPr) =>
+        WordprocessingMLUtil.InsertSectPrChildInOrder(sectPr, new XElement(W.titlePg));
 
     // ─── Footnotes / endnotes ─────────────────────────────────────────────────
     //

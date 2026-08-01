@@ -1,0 +1,30 @@
+// Type-checks the Playwright specs, which `tsconfig.json` does not cover (it compiles `src/**` to
+// `dist/`) and which Playwright itself does not check (it strips types without checking them).
+//
+// Without this, a spec could assert against a type that no longer exists and still pass — the exact
+// gap that let `EditErrorCode` lose a union member while a runtime assertion on the string literal
+// kept passing. Specs that bind a value to a public type are load-bearing documentation of the
+// ripple; this is what enforces them.
+//
+// Run via `npm run typecheck` (wired into `pretest`, so `npm test` enforces it).
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "tests/**/*"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    // Pre-existing type errors, all the same shape: a `page.evaluate` return is inferred as a
+    // union (`number | number[]`, `boolean | number[]`) and passed straight to `new Uint8Array(...)`.
+    // They are unrelated to any current work and fixing them means editing four specs that pass;
+    // excluded rather than silently weakening `strict` for everything. Remove an entry once its
+    // file is cleaned up.
+    "tests/worker.spec.ts",
+    "tests/docxodus.spec.ts",
+    "tests/editor.spec.ts",
+    "tests/pagination-print.spec.ts"
+  ]
+}

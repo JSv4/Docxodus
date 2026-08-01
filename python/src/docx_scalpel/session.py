@@ -64,6 +64,7 @@ from .types import (
     HtmlOptions,
     ListMembership,
     MarkdownProjection,
+    NumberFormat,
     ReplaceOptions,
     SectionInfo,
     TemplatePlaceholder,
@@ -924,16 +925,60 @@ class DocxSession:
         )
 
     def insert_page_number_field(
-        self, anchor_id: str, field: PageNumberField = PageNumberField.CURRENT_PAGE
+        self,
+        anchor_id: str,
+        field: PageNumberField = PageNumberField.CURRENT_PAGE,
+        format: NumberFormat | None = None,
     ) -> EditResult:
         """Append a page-number field to the paragraph ``anchor_id`` (typically a header/footer
         paragraph). ``CURRENT_PAGE`` emits a ``PAGE`` field, ``TOTAL_PAGES`` a ``NUMPAGES`` field.
-        Returns the affected paragraph anchor in ``EditResult.modified``."""
+        Returns the affected paragraph anchor in ``EditResult.modified``.
+
+        ``format`` writes the field's own ``\\*`` general-formatting switch (``PAGE \\* roman`` →
+        ``i, ii, iii``). Omitting it — the default — emits a plain field, which is what Word inserts
+        and what follows the SECTION's format (:meth:`set_page_numbering`). Prefer the section
+        setting for ordinary page numbering: a switch here overrides it for this one field and keeps
+        overriding it if the section later changes. ``NumberFormat.BULLET`` is rejected.
+        """
+        args: dict[str, Any] = {"anchorId": anchor_id, "field": field.value}
+        if format is not None:
+            args["format"] = format.value
+        return EditResult._from_wire(self._call("insert_page_number_field", args))
+
+    def set_page_numbering(
+        self,
+        anchor_id: str,
+        start: int | None = None,
+        format: NumberFormat | None = None,
+    ) -> EditResult:
+        """Set the page-numbering properties (``w:pgNumType``) of the section that owns
+        ``anchor_id`` (any body block in that section) — Word's *Format Page Numbers…* dialog.
+
+        ``start`` is the page number the section starts at (e.g. ``1`` to restart at a section
+        break); ``format`` is the format its pages use (e.g. ``NumberFormat.LOWER_ROMAN`` for
+        ``i, ii, iii`` front matter). Passing ``None`` for either leaves that attribute unchanged,
+        so the start can be set without disturbing the format and vice versa. Creates the element,
+        and a trailing ``w:sectPr``, if absent.
+
+        Applying values the section already has is a successful no-op that does not consume undo
+        history. ``NumberFormat.BULLET`` and a negative ``start`` are rejected with
+        ``EditErrorCode.INVALID_PAGE_NUMBERING``.
+        """
+        op: dict[str, Any] = {}
+        if start is not None:
+            op["start"] = start
+        if format is not None:
+            op["format"] = format.value
         return EditResult._from_wire(
-            self._call(
-                "insert_page_number_field",
-                {"anchorId": anchor_id, "field": field.value},
-            )
+            self._call("set_page_numbering", {"anchorId": anchor_id, "op": op})
+        )
+
+    def clear_page_numbering(self, anchor_id: str) -> EditResult:
+        """Remove the section's page-numbering start/format: it reverts to continuing the previous
+        section's numbering in Word's default ``1, 2, 3``. Chapter-numbering attributes
+        (``w:chapStyle``/``w:chapSep``) are preserved. A section with nothing to clear is a no-op."""
+        return EditResult._from_wire(
+            self._call("clear_page_numbering", {"anchorId": anchor_id})
         )
 
     def ensure_header_footer_visible(

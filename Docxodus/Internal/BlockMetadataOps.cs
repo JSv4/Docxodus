@@ -86,6 +86,14 @@ internal static class BlockMetadataOps
         var (ownHeaderRefs, ownFooterRefs) = ResolveSectionHeaderFooterRefs(doc, sectPr);
         var (headerRefs, footerRefs) = AddInheritedRefs(doc, element, sectPr, ownHeaderRefs, ownFooterRefs);
 
+        // Page numbering is reported per ATTRIBUTE, not per element: an absent w:start or w:fmt
+        // means "inherit" and must read back as null, so a UI can tell it from an explicit value.
+        var pgNumType = sectPr.Element(W.pgNumType);
+        int? pageNumberStart = ParseInt((string?)pgNumType?.Attribute(W.start));
+        NumberFormat? pageNumberFormat = (string?)pgNumType?.Attribute(W.fmt) is { } fmtToken
+            ? NumberFormats.ParseOoxml(fmtToken)
+            : null;
+
         // The sectPr itself doesn't carry a stable Unid in every fixture; fall back
         // to a deterministic synthetic id derived from element position so the field
         // is always non-null and stable across reads of the same doc state.
@@ -109,6 +117,8 @@ internal static class BlockMetadataOps
             FooterPartUris = ownFooterRefs.Select(r => r.PartUri).ToList(),
             HeaderRefs = headerRefs,
             FooterRefs = footerRefs,
+            PageNumberStart = pageNumberStart,
+            PageNumberFormat = pageNumberFormat,
         };
     }
 
@@ -360,15 +370,7 @@ internal static class BlockMetadataOps
         return null;
     }
 
-    private static NumberFormat ParseNumberFormat(string? raw) => raw switch
-    {
-        "bullet" => NumberFormat.Bullet,
-        "upperLetter" => NumberFormat.UpperLetter,
-        "lowerLetter" => NumberFormat.LowerLetter,
-        "upperRoman" => NumberFormat.UpperRoman,
-        "lowerRoman" => NumberFormat.LowerRoman,
-        _ => NumberFormat.Decimal,  // includes "decimal" and any unrecognized format
-    };
+    private static NumberFormat ParseNumberFormat(string? raw) => NumberFormats.ParseOoxml(raw);
 
     private static bool HasInlineFormatting(XElement element)
     {

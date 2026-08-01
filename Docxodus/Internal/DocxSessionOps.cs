@@ -25,6 +25,15 @@ internal static class DocxSessionOps
 
     public static byte[] Save(int handle) => SessionRegistry.Get(handle).Save();
 
+    /// <summary>
+    /// Save KEEPING the projector's Unid bookkeeping — see <see cref="DocxSession.Save(bool)"/>.
+    /// Exists for the in-browser editor's remount, which re-renders these bytes and needs the
+    /// anchors to survive the hop. The output is ~6x larger than the document and is not meant to
+    /// be handed to a user; a save-to-disk wants <see cref="Save(int)"/>.
+    /// </summary>
+    public static byte[] SaveWithAnchorIds(int handle) =>
+        SessionRegistry.Get(handle).Save(persistAnchorIds: true);
+
     // ─── Projection + discovery ─────────────────────────────────────────
 
     public static string Project(int handle) =>
@@ -220,11 +229,18 @@ internal static class DocxSessionOps
     public static string SetFooterText(int handle, string anchorId, HeaderFooterKind kind, string markdown) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetFooterText(anchorId, kind, markdown));
 
-    public static string InsertPageNumberField(int handle, string anchorId, PageNumberField field) =>
-        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertPageNumberField(anchorId, field));
+    public static string InsertPageNumberField(
+        int handle, string anchorId, PageNumberField field, NumberFormat? format = null) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertPageNumberField(anchorId, field, format));
 
     public static string EnsureHeaderFooterVisible(int handle, string anchorId, HeaderFooterKind kind) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).EnsureHeaderFooterVisible(anchorId, kind));
+
+    public static string SetPageNumbering(int handle, string anchorId, PageNumberingOp op) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetPageNumbering(anchorId, op));
+
+    public static string ClearPageNumbering(int handle, string anchorId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ClearPageNumbering(anchorId));
 
     // ─── Footnotes / endnotes ───────────────────────────────────────────
 

@@ -3681,6 +3681,16 @@ namespace Docxodus
                 // Check if section has different first page headers/footers
                 bool hasTitlePage = sectPr.Element(W.titlePg) != null;
 
+                // …and whether the EVEN stories are switched on. Word leaves the even part and its
+                // w:footerReference behind when "Different odd & even pages" is turned back off,
+                // dropping only the document-global w:evenAndOddHeaders — so a reference of type
+                // "even" is NOT on its own evidence that anything renders. Word and LibreOffice
+                // both use the Default story on even pages in that state; without this gate the
+                // paginated view showed a running foot the document does not have (confirmed on a
+                // real filing template whose leftover even footer reads "DRAFT").
+                bool hasEvenAndOddHeaders = wordDoc.MainDocumentPart?.DocumentSettingsPart
+                    ?.GetXDocument().Root?.Element(W.evenAndOddHeaders) != null;
+
                 // Render default header
                 var defaultHeaderContent = RenderHeaderForSection(wordDoc, settings, sectPr, "default");
                 if (defaultHeaderContent != null)
@@ -3704,8 +3714,10 @@ namespace Docxodus
                     }
                 }
 
-                // Render even header if exists
-                var evenHeaderContent = RenderHeaderForSection(wordDoc, settings, sectPr, "even");
+                // Render even header if the document actually uses even/odd stories
+                var evenHeaderContent = hasEvenAndOddHeaders
+                    ? RenderHeaderForSection(wordDoc, settings, sectPr, "even")
+                    : null;
                 if (evenHeaderContent != null)
                 {
                     registry.Add(new XElement(Xhtml.div,
@@ -3737,8 +3749,10 @@ namespace Docxodus
                     }
                 }
 
-                // Render even footer if exists
-                var evenFooterContent = RenderFooterForSection(wordDoc, settings, sectPr, "even");
+                // Render even footer if the document actually uses even/odd stories
+                var evenFooterContent = hasEvenAndOddHeaders
+                    ? RenderFooterForSection(wordDoc, settings, sectPr, "even")
+                    : null;
                 if (evenFooterContent != null)
                 {
                     registry.Add(new XElement(Xhtml.div,
@@ -3781,6 +3795,11 @@ namespace Docxodus
             if (headerRoot == null || !headerRoot.Elements().Any())
                 return null;
 
+            // Complex fields are grouped from these annotations, and only the main part is annotated
+            // up front — without this a PAGE field in a running head is just five unrelated runs, so
+            // it could never be marked for per-page substitution.
+            FieldRetriever.AnnotateWithFieldInfo(headerPart);
+
             // Convert the content of the header
             return headerRoot.Elements()
                 .Select(e => ConvertToHtmlTransform(wordDoc, settings, e, false, 0m))
@@ -3816,6 +3835,10 @@ namespace Docxodus
 
             if (footerRoot == null || !footerRoot.Elements().Any())
                 return null;
+
+            // See RenderHeaderForSection: fields are grouped from these annotations, and only the
+            // main part is annotated up front.
+            FieldRetriever.AnnotateWithFieldInfo(footerPart);
 
             // Convert the content of the footer
             return footerRoot.Elements()
@@ -5061,6 +5084,15 @@ namespace Docxodus
                             div.Add(new XAttribute("data-header-height", dims.HeaderPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
                             div.Add(new XAttribute("data-footer-height", dims.FooterPt.ToString("F1", NumberFormatInfo.InvariantInfo)));
                         }
+
+                        // The section's page numbering (w:pgNumType), which is what an unswitched
+                        // PAGE field renders through. Emitted per attribute: absent means "continue
+                        // the previous section" / "Word's default format", not a value.
+                        var pgNumType = sectAnnotation?.SectionElement.Element(W.pgNumType);
+                        if ((string)pgNumType?.Attribute(W.start) is { } pgStart)
+                            div.Add(new XAttribute("data-page-num-start", pgStart));
+                        if ((string)pgNumType?.Attribute(W.fmt) is { } pgFmt)
+                            div.Add(new XAttribute("data-page-num-fmt", pgFmt));
                     }
 
                     sectionIndex++;
@@ -5183,9 +5215,16 @@ namespace Docxodus
             var firstTabRun = paragraph
                 .Elements(W.r)
                 .FirstOrDefault(run => run.Elements(W.tab).Any());
+            // EVERY run before the tab, not just the width-annotated ones. PtOpenXml:TabWidth is
+            // applied by CalculateSpanWidthForTabs, which walks the MAIN document part only, so
+            // filtering on it here dropped header/footer content outright: such a run is absent from
+            // this list AND from elementsSucceedingTab (which starts after the tab), so it rendered
+            // nowhere. A footer of the shape `Last Updated October 2025 [tab] PAGE` came out as just
+            // the page number. The two questions are separate — TransformElementsPrecedingTab still
+            // sums widths over the annotated children only, and an unannotated run simply
+            // contributes zero width while keeping its text.
             var elementsPrecedingTab = firstTabRun != null
-                ? paragraph.Elements(W.r).TakeWhile(e => e != firstTabRun)
-                    .Where(e => e.Elements().Any(c => c.Attributes(PtOpenXml.TabWidth).Any())).ToList()
+                ? paragraph.Elements(W.r).TakeWhile(e => e != firstTabRun).ToList()
                 : Enumerable.Empty<XElement>().ToList();
 
             // TODO: Revisit
@@ -8008,6 +8047,21 @@ namespace Docxodus
 
                     var instrText = FieldRetriever.InstrText(g.First().Ancestors().Last(), (int)key)
                         .TrimStart('{').TrimEnd('}');
+
+                    // Mark PAGE/NUMPAGES results so the paginator can substitute each page's real
+                    // number: a header/footer is cloned onto every page, so the field's single
+                    // cached result would otherwise read the same on all of them. Paginated mode
+                    // only — it is the only consumer, and every other mode's HTML stays untouched.
+                    if (settings.RenderPagination == PaginationMode.Paginated
+                        && Internal.PageNumberFieldInstr.TryParse(instrText) is { } pageField)
+                    {
+                        return new XElement(Xhtml.span,
+                            new XAttribute("data-field", pageField.Kind),
+                            pageField.FormatSwitch is null
+                                ? null
+                                : new XAttribute("data-field-format", pageField.FormatSwitch),
+                            g.Select(n => ConvertToHtmlTransform(wordDoc, settings, n, false, 0m)));
+                    }
 
                     var parsed = FieldRetriever.ParseField(instrText);
                     if (parsed.FieldType != "HYPERLINK")

@@ -74,10 +74,15 @@ internal static class Dispatcher
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
         "insert_page_number_field" => DocxSessionOps.InsertPageNumberField(
             Handle(args), Str(args, "anchorId"),
-            DocxSessionJson.ParsePageNumberField(Str(args, "field"))),
+            DocxSessionJson.ParsePageNumberField(Str(args, "field")),
+            DocxSessionJson.ParseNumberFormatOrNull(OptStr(args, "format"))),
         "ensure_header_footer_visible" => DocxSessionOps.EnsureHeaderFooterVisible(
             Handle(args), Str(args, "anchorId"),
             DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind"))),
+        "set_page_numbering" => DocxSessionOps.SetPageNumbering(
+            Handle(args), Str(args, "anchorId"), ParsePageNumberingOp(args, "op")),
+        "clear_page_numbering" => DocxSessionOps.ClearPageNumbering(
+            Handle(args), Str(args, "anchorId")),
 
         "insert_footnote" => DocxSessionOps.InsertFootnote(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
@@ -358,6 +363,19 @@ internal static class Dispatcher
     {
         if (args.ValueKind != JsonValueKind.Object) return fallback;
         return args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : fallback;
+    }
+
+    private static string? OptStr(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return null;
+        return args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+    }
+
+    private static PageNumberingOp ParsePageNumberingOp(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var op))
+            return new PageNumberingOp();
+        return DocxSessionJson.ParsePageNumberingOp(op);
     }
 
     private static Position ParsePos(JsonElement args, string name) =>

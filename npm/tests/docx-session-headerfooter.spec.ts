@@ -44,7 +44,7 @@ test.describe('DocxSession header/footer authoring (WASM bridge)', () => {
         );
         const footerAnchor: string | undefined = setFooter.created?.[0]?.id;
         const pageNum = footerAnchor
-          ? JSON.parse(bridge.InsertPageNumberField(handle, footerAnchor, 'currentPage'))
+          ? JSON.parse(bridge.InsertPageNumberField(handle, footerAnchor, 'currentPage', ''))
           : { success: false };
 
         const after = JSON.parse(bridge.Project(handle));

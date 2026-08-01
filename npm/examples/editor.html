@@ -43,9 +43,13 @@
     .docx-hf-band[data-hf-band="footer"] { margin: 14px 0 0; }
     .docx-hf-chrome { display: flex; gap: 8px; align-items: center; margin: 0 0 6px -60px;
       font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8a8d91; }
-    .docx-hf-chrome select { font: inherit; text-transform: none; letter-spacing: normal;
+    .docx-hf-chrome select,
+    .docx-hf-chrome input { font: inherit; text-transform: none; letter-spacing: normal;
       padding: 2px 4px; border: 1px solid #d7dade; border-radius: 4px; background: #f6f7f8;
       color: #1c1e21; }
+    /* The section's page-number format + restart value (issue #277). Narrow, because it holds a
+       page number rather than a measurement. */
+    .docx-hf-chrome input[data-hf-pagestart] { width: 72px; }
     .docx-hf-label { font-weight: 600; }
     .docx-hf-warning { margin: 0 0 8px -60px; padding: 6px 8px; font-size: 12px; line-height: 1.4;
       background: #fff7e6; border: 1px solid #f0d9a8; border-radius: 4px; color: #6b4e00; }

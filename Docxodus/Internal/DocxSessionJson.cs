@@ -35,6 +35,49 @@ internal static class DocxSessionJson
             _ => PageNumberField.CurrentPage,
         };
 
+    /// <summary>
+    /// Wire → <see cref="NumberFormat"/>, where an EMPTY or absent token means "no format
+    /// specified" rather than a default — the distinction the tri-state page-numbering surface is
+    /// built on. Unlike <see cref="NumberFormats.ParseOoxml"/>, an unrecognized non-empty token also
+    /// reads as null so a typo cannot silently become <see cref="NumberFormat.Decimal"/>; the typed
+    /// clients (TypeScript union, Python enum) constrain the value long before it gets here.
+    /// </summary>
+    public static NumberFormat? ParseNumberFormatOrNull(string? s) => s switch
+    {
+        "decimal" => NumberFormat.Decimal,
+        "upperLetter" => NumberFormat.UpperLetter,
+        "lowerLetter" => NumberFormat.LowerLetter,
+        "upperRoman" => NumberFormat.UpperRoman,
+        "lowerRoman" => NumberFormat.LowerRoman,
+        "bullet" => NumberFormat.Bullet,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Parse a <see cref="PageNumberingOp"/> from <c>{ start?: int, format?: string }</c>. An
+    /// omitted field stays null, which is what "leave this attribute unchanged" means on the op.
+    /// </summary>
+    public static PageNumberingOp ParsePageNumberingOp(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return new PageNumberingOp();
+        using var doc = JsonDocument.Parse(json);
+        return ParsePageNumberingOp(doc.RootElement);
+    }
+
+    /// <summary>Element overload — the stdio host already holds a parsed request body.</summary>
+    public static PageNumberingOp ParsePageNumberingOp(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return new PageNumberingOp();
+        int? start = root.TryGetProperty("start", out var s) && s.ValueKind == JsonValueKind.Number
+            ? s.GetInt32()
+            : null;
+        return new PageNumberingOp
+        {
+            Start = start,
+            Format = ParseNumberFormatOrNull(TryGetString(root, "format", null)),
+        };
+    }
+
     public static DocxSessionSettings ParseSettings(string settingsJson)
     {
         if (string.IsNullOrEmpty(settingsJson)) return new DocxSessionSettings();
@@ -723,6 +766,12 @@ internal static class DocxSessionJson
         sb.Append(']');
         AppendHeaderFooterRefs(sb, ",\"headerRefs\":", info.HeaderRefs);
         AppendHeaderFooterRefs(sb, ",\"footerRefs\":", info.FooterRefs);
+        // Omitted, not null-valued, when absent — an absent w:pgNumType attribute is "inherit", and
+        // the optional TypeScript/Python fields read that as undefined/None.
+        if (info.PageNumberStart is { } pnStart)
+            sb.Append(",\"pageNumberStart\":").Append(pnStart);
+        if (info.PageNumberFormat is { } pnFormat)
+            sb.Append(",\"pageNumberFormat\":").Append(JsonString(NumberFormatToString(pnFormat)));
         sb.Append('}');
         return sb.ToString();
     }
@@ -749,16 +798,7 @@ internal static class DocxSessionJson
         _ => "default",
     };
 
-    private static string NumberFormatToString(NumberFormat f) => f switch
-    {
-        NumberFormat.Decimal => "decimal",
-        NumberFormat.UpperLetter => "upperLetter",
-        NumberFormat.LowerLetter => "lowerLetter",
-        NumberFormat.UpperRoman => "upperRoman",
-        NumberFormat.LowerRoman => "lowerRoman",
-        NumberFormat.Bullet => "bullet",
-        _ => "decimal",
-    };
+    private static string NumberFormatToString(NumberFormat f) => NumberFormats.ToOoxml(f);
 
     public static string SerializeAnnotations(IReadOnlyList<DocumentAnnotation> anns)
     {

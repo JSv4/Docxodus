@@ -22,7 +22,9 @@ import type {
   FindOptions,
   FormatOp,
   HeaderFooterKind,
+  NumberFormat,
   PageNumberField,
+  PageNumberingOp,
   ParagraphBorderEdge,
   ParagraphFormatOp,
   TableInsertOptions,
@@ -239,11 +241,49 @@ export class DocxSession {
   /**
    * Append a page-number field to the paragraph `anchorId` — typically a header/footer paragraph
    * returned by {@link setFooterText}/{@link setHeaderText}. `"currentPage"` emits a PAGE field,
-   * `"totalPages"` a NUMPAGES field (native complex field with a cached "1"). Center it by setting
-   * the paragraph alignment ({@link setParagraphFormat}). Returns the paragraph anchor in `modified`.
+   * `"totalPages"` a NUMPAGES field (native complex field with a cached result). Center it by
+   * setting the paragraph alignment ({@link setParagraphFormat}). Returns the paragraph anchor in
+   * `modified`.
+   *
+   * `format` writes the field's own `\*` general-formatting switch (`PAGE \* roman` → `i, ii, iii`).
+   * Omitting it — the default — emits a plain field, which is what Word inserts and what follows the
+   * SECTION's format ({@link setPageNumbering}). Prefer the section setting for ordinary page
+   * numbering: a switch here overrides it for this one field and keeps overriding it if the section
+   * later changes.
    */
-  insertPageNumberField(anchorId: string, field: PageNumberField = "currentPage"): EditResult {
-    return JSON.parse(this.wasm.InsertPageNumberField(this.handle, anchorId, field)) as EditResult;
+  insertPageNumberField(
+    anchorId: string,
+    field: PageNumberField = "currentPage",
+    format?: NumberFormat
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.InsertPageNumberField(this.handle, anchorId, field, format ?? "")
+    ) as EditResult;
+  }
+
+  /**
+   * Set the page-numbering properties (`w:pgNumType`) of the section that owns `anchorId` (any body
+   * block in that section) — Word's *Format Page Numbers…* dialog: which number the section starts
+   * at and which format its pages use. Omitted fields on `op` are left unchanged, so the start can
+   * be set without disturbing the format and vice versa. Creates the element, and a trailing
+   * `w:sectPr`, if absent.
+   *
+   * Applying values the section already has is a successful no-op that does NOT consume undo
+   * history — safe to call from a dropdown's change handler.
+   */
+  setPageNumbering(anchorId: string, op: PageNumberingOp): EditResult {
+    return JSON.parse(
+      this.wasm.SetPageNumbering(this.handle, anchorId, JSON.stringify(op))
+    ) as EditResult;
+  }
+
+  /**
+   * Remove the section's page-numbering start/format: it reverts to continuing the previous
+   * section's numbering in Word's default `1, 2, 3`. Chapter-numbering attributes
+   * (`w:chapStyle`/`w:chapSep`) are preserved. A section with nothing to clear is a no-op.
+   */
+  clearPageNumbering(anchorId: string): EditResult {
+    return JSON.parse(this.wasm.ClearPageNumbering(this.handle, anchorId)) as EditResult;
   }
 
   /**

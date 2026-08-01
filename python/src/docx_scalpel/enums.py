@@ -82,6 +82,7 @@ class EditErrorCode(str, Enum):
     INVALID_POSITION = "invalid_position"
     UNKNOWN_STYLE = "unknown_style"
     INVALID_LIST_LEVEL = "invalid_list_level"
+    INVALID_PAGE_NUMBERING = "invalid_page_numbering"
     MALFORMED_XML = "malformed_xml"
     DISALLOWED_NAMESPACE = "disallowed_namespace"
     INCOMPATIBLE_ELEMENT_TYPE = "incompatible_element_type"
