@@ -885,6 +885,40 @@ public sealed record DiffEntry
 
 public sealed record MarkdownPatch(string ScopeAnchorId, string Markdown);
 
+/// <summary>One top-level render unit in a <see cref="RenderPlan"/> — a body block
+/// (<c>p</c>/<c>h</c>/<c>li</c>), one whole table (<c>tbl</c>, its rows/cells/cell
+/// paragraphs subsumed), or one footnote/endnote definition (<c>fn</c>/<c>en</c>).
+/// <para><see cref="Sig"/> is a content signature carried ONLY by container units
+/// (<c>tbl</c>/<c>fn</c>/<c>en</c>): a container's unid is structural (tag-name
+/// signature) and survives edits INSIDE it — a row insert or a note text edit keeps
+/// the container's unid — so a renderer diffing by unid alone would keep a stale
+/// node. The signature hashes the descendant unids, which any inner content or
+/// structure change re-derives, so a changed container diffs as an in-place
+/// substitution. <c>null</c> for leaf blocks, whose own unid IS their content
+/// signature.</para></summary>
+public sealed record RenderUnit(string Id, string Kind, string? Sig = null);
+
+/// <summary>
+/// The ordered top-level render units per scope container — the authority for "what
+/// blocks exist, in what order" that an incremental renderer diffs its DOM against.
+/// The projection's flat <c>AnchorIndex</c> cannot express table containment (a cell
+/// paragraph and a body paragraph are both kind <c>p</c>); this plan can.
+/// </summary>
+public sealed record RenderPlan(
+    System.Collections.Generic.IReadOnlyList<RenderUnit> Body,
+    System.Collections.Generic.IReadOnlyList<RenderUnit> Footnotes,
+    System.Collections.Generic.IReadOnlyList<RenderUnit> Endnotes);
+
+/// <summary>
+/// One footnote/endnote in citation order. <see cref="Id"/> is the note's
+/// <c>w:id</c> as written in the XML; <see cref="Ordinal"/> is its 1-based
+/// citation position — which IS its displayed number (ids ascend in reference
+/// order, the invariant every Word file holds). A client that renumbers rendered
+/// note chrome (markers, hrefs, list values) after an insert walks its markers in
+/// document order and applies the k-th entry to the k-th marker.
+/// </summary>
+public sealed record NoteListEntry(string Id, string DefAnchorId, int Ordinal);
+
 /// <summary>Summary returned by <see cref="DocxSession.CompactRuns"/>.</summary>
 public sealed record CompactResult
 {
@@ -1000,6 +1034,14 @@ public sealed class DocxSessionSettings
     /// through unchanged) — see issue #140.
     /// </summary>
     public bool SmartQuotes { get; init; } = false;
+
+    /// <summary>
+    /// When <c>false</c>, mutation ops return <c>Patch = null</c> and skip the per-op
+    /// scope re-projection that builds it. For clients that re-render from HTML (the
+    /// browser editor) the patch is dead weight — on a 350-block document it is a large
+    /// share of every op's latency. Default <c>true</c> (wire-compatible).
+    /// </summary>
+    public bool EmitMarkdownPatch { get; init; } = true;
 
     /// <summary>
     /// When <c>true</c> (default), the session projects the document at construction
@@ -1178,10 +1220,137 @@ public sealed class DocxSession : IDisposable
     /// to a Unid scan, so agents that hold cached ids keep working — matching the
     /// promise in <c>docs/architecture/docx_mutation_api.md</c>.
     /// </summary>
+    /// <summary>
+    /// The anchor index for LOOKUP (mutations, EditResult anchors). Reuses the full
+    /// projection's index when one is cached; otherwise builds and caches the cheap
+    /// index-only variant (no markdown emission, no per-entry TextPreview/AutoNumberPrefix)
+    /// — see <see cref="WmlToMarkdownConverter.BuildAnchorIndexOnly"/>. Entries from this
+    /// path therefore carry empty previews; consumers that need enrichment must call
+    /// <see cref="Project"/> explicitly.
+    /// </summary>
+    internal IReadOnlyDictionary<string, AnchorTarget> AnchorIndex()
+    {
+        ThrowIfDisposed();
+        if (_cachedProjection is not null) return _cachedProjection.AnchorIndex;
+        return _cachedAnchorIndex ??=
+            WmlToMarkdownConverter.BuildAnchorIndexOnly(_doc!, _settings.ProjectionSettings);
+    }
+
+    private IReadOnlyDictionary<string, AnchorTarget>? _cachedAnchorIndex;
+
+    /// <summary>
+    /// The ordered top-level render units per scope container — see <see cref="RenderPlan"/>.
+    /// Body = the main body's direct children in document order (each <c>w:p</c> under its
+    /// projected kind, each <c>w:tbl</c> as ONE <c>tbl</c> unit); Footnotes/Endnotes = the
+    /// non-boilerplate note definitions in part order. Elements the projection does not
+    /// address (e.g. <c>w:sectPr</c>) are skipped. Unlike the projection itself, empty
+    /// paragraphs are ALWAYS listed — the plan mirrors the rendered DOM, which contains
+    /// every block regardless of <see cref="EmptyParagraphMode"/>.
+    /// </summary>
+    public RenderPlan ListBlocks()
+    {
+        ThrowIfDisposed();
+        _ = AnchorIndex(); // guarantees Unids are assigned on every projected part
+
+        var body = new List<RenderUnit>();
+        var bodyEl = _doc!.MainDocumentPart?.GetXDocument().Root?.Element(W.body);
+        if (bodyEl is not null)
+        {
+            foreach (var el in bodyEl.Elements())
+            {
+                string? kind =
+                    el.Name == W.tbl ? "tbl" :
+                    el.Name == W.p ? WmlToMarkdownConverter.KindFor(el) : null;
+                var unid = (string?)el.Attribute(PtOpenXml.Unid);
+                if (kind is null || unid is null) continue;
+                body.Add(new RenderUnit($"{kind}:body:{unid}", kind, UnidHelper.ContentHash(el)));
+            }
+        }
+
+        List<RenderUnit> Notes(XElement? root, XName noteName, bool endnotes, string kindScope)
+        {
+            var list = new List<RenderUnit>();
+            if (root is null) return list;
+            // MIRRORS THE RENDERER exactly (WmlToHtmlConverter's notes sections), which
+            // is the only contract that lets a DOM diff work:
+            //  - with ≥1 citation, the section renders the CITED notes in citation order
+            //    (the tracker path) — an uncited note (Word's continuationNotice) does
+            //    NOT render;
+            //  - with zero citations, it renders every non-separator note in part order
+            //    (so an uncited notice DOES render there).
+            var cited = ListNotes(endnotes);
+            if (cited.Count > 0)
+            {
+                foreach (var n in cited)
+                    list.Add(new RenderUnit(n.DefAnchorId, kindScope,
+                        ResolveNoteDef(root, noteName, n.Id) is { } def ? UnidHelper.ContentHash(def) : null));
+                return list;
+            }
+            foreach (var n in root.Elements(noteName))
+            {
+                if ((string?)n.Attribute(W.type) is "separator" or "continuationSeparator") continue;
+                var unid = (string?)n.Attribute(PtOpenXml.Unid);
+                if (unid is null) continue;
+                list.Add(new RenderUnit($"{kindScope}:{kindScope}:{unid}", kindScope, UnidHelper.ContentHash(n)));
+            }
+            return list;
+        }
+
+        static XElement? ResolveNoteDef(XElement root, XName noteName, string id) =>
+            root.Elements(noteName).FirstOrDefault(n => (string?)n.Attribute(W.id) == id);
+
+        var main = _doc!.MainDocumentPart;
+        return new RenderPlan(
+            body,
+            Notes(main?.FootnotesPart?.GetXDocument().Root, W.footnote, endnotes: false, "fn"),
+            Notes(main?.EndnotesPart?.GetXDocument().Root, W.endnote, endnotes: true, "en"));
+    }
+
+    /// <summary>
+    /// The document's footnotes (or endnotes) in citation order — see
+    /// <see cref="NoteListEntry"/>. References are collected from the main body in
+    /// document order (Word disallows note references anywhere else this API can
+    /// author them); a reference whose definition is missing is skipped.
+    /// </summary>
+    public IReadOnlyList<NoteListEntry> ListNotes(bool endnotes = false)
+    {
+        ThrowIfDisposed();
+        _ = AnchorIndex(); // guarantees Unids on the note parts
+
+        var result = new List<NoteListEntry>();
+        var main = _doc!.MainDocumentPart;
+        var bodyRoot = main?.GetXDocument().Root;
+        var notesRoot = endnotes
+            ? main?.EndnotesPart?.GetXDocument().Root
+            : main?.FootnotesPart?.GetXDocument().Root;
+        if (bodyRoot is null || notesRoot is null) return result;
+
+        var refName = endnotes ? W.endnoteReference : W.footnoteReference;
+        var defName = endnotes ? W.endnote : W.footnote;
+        var kindScope = endnotes ? "en" : "fn";
+
+        var defsById = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var def in notesRoot.Elements(defName))
+        {
+            var defId = (string?)def.Attribute(W.id);
+            if (defId is not null) defsById[defId] = def;
+        }
+
+        foreach (var r in bodyRoot.Descendants(refName))
+        {
+            var id = (string?)r.Attribute(W.id);
+            if (id is null || !defsById.TryGetValue(id, out var def)) continue;
+            var unid = (string?)def.Attribute(PtOpenXml.Unid);
+            if (unid is null) continue;
+            result.Add(new NoteListEntry(id, $"{kindScope}:{kindScope}:{unid}", result.Count + 1));
+        }
+        return result;
+    }
+
     internal AnchorTarget? FindAnchor(string? anchorId)
     {
         if (anchorId is null) return null;
-        var index = Project().AnchorIndex;
+        var index = AnchorIndex();
         if (index.TryGetValue(anchorId, out var direct)) return direct;
         int lastColon = anchorId.LastIndexOf(':');
         if (lastColon <= 0 || lastColon == anchorId.Length - 1) return null;
@@ -1211,7 +1380,7 @@ public sealed class DocxSession : IDisposable
     {
         if (unid is null) return null;
         AnchorTarget? fallback = null;
-        foreach (var t in Project().AnchorIndex.Values)
+        foreach (var t in AnchorIndex().Values)
         {
             if (t.Unid != unid) continue;
             if (preferPartUri is not null && t.PartUri == preferPartUri) return t.Anchor;
@@ -1245,6 +1414,7 @@ public sealed class DocxSession : IDisposable
     public AnchorInfo? GetAnchorInfo(string anchorId)
     {
         ThrowIfDisposed();
+        _ = Project(); // AnchorInfo's product IS the enrichment — never serve the index-only (empty-preview) entries.
         var target = FindAnchor(anchorId);
         if (target is null) return null;
         return new AnchorInfo(target.Anchor.Id, target.Anchor.Kind, target.Anchor.Scope, target.TextPreview)
@@ -1263,6 +1433,7 @@ public sealed class DocxSession : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(anchorIds);
+        _ = Project(); // See GetAnchorInfo — enrichment required, index-only entries won't do.
 
         var result = new Dictionary<string, AnchorInfo?>(StringComparer.Ordinal);
         foreach (var id in anchorIds)
@@ -1921,7 +2092,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
             return Enumerable.Repeat(success, matches.Count).ToArray();
         }
@@ -2036,7 +2207,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -2977,6 +3148,17 @@ public sealed class DocxSession : IDisposable
 
         if (persistAnchorIds)
         {
+            // Flush every projected part's cached XDocument to its stream first.
+            // Ops mutate the cached XDocument only; historically the per-op
+            // projection rebuild flushed for them (scope.Part.PutXDocument in
+            // BuildAnchorIndex), but that flush is now conditional on Unid
+            // assignment — this path must not depend on it, or an op that changes
+            // content without creating a new Unid (e.g. SetPageNumbering) could
+            // serialize stale bytes.
+            foreach (var part in EnumerateProjectedParts())
+            {
+                if (part.GetXDocument().Root is not null) part.PutXDocument();
+            }
             _doc!.Save();
             _stream!.Flush();
             _stream.Position = 0;
@@ -3120,7 +3302,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3170,7 +3352,7 @@ public sealed class DocxSession : IDisposable
                 {
                     Success = true,
                     Modified = new[] { target.Anchor },
-                    Patch = ProjectScope(target),
+                    Patch = PatchFor(target),
                 };
             }
 
@@ -3186,7 +3368,7 @@ public sealed class DocxSession : IDisposable
             }
 
             // Collect descendant anchors before removal so the caller knows what's gone.
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             var removed = new List<Anchor> { target.Anchor };
             foreach (var d in element.Descendants())
             {
@@ -3204,7 +3386,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Removed = removed,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3344,7 +3526,7 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             bool trackedChanges = _settings.TrackedChanges == TrackedChangeMode.RenderInline;
 
             if (trackedChanges)
@@ -3379,7 +3561,7 @@ public sealed class DocxSession : IDisposable
                 {
                     Success = true,
                     Modified = modified,
-                    Patch = ProjectScope(anchorForPatchScope),
+                    Patch = PatchFor(anchorForPatchScope),
                 };
             }
 
@@ -3395,7 +3577,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Removed = removed,
-                Patch = ProjectScope(anchorForPatchScope),
+                Patch = PatchFor(anchorForPatchScope),
             };
         }
         catch (Exception ex)
@@ -3552,7 +3734,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = created,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3659,7 +3841,7 @@ public sealed class DocxSession : IDisposable
                 Success = true,
                 Modified = new[] { target.Anchor },
                 Created = new[] { secondAnchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3739,7 +3921,7 @@ public sealed class DocxSession : IDisposable
                 Success = true,
                 Modified = new[] { firstTarget.Anchor },
                 Removed = new[] { secondTarget.Anchor },
-                Patch = ProjectScope(firstTarget),
+                Patch = PatchFor(firstTarget),
             };
         }
         catch (Exception ex)
@@ -3830,7 +4012,7 @@ public sealed class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
-            var freshIndex = Project().AnchorIndex;
+            var freshIndex = AnchorIndex();
             var created = new List<Anchor>();
             foreach (var unid in CollectUnids(parsedXml))
             {
@@ -3842,7 +4024,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = created,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -3883,7 +4065,7 @@ public sealed class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
-            var freshIndex = Project().AnchorIndex;
+            var freshIndex = AnchorIndex();
             var newUnids = CollectUnids(parsedXml).ToHashSet();
 
             // Classify by Unid set membership: the documented Get→mutate→Replace
@@ -3918,7 +4100,7 @@ public sealed class DocxSession : IDisposable
                 Removed = removed,
                 Created = created,
                 Modified = modified,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4015,7 +4197,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4123,7 +4305,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4162,14 +4344,14 @@ public sealed class DocxSession : IDisposable
 
             InvalidateProjectionCache();
             // Anchor kind may have flipped (e.g., p → h); look it up in the fresh index.
-            var freshIndex = Project().AnchorIndex;
+            var freshIndex = AnchorIndex();
             var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
 
             return new EditResult
             {
                 Success = true,
                 Modified = new[] { updated },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4310,14 +4492,14 @@ public sealed class DocxSession : IDisposable
                 ApplyParagraphBorders(pPr, op.TopBorder, op.BottomBorder, op.ClearBorders is true);
 
             InvalidateProjectionCache();
-            var freshIndex = Project().AnchorIndex;
+            var freshIndex = AnchorIndex();
             var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
 
             return new EditResult
             {
                 Success = true,
                 Modified = new[] { updated },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4376,7 +4558,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = new[] { created },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4583,7 +4765,7 @@ public sealed class DocxSession : IDisposable
                 WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
 
             InvalidateProjectionCache();
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             var created = new List<Anchor>();
             foreach (var p in paras)
             {
@@ -4597,7 +4779,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = created,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4658,7 +4840,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -4980,7 +5162,7 @@ public sealed class DocxSession : IDisposable
                 Success = true,
                 Created = created,
                 Modified = new[] { target.Anchor },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -5318,7 +5500,7 @@ public sealed class DocxSession : IDisposable
             foreach (var p in cellParagraphs) PromoteHyperlinkRelationships(p);
 
             InvalidateProjectionCache();
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             var created = new List<Anchor>();
             foreach (var p in cellParagraphs)
             {
@@ -5331,7 +5513,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = created,
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -5419,7 +5601,7 @@ public sealed class DocxSession : IDisposable
     /// <summary>After a structural edit, resolve the freshly-projected anchors for the given paragraphs.</summary>
     private List<Anchor> ResolveAnchorsForParagraphs(IEnumerable<XElement> paras)
     {
-        var index = Project().AnchorIndex;
+        var index = AnchorIndex();
         var result = new List<Anchor>();
         foreach (var para in paras)
         {
@@ -5467,7 +5649,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = ResolveAnchorsForParagraphs(newParas),
-                Patch = ProjectScope(target!),
+                Patch = PatchFor(target!),
             };
         }
         catch (Exception ex)
@@ -5519,7 +5701,7 @@ public sealed class DocxSession : IDisposable
             {
                 Success = true,
                 Created = ResolveAnchorsForParagraphs(newParas),
-                Patch = ProjectScope(target!),
+                Patch = PatchFor(target!),
             };
         }
         catch (Exception ex)
@@ -5540,13 +5722,13 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             var removed = CellParagraphAnchorsIn(tr!);
             if (tbl!.Elements(W.tr).Count() <= 1) { foreach (var a in CellParagraphAnchorsIn(tbl)) if (!removed.Contains(a)) removed.Add(a); tbl.Remove(); }
             else tr!.Remove();
 
             InvalidateProjectionCache();
-            return new EditResult { Success = true, Removed = removed, Patch = ProjectScope(target!) };
+            return new EditResult { Success = true, Removed = removed, Patch = PatchFor(target!) };
         }
         catch (Exception ex)
         {
@@ -5566,7 +5748,7 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             var grid = tbl!.Element(W.tblGrid);
             int colCount = grid?.Elements(W.gridCol).Count() ?? tbl.Elements(W.tr).First().Elements(W.tc).Count();
 
@@ -5586,7 +5768,7 @@ public sealed class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
-            return new EditResult { Success = true, Removed = removed, Patch = ProjectScope(target!) };
+            return new EditResult { Success = true, Removed = removed, Patch = PatchFor(target!) };
         }
         catch (Exception ex)
         {
@@ -5678,7 +5860,7 @@ public sealed class DocxSession : IDisposable
         {
             Success = true,
             Modified = new[] { target.Anchor },
-            Patch = ProjectScope(target),
+            Patch = PatchFor(target),
         };
     }
 
@@ -5725,13 +5907,13 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         element.Element(W.pPr)?.Element(W.numPr)?.Remove();
         InvalidateProjectionCache();
-        var fresh = Project().AnchorIndex;
+        var fresh = AnchorIndex();
         var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
         return new EditResult
         {
             Success = true,
             Modified = new[] { updated },
-            Patch = ProjectScope(target),
+            Patch = PatchFor(target),
         };
     }
 
@@ -5774,13 +5956,13 @@ public sealed class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
-            var freshIndex = Project().AnchorIndex;
+            var freshIndex = AnchorIndex();
             var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
             return new EditResult
             {
                 Success = true,
                 Modified = new[] { updated },
-                Patch = ProjectScope(target),
+                Patch = PatchFor(target),
             };
         }
         catch (Exception ex)
@@ -5908,7 +6090,7 @@ public sealed class DocxSession : IDisposable
     /// </summary>
     private Anchor? CanonicalizeAnchorByUnid(string unid)
     {
-        var idx = Project().AnchorIndex;
+        var idx = AnchorIndex();
         return idx.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor;
     }
 
@@ -6019,7 +6201,11 @@ public sealed class DocxSession : IDisposable
 
     // ─── Internal mutation helpers (used by tier methods landing in later phases) ───
 
-    internal void InvalidateProjectionCache() => _cachedProjection = null;
+    internal void InvalidateProjectionCache()
+    {
+        _cachedProjection = null;
+        _cachedAnchorIndex = null;
+    }
 
     /// <summary>
     /// A per-part XML snapshot covering every part the projector / mutation ops walk.
@@ -6204,12 +6390,27 @@ public sealed class DocxSession : IDisposable
 
     // ─── Mutation helpers (shared across tiers) ───────────────────────────
 
+    /// <summary>
+    /// The per-op patch, or <c>null</c> when <see cref="DocxSessionSettings.EmitMarkdownPatch"/>
+    /// is off — every mutation's <c>Patch =</c> site routes through here so the opt-out
+    /// cannot be missed by a new op.
+    /// </summary>
+    private MarkdownPatch? PatchFor(AnchorTarget target) =>
+        _settings.EmitMarkdownPatch ? ProjectScope(target) : null;
+
     internal MarkdownPatch ProjectScope(AnchorTarget target)
     {
         // Phase 3 implementation: re-project the whole document. The patch contract
         // (smallest enclosing block) is honored by ScopeAnchorId; the markdown payload
         // is the full projection until we optimize this in a later phase.
+        //
+        // Every Patch site runs AFTER the op's InvalidateProjectionCache, so the fresh
+        // projection built here IS the post-op state — cache it. Without this, a
+        // default-settings caller pays this Convert per op AND a second index build on
+        // the next op's FindAnchor.
         var fresh = WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
+        _cachedProjection = fresh;
+        _cachedAnchorIndex = null;
         return new MarkdownPatch(target.Anchor.Id, fresh.Markdown);
     }
 

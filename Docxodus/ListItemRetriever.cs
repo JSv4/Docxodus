@@ -374,6 +374,15 @@ namespace Docxodus
 
         public static void InitListItemInfo(XDocument numXDoc, XDocument stylesXDoc, XElement paragraph)
         {
+            // Idempotent: a live (session) document is re-initialized whenever an edit
+            // ADDS a paragraph, and every paragraph annotated by an earlier pass must be
+            // left alone — re-annotating would stack duplicate annotations and, worse,
+            // hit SetParagraphLevel's double-set guard and throw for any list item.
+            // (First-added annotations win on read, so skipping preserves exactly the
+            // values earlier passes computed.)
+            if (paragraph.Annotation<ListItemInfo>() != null)
+                return;
+
             if (FirstRunIsEmptySectionBreak(paragraph))
             {
                 paragraph.AddAnnotation(NotAListItem);

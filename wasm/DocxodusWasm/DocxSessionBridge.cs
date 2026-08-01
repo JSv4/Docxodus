@@ -38,6 +38,48 @@ public static partial class DocxSessionBridge
     public static string Project(int handle) => DocxSessionOps.Project(handle);
 
     /// <summary>
+    /// Ordered top-level render units per scope container (body / footnotes /
+    /// endnotes), as JSON: <c>{"body":[{"id","kind"},…],"footnotes":[…],"endnotes":[…]}</c>.
+    /// A table is ONE body unit; a note definition is one notes unit. The editor's
+    /// incremental reconciler diffs its DOM against this after a structural op.
+    /// </summary>
+    [JSExport]
+    public static string ListBlocks(int handle) => DocxSessionOps.ListBlocks(handle);
+
+    /// <summary>
+    /// Citation-ordered footnotes (or endnotes) as JSON
+    /// <c>[{"id","defAnchorId","ordinal"},…]</c> — the id↔ordinal authority the
+    /// editor's reconciler walks when it renumbers rendered note chrome (marker
+    /// sup text, hrefs, list values) after a note insert/delete.
+    /// </summary>
+    [JSExport]
+    public static string ListNotes(int handle, bool endnotes) => DocxSessionOps.ListNotes(handle, endnotes);
+
+    /// <summary>
+    /// The anchor index alone as <c>{"anchorIndex":{…}}</c> — the editor's per-op
+    /// anchor-map refresh, without marshaling the whole markdown projection.
+    /// </summary>
+    [JSExport]
+    public static string ListAnchors(int handle) => DocxSessionOps.ListAnchors(handle);
+
+    /// <summary>
+    /// Batch block render: <paramref name="anchorIdsJson"/> is a JSON string array of
+    /// anchor ids; returns a JSON object mapping each id to its HTML element (null for
+    /// an id that failed to resolve). One throwaway document and one converter run for
+    /// the whole batch, with real sibling context and true list-marker numbers.
+    /// </summary>
+    [JSExport]
+    public static string RenderBlocksHtml(int handle, string anchorIdsJson, string cssPrefix, bool fabricateClasses)
+    {
+        // NOTE: success output is itself a JSON object, so the "HTML never starts with
+        // '{'" error convention of RenderBlockHtml does not apply here — callers parse
+        // and check for an "error" property (anchor-id keys always contain a colon, so
+        // they can never collide with it).
+        try { return DocxSessionOps.RenderBlocksHtml(handle, anchorIdsJson, cssPrefix, fabricateClasses); }
+        catch (System.Exception ex) { return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}"; }
+    }
+
+    /// <summary>
     /// Bridge for <see cref="DocxSession.ProjectAnchor"/>. <paramref name="depth"/>
     /// uses the numeric layout of <see cref="ProjectionDepth"/> (SelfOnly=0,
     /// Subtree=1, SubtreeAndFollowingSiblings=2). Returns a JSON object with

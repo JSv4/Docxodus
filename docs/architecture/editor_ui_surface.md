@@ -152,8 +152,9 @@ not by DOM position — so the demo states the anchor rather than hiding it in d
 fastest way to confirm scope resolution is right: clicking a footnote body shows `p:fn:…`, a header
 line shows `p:hdr:…`.
 
-`last op` exists because operation cost here is not uniform (§9), and a surface that hides a six-second
-remount invites you to design as if it were free.
+`last op` exists because operation cost here is not uniform (§9), and a surface that hides its repaint
+cost invites you to design as if it were free — it is how the old six-second structural remount was
+caught and driven down to a few hundred milliseconds.
 
 ---
 
@@ -204,22 +205,29 @@ above shows `Last Updated October 2025 i` on page 1 of a section formatted `lowe
 
 ## 9. What operations cost
 
-Measured on the 346-block document above (Chromium, WASM):
+Measured on the 346-block document above (Chromium, WASM, warm):
 
 | Operation | Cost | Why |
 |-----------|------|-----|
-| Open + first render | ~5–10 s | Full document conversion |
-| Text edit (commit on blur) | < 100 ms | Single-block re-render — the whole point of the design |
-| `setPageNumbering` | ~650 ms | Section attribute + band repaint |
-| `save()` | ~300 ms | Lossless serialize |
-| Undo / redo | **~5.6 s** | Full remount |
-| Insert table / row / footnote | **~6 s** | Full remount |
+| Open + first render | ~5–8 s | Full document conversion (one-time; M3 worker offload is the open item) |
+| Text edit (commit on blur) | ~150–220 ms | Single-block re-render + note-marker repair |
+| `setPageNumbering` | ~285 ms | Section attribute + band repaint |
+| `save()` | ~220 ms | Lossless serialize |
+| Undo / redo | ~200–360 ms | Incremental reconcile (was ~5.6 s as a full remount) |
+| Insert table / row | ~225–245 ms | Incremental reconcile (was ~6 s) |
+| Insert footnote | ~210 ms | Incremental reconcile + chrome renumber (was ~6.2 s) |
+| Delete block | ~95 ms | Incremental reconcile |
 
-Structural operations remount the whole document because their effects are non-local: a new list item
-renumbers the list, a new footnote renumbers every later citation, and a single-block render of a
-numbered item would show it as "1.". This is a **known cost, not a mystery** — `save()` at 300 ms
-shows the engine is not the bottleneck; the re-render is. Incremental repaint for structural ops is
-the open optimization.
+Structural operations no longer remount: `DocxEditor.reconcile()` diffs the DOM's top-level unit
+sequence against the session's render plan (`ListBlocks` — LCS over `unid|contentHash` tokens),
+keeps unchanged units' DOM nodes, renders changed/created units in one batched WASM call
+(`RenderBlocksHtml`, with real sibling context and true list-marker numbers), and renumbers
+footnote/endnote marker chrome positionally from `ListNotes`. A full remount survives as the
+universal **fallback** — paginated mode, pure list-item insert/remove (sibling numbers shift
+without sibling XML changing), border-`div` regrouping (`insertHorizontalRule`, `clearBorders`,
+list toggles), or any inconsistency — so correctness never depends on the diff; the reconciled DOM
+is pinned equal to a remounted DOM by `npm/tests/editor-reconcile.spec.ts`. When an op reads
+slow in the rail, `editor['lastReconcileFallback']` says why it fell back.
 
 ---
 
