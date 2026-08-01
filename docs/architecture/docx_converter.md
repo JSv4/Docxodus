@@ -8,6 +8,18 @@ This document describes the architecture and capabilities of the `WmlToHtmlConve
 
 The converter transforms Open XML WordprocessingML documents into well-formed XHTML with CSS styling. It processes the document through a multi-stage pipeline that resolves formatting, calculates layout metrics, and transforms elements to their HTML equivalents.
 
+![The NVCA model charter rendered to HTML](../images/render.png)
+
+The [NVCA model certificate of incorporation](https://nvca.org/model-legal-documents/) in flow mode.
+Justification, style-inherited italics, superscript footnote references and legal numbering all
+survive the conversion — resolved by the pipeline below rather than approximated.
+
+![Footnotes rendered with back-references](../images/footnotes.png)
+
+With `RenderFootnotesAndEndnotes` on, notes render as a numbered section with a back-reference to
+the citing paragraph. In paginated mode the same notes are placed at the bottom of the page that
+cites them, above a separator rule — see [`paginated_headers_footers.md`](paginated_headers_footers.md).
+
 ## Entry Points
 
 ```csharp

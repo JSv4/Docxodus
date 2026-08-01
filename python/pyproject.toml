@@ -10,7 +10,20 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Docxodus contributors" }]
-keywords = ["docx", "ooxml", "llm", "agent", "document-editing", "redline"]
+keywords = [
+    "docx",
+    "word",
+    "ooxml",
+    "openxml",
+    "llm",
+    "agent",
+    "document-editing",
+    "document-comparison",
+    "redline",
+    "diff",
+    "tracked-changes",
+    "markdown",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

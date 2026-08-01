@@ -6,6 +6,25 @@
 
 The IR diff engine is a structure-aware DOCX comparison engine built on Docxodus' intermediate document representation (IR). It is the write-side analogue of the read-only IR pipeline that backs the markdown projection: it reads two documents into anchor-addressed IR snapshots, computes an **edit script** between them, and renders that script three ways — native tracked-changes markup, a consumer revision list, or the script itself as JSON (diff-as-data).
 
+### What it produces
+
+![A redlined venture financing agreement](../images/redline.png)
+
+The [NVCA model voting agreement](https://nvca.org/model-legal-documents/) against a copy edited
+through `DocxSession`, compared with `DocxDiff.Compare` and rendered by `WmlToHtmlConverter` with
+`RenderTrackedChanges: true`. Four families of change in one frame, all recovered structurally:
+
+| In the screenshot | Markup emitted |
+|---|---|
+| `(g)` "Qualified Key Holder" struck in red | `w:del` |
+| The "Sanctions Authority" definition underlined in green | `w:ins` |
+| `Series A` for a blank, `means` for `shall mean and include` | `w:ins`/`w:del` at token granularity inside an otherwise Equal block |
+| The interpretation clause struck at the bottom in purple, re-inserted at the top | `w:moveFrom`/`w:moveTo`, paired by `w:name` and surfaced as one `MoveGroupId` |
+
+Note the list renumbering `(k)`/`(l)`/`(o)`: the letters move because the surrounding items changed,
+and the diff attributes that to the structural edit rather than reporting every subsequent
+definition as rewritten.
+
 It is a sibling to `WmlComparer` in the comparison family. The differences that motivate it:
 
 1. **Anchor-addressed revisions.** Every revision carries the stable block anchor(s) (`kind:scope:unid`) it derives from — the same anchor grammar as the markdown projection and `DocxSession`. A revision can be located in the projection or fed straight to a `DocxSession` mutation. `WmlComparer.WmlComparerRevision` has no anchors.

@@ -1,285 +1,280 @@
 <p align="center">
-  <img src="docxodus-logo.png" alt="Docxodus" width="400">
+  <img src="docxodus-logo.png" alt="Docxodus" width="380">
 </p>
 
 <p align="center">
-  <strong>A powerful Typescript, Python and .NET library for manipulating Open XML documents (DOCX, XLSX, PPTX).</strong>
+  <strong>Free your .docx files.</strong><br>
+  Render them, edit them, diff them, and hand them to an agent — from .NET, the browser, Python, or the shell.
 </p>
 
 <p align="center">
   <a href="https://github.com/JSv4/Docxodus/actions/workflows/ci.yml"><img src="https://github.com/JSv4/Docxodus/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://www.nuget.org/packages/Docxodus"><img src="https://img.shields.io/nuget/v/Docxodus?label=nuget" alt="NuGet"></a>
+  <a href="https://www.npmjs.com/package/docxodus"><img src="https://img.shields.io/npm/v/docxodus?label=npm" alt="npm"></a>
+  <a href="https://pypi.org/project/docx-scalpel/"><img src="https://img.shields.io/pypi/v/docx-scalpel?label=pypi" alt="PyPI"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
 </p>
 
 ---
 
-Docxodus is a fork of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools) upgraded to .NET 10.0. It provides tools for comparing Word documents, converting between DOCX and HTML, projecting DOCX to anchor-addressed markdown for LLM pipelines, programmatically editing DOCX content via a stateful session API, merging documents, and more.
+A `.docx` is a zip full of XML that only one program really understands. Docxodus is the toolkit that
+changes that: a **structure-aware OOXML engine** that reads Word documents faithfully, writes them
+back losslessly, and exposes them through whichever surface your program actually needs — an HTML
+render, a stable markdown projection, a stateful edit session, a tracked-changes redline, or a live
+in-browser editor.
 
-## Quick Start
+It runs as a **.NET library**, a **WebAssembly module in the browser**, an **npm/TypeScript package**,
+a **Python client**, and three **CLI tools** — all over the same engine, so a document behaves the
+same everywhere.
 
-### Install the Library
-
-```bash
-# Install from NuGet
-dotnet add package Docxodus
+```
+                    ┌───────────────────────────────────────────┐
+  your .docx  ──▶   │       Docxodus  ·  one OOXML engine       │   ──▶   .docx  (lossless)
+                    └────┬─────────┬──────────┬──────────┬──────┘
+                         │         │          │          │
+                      render     edit      compare    project
 ```
 
-### Using as a Library
+Every screenshot below is real output, captured from the
+[NVCA model financing documents](https://nvca.org/model-legal-documents/) — the venture-financing
+forms that every startup lawyer actually redlines.
+
+---
+
+## Compare — a redline Word will open
+
+`DocxDiff` compares two documents structurally and emits **native Word tracked-changes markup**:
+`w:ins`, `w:del`, `w:moveFrom`/`w:moveTo`, and `w:pPrChange`. Not a text diff with highlighting — a
+file you can hand to opposing counsel, who accepts and rejects changes in Word as usual.
+
+![A redlined venture financing agreement](docs/images/redline.png)
+
+One frame, four kinds of change, all detected automatically: a **struck definition** (red), an
+**inserted definition** (green), **word-level substitutions** inside an otherwise untouched sentence
+(`Series A` replacing a blank; `means` replacing `shall mean and include`), and a **move** — the
+interpretation clause struck at the bottom in purple and re-inserted at the top, linked as one
+operation rather than reported as an unrelated delete and insert.
+
+- **Round-trip contract:** `accept(compare(left, right)) ≡ right` and `reject(...) ≡ left`, verified
+  at the block-text level.
+- **The diff is also data.** `GetRevisions()` returns typed revisions carrying stable
+  `kind:scope:unid` anchors; `GetEditScriptJson()` returns the whole edit script as JSON, so you can
+  drive a review UI or an approval workflow without parsing OOXML.
+- **N-way consolidate.** Merge many reviewers' copies against one base into a single multi-author
+  tracked-changes document, with a structured conflict report.
+- Headers and footers are compared too — the way Word's own "Headers and footers" option does, and
+  the way `WmlComparer` never did.
+
+Two engines ship: the incumbent `WmlComparer` and the newer structure-aware `DocxDiff`.
+See [`docs/architecture/ir_diff_engine.md`](docs/architecture/ir_diff_engine.md).
+
+---
+
+## Render — fidelity, not approximation
+
+DOCX → HTML that keeps the things naive converters drop: justification, style inheritance, legal
+numbering, tables, images, comments, headers and footers, and real footnotes with back-references.
+
+![The NVCA model charter rendered to HTML](docs/images/render.png)
+
+- **Paginated mode** flows content into real page boxes with per-page numbers, page-anchored
+  footnotes, and running heads — a print-accurate preview in the browser.
+- **Tracked changes render as `<ins>`/`<del>`** with author metadata and move-aware styling (that's
+  exactly what the redline screenshot above is).
+- **Comments** render endnote-style, inline, or in a margin; annotations can be overlaid
+  incrementally without re-converting the document (~0.3 ms to add one, vs. a full re-conversion).
+- `HtmlToWmlConverter` goes the other way.
+
+---
+
+## Project — a text view an LLM can actually address
+
+`WmlToMarkdownConverter` renders a document as markdown where **every block carries a stable id**.
+The same document, two views, one addressing system:
+
+![Markdown projection beside the rendered document](docs/images/projection.png)
+
+An anchor like `{#p:body:09612b1c13…}` is content-derived and survives edits elsewhere in the
+document. That gives an agent something a raw text dump can't: a way to *point*.
+
+- Read the markdown, decide "rewrite the indemnification clause", write back to that anchor.
+- Anchors are shared across the whole stack — the same id addresses a projection block, a rendered
+  DOM node (`data-anchor`), a diff revision, and an edit target.
+- Resolve intent to anchors by text, regex, kind, bookmark, or annotation id — no re-walking the
+  document.
+- Also exports to [OpenContracts](docs/architecture/opencontracts_export.md) format with PAWLS page
+  layout and token positions, for NLP and document-analysis pipelines.
+
+---
+
+## Edit — programmatically, or in a browser
+
+`DocxSession` is a stateful, anchor-addressed editor over the live document. Every mutation returns a
+typed result envelope — no exceptions across the API boundary — and the document stays a real,
+valid `.docx` the whole time.
+
+Text and structure (replace, split, merge, insert, delete), tables (insert/delete rows and columns),
+formatting (character ranges, paragraph styles, lists, borders), headers and footers, page numbering,
+footnotes and endnotes, annotations, bounded undo/redo, and a raw-OOXML escape hatch for anything
+the markdown subset can't express. Set `TrackedChanges = RenderInline` and every edit lands as
+`w:ins`/`w:del` instead of an accepted change.
+
+`DocxEditor` is the browser editor built on top of it — framework-agnostic TypeScript, WASM engine,
+no server:
+
+![The in-browser DOCX editor](docs/images/editor/editor-overview.png)
+
+The document you see is the document you get: edits go through the session, and **only the changed
+block re-renders** — so a structural op costs ~90–360 ms on a 346-block, 94-footnote filing
+template, not the ~6 s a full remount used to take. `save()` returns lossless bytes.
+
+<p align="center">
+  <img src="docs/images/editor/ribbon-insert.png" alt="Insert tab" width="49%">
+  <img src="docs/images/editor/ribbon-table-contextual.png" alt="Contextual table tab" width="49%">
+</p>
+
+More of the surface — ribbon anatomy, header/footer bands, paginated mode, per-operation costs — is
+in [`docs/architecture/editor_ui_surface.md`](docs/architecture/editor_ui_surface.md).
+
+---
+
+## Get started
+
+<table>
+<tr><th align="left">.NET</th><th align="left">Browser / Node</th></tr>
+<tr valign="top"><td>
+
+```bash
+dotnet add package Docxodus
+```
 
 ```csharp
 using Docxodus;
 
-// Compare documents
-var original = new WmlDocument("original.docx");
-var modified = new WmlDocument("modified.docx");
+var redline = DocxDiff.Compare(
+    new WmlDocument("v1.docx"),
+    new WmlDocument("v2.docx"));
 
-var settings = new WmlComparerSettings
-{
-    AuthorForRevisions = "Redline",
-    DetailThreshold = 0
-};
-
-var result = WmlComparer.Compare(original, modified, settings);
-
-// Get list of revisions (with move detection)
-var revisions = WmlComparer.GetRevisions(result, settings);
-foreach (var rev in revisions)
-{
-    if (rev.RevisionType == WmlComparer.WmlComparerRevisionType.Moved)
-        Console.WriteLine($"Moved (group {rev.MoveGroupId}): {rev.Text}");
-    else
-        Console.WriteLine($"{rev.RevisionType}: {rev.Text}");
-}
-
-// Save the redlined document
-result.SaveAs("redline.docx");
+redline.SaveAs("redline.docx");
 ```
 
-## CLI Tools
-
-Docxodus includes two command-line tools:
-
-### Redline (Document Comparison)
-
-```bash
-# Install globally
-dotnet tool install -g Redline
-
-# Usage
-redline original.docx modified.docx output.docx
-
-# With custom author tag
-redline original.docx modified.docx output.docx --author="Legal Review"
-```
-
-| Option | Description |
-|--------|-------------|
-| `--author=<name>` | Author name for tracked changes (default: "Redline") |
-| `-h, --help` | Show help message |
-| `-v, --version` | Show version information |
-
-### docx2html (HTML Conversion)
-
-```bash
-# Install globally
-dotnet tool install -g Docx2Html
-
-# Basic conversion
-docx2html document.docx
-
-# Specify output file
-docx2html document.docx output.html
-
-# Extract images to files instead of embedding as base64
-docx2html document.docx --extract-images
-
-# Use inline styles instead of CSS classes
-docx2html document.docx --inline-styles
-```
-
-| Option | Description |
-|--------|-------------|
-| `--title=<text>` | Page title (default: document title or filename) |
-| `--css-prefix=<text>` | CSS class prefix (default: "pt-") |
-| `--inline-styles` | Use inline styles instead of CSS classes |
-| `--extract-images` | Save images to separate files instead of embedding |
-| `-h, --help` | Show help message |
-| `-v, --version` | Show version information |
-
-## Download Standalone Binaries
-
-Pre-built binaries are available on the [Releases](https://github.com/JSv4/Docxodus/releases) page:
-
-**redline** (Document Comparison):
-
-| Platform | Download |
-|----------|----------|
-| Windows (x64) | `redline-win-x64.exe` |
-| Linux (x64) | `redline-linux-x64` |
-| macOS (x64) | `redline-osx-x64` |
-| macOS (ARM) | `redline-osx-arm64` |
-
-**docx2html** (HTML Conversion):
-
-| Platform | Download |
-|----------|----------|
-| Windows (x64) | `docx2html-win-x64.exe` |
-| Linux (x64) | `docx2html-linux-x64` |
-| macOS (x64) | `docx2html-osx-x64` |
-| macOS (ARM) | `docx2html-osx-arm64` |
-
-## Build from Source
-
-```bash
-# Clone the repository
-git clone https://github.com/JSv4/Docxodus.git
-cd Docxodus
-
-# Build
-dotnet build Docxodus.sln
-
-# Run the CLI
-dotnet run --project tools/redline/redline.csproj -- --help
-```
-
-## Testing
-
-### .NET Unit Tests
-
-```bash
-# Run all tests (~1,100 tests)
-dotnet test Docxodus.Tests/Docxodus.Tests.csproj
-
-# Run specific test by name
-dotnet test --filter "FullyQualifiedName~WC001"
-
-# Run tests for a specific class
-dotnet test --filter "FullyQualifiedName~WmlComparerTests"
-```
-
-### npm/WASM Browser Tests (Playwright)
-
-```bash
-# Need to be in npm subdirectory
-cd npm
-
-# Install dependencies (first time only)
-npm install
-npx playwright install chromium
-
-# Build WASM and TypeScript (required before tests)
-npm run build
-
-# Run all Playwright tests (~62 tests)
-npm test
-
-# Run specific test by name pattern
-npx playwright test --grep "Document Structure"
-
-# Run tests with browser visible
-npx playwright test --headed
-
-# TypeScript type checking
-npx tsc --noEmit
-```
-
-## Features
-
-- **WmlComparer** - Compare two DOCX files and generate redlines with tracked changes
-  - **Move Detection** - Automatically detects when content is relocated (not just deleted and re-inserted)
-  - **Format Change Detection** - Detects formatting-only changes (bold, italic, font size, etc.)
-  - Configurable similarity threshold and minimum word count
-  - Links move pairs via `MoveGroupId` for easy tracking
-- **WmlToHtmlConverter** / **HtmlToWmlConverter** - Bidirectional DOCX ↔ HTML conversion
-  - Comment rendering (endnote-style, inline, or margin)
-  - Paginated output mode for PDF-like viewing
-  - Headers, footers, footnotes, and endnotes support
-  - Custom annotation rendering
-- **WmlToMarkdownConverter** - Anchor-addressed markdown projection of a DOCX with stable per-block IDs - a text view suitable for LLM editing pipelines, structured search indexers, and diff/review UIs
-- **DocxSession** - Stateful in-memory DOCX editor keyed by markdown-projection anchor ids - the write-side counterpart to WmlToMarkdownConverter for agentic editing pipelines
-  - Text and structural edits: replace paragraph text, delete blocks, insert/split/merge paragraphs, change paragraph style, adjust list level, replace table-cell content
-  - Character-range formatting (bold, italic, underline, strike, code, color, run style) addressed by substring, span, or a prior search match
-  - Surgical text replacement that preserves per-run formatting on either side of the rewritten slice - including a span-addressed variant that lets identical placeholders in one paragraph each receive distinct values
-  - Cross-run text search with per-fragment run breakdown (`Grep`), plus a cross-block variant (`GrepCrossBlock`) that lets a single match span adjacent paragraphs, headings, and list items
-  - Template-slot enumeration that classifies bracketed regions as value blanks, alternative clauses, or drafter hints
-  - Anchor discovery by text, regex, kind, bookmark, annotation id, or shared label - so an agent told to "edit the indemnification clause" can resolve intent to anchors without re-walking the document
-  - NBSP / smart-quote handling so common Word whitespace and punctuation don't sabotage literal find/replace
-  - Tracked-change mode that lands every mutation as `w:ins` / `w:del` instead of accepted edits
-  - Bounded snapshot undo/redo
-  - Raw OOXML escape hatch for content the markdown subset can't express (charts, equations, content controls)
-  - Typed result envelope on every call - no exceptions across the API boundary
-  - Available in .NET, WASM, and an npm TypeScript wrapper
-- **DocumentBuilder** - Merge and split DOCX files
-- **DocumentAssembler** - Template population from XML data
-- **PresentationBuilder** - Merge and split PPTX files
-- **SpreadsheetWriter** - Simplified XLSX creation API
-- **OpenXmlRegex** - Search/replace in DOCX/PPTX using regular expressions
-- **OpenContractExporter** - Export documents to OpenContracts format for NLP/document analysis
-- Supporting utilities for document manipulation
-
-## Browser/JavaScript Usage (npm)
-
-Docxodus is also available as an npm package for client-side usage via WebAssembly:
+</td><td>
 
 ```bash
 npm install docxodus
 ```
 
-```javascript
-import {
-  initialize,
-  convertDocxToHtml,
-  compareDocuments,
-  getRevisions,
-  getDocumentMetadata,
-  isMove,
-  isMoveSource,
-  isFormatChange,
-  findMovePair,
-  CommentRenderMode,
-  PaginationMode
-} from 'docxodus';
+```ts
+import { initialize, compareDocuments } from 'docxodus';
 
 await initialize();
-
-// Convert DOCX to HTML with comments and pagination
-const html = await convertDocxToHtml(docxFile, {
-  commentRenderMode: CommentRenderMode.EndnoteStyle,
-  paginationMode: PaginationMode.Paginated,
-  renderHeadersAndFooters: true
-});
-
-// Compare two documents
-const redlinedDocx = await compareDocuments(originalFile, modifiedFile);
-
-// Get revisions with move and format change detection
-const revisions = await getRevisions(redlinedDocx);
-for (const rev of revisions) {
-  if (isMove(rev)) {
-    const pair = findMovePair(rev, revisions);
-    if (isMoveSource(rev)) {
-      console.log(`Content moved from: "${rev.text}" to: "${pair?.text}"`);
-    }
-  } else if (isFormatChange(rev)) {
-    console.log(`Format changed: ${rev.formatChange?.changedPropertyNames?.join(', ')}`);
-  }
-}
-
-// Get document metadata for lazy loading
-const metadata = await getDocumentMetadata(docxFile);
-console.log(`${metadata.totalParagraphs} paragraphs, ${metadata.estimatedPageCount} pages`);
+const redline = await compareDocuments(v1, v2);
 ```
 
-See the [npm package documentation](docs/npm-package.md) for full API reference, React hooks, and usage examples.
+</td></tr>
+<tr><th align="left">Python</th><th align="left">CLI</th></tr>
+<tr valign="top"><td>
 
-## Requirements
+```bash
+pip install docx-scalpel
+```
 
-- .NET 10.0 or later
+```python
+from docx_scalpel import open_session
 
-## License
+with open_session(docx_bytes) as s:
+    s.replace_text(anchor, "new text")
+    out = s.save()
+```
 
-MIT License - see [LICENSE](LICENSE) for details.
+</td><td>
+
+```bash
+dotnet tool install -g Redline
+redline old.docx new.docx out.docx
+```
+
+Also `Docx2Html` and `Docx2OC`, plus
+[standalone binaries](https://github.com/JSv4/Docxodus/releases)
+for Windows, Linux and macOS.
+
+</td></tr>
+</table>
+
+Opening an editor in a page is a few lines more — see [`npm/examples/editor.html`](npm/examples/editor.html)
+for a complete ribbon implementation, and [`docs/npm-package.md`](docs/npm-package.md) for the
+TypeScript API and React hooks.
 
 ---
 
-*Built on the shoulders of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools). Thanks to Eric White, Thomas Barnekow, and all original contributors.*
+## Where it runs
+
+| Surface | Package | Notes |
+|---|---|---|
+| .NET 10 library | [`Docxodus`](https://www.nuget.org/packages/Docxodus) (NuGet) | The engine. Everything else wraps it. |
+| Browser / Node | [`docxodus`](https://www.npmjs.com/package/docxodus) (npm) | .NET WASM + TypeScript. Runs fully client-side; Web Worker and React hooks included. |
+| Python | [`docx-scalpel`](https://pypi.org/project/docx-scalpel/) (PyPI) | Long-running host process, so an agent can issue dozens of edits against one open session. *Alpha; linux-x64 wheels.* |
+| CLI | `Redline`, `Docx2Html`, `Docx2OC` | `dotnet tool install -g`, or download a self-contained binary. |
+
+---
+
+## What else is in the box
+
+| | |
+|---|---|
+| **DocumentBuilder** | Merge and split DOCX files, with section and style fidelity |
+| **DocumentAssembler** | Populate templates from XML data via content controls |
+| **PresentationBuilder** | Merge and split PPTX |
+| **SpreadsheetWriter** | Streaming XLSX creation |
+| **OpenXmlRegex** | Regex search/replace across DOCX and PPTX |
+| **RevisionProcessor** | Accept and reject tracked revisions, byte-to-byte |
+| **FormattingAssembler** | Resolve and flatten inherited formatting |
+| **MetricsGetter** | Extract document metrics — styles, fonts, languages |
+| **ExternalAnnotationProjector** | Overlay annotations onto rendered HTML without touching the DOCX |
+
+---
+
+## Documentation
+
+Design docs for every subsystem live in [`docs/architecture/`](docs/architecture/). The ones worth
+reading first:
+
+| Doc | What it covers |
+|---|---|
+| [`ir_diff_engine.md`](docs/architecture/ir_diff_engine.md) | `DocxDiff` — pipeline, edit script, settings, parity with Word |
+| [`docx_mutation_api.md`](docs/architecture/docx_mutation_api.md) | `DocxSession` — full surface, anchor lifecycle, error catalog, markdown subset |
+| [`markdown_projection.md`](docs/architecture/markdown_projection.md) | The projection spec and anchor format |
+| [`docx_converter.md`](docs/architecture/docx_converter.md) | `WmlToHtmlConverter` internals |
+| [`editor_ui_surface.md`](docs/architecture/editor_ui_surface.md) | The browser editor, control by control |
+| [`ooxml_corner_cases.md`](docs/ooxml_corner_cases.md) | Where Word disagrees with the spec — and what we do about it |
+
+---
+
+## Build and test
+
+```bash
+dotnet build Docxodus.sln            # build
+dotnet test Docxodus.Tests/Docxodus.Tests.csproj   # 1,900+ tests
+
+cd npm && npm install && npx playwright install chromium
+npm run build && npm test           # WASM + Playwright browser tests
+```
+
+`npm run build` compiles the library to WebAssembly (`scripts/build-wasm.sh`) and bundles the
+TypeScript — re-run it after touching C#, TypeScript, or the test harness, or the browser tests will
+run against stale artifacts. Release builds treat warnings as errors. See
+[`CLAUDE.md`](CLAUDE.md) for the full development workflow and repository layout.
+
+## Requirements
+
+The .NET 10.0 SDK, to build from source. Consumers of the npm and PyPI packages need no .NET
+install of their own.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+*Built on the shoulders of [Open-Xml-PowerTools](https://github.com/OfficeDev/Open-Xml-PowerTools).
+Thanks to Eric White, Thomas Barnekow, and all original contributors.*
