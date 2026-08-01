@@ -62,4 +62,27 @@ public class DocxSessionPerfPathTests
         var res = b.ReplaceText(target, "Index-only resolved edit.");
         Assert.True(res.Success);
     }
+
+    [Fact]
+    public void DS303_ListAnchors_SameShapeAndKeysAsProjection()
+    {
+        var bytes = System.IO.File.ReadAllBytes("../../../../TestFiles/HC031-Complicated-Document.docx");
+        using var session = new DocxSession(bytes);
+
+        var viaProjection = System.Text.Json.JsonDocument.Parse(
+            Docxodus.Internal.DocxSessionJson.SerializeProjection(session.Project()));
+        var viaIndex = System.Text.Json.JsonDocument.Parse(
+            Docxodus.Internal.DocxSessionOps.ListAnchors(
+                Docxodus.Internal.SessionRegistry.OpenSession(bytes, null)));
+
+        static System.Collections.Generic.List<string> Keys(System.Text.Json.JsonDocument d) =>
+            d.RootElement.GetProperty("anchorIndex").EnumerateObject()
+                .Select(p => p.Name).OrderBy(k => k).ToList();
+
+        Assert.Equal(Keys(viaProjection), Keys(viaIndex));
+        // Entries carry the fields the editor's anchor map reads.
+        var sample = viaIndex.RootElement.GetProperty("anchorIndex").EnumerateObject().First().Value;
+        Assert.True(sample.TryGetProperty("unid", out _));
+        Assert.True(sample.TryGetProperty("scope", out _));
+    }
 }

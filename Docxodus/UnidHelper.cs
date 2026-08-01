@@ -163,9 +163,18 @@ internal static class UnidHelper
         void Walk(XElement e)
         {
             sb.Append('<').Append(e.Name.LocalName);
+            // A note's w:id is EXCLUDED — on the reference AND on the definition:
+            // inserting a footnote shifts the id of every later citation and its
+            // definition (ids ascend in reference order), yet their rendered content is
+            // unchanged — marker/list numbering and hrefs are POSITION-derived chrome a
+            // renumber pass owns, not content. Hashing the id would make one note insert
+            // look like a change to every later citing block and every note definition.
+            bool isNoteRef = e.Name == W.footnoteReference || e.Name == W.endnoteReference
+                || e.Name == W.footnote || e.Name == W.endnote;
             foreach (var a in e.Attributes())
             {
                 if (a.Name == PtOpenXml.Unid || a.IsNamespaceDeclaration) continue;
+                if (isNoteRef && a.Name == W.id) continue;
                 sb.Append(' ').Append(a.Name.LocalName).Append('=').Append(a.Value);
             }
             sb.Append('>');

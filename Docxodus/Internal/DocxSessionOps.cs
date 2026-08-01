@@ -51,6 +51,14 @@ internal static class DocxSessionOps
     public static string ListNotes(int handle, bool endnotes) =>
         DocxSessionJson.SerializeNoteList(SessionRegistry.Get(handle).ListNotes(endnotes));
 
+    /// <summary>
+    /// The anchor index alone (no markdown emission or marshaling) — the editor's
+    /// per-op anchor-map refresh. Same <c>{"anchorIndex":{…}}</c> shape as
+    /// <see cref="Project"/>, an order of magnitude cheaper on a large document.
+    /// </summary>
+    public static string ListAnchors(int handle) =>
+        DocxSessionJson.SerializeAnchorIndex(SessionRegistry.Get(handle).AnchorIndex());
+
     public static string ProjectAnchor(int handle, string anchorId, ProjectionDepth depth) =>
         DocxSessionJson.SerializeProjection(SessionRegistry.Get(handle).ProjectAnchor(anchorId, depth));
 

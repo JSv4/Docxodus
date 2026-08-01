@@ -102,10 +102,11 @@ export interface DocxEditorExports {
       characterOffset: number,
       markdown: string,
     ) => string;
-    /** Incremental-reconcile trio (optional: older WASM bundles predate them; the
-     *  editor falls back to full remounts without them). */
+    /** Incremental-reconcile endpoints (optional: older WASM bundles predate them;
+     *  the editor falls back to full remounts / full projections without them). */
     ListBlocks?: (handle: number) => string;
     ListNotes?: (handle: number, endnotes: boolean) => string;
+    ListAnchors?: (handle: number) => string;
     RenderBlocksHtml?: (
       handle: number,
       anchorIdsJson: string,
@@ -644,6 +645,10 @@ export class DocxEditor {
   /** The docked header/footer bands, when `options.headerFooter` is on. */
   private region: HeaderFooterRegion | null = null;
 
+  /** Why the last reconcile() fell back to a full remount (null = it patched). For
+   *  diagnostics/specs; not part of the public API. */
+  private lastReconcileFallback: string | null = null;
+
   private constructor(
     container: HTMLElement,
     exports: DocxEditorExports,
@@ -817,7 +822,15 @@ export class DocxEditor {
    * edit into a header part.
    */
   private refreshAnchorMap(): void {
-    const proj = JSON.parse(this.exports.DocxSessionBridge.Project(this.handle)) as {
+    const bridge = this.exports.DocxSessionBridge;
+    // ListAnchors returns the same {anchorIndex} object WITHOUT the markdown payload —
+    // marshaling the full projection (a couple hundred KB on a real document) made
+    // this refresh the single biggest term of every incremental repaint.
+    const raw =
+      typeof bridge.ListAnchors === "function"
+        ? bridge.ListAnchors(this.handle)
+        : bridge.Project(this.handle);
+    const proj = JSON.parse(raw) as {
       anchorIndex: Record<string, AnchorTargetLite>;
     };
     this.unidToFullId.clear();
@@ -2150,7 +2163,8 @@ export class DocxEditor {
         this.remount(focusIndex, caretAtEnd);
         return;
       }
-    } catch {
+    } catch (err) {
+      this.lastReconcileFallback = `threw: ${err instanceof Error ? err.message : String(err)}`;
       this.remount(focusIndex, caretAtEnd);
       return;
     }
@@ -2172,17 +2186,17 @@ export class DocxEditor {
     // resolves through it, and the map must reflect the post-op session.
     this.refreshAnchorMap();
     const plan = JSON.parse(bridge.ListBlocks!(this.handle)) as RenderPlan & { error?: string };
-    if (plan.error) return false;
+    if (plan.error) return this.bail(`plan error: ${plan.error}`);
 
     const oldNodes = this.bodyUnitNodes();
     const oldTokens = oldNodes.map(DocxEditor.domTokenOf);
     const oldKinds = oldNodes.map(DocxEditor.domKindOf);
     const bodyDiff = diffUnits(oldTokens, plan.body);
-    if (needsRemount(bodyDiff, plan.body, oldKinds)) return false;
+    if (needsRemount(bodyDiff, plan.body, oldKinds)) return this.bail("needsRemount (li change or churn)");
 
     const fnState = this.notesDiff("footnotes", plan.footnotes);
     const enState = this.notesDiff("endnotes", plan.endnotes);
-    if (fnState === null || enState === null) return false;
+    if (fnState === null || enState === null) return this.bail("notes container unstampable/missing");
 
     // One batch render for everything that needs fresh HTML.
     const addedBodyIds = bodyDiff.added.map((j) => plan.body[j].id);
@@ -2200,8 +2214,8 @@ export class DocxEditor {
           this.options.fabricateClasses,
         ),
       );
-      if ((rendered as { error?: string }).error) return false;
-      for (const id of allIds) if (!rendered[id]) return false;
+      if ((rendered as { error?: string }).error) return this.bail(`render error: ${(rendered as { error?: string }).error}`);
+      for (const id of allIds) if (!rendered[id]) return this.bail(`unrenderable: ${id}`);
     }
 
     // A substituted list item may only swap in place if its rendered marker matches
@@ -2218,7 +2232,7 @@ export class DocxEditor {
     const freshBody = new Map<number, HTMLElement>();
     for (const j of bodyDiff.added) {
       const el = parse(rendered[plan.body[j].id]!);
-      if (!el) return false;
+      if (!el) return this.bail(`unparseable render: ${plan.body[j].id}`);
       freshBody.set(j, el);
     }
     for (const { oldIndex, newIndex } of bodyDiff.substituted) {
@@ -2227,10 +2241,10 @@ export class DocxEditor {
       const newMarker = DocxEditor.listMarkerText(
         freshRoot ? DocxEditor.anchorElOf(freshRoot) : null,
       );
-      if (oldMarker !== newMarker) return false;
+      if (oldMarker !== newMarker) return this.bail("substituted li marker drift");
     }
 
-    if (!this.applyBodyDiff(oldNodes, plan.body, bodyDiff, freshBody)) return false;
+    if (!this.applyBodyDiff(oldNodes, plan.body, bodyDiff, freshBody)) return this.bail("applyBodyDiff bail");
     this.applyNotesDiff("footnotes", plan.footnotes, fnState, rendered);
     this.applyNotesDiff("endnotes", plan.endnotes, enState, rendered);
 
@@ -2244,7 +2258,13 @@ export class DocxEditor {
       this.renumberNoteChrome("footnote");
     if (enState.diff.added.length + enState.diff.removed.length > 0 || freshHasMarker)
       this.renumberNoteChrome("endnote");
+    this.lastReconcileFallback = null;
     return true;
+  }
+
+  private bail(reason: string): false {
+    this.lastReconcileFallback = reason;
+    return false;
   }
 
   /** The generated single-child wrapper chain around a unit node (a table's alignment
@@ -2455,9 +2475,14 @@ export class DocxEditor {
       const sup = a.querySelector("sup");
       if (sup) sup.textContent = String(n.ordinal);
     });
+    // Match list items by their stamped note anchor, NOT position: the section can
+    // hold rendered-but-never-cited notes (Word's continuationNotice) that ListNotes
+    // — a citation walk — does not list; positional pairing would relabel them.
+    const byUnid = new Map(notes.map((n) => [unidOf(n.defAnchorId), n]));
     const lis = this.editRoot.querySelectorAll<HTMLElement>(`section.${kind}s > ol > li`);
-    lis.forEach((li, k) => {
-      const n = notes[k];
+    lis.forEach((li) => {
+      const unid = li.getAttribute("data-note-anchor");
+      const n = unid ? byUnid.get(unid) : undefined;
       if (!n) return;
       li.id = `${prefix}-${n.id}`;
       li.setAttribute("value", String(n.ordinal));

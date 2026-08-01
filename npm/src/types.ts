@@ -1058,6 +1058,10 @@ export interface DocxodusWasmExports {
      *  id↔ordinal authority for renumbering rendered note chrome. Optional:
      *  absent on older WASM bundles. */
     ListNotes?: (handle: number, endnotes: boolean) => string;
+    /** The anchor index alone as `{"anchorIndex":{…}}` — the editor's per-op
+     *  anchor-map refresh without marshaling the whole markdown projection.
+     *  Optional: absent on older WASM bundles. */
+    ListAnchors?: (handle: number) => string;
     /** Batch block render: `anchorIdsJson` is a JSON string array; returns a JSON
      *  object mapping each id to its HTML element (null when unresolvable), or
      *  `{"error": …}` on total failure — parse and check for `error`. One throwaway

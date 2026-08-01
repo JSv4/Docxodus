@@ -1267,19 +1267,28 @@ public sealed class DocxSession : IDisposable
             }
         }
 
-        List<RenderUnit> Notes(XElement? root, XName noteName, string kindScope)
+        List<RenderUnit> Notes(XElement? root, XName noteName, bool endnotes, string kindScope)
         {
             var list = new List<RenderUnit>();
             if (root is null) return list;
-            // CITATION order, not part order: the rendered notes section lists notes in
-            // the order they are cited, and ids ascend in reference order (the invariant
-            // every Word file holds), so numeric id order IS citation order — while the
-            // part can hold a freshly inserted definition appended at the end.
-            var ordered = root.Elements(noteName)
-                .Where(n => !WmlToMarkdownConverter.IsBoilerplateNote(n))
-                .OrderBy(n => int.TryParse((string?)n.Attribute(W.id), out var id) ? id : int.MaxValue);
-            foreach (var n in ordered)
+            // MIRRORS THE RENDERER exactly (WmlToHtmlConverter's notes sections), which
+            // is the only contract that lets a DOM diff work:
+            //  - with ≥1 citation, the section renders the CITED notes in citation order
+            //    (the tracker path) — an uncited note (Word's continuationNotice) does
+            //    NOT render;
+            //  - with zero citations, it renders every non-separator note in part order
+            //    (so an uncited notice DOES render there).
+            var cited = ListNotes(endnotes);
+            if (cited.Count > 0)
             {
+                foreach (var n in cited)
+                    list.Add(new RenderUnit(n.DefAnchorId, kindScope,
+                        ResolveNoteDef(root, noteName, n.Id) is { } def ? UnidHelper.ContentHash(def) : null));
+                return list;
+            }
+            foreach (var n in root.Elements(noteName))
+            {
+                if ((string?)n.Attribute(W.type) is "separator" or "continuationSeparator") continue;
                 var unid = (string?)n.Attribute(PtOpenXml.Unid);
                 if (unid is null) continue;
                 list.Add(new RenderUnit($"{kindScope}:{kindScope}:{unid}", kindScope, UnidHelper.ContentHash(n)));
@@ -1287,11 +1296,14 @@ public sealed class DocxSession : IDisposable
             return list;
         }
 
+        static XElement? ResolveNoteDef(XElement root, XName noteName, string id) =>
+            root.Elements(noteName).FirstOrDefault(n => (string?)n.Attribute(W.id) == id);
+
         var main = _doc!.MainDocumentPart;
         return new RenderPlan(
             body,
-            Notes(main?.FootnotesPart?.GetXDocument().Root, W.footnote, "fn"),
-            Notes(main?.EndnotesPart?.GetXDocument().Root, W.endnote, "en"));
+            Notes(main?.FootnotesPart?.GetXDocument().Root, W.footnote, endnotes: false, "fn"),
+            Notes(main?.EndnotesPart?.GetXDocument().Root, W.endnote, endnotes: true, "en"));
     }
 
     /// <summary>

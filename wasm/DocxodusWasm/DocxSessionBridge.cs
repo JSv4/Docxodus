@@ -56,6 +56,13 @@ public static partial class DocxSessionBridge
     public static string ListNotes(int handle, bool endnotes) => DocxSessionOps.ListNotes(handle, endnotes);
 
     /// <summary>
+    /// The anchor index alone as <c>{"anchorIndex":{…}}</c> — the editor's per-op
+    /// anchor-map refresh, without marshaling the whole markdown projection.
+    /// </summary>
+    [JSExport]
+    public static string ListAnchors(int handle) => DocxSessionOps.ListAnchors(handle);
+
+    /// <summary>
     /// Batch block render: <paramref name="anchorIdsJson"/> is a JSON string array of
     /// anchor ids; returns a JSON object mapping each id to its HTML element (null for
     /// an id that failed to resolve). One throwaway document and one converter run for

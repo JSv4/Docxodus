@@ -123,6 +123,46 @@ public class DocxSessionRenderPlanTests
         Assert.NotEqual(fnBefore.Sig, fnAfter.Sig);
     }
 
+    // A footnote insert shifts every LATER citation's w:id (reference-order law), but
+    // those blocks' rendered content is unchanged — marker chrome is renumbered
+    // positionally by the client. Their plan signatures must therefore NOT move, or one
+    // note insert reads as a change to half the document.
+    [Fact]
+    public void DS314_NoteIdShift_DoesNotChurnCitingBlockSignatures()
+    {
+        using var session = new DocxSession(DocxSession.CreateBlankDocxBytes());
+        var p0 = session.ListBlocks().Body[0].Id;
+        session.ReplaceText(p0, "First paragraph cites second.");
+        var anchor = session.ListBlocks().Body[0].Id;
+        session.InsertParagraph(anchor, Position.After, "Second paragraph cites first.");
+
+        // Cite from the SECOND paragraph first; its note takes the lowest id.
+        var second = session.ListBlocks().Body[1].Id;
+        Assert.True(session.InsertFootnote(second, 5, "Later-cited note.").Success);
+        var mid = session.ListBlocks();
+        var para1SigBefore = mid.Body[0].Sig;
+        var para2SigBefore = mid.Body[1].Sig;
+
+        // Now cite from the FIRST paragraph — earlier in document order, so the
+        // engine SHIFTS the second paragraph's citation id up to keep reference order.
+        Assert.True(session.InsertFootnote(mid.Body[0].Id, 5, "Earlier-cited note.").Success);
+
+        var notes = session.ListNotes();
+        Assert.Equal(2, notes.Count);
+        Assert.True(int.Parse(notes[0].Id) < int.Parse(notes[1].Id));
+
+        var plan = session.ListBlocks();
+        // The newly cited paragraph changed (it gained a reference run)…
+        Assert.NotEqual(para1SigBefore, plan.Body[0].Sig);
+        // …but the OTHER citing paragraph — whose only XML delta is the shifted
+        // reference id — keeps its signature, so a diff won't re-render it.
+        Assert.Equal(para2SigBefore, plan.Body[1].Sig);
+        // Same for the shifted note DEFINITION: its id moved, its content didn't.
+        var origNoteUnit = mid.Footnotes.Single();
+        var shiftedNoteUnit = plan.Footnotes.Single(u => u.Id == origNoteUnit.Id);
+        Assert.Equal(origNoteUnit.Sig, shiftedNoteUnit.Sig);
+    }
+
     private static string FirstCellParagraphAnchor(DocxSession session)
     {
         // A cell paragraph is a p:body anchor whose element sits inside w:tc — find one

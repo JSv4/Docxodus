@@ -605,6 +605,32 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    /// <summary>
+    /// The projection's anchor index WITHOUT the markdown payload — the shape the
+    /// editor's anchor-map refresh needs. Emits the same <c>{"anchorIndex":{…}}</c>
+    /// object <see cref="SerializeProjection"/> nests, so clients parse identically;
+    /// serialized from the cheap index-only entries (previews empty).
+    /// </summary>
+    public static string SerializeAnchorIndex(IReadOnlyDictionary<string, AnchorTarget> index)
+    {
+        var sb = new StringBuilder(64 + index.Count * 96);
+        sb.Append("{\"anchorIndex\":{");
+        bool first = true;
+        foreach (var kv in index)
+        {
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append(JsonString(kv.Key)).Append(":{")
+              .Append("\"partUri\":").Append(JsonString(kv.Value.PartUri))
+              .Append(",\"unid\":").Append(JsonString(kv.Value.Unid))
+              .Append(",\"kind\":").Append(JsonString(kv.Value.Anchor.Kind))
+              .Append(",\"scope\":").Append(JsonString(kv.Value.Anchor.Scope))
+              .Append('}');
+        }
+        sb.Append("}}");
+        return sb.ToString();
+    }
+
     public static string SerializeRenderPlan(RenderPlan plan)
     {
         var sb = new StringBuilder(256);
