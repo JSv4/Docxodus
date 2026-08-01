@@ -6,6 +6,10 @@ runnable proof-of-concept** that turns "could we?" into a measured yes/no.
 
 Branch: `feat/ir-editor-feasibility-poc`.
 
+> For what the editor **exposes today** — the ribbon, every control mapped to its command and
+> session op, screenshots, and measured per-operation costs — see
+> [`editor_ui_surface.md`](editor_ui_surface.md). This document covers the architecture behind it.
+
 ---
 
 ## 1. Summary / verdict
