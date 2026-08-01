@@ -1186,10 +1186,28 @@ public sealed class DocxSession : IDisposable
     /// to a Unid scan, so agents that hold cached ids keep working — matching the
     /// promise in <c>docs/architecture/docx_mutation_api.md</c>.
     /// </summary>
+    /// <summary>
+    /// The anchor index for LOOKUP (mutations, EditResult anchors). Reuses the full
+    /// projection's index when one is cached; otherwise builds and caches the cheap
+    /// index-only variant (no markdown emission, no per-entry TextPreview/AutoNumberPrefix)
+    /// — see <see cref="WmlToMarkdownConverter.BuildAnchorIndexOnly"/>. Entries from this
+    /// path therefore carry empty previews; consumers that need enrichment must call
+    /// <see cref="Project"/> explicitly.
+    /// </summary>
+    internal IReadOnlyDictionary<string, AnchorTarget> AnchorIndex()
+    {
+        ThrowIfDisposed();
+        if (_cachedProjection is not null) return _cachedProjection.AnchorIndex;
+        return _cachedAnchorIndex ??=
+            WmlToMarkdownConverter.BuildAnchorIndexOnly(_doc!, _settings.ProjectionSettings);
+    }
+
+    private IReadOnlyDictionary<string, AnchorTarget>? _cachedAnchorIndex;
+
     internal AnchorTarget? FindAnchor(string? anchorId)
     {
         if (anchorId is null) return null;
-        var index = Project().AnchorIndex;
+        var index = AnchorIndex();
         if (index.TryGetValue(anchorId, out var direct)) return direct;
         int lastColon = anchorId.LastIndexOf(':');
         if (lastColon <= 0 || lastColon == anchorId.Length - 1) return null;
@@ -1219,7 +1237,7 @@ public sealed class DocxSession : IDisposable
     {
         if (unid is null) return null;
         AnchorTarget? fallback = null;
-        foreach (var t in Project().AnchorIndex.Values)
+        foreach (var t in AnchorIndex().Values)
         {
             if (t.Unid != unid) continue;
             if (preferPartUri is not null && t.PartUri == preferPartUri) return t.Anchor;
@@ -1253,6 +1271,7 @@ public sealed class DocxSession : IDisposable
     public AnchorInfo? GetAnchorInfo(string anchorId)
     {
         ThrowIfDisposed();
+        _ = Project(); // AnchorInfo's product IS the enrichment — never serve the index-only (empty-preview) entries.
         var target = FindAnchor(anchorId);
         if (target is null) return null;
         return new AnchorInfo(target.Anchor.Id, target.Anchor.Kind, target.Anchor.Scope, target.TextPreview)
@@ -1271,6 +1290,7 @@ public sealed class DocxSession : IDisposable
     {
         ThrowIfDisposed();
         ArgumentNullException.ThrowIfNull(anchorIds);
+        _ = Project(); // See GetAnchorInfo — enrichment required, index-only entries won't do.
 
         var result = new Dictionary<string, AnchorInfo?>(StringComparer.Ordinal);
         foreach (var id in anchorIds)
@@ -3194,7 +3214,7 @@ public sealed class DocxSession : IDisposable
             }
 
             // Collect descendant anchors before removal so the caller knows what's gone.
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             var removed = new List<Anchor> { target.Anchor };
             foreach (var d in element.Descendants())
             {
@@ -3352,7 +3372,7 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             bool trackedChanges = _settings.TrackedChanges == TrackedChangeMode.RenderInline;
 
             if (trackedChanges)
@@ -3838,7 +3858,7 @@ public sealed class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
-            var freshIndex = Project().AnchorIndex;
+            var freshIndex = AnchorIndex();
             var created = new List<Anchor>();
             foreach (var unid in CollectUnids(parsedXml))
             {
@@ -3891,7 +3911,7 @@ public sealed class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
-            var freshIndex = Project().AnchorIndex;
+            var freshIndex = AnchorIndex();
             var newUnids = CollectUnids(parsedXml).ToHashSet();
 
             // Classify by Unid set membership: the documented Get→mutate→Replace
@@ -4170,7 +4190,7 @@ public sealed class DocxSession : IDisposable
 
             InvalidateProjectionCache();
             // Anchor kind may have flipped (e.g., p → h); look it up in the fresh index.
-            var freshIndex = Project().AnchorIndex;
+            var freshIndex = AnchorIndex();
             var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
 
             return new EditResult
@@ -4318,7 +4338,7 @@ public sealed class DocxSession : IDisposable
                 ApplyParagraphBorders(pPr, op.TopBorder, op.BottomBorder, op.ClearBorders is true);
 
             InvalidateProjectionCache();
-            var freshIndex = Project().AnchorIndex;
+            var freshIndex = AnchorIndex();
             var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
 
             return new EditResult
@@ -4591,7 +4611,7 @@ public sealed class DocxSession : IDisposable
                 WordprocessingMLUtil.EnsureEvenAndOddHeaders(main);
 
             InvalidateProjectionCache();
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             var created = new List<Anchor>();
             foreach (var p in paras)
             {
@@ -5326,7 +5346,7 @@ public sealed class DocxSession : IDisposable
             foreach (var p in cellParagraphs) PromoteHyperlinkRelationships(p);
 
             InvalidateProjectionCache();
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             var created = new List<Anchor>();
             foreach (var p in cellParagraphs)
             {
@@ -5427,7 +5447,7 @@ public sealed class DocxSession : IDisposable
     /// <summary>After a structural edit, resolve the freshly-projected anchors for the given paragraphs.</summary>
     private List<Anchor> ResolveAnchorsForParagraphs(IEnumerable<XElement> paras)
     {
-        var index = Project().AnchorIndex;
+        var index = AnchorIndex();
         var result = new List<Anchor>();
         foreach (var para in paras)
         {
@@ -5548,7 +5568,7 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             var removed = CellParagraphAnchorsIn(tr!);
             if (tbl!.Elements(W.tr).Count() <= 1) { foreach (var a in CellParagraphAnchorsIn(tbl)) if (!removed.Contains(a)) removed.Add(a); tbl.Remove(); }
             else tr!.Remove();
@@ -5574,7 +5594,7 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            var index = Project().AnchorIndex;
+            var index = AnchorIndex();
             var grid = tbl!.Element(W.tblGrid);
             int colCount = grid?.Elements(W.gridCol).Count() ?? tbl.Elements(W.tr).First().Elements(W.tc).Count();
 
@@ -5733,7 +5753,7 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         element.Element(W.pPr)?.Element(W.numPr)?.Remove();
         InvalidateProjectionCache();
-        var fresh = Project().AnchorIndex;
+        var fresh = AnchorIndex();
         var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
         return new EditResult
         {
@@ -5782,7 +5802,7 @@ public sealed class DocxSession : IDisposable
             }
 
             InvalidateProjectionCache();
-            var freshIndex = Project().AnchorIndex;
+            var freshIndex = AnchorIndex();
             var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
             return new EditResult
             {
@@ -5916,7 +5936,7 @@ public sealed class DocxSession : IDisposable
     /// </summary>
     private Anchor? CanonicalizeAnchorByUnid(string unid)
     {
-        var idx = Project().AnchorIndex;
+        var idx = AnchorIndex();
         return idx.Values.FirstOrDefault(t => t.Unid == unid)?.Anchor;
     }
 
@@ -6027,7 +6047,11 @@ public sealed class DocxSession : IDisposable
 
     // ─── Internal mutation helpers (used by tier methods landing in later phases) ───
 
-    internal void InvalidateProjectionCache() => _cachedProjection = null;
+    internal void InvalidateProjectionCache()
+    {
+        _cachedProjection = null;
+        _cachedAnchorIndex = null;
+    }
 
     /// <summary>
     /// A per-part XML snapshot covering every part the projector / mutation ops walk.
@@ -6225,7 +6249,14 @@ public sealed class DocxSession : IDisposable
         // Phase 3 implementation: re-project the whole document. The patch contract
         // (smallest enclosing block) is honored by ScopeAnchorId; the markdown payload
         // is the full projection until we optimize this in a later phase.
+        //
+        // Every Patch site runs AFTER the op's InvalidateProjectionCache, so the fresh
+        // projection built here IS the post-op state — cache it. Without this, a
+        // default-settings caller pays this Convert per op AND a second index build on
+        // the next op's FindAnchor.
         var fresh = WmlToMarkdownConverter.Convert(_doc!, _settings.ProjectionSettings);
+        _cachedProjection = fresh;
+        _cachedAnchorIndex = null;
         return new MarkdownPatch(target.Anchor.Id, fresh.Markdown);
     }
 

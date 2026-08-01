@@ -374,8 +374,20 @@ public static class WmlToMarkdownConverter
             : text;
     }
 
+    /// <summary>
+    /// The projection's <c>AnchorIndex</c> WITHOUT the per-entry enrichment
+    /// (<see cref="AnchorTarget.TextPreview"/> stays empty, <see cref="AnchorTarget.AutoNumberPrefix"/>
+    /// stays null) and without emitting any markdown. Same walk, same keys, same Unid
+    /// assignment/persistence as the full projection — this is the cheap index mutation
+    /// ops resolve anchors through (<see cref="DocxSession.AnchorIndex"/>), so an edit
+    /// doesn't pay a whole-document markdown render just to look up one anchor id.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, AnchorTarget> BuildAnchorIndexOnly(
+        WordprocessingDocument doc, WmlToMarkdownConverterSettings settings) =>
+        BuildAnchorIndex(doc, settings, enrich: false).Index;
+
     private static (IReadOnlyDictionary<string, AnchorTarget> Index, List<ScopeInfo> Scopes, AnchorIdMap RenderMap)
-        BuildAnchorIndex(WordprocessingDocument doc, WmlToMarkdownConverterSettings settings)
+        BuildAnchorIndex(WordprocessingDocument doc, WmlToMarkdownConverterSettings settings, bool enrich = true)
     {
         var main = doc.MainDocumentPart
             ?? throw new InvalidOperationException("Document has no MainDocumentPart.");
@@ -456,8 +468,8 @@ public static class WmlToMarkdownConverter
                     Anchor = anchor,
                     PartUri = scope.Part.Uri.ToString(),
                     Unid = unid,
-                    TextPreview = ComputeTextPreview(el),
-                    AutoNumberPrefix = kind is "p" or "h" or "li" && scope.Name == "body"
+                    TextPreview = enrich ? ComputeTextPreview(el) : string.Empty,
+                    AutoNumberPrefix = enrich && kind is "p" or "h" or "li" && scope.Name == "body"
                         ? Internal.ListNumberResolver.Resolve(el, doc)
                         : null,
                 };

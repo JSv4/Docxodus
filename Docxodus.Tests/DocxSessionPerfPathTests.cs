@@ -43,4 +43,23 @@ public class DocxSessionPerfPathTests
         Assert.False(s.EmitMarkdownPatch);
         Assert.True(Docxodus.Internal.DocxSessionJson.ParseSettings("{}").EmitMarkdownPatch);
     }
+
+    [Fact]
+    public void DS302_IndexOnlyLookup_MatchesFullProjectionKeys()
+    {
+        var bytes = System.IO.File.ReadAllBytes("../../../../TestFiles/HC031-Complicated-Document.docx");
+        using var a = new DocxSession(bytes);
+        using var b = new DocxSession(bytes,
+            new DocxSessionSettings { CaptureInitialProjection = false });
+
+        var fullKeys = a.Project().AnchorIndex.Keys.OrderBy(k => k).ToList();
+        // b: never call Project() — force the index-only path.
+        var idxKeys = b.AnchorIndex().Keys.OrderBy(k => k).ToList();
+        Assert.Equal(fullKeys, idxKeys);
+
+        // Mutations still resolve anchors without a full projection.
+        var target = idxKeys.First(k => k.StartsWith("p:body:"));
+        var res = b.ReplaceText(target, "Index-only resolved edit.");
+        Assert.True(res.Success);
+    }
 }
