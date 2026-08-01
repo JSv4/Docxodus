@@ -143,6 +143,8 @@ internal static class DocxDiffOps
             settings.CompareHeadersFooters = compareHf;
         if (TryGetBool(root, "compareTextboxes", out var compareTextboxes))
             settings.CompareTextboxes = compareTextboxes;
+        if (TryGetBool(root, "compareFields", out var compareFields))
+            settings.CompareFields = compareFields;
         if (TryGetBool(root, "trackBlockFormatChanges", out var trackBlockFmt))
             settings.TrackBlockFormatChanges = trackBlockFmt;
         if (TryGetBool(root, "preAcceptInputRevisions", out var preAcceptInputRevisions))

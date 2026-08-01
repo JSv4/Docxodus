@@ -809,6 +809,35 @@ public sealed class DocxDiffSettings
     public bool CompareTextboxes { get; set; } = true;
 
     /// <summary>
+    /// Word Compare's "Fields" comparison option (default true, matching Word's own box). Governs whether a
+    /// paragraph's FIELD CODE state participates in the comparison: the instruction text (<c>PAGE</c> →
+    /// <c>NUMPAGES</c>, a changed <c>REF</c> target, an added format switch), the simple
+    /// (<c>w:fldSimple</c>) versus complex (<c>w:fldChar</c>) representation, the field's inline position, and
+    /// its <c>w:fldChar</c>/<c>w:fldData</c> scaffolding. Field RESULTS are ordinary text either way — a
+    /// changed result diffs as prose regardless of this setting.
+    /// <para>When true, a field-code change is tracked: the paragraph is rendered as one reversible
+    /// <c>w:del</c>/<c>w:ins</c> paragraph pair (the field plumbing cannot be sliced into a partial revision),
+    /// with the deleted instruction carried as <c>w:delInstrText</c>, and both <c>accept ≡ right</c> and
+    /// <c>reject ≡ left</c> hold.</para>
+    /// <para>When false, a field-code-only difference is not reported anywhere and one side's code rides through
+    /// UNTRACKED — an uncompared difference is by definition not reversible. WHICH side survives follows the scope's
+    /// output source, so it differs by scope: in the body (including tables and textboxes) blocks render from the
+    /// RIGHT document, so the right code survives and <c>accept ≡ right</c> still holds exactly while <c>reject</c>
+    /// keeps the right code; in header/footer and footnote/endnote scopes a story or note that produces no ops keeps
+    /// its part carried over verbatim from the LEFT package, so the left code survives and <c>reject ≡ left</c> holds
+    /// while <c>accept</c> keeps the left code. Clients verifying the round trip with
+    /// <c>AcceptRevisions</c>/<c>RejectRevisions</c> should expect that exception for fields they chose not to
+    /// compare. <c>Consolidate</c> honors this setting per reviewer; with it off a reviewer's field-code-only edit is
+    /// not merged and the base code survives.</para>
+    /// <para>A canonicalized <c>HYPERLINK</c> field is NOT affected: the reader folds a clean one into a
+    /// <c>w:hyperlink</c> whose target is ordinary content identity rather than field-envelope state, so a changed
+    /// hyperlink target is still compared with this off.</para>
+    /// <para>The legacy <c>WmlComparer</c> engine ignores field codes entirely, i.e. behaves as if this were
+    /// permanently false; <see cref="DocxCompare"/> has no knob to map onto it.</para>
+    /// </summary>
+    public bool CompareFields { get; set; } = true;
+
+    /// <summary>
     /// Track paragraph-and-above property changes (block-format-change family) as native Word markup —
     /// <c>w:pPrChange</c>/<c>w:tcPrChange</c>/<c>w:trPrChange</c>/<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/
     /// <c>w:tblPrExChange</c>/<c>w:sectPrChange</c>. Default <c>true</c>. Set <c>false</c> to restore the
@@ -883,6 +912,7 @@ public sealed class DocxDiffSettings
                 : IrFormatComparison.ModeledOnly,
             CompareHeadersFooters = CompareHeadersFooters,
             CompareTextboxes = CompareTextboxes,
+            CompareFields = CompareFields,
             PreserveInputRevisions = PreserveInputRevisions,
             NormalizeRevisionAuthors = NormalizeRevisionAuthors,
             TrackBlockFormatChanges = TrackBlockFormatChanges,

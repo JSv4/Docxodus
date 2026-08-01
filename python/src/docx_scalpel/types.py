@@ -1005,6 +1005,15 @@ class DocxDiffSettings:
     #: wholesale by its host paragraph, so the change stays in the markup; the edit script's per-box
     #: detail and the fine revision list go quiet.
     compare_textboxes: bool = True
+    #: Word Compare's "Fields" option (default True). Governs whether a paragraph's FIELD CODE state
+    #: (instruction text, simple-vs-complex form, inline position, fldChar scaffolding) is compared;
+    #: field RESULTS are ordinary text either way. When False a field-code-only difference is not
+    #: reported and one side's code rides through untracked (an uncompared difference is not
+    #: reversible): body/table/textbox blocks render from the RIGHT, so accept is still exact and
+    #: reject keeps the right code, while a header/footer story or note definition keeps its part
+    #: verbatim from the LEFT, so reject is exact and accept keeps the left code. A canonicalized
+    #: HYPERLINK field's target is content, not field state, and stays compared.
+    compare_fields: bool = True
     word_separators: str | None = None
     detect_moves: bool = True
     move_similarity_threshold: float = 0.8
@@ -1053,6 +1062,8 @@ class DocxDiffSettings:
             wire["compareWhitespace"] = False
         if not self.compare_textboxes:
             wire["compareTextboxes"] = False
+        if not self.compare_fields:
+            wire["compareFields"] = False
         if self.word_separators is not None:
             wire["wordSeparators"] = self.word_separators
         if not self.detect_moves:

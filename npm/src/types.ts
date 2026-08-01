@@ -508,6 +508,17 @@ export interface DocxDiffSettings {
    * script's `textboxDiffs` detail and the fine revision list.
    */
   compareTextboxes?: boolean;
+  /**
+   * Word Compare's "Fields" option (default true). Governs whether a paragraph's FIELD CODE state —
+   * instruction text, simple-vs-complex form, inline position, `w:fldChar`/`w:fldData` scaffolding —
+   * participates in the comparison; field RESULTS are ordinary text either way. When false a
+   * field-code-only difference is not reported anywhere and one side's code rides through untracked
+   * (an uncompared difference is not reversible): body/table/textbox blocks render from the RIGHT, so
+   * `accept ≡ right` still holds and `reject` keeps the right code, while a header/footer story or note
+   * definition keeps its part verbatim from the LEFT, so `reject ≡ left` holds and `accept` keeps the
+   * left code. A canonicalized HYPERLINK field's target is content, not field state, and stays compared.
+   */
+  compareFields?: boolean;
   /** Report relocations as native move pairs (default true). */
   detectMoves?: boolean;
   /** Jaccard similarity threshold for a fuzzy move 0.0-1.0 (default 0.8). */

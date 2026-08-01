@@ -136,7 +136,7 @@ Word's Compare dialog exposes a checkbox per comparison category. Mapped onto `W
 | Headers and footers | — | ❌ ignored entirely (`DocxDiff.CompareHeadersFooters` covers this) |
 | Footnotes and endnotes | — | ~ partial; **no toggle** — attempted and reverted, see `ir_diff_engine.md` (gating the note-store diff dangles a right-added note's reference) |
 | Textboxes | — | ~ compared; `DocxDiffSettings.CompareTextboxes` is the toggle (granularity: off ⇒ wholesale box del/ins instead of an inner diff) |
-| Fields | — | ❌ |
+| Fields | — | ❌ on `WmlComparer` (field codes never compared); `DocxDiff` compares them by default and `DocxDiffSettings.CompareFields` is the toggle |
 | Comments | — | ❌ |
 | Output target (Original/Revised/New) | — | ❌ only "New document" |
 

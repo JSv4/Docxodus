@@ -341,6 +341,31 @@ internal sealed record IrDiffSettings
     public bool CompareTextboxes { get; init; } = true;
 
     /// <summary>
+    /// DIFF-TIME setting (Word Compare "Fields", default-on like Word's own box). Gates whether a paragraph's
+    /// FIELD CODE state — <see cref="IrParagraph.FieldEnvelopeDigest"/>: the instruction text, simple-vs-complex
+    /// representation, inline position and <c>w:fldChar</c>/<c>w:fldData</c> scaffolding — participates in the
+    /// comparison. Field RESULTS are ordinary text on both settings (they are transparent to the tokenizer), so
+    /// this governs the code only.
+    /// <para>When false, a pair whose only difference is field-code state classifies <c>EqualBlock</c> instead of
+    /// being lowered to a whole-paragraph replacement, so one side's code rides through UNTRACKED. WHICH side
+    /// survives follows the scope's output source: BODY blocks (including inside tables and textboxes) render from
+    /// the RIGHT source, so <c>accept ≡ right</c> still holds and <c>reject</c> keeps the right code; a
+    /// HEADER/FOOTER story or a NOTE definition that produces no ops keeps its part carried over verbatim from the
+    /// LEFT package (<see cref="IrMarkupRenderer"/> only rebuilds a part that produced ops — the same carry-over
+    /// that preserves the revisionsInInput pins), so <c>reject ≡ left</c> holds and <c>accept</c> keeps the left
+    /// code. Either way an uncompared difference is not reversible; the direction is a consequence of the renderer's
+    /// per-scope sourcing, not a policy choice.</para>
+    /// <para><see cref="IrParagraph.InlineEnvelopeDigest"/> (SDT/smartTag carriers) is unaffected, and the
+    /// unsliceable-carrier render guard still applies to genuinely modified paragraphs. A canonicalized
+    /// <c>HYPERLINK</c> field is unaffected too — the reader folds a clean one into an <c>IrHyperlink</c> whose
+    /// target is content identity, not field-envelope state. A cell's content hash folds its paragraphs'
+    /// field-carrier digests at READ time (<c>IrReader.AppendNestedStructuralCarrierHash</c>), so a
+    /// field-code-only change inside a table still aligns the row unequal — but the per-paragraph op is gated
+    /// here all the same, so no change is reported.</para>
+    /// </summary>
+    public bool CompareFields { get; init; } = true;
+
+    /// <summary>
     /// RENDER-TIME setting (Word-parity input-revision preservation). When true, the markup renderer
     /// carries the RIGHT input's pre-existing tracked-revision markup through into the output for
     /// content-EQUAL blocks (verbatim from the ORIGINAL right element rather than the accepted working

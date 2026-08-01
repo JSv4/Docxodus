@@ -781,7 +781,7 @@ internal static class IrEditScriptBuilder
                     ? IrEditOpKind.MoveModifyBlock
                     : IrEditOpKind.MoveBlock;
                 moves[li] = new MoveInfo(nextGroup++, entry.Left!, opKind,
-                    StructuralCarrierDiffers(entry.Left!, entry.Right!) ||
+                    StructuralCarrierDiffers(entry.Left!, entry.Right!, settings) ||
                     (entry.Kind == IrAlignmentKind.MovedModified &&
                      entry.Left is IrParagraph movedLeft && entry.Right is IrParagraph movedRight &&
                      HasUnsliceableFieldCarrier(movedLeft, movedRight)));
@@ -892,7 +892,7 @@ internal static class IrEditScriptBuilder
             switch (entry.Kind)
             {
                 case IrAlignmentKind.Unchanged:
-                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
+                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!, settings))
                         ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
                     else
                         ops.Add(new IrEditOp(IrEditOpKind.EqualBlock,
@@ -901,7 +901,7 @@ internal static class IrEditScriptBuilder
                     break;
 
                 case IrAlignmentKind.FormatOnly:
-                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!))
+                    if (StructuralCarrierDiffers(entry.Left!, entry.Right!, settings))
                         ops.Add(MakeParagraphModifyOp((IrParagraph)entry.Left!, (IrParagraph)entry.Right!, settings));
                     else
                         ops.Add(new IrEditOp(IrEditOpKind.FormatOnlyBlock,
@@ -1487,7 +1487,7 @@ internal static class IrEditScriptBuilder
             lp.Anchor.ToString(), rp.Anchor.ToString(),
             tokenDiff, null, null, null,
             nest ? IrNodeList.From(textboxDiffs!) : null,
-            RequiresWholeParagraphReplace: StructuralCarrierDiffers(lp, rp) ||
+            RequiresWholeParagraphReplace: StructuralCarrierDiffers(lp, rp, settings) ||
                 HasUnsliceableFieldCarrier(lp, rp));
     }
 
@@ -1495,11 +1495,12 @@ internal static class IrEditScriptBuilder
     /// Inline SDT/smartTag wrappers and non-hyperlink field code/state are deliberately transparent to ordinary
     /// token alignment, but either carrier can be corrupted by slicing its source around a revision. Keep the
     /// alignment stable and mark a differing paired paragraph for a reversible whole-paragraph replacement.
+    /// The field half is gated on <see cref="IrDiffSettings.CompareFields"/> (Word Compare's "Fields" box).
     /// </summary>
-    private static bool StructuralCarrierDiffers(IrBlock left, IrBlock right) =>
+    private static bool StructuralCarrierDiffers(IrBlock left, IrBlock right, IrDiffSettings settings) =>
         left is IrParagraph lp && right is IrParagraph rp &&
         (lp.InlineEnvelopeDigest != rp.InlineEnvelopeDigest ||
-         lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest);
+         (settings.CompareFields && lp.FieldEnvelopeDigest != rp.FieldEnvelopeDigest));
 
     private static bool HasStructuralCarrier(IrParagraph paragraph) =>
         paragraph.InlineEnvelopeDigest != default ||
