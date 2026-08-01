@@ -87,6 +87,19 @@ export interface DocxEditorExports {
     EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
     SetPageNumbering: (handle: number, anchor: string, opJson: string) => string;
     ClearPageNumbering: (handle: number, anchor: string) => string;
+    /** Note authoring (optional: older WASM bundles predate it). */
+    InsertFootnote?: (
+      handle: number,
+      anchor: string,
+      characterOffset: number,
+      markdown: string,
+    ) => string;
+    InsertEndnote?: (
+      handle: number,
+      anchor: string,
+      characterOffset: number,
+      markdown: string,
+    ) => string;
   };
   DocumentConverter: {
     ConvertDocxToHtmlComplete: (...args: any[]) => string;
@@ -1780,6 +1793,46 @@ export class DocxEditor {
     const res = this.parseEdit(this.exports.DocxSessionBridge.DeleteBlock(this.handle, fullId));
     if (!res.success) return;
     this.refreshAfter(block, Math.max(0, idx - 1), true);
+  }
+
+  /**
+   * Cite a new footnote from the caret position in the active body block. The note definition is
+   * created (writing the whole Word scaffold — part, reserved separator notes, settings
+   * declaration, styles — on a document that has none yet) and its body renders as ordinary
+   * editable `data-anchor` blocks in the notes section, so editing it afterwards needs no new op.
+   *
+   * Body blocks only: Word disallows a note reference inside a header/footer story or inside
+   * another note, and the session rejects those with `AnchorWrongKind`. Remounts, because a new
+   * note renumbers the citations after it and can add a whole part.
+   */
+  insertFootnote(markdown = "New footnote."): void {
+    this.insertNote("footnote", markdown);
+  }
+
+  /** Cite a new endnote from the caret — see {@link insertFootnote}; writes the endnotes part. */
+  insertEndnote(markdown = "New endnote."): void {
+    this.insertNote("endnote", markdown);
+  }
+
+  private insertNote(kind: "footnote" | "endnote", markdown: string): void {
+    const block = this.activeBlock;
+    if (this.closed || !block) return;
+    // A note reference is legal only in the main story: not in a header/footer band, and not
+    // inside an existing note's body (both render as editable blocks here).
+    if (this.isBandBlock(block) || block.closest(".footnotes, .endnotes")) return;
+    let fullId = this.anchorIdOf(block);
+    if (!fullId) return;
+    const idx = this.blockIndex(block);
+    // Offset first: syncBlock re-renders the block and would drop the live selection.
+    const raw = caretOffsetIn(block);
+    fullId = this.syncBlock(block, fullId);
+    const offset = trimmedSplitOffset(block, raw ?? (block.textContent ?? "").length);
+    const bridge = this.exports.DocxSessionBridge;
+    const call = kind === "footnote" ? bridge.InsertFootnote : bridge.InsertEndnote;
+    if (!call) return; // bridge predates note authoring
+    const res = this.parseEdit(call.call(bridge, this.handle, fullId, offset, markdown));
+    if (!res.success) return;
+    this.remount(idx, false);
   }
 
   private applyParagraphFormat(op: {
