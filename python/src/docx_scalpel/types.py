@@ -264,6 +264,13 @@ class SectionInfo:
     header_refs: tuple[HeaderFooterRef, ...] = ()
     #: Footer references in declaration order, each with its ``w:type``.
     footer_refs: tuple[HeaderFooterRef, ...] = ()
+    #: The page number this section starts at (``w:pgNumType/@w:start``). ``None`` when the
+    #: section continues the previous section's numbering.
+    page_number_start: int | None = None
+    #: This section's page-number format (``w:pgNumType/@w:fmt``). ``None`` means Word's default
+    #: ``1, 2, 3`` — deliberately not reported as ``DECIMAL``, so a caller can tell "inherits"
+    #: from "explicitly decimal" and avoid writing an attribute the document never had.
+    page_number_format: NumberFormat | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "SectionInfo":
@@ -282,6 +289,15 @@ class SectionInfo:
             # .get: an older host that predates the refs still decodes.
             header_refs=tuple(HeaderFooterRef._from_wire(r) for r in d.get("headerRefs", ())),
             footer_refs=tuple(HeaderFooterRef._from_wire(r) for r in d.get("footerRefs", ())),
+            # Omitted by the host when the attribute is absent — "inherit", not a default value.
+            page_number_start=(
+                int(d["pageNumberStart"]) if d.get("pageNumberStart") is not None else None
+            ),
+            page_number_format=(
+                NumberFormat._from_wire(d["pageNumberFormat"])
+                if d.get("pageNumberFormat") is not None
+                else None
+            ),
         )
 
 

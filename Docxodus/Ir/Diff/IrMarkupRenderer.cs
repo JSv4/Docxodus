@@ -2758,19 +2758,8 @@ internal static class IrMarkupRenderer
         main.PutXDocument();
     }
 
-    /// <summary>Elements that FOLLOW <c>w:titlePg</c> in the CT_SectPr sequence — an insertion lands
-    /// before the first of these (or at the end), keeping the sectPr schema-ordered.</summary>
-    private static readonly XName[] SectPrAfterTitlePg =
-        { W.textDirection, W.bidi, W.rtlGutter, W.docGrid, W.printerSettings, W.sectPrChange };
-
-    private static void InsertIntoSectPr(XElement sectPr, XElement element)
-    {
-        var firstTail = sectPr.Elements().FirstOrDefault(e => SectPrAfterTitlePg.Contains(e.Name));
-        if (firstTail is null)
-            sectPr.Add(element);
-        else
-            firstTail.AddBeforeSelf(element);
-    }
+    private static void InsertIntoSectPr(XElement sectPr, XElement element) =>
+        WordprocessingMLUtil.InsertSectPrChildInOrder(sectPr, element);
 
     /// <summary>The output package's header (or footer) part with the given URI, or null.</summary>
     private static OpenXmlPart? FindHeaderFooterPart(MainDocumentPart main, bool isHeader, Uri partUri)

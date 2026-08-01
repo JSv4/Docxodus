@@ -5,6 +5,8 @@
  * and flows it across fixed-size page containers based on document dimensions.
  */
 
+import { formatPageNumber } from "./page-number-format.js";
+
 /**
  * Page dimensions extracted from HTML data attributes (in points).
  */
@@ -221,6 +223,16 @@ interface PartialFootnote {
   fittingElements: HTMLElement[];
 }
 
+/**
+ * A section's `w:pgNumType`, as stamped on its wrapper by the converter. Both fields are optional
+ * because both attributes are: an absent `start` means the section continues the previous section's
+ * numbering, and an absent `format` means Word's default `1, 2, 3`.
+ */
+interface SectionPageNumbering {
+  start?: number;
+  format?: string;
+}
+
 export class PaginationEngine {
   private stagingElement: HTMLElement;
   private containerElement: HTMLElement;
@@ -232,6 +244,8 @@ export class PaginationEngine {
   private hfRegistry: HeaderFooterRegistry;
   private footnoteRegistry: FootnoteRegistry;
   private pendingFootnoteContinuation: FootnoteContinuation | null = null;
+  /** Per-section `w:pgNumType` (start / format), read off the section wrappers. */
+  private pageNumbering: Map<number, SectionPageNumbering> = new Map();
 
   /**
    * Creates a new pagination engine.
@@ -290,6 +304,8 @@ export class PaginationEngine {
       "[data-section-index]"
     );
 
+    this.pageNumbering = this.parsePageNumbering(sections);
+
     // If no sections found, treat the entire staging content as one section
     const sectionsToProcess =
       sections.length > 0 ? Array.from(sections) : [this.stagingElement];
@@ -319,7 +335,71 @@ export class PaginationEngine {
     // Hide staging after measurement
     this.stagingElement.style.display = "none";
 
+    // Every page box exists now, so NUMPAGES has an answer and each PAGE marker knows its page.
+    this.substitutePageNumberFields(pages.length);
+
     return { totalPages: pages.length, pages };
+  }
+
+  /** Read each section's `w:pgNumType` off its wrapper (see {@link SectionPageNumbering}). */
+  private parsePageNumbering(sections: ArrayLike<HTMLElement>): Map<number, SectionPageNumbering> {
+    const map = new Map<number, SectionPageNumbering>();
+    for (const section of Array.from(sections)) {
+      const index = parseInt(section.dataset.sectionIndex || "0", 10);
+      const rawStart = section.dataset.pageNumStart;
+      const start = rawStart === undefined ? undefined : parseInt(rawStart, 10);
+      map.set(index, {
+        start: start !== undefined && Number.isFinite(start) ? start : undefined,
+        format: section.dataset.pageNumFmt,
+      });
+    }
+    return map;
+  }
+
+  /**
+   * Fill in the page-number fields inside every page's cloned header/footer.
+   *
+   * A header/footer is authored once and cloned onto each page, so a PAGE field's single cached
+   * result would otherwise show the same number on every page — the whole reason the converter
+   * marks these. `data-field-format` (the field's own `\*` switch) wins over the section's format
+   * when present, which is exactly how Word resolves the two.
+   *
+   * Runs after layout because NUMPAGES cannot be known before the last page exists. The
+   * substituted text can therefore be marginally wider than the cached result the header was
+   * measured with; the header band clips, so the failure mode is a hair of overflow rather than
+   * a layout that disagrees with itself.
+   *
+   * Scoped to the CLONED header/footer regions on purpose. A page-number field in body text is
+   * ordinary run content that the editor may make editable, and committing an edited block writes
+   * back whatever text the DOM holds — rewriting it here would mean a body field commits a number
+   * the document never contained. Body content is also not cloned, so it does not have the problem
+   * this method exists to solve.
+   */
+  private substitutePageNumberFields(totalPages: number): void {
+    const boxes = this.containerElement.querySelectorAll<HTMLElement>(`.${this.cssPrefix}box`);
+    for (const box of Array.from(boxes)) {
+      const markers = box.querySelectorAll<HTMLElement>(
+        `.${this.cssPrefix}header [data-field], .${this.cssPrefix}footer [data-field]`,
+      );
+      if (markers.length === 0) continue;
+
+      const sectionIndex = parseInt(box.dataset.sectionIndex || "0", 10);
+      const pageNumber = parseInt(box.dataset.pageNumber || "1", 10);
+      const pageInSection = parseInt(box.dataset.pageInSection || "1", 10);
+      const numbering = this.pageNumbering.get(sectionIndex) ?? {};
+
+      // A section that restarts numbering counts from its own start; one that does not continues
+      // the document-wide running number.
+      const displayed =
+        numbering.start !== undefined ? numbering.start + pageInSection - 1 : pageNumber;
+
+      for (const marker of Array.from(markers)) {
+        const kind = marker.dataset.field;
+        if (kind !== "PAGE" && kind !== "NUMPAGES") continue;
+        const format = marker.dataset.fieldFormat ?? numbering.format;
+        marker.textContent = formatPageNumber(kind === "PAGE" ? displayed : totalPages, format);
+      }
+    }
   }
 
   /**
@@ -1903,6 +1983,29 @@ export class PaginationEngine {
     return pages;
   }
 
+
+  /**
+   * Strip block addressing from a header/footer node cloned into a page box.
+   *
+   * A running story is authored ONCE and cloned onto every page, so the clones all carry the same
+   * `data-anchor` — on this document, 42 page boxes claiming one footer paragraph. Left editable,
+   * committing any one of them writes back through that single shared anchor, and the per-page
+   * page-number substitution makes it worse: each clone shows a DIFFERENT number, so a commit
+   * writes that page's number into the story as literal text and destroys the PAGE field.
+   *
+   * Page-box header/footer content is presentation. The docked editing bands
+   * (`editor-headerfooter.ts`) are the addressable affordance, and they exist precisely because a
+   * cloned node cannot be uniquely addressed.
+   */
+  private makeClonedStoryInert(root: HTMLElement): void {
+    const nodes = [root, ...Array.from(root.querySelectorAll<HTMLElement>("*"))];
+    for (const el of nodes) {
+      el.removeAttribute("data-anchor");
+      el.removeAttribute("data-committed-text");
+      if (el.getAttribute("contenteditable") !== null) el.setAttribute("contenteditable", "false");
+    }
+  }
+
   /**
    * Creates a page container element.
    */
@@ -1949,6 +2052,9 @@ export class PaginationEngine {
     pageBox.style.contain = "layout paint";
     pageBox.dataset.pageNumber = String(pageNumber);
     pageBox.dataset.sectionIndex = String(sectionIndex);
+    // Needed by substitutePageNumberFields: a section that restarts numbering counts from its own
+    // first page, not from the document's.
+    pageBox.dataset.pageInSection = String(pageInSection);
 
     // Get pre-computed effective heights for this page position (no re-measurement needed)
     const effectiveHeights = this.getEffectiveHeights(dims, sectionIndex, pageInSection, pageNumber);
@@ -1972,7 +2078,9 @@ export class PaginationEngine {
       headerDiv.style.paddingBottom = "4pt"; // Small gap before content area
       // Clone the header content (skip the wrapper div's data attributes)
       for (const child of Array.from(headerSource.childNodes)) {
-        headerDiv.appendChild(child.cloneNode(true));
+        const clonedheaderDiv = child.cloneNode(true) as HTMLElement;
+        if (clonedheaderDiv.nodeType === 1) this.makeClonedStoryInert(clonedheaderDiv);
+        headerDiv.appendChild(clonedheaderDiv);
       }
       pageBox.appendChild(headerDiv);
     }
@@ -2022,7 +2130,9 @@ export class PaginationEngine {
       footerDiv.style.paddingTop = "4pt"; // Small gap after content area
       // Clone the footer content (skip the wrapper div's data attributes)
       for (const child of Array.from(footerSource.childNodes)) {
-        footerDiv.appendChild(child.cloneNode(true));
+        const clonedfooterDiv = child.cloneNode(true) as HTMLElement;
+        if (clonedfooterDiv.nodeType === 1) this.makeClonedStoryInert(clonedfooterDiv);
+        footerDiv.appendChild(clonedfooterDiv);
       }
       pageBox.appendChild(footerDiv);
     }

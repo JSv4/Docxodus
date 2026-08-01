@@ -5132,4 +5132,299 @@ public class DocxSessionTests
         Assert.False(bad.Success);
         Assert.Equal(EditErrorCode.AnchorWrongKind, bad.Error!.Code);
     }
+
+    // ─── Page-number formatting: w:pgNumType + field switches (issue #277) ─────
+    //
+    // Two distinct layers, deliberately kept independent. SetPageNumbering writes the SECTION's
+    // w:pgNumType (Word's "Format Page Numbers…" dialog: restart-at + number format), which is what
+    // a plain PAGE field renders through. InsertPageNumberField's optional format writes the field's
+    // OWN `\*` general-formatting switch, which overrides the section for that one field.
+
+    private static PageNumberType? PgNumTypeOf(byte[] bytes)
+    {
+        using var ms = new MemoryStream(bytes);
+        using var d = WordprocessingDocument.Open(ms, false);
+        return LastSectPr(d).Elements<PageNumberType>().SingleOrDefault();
+    }
+
+    private static List<string> LastSectPrChildNames(byte[] bytes)
+    {
+        using var ms = new MemoryStream(bytes);
+        using var d = WordprocessingDocument.Open(ms, false);
+        return LastSectPr(d).ChildElements.Select(e => e.LocalName).ToList();
+    }
+
+    private static List<string> SchemaErrorsOfMainPart(byte[] bytes)
+    {
+        using var ms = new MemoryStream(bytes);
+        using var d = WordprocessingDocument.Open(ms, false);
+        return new DocumentFormat.OpenXml.Validation.OpenXmlValidator(FileFormatVersions.Office2019)
+            .Validate(d.MainDocumentPart!)
+            .Where(e => e.ErrorType == DocumentFormat.OpenXml.Validation.ValidationErrorType.Schema)
+            .Select(e => e.Description)
+            .ToList();
+    }
+
+    [Fact]
+    public void DS317_SetPageNumbering_WritesStartAndFormat()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        var r = s.SetPageNumbering(body,
+            new PageNumberingOp { Start = 1, Format = NumberFormat.LowerRoman });
+        Assert.True(r.Success, r.Error?.Message);
+
+        var pg = PgNumTypeOf(s.Save());
+        Assert.NotNull(pg);
+        Assert.Equal(1, pg!.Start!.Value);
+        Assert.Equal(NumberFormatValues.LowerRoman, pg.Format!.Value);
+        Assert.Empty(SchemaErrorsOfMainPart(s.Save()));
+    }
+
+    [Fact]
+    public void DS318_SetPageNumbering_NullFieldsLeaveExistingValuesUnchanged()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        Assert.True(s.SetPageNumbering(body,
+            new PageNumberingOp { Start = 5, Format = NumberFormat.UpperRoman }).Success);
+        // Format-only follow-up must not disturb the start value, and vice versa.
+        Assert.True(s.SetPageNumbering(body, new PageNumberingOp { Format = NumberFormat.Decimal }).Success);
+
+        var pg = PgNumTypeOf(s.Save())!;
+        Assert.Equal(5, pg.Start!.Value);
+        Assert.Equal(NumberFormatValues.Decimal, pg.Format!.Value);
+
+        Assert.True(s.SetPageNumbering(body, new PageNumberingOp { Start = 9 }).Success);
+        pg = PgNumTypeOf(s.Save())!;
+        Assert.Equal(9, pg.Start!.Value);
+        Assert.Equal(NumberFormatValues.Decimal, pg.Format!.Value);
+    }
+
+    [Fact]
+    public void DS319_SetPageNumbering_LandsInItsCtSectPrSchemaSlot()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        // titlePg sorts AFTER pgNumType, headerReference BEFORE both — write them in the order that
+        // would corrupt a naive append, then assert the schema sequence anyway.
+        Assert.True(s.SetHeaderText(body, HeaderFooterKind.First, "First page header").Success);
+        Assert.True(s.SetPageNumbering(body, new PageNumberingOp { Start = 1 }).Success);
+
+        var names = LastSectPrChildNames(s.Save());
+        Assert.True(names.IndexOf("headerReference") < names.IndexOf("pgSz"),
+            $"headerReference out of slot: [{string.Join(", ", names)}]");
+        Assert.True(names.IndexOf("pgMar") < names.IndexOf("pgNumType"),
+            $"pgNumType out of slot: [{string.Join(", ", names)}]");
+        Assert.True(names.IndexOf("pgNumType") < names.IndexOf("titlePg"),
+            $"pgNumType out of slot: [{string.Join(", ", names)}]");
+        Assert.Empty(SchemaErrorsOfMainPart(s.Save()));
+    }
+
+    /// <summary>Like <see cref="BuildDocWithTrailingSection"/> but the trailing sectPr already
+    /// carries chapter-numbering attributes this surface never writes — the fixture that proves
+    /// ClearPageNumbering narrows to w:start/w:fmt instead of dropping the whole element.</summary>
+    private static byte[] BuildDocWithChapterPageNumbering()
+    {
+        // A resizable stream — WordprocessingDocument.Open(.., isEditable: true) cannot grow a
+        // MemoryStream constructed over a fixed byte[].
+        using var ms = new MemoryStream();
+        ms.Write(BuildDocWithTrailingSection());
+        using (var d = WordprocessingDocument.Open(ms, true))
+        {
+            LastSectPr(d).AppendChild(new PageNumberType
+            {
+                ChapterStyle = 1,
+                ChapterSeparator = ChapterSeparatorValues.Hyphen,
+            });
+            d.MainDocumentPart!.Document.Save();
+        }
+        return ms.ToArray();
+    }
+
+    [Fact]
+    public void DS320_ClearPageNumbering_DropsStartAndFormatButKeepsChapterAttributes()
+    {
+        using var s = new DocxSession(BuildDocWithChapterPageNumbering());
+        var body = FirstBodyPara(s);
+        Assert.True(s.SetPageNumbering(body,
+            new PageNumberingOp { Start = 3, Format = NumberFormat.LowerLetter }).Success);
+
+        // The chapter attributes must survive the clear — clearing page numbering is not licence to
+        // discard the rest of the element.
+        Assert.True(s.ClearPageNumbering(body).Success);
+        var pg = PgNumTypeOf(s.Save());
+        Assert.NotNull(pg);
+        Assert.Null(pg!.Start);
+        Assert.Null(pg.Format);
+        Assert.NotNull(pg.ChapterStyle);
+    }
+
+    [Fact]
+    public void DS321_ClearPageNumbering_RemovesTheElementWhenNothingIsLeft()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        Assert.True(s.SetPageNumbering(body, new PageNumberingOp { Start = 2 }).Success);
+        Assert.NotNull(PgNumTypeOf(s.Save()));
+
+        Assert.True(s.ClearPageNumbering(body).Success);
+        Assert.Null(PgNumTypeOf(s.Save()));
+        Assert.Empty(SchemaErrorsOfMainPart(s.Save()));
+    }
+
+    [Fact]
+    public void DS322_GetSectionInfo_ReadsBackPageNumbering()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        // Absent w:pgNumType reads back as "not set" — not as a fabricated decimal/1 default.
+        var before = s.GetSectionInfo(body)!;
+        Assert.Null(before.PageNumberStart);
+        Assert.Null(before.PageNumberFormat);
+
+        Assert.True(s.SetPageNumbering(body,
+            new PageNumberingOp { Start = 7, Format = NumberFormat.UpperLetter }).Success);
+
+        var after = s.GetSectionInfo(body)!;
+        Assert.Equal(7, after.PageNumberStart);
+        Assert.Equal(NumberFormat.UpperLetter, after.PageNumberFormat);
+    }
+
+    [Theory]
+    [InlineData(NumberFormat.LowerRoman, "roman", "i")]
+    [InlineData(NumberFormat.UpperRoman, "ROMAN", "I")]
+    [InlineData(NumberFormat.LowerLetter, "alphabetic", "a")]
+    [InlineData(NumberFormat.UpperLetter, "ALPHABETIC", "A")]
+    [InlineData(NumberFormat.Decimal, "Arabic", "1")]
+    public void DS323_InsertPageNumberField_AppendsGeneralFormattingSwitch(
+        NumberFormat format, string expectedSwitch, string expectedCachedResult)
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        var footer = s.SetFooterText(body, HeaderFooterKind.Default, "").Created[0].Id;
+
+        var r = s.InsertPageNumberField(footer, PageNumberField.CurrentPage, format);
+        Assert.True(r.Success, r.Error?.Message);
+
+        var fx = FirstFooterXml(s.Save());
+        Assert.Contains($@" PAGE \* {expectedSwitch} ", fx);
+        // The cached result is what every renderer that does not recompute fields shows, so it must
+        // agree with the switch rather than always saying "1".
+        Assert.Contains($"<w:t>{expectedCachedResult}</w:t>", fx);
+        Assert.Empty(SchemaErrorsOfMainPart(s.Save()));
+    }
+
+    [Fact]
+    public void DS324_InsertPageNumberField_WithoutFormat_EmitsThePlainFieldUnchanged()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        var footer = s.SetFooterText(body, HeaderFooterKind.Default, "").Created[0].Id;
+
+        Assert.True(s.InsertPageNumberField(footer, PageNumberField.CurrentPage).Success);
+
+        var fx = FirstFooterXml(s.Save());
+        Assert.Contains(" PAGE ", fx);
+        Assert.DoesNotContain(@"\*", fx);
+        Assert.Contains("<w:t>1</w:t>", fx);
+    }
+
+    [Fact]
+    public void DS325_InsertPageNumberField_TotalPagesTakesTheSwitchToo()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        var footer = s.SetFooterText(body, HeaderFooterKind.Default, "").Created[0].Id;
+
+        Assert.True(s.InsertPageNumberField(footer, PageNumberField.TotalPages, NumberFormat.UpperRoman).Success);
+        Assert.Contains(@" NUMPAGES \* ROMAN ", FirstFooterXml(s.Save()));
+    }
+
+    [Fact]
+    public void DS326_PageNumbering_RejectsValuesThatArentPageNumbers()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+        var footer = s.SetFooterText(body, HeaderFooterKind.Default, "").Created[0].Id;
+
+        // Bullet is a valid w:numFmt for a LIST but meaningless as a page number, and there is no
+        // `\* bullet` field switch — it must fail loudly rather than silently degrade to decimal.
+        var a = s.SetPageNumbering(body, new PageNumberingOp { Format = NumberFormat.Bullet });
+        Assert.False(a.Success);
+        Assert.Equal(EditErrorCode.InvalidPageNumbering, a.Error!.Code);
+
+        var b = s.InsertPageNumberField(footer, PageNumberField.CurrentPage, NumberFormat.Bullet);
+        Assert.False(b.Success);
+        Assert.Equal(EditErrorCode.InvalidPageNumbering, b.Error!.Code);
+
+        var c = s.SetPageNumbering(body, new PageNumberingOp { Start = -1 });
+        Assert.False(c.Success);
+        Assert.Equal(EditErrorCode.InvalidPageNumbering, c.Error!.Code);
+
+        // Nothing was written by any of the rejected calls.
+        Assert.Null(PgNumTypeOf(s.Save()));
+        Assert.DoesNotContain("PAGE", FirstFooterXml(s.Save()));
+    }
+
+    [Fact]
+    public void DS327_SetPageNumbering_RejectsNonBodyAnchorAndSynthesizesMissingSection()
+    {
+        using var s = new DocxSession(BuildDocWithHeaderAndFooter());
+        var hdr = s.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Scope.StartsWith("hdr", StringComparison.Ordinal)).Anchor.Id;
+        var bad = s.SetPageNumbering(hdr, new PageNumberingOp { Start = 1 });
+        Assert.False(bad.Success);
+        Assert.Equal(EditErrorCode.AnchorWrongKind, bad.Error!.Code);
+
+        // A body with no sectPr at all gets one synthesized, exactly as SetHeaderText does.
+        using var s2 = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var body = FirstBodyPara(s2);
+        Assert.True(s2.SetPageNumbering(body, new PageNumberingOp { Start = 1 }).Success);
+        Assert.NotNull(PgNumTypeOf(s2.Save()));
+        Assert.Empty(SchemaErrorsOfMainPart(s2.Save()));
+    }
+
+    [Fact]
+    public void DS328_PageNumbering_UndoRedoRoundTripsAndNoOpsDontConsumeHistory()
+    {
+        using var s = new DocxSession(BuildDocWithTrailingSection());
+        var body = FirstBodyPara(s);
+
+        Assert.True(s.SetPageNumbering(body,
+            new PageNumberingOp { Start = 4, Format = NumberFormat.LowerRoman }).Success);
+        Assert.True(s.Undo());
+        Assert.Null(PgNumTypeOf(s.Save()));
+        Assert.True(s.Redo());
+        Assert.Equal(4, PgNumTypeOf(s.Save())!.Start!.Value);
+
+        Assert.True(s.ClearPageNumbering(body).Success);
+        Assert.Null(PgNumTypeOf(s.Save()));
+        Assert.True(s.Undo());
+        Assert.Equal(4, PgNumTypeOf(s.Save())!.Start!.Value);
+
+        // A format dropdown re-applying the value already in effect — and a clear on a section that
+        // has no page numbering — must not push no-op snapshots into the bounded undo ring.
+        Assert.True(s.ReplaceText(body, "UNDO PROBE").Success);
+        for (int i = 0; i < 6; i++)
+        {
+            Assert.True(s.SetPageNumbering(body,
+                new PageNumberingOp { Start = 4, Format = NumberFormat.LowerRoman }).Success);
+            Assert.True(s.SetPageNumbering(body, new PageNumberingOp()).Success);
+        }
+        Assert.True(s.Undo());
+        Assert.DoesNotContain("UNDO PROBE", s.Project().Markdown);
+
+        using var s2 = new DocxSession(BuildDocWithTrailingSection());
+        var body2 = FirstBodyPara(s2);
+        Assert.True(s2.ReplaceText(body2, "UNDO PROBE 2").Success);
+        for (int i = 0; i < 6; i++)
+            Assert.True(s2.ClearPageNumbering(body2).Success);
+        Assert.True(s2.Undo());
+        Assert.DoesNotContain("UNDO PROBE 2", s2.Project().Markdown);
+    }
 }

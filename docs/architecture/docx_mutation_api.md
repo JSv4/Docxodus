@@ -387,12 +387,67 @@ Wire: `headerRefs`/`footerRefs` (npm `SectionInfo.headerRefs`/`footerRefs`, `Hea
 `docx-scalpel` `SectionInfo.header_refs`/`footer_refs`). This is exactly what the browser
 editor's band chrome uses to label its kind selector.
 
+### Page-number formatting (issue #277)
+
+Page numbering has **two independent layers**, and conflating them is the usual way to get
+it wrong.
+
+**The section** — `SetPageNumbering(bodyAnchor, PageNumberingOp)` writes `w:pgNumType`,
+which is exactly what Word's *Format Page Numbers…* dialog writes. `Start` (`w:start`) is
+the number the section begins at; `Format` (`w:fmt`) is the format its pages use. Both
+fields are tri-state — null leaves that **attribute** alone, so the start can be set
+without disturbing the format and vice versa. `ClearPageNumbering(bodyAnchor)` removes the
+two attributes (preserving the chapter-numbering ones this surface never writes, and
+removing the element only once nothing is left on it). Addressed by any body block, with
+the governing `w:sectPr` resolved exactly as `GetSectionInfo` resolves it, and synthesized
+if the body has none.
+
+This is the normal way to number pages: set the section once, insert plain fields. A
+`PAGE` field with no switch renders through it.
+
+**The field** — `InsertPageNumberField(anchor, field, format?)` writes the field's own
+`\*` general-formatting switch (`PAGE \* roman`). Omitting `format` — the default —
+emits a plain field, byte-for-byte what earlier versions emitted. A switch *overrides* the
+section for that one field and keeps overriding it if the section later changes, so it is
+the escape hatch, not the default route. The editor's band deliberately inserts plain
+fields for exactly this reason.
+
+Both reject `NumberFormat.Bullet` and a negative start with
+`EditErrorCode.InvalidPageNumbering`: a bullet is a valid **list** format with no
+page-number counterpart in either vocabulary, so accepting it could only mean silently
+writing something else.
+
+`NumberFormat` is reused rather than duplicated — it is already this library's name for
+`ST_NumberFormat`, which is the type of both `w:numFmt` and `w:pgNumType/@w:fmt`.
+`Docxodus/Internal/NumberFormats.cs` is the single owner of the three mappings (OOXML
+token, `\*` switch argument, rendered glyph); the switch spellings are case-significant,
+since `roman` is `i, ii, iii` and `ROMAN` is `I, II, III`. A field's cached result is
+seeded with page 1 rendered in the requested format (`i`, `A`, `1`) rather than a
+hardcoded `"1"`, so a renderer that does not recompute fields agrees with the switch.
+
+`w:pgNumType` has a fixed slot in the `CT_SectPr` sequence. `WordprocessingMLUtil`'s
+`Order_sectPr` + `InsertSectPrChildInOrder` place it there — the same slot-insert
+discipline as `EnsureSettingsChildInOrder`, and now the single owner of that ordering for
+`w:titlePg` too (`DocxSession` and `IrMarkupRenderer` previously each carried a private
+"what follows titlePg" list).
+
+**Read-back:** `SectionInfo.PageNumberStart` / `PageNumberFormat` (wire
+`pageNumberStart`/`pageNumberFormat`; `docx-scalpel` `page_number_start`/
+`page_number_format`). Both are *omitted* when the attribute is absent rather than
+defaulted, because "continues the previous section in Word's default format" is a
+different claim from "starts at 1 in decimal" — a UI that cannot tell them apart writes
+attributes the document never had.
+
 ### The editor region
 
 The browser `DocxEditor` ships the visual affordance as **docked bands** — see
 `docs/architecture/ir_editor_feasibility.md` § "Header/footer editing region". Story
 paragraphs there are ordinary editable blocks addressed by their `p:hdr1:<unid>` anchors,
 which every text/format mutation on this page already accepts.
+
+The band chrome carries the section's page-number **format** and **start-at** controls
+(`setPageNumbering`/`clearPageNumbering`/`pageNumbering` on `DocxEditor`). They sit on both
+bands and show the same values, because they describe the section rather than either story.
 
 ### Not yet
 
@@ -404,8 +459,13 @@ which every text/format mutation on this page already accepts.
   assigns Unids to the main document part only, so header/footer content carries no
   `data-anchor`; and pagination clones one header node onto every page, so N pages would
   mean N DOM nodes sharing one anchor. The docked bands avoid both.
-- **Page-number formatting** (`w:pgNumType` start/format, `PAGE \* roman`) — v1 emits a
-  plain `PAGE`/`NUMPAGES`; field switches are a follow-up.
+- **Chapter page numbering** (`w:pgNumType/@w:chapStyle`/`@w:chapSep` — "1-1, 1-2" numbers
+  derived from a heading style). `ClearPageNumbering` preserves those attributes when a
+  document already has them, but nothing writes them.
+- **Recomputing a field's cached result.** The number a page-number field shows in a
+  non-paginated render is the value cached in the file; Word recomputes on open, and the
+  paginated preview substitutes the real per-page number (below), but a continuous-mode
+  render still shows the cached one.
 
 ## Tier B: footnotes & endnotes (issue #276)
 

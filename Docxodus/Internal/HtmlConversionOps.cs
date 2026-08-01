@@ -152,10 +152,23 @@ internal static class HtmlConversionOps
     }
 
     /// <summary>Render a live session's current (possibly edited) state to HTML.</summary>
+    /// <remarks>
+    /// Serializes with <c>persistAnchorIds: true</c> REGARDLESS of the session's setting. These
+    /// bytes are an internal hop that is rendered and discarded, and the anchors stamped into the
+    /// HTML have to address the LIVE session: a Unid is content-hashed, so stripping it here would
+    /// make the converter re-derive a fresh one for any block edited since the session assigned
+    /// its id, and the rendered <c>data-anchor</c> would no longer resolve — the editor sees that
+    /// as a block that has silently stopped being editable.
+    ///
+    /// That coupling is why the browser editor used to open its session with
+    /// <c>PersistAnchorIds</c>, which then leaked the bookkeeping into the file its users
+    /// downloaded. Pinning it to the RENDER, where the requirement actually lives, lets a save
+    /// mean what a save should mean.
+    /// </remarks>
     public static string ConvertToHtml(DocxSession session, HtmlConversionOptions options)
     {
         if (session == null) throw new ArgumentNullException(nameof(session));
-        return ConvertToHtml(session.Save(), options);
+        return ConvertToHtml(session.Save(persistAnchorIds: true), options);
     }
 
     /// <summary>Render the session registered under <paramref name="handle"/> to HTML.</summary>

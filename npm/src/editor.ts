@@ -20,7 +20,7 @@
 import { paginateHtml } from "./pagination.js";
 import { HeaderFooterRegion } from "./editor-headerfooter.js";
 import type { BandWhich } from "./editor-headerfooter.js";
-import type { HeaderFooterKind } from "./types.js";
+import type { HeaderFooterKind, NumberFormat } from "./types.js";
 
 /** The subset of WASM bridge exports the editor needs (as exposed on `window.Docxodus`). */
 export interface DocxEditorExports {
@@ -74,14 +74,19 @@ export interface DocxEditorExports {
       scale: number,
     ) => string;
     Save: (handle: number) => Uint8Array;
+    /** Save keeping the projector's Unid bookkeeping — remount only, never a user download.
+     *  Optional so a bridge predating it still satisfies this type. */
+    SaveWithAnchorIds?: (handle: number) => Uint8Array;
     Undo: (handle: number) => boolean;
     Redo: (handle: number) => boolean;
     /** Header/footer region: the section a body anchor belongs to (kind → part mapping). */
     GetSectionInfo: (handle: number, anchorId: string) => string;
     SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
-    InsertPageNumberField: (handle: number, anchor: string, field: string) => string;
+    InsertPageNumberField: (handle: number, anchor: string, field: string, format: string) => string;
     EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
+    SetPageNumbering: (handle: number, anchor: string, opJson: string) => string;
+    ClearPageNumbering: (handle: number, anchor: string) => string;
   };
   DocumentConverter: {
     ConvertDocxToHtmlComplete: (...args: any[]) => string;
@@ -701,11 +706,11 @@ export class DocxEditor {
       headerFooter: options.headerFooter ?? false,
       onEdit: options.onEdit,
     };
-    // persistAnchorIds=true keeps PtOpenXml:Unid attributes in Save() output, so a remount's
-    // full re-render keeps the SAME unids the live session uses (a content change like becoming
-    // a list otherwise re-derives a fresh unid, leaving the block unwired). The cost is that
-    // saved bytes carry the Unid attributes (Word ignores them).
-    const handle = exports.DocxSessionBridge.OpenSession(bytes, '{"persistAnchorIds":true}');
+    // NOT persistAnchorIds: that setting applies to every Save on the session, so it put the
+    // projector's Unid bookkeeping into the bytes the USER downloads — ~6x the file size for
+    // attributes no renderer reads. Only the remount's re-render needs id stability across a
+    // save/re-render hop, and it asks for that per call via SaveWithAnchorIds.
+    const handle = exports.DocxSessionBridge.OpenSession(bytes, '{}');
     const editor = new DocxEditor(container, exports, handle, opts);
     editor.refreshAnchorMap();
     if (opts.headerFooter) editor.createRegion();
@@ -1885,6 +1890,34 @@ export class DocxEditor {
     this.region.insertPageNumberInBand("footer", field);
   }
 
+  /**
+   * Set the page numbering of the section the bands describe (`w:pgNumType`) — Word's *Format Page
+   * Numbers…*: `start` restarts numbering at that number, `format` chooses `1, 2, 3` vs
+   * `i, ii, iii` etc. Omitted fields are left unchanged. Requires the header/footer region
+   * (`{ headerFooter: true }`); a no-op otherwise.
+   *
+   * Inserted page-number fields are plain, so they render through this. The editor's own view still
+   * shows each field's cached result — Word recomputes on open — but `{ paginated: true }`
+   * substitutes the real per-page number and so reflects the change immediately.
+   */
+  setPageNumbering(op: { start?: number; format?: NumberFormat }): void {
+    this.assertOpen();
+    this.region?.setPageNumbering(op);
+  }
+
+  /** Remove the section's page-numbering start/format: it reverts to continuing the previous
+   *  section's numbering in Word's default `1, 2, 3`. */
+  clearPageNumbering(): void {
+    this.assertOpen();
+    this.region?.clearPageNumbering();
+  }
+
+  /** This section's page numbering as the document currently states it — `{}` when the section
+   *  sets neither (it continues the previous section in the default format). */
+  pageNumbering(): { start?: number; format?: NumberFormat } {
+    return this.region?.pageNumbering() ?? {};
+  }
+
   /** Which inline formats the current selection carries — for ribbon button highlighting. */
   queryFormatState(): Record<FormatKey, boolean> {
     const block = this.activeBlock ?? this.editRoot;
@@ -1940,7 +1973,14 @@ export class DocxEditor {
       );
       if (html.charCodeAt(0) !== 0x7b /* not an error object */) return html;
     }
-    const bytes = bridge.Save(this.handle);
+    // Fallback only (no RenderHtml on this bridge, or it errored). These bytes are re-rendered and
+    // discarded, and the re-render has to resolve to the SAME anchors the live session holds — a
+    // content change re-derives a block's content-hashed unid, which would leave it unwired. So ask
+    // for the Unid-bearing save here, and here only; DocxEditor.save() stays clean.
+    const bytes =
+      typeof bridge.SaveWithAnchorIds === "function"
+        ? bridge.SaveWithAnchorIds(this.handle)
+        : bridge.Save(this.handle);
     return this.exports.DocumentConverter.ConvertDocxToHtmlComplete(
       ...completeArgs(bytes, this.options.cssPrefix, this.options.fabricateClasses, this.options.paginated, this.options.scale),
     );

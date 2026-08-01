@@ -1078,7 +1078,9 @@ export interface DocxodusWasmExports {
     DeleteTableColumn: (handle: number, cellAnchor: string) => string;
     SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
-    InsertPageNumberField: (handle: number, anchor: string, field: string) => string;
+    InsertPageNumberField: (handle: number, anchor: string, field: string, format: string) => string;
+    SetPageNumbering: (handle: number, anchor: string, opJson: string) => string;
+    ClearPageNumbering: (handle: number, anchor: string) => string;
     EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
     InsertFootnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
     InsertEndnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
@@ -1146,6 +1148,11 @@ export interface DocxodusWasmExports {
     Undo: (handle: number) => boolean;
     Redo: (handle: number) => boolean;
     Save: (handle: number) => Uint8Array;
+    /** Save KEEPING the projector's `PtOpenXml:Unid` bookkeeping. Exists for the in-browser
+     *  editor's remount, which re-renders these bytes and needs the anchors to survive the hop.
+     *  Roughly 6x the document's size and read by no renderer — never hand it to a user; a
+     *  save-to-disk wants {@link Save}. */
+    SaveWithAnchorIds: (handle: number) => Uint8Array;
   };
 }
 
@@ -1167,6 +1174,7 @@ export type EditErrorCode =
   | "invalid_position"
   | "unknown_style"
   | "invalid_list_level"
+  | "invalid_page_numbering"
   | "malformed_xml"
   | "disallowed_namespace"
   | "incompatible_element_type"
@@ -1270,6 +1278,27 @@ export type HeaderFooterKind = "default" | "first" | "even";
 /** Which page-number field `DocxSession.insertPageNumberField` emits: `"currentPage"` → PAGE,
  * `"totalPages"` → NUMPAGES. */
 export type PageNumberField = "currentPage" | "totalPages";
+
+/**
+ * Section-level page-numbering setup for {@link DocxSession.setPageNumbering} — the `w:pgNumType`
+ * element, which is what Word's *Format Page Numbers…* dialog writes. Each field is tri-state: an
+ * omitted field leaves that attribute exactly as it is. Use
+ * {@link DocxSession.clearPageNumbering} to remove them.
+ *
+ * This governs how a **plain** PAGE field renders anywhere in the section, which is the normal way
+ * to number pages: set the section once, insert unswitched fields. It is distinct from the
+ * per-field `\*` switch {@link DocxSession.insertPageNumberField} can stamp, which overrides the
+ * section for that one field.
+ */
+export interface PageNumberingOp {
+  /** The page number this section starts at (`w:start`) — e.g. `1` to restart at a section break.
+   *  Omitted leaves it unchanged; absent means the section continues the previous one. */
+  start?: number;
+  /** This section's page-number format (`w:fmt`) — e.g. `"lowerRoman"` for `i, ii, iii` front
+   *  matter. Omitted leaves it unchanged; absent means Word's default `1, 2, 3`. `"bullet"` is
+   *  rejected — pages cannot be bulleted. */
+  format?: NumberFormat;
+}
 
 /** Options for `DocxSession.insertTable`. */
 export interface TableInsertOptions {
@@ -1728,6 +1757,13 @@ export interface SectionInfo {
   /** Footer references in declaration order, each with its `w:type`. Describes exactly the
    *  parts {@link SectionInfo.footerPartUris} lists, plus the kind each supplies. */
   footerRefs: HeaderFooterRef[];
+  /** The page number this section starts at (`w:pgNumType/@w:start`). Absent when the section
+   *  continues the previous section's numbering. */
+  pageNumberStart?: number;
+  /** This section's page-number format (`w:pgNumType/@w:fmt`). Absent means Word's default
+   *  `1, 2, 3` — deliberately not reported as `"decimal"`, so a UI can tell "inherits" from
+   *  "explicitly decimal" and avoid writing an attribute the document never had. */
+  pageNumberFormat?: NumberFormat;
 }
 
 /**

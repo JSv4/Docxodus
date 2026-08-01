@@ -20,7 +20,7 @@
  * uses for the body, which is why the whole ribbon works inside a band with no new command code.
  */
 
-import type { HeaderFooterKind } from "./types.js";
+import type { HeaderFooterKind, NumberFormat } from "./types.js";
 
 /** Which of the two bands an operation targets. */
 export type BandWhich = "header" | "footer";
@@ -32,8 +32,10 @@ export interface HeaderFooterBridge {
   GetSectionInfo: (handle: number, anchorId: string) => string;
   SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
   SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
-  InsertPageNumberField: (handle: number, anchor: string, field: string) => string;
+  InsertPageNumberField: (handle: number, anchor: string, field: string, format: string) => string;
   EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
+  SetPageNumbering: (handle: number, anchor: string, opJson: string) => string;
+  ClearPageNumbering: (handle: number, anchor: string) => string;
   RenderBlockHtml: (
     handle: number,
     anchorId: string,
@@ -65,7 +67,23 @@ interface SectionInfoLite {
   sectionUnid: string;
   headerRefs?: HeaderFooterRefLite[];
   footerRefs?: HeaderFooterRefLite[];
+  /** `w:pgNumType/@w:start` — absent when the section continues the previous one's numbering. */
+  pageNumberStart?: number;
+  /** `w:pgNumType/@w:fmt` — absent means Word's default `1, 2, 3`. */
+  pageNumberFormat?: NumberFormat;
 }
+
+/** The page-number formats Word's *Format Page Numbers…* dialog offers, in its order. The blank
+ *  entry means "leave the section's format alone" — not "decimal", which would write an attribute
+ *  the document may never have had. */
+const PAGE_FORMAT_LABELS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: "", label: "Format…" },
+  { value: "decimal", label: "1, 2, 3" },
+  { value: "lowerLetter", label: "a, b, c" },
+  { value: "upperLetter", label: "A, B, C" },
+  { value: "lowerRoman", label: "i, ii, iii" },
+  { value: "upperRoman", label: "I, II, III" },
+];
 
 interface AnchorEntryLite {
   partUri: string;
@@ -196,12 +214,66 @@ export class HeaderFooterRegion {
     return this.kinds[which];
   }
 
-  /** Append a PAGE / NUMPAGES field to the story paragraph addressed by `anchorId`. */
+  /** Append a PAGE / NUMPAGES field to the story paragraph addressed by `anchorId`.
+   *  Deliberately a PLAIN field (no `\*` switch), exactly as Word inserts one, so it follows the
+   *  section's page-number format — see {@link setPageNumbering}. Stamping the section's current
+   *  format as a switch here would silently WIN over any later format change. */
   insertPageNumber(which: BandWhich, anchorId: string, field: "currentPage" | "totalPages"): boolean {
-    const res = parseResult(this.bridge.InsertPageNumberField(this.handle, anchorId, field));
+    const res = parseResult(this.bridge.InsertPageNumberField(this.handle, anchorId, field, ""));
     if (!res.success) return false;
     this.refresh(which);
     return true;
+  }
+
+  /**
+   * Set this section's page numbering (`w:pgNumType`) — Word's *Format Page Numbers…*. Omitted
+   * fields are left alone, so the format and the start are independently settable. Both bands then
+   * repaint, because the values belong to the section rather than to either story.
+   *
+   * The rendered page numbers in the editor do not change: a page-number field's cached result is
+   * what the browser shows, and Word recomputes it on open. Paginated mode substitutes the real
+   * per-page number, so it does reflect the format immediately.
+   */
+  setPageNumbering(op: { start?: number; format?: NumberFormat }): boolean {
+    if (!this.bodyAnchorId) return false;
+    const res = parseResult(
+      this.bridge.SetPageNumbering(this.handle, this.bodyAnchorId, JSON.stringify(op)),
+    );
+    if (!res.success) return false;
+    this.reloadSection();
+    return true;
+  }
+
+  /** This section's page numbering as the live document states it. Fields are absent, not
+   *  defaulted — "continues the previous section" is not the same claim as "starts at 1". */
+  pageNumbering(): { start?: number; format?: NumberFormat } {
+    return {
+      start: this.sectionInfo?.pageNumberStart,
+      format: this.sectionInfo?.pageNumberFormat,
+    };
+  }
+
+  /** Remove this section's page-numbering start/format — it reverts to continuing the previous
+   *  section's numbering in Word's default `1, 2, 3`. */
+  clearPageNumbering(): boolean {
+    if (!this.bodyAnchorId) return false;
+    const res = parseResult(this.bridge.ClearPageNumbering(this.handle, this.bodyAnchorId));
+    if (!res.success) return false;
+    this.reloadSection();
+    return true;
+  }
+
+  /**
+   * Re-read the section from the live document and repaint BOTH bands.
+   *
+   * `refreshAll` only repaints — it deliberately does not re-read, because its callers (remount,
+   * undo/redo) already refreshed the section. A section-property write has no such caller, and
+   * repainting from the stale snapshot would leave the chrome reporting the value the document had
+   * before the edit.
+   */
+  private reloadSection(): void {
+    this.sectionInfo = this.bodyAnchorId ? this.readSectionInfo(this.bodyAnchorId) : null;
+    this.refreshAll();
   }
 
   /** Insert a page number into a band's own target paragraph (focused, else last). Seeds the
@@ -353,6 +425,48 @@ export class HeaderFooterRegion {
     });
     chrome.appendChild(pageNum);
 
+    // Word's "Format Page Numbers…": these are SECTION properties (w:pgNumType), not properties of
+    // this band's story, so both bands show the same values and either can set them. An inserted
+    // page-number field is plain, so it renders through whatever is chosen here.
+    const pageFmt = document.createElement("select");
+    pageFmt.setAttribute("data-hf-pagefmt", "");
+    pageFmt.title = "Page-number format for this section";
+    for (const o of PAGE_FORMAT_LABELS) {
+      const opt = document.createElement("option");
+      opt.value = o.value;
+      opt.textContent = o.label;
+      pageFmt.appendChild(opt);
+    }
+    pageFmt.addEventListener("change", () => {
+      if (pageFmt.value === "") return;
+      this.setPageNumbering({ format: pageFmt.value as NumberFormat });
+    });
+    chrome.appendChild(pageFmt);
+
+    const pageStart = document.createElement("input");
+    pageStart.setAttribute("data-hf-pagestart", "");
+    pageStart.type = "number";
+    pageStart.min = "0";
+    pageStart.placeholder = "Start at";
+    pageStart.title = "Restart this section's page numbering at this number";
+    // Commit on blur/Enter, not on every keystroke: typing "12" would otherwise apply a start of 1
+    // first, and each apply is an undo step.
+    const commitStart = () => {
+      const raw = pageStart.value.trim();
+      if (raw === "") return;
+      const start = Number(raw);
+      if (!Number.isInteger(start) || start < 0) return;
+      this.setPageNumbering({ start });
+    };
+    pageStart.addEventListener("blur", commitStart);
+    pageStart.addEventListener("keydown", (e) => {
+      if ((e as KeyboardEvent).key === "Enter") {
+        e.preventDefault();
+        commitStart();
+      }
+    });
+    chrome.appendChild(pageStart);
+
     const inheritedNote = document.createElement("span");
     inheritedNote.className = "docx-hf-inherited";
     inheritedNote.setAttribute("data-hf-inherited-note", "");
@@ -397,6 +511,16 @@ export class HeaderFooterRegion {
     const kind = this.kinds[which];
     const select = band.querySelector<HTMLSelectElement>("[data-hf-kind]");
     if (select && select.value !== kind) select.value = kind;
+
+    // Section-level page numbering — the same values on both bands, seeded from the live sectPr so
+    // the chrome reports what the document says rather than what was last clicked.
+    const pageFmt = band.querySelector<HTMLSelectElement>("[data-hf-pagefmt]");
+    if (pageFmt) pageFmt.value = this.sectionInfo?.pageNumberFormat ?? "";
+    const pageStart = band.querySelector<HTMLInputElement>("[data-hf-pagestart]");
+    if (pageStart && document.activeElement !== pageStart) {
+      const start = this.sectionInfo?.pageNumberStart;
+      pageStart.value = start === undefined ? "" : String(start);
+    }
 
     // A section that declares no reference of this kind shows the story it inherits from an
     // earlier section. Say so: editing it changes BOTH sections, because they share one part.

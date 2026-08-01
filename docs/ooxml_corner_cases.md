@@ -878,11 +878,38 @@ pages, and enabling `w:titlePg` with an empty first-page footer leaves page 1 wi
 spec-correct and reproduces identically in Word and LibreOffice; the editor's header/footer bands
 show an inline note for both cases.
 
+### The render side of the same rule
+
+The flag governs **reading** too, and our paginated renderer originally got it wrong in the
+opposite direction: `RenderPaginatedHeaderFooterRegistry` gated the *first* stories on
+`w:titlePg` but emitted the *even* stories whenever a `w:type="even"` reference existed, with no
+check on `w:evenAndOddHeaders`.
+
+| Renderer | Even-page footer, reference present, `w:evenAndOddHeaders` absent |
+|----------|------------------------------------------------------------------|
+| Word | Default story |
+| LibreOffice 25.8 | Default story |
+| Docxodus (before) | **Even story** |
+| Docxodus (after) | Default story |
+
+Found by smoke-testing the NVCA model certificate of incorporation
+(`https://nvca.org/wp-content/uploads/2025/10/NVCA-Model-COI-10-1-2025.docx`), a real filing
+template that carries three `w:type="even"` footer references with the flag absent. Its leftover
+even footer reads `DRAFT` and carries no `PAGE` field, so the paginated view showed `DRAFT` — and
+therefore no page number at all — on every even page, where LibreOffice showed
+`Last Updated October 2025` and the roman-numeral page number.
+
+The fix mirrors the existing `hasTitlePage` gate with a `hasEvenAndOddHeaders` one, so both stories
+are governed by their own flag in the same place.
+
 ### Tests
 
 `Docxodus.Tests/DocxSessionTests.cs` — `DS268` (flags set for pre-existing stories, idempotent,
 lands in the section that carries the reference rather than merely the trailing `sectPr`);
-`npm/tests/editor-headerfooter.spec.ts` — the end-to-end assertion over the saved package.
+`Docxodus.Tests/PaginatedHeaderFooterGatingTests.cs` — `PHF001`/`PHF002` (even stories follow
+`w:evenAndOddHeaders`) and `PHF003` (first stories follow `w:titlePg`, pinned so the two rules
+cannot drift apart); `npm/tests/editor-headerfooter.spec.ts` — the end-to-end assertion over the
+saved package.
 
 ---
 

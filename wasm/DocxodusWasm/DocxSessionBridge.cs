@@ -168,10 +168,30 @@ public static partial class DocxSessionBridge
 
     /// <summary>Append a page-number field to the paragraph <paramref name="anchor"/> (typically a
     /// header/footer paragraph). <paramref name="field"/> is "currentPage" (PAGE) | "totalPages"
-    /// (NUMPAGES). Returns the affected paragraph anchor in <c>modified</c>.</summary>
+    /// (NUMPAGES). <paramref name="format"/> is an ST_NumberFormat token ("lowerRoman", …) writing
+    /// the field's own <c>\*</c> switch, or "" for a plain field that follows the section's format
+    /// (see <see cref="SetPageNumbering"/>) — which is the normal choice. Returns the affected
+    /// paragraph anchor in <c>modified</c>.</summary>
     [JSExport]
-    public static string InsertPageNumberField(int h, string anchor, string field) =>
-        DocxSessionOps.InsertPageNumberField(h, anchor, DocxSessionJson.ParsePageNumberField(field));
+    public static string InsertPageNumberField(int h, string anchor, string field, string format) =>
+        DocxSessionOps.InsertPageNumberField(h, anchor,
+            DocxSessionJson.ParsePageNumberField(field),
+            DocxSessionJson.ParseNumberFormatOrNull(format));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.SetPageNumbering"/> — the section (<c>w:pgNumType</c>) half
+    /// of page numbering, addressed by any body block in the section. <paramref name="opJson"/> is
+    /// { start?: int, format?: ST_NumberFormat token }; omitted fields are left unchanged.
+    /// </summary>
+    [JSExport]
+    public static string SetPageNumbering(int h, string anchor, string opJson) =>
+        DocxSessionOps.SetPageNumbering(h, anchor, DocxSessionJson.ParsePageNumberingOp(opJson));
+
+    /// <summary>Remove the section's page-numbering start/format — see
+    /// <see cref="DocxSession.ClearPageNumbering"/>.</summary>
+    [JSExport]
+    public static string ClearPageNumbering(int h, string anchor) =>
+        DocxSessionOps.ClearPageNumbering(h, anchor);
 
     /// <summary>Make the <paramref name="kind"/> ("first" | "even") header/footer stories of the
     /// section owning <paramref name="anchor"/> actually render — sets <c>w:titlePg</c> /
@@ -560,6 +580,12 @@ public static partial class DocxSessionBridge
 
     [JSExport]
     public static byte[] Save(int h) => DocxSessionOps.Save(h);
+
+    /// <summary>Save KEEPING the projector's Unid bookkeeping — for the editor's remount, which
+    /// re-renders these bytes and needs the anchors to survive the hop. ~6x larger than the
+    /// document; never hand this to a user (see <see cref="Save"/>).</summary>
+    [JSExport]
+    public static byte[] SaveWithAnchorIds(int h) => DocxSessionOps.SaveWithAnchorIds(h);
 
     // ─── Helpers ────────────────────────────────────────────────────────
 
