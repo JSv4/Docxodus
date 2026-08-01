@@ -222,40 +222,254 @@ internal static class HtmlConversionOps
             throw new ArgumentException("No anchor id provided", nameof(anchorId));
         ArgumentNullException.ThrowIfNull(options);
 
-        var liveDoc = session.LiveDocument;
+        // Single-block render IS a one-element batch — one owner for anchor resolution,
+        // neighbor context (contextualSpacing) and list-annotation transplant (true
+        // marker numbers in isolation), so every incremental swap path shares them.
+        var map = RenderBlocksCore(session, new[] { anchorId }, options);
+        return map[anchorId] ?? throw new ArgumentException($"anchor not found: {anchorId}", nameof(anchorId));
+    }
 
-        // Resolve through the session's anchor index FIRST: it knows which PART the anchor lives
-        // in. Unids are content-addressed, so identical content in different parts shares one unid
-        // — a document with empty default/first/even header stories has one unid across several
-        // header parts — and the unid-only scan below would render whichever part it reached
-        // first. An editor showing a header band would then display a different story than the
-        // one it is editing.
-        var blockElement = session.FindAnchor(anchorId)?.Resolve(liveDoc);
+    /// <summary>
+    /// Batch session-attached block render: N anchors, ONE throwaway document, one
+    /// converter run — the per-call shell setup that dominates single-block renders is
+    /// paid once. Returns a JSON object mapping each anchor id to its HTML element
+    /// (<c>null</c> for an anchor that fails to resolve — callers fall back per block).
+    /// Each rendered block matches the corresponding <c>data-anchor</c> element of a
+    /// full render with the same options: real siblings are cloned around each target
+    /// (so <c>w:contextualSpacing</c> margins resolve) and the live document's
+    /// list-numbering annotations ride along on the clones (so a list item deep in a
+    /// list renders its true number, not "1."). A <c>fn:</c>/<c>en:</c> anchor renders
+    /// as the concatenation of the note's paragraphs (no list-item wrapper — that is
+    /// notes-section chrome the client owns).
+    /// </summary>
+    public static string RenderBlocksHtml(DocxSession session, IReadOnlyList<string> anchorIds, HtmlConversionOptions options)
+    {
+        if (session is null) throw new ArgumentNullException(nameof(session));
+        ArgumentNullException.ThrowIfNull(anchorIds);
+        ArgumentNullException.ThrowIfNull(options);
 
-        var unid = AnchorUnid(anchorId);
-        blockElement ??= FindByUnid(liveDoc, unid);
-        if (blockElement is null)
+        var map = RenderBlocksCore(session, anchorIds, options);
+        var sb = new System.Text.StringBuilder(256);
+        sb.Append('{');
+        bool first = true;
+        foreach (var id in anchorIds)
         {
-            // Anchor not on the live tree yet — ensure Unids are assigned/persisted
-            // (one projection) and retry once.
-            session.Project();
-            blockElement = session.FindAnchor(anchorId)?.Resolve(liveDoc) ?? FindByUnid(liveDoc, unid);
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append(DocxSessionJson.JsonString(id)).Append(':');
+            sb.Append(map.TryGetValue(id, out var html) && html is not null
+                ? DocxSessionJson.JsonString(html)
+                : "null");
         }
-        if (blockElement is null)
-            throw new ArgumentException($"anchor not found: {anchorId}", nameof(anchorId));
+        sb.Append('}');
+        return sb.ToString();
+    }
 
-        // Reuse a per-session formatting "shell" (the formatting parts + an empty body, serialized
-        // once) so a keystroke commit doesn't re-clone the source's whole style gallery every render
-        // — the dominant cost on a large gallery. The shell is rebuilt only when the formatting parts
-        // actually change (signature), which only happens on a format op (add style / numbering /
-        // level), never on a text edit, so it survives normal typing.
+    /// <summary>Batch overload for a registered session handle (anchor ids as a JSON string array).</summary>
+    public static string RenderBlocksHtml(int handle, string anchorIdsJson, HtmlConversionOptions options)
+    {
+        var ids = new List<string>();
+        using (var doc = System.Text.Json.JsonDocument.Parse(anchorIdsJson))
+        {
+            foreach (var e in doc.RootElement.EnumerateArray())
+            {
+                if (e.GetString() is { } s) ids.Add(s);
+            }
+        }
+        return RenderBlocksHtml(SessionRegistry.Get(handle), ids, options);
+    }
+
+    private static Dictionary<string, string?> RenderBlocksCore(
+        DocxSession session, IReadOnlyList<string> anchorIds, HtmlConversionOptions options)
+    {
+        var liveDoc = session.LiveDocument;
+        EnsureListAnnotations(liveDoc);
+
+        var results = new Dictionary<string, string?>(StringComparer.Ordinal);
+        // Block-level render targets: the element to place in the throwaway body, keyed
+        // by the unid its HTML is extracted under.
+        var targets = new List<XElement>();
+        // fn/en anchors expand to their child paragraphs; remember which unids to
+        // concatenate back per note anchor.
+        var noteChildUnids = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+
+        foreach (var anchorId in anchorIds.Distinct(StringComparer.Ordinal))
+        {
+            var el = ResolveSessionAnchor(session, anchorId);
+            if (el is null) { results[anchorId] = null; continue; }
+            if (el.Name == W.footnote || el.Name == W.endnote)
+            {
+                var childUnids = new List<string>();
+                foreach (var p in el.Elements(W.p))
+                {
+                    var u = (string?)p.Attribute(PtOpenXml.Unid);
+                    if (u is null) continue;
+                    childUnids.Add(u);
+                    targets.Add(p);
+                }
+                noteChildUnids[anchorId] = childUnids;
+            }
+            else
+            {
+                targets.Add(el);
+            }
+        }
+
+        if (targets.Count > 0)
+        {
+            var htmlByUnid = RenderTargetsFromShell(session, liveDoc, targets, options);
+            foreach (var anchorId in anchorIds)
+            {
+                if (results.ContainsKey(anchorId)) continue; // resolution failure already recorded
+                if (noteChildUnids.TryGetValue(anchorId, out var childUnids))
+                {
+                    var parts = new List<string>(childUnids.Count);
+                    foreach (var u in childUnids)
+                    {
+                        if (htmlByUnid.TryGetValue(u, out var h) && h is not null) parts.Add(h);
+                    }
+                    results[anchorId] = parts.Count > 0 ? string.Concat(parts) : null;
+                }
+                else
+                {
+                    var unid = AnchorUnid(anchorId);
+                    results[anchorId] = htmlByUnid.TryGetValue(unid, out var h) ? h : null;
+                }
+            }
+        }
+        return results;
+    }
+
+    /// <summary>
+    /// Resolve an anchor against the live session: index-first (it knows which PART the
+    /// anchor lives in — content-addressed unids collide across parts, e.g. empty
+    /// default/first/even header stories), unid-scan fallback, one projection retry for
+    /// anchors not yet on the live tree.
+    /// </summary>
+    private static XElement? ResolveSessionAnchor(DocxSession session, string anchorId)
+    {
+        if (string.IsNullOrWhiteSpace(anchorId)) return null;
+        var liveDoc = session.LiveDocument;
+        var el = session.FindAnchor(anchorId)?.Resolve(liveDoc);
+        var unid = AnchorUnid(anchorId);
+        el ??= FindByUnid(liveDoc, unid);
+        if (el is null)
+        {
+            session.Project();
+            el = session.FindAnchor(anchorId)?.Resolve(liveDoc) ?? FindByUnid(liveDoc, unid);
+        }
+        return el;
+    }
+
+    /// <summary>
+    /// Render the target block elements through ONE fresh copy of the session's cached
+    /// shell and return each target's HTML keyed by its unid. Targets are grouped per
+    /// parent into contiguous sibling runs padded with one real neighbor on each side,
+    /// so <c>w:contextualSpacing</c> resolves exactly as in the full render; only
+    /// requested unids are extracted (context clones are scaffolding).
+    /// </summary>
+    private static Dictionary<string, string?> RenderTargetsFromShell(
+        DocxSession session, WordprocessingDocument liveDoc, List<XElement> targets, HtmlConversionOptions options)
+    {
         long sig = ComputeFormattingSignature(liveDoc);
         if (session.RenderShellBytes is null || session.RenderShellSignature != sig)
         {
             session.RenderShellBytes = BuildShellDocBytes(liveDoc);
             session.RenderShellSignature = sig;
         }
-        return RenderBlockFromShell(session.RenderShellBytes, blockElement, options);
+
+        var wantedUnids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var t in targets)
+        {
+            if ((string?)t.Attribute(PtOpenXml.Unid) is { } u) wantedUnids.Add(u);
+        }
+
+        // Per parent: order block-level children, merge each target's ±1 window into runs.
+        var bodyContent = new List<XElement>();
+        foreach (var parentGroup in targets.Where(t => t.Parent is not null).GroupBy(t => t.Parent!))
+        {
+            var siblings = parentGroup.Key.Elements()
+                .Where(e => e.Name == W.p || e.Name == W.tbl)
+                .ToList();
+            var posOf = new Dictionary<XElement, int>();
+            for (int i = 0; i < siblings.Count; i++) posOf[siblings[i]] = i;
+
+            var positions = parentGroup.Select(t => posOf.TryGetValue(t, out var p) ? p : -1)
+                .Where(p => p >= 0).Distinct().OrderBy(p => p).ToList();
+            int idx = 0;
+            while (idx < positions.Count)
+            {
+                int start = Math.Max(0, positions[idx] - 1);
+                int end = Math.Min(siblings.Count - 1, positions[idx] + 1);
+                while (idx + 1 < positions.Count && positions[idx + 1] - 1 <= end + 1)
+                {
+                    idx++;
+                    end = Math.Min(siblings.Count - 1, positions[idx] + 1);
+                }
+                idx++;
+                for (int i = start; i <= end; i++)
+                    bodyContent.Add(CloneWithListAnnotations(siblings[i]));
+            }
+        }
+
+        var htmlByUnid = new Dictionary<string, string?>(StringComparer.Ordinal);
+        if (bodyContent.Count == 0) return htmlByUnid;
+
+        using var ms = new MemoryStream();
+        ms.Write(session.RenderShellBytes, 0, session.RenderShellBytes.Length);
+        ms.Position = 0;
+        using var renderDoc = WordprocessingDocument.Open(ms, true);
+        var bodyEl = renderDoc.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
+        bodyEl.RemoveNodes();
+        foreach (var el in bodyContent) bodyEl.Add(el);
+
+        var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, BuildBlockConverterSettings(options));
+        foreach (var e in htmlElement.Descendants())
+        {
+            var u = (string?)e.Attribute("data-anchor");
+            if (u is not null && wantedUnids.Contains(u) && !htmlByUnid.ContainsKey(u))
+                htmlByUnid[u] = e.ToString(SaveOptions.DisableFormatting);
+        }
+        return htmlByUnid;
+    }
+
+    /// <summary>
+    /// Make sure the live document carries <see cref="ListItemRetriever"/> annotations
+    /// (per-paragraph <c>ListItemInfo</c> + per-item <c>LevelNumbers</c> counter
+    /// vectors). One <see cref="ListItemRetriever.RetrieveListItem(WordprocessingDocument, XElement)"/>
+    /// call on any unannotated paragraph initializes every content part.
+    /// </summary>
+    private static void EnsureListAnnotations(WordprocessingDocument doc)
+    {
+        var main = doc.MainDocumentPart;
+        if (main?.NumberingDefinitionsPart is null || main.StyleDefinitionsPart is null) return;
+        var missing = main.GetXDocument().Root?
+            .Descendants(W.p)
+            .FirstOrDefault(p => p.Annotation<ListItemRetriever.ListItemInfo>() is null);
+        if (missing is not null) ListItemRetriever.RetrieveListItem(doc, missing);
+    }
+
+    /// <summary>
+    /// Clone a block element and transplant the LIVE document's list-numbering
+    /// annotations onto the clone's paragraphs (XElement cloning drops annotations).
+    /// The throwaway converter then reads the live counters instead of recomputing
+    /// them from the throwaway's tiny body — where every list item would count from 1.
+    /// Annotation reads are first-added-wins, so even if the converter re-initializes
+    /// the throwaway document, the transplanted values hold.
+    /// </summary>
+    private static XElement CloneWithListAnnotations(XElement src)
+    {
+        var clone = new XElement(src);
+        using var s = src.DescendantsAndSelf().GetEnumerator();
+        using var c = clone.DescendantsAndSelf().GetEnumerator();
+        while (s.MoveNext() && c.MoveNext())
+        {
+            if (s.Current.Name != W.p) continue;
+            if (s.Current.Annotation<ListItemRetriever.ListItemInfo>() is { } lii) c.Current.AddAnnotation(lii);
+            if (s.Current.Annotation<ListItemRetriever.LevelNumbers>() is { } ln) c.Current.AddAnnotation(ln);
+            if (s.Current.Annotation<ListItemRetriever.ContinuationInfo>() is { } ci) c.Current.AddAnnotation(ci);
+        }
+        return clone;
     }
 
     /// <summary>Session-attached render for a registered session handle.</summary>
@@ -297,8 +511,8 @@ internal static class HtmlConversionOps
     /// Render one resolved block element to HTML via a throwaway document that copies the
     /// source's formatting parts. Read-only w.r.t. <paramref name="sourceDoc"/> (the block is
     /// cloned, parts are read), so it is safe to call on a live session document. This is the
-    /// STATELESS path (no per-session shell cache); the session-attached overload reuses a cached
-    /// shell via <see cref="RenderBlockFromShell"/>.
+    /// STATELESS path (no per-session shell cache); the session-attached paths batch through
+    /// <see cref="RenderTargetsFromShell"/> instead.
     /// </summary>
     private static string RenderResolvedBlock(WordprocessingDocument sourceDoc, XElement blockElement,
         HtmlConversionOptions options)
@@ -323,9 +537,9 @@ internal static class HtmlConversionOps
     /// <summary>
     /// Build the reusable per-session "shell": a serialized throwaway .docx holding the copied
     /// formatting parts and an EMPTY body. Built once (per formatting signature) and cached on the
-    /// session; <see cref="RenderBlockFromShell"/> drops the block into its body per render. This
-    /// front-loads the (expensive on a large style gallery) part clone+serialize so it is paid once
-    /// rather than every keystroke commit.
+    /// session; <see cref="RenderTargetsFromShell"/> drops the batch's blocks into its body per
+    /// render. This front-loads the (expensive on a large style gallery) part clone+serialize so
+    /// it is paid once rather than every keystroke commit.
     /// </summary>
     private static byte[] BuildShellDocBytes(WordprocessingDocument sourceDoc)
     {
@@ -338,27 +552,6 @@ internal static class HtmlConversionOps
             main.PutXDocument(BuildBodyDocument(/* empty body */));
         }
         return shellStream.ToArray();
-    }
-
-    /// <summary>
-    /// Render one block from a cached shell: open a fresh copy of <paramref name="shellBytes"/>
-    /// (so the converter's in-place mutation never touches the cache), drop the cloned block into
-    /// the empty body, convert, and extract the block's HTML. Output is identical to
-    /// <see cref="RenderResolvedBlock"/> for the same block + parts.
-    /// </summary>
-    private static string RenderBlockFromShell(byte[] shellBytes, XElement blockElement,
-        HtmlConversionOptions options)
-    {
-        var unid = (string?)blockElement.Attribute(PtOpenXml.Unid);
-        using var ms = new MemoryStream();
-        ms.Write(shellBytes, 0, shellBytes.Length);
-        ms.Position = 0;
-        using var renderDoc = WordprocessingDocument.Open(ms, true);
-        var bodyEl = renderDoc.MainDocumentPart!.GetXDocument().Root!.Element(W.body)!;
-        bodyEl.RemoveNodes();
-        bodyEl.Add(new XElement(blockElement));
-        var htmlElement = WmlToHtmlConverter.ConvertToHtml(renderDoc, BuildBlockConverterSettings(options));
-        return ExtractBlockHtml(htmlElement, unid);
     }
 
     /// <summary>
@@ -415,6 +608,10 @@ internal static class HtmlConversionOps
             FabricateCssClasses = options.FabricateCssClasses,
             CssClassPrefix = options.CssClassPrefix,
             StampAnchors = true,
+            // Must FOLLOW the caller's profile: with it off, ProcessFootnoteReference
+            // returns null and a re-rendered citing paragraph silently loses its
+            // citation marker from the DOM (the XML keeps the reference).
+            RenderFootnotesAndEndnotes = options.RenderFootnotesAndEndnotes,
             // The throwaway doc copies the source's (possibly huge) style gallery verbatim;
             // re-simplifying it every render is the dominant single-block cost (~70ms on a 160-style
             // python-docx doc) and only strips rsids, which never reach the HTML. Skip it — the

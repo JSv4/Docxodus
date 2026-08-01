@@ -1058,6 +1058,17 @@ export interface DocxodusWasmExports {
      *  id↔ordinal authority for renumbering rendered note chrome. Optional:
      *  absent on older WASM bundles. */
     ListNotes?: (handle: number, endnotes: boolean) => string;
+    /** Batch block render: `anchorIdsJson` is a JSON string array; returns a JSON
+     *  object mapping each id to its HTML element (null when unresolvable), or
+     *  `{"error": …}` on total failure — parse and check for `error`. One throwaway
+     *  doc + one converter run for the whole batch, with real sibling context and
+     *  true list-marker numbers. Optional: absent on older WASM bundles. */
+    RenderBlocksHtml?: (
+      handle: number,
+      anchorIdsJson: string,
+      cssPrefix: string,
+      fabricateClasses: boolean
+    ) => string;
     RenderBlockHtml: (
       handle: number,
       anchorId: string,

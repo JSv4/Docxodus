@@ -56,6 +56,23 @@ public static partial class DocxSessionBridge
     public static string ListNotes(int handle, bool endnotes) => DocxSessionOps.ListNotes(handle, endnotes);
 
     /// <summary>
+    /// Batch block render: <paramref name="anchorIdsJson"/> is a JSON string array of
+    /// anchor ids; returns a JSON object mapping each id to its HTML element (null for
+    /// an id that failed to resolve). One throwaway document and one converter run for
+    /// the whole batch, with real sibling context and true list-marker numbers.
+    /// </summary>
+    [JSExport]
+    public static string RenderBlocksHtml(int handle, string anchorIdsJson, string cssPrefix, bool fabricateClasses)
+    {
+        // NOTE: success output is itself a JSON object, so the "HTML never starts with
+        // '{'" error convention of RenderBlockHtml does not apply here — callers parse
+        // and check for an "error" property (anchor-id keys always contain a colon, so
+        // they can never collide with it).
+        try { return DocxSessionOps.RenderBlocksHtml(handle, anchorIdsJson, cssPrefix, fabricateClasses); }
+        catch (System.Exception ex) { return $"{{\"error\":\"{JsonEncodedText.Encode(ex.Message ?? string.Empty)}\"}}"; }
+    }
+
+    /// <summary>
     /// Bridge for <see cref="DocxSession.ProjectAnchor"/>. <paramref name="depth"/>
     /// uses the numeric layout of <see cref="ProjectionDepth"/> (SelfOnly=0,
     /// Subtree=1, SubtreeAndFollowingSiblings=2). Returns a JSON object with

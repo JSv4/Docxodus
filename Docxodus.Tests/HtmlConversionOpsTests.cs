@@ -1115,4 +1115,67 @@ public class HtmlConversionOpsTests
                 if (otherKind != kind) Assert.DoesNotContain(otherText, html);
         }
     }
+
+    // THE BATCH GATE: RenderBlocksHtml output must be ELEMENT-IDENTICAL to the
+    // corresponding data-anchor element of a full render — including list-item
+    // markers deep in a list (numbering continuation, the M9 gap the single-block
+    // path had) and contextualSpacing-dependent margins (neighbor context). This is
+    // deliberately stronger than HCO050's tag+text check.
+    [Fact]
+    public void HCO081_RenderBlocksHtml_MatchesFullRenderFragments()
+    {
+        byte[] bytes = File.ReadAllBytes(Path.Combine("..", "..", "..", "..", "TestFiles",
+            "HC031-Complicated-Document.docx"));
+        using var session = new DocxSession(bytes);
+        var options = new HtmlConversionOptions { FabricateCssClasses = false, StampAnchors = true };
+
+        var full = System.Xml.Linq.XElement.Parse(HtmlConversionOps.ConvertToHtml(session, options));
+        var fullByAnchor = full.Descendants()
+            .Where(e => (string?)e.Attribute("data-anchor") != null)
+            .GroupBy(e => (string)e.Attribute("data-anchor")!)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        static bool HasImg(System.Xml.Linq.XElement e) =>
+            e.Descendants().Any(d => d.Name.LocalName == "img");
+
+        var plan = session.ListBlocks();
+        var ids = plan.Body.Where(u => u.Kind == "li").Take(10)
+            .Concat(plan.Body.Where(u => u.Kind == "p").Take(4))
+            .Concat(plan.Body.Where(u => u.Kind == "h").Take(2))
+            .Where(u => fullByAnchor.TryGetValue(u.Id.Substring(u.Id.LastIndexOf(':') + 1), out var el) && !HasImg(el))
+            .Select(u => u.Id)
+            .ToList();
+        Assert.True(ids.Count >= 8, $"fixture too thin: only {ids.Count} usable units");
+
+        var json = HtmlConversionOps.RenderBlocksHtml(session, ids, options);
+        using var map = System.Text.Json.JsonDocument.Parse(json);
+
+        foreach (var id in ids)
+        {
+            var unid = id.Substring(id.LastIndexOf(':') + 1);
+            var expected = fullByAnchor[unid].ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+            var actual = map.RootElement.GetProperty(id).GetString();
+            Assert.NotNull(actual);
+            // One extra Parse round-trip on the actual normalizes serializer escaping
+            // (&#x00a0; vs the raw NBSP char) — the equality is structural + textual.
+            Assert.Equal(expected,
+                System.Xml.Linq.XElement.Parse(actual!).ToString(System.Xml.Linq.SaveOptions.DisableFormatting));
+        }
+    }
+
+    // Error contract: an unresolvable anchor maps to JSON null; good anchors in the
+    // same call still render. (The reconciler falls back to a full remount per null.)
+    [Fact]
+    public void HCO082_RenderBlocksHtml_UnresolvableAnchorMapsToNull()
+    {
+        using var session = new DocxSession(DocxSession.CreateBlankDocxBytes());
+        var options = new HtmlConversionOptions { FabricateCssClasses = false, StampAnchors = true };
+        var goodId = session.ListBlocks().Body[0].Id;
+        var json = HtmlConversionOps.RenderBlocksHtml(
+            session, new[] { goodId, "p:body:00000000000000000000000000000000" }, options);
+        using var map = System.Text.Json.JsonDocument.Parse(json);
+        Assert.False(string.IsNullOrEmpty(map.RootElement.GetProperty(goodId).GetString()));
+        Assert.Equal(System.Text.Json.JsonValueKind.Null,
+            map.RootElement.GetProperty("p:body:00000000000000000000000000000000").ValueKind);
+    }
 }

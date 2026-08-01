@@ -61,7 +61,31 @@ internal static class DocxSessionOps
     /// </summary>
     public static string RenderBlockHtml(int handle, string anchorId, string cssPrefix, bool fabricateClasses) =>
         HtmlConversionOps.RenderBlockHtml(SessionRegistry.Get(handle), anchorId,
-            new HtmlConversionOptions { CssClassPrefix = cssPrefix ?? "docx-", FabricateCssClasses = fabricateClasses });
+            EditorBlockRenderOptions(cssPrefix, fabricateClasses));
+
+    /// <summary>
+    /// Batch single-block render: N anchors, one throwaway document, one converter run.
+    /// Returns a JSON object mapping each anchor id to its HTML (null for an anchor that
+    /// failed to resolve). See <see cref="HtmlConversionOps.RenderBlocksHtml(DocxSession, System.Collections.Generic.IReadOnlyList{string}, HtmlConversionOptions)"/>.
+    /// </summary>
+    public static string RenderBlocksHtml(int handle, string anchorIdsJson, string cssPrefix, bool fabricateClasses) =>
+        HtmlConversionOps.RenderBlocksHtml(handle, anchorIdsJson,
+            EditorBlockRenderOptions(cssPrefix, fabricateClasses));
+
+    /// <summary>
+    /// The block-render option profile for the editor's incremental swaps. Must agree
+    /// with <see cref="RenderHtml"/>'s full-render profile wherever a setting affects
+    /// WITHIN-BLOCK output — footnote/endnote citation markers in particular: with
+    /// RenderFootnotesAndEndnotes off, a re-rendered citing paragraph silently loses
+    /// its citation marker from the DOM.
+    /// </summary>
+    private static HtmlConversionOptions EditorBlockRenderOptions(string cssPrefix, bool fabricateClasses) =>
+        new HtmlConversionOptions
+        {
+            CssClassPrefix = cssPrefix ?? "docx-",
+            FabricateCssClasses = fabricateClasses,
+            RenderFootnotesAndEndnotes = true,
+        };
 
     /// <summary>
     /// Render the live session's current state to a complete anchor-stamped HTML document —
