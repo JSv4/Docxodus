@@ -1607,23 +1607,88 @@ internal static class IrMarkupRenderer
     }
 
     /// <summary>
-    /// A Modified pair. A PARAGRAPH pair with a token diff renders finely (per-span run wrapping). Any other
-    /// Modified pair (table, opaque, section break, or a paragraph that somehow lacks a token diff) falls back
-    /// to a conservative whole-block del(left)+ins(right) that keeps the invariant — Task 4 refines tables.
+    /// The <c>w:txbxContent</c> hosts of an element, in document order. A textbox reached through
+    /// <c>mc:AlternateContent</c> is counted once — from the understood <c>mc:Choice</c> branch — because
+    /// that is the branch <c>IrReader</c> reads and therefore the one the nested ops describe. A populated
+    /// <c>mc:Fallback</c> is left exactly as the source had it (Word rewrites both branches; matching that is
+    /// a separate fidelity question, and leaving it never invents content).
+    /// </summary>
+    private static List<XElement> TextboxContentsOf(XElement element)
+    {
+        var hosts = new List<XElement>();
+        foreach (var content in element.DescendantsAndSelf(W.txbxContent))
+        {
+            if (content.Ancestors(MC.Fallback).Any())
+                continue;
+            hosts.Add(content);
+        }
+        return hosts;
+    }
+
+    /// <summary>
+    /// Rebuild each emitted textbox's interior from its nested block ops, so a change confined to a textbox
+    /// is tracked INSIDE the box — Word's shape — instead of deleting and re-inserting the whole drawing.
+    /// The nested ops are ordinary block ops, so they go through the same <see cref="RenderBlockOp"/> dispatch
+    /// as body, note and header/footer content. The builder masks textbox placeholder tokens so the
+    /// paragraph's own token diff pairs them Equal (<c>MakeParagraphModifyOp</c>), which is what leaves the
+    /// drawing emitted once and bare for this to fill in.
+    /// <para>Returns false — committing nothing — when the emitted boxes do not pair 1:1 with the nested
+    /// diffs. The pairing is positional, so a surplus box or a populated <c>mc:Fallback</c> could otherwise
+    /// pair the wrong interiors; the caller then falls back to the conservative whole-block del+ins, which is
+    /// coarser but never loses the change.</para>
+    /// </summary>
+    private static bool TryRenderTextboxInteriors(
+        IrNodeList<IrTextboxDiff> textboxDiffs, RenderState state, List<XElement> emitted)
+    {
+        var hosts = emitted.SelectMany(TextboxContentsOf).ToList();
+        if (hosts.Count != textboxDiffs.Count)
+            return false;                 // pair 1:1 or not at all — the caller falls back
+
+        for (int i = 0; i < hosts.Count; i++)
+        {
+            var rendered = new List<XElement>();
+            foreach (var op in textboxDiffs[i].Ops)
+                RenderBlockOp(op, state, rendered);
+            if (rendered.Count == 0)
+                continue;                 // an all-equal box: leave the emitted content untouched
+            hosts[i].ReplaceNodes(rendered);
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// A Modified pair. A PARAGRAPH pair with a token diff renders finely (per-span run wrapping), rebuilding
+    /// any textbox interiors from the nested ops. Any other Modified pair (table, opaque, section break, or a
+    /// paragraph that somehow lacks a token diff) falls back to a conservative whole-block del(left)+ins(right)
+    /// that keeps the invariant — Task 4 refines tables.
     /// </summary>
     private static void RenderModifyBlock(IrEditOp op, RenderState state, List<XElement> sink)
     {
         bool leftIsPara = ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph;
         bool rightIsPara = ResolveBlock(op.RightAnchor, state.RightSource) is IrParagraph;
 
-        if (!op.RequiresWholeParagraphReplace && op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara &&
-            op.TextboxDiffs is null)             // textbox-interior diffs are not finely rendered in Task 3
+        if (!op.RequiresWholeParagraphReplace && op.TokenDiff is { } tokenDiff && leftIsPara && rightIsPara)
         {
             // Commented paragraphs render finely too: comment range markers + the commentReference run ride
             // through the token diff as AlwaysKeep zero-width markers (IsAlwaysKeepMarker / WalkRun), then
             // NormalizeComments reconciles them to unique/paired/resolved markup. (Was: bailed to whole-block.)
-            RenderModifiedParagraph(op, tokenDiff, state, sink);
-            return;
+            if (op.TextboxDiffs is not { } textboxInteriors)
+            {
+                RenderModifiedParagraph(op, tokenDiff, state, sink);
+                return;
+            }
+
+            // Render into a scratch list so the interiors can be rebuilt BEFORE anything is committed: if the
+            // emitted boxes don't pair 1:1 with the nested diffs, the whole attempt is discarded and the
+            // conservative whole-block path below runs instead. Committing first and bailing mid-way would
+            // leave the box holding one side's content with no markup — the silent loss this exists to remove.
+            var fine = new List<XElement>();
+            RenderModifiedParagraph(op, tokenDiff, state, fine);
+            if (TryRenderTextboxInteriors(textboxInteriors, state, fine))
+            {
+                sink.AddRange(fine);
+                return;
+            }
         }
 
         // A Modified TABLE pair with a nested table diff renders row/cell-precise markup (Task 4).

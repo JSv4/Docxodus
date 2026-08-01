@@ -75,6 +75,15 @@ public class DocxDiffDrawingIdCollisionTests
         $"<wps:txbx><w:txbxContent><w:p><w:r><w:t xml:space=\"preserve\">{boxText}</w:t></w:r></w:p></w:txbxContent></wps:txbx>" +
         "<wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>";
 
+    /// <summary>
+    /// Forces a changed textbox to be deleted and re-inserted WHOLESALE. Since fine textbox-interior
+    /// rendering landed, an
+    /// ordinary textbox edit is tracked inside ONE box and no longer duplicates the drawing — so the
+    /// id-collision cases now come from the paths that still emit a drawing twice: this option off, a surplus
+    /// box, a whole-block paragraph replacement, Consolidate, or a source that already shares an id.
+    /// </summary>
+    private static DocxDiffSettings Wholesale => new() { CompareTextboxes = false };
+
     private static List<string> ValidationErrors(WmlDocument doc)
     {
         using var ms = new MemoryStream(doc.DocumentByteArray.ToArray());
@@ -128,14 +137,15 @@ public class DocxDiffDrawingIdCollisionTests
     [Fact]
     public void A_changed_DrawingML_textbox_sharing_a_docPr_id_compares_to_a_valid_document()
     {
-        var compared = DocxDiff.Compare(Doc(DrawingMlTextbox("box one")), Doc(DrawingMlTextbox("box two")));
+        var compared = DocxDiff.Compare(
+            Doc(DrawingMlTextbox("box one")), Doc(DrawingMlTextbox("box two")), Wholesale);
         Assert.Empty(ValidationErrors(compared));
     }
 
     [Fact]
     public void The_duplicated_docPr_ids_are_re_issued_uniquely()
     {
-        var compared = DocxDiff.Compare(Doc(DrawingMlTextbox("box one")), Doc(DrawingMlTextbox("box two")));
+        var compared = DocxDiff.Compare(Doc(DrawingMlTextbox("box one")), Doc(DrawingMlTextbox("box two")), Wholesale);
 
         var ids = AttributeValues(Body(compared), WP + "docPr", "id");
         Assert.Equal(2, ids.Count);                       // both copies survive (del + ins)
@@ -148,14 +158,14 @@ public class DocxDiffDrawingIdCollisionTests
     [Fact]
     public void A_changed_VML_textbox_sharing_shape_ids_compares_to_a_valid_document()
     {
-        var compared = DocxDiff.Compare(Doc(VmlTextbox("box one")), Doc(VmlTextbox("box two")));
+        var compared = DocxDiff.Compare(Doc(VmlTextbox("box one")), Doc(VmlTextbox("box two")), Wholesale);
         Assert.Empty(ValidationErrors(compared));
     }
 
     [Fact]
     public void The_duplicated_VML_shape_and_shapetype_ids_are_re_issued_uniquely()
     {
-        var compared = DocxDiff.Compare(Doc(VmlTextbox("box one")), Doc(VmlTextbox("box two")));
+        var compared = DocxDiff.Compare(Doc(VmlTextbox("box one")), Doc(VmlTextbox("box two")), Wholesale);
         var body = Body(compared);
 
         var shapeIds = AttributeValues(body, V + "shape", "id");
@@ -197,7 +207,7 @@ public class DocxDiffDrawingIdCollisionTests
             "</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>";
 
         var compared = DocxDiff.Compare(
-            Doc(TwoPicts("first one", "second one")), Doc(TwoPicts("first two", "second two")));
+            Doc(TwoPicts("first one", "second one")), Doc(TwoPicts("first two", "second two")), Wholesale);
 
         Assert.Empty(ValidationErrors(compared));
         AssertNoDanglingShapeTypeReference(Body(compared), "compared");
@@ -227,7 +237,7 @@ public class DocxDiffDrawingIdCollisionTests
 
         var compared = DocxDiff.Compare(
             Doc(DeclaringPara("declaring box one") + untouchedReferencingPara),
-            Doc(DeclaringPara("declaring box two") + untouchedReferencingPara));
+            Doc(DeclaringPara("declaring box two") + untouchedReferencingPara), Wholesale);
 
         Assert.Empty(ValidationErrors(compared));
         AssertNoDanglingShapeTypeReference(Body(compared), "compared");
@@ -273,7 +283,7 @@ public class DocxDiffDrawingIdCollisionTests
             $"<v:textbox><w:txbxContent><w:p><w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>" +
             "</w:txbxContent></v:textbox></v:rect></w:pict></w:r></w:p>";
 
-        var compared = DocxDiff.Compare(Doc(Rect("rect one")), Doc(Rect("rect two")));
+        var compared = DocxDiff.Compare(Doc(Rect("rect one")), Doc(Rect("rect two")), Wholesale);
 
         Assert.Empty(ValidationErrors(compared));
         var ids = VmlShapeIds(Body(compared));
@@ -292,7 +302,7 @@ public class DocxDiffDrawingIdCollisionTests
             $"<v:textbox><w:txbxContent><w:p><w:r><w:t xml:space=\"preserve\">{text}</w:t></w:r></w:p>" +
             "</w:txbxContent></v:textbox></v:shape></v:group></w:pict></w:r></w:p>";
 
-        var compared = DocxDiff.Compare(Doc(Group("group one")), Doc(Group("group two")));
+        var compared = DocxDiff.Compare(Doc(Group("group one")), Doc(Group("group two")), Wholesale);
 
         Assert.Empty(ValidationErrors(compared));
         var ids = VmlShapeIds(Body(compared));
@@ -364,7 +374,7 @@ public class DocxDiffDrawingIdCollisionTests
             new() { Author = "reviewer", Document = Doc(DrawingMlTextbox("box revised")) },
         };
 
-        var consolidated = DocxDiff.Consolidate(baseDoc, reviewers);
+        var consolidated = DocxDiff.Consolidate(baseDoc, reviewers, new DocxDiffConsolidateSettings { Diff = Wholesale });
 
         Assert.Empty(ValidationErrors(consolidated));
         var ids = AttributeValues(Body(consolidated), WP + "docPr", "id");
@@ -417,7 +427,7 @@ public class DocxDiffDrawingIdCollisionTests
             new() { Author = "reviewer", Document = NoteWithDrawing("note box revised") },
         };
 
-        var consolidated = DocxDiff.Consolidate(NoteWithDrawing("note box base"), reviewers);
+        var consolidated = DocxDiff.Consolidate(NoteWithDrawing("note box base"), reviewers, new DocxDiffConsolidateSettings { Diff = Wholesale });
         Assert.Empty(ValidationErrors(consolidated));
     }
 
@@ -447,7 +457,7 @@ public class DocxDiffDrawingIdCollisionTests
         var left = Doc(DrawingMlTextbox("box one") + DrawingMlTextbox("box two").Replace("id=\"7\"", "id=\"8\""));
         var right = Doc(DrawingMlTextbox("box one") + DrawingMlTextbox("box three").Replace("id=\"7\"", "id=\"8\""));
 
-        var compared = DocxDiff.Compare(left, right);
+        var compared = DocxDiff.Compare(left, right, Wholesale);
         Assert.Empty(ValidationErrors(compared));
 
         var ids = AttributeValues(Body(compared), WP + "docPr", "id");
@@ -459,7 +469,10 @@ public class DocxDiffDrawingIdCollisionTests
     [Fact]
     public void Round_trip_survives_the_re_issued_ids()
     {
-        var compared = DocxDiff.Compare(Doc(DrawingMlTextbox("box one")), Doc(DrawingMlTextbox("box two")));
+        // Wholesale, like its siblings: ids are only re-issued when a drawing is emitted twice. It also keeps
+        // the box text in one run — the fine path splits it at the change boundary ("box " + "two").
+        var compared = DocxDiff.Compare(
+            Doc(DrawingMlTextbox("box one")), Doc(DrawingMlTextbox("box two")), Wholesale);
 
         var accepted = Body(new WmlDocument("a.docx",
             Docxodus.Internal.DocxDiffOps.AcceptRevisions(compared.DocumentByteArray))).ToString();
