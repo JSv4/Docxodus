@@ -1,33 +1,74 @@
 # Docxodus
 
-DOCX document comparison and HTML conversion in the browser using WebAssembly.
-
-Docxodus brings professional-grade document comparison (redlining) to JavaScript applications. Compare two Word documents and get tracked changes, or convert DOCX files to HTML - all running entirely in the browser with no server required.
-
-## Features
-
-- **Document Comparison**: Compare two DOCX files and generate a redlined document with tracked changes
-- **Move Detection**: Automatically identifies relocated content (not just deleted/re-inserted)
-- **Format Change Detection**: Detects formatting-only changes (bold, italic, font size, etc.)
-- **HTML Conversion**: Convert DOCX documents to HTML for display in the browser
-  - Comment rendering (endnote-style, inline, or margin)
-  - Paginated output mode for PDF-like viewing
-  - Headers, footers, footnotes, and endnotes support
-  - Custom annotation rendering
-- **Document Metadata**: Fast metadata extraction for lazy loading and pagination
-- **Revision Extraction**: Get structured data about all revisions in a compared document
-- **OpenContracts Export**: Export documents to OpenContracts format for NLP/document analysis
-- **External Annotations**: Store annotations externally without modifying the DOCX
-- **100% Client-Side**: All processing happens in the browser using WebAssembly
-- **Web Worker Support**: Non-blocking WASM execution via Web Workers
-- **React Hooks**: Ready-to-use hooks for React applications
-- **TypeScript Support**: Full type definitions included
-
-## Installation
+**View, edit, and diff Word `.docx` files in the browser.** No server, no upload, no conversion
+round-trip — a real OOXML engine compiled to WebAssembly, wrapped in TypeScript.
 
 ```bash
 npm install docxodus
 ```
+
+---
+
+## Diff two documents into a redline Word will open
+
+`compareDocuments()` returns a `.docx` carrying **native Word tracked changes** — `w:ins`, `w:del`,
+and true move markup — not a text diff with highlighting. Open it in Word and accept/reject as usual.
+
+![A redlined venture financing agreement](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/redline.png)
+
+*Real output. One frame: a struck definition, an inserted definition, word-level substitutions inside
+an untouched sentence, and a clause **moved** — struck in purple at the bottom, re-inserted at the top,
+linked as one operation instead of reported as an unrelated delete and insert.*
+
+`getRevisions()` gives you the same changes as structured data — typed, with move pairing and stable
+`kind:scope:unid` anchors — so you can drive a review UI without parsing OOXML.
+
+## Render a document faithfully
+
+`convertDocxToHtml()` keeps what naive converters drop: justification, style inheritance, legal
+numbering, tables, images, comments, headers and footers, and real footnotes with back-references.
+
+![The NVCA model charter rendered to HTML](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/render.png)
+
+Paginated mode flows content into real page boxes with per-page numbers and page-anchored footnotes —
+a print-accurate preview in the browser.
+
+## Edit it in place
+
+`DocxEditor` is a framework-agnostic block editor over the live document. Edits go through a
+`DocxSession`, and **only the changed block re-renders**, so structural operations cost ~90–360 ms on
+a 346-block, 94-footnote filing template. `save()` returns lossless bytes.
+
+![The in-browser DOCX editor](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/editor/editor-overview.png)
+
+```ts
+import { DocxEditor } from 'docxodus';
+const editor = DocxEditor.open(container, docxBytes, exports);
+```
+
+See [`examples/editor.html`](https://github.com/JSv4/Docxodus/blob/main/npm/examples/editor.html) for
+a complete ribbon implementation.
+
+## Project it for an LLM
+
+`convertWmlToMarkdown()` renders the document as markdown where **every block carries a stable id**,
+so an agent can point at a clause and edit it — and `openDocxSession()` writes back to that same id.
+
+![Markdown projection beside the rendered document](https://raw.githubusercontent.com/JSv4/Docxodus/main/docs/images/projection.png)
+
+---
+
+## Everything else
+
+- **Move detection** — relocated content is identified as a move, not a delete plus an insert
+- **Format change detection** — formatting-only changes (bold, italic, font size, …)
+- **Comment rendering** — endnote-style, inline, or margin
+- **Document metadata** — fast extraction for lazy loading and pagination
+- **OpenContracts export** — for NLP and document-analysis pipelines
+- **External annotations** — overlay annotations without modifying the DOCX
+- **Web Worker support** — non-blocking WASM execution off the main thread
+- **React hooks** — `useDocxodus`, `useConversion`, `useComparison`
+- **TypeScript** — full type definitions included
 
 ## Quick Start
 

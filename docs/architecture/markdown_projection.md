@@ -4,6 +4,13 @@
 
 The markdown projection is a deterministic, **anchor-addressed** rendering of a DOCX as Markdown. It is a sibling to `WmlToHtmlConverter` and `OpenContractExporter` in the converter family, intended as a substrate for tooling that wants to operate on Word documents the way it would operate on source files — search, splice, diff, address by ID. Use cases include LLM-driven editing pipelines, structured search indexers, and diff/review UIs that need a text view richer than `WmlToHtmlConverter` strips down to.
 
+![Markdown projection beside the rendered document](../images/projection.png)
+
+The same DOCX, twice. On the left, `WmlToMarkdownConverter.Convert` output — every block prefixed
+with its anchor. On the right, `WmlToHtmlConverter` output of the same bytes with `StampAnchors`
+on, so the rendered DOM node carries that same id in `data-anchor`. The highlighted pair is one
+paragraph, addressable identically from a text pipeline and from a DOM.
+
 ## Goals
 
 1. **Stable addressing.** Every paragraph, heading, list item, table, table cell, comment, footnote, and endnote in the projection is reachable by an anchor that survives reformatting and reordering.
