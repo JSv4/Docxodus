@@ -253,10 +253,14 @@ code/strike, links, hard breaks).
 
 `apply_format`/`apply_format_by_substring` (`FormatOp`: bold/italic/underline/strike/code/color/
 vertAlign/fontSizePts/fontFamily), `set_paragraph_style`, `set_paragraph_format`
-(`ParagraphFormatOp`: alignment/indentDelta/pageBreakBefore/topBorder/bottomBorder/clearBorders —
-`topBorder`/`bottomBorder` add or replace a `w:pBdr` edge, `clearBorders` removes the whole
-`w:pBdr` before either is applied in the same call), `set_list_level`, `remove_list_membership`,
-`apply_list_format`.
+(`ParagraphFormatOp`: alignment/indentDelta/firstLineIndent/hangingIndent/spacingBefore/
+spacingAfter/lineSpacing/lineSpacingRule/pageBreakBefore/topBorder/bottomBorder/clearBorders —
+indent/spacing values are twips (1440 = 1in, 20 = 1pt); `firstLineIndent`/`hangingIndent` are
+one either/or `w:ind` slot (setting one evicts the other, both in one call is rejected);
+`lineSpacing` is measured per `lineSpacingRule` (`auto` default = 240ths of a line, so 240 =
+single/480 = double; `exact`/`atLeast` = twips); `topBorder`/`bottomBorder` add or replace a
+`w:pBdr` edge, `clearBorders` removes the whole `w:pBdr` before either is applied in the same
+call), `set_list_level`, `remove_list_membership`, `apply_list_format`.
 
 ### `docxodus_create` — new structural content
 

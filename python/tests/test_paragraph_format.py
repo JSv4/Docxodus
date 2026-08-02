@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from docx_scalpel import (
+    LineSpacingRule,
     ParagraphAlignment,
     ParagraphBorderEdge,
     ParagraphFormatOp,
@@ -90,6 +91,50 @@ def test_set_paragraph_format_adds_and_clears_borders():
 
         cleared_xml = session.raw.get_xml(anchor)
         assert "w:pBdr" not in cleared_xml
+
+
+def test_set_paragraph_format_first_line_indent_and_spacing():
+    # Issue #312: first-line/hanging indent and paragraph spacing were inexpressible —
+    # indentDelta (whole-left-edge shift) was the nearest reachable op.
+    with open_session(FIXTURE.read_bytes()) as session:
+        anchor = _first_body_anchor(session)
+
+        result = session.set_paragraph_format(
+            anchor,
+            ParagraphFormatOp(
+                first_line_indent=720,
+                spacing_before=240,
+                spacing_after=120,
+                line_spacing=480,
+                line_spacing_rule=LineSpacingRule.AT_LEAST,
+            ),
+        )
+        assert result.success
+
+        xml = session.raw.get_xml(anchor)
+        assert 'w:firstLine="720"' in xml
+        assert 'w:before="240"' in xml
+        assert 'w:after="120"' in xml
+        assert 'w:line="480"' in xml
+        assert 'w:lineRule="atLeast"' in xml
+
+        # hanging evicts firstLine — they share one w:ind slot in Word.
+        hung = session.set_paragraph_format(anchor, ParagraphFormatOp(hanging_indent=360))
+        assert hung.success
+        hung_xml = session.raw.get_xml(anchor)
+        assert 'w:hanging="360"' in hung_xml
+        assert "w:firstLine" not in hung_xml
+
+
+def test_set_paragraph_format_first_line_and_hanging_together_rejected():
+    with open_session(FIXTURE.read_bytes()) as session:
+        anchor = _first_body_anchor(session)
+        result = session.set_paragraph_format(
+            anchor,
+            ParagraphFormatOp(first_line_indent=720, hanging_indent=360),
+        )
+        assert not result.success
+        assert result.error.code.value == "invalid_paragraph_format"
 
 
 def test_set_paragraph_format_unknown_anchor_fails():

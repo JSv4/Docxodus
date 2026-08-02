@@ -149,6 +149,15 @@ What am I editing?
 ├── Changing a paragraph's style (e.g., Normal → Heading2)?
 │       → SetParagraphStyle(anchor, styleId)
 │
+├── Paragraph layout — alignment, indents, spacing, page-break-before, borders?
+│       → SetParagraphFormat(anchor, ParagraphFormatOp{...})
+│         # All indent/spacing values are twips (1440 = 1in, 20 = 1pt). IndentDelta shifts
+│         # w:ind/@w:left relatively; FirstLineIndent/HangingIndent are absolute and share
+│         # one either/or w:ind slot (setting one evicts the other; both in one op →
+│         # InvalidParagraphFormat). SpacingBefore/SpacingAfter → w:spacing/@w:before/@w:after.
+│         # LineSpacing → w:spacing/@w:line, measured per LineSpacingRule: auto (default) =
+│         # 240ths of a line (240 single, 360 = 1.5×, 480 double), exact/atLeast = twips.
+│
 ├── Indenting/outdenting a list item or removing it from a list?
 │       → SetListLevel(anchor, +1 | -1)
 │       → RemoveListMembership(anchor)
@@ -1246,6 +1255,7 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | Fix the markdown payload (the message names what's wrong) | `MalformedMarkdown`, `UnsupportedMarkdownSyntax`, `AnchorTokenInPayload` |
 | Call the v1 op the message names, or fall back to `Raw.InsertXml` | `TableInsertNotSupported`, `FootnoteRefNotSupported`, `CommentMarkerNotSupported`, `ImageInsertNotSupported` |
 | Re-query (no `ListStyles()` API in v1; the agent guesses from the projection) | `UnknownStyle`, `InvalidListLevel` |
+| Fix the op's field values (the message names the constraint OOXML can't express) | `InvalidPageNumbering`, `InvalidParagraphFormat` |
 | Use `Raw.GetXml(anchor)` as a template, mutate, resubmit | `MalformedXml`, `DisallowedNamespace`, `IncompatibleElementType`, `ValidationFailed` |
 | Stop, reopen, or accept "no more history" | `SessionDisposed`, `NothingToUndo`, `NothingToRedo` |
 | Should not happen; treat as a bug. Op is rolled back, safe to retry once or report. Full exception is on `session.LastInternalError` | `InternalError` |

@@ -139,7 +139,13 @@ internal static class ToolCatalog
                   "description": "set_paragraph_format payload. Omitted fields are left unchanged.",
                   "properties": {
                     "alignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
-                    "indentDelta": { "type": "integer", "description": "Twips to add to the current left indent (negative to outdent)." },
+                    "indentDelta": { "type": "integer", "description": "Twips to add to the current left indent (negative to outdent). 1440 twips = 1 inch." },
+                    "firstLineIndent": { "type": "integer", "minimum": 0, "description": "Absolute first-line indent in twips (w:ind/@w:firstLine; 1440 = 1 inch, 720 = 0.5 inch). 0 = explicitly none. Mutually exclusive with hangingIndent (Word stores one or the other); setting it removes any hanging indent." },
+                    "hangingIndent": { "type": "integer", "minimum": 0, "description": "Absolute hanging indent in twips (w:ind/@w:hanging; 1440 = 1 inch) — every line EXCEPT the first starts this far right of the left edge. Mutually exclusive with firstLineIndent; setting it removes any first-line indent." },
+                    "spacingBefore": { "type": "integer", "minimum": 0, "description": "Absolute space above the paragraph in twips (w:spacing/@w:before). 20 twips = 1pt, so 240 = 12pt." },
+                    "spacingAfter": { "type": "integer", "minimum": 0, "description": "Absolute space below the paragraph in twips (w:spacing/@w:after). 20 twips = 1pt, so 240 = 12pt." },
+                    "lineSpacing": { "type": "integer", "minimum": 0, "description": "Line spacing (w:spacing/@w:line). Units depend on lineSpacingRule: under \"auto\" (the default) it is 240ths of a line (240 = single, 360 = 1.5x, 480 = double); under \"exact\"/\"atLeast\" it is twips (20 = 1pt, so 480 = 24pt)." },
+                    "lineSpacingRule": { "type": "string", "enum": ["auto", "exact", "atLeast"], "description": "How lineSpacing is measured (w:spacing/@w:lineRule). Requires lineSpacing in the same call." },
                     "pageBreakBefore": { "type": "boolean" },
                     "topBorder": {
                       "type": "object",

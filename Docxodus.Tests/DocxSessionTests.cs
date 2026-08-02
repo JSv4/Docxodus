@@ -5562,6 +5562,138 @@ public class DocxSessionTests
         }
     }
 
+    // ─── SetParagraphFormat: first-line/hanging indent + spacing (issue #312) ─────
+
+    [Fact]
+    public void DS335_SetParagraphFormat_FirstLineIndent_And_Spacing()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var r = s.SetParagraphFormat(anchor, new ParagraphFormatOp
+        {
+            FirstLineIndent = 720,
+            SpacingBefore = 240,
+            SpacingAfter = 120,
+        });
+        Assert.True(r.Success, r.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("w:firstLine=\"720\"", xml);
+        Assert.Contains("w:before=\"240\"", xml);
+        Assert.Contains("w:after=\"120\"", xml);
+        // A second op touching only after preserves the earlier before.
+        var r2 = s.SetParagraphFormat(anchor, new ParagraphFormatOp { SpacingAfter = 60 });
+        Assert.True(r2.Success, r2.Error?.Message);
+        var xml2 = s.Raw.GetXml(anchor);
+        Assert.Contains("w:before=\"240\"", xml2);
+        Assert.Contains("w:after=\"60\"", xml2);
+    }
+
+    [Fact]
+    public void DS336_SetParagraphFormat_HangingIndent_EvictsFirstLine()
+    {
+        // w:firstLine and w:hanging are one either/or slot on w:ind — writing one must
+        // remove the other, or Word resolves the conflict itself (hanging wins) and the
+        // caller's firstLine silently does nothing.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        Assert.True(s.SetParagraphFormat(anchor, new ParagraphFormatOp { FirstLineIndent = 720 }).Success);
+        Assert.True(s.SetParagraphFormat(anchor, new ParagraphFormatOp { HangingIndent = 360 }).Success);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("w:hanging=\"360\"", xml);
+        Assert.DoesNotContain("w:firstLine", xml);
+        // And back: firstLine evicts hanging.
+        Assert.True(s.SetParagraphFormat(anchor, new ParagraphFormatOp { FirstLineIndent = 240 }).Success);
+        var xml2 = s.Raw.GetXml(anchor);
+        Assert.Contains("w:firstLine=\"240\"", xml2);
+        Assert.DoesNotContain("w:hanging", xml2);
+    }
+
+    [Fact]
+    public void DS337_SetParagraphFormat_InvalidCombinations_Rejected()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        var both = s.SetParagraphFormat(anchor, new ParagraphFormatOp { FirstLineIndent = 720, HangingIndent = 360 });
+        Assert.False(both.Success);
+        Assert.Equal(EditErrorCode.InvalidParagraphFormat, both.Error!.Code);
+
+        var negative = s.SetParagraphFormat(anchor, new ParagraphFormatOp { SpacingBefore = -240 });
+        Assert.False(negative.Success);
+        Assert.Equal(EditErrorCode.InvalidParagraphFormat, negative.Error!.Code);
+
+        var ruleAlone = s.SetParagraphFormat(anchor, new ParagraphFormatOp { LineSpacingRule = LineSpacingRule.Exact });
+        Assert.False(ruleAlone.Success);
+        Assert.Equal(EditErrorCode.InvalidParagraphFormat, ruleAlone.Error!.Code);
+
+        // A rejected op is validated before the undo snapshot, so nothing is undoable.
+        Assert.False(s.Undo());
+    }
+
+    [Fact]
+    public void DS338_SetParagraphFormat_LineSpacing_Rules()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        // Bare LineSpacing defaults the rule to auto (240ths of a line: 360 = 1.5×).
+        var auto = s.SetParagraphFormat(anchor, new ParagraphFormatOp { LineSpacing = 360 });
+        Assert.True(auto.Success, auto.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("w:line=\"360\"", xml);
+        Assert.Contains("w:lineRule=\"auto\"", xml);
+
+        // Exact spacing is in twips (480 = 24pt).
+        var exact = s.SetParagraphFormat(anchor, new ParagraphFormatOp
+        {
+            LineSpacing = 480,
+            LineSpacingRule = LineSpacingRule.Exact,
+        });
+        Assert.True(exact.Success, exact.Error?.Message);
+        var xml2 = s.Raw.GetXml(anchor);
+        Assert.Contains("w:line=\"480\"", xml2);
+        Assert.Contains("w:lineRule=\"exact\"", xml2);
+
+        var atLeast = s.SetParagraphFormat(anchor, new ParagraphFormatOp
+        {
+            LineSpacing = 480,
+            LineSpacingRule = LineSpacingRule.AtLeast,
+        });
+        Assert.True(atLeast.Success, atLeast.Error?.Message);
+        Assert.Contains("w:lineRule=\"atLeast\"", s.Raw.GetXml(anchor));
+    }
+
+    [Fact]
+    public void DS339_ParseParagraphFormatOp_WireShape()
+    {
+        // The one wire parser both bridges (WASM + stdio) and the MCP server route through.
+        var op = Docxodus.Internal.DocxSessionJson.ParseParagraphFormatOp(
+            """
+            { "firstLineIndent": 720, "spacingBefore": 240, "spacingAfter": 120,
+              "lineSpacing": 480, "lineSpacingRule": "atLeast" }
+            """);
+        Assert.Equal(720, op.FirstLineIndent);
+        Assert.Null(op.HangingIndent);
+        Assert.Equal(240, op.SpacingBefore);
+        Assert.Equal(120, op.SpacingAfter);
+        Assert.Equal(480, op.LineSpacing);
+        Assert.Equal(LineSpacingRule.AtLeast, op.LineSpacingRule);
+
+        var hang = Docxodus.Internal.DocxSessionJson.ParseParagraphFormatOp(
+            """{ "hangingIndent": 360, "lineSpacingRule": "exact", "lineSpacing": 300 }""");
+        Assert.Equal(360, hang.HangingIndent);
+        Assert.Equal(LineSpacingRule.Exact, hang.LineSpacingRule);
+
+        // Omitted fields stay null (tri-state: leave unchanged).
+        var empty = Docxodus.Internal.DocxSessionJson.ParseParagraphFormatOp("""{ "alignment": "center" }""");
+        Assert.Null(empty.FirstLineIndent);
+        Assert.Null(empty.HangingIndent);
+        Assert.Null(empty.SpacingBefore);
+        Assert.Null(empty.SpacingAfter);
+        Assert.Null(empty.LineSpacing);
+        Assert.Null(empty.LineSpacingRule);
+    }
+
     private static string SaveDocXml(DocxSession s)
     {
         var bytes = s.Save();

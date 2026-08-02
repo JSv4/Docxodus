@@ -29,6 +29,7 @@ from .enums import (
     EditErrorCode,
     EmptyParagraphMode,
     HeaderFooterKind,
+    LineSpacingRule,
     ParagraphAlignment,
     PlaceholderKind,
     PlaceholderKinds,
@@ -384,10 +385,24 @@ class ParagraphFormatOp:
     removes the entire ``w:pBdr`` (all paragraph borders) before applying any
     ``top_border``/``bottom_border`` set in this same op — this is how an S-1-style horizontal
     rule paragraph gets (or loses) its bottom border.
+
+    Indent/spacing fields are absolute values in twips (1440 twips = 1 inch; 20 twips = 1pt)
+    and must be >= 0. ``first_line_indent`` (``w:ind/@w:firstLine``) and ``hanging_indent``
+    (``w:ind/@w:hanging``) share one either/or slot in Word — setting one removes the other,
+    and an op carrying both is rejected with ``INVALID_PARAGRAPH_FORMAT``. ``line_spacing``
+    (``w:spacing/@w:line``) is measured per ``line_spacing_rule``: 240ths of a line under
+    ``AUTO`` (the default when the rule is omitted — 240 = single, 360 = 1.5x, 480 = double),
+    twips under ``EXACT``/``AT_LEAST``; a rule without ``line_spacing`` is rejected.
     """
 
     alignment: ParagraphAlignment | None = None
     indent_delta: int | None = None
+    first_line_indent: int | None = None
+    hanging_indent: int | None = None
+    spacing_before: int | None = None
+    spacing_after: int | None = None
+    line_spacing: int | None = None
+    line_spacing_rule: LineSpacingRule | None = None
     page_break_before: bool | None = None
     top_border: ParagraphBorderEdge | None = None
     bottom_border: ParagraphBorderEdge | None = None
@@ -397,6 +412,12 @@ class ParagraphFormatOp:
         out: dict[str, Any] = {}
         if self.alignment is not None: out["alignment"] = self.alignment.value
         if self.indent_delta is not None: out["indentDelta"] = self.indent_delta
+        if self.first_line_indent is not None: out["firstLineIndent"] = self.first_line_indent
+        if self.hanging_indent is not None: out["hangingIndent"] = self.hanging_indent
+        if self.spacing_before is not None: out["spacingBefore"] = self.spacing_before
+        if self.spacing_after is not None: out["spacingAfter"] = self.spacing_after
+        if self.line_spacing is not None: out["lineSpacing"] = self.line_spacing
+        if self.line_spacing_rule is not None: out["lineSpacingRule"] = self.line_spacing_rule.value
         if self.page_break_before is not None: out["pageBreakBefore"] = self.page_break_before
         if self.top_border is not None: out["topBorder"] = self.top_border.to_wire()
         if self.bottom_border is not None: out["bottomBorder"] = self.bottom_border.to_wire()
