@@ -90,7 +90,8 @@ markdown projection and search tools return:
 | `docxodus_format` | Character and paragraph formatting, list level |
 | `docxodus_create` | New paragraphs, headings, tables, horizontal rules, footnotes/endnotes, page-number fields |
 | `docxodus_list` | Promote/demote/renumber list membership |
-| `docxodus_comment` | Anchor-addressed highlight/label annotations (not native Word comment threads — see the docs) |
+| `docxodus_comment` | Native Word review comments (real `w:comment` markup): add on a span, update body, remove, list |
+| `docxodus_annotate` | Anchor-addressed highlight/label annotations (a custom-XML overlay for external tools, distinct from comments) |
 | `docxodus_track_changes` | List tracked changes; accept/reject them all |
 | `docxodus_mutations` | Apply or dry-run-preview a batch of the above as one call |
 | `docxodus_table` | Create tables; edit rows/columns/cell content |
@@ -102,9 +103,9 @@ exposed, because the underlying Docxodus engine doesn't have them (rather than f
 these are called out so agents/tooling built against this server know to route around
 them):
 
-- **No native Word review-comment threads.** `docxodus_comment` creates a bookmark +
-  custom-XML highlight overlay, not `w:comment` elements with Word-native reply/resolve
-  semantics.
+- **No comment reply-threading or resolve state.** `docxodus_comment` authors real
+  `w:comment` markup, but replies and Word's resolve flag (`commentsExtended.xml`) are not
+  yet authorable; existing threading metadata is preserved on update and pruned on remove.
 - **No selective tracked-change resolution.** `docxodus_track_changes` can list revisions
   filtered by author/type for display, but `accept_all`/`reject_all` apply to the whole
   document — there is no "accept only this author's inserts" primitive.

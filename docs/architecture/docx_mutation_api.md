@@ -73,7 +73,8 @@ This is symmetric by design: anything the projector can emit, the parser can acc
 - If you can see it in the projection output, you can write it in a payload.
 - If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`), then edit cells with `ReplaceCellContent` or address each cell-paragraph anchor; reshape with `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` (by a cell-paragraph anchor; v1 assumes a rectangular grid, no `w:gridSpan`).
 - If you need a footnote or endnote → `InsertFootnote(anchor, offset, markdown)` / `InsertEndnote(...)`; a `[^label]` reference in a *payload* stays rejected, because a label can't name a note the payload doesn't define.
-- If you need a comment or image → those are v2 ops, currently rejected with a clear error.
+- If you need a comment → `AddComment(anchor, span?, author, markdown, initials?, date?)`; a `{#cmt:...}` token in a *payload* stays rejected, because inline comment tokens are projection output only (see the Comments section).
+- If you need an image → still a v2 op, currently rejected with a clear error.
 - For everything OOXML can do that markdown can't (complex tables, math, content controls, drawings) → `session.Raw.*`.
 
 We didn't pick CommonMark or GFM as the input language because the projector's subset is small and well-defined; running a full parser against that subset would import surprise (e.g., GFM tables silently splitting paragraphs, autolinks mis-classifying spans). The hand-rolled parser is ~300 LOC, has no dependencies, and gives us complete control over what gets rejected and why.
@@ -103,6 +104,9 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `SetHeaderText(p, kind, md)` / `SetFooterText(...)` | the new header/footer paragraph anchors (scope `hdr{N}`/`ftr{N}`) | — (reused-part old paragraphs cease to exist; not separately reported in v1) | — | whole document |
 | `InsertPageNumberField(p, field?)` | — | — | `p` (the paragraph the field is appended to) | `p` |
 | `InsertFootnote(p, offset, md)` / `InsertEndnote(...)` | the note definition (`fn`/`en`) + its paragraphs (scope `fn`/`en`) | — | `p` (the citing paragraph) | whole document |
+| `AddComment(p, span?, author, md, …)` | the comment definition (`cmt`) + its paragraphs (kind `p`, scope `cmt`) | — | `p` (the commented paragraph) | `p` |
+| `UpdateComment(cmt, md)` | the new body paragraph anchors (scope `cmt`) | the old body paragraph anchors | `cmt` | `cmt` |
+| `RemoveComment(cmt)` | — | `cmt` + descendant paragraph anchors (the `DeleteBlock(cmt)` shape) | — | nearest stable ancestor |
 | `Raw.InsertXml(a, pos, xml)` | every block in the new XML | — | — | enclosing parent |
 | `Raw.ReplaceXml(a, xml)` | unids present in the new XML but not the old (typical for caller-authored XML) | unids present in the old element but not the new (when `a` itself is gone) | unids present in both (typical for the `GetXml → mutate → ReplaceXml` round trip, which preserves Unids) | enclosing parent |
 | `Undo()` / `Redo()` | (diff vs current) | (diff vs current) | (diff vs current) | `null` — caller re-projects |
@@ -674,6 +678,60 @@ rendering notes, appeared as a stray empty footnote with no citation.
   note anchors — they resolve against a projection that omits the part. Family behavior, identical
   to `SetHeaderText` with `Headers` excluded.
 
+## Comments (issue #300)
+
+Native Word comment authoring — real `w:comment` markup the Reviewing pane shows, not the
+Tier E annotation overlay (which stays: it solves a different problem, semantic tagging for
+external tools). Follows the #274/#276 part-creation pattern: the `WordprocessingCommentsPart`
+and the `CommentText`/`CommentReference` styles are find-or-created on first use, and part
+create/delete is undo/redo-reconciled by `ReconcileCommentsPart` (the `ReconcileNoteParts`
+twin — `DocumentSnapshot` carries the part's relationship id). Mechanics live in
+`Internal/CommentOps.cs` (the `AnnotationOps` split). Exposed in .NET, WASM/npm
+(`addComment`/`updateComment`/`removeComment`/`listComments`), stdio/`docx-scalpel`
+(`add_comment`/`update_comment`/`remove_comment`/`list_comments`), and the MCP server's
+`docxodus_comment` tool.
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `AddComment(anchorId, span?, author, markdown, initials?, date?)` | Comment on a character span of a body paragraph (`null` span = whole block; the same `SplitRunsForSpan` mechanism annotations use brackets the range with `w:commentRangeStart`/`End`, then the `CommentReference`-styled `w:commentReference` run lands directly after the rangeEnd). The definition gets Word's shape: `CommentText` paragraphs, a leading `w:annotationRef` mark run, `w:id` allocated max+1 over definitions *and* dangling markers. `w:date` is written only when provided — deterministic by default; an Unspecified-kind `DateTime` is treated as UTC. |
+| `UpdateComment(cmtAnchorId, markdown)` | Replace the body paragraphs; `w:id`/`w:author`/`w:initials`/`w:date` are untouched, and the old last paragraph's `w14:paraId` is re-stamped on the new last paragraph so Word's `commentsExtended` reply/resolve metadata stays attached across a body edit. |
+| `RemoveComment(cmtAnchorId)` | Kind-guarded delegate to `DeleteBlock`'s `cmt` teardown: definition + marker triple (wrapper run included) everywhere in the package, plus threading pruning (below). |
+| `ListComments()` | Read-only: `CommentListEntry(DefAnchorId, Author, Initials?, Date?, Text)` in comments-part order. `Date` is the raw `w:date` string; `Text` is the flattened body (`annotationRef` runs excluded). The numeric `w:id` is never surfaced — comments are addressed by anchor. |
+
+`Created` from `AddComment` = the definition anchor (kind `cmt`) + its paragraph anchors
+(kind `p`, scope `cmt`) — which are ordinary editable blocks, so `ReplaceText` on a comment
+paragraph and `DeleteBlock` on the definition also work (pinned by `DS364`/`DS329`-style
+tests). Body paragraphs only: Word has no comments-on-comments, so a `cmt`-scope host fails
+with `AnchorWrongKind`; a zero-length span fails with the new `EmptyCommentSpan`.
+
+### Threading metadata (`commentsExtended` / `commentsIds`)
+
+v1 does not *author* threading (replies/resolve are the natural v2), but it must not corrupt
+documents that have it: removing a comment prunes the `w15:commentEx`/`w16cid:commentId`
+entries keyed by the removed definition's `w14:paraId` values and drops `w15:paraIdParent`
+attributes that pointed at them (a surviving reply becomes top-level instead of dangling).
+The pruning lives in `DeleteBlock`'s `cmt` branch — single owner, so the generic path gets it
+too — and both threading parts are in the content-only snapshot scope, so it is undoable.
+
+### `{#cmt:...}` payload tokens stay rejected
+
+`CommentMarkerNotSupported` survives with a narrowed message naming `AddComment`: the
+projection emits `{#cmt:...}` tokens only in the trailing `# Comments` section, never inline
+in body text, so a token in an input payload has no round-trip meaning — the typed op is the
+write path, exactly as `InsertFootnote` is for `[^label]`.
+
+### Not yet
+
+- **Replies and resolve state** (`commentsExtended` authoring, `w15:paraIdParent` threading) —
+  the v2 candidate the issue names.
+- **Cross-block spans.** A comment range is single-block in v1; Word can span paragraphs.
+- **Comments anchored in header/footer/note stories.** Word allows them; v1 is body-only,
+  matching `InsertFootnote`'s host rule.
+- **Tracked-changes mode.** Consistent with every other insert op, `AddComment` doesn't wrap
+  its markup in `w:ins`.
+
 ## Tier E: Annotations
 
 Anchor-addressed CRUD for the Docxodus annotation system (custom-XML +
@@ -1139,7 +1197,7 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | The agent should… | When it sees these codes |
 |---|---|
 | Re-project and re-derive the anchor from current text | `AnchorNotFound` |
-| Re-read the anchor's kind via `GetAnchorInfo`, reissue with the right op or coordinates | `AnchorWrongKind`, `AnchorsNotAdjacent`, `InvalidPosition`, `OffsetOutOfRange` |
+| Re-read the anchor's kind via `GetAnchorInfo`, reissue with the right op or coordinates | `AnchorWrongKind`, `AnchorsNotAdjacent`, `InvalidPosition`, `OffsetOutOfRange`, `EmptyCommentSpan` |
 | Fix the markdown payload (the message names what's wrong) | `MalformedMarkdown`, `UnsupportedMarkdownSyntax`, `AnchorTokenInPayload` |
 | Call the v1 op the message names, or fall back to `Raw.InsertXml` | `TableInsertNotSupported`, `FootnoteRefNotSupported`, `CommentMarkerNotSupported`, `ImageInsertNotSupported` |
 | Re-query (no `ListStyles()` API in v1; the agent guesses from the projection) | `UnknownStyle`, `InvalidListLevel` |

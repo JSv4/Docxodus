@@ -607,6 +607,21 @@ public class DocxSessionCommentAuthoringTests
     }
 
     [Fact]
+    public void DS365_AuthoredComment_RendersThroughTheHtmlConverter()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+        Assert.True(session.AddComment(anchor, null, "Alice", "Rendered in HTML.").Success);
+
+        var wml = new WmlDocument("commented.docx", session.Save());
+        var settings = new WmlToHtmlConverterSettings { RenderComments = true };
+        var html = WmlToHtmlConverter.ConvertToHtml(wml, settings).ToString(SaveOptions.DisableFormatting);
+
+        Assert.Contains("Rendered in HTML.", html);
+        Assert.Contains("comments-section", html);
+    }
+
+    [Fact]
     public void DS352_AddComment_ProducesASchemaValidDocument()
     {
         using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());

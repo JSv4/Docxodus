@@ -4,6 +4,11 @@ This document describes the architecture for rendering Word document comments in
 
 **Source File:** `Docxodus/WmlToHtmlConverter.cs`
 
+> **Authoring comments** (the write side) is a separate surface: `DocxSession.AddComment` /
+> `UpdateComment` / `RemoveComment` / `ListComments` create and manage the same native
+> `w:comment` markup this converter renders — see the Comments section of
+> `docs/architecture/docx_mutation_api.md` (issue #300).
+
 ## Overview
 
 Word documents store comments as annotations linked to text ranges. The converter can render these comments in HTML with three different modes:
