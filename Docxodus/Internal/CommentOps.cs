@@ -127,6 +127,27 @@ internal static class CommentOps
     }
 
     /// <summary>
+    /// Flatten a <c>w:comment</c> body to plain text: per-paragraph <c>w:t</c> concatenation,
+    /// paragraphs joined by a single space, runs carrying the <c>w:annotationRef</c> mark
+    /// excluded — the same rule the HTML renderer and the markdown projection apply.
+    /// </summary>
+    internal static string FlattenBodyText(XElement comment)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var p in comment.Elements(W.p))
+        {
+            var text = string.Concat(
+                p.Descendants(W.t)
+                    .Where(t => !t.Ancestors(W.r).Any(r => r.Elements(W.annotationRef).Any()))
+                    .Select(t => (string)t));
+            if (text.Length == 0) continue;
+            if (sb.Length > 0) sb.Append(' ');
+            sb.Append(text);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Format a comment date the way Word writes <c>w:date</c>: UTC, second precision, trailing
     /// <c>Z</c>. An Unspecified-kind value is treated as already-UTC rather than local, so the
     /// output never depends on the machine's timezone.
