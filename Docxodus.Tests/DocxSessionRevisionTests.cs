@@ -15,7 +15,7 @@ namespace Docxodus.Tests;
 /// <summary>
 /// Tests for markup-native revision listing + selective per-revision accept/reject
 /// (<see cref="DocxSession.ListRevisions"/>, <see cref="DocxSession.AcceptRevision"/>,
-/// <see cref="DocxSession.RejectRevision"/> — issue #318). Test IDs DS370-DS389.
+/// <see cref="DocxSession.RejectRevision"/> — issues #318 and #319). Test IDs DS370-DS399.
 /// </summary>
 public class DocxSessionRevisionTests
 {
@@ -109,6 +109,53 @@ public class DocxSessionRevisionTests
                     new XElement(W.t, "Bold now.")),
                 RunT(" Plain.")));
 
+    /// <summary>Two adjacent runs with distinct original formatting, used to prove
+    /// that one tracked ApplyFormat call snapshots each run independently.</summary>
+    private static byte[] BuildTwoRunFormatTargetDoc() =>
+        BuildWithBody(
+            Para(
+                new XElement(W.r,
+                    new XElement(W.rPr, new XElement(W.i)),
+                    new XElement(W.t, "Alpha ")),
+                RunT("Beta")));
+
+    private static byte[] BuildBoldRunDoc() =>
+        BuildWithBody(
+            Para(
+                new XElement(W.r,
+                    // Lexically different from the bare w:b ApplyFormat writes, but
+                    // semantically the same — this must remain an untracked no-op.
+                    new XElement(W.rPr,
+                        new XElement(W.b, new XAttribute(W.val, "true"))),
+                    new XElement(W.t, "Already bold."))));
+
+    private static byte[] BuildSemanticNoOpRunDoc() =>
+        BuildWithBody(
+            Para(
+                new XElement(W.r,
+                    // Deliberately noncanonical child order and lexical spellings.
+                    // Applying the same semantic values must preserve this exact input
+                    // instead of manufacturing a review-pane format change.
+                    new XElement(W.rPr,
+                        new XElement(W.u),
+                        new XElement(W.b, new XAttribute(W.val, "true")),
+                        new XElement(W.color, new XAttribute(W.val, "ff00aa")),
+                        new XElement(W.sz, new XAttribute(W.val, "022")),
+                        new XElement(W.szCs, new XAttribute(W.val, "022"))),
+                    new XElement(W.t, "Semantically unchanged."))));
+
+    private static byte[] BuildSemanticOffNoOpRunDoc() =>
+        BuildWithBody(
+            Para(
+                new XElement(W.r,
+                    new XElement(W.rPr,
+                        new XElement(W.b, new XAttribute(W.val, "0")),
+                        new XElement(W.i, new XAttribute(W.val, "false")),
+                        new XElement(W.strike, new XAttribute(W.val, "off")),
+                        new XElement(W.u, new XAttribute(W.val, "none")),
+                        new XElement(W.vertAlign, new XAttribute(W.val, "baseline"))),
+                    new XElement(W.t, "Already off."))));
+
     /// <summary>An inline move pair linked by range name "move1".</summary>
     private static byte[] BuildMoveDoc() =>
         BuildWithBody(
@@ -160,6 +207,13 @@ public class DocxSessionRevisionTests
     }
 
     private static string VisibleText(byte[] bytes) => string.Join("\n", ParagraphTexts(bytes));
+
+    private static XElement MainDocumentRoot(byte[] bytes)
+    {
+        using var ms = new MemoryStream(bytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        return new XElement(doc.MainDocumentPart!.GetXDocument().Root!);
+    }
 
     private static bool HasRevisionMarkup(byte[] bytes)
     {
@@ -514,5 +568,384 @@ public class DocxSessionRevisionTests
         Assert.True(result.Success);
         var modified = Assert.Single(result.Modified);
         Assert.Equal(listed[0].AnchorId, modified.Id);
+    }
+
+    // ─── Session-authored run-format changes (issue #319) ────────────────
+
+    [Fact]
+    public void DS390_ApplyFormat_Tracked_EmitsPerRunSnapshotsAndSessionStamp()
+    {
+        using var s = new DocxSession(BuildTwoRunFormatTargetDoc(),
+            new DocxSessionSettings
+            {
+                TrackedChanges = TrackedChangeMode.RenderInline,
+                RevisionAuthor = "Format Reviewer",
+            });
+        var anchor = s.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        var result = s.ApplyFormat(anchor, span: null, new FormatOp { Bold = true });
+        Assert.True(result.Success, result.Error?.Message);
+
+        // Adjacent per-run markers surface as one user-visible format revision.
+        var listed = Assert.Single(s.ListRevisions());
+        Assert.Equal("rev1001", listed.Id);
+        Assert.Equal("format", listed.Type);
+        Assert.Equal("Format Reviewer", listed.Author);
+        Assert.Equal("Alpha Beta", listed.Text);
+        Assert.Matches(@"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{7}Z$", listed.Date!);
+
+        var bytes = s.Save();
+        using (var ms = new MemoryStream(bytes))
+        using (var doc = WordprocessingDocument.Open(ms, false))
+        {
+            var runs = doc.MainDocumentPart!.GetXDocument().Root!
+                .Descendants(W.r).Where(r => r.Element(W.t) is not null).ToArray();
+            Assert.Equal(2, runs.Length);
+            var changes = runs.Select(r => Assert.Single(r.Element(W.rPr)!.Elements(W.rPrChange)))
+                .ToArray();
+
+            Assert.Equal(new[] { "1001", "1002" },
+                changes.Select(c => (string?)c.Attribute(W.id)).ToArray());
+            Assert.All(changes, c => Assert.Equal("Format Reviewer", (string?)c.Attribute(W.author)));
+            Assert.Single(changes.Select(c => (string?)c.Attribute(W.date)).Distinct());
+            Assert.All(runs, r => Assert.Equal(W.rPrChange, r.Element(W.rPr)!.Elements().Last().Name));
+            Assert.All(runs, r => Assert.NotNull(r.Element(W.rPr)!.Element(W.b)));
+
+            // Each marker archives that run's own old property set.
+            Assert.NotNull(changes[0].Element(W.rPr)!.Element(W.i));
+            Assert.Null(changes[0].Element(W.rPr)!.Element(W.b));
+            Assert.Empty(changes[1].Element(W.rPr)!.Elements());
+            Assert.Empty(changes.SelectMany(c => c.Element(W.rPr)!.Descendants(W.rPrChange)));
+
+            var schemaErrors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
+                    FileFormatVersions.Office2019)
+                .Validate(doc)
+                .ToList();
+            Assert.Empty(schemaErrors);
+        }
+
+        Assert.True(s.AcceptRevision(listed.Id).Success);
+        using var acceptedMs = new MemoryStream(s.Save());
+        using var acceptedDoc = WordprocessingDocument.Open(acceptedMs, false);
+        var acceptedRuns = acceptedDoc.MainDocumentPart!.GetXDocument().Root!
+            .Descendants(W.r).Where(r => r.Element(W.t) is not null).ToArray();
+        Assert.All(acceptedRuns, r => Assert.NotNull(r.Element(W.rPr)?.Element(W.b)));
+        Assert.NotNull(acceptedRuns[0].Element(W.rPr)?.Element(W.i));
+        Assert.Empty(acceptedRuns.SelectMany(r => r.Descendants(W.rPrChange)));
+    }
+
+    [Fact]
+    public void DS391_ApplyFormat_Tracked_RejectRestoresEachRunsOriginalProperties()
+    {
+        using var s = new DocxSession(BuildTwoRunFormatTargetDoc(),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchor = s.Project().AnchorIndex.Values.Single().Anchor.Id;
+        Assert.True(s.ApplyFormat(anchor, span: null, new FormatOp { Bold = true }).Success);
+
+        var revision = Assert.Single(s.ListRevisions());
+        Assert.True(s.RejectRevision(revision.Id).Success);
+
+        using var ms = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var runs = doc.MainDocumentPart!.GetXDocument().Root!
+            .Descendants(W.r).Where(r => r.Element(W.t) is not null).ToArray();
+        Assert.Equal(2, runs.Length);
+        Assert.Null(runs[0].Element(W.rPr)?.Element(W.b));
+        Assert.NotNull(runs[0].Element(W.rPr)?.Element(W.i));
+        Assert.Null(runs[1].Element(W.rPr)?.Element(W.b));
+        Assert.Empty(runs.SelectMany(r => r.Descendants(W.rPrChange)));
+    }
+
+    [Fact]
+    public void DS392_ApplyFormatToSubstring_Tracked_RoundTripsThroughRevisionProcessor()
+    {
+        using var s = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs(),
+            new DocxSessionSettings
+            {
+                TrackedChanges = TrackedChangeMode.RenderInline,
+                RevisionAuthor = "Substring Reviewer",
+            });
+        var anchor = s.Project().AnchorIndex.Values.First().Anchor.Id;
+
+        var result = s.ApplyFormatToSubstring(anchor, "paragraph", new FormatOp { Bold = true });
+        Assert.True(result.Success, result.Error?.Message);
+        var listed = Assert.Single(s.ListRevisions());
+        Assert.Equal("format", listed.Type);
+        Assert.Equal("paragraph", listed.Text);
+        Assert.Equal("Substring Reviewer", listed.Author);
+
+        var tracked = s.Save();
+        using (var trackedMs = new MemoryStream(tracked))
+        using (var trackedDoc = WordprocessingDocument.Open(trackedMs, false))
+        {
+            var changedRun = trackedDoc.MainDocumentPart!.GetXDocument().Root!
+                .Descendants(W.r).Single(r => (string?)r.Element(W.t) == "paragraph");
+            Assert.NotNull(changedRun.Element(W.rPr)?.Element(W.b));
+            Assert.NotNull(changedRun.Element(W.rPr)?.Element(W.rPrChange));
+            Assert.Empty(trackedDoc.MainDocumentPart.GetXDocument().Root!
+                .Descendants(W.rPrChange)
+                .Where(c => (string?)c.Parent?.Parent?.Element(W.t) != "paragraph"));
+        }
+
+        var accepted = RevisionProcessor.AcceptRevisions(new WmlDocument("accepted.docx", tracked));
+        var rejected = RevisionProcessor.RejectRevisions(new WmlDocument("rejected.docx", tracked));
+
+        using (var acceptedMs = new MemoryStream(accepted.DocumentByteArray))
+        using (var acceptedDoc = WordprocessingDocument.Open(acceptedMs, false))
+        {
+            var run = acceptedDoc.MainDocumentPart!.GetXDocument().Root!
+                .Descendants(W.r).Single(r => (string?)r.Element(W.t) == "paragraph");
+            Assert.NotNull(run.Element(W.rPr)?.Element(W.b));
+            Assert.Empty(run.Descendants(W.rPrChange));
+        }
+        using (var rejectedMs = new MemoryStream(rejected.DocumentByteArray))
+        using (var rejectedDoc = WordprocessingDocument.Open(rejectedMs, false))
+        {
+            var root = rejectedDoc.MainDocumentPart!.GetXDocument().Root!;
+            var run = root.Descendants(W.r).Single(r => (string?)r.Element(W.t) == "paragraph");
+            Assert.Null(run.Element(W.rPr)?.Element(W.b));
+            Assert.Empty(root.Descendants(W.rPrChange));
+            Assert.Contains("First paragraph.", string.Concat(root.Descendants(W.t).Select(t => t.Value)));
+        }
+    }
+
+    [Fact]
+    public void DS393_ApplyFormat_Tracked_PreservesExistingRevisionBaselineAndMetadata()
+    {
+        using var s = new DocxSession(BuildFormatChangeDoc(),
+            new DocxSessionSettings
+            {
+                TrackedChanges = TrackedChangeMode.RenderInline,
+                RevisionAuthor = "Later Reviewer",
+            });
+        var anchor = s.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        var result = s.ApplyFormat(anchor, new CharSpan(0, "Bold now.".Length),
+            new FormatOp { Italic = true });
+        Assert.True(result.Success, result.Error?.Message);
+
+        // OOXML allows one rPrChange only. The later edit folds into Carol's pending
+        // change so reject still reaches the original empty formatting baseline.
+        var listed = Assert.Single(s.ListRevisions());
+        Assert.Equal("rev401", listed.Id);
+        Assert.Equal("Carol", listed.Author);
+
+        using (var trackedMs = new MemoryStream(s.Save()))
+        using (var trackedDoc = WordprocessingDocument.Open(trackedMs, false))
+        {
+            var run = trackedDoc.MainDocumentPart!.GetXDocument().Root!
+                .Descendants(W.r).First();
+            var rPr = run.Element(W.rPr)!;
+            Assert.NotNull(rPr.Element(W.b));
+            Assert.NotNull(rPr.Element(W.i));
+            var change = Assert.Single(rPr.Elements(W.rPrChange));
+            Assert.Equal("401", (string?)change.Attribute(W.id));
+            Assert.Equal("Carol", (string?)change.Attribute(W.author));
+            Assert.Empty(change.Element(W.rPr)!.Elements());
+            Assert.Empty(change.Element(W.rPr)!.Descendants(W.rPrChange));
+            Assert.Equal(W.rPrChange, rPr.Elements().Last().Name);
+        }
+
+        Assert.True(s.RejectRevision("rev401").Success);
+        using var rejectedMs = new MemoryStream(s.Save());
+        using var rejectedDoc = WordprocessingDocument.Open(rejectedMs, false);
+        var rejectedRun = rejectedDoc.MainDocumentPart!.GetXDocument().Root!
+            .Descendants(W.r).First();
+        Assert.Null(rejectedRun.Element(W.rPr)?.Element(W.b));
+        Assert.Null(rejectedRun.Element(W.rPr)?.Element(W.i));
+        Assert.Empty(rejectedRun.Descendants(W.rPrChange));
+    }
+
+    [Fact]
+    public void DS394_ApplyFormat_Tracked_NoOpDoesNotCreateRevision()
+    {
+        using var s = new DocxSession(BuildBoldRunDoc(),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchor = s.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        var result = s.ApplyFormat(anchor, span: null, new FormatOp { Bold = true });
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Empty(s.ListRevisions());
+
+        using var ms = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var run = doc.MainDocumentPart!.GetXDocument().Root!.Descendants(W.r).Single();
+        Assert.NotNull(run.Element(W.rPr)?.Element(W.b));
+        Assert.Empty(run.Descendants(W.rPrChange));
+    }
+
+    [Fact]
+    public void DS395_ApplyFormat_Tracked_FailureRestoresWholeOperationSnapshot()
+    {
+        using var s = new DocxSession(BuildFormatChangeDoc(),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchor = s.Project().AnchorIndex.Values.Single().Anchor.Id;
+        var before = MainDocumentRoot(s.Save());
+
+        // The partial span first splits a run carrying an existing rPrChange. The
+        // invalid value then fails after another property was tentatively changed.
+        // Run-local restoration is insufficient: the operation snapshot must also
+        // undo the split and restore the original marker exactly.
+        var result = s.ApplyFormat(anchor, new CharSpan(1, 3),
+            new FormatOp { Italic = true, VertAlign = "sideways" });
+
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.InternalError, result.Error!.Code);
+        Assert.True(XNode.DeepEquals(before, MainDocumentRoot(s.Save())));
+        var revision = Assert.Single(s.ListRevisions());
+        Assert.Equal("rev401", revision.Id);
+        Assert.Equal("Carol", revision.Author);
+        Assert.False(s.Undo()); // failed operations do not remain on the history stack
+    }
+
+    [Fact]
+    public void DS396_ApplyFormat_Tracked_SeparateAdjacentCallsResolveIndependently()
+    {
+        using var s = new DocxSession(BuildTwoRunFormatTargetDoc(),
+            new DocxSessionSettings
+            {
+                TrackedChanges = TrackedChangeMode.RenderInline,
+                RevisionAuthor = "One Reviewer",
+            });
+        var anchor = s.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        Assert.True(s.ApplyFormat(anchor, new CharSpan(0, 6),
+            new FormatOp { Bold = true }).Success);
+        Assert.True(s.ApplyFormat(anchor, new CharSpan(6, 4),
+            new FormatOp { Italic = true }).Success);
+
+        var revisions = s.ListRevisions();
+        Assert.Equal(2, revisions.Count);
+        Assert.Equal(new[] { "rev1001", "rev1002" }, revisions.Select(r => r.Id).ToArray());
+        Assert.Equal(new[] { "Alpha ", "Beta" }, revisions.Select(r => r.Text).ToArray());
+        Assert.All(revisions, r => Assert.Equal("One Reviewer", r.Author));
+        Assert.NotEqual(revisions[0].Date, revisions[1].Date);
+
+        Assert.True(s.RejectRevision(revisions[0].Id).Success);
+        var remaining = Assert.Single(s.ListRevisions());
+        Assert.Equal("rev1002", remaining.Id);
+        Assert.Equal("Beta", remaining.Text);
+
+        using (var rejectedFirstMs = new MemoryStream(s.Save()))
+        using (var rejectedFirstDoc = WordprocessingDocument.Open(rejectedFirstMs, false))
+        {
+            var runs = rejectedFirstDoc.MainDocumentPart!.GetXDocument().Root!
+                .Descendants(W.r).Where(r => r.Element(W.t) is not null).ToArray();
+            Assert.Null(runs[0].Element(W.rPr)?.Element(W.b));
+            Assert.NotNull(runs[0].Element(W.rPr)?.Element(W.i));
+            Assert.NotNull(runs[1].Element(W.rPr)?.Element(W.i));
+            Assert.Empty(runs[0].Descendants(W.rPrChange));
+            Assert.Single(runs[1].Descendants(W.rPrChange));
+        }
+
+        Assert.True(s.AcceptRevision(remaining.Id).Success);
+        Assert.Empty(s.ListRevisions());
+    }
+
+    [Fact]
+    public void DS397_ApplyFormat_Tracked_RevertingWholePendingChangeDropsMarker()
+    {
+        using var s = new DocxSession(BuildFormatChangeDoc(),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchor = s.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        var result = s.ApplyFormat(anchor, new CharSpan(0, "Bold now.".Length),
+            new FormatOp { Bold = false });
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Empty(s.ListRevisions());
+
+        using (var ms = new MemoryStream(s.Save()))
+        using (var doc = WordprocessingDocument.Open(ms, false))
+        {
+            var run = doc.MainDocumentPart!.GetXDocument().Root!
+                .Descendants(W.r).First(r => (string?)r.Element(W.t) == "Bold now.");
+            Assert.Null(run.Element(W.rPr)?.Element(W.b));
+            Assert.Empty(run.Descendants(W.rPrChange));
+        }
+
+        Assert.True(s.Undo());
+        Assert.Equal("rev401", Assert.Single(s.ListRevisions()).Id);
+        Assert.True(s.Redo());
+        Assert.Empty(s.ListRevisions());
+    }
+
+    [Fact]
+    public void DS398_ApplyFormat_Tracked_RevertingPartialPendingChangeKeepsOnlyRemainder()
+    {
+        using var s = new DocxSession(BuildFormatChangeDoc(),
+            new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+        var anchor = s.Project().AnchorIndex.Values.Single().Anchor.Id;
+
+        var result = s.ApplyFormat(anchor, new CharSpan(0, 4),
+            new FormatOp { Bold = false });
+        Assert.True(result.Success, result.Error?.Message);
+        var remaining = Assert.Single(s.ListRevisions());
+        Assert.Equal("rev401", remaining.Id);
+        Assert.Equal(" now.", remaining.Text);
+
+        using (var ms = new MemoryStream(s.Save()))
+        using (var doc = WordprocessingDocument.Open(ms, false))
+        {
+            var runs = doc.MainDocumentPart!.GetXDocument().Root!
+                .Descendants(W.r).Where(r => r.Element(W.t) is not null).ToArray();
+            var reverted = Assert.Single(runs, r => (string?)r.Element(W.t) == "Bold");
+            var pending = Assert.Single(runs, r => (string?)r.Element(W.t) == " now.");
+            Assert.Null(reverted.Element(W.rPr)?.Element(W.b));
+            Assert.Empty(reverted.Descendants(W.rPrChange));
+            Assert.NotNull(pending.Element(W.rPr)?.Element(W.b));
+            Assert.Single(pending.Descendants(W.rPrChange));
+        }
+
+        Assert.True(s.RejectRevision(remaining.Id).Success);
+        Assert.Empty(s.ListRevisions());
+        using var rejectedMs = new MemoryStream(s.Save());
+        using var rejectedDoc = WordprocessingDocument.Open(rejectedMs, false);
+        var rejectedRuns = rejectedDoc.MainDocumentPart!.GetXDocument().Root!
+            .Descendants(W.r).Where(r => r.Element(W.t) is not null).ToArray();
+        Assert.Empty(rejectedRuns.SelectMany(r => r.Descendants(W.rPrChange)));
+        Assert.DoesNotContain(rejectedRuns, r => r.Element(W.rPr)?.Element(W.b) is not null);
+    }
+
+    [Fact]
+    public void DS399_ApplyFormat_Tracked_SemanticNoOpPreservesRawPropertyXml()
+    {
+        {
+            using var s = new DocxSession(BuildSemanticNoOpRunDoc(),
+                new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+            var anchor = s.Project().AnchorIndex.Values.Single().Anchor.Id;
+            var before = MainDocumentRoot(s.Save());
+
+            var result = s.ApplyFormat(anchor, span: null, new FormatOp
+            {
+                Bold = true,
+                Underline = true,
+                Color = "FF00AA",
+                FontSizePts = 11,
+            });
+
+            Assert.True(result.Success, result.Error?.Message);
+            Assert.Empty(s.ListRevisions());
+            Assert.True(XNode.DeepEquals(before, MainDocumentRoot(s.Save())));
+        }
+
+        {
+            using var s = new DocxSession(BuildSemanticOffNoOpRunDoc(),
+                new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline });
+            var anchor = s.Project().AnchorIndex.Values.Single().Anchor.Id;
+            var before = MainDocumentRoot(s.Save());
+
+            var result = s.ApplyFormat(anchor, span: null, new FormatOp
+            {
+                Bold = false,
+                Italic = false,
+                Strike = false,
+                Underline = false,
+                VertAlign = "baseline",
+            });
+
+            Assert.True(result.Success, result.Error?.Message);
+            Assert.Empty(s.ListRevisions());
+            Assert.True(XNode.DeepEquals(before, MainDocumentRoot(s.Save())));
+        }
     }
 }

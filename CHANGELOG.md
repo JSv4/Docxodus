@@ -107,6 +107,24 @@ All notable changes to this project will be documented in this file.
   `docxodus_track_changes` gains `accept`/`reject` actions taking `revisionId` and its `list`
   action switches to the markup-native listing (stable ids, real attribution, ~3s → ~ms on a
   49-page document). Coverage: `DocxSessionRevisionTests` (DS370–DS389).
+- **Tracked run-format mutations in `DocxSession` (issue #319).** `ApplyFormat` now
+  emits native `w:rPrChange` markup when the session is in
+  `TrackedChangeMode.RenderInline`, including calls routed through
+  `ApplyFormatToSubstring` and the `TextMatch` overload. Every changed run keeps the
+  requested current properties and archives its own previous `w:rPr` in a schema-last
+  change marker stamped with the session revision author, one high-resolution operation
+  timestamp, and a fresh revision id; adjacent runs from one call therefore list as one
+  `format` revision, while separate adjacent calls remain independently selectable.
+  Accept keeps the new formatting and removes the marker; reject (selective or
+  whole-document) restores the original per-run properties. Semantic no-ops (including
+  equivalent OOXML ordering/boolean/underline/color/size spellings) produce no revision,
+  and a failed operation restores the complete pre-call snapshot. Applying another
+  tracked format to a run that already has an `rPrChange` preserves that single marker's
+  original baseline and attribution instead of nesting/replacing it, so reject-all still
+  reaches the true pre-review formatting; formatting back to that archived baseline
+  removes the now-empty pending change, including for partial spans. Paragraph-property/
+  style changes remain a separate `pPrChange` follow-up. No wire changes. Coverage:
+  `DocxSessionRevisionTests` (DS390–DS399).
 - **First-line/hanging indent and paragraph spacing on `SetParagraphFormat` (issue #312).**
   `ParagraphFormatOp` could express alignment, a left-indent delta, page-break-before, and
   paragraph borders — but not the other two workhorses of paragraph layout, so the intent
