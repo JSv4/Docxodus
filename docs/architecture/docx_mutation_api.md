@@ -116,7 +116,7 @@ Two conventions worth pinning down because they affect agent reasoning:
 - **`SplitParagraph` keeps the original Unid on the first half.** Reason: external systems (LLM context windows, search indices) bias toward the pre-split anchor position; keeping the prefix-half stable minimizes invalidation downstream.
 - **`MergeParagraphs` lets the first anchor absorb the second.** Symmetric reason: the first anchor is to the left in reading order and is more likely to be the one a caller has cached.
 
-**Tracked-change mode shifts the semantics for `ReplaceText` and `DeleteBlock`.** When `Settings.TrackedChanges = RenderInline`, deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged.
+**Tracked-change mode shifts the semantics for `ReplaceText` and `DeleteBlock`.** When `Settings.TrackedChanges = RenderInline`, deletions don't remove elements — they wrap old runs in `w:del` and new content in `w:ins`. So the affected anchor stays live and appears in `Modified` instead of `Removed`. The agent's view of the world doesn't have to change; the `EditResult` shape is unchanged. The mode is switchable mid-session — see "Switching tracked-changes mode mid-session" below.
 
 **`ReplaceText` quietly strips a leading auto-number prefix from the payload.** When the target paragraph carries `w:numPr` (numbered heading or list item), the projector emits the resolved number inline (`## Fourth The total number…`) so a human can read what Word renders. An agent that echoes the visible heading back as its `ReplaceText` payload would otherwise see `Fourth Fourth: …` in the saved DOCX — the auto-number is still applied by Word, *and* the new run text now also starts with the prefix. The session resolves the number via the shared `Internal.ListNumberResolver` and strips a matching prefix (plus one optional separator: space, tab, or NBSP) from the payload before parsing. Idempotent — if the agent skipped the prefix, nothing is stripped. Documented in `DS091`/`DS091b`.
 
@@ -799,6 +799,29 @@ session.FindByKind("h", scope: "body")            // direct read over AnchorInde
 ## SmartQuotes
 
 `DocxSessionSettings.SmartQuotes = true` makes every text-modifying op (`ReplaceText`, `ReplaceTextRange`, `ReplaceMatch`, `ReplaceTextAtSpan`) convert ASCII `"` and `'` in the payload to typographic curly quotes based on context — open at start/after-whitespace/after-open-bracket, close elsewhere. Avoids the cosmetic regression where a fill lands as `"foo"` next to surrounding already-curly `"foo"` text. Default off (pass payloads through unchanged).
+
+## Switching tracked-changes mode mid-session (issue #304)
+
+`Settings.TrackedChanges` and `Settings.RevisionAuthor` seed the session but do
+**not** nail it down: `SetTrackedChanges(TrackedChangeMode)` and
+`SetRevisionAuthor(string?)` switch how *subsequent* mutations are recorded, so a
+workflow can edit directly and flip to `RenderInline` for just the edits that
+should land as reviewable revisions (or change author between phases for
+multi-author output) without a save→close→reopen.
+
+Semantics:
+
+- **Already-applied history is never touched.** Switching to `Accept` does not
+  accept existing `w:ins`/`w:del` (that's `RevisionProcessor` / the MCP server's
+  `accept_all`); switching to `RenderInline` does not retroactively wrap prior
+  direct edits.
+- **Session configuration, not a document mutation.** No undo snapshot is taken;
+  `Undo()`/`Redo()` restore document content only and never change the mode or
+  author. The mutators return `void`, not `EditResult`.
+- Read back the current values via `session.TrackedChanges` / `session.RevisionAuthor`.
+- Wired through every surface: WASM/npm (`setTrackedChanges`/`setRevisionAuthor`),
+  stdio host + docx-scalpel (`set_tracked_changes`/`set_revision_author`), MCP
+  (`docxodus_track_changes` action `set_mode`).
 
 ## ApplyFormat — substring and TextMatch overloads
 
