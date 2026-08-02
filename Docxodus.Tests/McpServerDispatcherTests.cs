@@ -841,4 +841,64 @@ public class McpServerDispatcherTests : IDisposable
         foreach (var tool in tools.EnumerateArray())
             Assert.Equal(JsonValueKind.Object, tool.GetProperty("inputSchema").ValueKind);
     }
+
+    // ─── docxodus_track_changes set_mode (issue #304) ───────────────────
+
+    private JsonElement SetMode(string sessionId, string mode, string? author = null)
+    {
+        var args = $$"""{"sessionId":{{JsonSerializer.Serialize(sessionId)}},"action":"set_mode","mode":{{JsonSerializer.Serialize(mode)}}""";
+        if (author is not null)
+            args += $$""","revisionAuthor":{{JsonSerializer.Serialize(author)}}""";
+        args += "}";
+        return Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(args)));
+    }
+
+    [Fact]
+    public void MCP133_SetMode_SwitchesRecordingMidSession()
+    {
+        var sessionId = OpenSession(); // default: accept
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var direct = ReplaceText(_store, sessionId, anchor, "Direct edit.");
+        Assert.True(direct.GetProperty("success").GetBoolean());
+
+        var mode = SetMode(sessionId, "render_inline", "mcp-reviewer");
+        Assert.True(mode.GetProperty("success").GetBoolean());
+
+        var tracked = ReplaceText(_store, sessionId, anchor, "Tracked edit.");
+        Assert.True(tracked.GetProperty("success").GetBoolean());
+
+        var outPath = Path.Combine(_root, "tracked-out.docx");
+        Save(sessionId, outPath);
+        var xml = SavedDocumentXml(outPath);
+        Assert.Contains("w:ins", xml);
+        Assert.Contains("mcp-reviewer", xml);
+    }
+
+    [Fact]
+    public void MCP134_SetMode_UnknownModeThrows()
+    {
+        var sessionId = OpenSession();
+        var ex = Assert.Throws<McpToolException>(() => SetMode(sessionId, "bogus"));
+        Assert.Contains("unknown trackedChanges mode", ex.Message);
+    }
+
+    [Fact]
+    public void MCP135_SetMode_EchoAndAuthorSemantics()
+    {
+        var sessionId = OpenSession();
+
+        var r1 = SetMode(sessionId, "render_inline", "Reviewer A");
+        Assert.Equal("render_inline", r1.GetProperty("trackedChanges").GetString());
+        Assert.Equal("Reviewer A", r1.GetProperty("revisionAuthor").GetString());
+
+        // Absent revisionAuthor leaves the author unchanged.
+        var r2 = SetMode(sessionId, "accept");
+        Assert.Equal("accept", r2.GetProperty("trackedChanges").GetString());
+        Assert.Equal("Reviewer A", r2.GetProperty("revisionAuthor").GetString());
+
+        // Empty string resets to the default (null).
+        var r3 = SetMode(sessionId, "accept", "");
+        Assert.Equal(JsonValueKind.Null, r3.GetProperty("revisionAuthor").ValueKind);
+    }
 }

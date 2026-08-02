@@ -294,7 +294,20 @@ projection's `# Comments` section). Removing a comment also prunes any
 Deliberately distinct from `docxodus_comment`: the overlay semantically tags regions for
 external tools (e.g. OpenContracts) and never appears in Word's Reviewing UI.
 
-### `docxodus_track_changes` — list/accept/reject tracked changes
+### `docxodus_track_changes` — list/accept/reject tracked changes, switch recording mode
+
+`set_mode` (issue #304) switches how the session records its *own subsequent* edits —
+`mode: "accept" | "render_inline" | "strip_deletions"` (the same values `docxodus_open`'s
+`trackedChanges` takes), plus optional `revisionAuthor` (absent = leave the current author
+unchanged; empty string = reset to the `"docxodus"` default). Backed by
+`DocxSession.SetTrackedChanges`/`SetRevisionAuthor`: session configuration, not a document
+mutation — not undoable, and already-applied markup is never touched (switching to `accept`
+does not resolve existing revisions — that's `accept_all`; switching to `render_inline` does
+not retroactively track prior direct edits). The response echoes the now-current state:
+`{"success":true,"trackedChanges":"render_inline","revisionAuthor":"Reviewer A"}`. Before this
+action existed, flipping the mode meant `docxodus_save` → `docxodus_close` → `docxodus_open`
+(and, without `persistAnchorIds`, losing every anchor id at that boundary); that dance is no
+longer needed for mode switching.
 
 `list` computes the revision set by materializing both sides of the session's *current* state —
 `RevisionProcessor.RejectRevisions` (the "left"/original side) and `.AcceptRevisions` (the
