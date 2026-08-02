@@ -4715,8 +4715,19 @@ public sealed class DocxSession : IDisposable
             if (op.SpacingBefore is not null || op.SpacingAfter is not null || op.LineSpacing is not null)
             {
                 var spacing = GetOrCreatePPrChild(pPr, W.spacing);
-                if (op.SpacingBefore is { } before) spacing.SetAttributeValue(W.before, before);
-                if (op.SpacingAfter is { } after) spacing.SetAttributeValue(W.after, after);
+                // A direct beforeAutospacing/afterAutospacing flag makes Word ignore the explicit
+                // value, so writing one clears the matching flag — Word's own Paragraph dialog
+                // does the same when a typed value replaces "Auto".
+                if (op.SpacingBefore is { } before)
+                {
+                    spacing.SetAttributeValue(W.before, before);
+                    spacing.SetAttributeValue(W.beforeAutospacing, null);
+                }
+                if (op.SpacingAfter is { } after)
+                {
+                    spacing.SetAttributeValue(W.after, after);
+                    spacing.SetAttributeValue(W.afterAutospacing, null);
+                }
                 if (op.LineSpacing is { } line)
                 {
                     spacing.SetAttributeValue(W.line, line);
