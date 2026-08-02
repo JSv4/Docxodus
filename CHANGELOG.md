@@ -11,6 +11,60 @@ All notable changes to this project will be documented in this file.
 - **Incremental structural repaint in the browser `DocxEditor` — structural operations drop from seconds to modern-web latencies.** Every structural op (insert table / row / column, insert footnote or endnote, delete block, undo, redo) used to pay a full remount: a whole-document `RenderHtml` plus a complete DOM rebuild, ~5–6 s on a 346-block, 94-footnote filing template while `save()` was ~300 ms — the re-render was the bottleneck, and separately the engine ops themselves carried ~1 s of per-op projection overhead. Both are gone. Measured on that same document (warm, continuous mode): insert table **225 ms** (was ~6.1 s), insert row **243 ms**, insert footnote **210 ms** (was ~6.2 s), delete block **93 ms**, undo **201–349 ms** / redo **359 ms** (were ~5.6 s), `setPageNumbering` **287 ms** (was ~650 ms); text commit and `save()` unregressed. The mechanism is one op-agnostic reconciler, `DocxEditor.reconcile()`: diff the DOM's top-level unit sequence against the session's render plan (LCS over `unid|contentHash` tokens), keep every unchanged unit's DOM node, render changed/created units in ONE batched WASM call, drop removed units (with their generated wrappers), and renumber footnote/endnote marker chrome positionally. A full remount remains the universal fallback — unsupported bridge, paginated mode, pure list-item insert/remove (sibling numbers shift without sibling XML changing), a substituted list item whose rendered marker drifts, border-`div` regrouping, order violations, or any error — so correctness never depends on the diff being right, and the reconciled DOM is pinned equal to a remounted DOM by spec. New `npm/src/editor-reconcile.ts` (pure diff functions), 19 new Playwright specs (`editor-reconcile*.spec.ts`) including node-identity proofs, remount-equivalence, chrome renumbering and save/reopen fidelity.
 - **Session endpoints powering the reconciler** (WASM `DocxSessionBridge` + npm types; all optional on older bundles, the editor degrades to remounts): **`ListBlocks`** — the ordered top-level render units per scope container (each body `w:p` under its projected kind, each table as ONE `tbl` unit, note definitions mirroring exactly what the renderer's notes section shows), each unit carrying a content signature (`UnidHelper.ContentHash`) because in-session an element keeps its unid across edits, so unid alone cannot reveal an undone text edit or a row insert; note ids (reference AND definition) are excluded from the hash since a footnote insert shifts every later note's `w:id` without changing rendered content. **`ListNotes`** — footnotes/endnotes in citation order with their `w:id`, the id↔ordinal authority for renumbering rendered note chrome client-side instead of re-rendering every citing block. **`ListAnchors`** — the projection's anchor index without the markdown payload, replacing a couple-hundred-KB `Project` marshal per repaint. **`RenderBlocksHtml`** — batch block render: N anchors, one throwaway document, one converter run, with each target cloned alongside its real siblings (so `w:contextualSpacing` margins resolve exactly as in the full render) and the live document's `ListItemRetriever` annotations transplanted onto the clones, so **a list item deep in a list renders its true number in isolation** — closing the numbering-continuation gap (M9) for every incremental swap; a table returns with its generated alignment-`div` wrapper, and `fn:`/`en:` anchors return their note paragraphs. The session-attached single-block `RenderBlockHtml` is now a one-element batch, so those fixes apply to every existing swap path too — including a fixed latent bug where a re-rendered citing paragraph silently *lost its citation marker* because the block render profile left `RenderFootnotesAndEndnotes` off.
 - **`DocxSessionSettings.EmitMarkdownPatch` (wire key `emitMarkdownPatch`, default `true`).** When `false`, mutation ops return `Patch = null` and skip the per-op scope re-projection that builds it — `ProjectScope` re-projects the whole document per mutation, pure dead weight for clients that re-render from HTML. The browser editor opens its session with it off.
+- **Agent-facing DOCX editing server (`tools/mcp-server`, `docxodus-mcp`).** A [Model Context
+  Protocol](https://modelcontextprotocol.io) server that lets an AI agent open a `.docx` file
+  into an in-memory `DocxSession`, read/search/edit/format it through ten grouped-intent tools
+  (`docxodus_get_content`, `docxodus_search`, `docxodus_edit`, `docxodus_format`,
+  `docxodus_create`, `docxodus_list`, `docxodus_comment`, `docxodus_track_changes`,
+  `docxodus_mutations`, `docxodus_table`) plus three lifecycle tools
+  (`docxodus_open`/`docxodus_save`/`docxodus_close`), and save it back — over stdio only, no
+  network calls, no telemetry. Every tool routes through the existing
+  `Docxodus.Internal.DocxSessionOps`/`DocxDiffOps` facade (the same one the WASM bridge and
+  `tools/python-host` use); no new editing logic was added to the core library. New
+  `SessionStore` layer (external string `session_id` → handle/path/settings) supports
+  `docxodus_save`'s "write back to the opened path" default and `docxodus_track_changes`'s
+  `accept_all`/`reject_all` (which swap a session's underlying document for a whole-document
+  `RevisionProcessor` transform while keeping the same external session id). `docxodus_mutations`
+  batches any of the mutating grouped tools into one call, with a `preview` mode that applies
+  every step and then undoes them via the session's bounded undo ring. Ships as the `dotnet tool`
+  `docxodus-mcp` (`Docxodus.csproj` gains an `InternalsVisibleTo` grant for it, mirroring the
+  existing grants to `docxodus-pyhost` and `DocxodusWasm`). Several Docxodus capability gaps are
+  documented rather than papered over: no native Word review-comment threads (the comment tool
+  is a bookmark + custom-XML highlight overlay), no selective per-author/per-type tracked-change
+  resolution (only whole-document accept/reject), and a pre-existing anchor-kind asymmetry
+  between `ReplaceCellContent` (needs a `"tc"` anchor) and the table row/column ops (need a
+  `"p"` anchor) that the new test suite surfaced. See
+  `docs/architecture/docx_agent_server.md` for the full tool contract and gap list. Coverage:
+  `Docxodus.Tests/McpServerDispatcherTests.cs` (`MCP###`).
+
+- **Scoped document storage for the agent server (`IDocumentStore`).** Everything the server reads
+  or writes goes through one three-method interface — `Resolve` a caller-supplied location to a
+  canonical in-scope identifier, then byte-level `Read`/`Write` — with `DocumentStores` as the
+  single owner of "which backend, rooted where," built once at startup from the environment
+  (`DOCXODUS_STORAGE_BACKEND`, `DOCXODUS_STORAGE_ROOT`, `DOCXODUS_STORAGE_SCOPE`). The point of
+  the seam is that a future backend (object storage, a content repository) is a new
+  implementation plus one case in `DocumentStores.Create`, with no change to the dispatcher, the
+  tool schemas, or any session logic; the interface takes opaque location *strings* rather than a
+  filesystem-shaped API so a backend without directories needn't pretend to have them. Today the
+  one implementation is `LocalFileDocumentStore`. **Isolation is structural rather than a check:**
+  a store is constructed already rooted at its scope and there is no read/write path that skips
+  `Resolve`, so a session cannot name a document outside it — relative locations resolve under the
+  root, an absolute path is accepted only if the root contains it (which is what keeps
+  `~/Downloads/contract.docx` working under the permissive default root while a narrower root
+  confines the identical tool surface), and containment is checked against symlink-resolved paths
+  with every component resolved from the volume root down. That last part is load-bearing and was
+  wrong in the first cut: resolving only the leaf missed `{root}/link → /elsewhere` followed by
+  `{root}/link/secret.docx`, whose own leaf is not a link — the regression test for it is
+  `MCP125`. Dangling links are detected by reading rather than following the link, so one can't be
+  used as a write escape, and segment boundaries are respected so `/srv/base-2` is not inside
+  `/srv/base`. Backend and root are operator configuration and never tool arguments — if the agent
+  could name a root per call, the scope would be chosen by the thing it exists to contain — and
+  `DOCXODUS_STORAGE_SCOPE` comes from whoever launches the process, which is the only trust
+  boundary stdio MCP actually has (there is no in-band authentication; the spawn *is* the
+  authorization). Because a scope is just a stable path segment, passing the same value next
+  session reaches the same documents with no registry, token format, or revocation list; one
+  process serves exactly one scope. Session ids became 16 random bytes rather than a counter, since
+  the id is the capability. Coverage: `MCP120`–`MCP131` plus `MCP003`.
 
 ### Changed
 - **`DocxSession` mutation ops no longer rebuild the full markdown projection per edit.** Anchor resolution (`FindAnchor` and the post-apply re-resolution inside every mutation op) now goes through a cached index-only build — same walk, same keys, same Unid assignment as the full projection, minus markdown emission and per-entry `TextPreview`/`AutoNumberPrefix` numbering resolution. `ProjectScope` caches the projection it builds (it runs post-invalidation, so it IS the post-op state). The deterministic Unid pass prunes to subtrees that actually contain an unassigned element (it recursed the whole tree computing content signatures even when fully assigned — 36 ms of every 74 ms rebuild on a 15k-element document), and the per-scope part flush is skipped when nothing was assigned, with `Save(persistAnchorIds: true)` now flushing projected parts itself so neither save path depends on rebuild side effects. Net (NVCA, native, editor profile): per-op index rebuild 74 ms → 2 ms; `ReplaceText` ~130 → ~40 ms, `InsertFootnote` ~190 → ~40 ms, `InsertTable` ~245 → ~28 ms, `SetPageNumbering` ~90 → ~8 ms.

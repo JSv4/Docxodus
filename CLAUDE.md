@@ -187,6 +187,7 @@ This repo is not just a .NET library — it ships a four-layer stack. Changes to
 | CLI tools | `tools/redline/`, `tools/docx2html/`, `tools/docx2oc/` | Thin `dotnet tool`-installable wrappers over the library. |
 | WASM bridge | `wasm/DocxodusWasm/` | `[JSExport]` shells (`DocumentConverter.cs`, `DocumentComparer.cs`, `DocxSessionBridge.cs`) exposing the library to JS via .NET WASM. `DocxSessionBridge` is now a thin passthrough to `DocxSessionOps`. |
 | Stdio host | `tools/python-host/` | .NET 10 console binary (`docxodus-pyhost`) that reads NDJSON requests on stdin and dispatches to `DocxSessionOps`. The upcoming python-docxodus pip package will subprocess this. |
+| Agent server | `tools/mcp-server/` | .NET 10 console binary (`docxodus-mcp`) speaking newline-delimited JSON-RPC 2.0 (the Model Context Protocol stdio transport) on stdin/stdout. Groups `DocxSessionOps`/`DocxDiffOps` into ten intent-shaped tools (`docxodus_edit`, `docxodus_format`, `docxodus_table`, …) plus open/save/close, for AI agents. See `docs/architecture/docx_agent_server.md`. |
 | npm/TypeScript | `npm/` | Wrapper around the WASM bridge — `src/index.ts` is the public API, `src/react.ts` is the React hook layer, `src/docxodus.worker.ts`/`worker-proxy.ts` run WASM off the main thread. |
 | Web demo | `web/DocxodusWeb/` | Blazor/web demo app (separate workflow). |
 

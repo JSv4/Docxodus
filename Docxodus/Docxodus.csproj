@@ -61,6 +61,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="DocxodusWasm" />
     <InternalsVisibleTo Include="docxodus-pyhost" />
+    <InternalsVisibleTo Include="docxodus-mcp" />
     <InternalsVisibleTo Include="Docxodus.Tests" />
   </ItemGroup>
 
