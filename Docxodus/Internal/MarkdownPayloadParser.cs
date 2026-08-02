@@ -335,7 +335,7 @@ internal static class MarkdownPayloadParser
                     {
                         throw new MarkdownPayloadException(
                             EditErrorCode.CommentMarkerNotSupported,
-                            "Comment markers are output-only in v1. AddComment(anchor, author, md) is planned for v2.");
+                            "Comment markers are projection output, not input. Use AddComment(anchor, span, author, markdown) to author a comment.");
                     }
                     throw new MarkdownPayloadException(
                         EditErrorCode.AnchorTokenInPayload,

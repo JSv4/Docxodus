@@ -1107,6 +1107,20 @@ export interface DocxodusWasmExports {
     EnsureHeaderFooterVisible: (handle: number, anchor: string, kind: string) => string;
     InsertFootnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
     InsertEndnote: (handle: number, anchor: string, characterOffset: number, markdown: string) => string;
+    // Native Word comment authoring (issue #300). spanJson: "" = whole block, else
+    // {"start":n,"length":n}; initials/date: "" = absent (date is ISO-8601).
+    AddComment: (
+      handle: number,
+      anchor: string,
+      spanJson: string,
+      author: string,
+      initials: string,
+      date: string,
+      markdown: string,
+    ) => string;
+    UpdateComment: (handle: number, commentAnchor: string, markdown: string) => string;
+    RemoveComment: (handle: number, commentAnchor: string) => string;
+    ListComments: (handle: number) => string;
     ApplyFormat: (handle: number, anchor: string, spanJson: string, opJson: string) => string;
     ApplyFormatBySubstring: (handle: number, anchor: string, substring: string, opJson: string) => string;
     SetParagraphStyle: (handle: number, anchor: string, styleId: string) => string;
@@ -1204,6 +1218,10 @@ export type EditErrorCode =
   | "validation_failed"
   | "nothing_to_undo"
   | "nothing_to_redo"
+  | "duplicate_annotation_id"
+  | "annotation_not_found"
+  | "empty_annotation_span"
+  | "empty_comment_span"
   | "internal_error";
 
 export interface AnchorRef {
@@ -1231,6 +1249,23 @@ export interface EditResult {
   removed: AnchorRef[];
   modified: AnchorRef[];
   patch?: MarkdownPatch;
+  /** Set by the annotation ops (addAnnotation/removeAnnotation/updateAnnotation/
+   * moveAnnotation) with the affected annotation id; absent for every other op. */
+  annotationId?: string;
+}
+
+/**
+ * One native Word comment, in comments-part order — see {@link DocxSession.listComments}.
+ * `anchorId` addresses the definition (kind `cmt`) for updateComment/removeComment;
+ * `date` is the raw `w:date` attribute string; `text` is the flattened body. The numeric
+ * `w:id` is deliberately not surfaced — comments are addressed by anchor everywhere.
+ */
+export interface CommentListEntry {
+  anchorId: string;
+  author: string;
+  initials?: string;
+  date?: string;
+  text: string;
 }
 
 export interface CharSpan {

@@ -101,6 +101,59 @@ internal static class StyleFactory
         if (added) part.PutXDocument();
     }
 
+    /// <summary>
+    /// Ensure the two styles a native Word comment references exist (issue #300): the
+    /// <c>CommentText</c> paragraph style worn by the comment's body paragraphs and the
+    /// <c>CommentReference</c> character style worn by the body-side reference run and the
+    /// definition's <c>w:annotationRef</c> mark run. Same find-or-create contract as
+    /// <see cref="EnsureNoteStyles"/>: a style the document already defines is left untouched.
+    /// Shapes follow Word's canonical "annotation text"/"annotation reference" definitions,
+    /// minus the <c>w:link</c> to <c>CommentTextChar</c> (that style isn't created, so a link
+    /// would be a phantom reference).
+    /// </summary>
+    public static void EnsureCommentStyles(WordprocessingDocument doc)
+    {
+        var main = doc.MainDocumentPart;
+        if (main is null) return;
+
+        var part = EnsureStylesPart(main);
+        var root = part.GetXDocument().Root!;
+        bool added = false;
+
+        added |= AddStyleIfMissing(root, "CommentText", CommentTextStyle());
+        added |= AddStyleIfMissing(root, "CommentReference", CommentReferenceStyle());
+
+        // Flush to the part stream — Save only persists the projected parts, not styles.
+        if (added) part.PutXDocument();
+    }
+
+    /// <summary>Word's comment-body paragraph style ("annotation text"): Normal at 10pt.</summary>
+    private static XElement CommentTextStyle() =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "paragraph"),
+            new XAttribute(W + "styleId", "CommentText"),
+            new XElement(W + "name", new XAttribute(W + "val", "annotation text")),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "Normal")),
+            new XElement(W + "semiHidden"),
+            new XElement(W + "unhideWhenUsed"),
+            new XElement(W + "rPr",
+                new XElement(W + "sz", new XAttribute(W + "val", "20")),
+                new XElement(W + "szCs", new XAttribute(W + "val", "20"))));
+
+    /// <summary>Word's comment-marker character style ("annotation reference"): 8pt.</summary>
+    private static XElement CommentReferenceStyle() =>
+        new XElement(W + "style",
+            new XAttribute(W + "type", "character"),
+            new XAttribute(W + "styleId", "CommentReference"),
+            new XElement(W + "name", new XAttribute(W + "val", "annotation reference")),
+            new XElement(W + "basedOn", new XAttribute(W + "val", "DefaultParagraphFont")),
+            new XElement(W + "uiPriority", new XAttribute(W + "val", "99")),
+            new XElement(W + "semiHidden"),
+            new XElement(W + "unhideWhenUsed"),
+            new XElement(W + "rPr",
+                new XElement(W + "sz", new XAttribute(W + "val", "16")),
+                new XElement(W + "szCs", new XAttribute(W + "val", "16"))));
+
     private static bool AddStyleIfMissing(XElement stylesRoot, string styleId, XElement definition)
     {
         bool exists = stylesRoot.Elements(W + "style")

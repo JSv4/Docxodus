@@ -27,8 +27,8 @@ facade the WASM bridge and the Python stdio host use. No new editing logic lives
 
 Document-editing MCP servers built around "open a file into a stateful in-memory session,
 address every subsequent edit by a stable anchor id, group many operations under a handful of
-grouped-intent tools (read / search / edit / format / create / list / comment / track-changes /
-batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
+grouped-intent tools (read / search / edit / format / create / list / comment / annotate /
+track-changes / batch-mutate / table), save on request" are a known-good shape for this problem — it matches how
 this class of tool is used in practice: an agent reads a projection once, holds anchor ids in its
 context, and issues a sequence of small, anchor-addressed mutations before saving. This server
 adopts that shape but is a clean-room implementation against Docxodus's own `DocxSession` engine
@@ -79,7 +79,7 @@ stderr only.
 
 - `initialize` → `{ protocolVersion, capabilities: { tools: {} }, serverInfo }`
 - `notifications/initialized` → no response (notification)
-- `tools/list` → `{ tools: [ { name, description, inputSchema }, ... ] }` — the 13 tools below
+- `tools/list` → `{ tools: [ { name, description, inputSchema }, ... ] }` — the 14 tools below
 - `tools/call` params `{ name, arguments }` → `{ content: [ { type: "text", text: <JSON string> } ], isError }`
 
 **`isError` semantics:** a tool result is marked `isError: true` when either (a) the JSON text is
@@ -94,7 +94,8 @@ unknown methods, which a well-behaved client should never produce.
 ```
 docxodus_open(path) → session_id
    ↓ (any number of docxodus_edit / docxodus_format / docxodus_create / docxodus_table /
-   ↓  docxodus_list / docxodus_comment / docxodus_track_changes / docxodus_mutations calls)
+   ↓  docxodus_list / docxodus_comment / docxodus_annotate / docxodus_track_changes /
+   ↓  docxodus_mutations calls)
 docxodus_save(session_id, path?)
    ↓
 docxodus_close(session_id)
@@ -188,7 +189,7 @@ problem that has no good answer at this layer.
 
 ## Tool reference
 
-Three lifecycle tools, ten grouped-intent tools. Every grouped tool takes `sessionId` plus an
+Three lifecycle tools, eleven grouped-intent tools. Every grouped tool takes `sessionId` plus an
 `action` string; see `tools/mcp-server/ToolCatalog.cs` for the exact JSON Schema advertised over
 `tools/list` (this section is the narrative version).
 
@@ -251,12 +252,27 @@ server composes one from the paragraph op and the markdown subset's ATX-heading 
 `ApplyListFormat` — this is the one that actually creates Word-native numbering, unlike a bare
 markdown `"- item"` payload, see Known gaps), `set_level`, `remove`, `get_membership`.
 
-### `docxodus_comment` — annotation overlay (see Known gaps: not native Word comments)
+### `docxodus_comment` — native Word review comments (issue #300)
+
+`add`/`update`/`remove`/`list` over `DocxSession`'s comment API
+(`AddComment`/`UpdateComment`/`RemoveComment`/`ListComments`) — real `w:comment` markup with
+`w:commentRangeStart`/`End` + `w:commentReference` body plumbing, visible in Word/Google
+Docs/LibreOffice's Reviewing pane. `add` targets a body paragraph (`anchorId` + optional
+`span`; required `author`, optional `initials`/`date` — `w:date` is written only when
+provided, keeping output deterministic); `update`/`remove` address the comment by its
+definition anchor (`commentAnchorId`, kind `cmt`, from `add`'s `created` list or the
+projection's `# Comments` section). Removing a comment also prunes any
+`commentsExtended`/`commentsIds` threading entries it owned. Documented at
+`docs/architecture/docx_mutation_api.md` (Comments section).
+
+### `docxodus_annotate` — annotation overlay
 
 `add`/`update`/`remove`/`move`/`list`/`find` over `DocxSession`'s Tier E annotation API
 (`AddAnnotation`/`UpdateAnnotation`/`RemoveAnnotation`/`MoveAnnotation`/`ListAnnotations`/
 `FindByAnnotation`) — a highlight + label overlay stored in a bookmark and a custom-XML part
 (`Docxodus/DocumentAnnotation.cs`), documented at `docs/architecture/custom_annotations.md`.
+Deliberately distinct from `docxodus_comment`: the overlay semantically tags regions for
+external tools (e.g. OpenContracts) and never appears in Word's Reviewing UI.
 
 ### `docxodus_track_changes` — list/accept/reject tracked changes
 
@@ -274,8 +290,9 @@ per-author/per-type accept/reject.
 ### `docxodus_mutations` — batch apply or dry-run preview
 
 `steps: [{ tool, args }]` where `tool` is one of `docxodus_edit`/`docxodus_format`/
-`docxodus_create`/`docxodus_table`/`docxodus_list` (their `undo`/`redo` and read-only actions —
-e.g. `get_membership` — are rejected as steps; a batch is a sequence of *mutations*). `mode:
+`docxodus_create`/`docxodus_table`/`docxodus_list`/`docxodus_comment` (their `undo`/`redo` and
+read-only actions — e.g. `get_membership`, comment `list` — are rejected as steps; a batch is a
+sequence of *mutations*). `mode:
 apply` runs every step and returns a `{ status, editsApplied, results, errors }` receipt (`status`
 is `ok`/`partial`/`failed`). `mode: preview` runs every step exactly the same way, then calls
 `DocxSessionOps.Undo` once per step that actually mutated before returning — see Known gaps for
@@ -302,11 +319,12 @@ Capabilities a full-featured document-editing agent surface might have, that Doc
 doesn't yet support — called out explicitly rather than faked, per this server's design goal of
 never claiming a capability it doesn't have:
 
-- **No native Word review-comment threads.** `docxodus_comment` creates a bookmark +
-  custom-XML highlight/label overlay (`DocumentAnnotation`), not `w:comment` elements. There is
-  no reply-threading or Word-native resolve state; "resolve" in the Word sense doesn't apply to
-  this overlay at all (there's no `remove`-vs-`resolve` distinction — `remove` is the only way to
-  make one go away).
+- **No comment reply-threading or resolve state.** `docxodus_comment` authors real
+  `w:comment` markup (issue #300 closed the native-comment gap), but replies and Word's
+  resolve flag live in `commentsExtended.xml` (`w15:paraIdParent`/`w15:done`), which v1 does
+  not author — `remove` is still the only way to make a comment go away. Existing threading
+  metadata in Word-authored documents is preserved on `update` and pruned (never dangled) on
+  `remove`.
 - **No selective tracked-change resolution.** `docxodus_track_changes`'s `list` action can filter
   the *display* by author/changeType, but `accept_all`/`reject_all` are exactly that — whole
   document. Docxodus's `RevisionProcessor` has no "accept only this author's inserts" primitive

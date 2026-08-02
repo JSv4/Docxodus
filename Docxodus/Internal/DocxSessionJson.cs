@@ -674,6 +674,36 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    public static string SerializeCommentList(IReadOnlyList<CommentListEntry> comments)
+    {
+        var sb = new StringBuilder(64 + comments.Count * 96);
+        sb.Append('[');
+        for (int i = 0; i < comments.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var c = comments[i];
+            sb.Append("{\"anchorId\":").Append(JsonString(c.DefAnchorId))
+              .Append(",\"author\":").Append(JsonString(c.Author));
+            if (c.Initials is not null) sb.Append(",\"initials\":").Append(JsonString(c.Initials));
+            if (c.Date is not null) sb.Append(",\"date\":").Append(JsonString(c.Date));
+            sb.Append(",\"text\":").Append(JsonString(c.Text)).Append('}');
+        }
+        sb.Append(']');
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Parse an ISO-8601 comment date from the wire; null/empty → null (the deterministic
+    /// no-date default). An unparseable string throws <see cref="System.FormatException"/> at
+    /// the transport layer — the <see cref="ParseHeaderFooterKind"/> precedent, never a
+    /// silent drop.
+    /// </summary>
+    public static System.DateTime? ParseCommentDate(string? iso) =>
+        string.IsNullOrEmpty(iso)
+            ? null
+            : System.DateTime.Parse(iso, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.RoundtripKind);
+
     public static string SerializeAnchorTargets(IReadOnlyList<AnchorTarget> targets)
     {
         var sb = new StringBuilder(targets.Count * 128 + 2);

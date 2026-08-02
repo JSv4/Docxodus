@@ -89,6 +89,15 @@ internal static class Dispatcher
         "insert_endnote" => DocxSessionOps.InsertEndnote(
             Handle(args), Str(args, "anchorId"), Int(args, "characterOffset"), Str(args, "markdown")),
 
+        "add_comment" => DocxSessionOps.AddComment(
+            Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"),
+            Str(args, "author"), OptStr(args, "initials"), OptStr(args, "date"), Str(args, "markdown")),
+        "update_comment" => DocxSessionOps.UpdateComment(
+            Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
+        "remove_comment" => DocxSessionOps.RemoveComment(
+            Handle(args), Str(args, "anchorId")),
+        "list_comments" => DocxSessionOps.ListComments(Handle(args)),
+
         "apply_format" => DocxSessionOps.ApplyFormat(
             Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"), ParseFormatOp(args, "op")),
         "apply_format_by_substring" => DocxSessionOps.ApplyFormatBySubstring(

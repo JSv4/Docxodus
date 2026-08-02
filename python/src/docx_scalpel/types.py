@@ -615,6 +615,34 @@ class EditResult:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CommentListEntry:
+    """One native Word comment, in comments-part order — see ``Session.list_comments``.
+
+    ``anchor_id`` addresses the definition (kind ``cmt``) for ``update_comment``/
+    ``remove_comment``; ``date`` is the raw ``w:date`` attribute string (``None`` when
+    absent); ``text`` is the flattened body (paragraphs joined by a space, the
+    ``w:annotationRef`` mark excluded). The numeric ``w:id`` is deliberately not
+    surfaced — comments are addressed by anchor everywhere in this API.
+    """
+
+    anchor_id: str
+    author: str
+    initials: str | None = None
+    date: str | None = None
+    text: str = ""
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "CommentListEntry":
+        return cls(
+            anchor_id=d["anchorId"],
+            author=d.get("author", "unknown"),
+            initials=d.get("initials"),
+            date=d.get("date"),
+            text=d.get("text", ""),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Projection
 # ---------------------------------------------------------------------------

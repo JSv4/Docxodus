@@ -100,6 +100,10 @@ class EditErrorCode(str, Enum):
     VALIDATION_FAILED = "validation_failed"
     NOTHING_TO_UNDO = "nothing_to_undo"
     NOTHING_TO_REDO = "nothing_to_redo"
+    DUPLICATE_ANNOTATION_ID = "duplicate_annotation_id"
+    ANNOTATION_NOT_FOUND = "annotation_not_found"
+    EMPTY_ANNOTATION_SPAN = "empty_annotation_span"
+    EMPTY_COMMENT_SPAN = "empty_comment_span"
     INTERNAL_ERROR = "internal_error"
 
     @classmethod

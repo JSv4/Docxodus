@@ -919,6 +919,18 @@ public sealed record RenderPlan(
 /// </summary>
 public sealed record NoteListEntry(string Id, string DefAnchorId, int Ordinal);
 
+/// <summary>
+/// One native Word comment, in comments-part order — see <see cref="DocxSession.ListComments"/>.
+/// <see cref="DefAnchorId"/> addresses the definition (kind <c>cmt</c>) for
+/// <see cref="DocxSession.UpdateComment"/>/<see cref="DocxSession.RemoveComment"/>;
+/// <see cref="Date"/> is the raw <c>w:date</c> attribute string (null when absent);
+/// <see cref="Text"/> is the flattened body (paragraphs joined by a space, the
+/// <c>w:annotationRef</c> mark excluded). The numeric <c>w:id</c> is deliberately not
+/// surfaced — comments are addressed by anchor everywhere in this API.
+/// </summary>
+public sealed record CommentListEntry(
+    string DefAnchorId, string Author, string? Initials, string? Date, string Text);
+
 /// <summary>Summary returned by <see cref="DocxSession.CompactRuns"/>.</summary>
 public sealed record CompactResult
 {
@@ -967,6 +979,11 @@ public enum EditErrorCode
     DuplicateAnnotationId,
     AnnotationNotFound,
     EmptyAnnotationSpan,
+
+    /// <summary>A zero-length span passed to <see cref="DocxSession.AddComment"/>, or a
+    /// whole-block comment requested on a paragraph with no text — a comment range must
+    /// cover at least one character.</summary>
+    EmptyCommentSpan,
 
     InternalError,
 }
@@ -1343,6 +1360,61 @@ public sealed class DocxSession : IDisposable
             var unid = (string?)def.Attribute(PtOpenXml.Unid);
             if (unid is null) continue;
             result.Add(new NoteListEntry(id, $"{kindScope}:{kindScope}:{unid}", result.Count + 1));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Remove a native Word comment, addressed by its definition anchor (kind <c>cmt</c>):
+    /// the <c>w:comment</c> definition, its body-side marker triple
+    /// (<c>w:commentRangeStart</c>/<c>w:commentRangeEnd</c>/<c>w:commentReference</c>, wrapper
+    /// run included) everywhere in the package, and any <c>commentsExtended</c>/
+    /// <c>commentsIds</c> threading entries keyed by its paragraphs' <c>w14:paraId</c> — a
+    /// surviving reply whose parent was removed becomes top-level. Delegates to the same
+    /// teardown <see cref="DeleteBlock"/> performs for a <c>cmt</c> anchor; this wrapper adds
+    /// only the comment-specific kind guard. The comments part itself is kept even when the
+    /// last comment is removed (part deletion happens only via <see cref="Undo"/> of the
+    /// create).
+    /// </summary>
+    public EditResult RemoveComment(string commentAnchorId)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var target = FindAnchor(commentAnchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {commentAnchorId}", commentAnchorId);
+        if (target.Anchor.Kind != "cmt")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"RemoveComment requires a comment definition anchor (kind cmt); got kind={target.Anchor.Kind}",
+                commentAnchorId);
+
+        return DeleteBlock(commentAnchorId);
+    }
+
+    /// <summary>
+    /// The document's native Word comments in comments-part order — see
+    /// <see cref="CommentListEntry"/>. Read-only; returns an empty list when the document
+    /// has no comments part.
+    /// </summary>
+    public IReadOnlyList<CommentListEntry> ListComments()
+    {
+        ThrowIfDisposed();
+        _ = AnchorIndex(); // guarantees Unids on the comments part
+
+        var result = new List<CommentListEntry>();
+        var root = _doc!.MainDocumentPart?.WordprocessingCommentsPart?.GetXDocument().Root;
+        if (root is null) return result;
+
+        foreach (var c in root.Elements(W.comment))
+        {
+            var unid = (string?)c.Attribute(PtOpenXml.Unid);
+            if (unid is null) continue;
+            result.Add(new CommentListEntry(
+                $"cmt:cmt:{unid}",
+                (string?)c.Attribute(W.author) ?? "unknown",
+                (string?)c.Attribute(W.initials),
+                (string?)c.Attribute(W.date),
+                Internal.CommentOps.FlattenBodyText(c)));
         }
         return result;
     }
@@ -3251,6 +3323,11 @@ public sealed class DocxSession : IDisposable
         if (main.FootnotesPart is not null) yield return main.FootnotesPart;
         if (main.EndnotesPart is not null) yield return main.EndnotesPart;
         if (main.WordprocessingCommentsPart is not null) yield return main.WordprocessingCommentsPart;
+        // Comment-threading metadata parts: content-only snapshot scope (no session op
+        // creates or deletes them) so the pruning DeleteBlock/RemoveComment perform on
+        // commentsExtended/commentsIds entries is undoable.
+        if (main.WordprocessingCommentsExPart is not null) yield return main.WordprocessingCommentsExPart;
+        if (main.WordprocessingCommentsIdsPart is not null) yield return main.WordprocessingCommentsIdsPart;
         var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
         if (annotationsPart is not null) yield return annotationsPart;
     }
@@ -3365,6 +3442,20 @@ public sealed class DocxSession : IDisposable
                 var elementId = (string?)element.Attribute(W.id);
                 if (!string.IsNullOrEmpty(elementId))
                     RemoveCrossReferences(target.Anchor.Kind, elementId);
+
+                // For comments, also prune Word's threading metadata (commentsExtended /
+                // commentsIds entries keyed by the definition paragraphs' w14:paraId) so a
+                // removed comment leaves no dangling reply/resolve state. Lives here — not in
+                // RemoveComment — so the generic DeleteBlock path gets it too.
+                if (target.Anchor.Kind == "cmt")
+                {
+                    var paraIds = element.Elements(W.p)
+                        .Select(p => (string?)p.Attribute(W14.paraId))
+                        .Where(pid => !string.IsNullOrEmpty(pid))
+                        .Select(pid => pid!)
+                        .ToList();
+                    Internal.CommentOps.PruneThreadingMetadata(_doc!, paraIds);
+                }
             }
 
             // Collect descendant anchors before removal so the caller knows what's gone.
@@ -5389,6 +5480,246 @@ public sealed class DocxSession : IDisposable
     private static string NoteReferenceStyleId(bool isFootnote) =>
         isFootnote ? "FootnoteReference" : "EndnoteReference";
 
+    // ─── Comments (issue #300) ───────────────────────────────────────────
+    //
+    // Native Word comment authoring, following the part-creation pattern the note ops above
+    // established: find-or-create the WordprocessingCommentsPart + the CommentText/
+    // CommentReference styles, bracket a character span with w:commentRangeStart/End, append
+    // the run-level w:commentReference, and add the w:comment definition. Mechanics live in
+    // Internal.CommentOps; part create/delete is undo/redo-reconciled by ReconcileCommentsPart.
+    //
+    // Editing a comment body needs no bespoke path beyond UpdateComment: comment paragraphs
+    // project as kind p, scope cmt, so ReplaceText already accepts them; DeleteBlock already
+    // removes a cmt definition together with its body-side marker triple.
+
+    /// <summary>
+    /// Add a <b>native Word comment</b> (a <c>w:comment</c> the Reviewing pane shows — not the
+    /// <see cref="AddAnnotation"/> overlay) on the paragraph named by <paramref name="anchorId"/>.
+    /// <paramref name="span"/> selects the commented character range; <c>null</c> comments the
+    /// whole block. Creates the <c>WordprocessingCommentsPart</c> and the <c>CommentText</c>/
+    /// <c>CommentReference</c> styles when absent. The comment body comes from
+    /// <paramref name="markdownPayload"/> (same subset as <see cref="InsertFootnote"/>).
+    /// <paramref name="date"/> is written only when provided, keeping output deterministic by
+    /// default; an Unspecified-kind value is treated as UTC. Returns the created definition
+    /// anchor (kind <c>cmt</c>) and its paragraph anchors (kind <c>p</c>, scope <c>cmt</c>) in
+    /// <see cref="EditResult.Created"/> so a caller can immediately
+    /// <see cref="UpdateComment"/>/<see cref="RemoveComment"/> it.
+    /// </summary>
+    /// <remarks>
+    /// Body paragraphs only (kind <c>p</c>/<c>h</c>/<c>li</c>, scope <c>body</c>) — Word has no
+    /// comments-on-comments, and v1 does not target header/footer/note stories. Spans are
+    /// single-block; the numeric <c>w:id</c> is never surfaced (comments are addressed by anchor).
+    /// </remarks>
+    public EditResult AddComment(
+        string anchorId, CharSpan? span, string author, string markdownPayload,
+        string? initials = null, DateTime? date = null)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"AddComment requires a paragraph/heading/list-item anchor; got kind={target.Anchor.Kind}", anchorId);
+        if (target.Anchor.Scope != "body")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"AddComment requires a body paragraph anchor; got scope '{target.Anchor.Scope}'", anchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no main document part", anchorId);
+
+        var totalText = ParagraphText(element);
+        int spanStart, spanLength;
+        if (span.HasValue)
+        {
+            spanStart = span.Value.Start;
+            spanLength = span.Value.Length;
+            if (spanLength <= 0)
+                return EditResult.Fail(EditErrorCode.EmptyCommentSpan, "span length must be > 0", anchorId);
+            if (spanStart < 0 || spanStart + spanLength > totalText.Length)
+                return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                    $"span [{spanStart},{spanStart + spanLength}) outside block of length {totalText.Length}", anchorId);
+        }
+        else
+        {
+            spanStart = 0;
+            spanLength = totalText.Length;
+            if (spanLength == 0)
+                return EditResult.Fail(EditErrorCode.EmptyCommentSpan, "block has no text to comment", anchorId);
+        }
+
+        // Parse the comment body BEFORE snapshotting so a malformed payload is a clean no-op
+        // (no part created, no undo entry pushed).
+        var paras = new List<XElement>();
+        if (!string.IsNullOrEmpty(markdownPayload))
+        {
+            var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
+            if (!parsed.Success)
+                return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
+            foreach (var block in parsed.Blocks)
+                paras.Add(BuildParagraphFromParsedBlock(block));
+        }
+        if (paras.Count == 0) paras.Add(new XElement(W.p));
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var part = Internal.CommentOps.EnsureCommentsPart(main);
+            Internal.StyleFactory.EnsureCommentStyles(_doc!);
+            var id = Internal.CommentOps.NextCommentId(main);
+            var idStr = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            // Body plumbing: bracket the span, then the reference run directly after the
+            // rangeEnd — the shape Word writes. Splits route through the same offset
+            // mechanism every other span op uses (AnnotationOps.SplitRunsForSpan).
+            var (startRun, endRun) = Internal.AnnotationOps.SplitRunsForSpan(element, spanStart, spanLength);
+            var rangeStart = new XElement(W.commentRangeStart, new XAttribute(W.id, idStr));
+            var rangeEnd = new XElement(W.commentRangeEnd, new XAttribute(W.id, idStr));
+            startRun.AddBeforeSelf(rangeStart);
+            endRun.AddAfterSelf(rangeEnd);
+            var refRun = Internal.CommentOps.BuildReferenceRun(id);
+            UnidHelper.AssignToSelfAndDescendants(refRun);
+            rangeEnd.AddAfterSelf(refRun);
+
+            // Definition.
+            Internal.CommentOps.ApplyCommentBodyStyle(paras);
+            var comment = new XElement(W.comment,
+                new XAttribute(W.id, idStr),
+                new XAttribute(W.author, author));
+            if (!string.IsNullOrEmpty(initials))
+                comment.SetAttributeValue(W.initials, initials);
+            if (date.HasValue)
+                comment.SetAttributeValue(W.date, Internal.CommentOps.FormatDate(date.Value));
+            foreach (var p in paras) comment.Add(p);
+            var root = part.GetXDocument().Root!;
+            root.Add(comment);
+            UnidHelper.AssignToSelfAndDescendants(comment);
+            part.PutXDocument();
+
+            InvalidateProjectionCache();
+
+            var created = new List<Anchor>();
+            var commentsPartUri = part.Uri.ToString();
+            if (AnchorForUnid((string?)comment.Attribute(PtOpenXml.Unid), commentsPartUri) is { } defAnchor)
+                created.Add(defAnchor);
+            foreach (var p in comment.Elements(W.p))
+                if (AnchorForUnid((string?)p.Attribute(PtOpenXml.Unid), commentsPartUri) is { } pa)
+                    created.Add(pa);
+
+            return new EditResult
+            {
+                Success = true,
+                Created = created,
+                Modified = new[] { target.Anchor },
+                Patch = PatchFor(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RestoreSnapshot(_history.PopForUndo().snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>
+    /// Replace a comment's <b>body text</b> with <paramref name="markdownPayload"/>, addressed by
+    /// its definition anchor (kind <c>cmt</c>, from <see cref="EditResult.Created"/> or the
+    /// projection's <c># Comments</c> tokens). The comment's identity attributes
+    /// (<c>w:id</c>/<c>w:author</c>/<c>w:initials</c>/<c>w:date</c>) are untouched. When the old
+    /// last paragraph carried a <c>w14:paraId</c> (a Word-threaded comment), the id is re-stamped
+    /// on the new last paragraph — <c>commentsExtended.xml</c> entries key on it, so a body edit
+    /// must not orphan Word's reply/resolve metadata.
+    /// </summary>
+    public EditResult UpdateComment(string commentAnchorId, string markdownPayload)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var target = FindAnchor(commentAnchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {commentAnchorId}", commentAnchorId);
+        if (target.Anchor.Kind != "cmt")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"UpdateComment requires a comment definition anchor (kind cmt); got kind={target.Anchor.Kind}",
+                commentAnchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", commentAnchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main?.WordprocessingCommentsPart is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no comments part", commentAnchorId);
+
+        // Parse BEFORE snapshotting so a malformed payload is a clean no-op.
+        var paras = new List<XElement>();
+        if (!string.IsNullOrEmpty(markdownPayload))
+        {
+            var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
+            if (!parsed.Success)
+                return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, commentAnchorId);
+            foreach (var block in parsed.Blocks)
+                paras.Add(BuildParagraphFromParsedBlock(block));
+        }
+        if (paras.Count == 0) paras.Add(new XElement(W.p));
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            Internal.StyleFactory.EnsureCommentStyles(_doc!);
+
+            var oldParas = element.Elements(W.p).ToList();
+            var preservedParaId = (string?)oldParas.LastOrDefault()?.Attribute(W14.paraId);
+
+            // Collect the outgoing paragraph anchors before removal.
+            var index = AnchorIndex();
+            var removed = new List<Anchor>();
+            foreach (var p in oldParas)
+            {
+                var unid = (string?)p.Attribute(PtOpenXml.Unid);
+                if (unid is null) continue;
+                foreach (var kv in index)
+                    if (kv.Value.Unid == unid)
+                        removed.Add(kv.Value.Anchor);
+            }
+
+            foreach (var p in oldParas) p.Remove();
+            Internal.CommentOps.ApplyCommentBodyStyle(paras);
+            foreach (var p in paras) element.Add(p);
+            if (preservedParaId is not null)
+                paras[paras.Count - 1].SetAttributeValue(W14.paraId, preservedParaId);
+            foreach (var p in paras) UnidHelper.AssignToSelfAndDescendants(p);
+            main.WordprocessingCommentsPart.PutXDocument();
+
+            InvalidateProjectionCache();
+
+            var created = new List<Anchor>();
+            var commentsPartUri = main.WordprocessingCommentsPart.Uri.ToString();
+            foreach (var p in element.Elements(W.p))
+                if (AnchorForUnid((string?)p.Attribute(PtOpenXml.Unid), commentsPartUri) is { } pa)
+                    created.Add(pa);
+
+            return new EditResult
+            {
+                Success = true,
+                Created = created,
+                Removed = removed,
+                Modified = new[] { target.Anchor },
+                Patch = PatchFor(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RestoreSnapshot(_history.PopForUndo().snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, commentAnchorId);
+        }
+    }
+
     /// <summary>
     /// Insert <paramref name="newChild"/> into <paramref name="paragraph"/> at
     /// <paramref name="offset"/> characters into its text — before the first child that starts at
@@ -6221,10 +6552,13 @@ public sealed class DocxSession : IDisposable
     /// content is read back from <see cref="Parts"/> by URI when a part must be re-created.</param>
     /// <param name="NoteParts">The same, for the footnotes/endnotes parts, which
     /// InsertFootnote/InsertEndnote create on a document that had no notes.</param>
+    /// <param name="CommentParts">The same, for the comments part (0 or 1 entries), which
+    /// AddComment creates on a document that had no comments.</param>
     internal sealed record DocumentSnapshot(
         System.Collections.Generic.IReadOnlyList<(string PartUri, XDocument Xml)> Parts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsHeader, string PartUri)> HeaderFooterParts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts);
+        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts,
+        System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> CommentParts);
 
     internal DocumentSnapshot TakeSnapshot()
     {
@@ -6234,6 +6568,7 @@ public sealed class DocxSession : IDisposable
 
         var hfParts = new System.Collections.Generic.List<(string, bool, string)>();
         var noteParts = new System.Collections.Generic.List<(string, bool, string)>();
+        var commentParts = new System.Collections.Generic.List<(string, string)>();
         var main = _doc!.MainDocumentPart;
         if (main is not null)
         {
@@ -6243,8 +6578,10 @@ public sealed class DocxSession : IDisposable
                 noteParts.Add((main.GetIdOfPart(main.FootnotesPart), true, main.FootnotesPart.Uri.ToString()));
             if (main.EndnotesPart is not null)
                 noteParts.Add((main.GetIdOfPart(main.EndnotesPart), false, main.EndnotesPart.Uri.ToString()));
+            if (main.WordprocessingCommentsPart is not null)
+                commentParts.Add((main.GetIdOfPart(main.WordprocessingCommentsPart), main.WordprocessingCommentsPart.Uri.ToString()));
         }
-        return new DocumentSnapshot(parts, hfParts, noteParts);
+        return new DocumentSnapshot(parts, hfParts, noteParts, commentParts);
     }
 
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
@@ -6274,12 +6611,13 @@ public sealed class DocxSession : IDisposable
             // Same reconcile for the footnotes/endnotes parts, which InsertFootnote/InsertEndnote
             // create on a document that had no notes.
             ReconcileNoteParts(main, snapshot, byUri);
+            // And for the comments part, which AddComment creates on a document that had no comments.
+            ReconcileCommentsPart(main, snapshot, byUri);
         }
 
         // The annotations CustomXmlPart is reconciled the same way (its own factory) — see
         // EnumerateProjectedPartsForSnapshot for why AddCustomXmlPart(CustomXml) is unsafe for
         // non-annotation custom-xml parts (wrong content type, no CustomXmlPropertiesPart partner).
-        // CommentsPart is still content-only (no op adds/removes it).
         if (main is not null)
         {
             var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
@@ -6377,6 +6715,37 @@ public sealed class DocxSession : IDisposable
             OpenXmlPart np = kv.Value.IsFootnote
                 ? main.AddNewPart<FootnotesPart>(kv.Key)
                 : main.AddNewPart<EndnotesPart>(kv.Key);
+            np.PutXDocument(new XDocument(xml));
+        }
+    }
+
+    /// <summary>
+    /// The <see cref="ReconcileNoteParts"/> twin for the comments part: delete a part created
+    /// since <paramref name="snapshot"/> (undo of the AddComment that introduced comments) and
+    /// re-create one the live document has since lost (redo), keeping the original relationship
+    /// id. Content for a part present in both is restored by URI in <see cref="RestoreSnapshot"/>.
+    /// </summary>
+    private static void ReconcileCommentsPart(
+        MainDocumentPart main, DocumentSnapshot snapshot,
+        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+    {
+        var snapByRel = new System.Collections.Generic.Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (relId, partUri) in snapshot.CommentParts)
+            snapByRel[relId] = partUri;
+
+        var live = new System.Collections.Generic.Dictionary<string, OpenXmlPart>(StringComparer.Ordinal);
+        if (main.WordprocessingCommentsPart is not null)
+            live[main.GetIdOfPart(main.WordprocessingCommentsPart)] = main.WordprocessingCommentsPart;
+
+        foreach (var kv in live)
+            if (!snapByRel.ContainsKey(kv.Key))
+                main.DeletePart(kv.Value);
+
+        foreach (var kv in snapByRel)
+        {
+            if (live.ContainsKey(kv.Key)) continue;
+            if (!byUri.TryGetValue(kv.Value, out var xml)) continue;
+            var np = main.AddNewPart<WordprocessingCommentsPart>(kv.Key);
             np.PutXDocument(new XDocument(xml));
         }
     }

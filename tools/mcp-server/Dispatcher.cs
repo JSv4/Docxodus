@@ -38,6 +38,7 @@ internal static class Dispatcher
         "docxodus_create" => Create(store, args),
         "docxodus_list" => ListTool(store, args),
         "docxodus_comment" => Comment(store, args),
+        "docxodus_annotate" => Annotate(store, args),
         "docxodus_track_changes" => TrackChanges(store, args),
         "docxodus_mutations" => Mutations(store, args),
         "docxodus_table" => Table(store, args),
@@ -358,9 +359,32 @@ internal static class Dispatcher
 
     private static bool IsMutatingListAction(string action) => action != "get_membership";
 
-    // ─── Comment (annotation overlay) ──────────────────────────────────
+    // ─── Comment (native Word comments, issue #300) ────────────────────
 
     private static string Comment(SessionStore store, JsonElement args)
+    {
+        var session = Session(store, args);
+        return RunCommentAction(session, Str(args, "action"), args);
+    }
+
+    private static string RunCommentAction(DocSession session, string action, JsonElement args) => action switch
+    {
+        "add" => DocxSessionOps.AddComment(
+            session.Handle, Str(args, "anchorId"), ParseSpan(args, "span"),
+            Str(args, "author"), OptStr(args, "initials"), OptStr(args, "date"),
+            OptStr(args, "markdown") ?? ""),
+        "update" => DocxSessionOps.UpdateComment(
+            session.Handle, Str(args, "commentAnchorId"), Str(args, "markdown")),
+        "remove" => DocxSessionOps.RemoveComment(session.Handle, Str(args, "commentAnchorId")),
+        "list" => $"{{\"comments\":{DocxSessionOps.ListComments(session.Handle)}}}",
+        _ => throw new McpToolException($"unknown docxodus_comment action: {action}"),
+    };
+
+    private static bool IsMutatingCommentAction(string action) => action != "list";
+
+    // ─── Annotate (annotation overlay) ─────────────────────────────────
+
+    private static string Annotate(SessionStore store, JsonElement args)
     {
         var session = Session(store, args);
         var action = Str(args, "action");
@@ -395,7 +419,7 @@ internal static class Dispatcher
             case "find":
                 return $"{{\"anchors\":{DocxSessionOps.FindByAnnotation(session.Handle, Str(args, "query"))}}}";
             default:
-                throw new McpToolException($"unknown docxodus_comment action: {action}");
+                throw new McpToolException($"unknown docxodus_annotate action: {action}");
         }
     }
 
@@ -462,6 +486,7 @@ internal static class Dispatcher
     private static readonly HashSet<string> BatchableTools = new()
     {
         "docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list",
+        "docxodus_comment",
     };
 
     private static string Mutations(SessionStore store, JsonElement args)
@@ -493,6 +518,7 @@ internal static class Dispatcher
             {
                 "docxodus_edit" => IsMutatingEditAction(stepAction),
                 "docxodus_list" => IsMutatingListAction(stepAction),
+                "docxodus_comment" => IsMutatingCommentAction(stepAction),
                 _ => true, // every docxodus_format/docxodus_create/docxodus_table action mutates
             };
             if (!isMutating)
@@ -508,6 +534,7 @@ internal static class Dispatcher
                     "docxodus_create" => RunCreateAction(session, stepAction, stepArgs),
                     "docxodus_table" => RunTableAction(session, stepAction, stepArgs),
                     "docxodus_list" => RunListAction(session, stepAction, stepArgs),
+                    "docxodus_comment" => RunCommentAction(session, stepAction, stepArgs),
                     _ => throw new McpToolException($"unreachable: {stepTool}"),
                 };
             }

@@ -2,6 +2,7 @@
 
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using Docxodus.McpServer;
 using Xunit;
@@ -331,10 +332,10 @@ public class McpServerDispatcherTests : IDisposable
         Assert.True(rowAdded.GetProperty("success").GetBoolean(), rowAddedJson);
     }
 
-    // ─── Comment (annotation overlay) ──────────────────────────────────
+    // ─── Annotate (annotation overlay) ─────────────────────────────────
 
     [Fact]
-    public void MCP070_Comment_AddListRemove()
+    public void MCP070_Annotate_AddListRemove()
     {
         var sessionId = OpenSession();
         var sessionArg = JsonSerializer.Serialize(sessionId);
@@ -342,17 +343,107 @@ public class McpServerDispatcherTests : IDisposable
         Dispatcher.Call(_store, "docxodus_edit", J(
             $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"annotate this"}"""));
 
-        var added = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+        var added = Parse(Dispatcher.Call(_store, "docxodus_annotate", J(
             $$"""{"sessionId":{{sessionArg}},"action":"add","anchorId":"{{anchor}}","label":"note","labelId":"NOTE","color":"#FFEB3B"}""")));
         Assert.True(added.GetProperty("success").GetBoolean());
         var annotationId = added.GetProperty("annotationId").GetString()!;
 
-        var listed = Parse(Dispatcher.Call(_store, "docxodus_comment", J($$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_annotate", J($$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
         Assert.True(listed.GetProperty("annotations").GetArrayLength() > 0);
 
-        var removed = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+        var removed = Parse(Dispatcher.Call(_store, "docxodus_annotate", J(
             $$"""{"sessionId":{{sessionArg}},"action":"remove","annotationId":"{{annotationId}}"}""")));
         Assert.True(removed.GetProperty("success").GetBoolean());
+    }
+
+    // ─── Comment (native Word comments, issue #300) ────────────────────
+
+    [Fact]
+    public void MCP071_Comment_AddUpdateListRemove_IsNative()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"comment on this"}"""));
+
+        var added = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add","anchorId":"{{anchor}}","author":"Alice","initials":"AL","markdown":"Needs review."}""")));
+        Assert.True(added.GetProperty("success").GetBoolean());
+        var cmtAnchor = added.GetProperty("created").EnumerateArray()
+            .First(a => a.GetProperty("kind").GetString() == "cmt")
+            .GetProperty("id").GetString()!;
+
+        // The comment is a real w:comment: the saved bytes carry a comments part entry.
+        var session = _store.Get(sessionId);
+        var savedBytes = Docxodus.Internal.DocxSessionOps.Save(session.Handle);
+        using (var ms = new System.IO.MemoryStream(savedBytes))
+        using (var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(ms, false))
+        {
+            var part = doc.MainDocumentPart!.WordprocessingCommentsPart;
+            Assert.NotNull(part);
+            System.Xml.Linq.XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+            var comment = Assert.Single(part!.GetXDocument().Root!.Elements(w + "comment"));
+            Assert.Equal("Alice", (string?)comment.Attribute(w + "author"));
+        }
+
+        var updated = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"update","commentAnchorId":"{{cmtAnchor}}","markdown":"Revised."}""")));
+        Assert.True(updated.GetProperty("success").GetBoolean());
+
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        var entry = Assert.Single(listed.GetProperty("comments").EnumerateArray().ToList());
+        Assert.Equal("Alice", entry.GetProperty("author").GetString());
+        Assert.Equal("AL", entry.GetProperty("initials").GetString());
+        Assert.Equal("Revised.", entry.GetProperty("text").GetString());
+
+        var removed = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"remove","commentAnchorId":"{{cmtAnchor}}"}""")));
+        Assert.True(removed.GetProperty("success").GetBoolean());
+        var emptied = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        Assert.Equal(0, emptied.GetProperty("comments").GetArrayLength());
+    }
+
+    [Fact]
+    public void MCP072_Mutations_AcceptsCommentAddStep()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"batched comment target"}"""));
+
+        var batch = Parse(Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "apply",
+              "steps": [
+                { "tool": "docxodus_comment", "args": { "action": "add", "anchorId": "{{anchor}}", "author": "Bot", "markdown": "From a batch." } }
+              ]
+            }
+            """)));
+        Assert.Equal("ok", batch.GetProperty("status").GetString());
+        Assert.Equal(1, batch.GetProperty("editsApplied").GetInt32());
+
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        var entry = Assert.Single(listed.GetProperty("comments").EnumerateArray().ToList());
+        Assert.Equal("Bot", entry.GetProperty("author").GetString());
+
+        // The read-only list action is rejected as a batch step.
+        Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_mutations", J(
+            $$"""
+            {
+              "sessionId": {{sessionArg}},
+              "mode": "apply",
+              "steps": [
+                { "tool": "docxodus_comment", "args": { "action": "list" } }
+              ]
+            }
+            """)));
     }
 
     // ─── Track changes ──────────────────────────────────────────────────
@@ -467,9 +558,9 @@ public class McpServerDispatcherTests : IDisposable
     // ─── Tool catalog ───────────────────────────────────────────────────
 
     [Fact]
-    public void MCP100_ToolCatalog_HasThirteenDistinctNamedToolsWithValidSchemas()
+    public void MCP100_ToolCatalog_HasFourteenDistinctNamedToolsWithValidSchemas()
     {
-        Assert.Equal(13, ToolCatalog.Tools.Count);
+        Assert.Equal(14, ToolCatalog.Tools.Count);
         var names = new System.Collections.Generic.HashSet<string>();
         foreach (var tool in ToolCatalog.Tools)
         {

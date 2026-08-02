@@ -10,7 +10,7 @@ namespace Docxodus.McpServer;
 internal sealed record ToolDefinition(string Name, string Description, string InputSchemaJson);
 
 /// <summary>
-/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus ten
+/// The tool surface this server advertises: three lifecycle tools (open/save/close) plus eleven
 /// grouped-intent tools, each accepting an <c>action</c> discriminator and action-specific
 /// arguments. See <c>docs/architecture/docx_agent_server.md</c> for the full contract, the
 /// mapping of every action onto the underlying Docxodus API, and the documented capability gaps.
@@ -213,7 +213,27 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_comment",
-            "Create and manage anchor-addressed annotations: a highlight + label overlay stored in a bookmark and a custom-XML part. NOTE: this is not a native Word review comment thread (no Word-native reply/resolve semantics) — see the capability-gap note in docs/architecture/docx_agent_server.md.",
+            "Create and manage native Word review comments (real w:comment markup — visible in Word/Google Docs/LibreOffice's Reviewing pane): comment on a character span of a body paragraph, update a comment's body, remove one, or list them. Comments are addressed by their cmt anchor (from add's created list or the projection's # Comments section). For the semantic highlight/label overlay see docxodus_annotate. Reply threading / resolve state is not yet supported (v2).",
+            """
+            {
+              "type": "object",
+              "properties": {
+                "sessionId": { "type": "string" },
+                "action": { "type": "string", "enum": ["add", "update", "remove", "list"] },
+                "anchorId": { "type": "string", "description": "add: the body paragraph to comment on." },
+                "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "add: character range within the paragraph. Omit to comment on the whole block." },
+                "author": { "type": "string", "description": "add: comment author (required)." },
+                "initials": { "type": "string", "description": "add: optional author initials." },
+                "date": { "type": "string", "description": "add: optional ISO-8601 timestamp; w:date is written only when provided (omitting keeps output deterministic)." },
+                "markdown": { "type": "string", "description": "add/update: the comment body (same markdown subset as other payloads)." },
+                "commentAnchorId": { "type": "string", "description": "update/remove: the comment definition anchor (kind cmt)." }
+              },
+              "required": ["sessionId", "action"]
+            }
+            """),
+        new ToolDefinition(
+            "docxodus_annotate",
+            "Create and manage anchor-addressed annotations: a highlight + label overlay stored in a bookmark and a custom-XML part, for semantically tagging regions for external tools (e.g. OpenContracts). Not a Word review comment — those live in docxodus_comment.",
             """
             {
               "type": "object",
@@ -259,7 +279,7 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_mutations",
-            "Apply (or preview) a batch of docxodus_edit/docxodus_format/docxodus_create/docxodus_table/docxodus_list actions as one atomic-feeling sequence, with a single aggregate result.",
+            "Apply (or preview) a batch of docxodus_edit/docxodus_format/docxodus_create/docxodus_table/docxodus_list/docxodus_comment actions as one atomic-feeling sequence, with a single aggregate result.",
             """
             {
               "type": "object",
@@ -271,7 +291,7 @@ internal static class ToolCatalog
                   "items": {
                     "type": "object",
                     "properties": {
-                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list"] },
+                      "tool": { "type": "string", "enum": ["docxodus_edit", "docxodus_format", "docxodus_create", "docxodus_table", "docxodus_list", "docxodus_comment"] },
                       "args": { "type": "object", "description": "The same arguments that tool's action takes, minus sessionId (inherited from the batch)." }
                     },
                     "required": ["tool", "args"]
