@@ -319,6 +319,7 @@ internal static class RevisionOps
             if (u.Kind == UnitKind.PropsChange)
             {
                 if (cur is not null && cur.Type == TypeFormat && cur.Author == u.Author
+                    && cur.Date == u.Date
                     && cur.Units[^1].Element.Name == W.rPrChange && u.Element.Name == W.rPrChange
                     && AdjacentFormatRuns(cur.Units[^1].Element, u.Element))
                 {

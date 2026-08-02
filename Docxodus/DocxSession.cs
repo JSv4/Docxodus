@@ -1222,6 +1222,7 @@ public sealed class DocxSession : IDisposable
     private MarkdownProjection? _initialProjection;
     private bool _disposed;
     private int _revisionCounter = 1000;
+    private long _lastFormatRevisionTicks;
     private RawDocxOps? _raw;
 
     // Mutable session configuration (issue #304): seeded from _settings at construction,
@@ -4697,6 +4698,17 @@ public sealed class DocxSession : IDisposable
             SplitRunsAtOffset(element, actualSpan.Start);
             SplitRunsAtOffset(element, actualSpan.Start + actualSpan.Length);
 
+            var trackFormatChanges = _trackedChanges == TrackedChangeMode.RenderInline;
+            var revisionAuthor = _revisionAuthor ?? "docxodus";
+            // Every run touched by one ApplyFormat call belongs to the same user action.
+            // Give its per-run rPrChange markers one timestamp for coherent attribution
+            // and grouping. The value is monotonic at tick precision so two adjacent,
+            // same-author ApplyFormat calls remain independently selectable even when
+            // the wall clock would otherwise stamp them in the same second.
+            var revisionDate = trackFormatChanges
+                ? NextTrackedFormatRevisionDate()
+                : null;
+
             int consumed = 0;
             foreach (var run in InlineRuns(element).ToList())
             {
@@ -4705,7 +4717,10 @@ public sealed class DocxSession : IDisposable
                 int runEnd = consumed + runText.Length;
                 consumed = runEnd;
                 if (runEnd <= actualSpan.Start || runStart >= actualSpan.Start + actualSpan.Length) continue;
-                ApplyFormatToRun(run, op);
+                if (trackFormatChanges)
+                    ApplyFormatToRunTracked(run, op, revisionAuthor, revisionDate!);
+                else
+                    ApplyFormatToRun(run, op);
             }
 
             InvalidateProjectionCache();
@@ -4719,8 +4734,26 @@ public sealed class DocxSession : IDisposable
         catch (Exception ex)
         {
             LastInternalError = ex;
-            _ = _history.PopForUndo();
+            var preOp = _history.PopForUndo();
+            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    private string NextTrackedFormatRevisionDate()
+    {
+        while (true)
+        {
+            var observed = System.Threading.Interlocked.Read(ref _lastFormatRevisionTicks);
+            var now = DateTime.UtcNow.Ticks;
+            var next = now > observed ? now : observed + 1;
+            if (System.Threading.Interlocked.CompareExchange(
+                    ref _lastFormatRevisionTicks, next, observed) == observed)
+            {
+                return new DateTime(next, DateTimeKind.Utc).ToString(
+                    "yyyy-MM-ddTHH:mm:ss.fffffffZ",
+                    System.Globalization.CultureInfo.InvariantCulture);
+            }
         }
     }
 
@@ -8105,6 +8138,197 @@ public sealed class DocxSession : IDisposable
                 else rPr.AddFirst(rFonts);
             }
         }
+    }
+
+    /// <summary>
+    /// Apply a run-format mutation using Word's native tracked-format representation:
+    /// the run keeps its new properties while <c>w:rPr/w:rPrChange/w:rPr</c> stores
+    /// the old properties for reject. A run may carry only one direct rPrChange. When
+    /// it already has one, preserve that marker (including its original baseline and
+    /// attribution) and fold the new formatting into the same pending revision; replacing
+    /// its baseline with the intermediate format would make reject-all stop halfway.
+    /// </summary>
+    private void ApplyFormatToRunTracked(
+        XElement run, FormatOp op, string revisionAuthor, string revisionDate)
+    {
+        var originalRPr = run.Element(W.rPr);
+        var originalRPrClone = originalRPr is null ? null : new XElement(originalRPr);
+        var oldProperties = SnapshotRunPropertiesForRevision(originalRPr);
+
+        // rPrChange is the final CT_RPr child. Detach it while ApplyFormatToRun edits
+        // properties (several setters append) and re-append it below. Taking only the
+        // first also prevents malformed duplicate markers from becoming nested/stacked.
+        var existingChanges = originalRPr?.Elements(W.rPrChange).ToList()
+            ?? new List<XElement>();
+        foreach (var change in existingChanges) change.Remove();
+        var existingChange = existingChanges.FirstOrDefault();
+        var archivedProperties = existingChange is null
+            ? null
+            : SnapshotRunPropertiesForRevision(existingChange.Element(W.rPr));
+
+        try
+        {
+            ApplyFormatToRun(run, op);
+        }
+        catch
+        {
+            RestoreRunProperties(run, originalRPrClone);
+            throw;
+        }
+
+        var currentRPr = run.Element(W.rPr)!;
+        var newProperties = SnapshotRunPropertiesForRevision(currentRPr);
+        bool changed = !RunPropertiesEquivalentForRevision(oldProperties, newProperties);
+
+        if (archivedProperties is not null
+            && RunPropertiesEquivalentForRevision(archivedProperties, newProperties))
+        {
+            // Editing a pending format change back to its archived baseline resolves
+            // that portion of the change. Keeping rPrChange here would leave a phantom
+            // revision whose accept and reject results are identical. Reuse the stored
+            // baseline XML so lexical-only differences do not survive as document churn.
+            RestoreRunProperties(run,
+                archivedProperties.HasElements
+                    || archivedProperties.Attributes().Any(a => !a.IsNamespaceDeclaration)
+                    ? archivedProperties
+                    : null);
+            return;
+        }
+
+        if (!changed)
+        {
+            // A no-op must not manufacture a format revision OR normalize/reorder the
+            // caller's existing XML as a side effect. Put the exact rPr back.
+            RestoreRunProperties(run, originalRPrClone);
+            return;
+        }
+
+        // ApplyFormatToRun historically appends several properties. Once rPrChange makes
+        // schema validity externally observable, normalize the changed outer rPr to the
+        // canonical CT_RPr order before placing the revision marker last.
+        var orderedRPr = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(currentRPr);
+        currentRPr.ReplaceNodes(orderedRPr.Nodes());
+
+        if (existingChange is not null)
+        {
+            currentRPr.Add(existingChange);
+            return;
+        }
+
+        currentRPr.Add(new XElement(W.rPrChange,
+            new XAttribute(W.id, NextRevisionId()),
+            new XAttribute(W.author, revisionAuthor),
+            new XAttribute(W.date, revisionDate),
+            oldProperties));
+    }
+
+    /// <summary>
+    /// Clone the direct run properties suitable for the inner payload of rPrChange.
+    /// Existing change markup is deliberately excluded (CT_RPrOriginal cannot contain
+    /// another rPrChange), as is projector-only Unid bookkeeping.
+    /// </summary>
+    private static XElement SnapshotRunPropertiesForRevision(XElement? rPr)
+    {
+        if (rPr is null) return new XElement(W.rPr);
+
+        var snapshot = new XElement(rPr);
+        snapshot.Descendants(W.rPrChange).Remove();
+        foreach (var element in snapshot.DescendantsAndSelf())
+            element.Attributes()
+                .Where(a => a.Name.Namespace == PtOpenXml.pt)
+                .Remove();
+        return snapshot;
+    }
+
+    /// <summary>Compare run properties by their schema order and normalize the lexical
+    /// true spellings of the on/off toggles ApplyFormat writes as bare elements, bare
+    /// underline as <c>single</c>, and canonical lexical forms for color/half-point
+    /// values. This keeps semantically identical writes (for example
+    /// <c>w:b w:val="true"</c> → <c>w:b</c>, <c>w:u</c> →
+    /// <c>w:u w:val="single"</c>, or remove/re-add of an unchanged color) out of the
+    /// review pane.</summary>
+    private static bool RunPropertiesEquivalentForRevision(XElement left, XElement right)
+    {
+        static XElement Normalize(XElement source)
+        {
+            var ordered = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(source);
+            foreach (var name in new[] { W.b, W.i, W.strike })
+            {
+                foreach (var property in ordered.Elements(name).ToList())
+                {
+                    var value = (string?)property.Attribute(W.val);
+                    if (value is null || value is "1"
+                        || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                        || value.Equals("on", StringComparison.OrdinalIgnoreCase))
+                    {
+                        property.Attribute(W.val)?.Remove();
+                    }
+                    else if (value is "0"
+                        || value.Equals("false", StringComparison.OrdinalIgnoreCase)
+                        || value.Equals("off", StringComparison.OrdinalIgnoreCase))
+                    {
+                        property.Remove();
+                    }
+                }
+            }
+
+            foreach (var underline in ordered.Elements(W.u).ToList())
+            {
+                var value = (string?)underline.Attribute(W.val);
+                if (string.IsNullOrEmpty(value)
+                    || value.Equals("single", StringComparison.OrdinalIgnoreCase))
+                {
+                    underline.SetAttributeValue(W.val, "single");
+                }
+                else if (value.Equals("none", StringComparison.OrdinalIgnoreCase))
+                {
+                    underline.Remove();
+                }
+            }
+
+            foreach (var vertAlign in ordered.Elements(W.vertAlign).ToList())
+            {
+                var value = (string?)vertAlign.Attribute(W.val);
+                if (value is not null
+                    && value.Equals("baseline", StringComparison.OrdinalIgnoreCase))
+                {
+                    vertAlign.Remove();
+                }
+            }
+
+            foreach (var color in ordered.Elements(W.color))
+            {
+                var value = (string?)color.Attribute(W.val);
+                if (value is null) continue;
+                if (value.Equals("auto", StringComparison.OrdinalIgnoreCase))
+                    color.SetAttributeValue(W.val, "auto");
+                else if (value.Length == 6 && value.All(Uri.IsHexDigit))
+                    color.SetAttributeValue(W.val, value.ToUpperInvariant());
+            }
+
+            foreach (var name in new[] { W.sz, W.szCs })
+            {
+                foreach (var size in ordered.Elements(name))
+                {
+                    var value = (string?)size.Attribute(W.val);
+                    if (uint.TryParse(value, System.Globalization.NumberStyles.None,
+                            System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+                    {
+                        size.SetAttributeValue(W.val, parsed.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture));
+                    }
+                }
+            }
+            return ordered;
+        }
+
+        return XNode.DeepEquals(Normalize(left), Normalize(right));
+    }
+
+    private static void RestoreRunProperties(XElement run, XElement? snapshot)
+    {
+        run.Element(W.rPr)?.Remove();
+        if (snapshot is not null) run.AddFirst(snapshot);
     }
 
     internal static XElement BuildParagraphFromParsedBlock(Internal.ParsedBlock block)
