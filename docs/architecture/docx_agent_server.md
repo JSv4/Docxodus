@@ -228,8 +228,13 @@ Three lifecycle tools, eleven grouped-intent tools. Every grouped tool takes `se
 regex-based syntax strip — an approximation, not a real markdown parser; use `markdown` for
 anything that needs to survive a write-back), `blocks` (every addressable block's
 `BlockMetadata` — style id/name, outline level, list facts), `info` (`GetEditSummary` plus the
-`SectionInfo` of the first body block found). Optional `anchorId` scopes `markdown`/`html` to one
-block's subtree via `ProjectionDepth.SubtreeAndFollowingSiblings`.
+`SectionInfo` of the first body block found). Optional `anchorId` scopes
+`markdown`/`text`/`html` to one block's subtree via
+`ProjectionDepth.SubtreeAndFollowingSiblings`. The full markdown/text/blocks
+reads include every projected package story, including `hdr*`/`ftr*`; an `anchorId` returned by
+`set_header_text` or `set_footer_text` can also be handed straight back to markdown, text, or HTML
+read-back. (The unscoped continuous HTML render is body-oriented; use the story anchor for
+header/footer HTML.)
 
 ### `docxodus_search` — find text or blocks, get reusable anchor ids back
 
@@ -237,9 +242,12 @@ block's subtree via `ProjectionDepth.SubtreeAndFollowingSiblings`.
 useful for a follow-up `apply_format`/`replace_text_at_span`-style edit, though this server only
 exposes the anchor-level ops from `docxodus_edit`/`docxodus_format` today). `mode: kind`,
 `annotation`, `bookmark` use `FindByKind`/`FindByAnnotation`/`FindByBookmark` (anchor-only
-results). The returned `id` field on every match **is** the anchor id every other tool's
-`anchorId`/`cellAnchorId` argument expects — this server doesn't invent a separate "search
-result handle" concept; Docxodus's anchors already are one.
+results). Text/regex searches remain body-only by default for backward compatibility; optional
+`scope: body|headers|footers|header_footer|all` widens them to every part in those story
+categories (`headers` covers every `hdr*`, not merely `hdr1`). Text/regex results carry the
+reusable id at `enclosingAnchor.id`; anchor-only results carry it at `id`. Either is the same
+anchor every other tool's `anchorId`/`cellAnchorId` argument expects — this server doesn't invent
+a separate "search result handle" concept; Docxodus's anchors already are one.
 
 ### `docxodus_edit` — text/block CRUD + undo/redo
 
@@ -268,7 +276,18 @@ call), `set_list_level`, `remove_list_membership`, `apply_list_format`.
 payload and calls `InsertParagraph` — Docxodus has no separate heading-insert primitive, so this
 server composes one from the paragraph op and the markdown subset's ATX-heading support),
 `insert_table`, `insert_horizontal_rule`, `insert_footnote`, `insert_endnote`,
-`insert_page_number_field`.
+`insert_page_number_field`, plus the header/footer story actions from the existing session API:
+
+- `set_header_text` / `set_footer_text`: `bodyAnchorId` selects the governing section,
+  `kind: default|first|even` selects its running story, and `markdown` replaces that story's
+  content. The result's `created` list contains the new `p:hdr*`/`p:ftr*` paragraph anchor.
+- `ensure_header_footer_visible`: `bodyAnchorId` + `kind` enables Word's first-page or even-page
+  visibility flag for a story already referenced by that section (default is a successful no-op).
+
+The existing `insert_page_number_field` composes with the returned story paragraph: pass its id
+as `anchorId` to append `PAGE`/`NUMPAGES` inside the header/footer, exactly as it already does for
+any other paragraph. No MCP-only editing logic is involved; all three routes are thin calls into
+`DocxSessionOps`.
 
 ### `docxodus_list` — list membership
 

@@ -437,6 +437,96 @@ public class McpServerDispatcherTests : IDisposable
     }
 
     [Fact]
+    public void MCP137_Create_HeaderFooter_ReturnedAnchorsComposeAndReadBack()
+    {
+        // Issue #316: the engine and stdio host could author running stories, but the MCP
+        // surface could not reach them. Exercise the complete agent workflow: address a section
+        // through a BODY anchor, retain each returned story anchor, read both stories back, and
+        // use the existing page-field action directly on the returned footer paragraph.
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var bodyAnchor = FirstBodyAnchorId(sessionId, _store);
+
+        var header = Parse(Dispatcher.Call(_store, "docxodus_create", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_header_text","bodyAnchorId":"{{bodyAnchor}}","kind":"default","markdown":"**CONFIDENTIAL** running header"}""")));
+        Assert.True(header.GetProperty("success").GetBoolean());
+        var headerAnchor = header.GetProperty("created")[0].GetProperty("id").GetString()!;
+        Assert.StartsWith("p:hdr", headerAnchor);
+
+        var footer = Parse(Dispatcher.Call(_store, "docxodus_create", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_footer_text","bodyAnchorId":"{{bodyAnchor}}","kind":"default","markdown":"Running footer page "}""")));
+        Assert.True(footer.GetProperty("success").GetBoolean());
+        var footerAnchor = footer.GetProperty("created")[0].GetProperty("id").GetString()!;
+        Assert.StartsWith("p:ftr", footerAnchor);
+
+        var pageField = Parse(Dispatcher.Call(_store, "docxodus_create", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert_page_number_field","anchorId":"{{footerAnchor}}","field":"current_page","numberFormat":"lowerRoman"}""")));
+        Assert.True(pageField.GetProperty("success").GetBoolean());
+
+        var headerMarkdown = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown","anchorId":"{{headerAnchor}}"}""")))
+            .GetProperty("markdown").GetString()!;
+        Assert.Contains("CONFIDENTIAL", headerMarkdown);
+        Assert.DoesNotContain("Running footer", headerMarkdown);
+
+        var footerText = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"text","anchorId":"{{footerAnchor}}"}""")))
+            .GetProperty("text").GetString()!;
+        Assert.Contains("Running footer page", footerText);
+
+        var footerHtml = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"html","anchorId":"{{footerAnchor}}"}""")))
+            .GetProperty("html").GetString()!;
+        Assert.Contains("Running footer page", footerHtml);
+
+        var blocks = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"blocks"}"""))).GetProperty("blocks");
+        Assert.True(blocks.TryGetProperty(headerAnchor, out _));
+        Assert.True(blocks.TryGetProperty(footerAnchor, out _));
+
+        var visible = Parse(Dispatcher.Call(_store, "docxodus_create", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"ensure_header_footer_visible","bodyAnchorId":"{{bodyAnchor}}","kind":"first"}""")));
+        Assert.True(visible.GetProperty("success").GetBoolean());
+    }
+
+    [Fact]
+    public void MCP138_Search_HeaderFooterScope_IsOptInAndComposable()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var bodyAnchor = FirstBodyAnchorId(sessionId, _store);
+
+        var header = Parse(Dispatcher.Call(_store, "docxodus_create", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_header_text","bodyAnchorId":"{{bodyAnchor}}","kind":"default","markdown":"scope needle running header"}""")));
+        var headerAnchor = header.GetProperty("created")[0].GetProperty("id").GetString()!;
+        var footer = Parse(Dispatcher.Call(_store, "docxodus_create", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_footer_text","bodyAnchorId":"{{bodyAnchor}}","kind":"default","markdown":"scope needle running footer"}""")));
+        var footerAnchor = footer.GetProperty("created")[0].GetProperty("id").GetString()!;
+
+        // Backward compatibility: absent scope is still body-only.
+        var bodyDefault = Parse(Dispatcher.Call(_store, "docxodus_search", J(
+            $$"""{"sessionId":{{sessionArg}},"mode":"text","query":"scope needle"}""")));
+        Assert.Equal(0, bodyDefault.GetProperty("matches").GetArrayLength());
+
+        var headers = Parse(Dispatcher.Call(_store, "docxodus_search", J(
+            $$"""{"sessionId":{{sessionArg}},"mode":"text","query":"scope needle","scope":"headers"}""")));
+        var headerMatch = Assert.Single(headers.GetProperty("matches").EnumerateArray());
+        Assert.Equal(headerAnchor,
+            headerMatch.GetProperty("enclosingAnchor").GetProperty("id").GetString());
+        Assert.StartsWith("hdr",
+            headerMatch.GetProperty("enclosingAnchor").GetProperty("scope").GetString());
+
+        var both = Parse(Dispatcher.Call(_store, "docxodus_search", J(
+            $$"""{"sessionId":{{sessionArg}},"mode":"regex","query":"scope\\s+needle","scope":"header_footer"}""")));
+        var bothMatches = both.GetProperty("matches").EnumerateArray().ToList();
+        Assert.Equal(2, bothMatches.Count);
+        Assert.Contains(bothMatches, m =>
+            m.GetProperty("enclosingAnchor").GetProperty("id").GetString() == headerAnchor);
+        Assert.Contains(bothMatches, m =>
+            m.GetProperty("enclosingAnchor").GetProperty("id").GetString() == footerAnchor);
+    }
+
+    [Fact]
     public void MCP060_Table_InsertRowAndReplaceCellContent()
     {
         var sessionId = OpenSession();
@@ -748,6 +838,30 @@ public class McpServerDispatcherTests : IDisposable
             using var schema = JsonDocument.Parse(tool.InputSchemaJson); // must be valid JSON
             Assert.Equal("object", schema.RootElement.GetProperty("type").GetString());
         }
+    }
+
+    [Fact]
+    public void MCP139_ToolCatalog_AdvertisesHeaderFooterCreateAndSearchScope()
+    {
+        var create = Assert.Single(ToolCatalog.Tools, t => t.Name == "docxodus_create");
+        using (var schema = JsonDocument.Parse(create.InputSchemaJson))
+        {
+            var actions = schema.RootElement.GetProperty("properties").GetProperty("action")
+                .GetProperty("enum").EnumerateArray().Select(v => v.GetString()).ToList();
+            Assert.Contains("set_header_text", actions);
+            Assert.Contains("set_footer_text", actions);
+            Assert.Contains("ensure_header_footer_visible", actions);
+            Assert.True(schema.RootElement.GetProperty("properties").TryGetProperty("bodyAnchorId", out _));
+            Assert.True(schema.RootElement.GetProperty("properties").TryGetProperty("kind", out _));
+        }
+
+        var search = Assert.Single(ToolCatalog.Tools, t => t.Name == "docxodus_search");
+        using var searchSchema = JsonDocument.Parse(search.InputSchemaJson);
+        var scopes = searchSchema.RootElement.GetProperty("properties").GetProperty("scope")
+            .GetProperty("enum").EnumerateArray().Select(v => v.GetString()).ToList();
+        Assert.Contains("headers", scopes);
+        Assert.Contains("footers", scopes);
+        Assert.Contains("header_footer", scopes);
     }
 
     // ─── Document store: scoping and isolation ─────────────────────────

@@ -193,6 +193,7 @@ internal static class Dispatcher
         var query = Str(args, "query");
         var caseSensitive = BoolOpt(args, "caseSensitive", false);
         var contextChars = IntOpt(args, "contextChars", 80);
+        var scope = ParseSearchScope(OptStr(args, "scope"));
         var maxResults = args.ValueKind == JsonValueKind.Object && args.TryGetProperty("maxResults", out var mr) && mr.ValueKind == JsonValueKind.Number
             ? mr.GetInt32() : (int?)null;
 
@@ -200,10 +201,10 @@ internal static class Dispatcher
         {
             "text" => DocxSessionOps.Grep(
                 session.Handle, Regex.Escape(query), caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase,
-                ProjectionScopes.Body, contextChars, WhitespaceMode.Preserve, ContextBoundary.Char),
+                scope, contextChars, WhitespaceMode.Preserve, ContextBoundary.Char),
             "regex" => DocxSessionOps.Grep(
                 session.Handle, query, caseSensitive ? RegexOptions.None : RegexOptions.IgnoreCase,
-                ProjectionScopes.Body, contextChars, WhitespaceMode.Preserve, ContextBoundary.Char),
+                scope, contextChars, WhitespaceMode.Preserve, ContextBoundary.Char),
             "kind" => DocxSessionOps.FindByKind(session.Handle, query, null),
             "annotation" => DocxSessionOps.FindByAnnotation(session.Handle, query),
             "bookmark" => DocxSessionOps.FindByBookmark(session.Handle, query),
@@ -221,6 +222,19 @@ internal static class Dispatcher
         }
         return "{\"matches\":[" + string.Join(",", items) + "]}";
     }
+
+    /// <summary>Translate the MCP search vocabulary onto the engine's flag set. Omitted scope
+    /// intentionally remains body-only: widening the historical default would make an existing
+    /// query start returning repeated running-story text from every header/footer part.</summary>
+    private static ProjectionScopes ParseSearchScope(string? scope) => scope switch
+    {
+        null or "body" => ProjectionScopes.Body,
+        "headers" => ProjectionScopes.Headers,
+        "footers" => ProjectionScopes.Footers,
+        "header_footer" => ProjectionScopes.Headers | ProjectionScopes.Footers,
+        "all" => ProjectionScopes.All,
+        _ => throw new McpToolException($"unknown search scope: {scope}"),
+    };
 
     // ─── Edit ───────────────────────────────────────────────────────────
 
@@ -322,6 +336,15 @@ internal static class Dispatcher
             session.Handle, Str(args, "anchorId"),
             OptStr(args, "field") == "total_pages" ? PageNumberField.TotalPages : PageNumberField.CurrentPage,
             DocxSessionJson.ParseNumberFormatOrNull(OptStr(args, "numberFormat"))),
+        "set_header_text" => DocxSessionOps.SetHeaderText(
+            session.Handle, Str(args, "bodyAnchorId"),
+            DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
+        "set_footer_text" => DocxSessionOps.SetFooterText(
+            session.Handle, Str(args, "bodyAnchorId"),
+            DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind")), Str(args, "markdown")),
+        "ensure_header_footer_visible" => DocxSessionOps.EnsureHeaderFooterVisible(
+            session.Handle, Str(args, "bodyAnchorId"),
+            DocxSessionJson.ParseHeaderFooterKind(Str(args, "kind"))),
         _ => throw new McpToolException($"unknown docxodus_create action: {action}"),
     };
 
