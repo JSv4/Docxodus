@@ -5536,6 +5536,32 @@ public class DocxSessionTests
         Assert.Contains(r.Modified, a => a.Id == anchor);
     }
 
+    [Fact]
+    public void DS334_Ops_SetTrackedChanges_RoundTrip()
+    {
+        int handle = Docxodus.Internal.DocxSessionOps.OpenSession(BuildDS001_SimpleTwoParagraphs(), null);
+        try
+        {
+            var initial = System.Text.Json.JsonDocument.Parse(
+                Docxodus.Internal.DocxSessionOps.GetTrackedChanges(handle)).RootElement;
+            Assert.Equal("accept", initial.GetProperty("trackedChanges").GetString());
+            Assert.Equal(System.Text.Json.JsonValueKind.Null,
+                initial.GetProperty("revisionAuthor").ValueKind);
+
+            Docxodus.Internal.DocxSessionOps.SetTrackedChanges(handle, TrackedChangeMode.RenderInline);
+            Docxodus.Internal.DocxSessionOps.SetRevisionAuthor(handle, "ops-agent");
+
+            var after = System.Text.Json.JsonDocument.Parse(
+                Docxodus.Internal.DocxSessionOps.GetTrackedChanges(handle)).RootElement;
+            Assert.Equal("render_inline", after.GetProperty("trackedChanges").GetString());
+            Assert.Equal("ops-agent", after.GetProperty("revisionAuthor").GetString());
+        }
+        finally
+        {
+            Docxodus.Internal.DocxSessionOps.CloseSession(handle);
+        }
+    }
+
     private static string SaveDocXml(DocxSession s)
     {
         var bytes = s.Save();
