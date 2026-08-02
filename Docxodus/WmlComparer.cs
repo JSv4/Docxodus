@@ -1104,7 +1104,7 @@ namespace Docxodus
                     AddFootnotesEndnotesStyles(consolidatedWDoc);
                 }
 
-                var newConsolidatedDocument = new WmlDocument("consolidated.docx", consolidatedMs.ToArray());
+                var newConsolidatedDocument = new WmlDocument("consolidated.docx", ZipUnixPermissionFixer.Fix(consolidatedMs.ToArray()));
                 return newConsolidatedDocument;
             }
         }
@@ -1948,7 +1948,7 @@ namespace Docxodus
                     part.PutXDocument();
                 foreach (var part in wDoc2.ContentParts())
                     part.PutXDocument();
-                var updatedWmlResult = new WmlDocument("Dummy.docx", ms.ToArray());
+                var updatedWmlResult = new WmlDocument("Dummy.docx", ZipUnixPermissionFixer.Fix(ms.ToArray()));
                 return updatedWmlResult;
             }
         }
