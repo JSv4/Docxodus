@@ -84,4 +84,31 @@ internal static class NumberFormats
     /// </summary>
     internal static string Render(int value, NumberFormat format) =>
         ListItemTextGetter_Default.GetListItemText("en-US", value, ToOoxml(format));
+
+    /// <summary>
+    /// Decompose a <see cref="ListFormat"/> into its underlying <see cref="NumberFormat"/> plus
+    /// whether the level text wraps the number in parentheses (<c>(%1)</c> vs <c>%1.</c>).
+    /// <see cref="ListFormat"/> is the list-surface vocabulary
+    /// (<c>ApplyListFormat</c>/<c>ApplyListFormatRange</c>); <see cref="NumberFormat"/> is the
+    /// <c>ST_NumberFormat</c> vocabulary. Parenthesization is a <c>w:lvlText</c> concern, not a
+    /// <c>w:numFmt</c> one, which is why the <c>*Parenthesis</c> variants exist only on
+    /// <see cref="ListFormat"/>. <see cref="ListFormat.None"/> has no numbering definition and
+    /// is rejected.
+    /// </summary>
+    internal static (NumberFormat Format, bool Parenthesized) FromListFormat(ListFormat format) => format switch
+    {
+        ListFormat.Bullet => (NumberFormat.Bullet, false),
+        ListFormat.Decimal => (NumberFormat.Decimal, false),
+        ListFormat.DecimalParenthesis => (NumberFormat.Decimal, true),
+        ListFormat.LowerLetter => (NumberFormat.LowerLetter, false),
+        ListFormat.LowerLetterParenthesis => (NumberFormat.LowerLetter, true),
+        ListFormat.UpperLetter => (NumberFormat.UpperLetter, false),
+        ListFormat.UpperLetterParenthesis => (NumberFormat.UpperLetter, true),
+        ListFormat.LowerRoman => (NumberFormat.LowerRoman, false),
+        ListFormat.LowerRomanParenthesis => (NumberFormat.LowerRoman, true),
+        ListFormat.UpperRoman => (NumberFormat.UpperRoman, false),
+        ListFormat.UpperRomanParenthesis => (NumberFormat.UpperRoman, true),
+        _ => throw new System.ArgumentOutOfRangeException(nameof(format), format,
+            "ListFormat.None does not correspond to a numbering definition"),
+    };
 }

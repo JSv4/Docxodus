@@ -278,11 +278,25 @@ internal static class DocxSessionJson
         };
     }
 
-    /// <summary>Parse a list-format kind string ("bullet" | "decimal"/"number" | "none").</summary>
+    /// <summary>
+    /// Parse a list-format kind token (case-insensitive camelCase of the <see cref="ListFormat"/>
+    /// member: "bullet", "decimal", "lowerLetter", "upperRoman", "decimalParenthesis", …; "none"
+    /// or anything unrecognized maps to <see cref="ListFormat.None"/>, matching the historical
+    /// leniency of this parser).
+    /// </summary>
     public static ListFormat ParseListFormat(string? kind) => kind?.ToLowerInvariant() switch
     {
         "bullet" => ListFormat.Bullet,
         "decimal" or "number" or "numbered" => ListFormat.Decimal,
+        "lowerletter" => ListFormat.LowerLetter,
+        "upperletter" => ListFormat.UpperLetter,
+        "lowerroman" => ListFormat.LowerRoman,
+        "upperroman" => ListFormat.UpperRoman,
+        "decimalparenthesis" => ListFormat.DecimalParenthesis,
+        "lowerletterparenthesis" => ListFormat.LowerLetterParenthesis,
+        "upperletterparenthesis" => ListFormat.UpperLetterParenthesis,
+        "lowerromanparenthesis" => ListFormat.LowerRomanParenthesis,
+        "upperromanparenthesis" => ListFormat.UpperRomanParenthesis,
         _ => ListFormat.None,
     };
 

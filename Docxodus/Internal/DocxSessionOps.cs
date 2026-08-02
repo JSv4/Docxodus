@@ -341,6 +341,9 @@ internal static class DocxSessionOps
     public static string ApplyListFormat(int handle, string anchorId, ListFormat kind) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).ApplyListFormat(anchorId, kind));
 
+    public static string ApplyListFormatRange(int handle, string firstAnchorId, string lastAnchorId, ListFormat kind) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ApplyListFormatRange(firstAnchorId, lastAnchorId, kind));
+
     // ─── Tier D: tables ─────────────────────────────────────────────────
 
     public static string ReplaceCellContent(int handle, string cellAnchorId, string markdown) =>

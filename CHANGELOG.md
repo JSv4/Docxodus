@@ -8,6 +8,29 @@ All notable changes to this project will be documented in this file.
 - **README, package metadata and architecture docs rewritten around what the library actually does.** The repo described itself as an "Office XML Redline Engine" — accurate about one of five capabilities, and containing none of the words anyone searches for. Comparison is now one of four peer sections (render / project / edit / compare), each opening with a **real screenshot** captured from the [NVCA model financing documents](https://nvca.org/model-legal-documents/): a redlined voting agreement showing deletion, insertion, token-level substitution and a paired move in one frame; the model charter rendered to HTML with justification, legal numbering and back-referenced footnotes intact; the markdown projection beside the same document's rendered DOM, with one anchor highlighted in both panes to show they share an addressing system. The redline image is genuine engine output end to end — a round of realistic counsel edits applied through `DocxSession`, compared with `DocxDiff.Compare`, rendered with `RenderTrackedChanges`. Also: a "where it runs" table covering the NuGet / npm / PyPI / CLI surfaces (three CLI tools ship, not two), quick starts trimmed to ≤6 lines each so they can't silently rot, and the OpenXmlPowerTools lineage kept but moved out of the lede. Screenshots also land in `ir_diff_engine.md`, `markdown_projection.md`, `docx_converter.md` and the npm package README (which had no mention of the editor, the session API or the projection). Package metadata is aligned for search across all three registries — `Docxodus.csproj` `Description`/`PackageTags`, `npm/package.json` `description`/`keywords`, `pyproject.toml` `keywords`. New `docs/repo-positioning.md` records the GitHub description and topic list a maintainer still has to apply by hand, the keyword→surface map behind them, and how to regenerate the screenshots.
 
 ### Added
+- **Letter/roman/parenthesized list formats + whole-range list conversion (issue #313).** The
+  list write surface could only produce `bullet` and `decimal`, and only one paragraph per
+  call — converting a 3-item list took 3 calls with no guarantee the items landed in the same
+  `w:num` instance, and a "(i)/(ii)/(iii)" romanized sub-list (bread and butter in legal
+  drafting) was inexpressible. `ListFormat` widens to `LowerLetter`/`UpperLetter`/
+  `LowerRoman`/`UpperRoman` plus a `*Parenthesis` variant of every numbered format
+  (`DecimalParenthesis` → `(1)`, `LowerRomanParenthesis` → `(i)`, …) — parenthesization is a
+  `w:lvlText` concern, not a `w:numFmt` one, so the variants decompose through the new
+  `NumberFormats.FromListFormat` into the existing `NumberFormat` vocabulary and
+  `NumberingFactory` stays on `NumberFormats.cs` as the single token-mapping owner (each
+  format keeps its own stable marker `w:nsid`, so definitions stay find-or-create idempotent).
+  New `ApplyListFormatRange(firstAnchor, lastAnchor, format)` applies one format across a
+  contiguous sibling run (inclusive, either document order): every member is guaranteed the
+  SAME shared `w:num` instance so the sequence numbers stay intact, each member keeps its own
+  `w:ilvl`, non-paragraph siblings are skipped, and the whole range is one undo step
+  (cross-part or cross-parent anchors → `AnchorsNotAdjacent`). `NumberingFactory.
+  EnsureLevelDefined` now synthesizes missing nest levels in the numbering's own format
+  (letter/roman/parenthesized carry down) instead of always falling back to decimal. Rippled
+  through every surface: WASM/npm (`ListFormat` union widened, `applyListFormatRange`), stdio
+  host + docx-scalpel (`apply_list_format`/`apply_list_format_range` — new on that surface —
+  with a `ListFormat` enum), and `docxodus_list`, which gains an `apply_format_range` action
+  (`firstAnchorId`/`lastAnchorId`) and the widened `listFormat` token set. Coverage:
+  DS340–DS347.
 - **First-line/hanging indent and paragraph spacing on `SetParagraphFormat` (issue #312).**
   `ParagraphFormatOp` could express alignment, a left-indent delta, page-break-before, and
   paragraph borders — but not the other two workhorses of paragraph layout, so the intent

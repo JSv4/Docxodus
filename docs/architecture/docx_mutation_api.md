@@ -100,6 +100,8 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `SetParagraphStyle(p, style)` | — | — | `p` (kind prefix may flip) | `p` |
 | `SetListLevel(p, delta)` | — | — | `p` | enclosing list (downstream items renumber) |
 | `RemoveListMembership(p)` | — | — | `p` (kind flips `li`→`p`) | enclosing list |
+| `ApplyListFormat(p, fmt)` | — | — | `p` (kind may flip `p`↔`li`) | `p` |
+| `ApplyListFormatRange(first, last, fmt)` | — | — | every `w:p` member of the run (kinds may flip `p`↔`li`) | `first` |
 | `ReplaceCellContent(tc, md)` | — | descendant inline anchors (rare) | `tc` | `tc` |
 | `SetHeaderText(p, kind, md)` / `SetFooterText(...)` | the new header/footer paragraph anchors (scope `hdr{N}`/`ftr{N}`) | — (reused-part old paragraphs cease to exist; not separately reported in v1) | — | whole document |
 | `InsertPageNumberField(p, field?)` | — | — | `p` (the paragraph the field is appended to) | `p` |
@@ -161,6 +163,21 @@ What am I editing?
 ├── Indenting/outdenting a list item or removing it from a list?
 │       → SetListLevel(anchor, +1 | -1)
 │       → RemoveListMembership(anchor)
+│
+├── Making a paragraph a real auto-numbered list item (or changing a list's format)?
+│       → ApplyListFormat(anchor, ListFormat.Bullet | Decimal | LowerLetter | UpperLetter |
+│                                  LowerRoman | UpperRoman | *Parenthesis variants | None)
+│         # Synthesizes a reusable numbering definition if needed (NumberingFactory, marker
+│         # nsid per format). Plain formats render "1."/"a."/"i." level text; the *Parenthesis
+│         # variants render "(1)"/"(a)"/"(i)" — same w:numFmt, different w:lvlText (the
+│         # legal-drafting presets). None strips inline list membership.
+│       → ApplyListFormatRange(firstAnchor, lastAnchor, format)
+│         # The same conversion across a contiguous sibling run, first..last INCLUSIVE (either
+│         # document order). One call instead of one per item; every member is guaranteed the
+│         # same shared w:num instance so the sequence numbers stay intact; each member keeps
+│         # its own w:ilvl; the whole range is ONE undo step. Non-paragraph siblings inside
+│         # the range are skipped. Anchors in different parts or different direct parents →
+│         # AnchorsNotAdjacent.
 │
 ├── Replacing the contents of a table cell?
 │       → ReplaceCellContent(tcAnchor, markdown)

@@ -440,6 +440,15 @@ export class DocxSession {
     return JSON.parse(this.wasm.ApplyListFormat(this.handle, anchorId, kind)) as EditResult;
   }
 
+  /** Apply one list format across the contiguous sibling run from `firstAnchorId` to
+   * `lastAnchorId` inclusive (either document order). Every member shares one `w:num`
+   * instance so the numbering sequence stays intact; the whole range is a single undo step. */
+  applyListFormatRange(firstAnchorId: string, lastAnchorId: string, kind: ListFormat): EditResult {
+    return JSON.parse(
+      this.wasm.ApplyListFormatRange(this.handle, firstAnchorId, lastAnchorId, kind),
+    ) as EditResult;
+  }
+
   // ─── Tier D: cell content ────────────────────────────────────────────
 
   replaceCellContent(cellAnchorId: string, markdown: string): EditResult {

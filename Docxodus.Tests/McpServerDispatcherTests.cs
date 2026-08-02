@@ -332,6 +332,30 @@ public class McpServerDispatcherTests : IDisposable
     }
 
     [Fact]
+    public void MCP136_List_ApplyFormatRange_RomanParenthesis_SharedInstance()
+    {
+        // Issue #313: one apply_format_range call converts a whole contiguous run — with a
+        // legal-drafting "(i)" preset — instead of one apply_format call per item.
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var first = FirstBodyAnchorId(sessionId, _store);
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{first}}","markdown":"item one"}"""));
+        var second = InsertParagraph(sessionId, "item two");
+
+        var applied = Parse(Dispatcher.Call(_store, "docxodus_list", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"apply_format_range","firstAnchorId":"{{first}}","lastAnchorId":"{{second}}","listFormat":"lowerRomanParenthesis"}""")));
+        Assert.True(applied.GetProperty("success").GetBoolean());
+        Assert.Equal(2, applied.GetProperty("modified").GetArrayLength());
+
+        var secondLi = applied.GetProperty("modified")[1].GetProperty("id").GetString()!;
+        var membership = Parse(Dispatcher.Call(_store, "docxodus_list", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"get_membership","anchorId":"{{secondLi}}"}""")));
+        Assert.True(membership.GetProperty("isAutoNumbered").GetBoolean());
+        Assert.Equal("(ii)", membership.GetProperty("generatedLabel").GetString());
+    }
+
+    [Fact]
     public void MCP042_Format_SetParagraphFormat_AddsAndClearsBorder()
     {
         // Issue #301: the schema used to only expose clearBorders, so an agent could remove a

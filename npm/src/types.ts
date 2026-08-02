@@ -1128,6 +1128,7 @@ export interface DocxodusWasmExports {
     SetListLevel: (handle: number, anchor: string, delta: number) => string;
     RemoveListMembership: (handle: number, anchor: string) => string;
     ApplyListFormat: (handle: number, anchor: string, kind: string) => string;
+    ApplyListFormatRange: (handle: number, firstAnchor: string, lastAnchor: string, kind: string) => string;
     ReplaceCellContent: (handle: number, anchor: string, md: string) => string;
     RawGetXml: (handle: number, anchor: string) => string;
     RawInsertXml: (handle: number, anchor: string, pos: string, xml: string) => string;
@@ -1310,8 +1311,22 @@ export interface ParagraphBorderEdge {
   space?: number;
 }
 
-/** List membership for `DocxSession.applyListFormat`. */
-export type ListFormat = "none" | "bullet" | "decimal";
+/** List format for `DocxSession.applyListFormat` / `applyListFormatRange`. The plain numbered
+ * formats render `1.` / `a.` / `i.` level text; the `*Parenthesis` variants render `(1)` /
+ * `(a)` / `(i)` — same `w:numFmt`, different `w:lvlText` (the legal-drafting presets). */
+export type ListFormat =
+  | "none"
+  | "bullet"
+  | "decimal"
+  | "lowerLetter"
+  | "upperLetter"
+  | "lowerRoman"
+  | "upperRoman"
+  | "decimalParenthesis"
+  | "lowerLetterParenthesis"
+  | "upperLetterParenthesis"
+  | "lowerRomanParenthesis"
+  | "upperRomanParenthesis";
 
 /** How `ParagraphFormatOp.lineSpacing` is interpreted (`w:spacing/@w:lineRule`): under `"auto"`
  * the value is in 240ths of a line (240 = single, 360 = 1.5×, 480 = double); under

@@ -1752,6 +1752,124 @@ public class DocxSessionTests
     }
 
     [Fact]
+    public void DS340_ApplyListFormat_LowerRoman_MembershipAndLabel()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var p = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("p:"));
+        var r = s.ApplyListFormat(p, ListFormat.LowerRoman);
+        Assert.True(r.Success, r.Error?.Message);
+        var lm = s.GetListMembership(r.Modified[0].Id);
+        Assert.NotNull(lm);
+        Assert.Equal(NumberFormat.LowerRoman, lm!.Format);
+        Assert.Equal("i.", lm.GeneratedLabel);
+    }
+
+    [Fact]
+    public void DS341_ApplyListFormat_DecimalParenthesis_LabelAndLvlText()
+    {
+        // Parenthesization is a w:lvlText concern, not a w:numFmt one — membership reports the
+        // underlying Decimal while the rendered label carries the parens.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var p = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("p:"));
+        var r = s.ApplyListFormat(p, ListFormat.DecimalParenthesis);
+        Assert.True(r.Success, r.Error?.Message);
+        var lm = s.GetListMembership(r.Modified[0].Id);
+        Assert.Equal(NumberFormat.Decimal, lm!.Format);
+        Assert.Equal("(1)", lm.GeneratedLabel);
+
+        // The synthesized abstractNum writes "(%1)" at level 0 and persists across save.
+        using var ms = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        var numbering = System.Xml.Linq.XDocument.Load(
+            doc.MainDocumentPart!.NumberingDefinitionsPart!.GetStream()).Root!;
+        Assert.Contains(numbering.Descendants(w + "lvlText"),
+            e => (string?)e.Attribute(w + "val") == "(%1)");
+    }
+
+    [Fact]
+    public void DS342_ApplyListFormatRange_SharedNumInstance()
+    {
+        // Converting a 3-paragraph run takes ONE call, and — unlike three per-item calls that
+        // happen to reuse the same definition by luck — the contract guarantees a single shared
+        // w:num instance so the sequence numbers 1./2./3. stay intact.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var ps = s.Project().AnchorIndex.Keys.Where(k => k.StartsWith("p:")).ToList();
+        var third = s.InsertParagraph(ps[1], Position.After, "Third paragraph.").Created[0].Id;
+
+        var r = s.ApplyListFormatRange(ps[0], third, ListFormat.Decimal);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal(3, r.Modified.Count);
+        Assert.All(r.Modified, a => Assert.StartsWith("li:", a.Id));
+
+        var memberships = r.Modified.Select(a => s.GetListMembership(a.Id)!).ToList();
+        Assert.Single(memberships.Select(m => m.NumId).Distinct());
+        Assert.Equal(new[] { "1.", "2.", "3." },
+            memberships.Select(m => m.GeneratedLabel).ToArray());
+    }
+
+    [Fact]
+    public void DS343_ApplyListFormatRange_ReversedAnchors_Normalize()
+    {
+        // (last, first) is accepted and means the same range.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var ps = s.Project().AnchorIndex.Keys.Where(k => k.StartsWith("p:")).ToList();
+        var r = s.ApplyListFormatRange(ps[1], ps[0], ListFormat.LowerLetter);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal(2, r.Modified.Count);
+        Assert.All(r.Modified, a => Assert.StartsWith("li:", a.Id));
+    }
+
+    [Fact]
+    public void DS344_ApplyListFormatRange_None_StripsMembership()
+    {
+        using var s = new DocxSession(BuildDS002_BulletedList());
+        var lis = s.Project().AnchorIndex.Keys.Where(k => k.StartsWith("li:")).ToList();
+        Assert.Equal(3, lis.Count);
+        var r = s.ApplyListFormatRange(lis[0], lis[2], ListFormat.None);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal(3, r.Modified.Count);
+        Assert.All(r.Modified, a => Assert.StartsWith("p:", a.Id));
+        Assert.Null(s.GetListMembership(r.Modified[0].Id));
+    }
+
+    [Fact]
+    public void DS345_ApplyListFormatRange_CrossPart_Fails()
+    {
+        // A body paragraph and a header paragraph can never form a contiguous sibling run.
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var ps = s.Project().AnchorIndex.Keys.Where(k => k.StartsWith("p:")).ToList();
+        var hdrP = s.SetHeaderText(ps[0], HeaderFooterKind.Default, "Running header")
+            .Created.First(a => a.Kind == "p").Id;
+        var r = s.ApplyListFormatRange(ps[1], hdrP, ListFormat.Decimal);
+        Assert.False(r.Success);
+        Assert.Equal(EditErrorCode.AnchorsNotAdjacent, r.Error!.Code);
+    }
+
+    [Fact]
+    public void DS346_ApplyListFormatRange_SingleUndoStep()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var ps = s.Project().AnchorIndex.Keys.Where(k => k.StartsWith("p:")).ToList();
+        var r = s.ApplyListFormatRange(ps[0], ps[1], ListFormat.LowerLetterParenthesis);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal("(a)", s.GetListMembership(r.Modified[0].Id)!.GeneratedLabel);
+
+        Assert.True(s.Undo());
+        Assert.DoesNotContain(s.Project().AnchorIndex.Keys, k => k.StartsWith("li:"));
+    }
+
+    [Fact]
+    public void DS347_ParseListFormat_WireTokens()
+    {
+        Assert.Equal(ListFormat.LowerRoman, Docxodus.Internal.DocxSessionJson.ParseListFormat("lowerRoman"));
+        Assert.Equal(ListFormat.DecimalParenthesis, Docxodus.Internal.DocxSessionJson.ParseListFormat("decimalParenthesis"));
+        Assert.Equal(ListFormat.UpperRomanParenthesis, Docxodus.Internal.DocxSessionJson.ParseListFormat("upperRomanParenthesis"));
+        Assert.Equal(ListFormat.UpperLetter, Docxodus.Internal.DocxSessionJson.ParseListFormat("UPPERLETTER")); // case-insensitive
+        Assert.Equal(ListFormat.None, Docxodus.Internal.DocxSessionJson.ParseListFormat("wingding")); // lenient fallback
+    }
+
+    [Fact]
     public void DS054_SetListLevelIndent()
     {
         using var s = new DocxSession(BuildDS002_BulletedList());

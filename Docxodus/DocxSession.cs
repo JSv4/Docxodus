@@ -264,8 +264,30 @@ public sealed record TableInsertOptions
     public IReadOnlyList<int>? ColumnWidths { get; init; }
 }
 
-/// <summary>List membership for <see cref="DocxSession.ApplyListFormat"/>.</summary>
-public enum ListFormat { None, Bullet, Decimal }
+/// <summary>
+/// List membership for <see cref="DocxSession.ApplyListFormat"/> /
+/// <see cref="DocxSession.ApplyListFormatRange"/>. The non-<see cref="None"/> members decompose
+/// (via <c>Internal.NumberFormats.FromListFormat</c>) into an underlying <see cref="NumberFormat"/>
+/// plus a parenthesized-level-text flag: <see cref="Decimal"/> renders <c>1.</c> while
+/// <see cref="DecimalParenthesis"/> renders <c>(1)</c> — same <c>w:numFmt</c>, different
+/// <c>w:lvlText</c>. The <c>*Parenthesis</c> variants are the legal-drafting presets
+/// (<c>(a)</c>, <c>(i)</c>, <c>(1)</c>).
+/// </summary>
+public enum ListFormat
+{
+    None,
+    Bullet,
+    Decimal,
+    LowerLetter,
+    UpperLetter,
+    LowerRoman,
+    UpperRoman,
+    DecimalParenthesis,
+    LowerLetterParenthesis,
+    UpperLetterParenthesis,
+    LowerRomanParenthesis,
+    UpperRomanParenthesis,
+}
 
 /// <summary>
 /// Per-fragment visible formatting reported by <see cref="DocxSession.Grep"/>.
@@ -6427,8 +6449,7 @@ public sealed class DocxSession : IDisposable
             else
             {
                 if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
-                var fmt = kind == ListFormat.Bullet ? NumberFormat.Bullet : NumberFormat.Decimal;
-                int numId = Internal.NumberingFactory.EnsureNumbering(_doc!, fmt);
+                int numId = Internal.NumberingFactory.EnsureNumbering(_doc!, kind);
                 int ilvl = (int?)pPr.Element(W.numPr)?.Element(W.ilvl)?.Attribute(W.val) ?? 0;
                 pPr.Element(W.numPr)?.Remove();
                 SetPPrChildInOrder(pPr, new XElement(W.numPr,
@@ -6451,6 +6472,110 @@ public sealed class DocxSession : IDisposable
             LastInternalError = ex;
             _ = _history.PopForUndo();
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>
+    /// <see cref="ApplyListFormat"/> across a contiguous sibling run of paragraphs, from
+    /// <paramref name="firstAnchorId"/> to <paramref name="lastAnchorId"/> INCLUSIVE (they may
+    /// be the same anchor, and may be passed in either document order). Every member gets the
+    /// same shared <c>w:num</c> instance, so the numbering sequence stays intact — the per-item
+    /// op cannot guarantee that. One snapshot is recorded, so the whole range is a single
+    /// <see cref="Undo"/> step. Non-paragraph siblings inside the range (a table, an sdt) are
+    /// skipped — they cannot carry <c>w:numPr</c>. Each paragraph keeps its own <c>w:ilvl</c>,
+    /// so a nested run converts in place. <see cref="ListFormat.None"/> strips inline list
+    /// membership from every member.
+    /// </summary>
+    public EditResult ApplyListFormatRange(string firstAnchorId, string lastAnchorId, ListFormat kind)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var firstTarget = FindAnchor(firstAnchorId);
+        if (firstTarget is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"first anchor not found: {firstAnchorId}", firstAnchorId);
+        var lastTarget = FindAnchor(lastAnchorId);
+        if (lastTarget is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"last anchor not found: {lastAnchorId}", lastAnchorId);
+        if (firstTarget.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"ApplyListFormatRange requires paragraph anchors; first kind={firstTarget.Anchor.Kind}", firstAnchorId);
+        if (lastTarget.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"ApplyListFormatRange requires paragraph anchors; last kind={lastTarget.Anchor.Kind}", lastAnchorId);
+        if (firstTarget.Anchor.Scope != lastTarget.Anchor.Scope)
+            return EditResult.Fail(EditErrorCode.AnchorsNotAdjacent,
+                $"ApplyListFormatRange anchors must live in the same package part; first={firstTarget.Anchor.Scope} last={lastTarget.Anchor.Scope}",
+                firstAnchorId);
+
+        var firstElement = firstTarget.Resolve(_doc!);
+        var lastElement = lastTarget.Resolve(_doc!);
+        if (firstElement is null || lastElement is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", firstAnchorId);
+        if (firstElement.Parent != lastElement.Parent)
+            return EditResult.Fail(EditErrorCode.AnchorsNotAdjacent,
+                "ApplyListFormatRange anchors must share a direct parent (no spanning into nested containers)",
+                firstAnchorId);
+
+        // Normalize order: same parent is established, so if `last` is not a following sibling
+        // of `first`, the caller passed them reversed — swap rather than erroring.
+        if (firstElement != lastElement && !firstElement.ElementsAfterSelf().Contains(lastElement))
+            (firstElement, lastElement) = (lastElement, firstElement);
+
+        // The w:p members of the run, first..last inclusive, with their unids captured pre-op
+        // so the post-op anchors (kind may flip p↔li) can be reported in Modified.
+        var members = new List<XElement>();
+        for (var cursor = firstElement; cursor is not null; cursor = cursor.ElementsAfterSelf().FirstOrDefault())
+        {
+            if (cursor.Name == W.p) members.Add(cursor);
+            if (cursor == lastElement) break;
+        }
+        var memberUnids = members.Select(m => (string?)m.Attribute(PtOpenXml.Unid)).ToList();
+        var partUri = firstTarget.PartUri;
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            if (kind == ListFormat.None)
+            {
+                foreach (var member in members)
+                    member.Element(W.pPr)?.Element(W.numPr)?.Remove();
+            }
+            else
+            {
+                // One find-or-create up front — every member points at the SAME numId.
+                int numId = Internal.NumberingFactory.EnsureNumbering(_doc!, kind);
+                foreach (var member in members)
+                {
+                    var pPr = member.Element(W.pPr);
+                    if (pPr is null) { pPr = new XElement(W.pPr); member.AddFirst(pPr); }
+                    int ilvl = (int?)pPr.Element(W.numPr)?.Element(W.ilvl)?.Attribute(W.val) ?? 0;
+                    pPr.Element(W.numPr)?.Remove();
+                    SetPPrChildInOrder(pPr, new XElement(W.numPr,
+                        new XElement(W.ilvl, new XAttribute(W.val, ilvl)),
+                        new XElement(W.numId, new XAttribute(W.val, numId))));
+                }
+            }
+
+            InvalidateProjectionCache();
+            _ = AnchorIndex();
+            var modified = new List<Anchor>();
+            foreach (var unid in memberUnids)
+            {
+                if (unid is not null && AnchorForUnid(unid, partUri) is { } updated)
+                    modified.Add(updated);
+            }
+            return new EditResult
+            {
+                Success = true,
+                Modified = modified,
+                Patch = PatchFor(firstTarget),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            var preOp = _history.PopForUndo();
+            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, firstAnchorId);
         }
     }
 
