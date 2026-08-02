@@ -474,6 +474,21 @@ export class DocxSession {
     ) as EditResult;
   }
 
+  /** Restart the anchored list item's numbering at `value` — Word's *Set Numbering Value…*.
+   * Writes a `w:startOverride` on a dedicated `w:num` instance and repoints the anchored item
+   * plus every following member of its sequence, so a mid-list restart splits the sequence
+   * exactly like Word (earlier items keep their numbers, the tail continues from `value`). */
+  setListStartOverride(anchorId: string, value: number): EditResult {
+    return JSON.parse(this.wasm.SetListStartOverride(this.handle, anchorId, value)) as EditResult;
+  }
+
+  /** Remove the numbering restart from the anchored item's whole sequence (the inverse of
+   * {@link setListStartOverride}); the sequence reverts to the definition's own start. A
+   * sequence with no override at the item's level is a successful no-op. */
+  clearListStartOverride(anchorId: string): EditResult {
+    return JSON.parse(this.wasm.ClearListStartOverride(this.handle, anchorId)) as EditResult;
+  }
+
   // ─── Tier D: cell content ────────────────────────────────────────────
 
   replaceCellContent(cellAnchorId: string, markdown: string): EditResult {

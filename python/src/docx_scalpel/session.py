@@ -1269,6 +1269,29 @@ class DocxSession:
             )
         )
 
+    def set_list_start_override(self, anchor_id: str, value: int) -> EditResult:
+        """Restart the anchored list item's numbering at ``value`` — Word's *Set Numbering
+        Value…* (issue #314). Writes a ``w:lvlOverride/w:startOverride`` on a dedicated
+        ``w:num`` instance and repoints the anchored item plus every following member of its
+        sequence, so a mid-list restart splits the sequence exactly like Word (earlier items
+        keep their numbers, the tail continues from ``value``). A negative ``value`` fails
+        with ``EditErrorCode.INVALID_LIST_START_VALUE``."""
+        return EditResult._from_wire(
+            self._call(
+                "set_list_start_override",
+                {"anchorId": anchor_id, "value": value},
+            )
+        )
+
+    def clear_list_start_override(self, anchor_id: str) -> EditResult:
+        """Remove the numbering restart from the anchored item's whole sequence (the inverse
+        of :meth:`set_list_start_override`); the sequence reverts to the numbering
+        definition's own start. A sequence with no override at the item's level is a
+        successful no-op that consumes no undo history."""
+        return EditResult._from_wire(
+            self._call("clear_list_start_override", {"anchorId": anchor_id})
+        )
+
     # -- Tier D: tables ---------------------------------------------------
 
     def replace_cell_content(self, cell_anchor_id: str, markdown: str) -> EditResult:

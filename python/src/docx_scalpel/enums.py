@@ -130,6 +130,7 @@ class EditErrorCode(str, Enum):
     INVALID_POSITION = "invalid_position"
     UNKNOWN_STYLE = "unknown_style"
     INVALID_LIST_LEVEL = "invalid_list_level"
+    INVALID_LIST_START_VALUE = "invalid_list_start_value"
     INVALID_PAGE_NUMBERING = "invalid_page_numbering"
     INVALID_PARAGRAPH_FORMAT = "invalid_paragraph_format"
     MALFORMED_XML = "malformed_xml"

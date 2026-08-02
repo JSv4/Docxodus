@@ -102,6 +102,8 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `RemoveListMembership(p)` | — | — | `p` (kind flips `li`→`p`) | enclosing list |
 | `ApplyListFormat(p, fmt)` | — | — | `p` (kind may flip `p`↔`li`) | `p` |
 | `ApplyListFormatRange(first, last, fmt)` | — | — | every `w:p` member of the run (kinds may flip `p`↔`li`) | `first` |
+| `SetListStartOverride(li, value)` | — | — | the anchored item + every following member of its numbering instance (all repointed to a dedicated `w:num`) | the anchored item |
+| `ClearListStartOverride(li)` | — | — | every member of the item's numbering instance (all repointed together) | the anchored item |
 | `ReplaceCellContent(tc, md)` | — | descendant inline anchors (rare) | `tc` | `tc` |
 | `SetHeaderText(p, kind, md)` / `SetFooterText(...)` | the new header/footer paragraph anchors (scope `hdr{N}`/`ftr{N}`) | — (reused-part old paragraphs cease to exist; not separately reported in v1) | — | whole document |
 | `InsertPageNumberField(p, field?)` | — | — | `p` (the paragraph the field is appended to) | `p` |
@@ -178,6 +180,19 @@ What am I editing?
 │         # its own w:ilvl; the whole range is ONE undo step. Non-paragraph siblings inside
 │         # the range are skipped. Anchors in different parts or different direct parents →
 │         # AnchorsNotAdjacent.
+│
+├── Restarting (or seeding) a list's numbering — Word's "Set Numbering Value…"?
+│       → SetListStartOverride(itemAnchor, value)   # "start this list at 5"
+│         # Writes w:lvlOverride/w:startOverride on a DEDICATED w:num (the item's current
+│         # instance is cloned, never mutated — it may be shared, and the numbering part is
+│         # not snapshotted) and repoints the anchored item + every FOLLOWING member of its
+│         # instance. Anchoring mid-list therefore splits the sequence exactly like Word:
+│         # earlier items keep their numbers, the tail continues from `value`. Negative
+│         # value → InvalidListStartValue. Requires a list-item ("li") anchor.
+│       → ClearListStartOverride(itemAnchor)        # back to "continue from the definition"
+│         # Repoints EVERY member of the instance (they move together, so relative
+│         # continuation is preserved) at a clone WITHOUT the override; a sequence with no
+│         # override at the item's level is a successful, undo-free no-op.
 │
 ├── Replacing the contents of a table cell?
 │       → ReplaceCellContent(tcAnchor, markdown)
@@ -1272,7 +1287,7 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | Fix the markdown payload (the message names what's wrong) | `MalformedMarkdown`, `UnsupportedMarkdownSyntax`, `AnchorTokenInPayload` |
 | Call the v1 op the message names, or fall back to `Raw.InsertXml` | `TableInsertNotSupported`, `FootnoteRefNotSupported`, `CommentMarkerNotSupported`, `ImageInsertNotSupported` |
 | Re-query (no `ListStyles()` API in v1; the agent guesses from the projection) | `UnknownStyle`, `InvalidListLevel` |
-| Fix the op's field values (the message names the constraint OOXML can't express) | `InvalidPageNumbering`, `InvalidParagraphFormat` |
+| Fix the op's field values (the message names the constraint OOXML can't express) | `InvalidPageNumbering`, `InvalidParagraphFormat`, `InvalidListStartValue` |
 | Use `Raw.GetXml(anchor)` as a template, mutate, resubmit | `MalformedXml`, `DisallowedNamespace`, `IncompatibleElementType`, `ValidationFailed` |
 | Stop, reopen, or accept "no more history" | `SessionDisposed`, `NothingToUndo`, `NothingToRedo` |
 | Should not happen; treat as a bug. Op is rolled back, safe to retry once or report. Full exception is on `session.LastInternalError` | `InternalError` |

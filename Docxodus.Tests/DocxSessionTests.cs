@@ -1869,6 +1869,154 @@ public class DocxSessionTests
         Assert.Equal(ListFormat.None, Docxodus.Internal.DocxSessionJson.ParseListFormat("wingding")); // lenient fallback
     }
 
+    // ─── SetListStartOverride / ClearListStartOverride (issue #314) ─────────
+
+    /// <summary>Build a session over a 3-item decimal list (labels 1./2./3.) and return the
+    /// three li anchor ids in document order.</summary>
+    private static (DocxSession Session, List<string> Items) BuildThreeItemDecimalList()
+    {
+        var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var ps = s.Project().AnchorIndex.Keys.Where(k => k.StartsWith("p:")).ToList();
+        var third = s.InsertParagraph(ps[1], Position.After, "Third paragraph.").Created[0].Id;
+        var r = s.ApplyListFormatRange(ps[0], third, ListFormat.Decimal);
+        Assert.True(r.Success, r.Error?.Message);
+        return (s, r.Modified.Select(a => a.Id).ToList());
+    }
+
+    [Fact]
+    public void DS350_SetListStartOverride_FirstItem_RestartsVisibleNumbers()
+    {
+        // Word's "Set Numbering Value… → Set value to 5" on the first item: the whole
+        // sequence renders 5./6./7. — checked through the same ListItemRetriever numbering
+        // engine the HTML converter uses, so the VISIBLE numbers restart, not just the XML.
+        var (s, lis) = BuildThreeItemDecimalList();
+        using var _ = s;
+        var r = s.SetListStartOverride(lis[0], 5);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal(3, r.Modified.Count); // the whole sequence repointed
+
+        var memberships = lis.Select(a => s.GetListMembership(a)!).ToList();
+        Assert.Equal(new[] { "5.", "6.", "7." },
+            memberships.Select(m => m.GeneratedLabel).ToArray());
+        Assert.Equal(5, memberships[0].StartOverride);
+        Assert.Single(memberships.Select(m => m.NumId).Distinct()); // still ONE sequence
+    }
+
+    [Fact]
+    public void DS351_SetListStartOverride_MidList_SplitsLikeWord()
+    {
+        // Restarting item 2 at 10 splits the sequence the way Word does: item 1 keeps its
+        // number on the old w:num, items 2-3 move to a dedicated w:num carrying the override.
+        var (s, lis) = BuildThreeItemDecimalList();
+        using var _ = s;
+        var r = s.SetListStartOverride(lis[1], 10);
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Equal(2, r.Modified.Count); // anchored item + the tail, not the head
+
+        var memberships = lis.Select(a => s.GetListMembership(a)!).ToList();
+        Assert.Equal(new[] { "1.", "10.", "11." },
+            memberships.Select(m => m.GeneratedLabel).ToArray());
+        Assert.NotEqual(memberships[0].NumId, memberships[1].NumId); // dedicated instance
+        Assert.Equal(memberships[1].NumId, memberships[2].NumId);    // tail continues from it
+        Assert.Null(memberships[0].StartOverride);
+        Assert.Equal(10, memberships[1].StartOverride);
+    }
+
+    [Fact]
+    public void DS352_ClearListStartOverride_RestoresSequence()
+    {
+        var (s, lis) = BuildThreeItemDecimalList();
+        using var _ = s;
+        Assert.True(s.SetListStartOverride(lis[0], 5).Success);
+
+        var r = s.ClearListStartOverride(lis[1]); // any member addresses the sequence
+        Assert.True(r.Success, r.Error?.Message);
+        var memberships = lis.Select(a => s.GetListMembership(a)!).ToList();
+        Assert.Equal(new[] { "1.", "2.", "3." },
+            memberships.Select(m => m.GeneratedLabel).ToArray());
+        Assert.All(memberships, m => Assert.Null(m.StartOverride));
+    }
+
+    [Fact]
+    public void DS353_SetListStartOverride_InvalidTargets()
+    {
+        // w:startOverride/@w:val is a non-negative decimal; and only a list item can restart.
+        var (s, lis) = BuildThreeItemDecimalList();
+        using var _ = s;
+        var neg = s.SetListStartOverride(lis[0], -1);
+        Assert.False(neg.Success);
+        Assert.Equal(EditErrorCode.InvalidListStartValue, neg.Error!.Code);
+
+        var plain = s.InsertParagraph(lis[2], Position.After, "Not a list item.").Created[0].Id;
+        var wrongKind = s.SetListStartOverride(plain, 5);
+        Assert.False(wrongKind.Success);
+        Assert.Equal(EditErrorCode.AnchorWrongKind, wrongKind.Error!.Code);
+    }
+
+    [Fact]
+    public void DS354_SetListStartOverride_UndoRedo()
+    {
+        var (s, lis) = BuildThreeItemDecimalList();
+        using var _ = s;
+        Assert.True(s.SetListStartOverride(lis[0], 5).Success);
+        Assert.Equal("5.", s.GetListMembership(lis[0])!.GeneratedLabel);
+
+        // Undo restores the paragraphs' w:numPr (the cloned w:num strands unreferenced —
+        // the numbering part is additive-only, by design). GeneratedLabel is an enrichment
+        // product, so force a full Project() after undo/redo — FindAnchor otherwise serves
+        // the cheap index-only entries, whose AutoNumberPrefix is always null.
+        Assert.True(s.Undo());
+        s.Project();
+        Assert.Equal(new[] { "1.", "2.", "3." },
+            lis.Select(a => s.GetListMembership(a)!.GeneratedLabel).ToArray());
+
+        Assert.True(s.Redo());
+        s.Project();
+        Assert.Equal(new[] { "5.", "6.", "7." },
+            lis.Select(a => s.GetListMembership(a)!.GeneratedLabel).ToArray());
+    }
+
+    [Fact]
+    public void DS355_SetListStartOverride_RoundTrips()
+    {
+        // The override survives save + reopen, and the saved numbering.xml carries the
+        // native w:lvlOverride/w:startOverride markup Word's dialog writes.
+        var (s, lis) = BuildThreeItemDecimalList();
+        byte[] saved;
+        using (s)
+        {
+            Assert.True(s.SetListStartOverride(lis[0], 5).Success);
+            saved = s.Save();
+        }
+
+        using var s2 = new DocxSession(saved);
+        var labels = s2.Project().AnchorIndex.Keys.Where(k => k.StartsWith("li:"))
+            .Select(a => s2.GetListMembership(a)!.GeneratedLabel).ToArray();
+        Assert.Equal(new[] { "5.", "6.", "7." }, labels);
+
+        using var ms = new MemoryStream(saved);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        var numbering = System.Xml.Linq.XDocument.Load(
+            doc.MainDocumentPart!.NumberingDefinitionsPart!.GetStream()).Root!;
+        Assert.Contains(numbering.Descendants(w + "startOverride"),
+            e => (string?)e.Attribute(w + "val") == "5");
+    }
+
+    [Fact]
+    public void DS356_ClearListStartOverride_NoOverride_IsUndoFreeNoOp()
+    {
+        // Clearing a sequence that has no restart succeeds without consuming undo history:
+        // the next Undo must roll back the list conversion itself, not a phantom clear.
+        var (s, lis) = BuildThreeItemDecimalList();
+        using var _ = s;
+        var r = s.ClearListStartOverride(lis[0]);
+        Assert.True(r.Success, r.Error?.Message);
+
+        Assert.True(s.Undo());
+        Assert.DoesNotContain(s.Project().AnchorIndex.Keys, k => k.StartsWith("li:"));
+    }
+
     [Fact]
     public void DS054_SetListLevelIndent()
     {

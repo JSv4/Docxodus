@@ -368,6 +368,22 @@ public static partial class DocxSessionBridge
     public static string ApplyListFormatRange(int h, string firstAnchor, string lastAnchor, string kind) =>
         DocxSessionOps.ApplyListFormatRange(h, firstAnchor, lastAnchor, DocxSessionJson.ParseListFormat(kind));
 
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.SetListStartOverride"/>. Restarts the anchored list
+    /// item's numbering at <paramref name="value"/> (Word's <em>Set Numbering Value…</em>) by
+    /// writing a <c>w:startOverride</c> on a dedicated <c>w:num</c> and repointing the anchored
+    /// item plus the following members of its sequence.
+    /// </summary>
+    [JSExport]
+    public static string SetListStartOverride(int h, string anchor, int value) =>
+        DocxSessionOps.SetListStartOverride(h, anchor, value);
+
+    /// <summary>Bridge for <see cref="DocxSession.ClearListStartOverride"/> — removes the
+    /// numbering restart from the anchored item's whole sequence.</summary>
+    [JSExport]
+    public static string ClearListStartOverride(int h, string anchor) =>
+        DocxSessionOps.ClearListStartOverride(h, anchor);
+
     [JSExport]
     public static string ReplaceCellContent(int h, string anchor, string md) =>
         DocxSessionOps.ReplaceCellContent(h, anchor, md);

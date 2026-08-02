@@ -119,6 +119,10 @@ internal static class Dispatcher
         "apply_list_format_range" => DocxSessionOps.ApplyListFormatRange(
             Handle(args), Str(args, "firstAnchorId"), Str(args, "lastAnchorId"),
             DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
+        "set_list_start_override" => DocxSessionOps.SetListStartOverride(
+            Handle(args), Str(args, "anchorId"), Int(args, "value")),
+        "clear_list_start_override" => DocxSessionOps.ClearListStartOverride(
+            Handle(args), Str(args, "anchorId")),
 
         "replace_cell_content" => DocxSessionOps.ReplaceCellContent(
             Handle(args), Str(args, "cellAnchorId"), Str(args, "markdown")),
