@@ -291,6 +291,24 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static string ListComments(int h) => DocxSessionOps.ListComments(h);
 
+    /// <summary>Markup-native tracked-revision listing (issue #318), document order:
+    /// <c>[{"id","type","author","date"?,"text","anchorId"?}]</c>. Ids are stable while
+    /// the markup exists and address AcceptRevision/RejectRevision; type is
+    /// <c>insert</c>/<c>delete</c>/<c>move</c>/<c>format</c>.</summary>
+    [JSExport]
+    public static string ListRevisions(int h) => DocxSessionOps.ListRevisions(h);
+
+    /// <summary>Accept ONE revision by id (an undoable session mutation); returns an
+    /// EditResult envelope.</summary>
+    [JSExport]
+    public static string AcceptRevision(int h, string revisionId) =>
+        DocxSessionOps.AcceptRevision(h, revisionId);
+
+    /// <summary>Reject ONE revision by id — the inverse of AcceptRevision.</summary>
+    [JSExport]
+    public static string RejectRevision(int h, string revisionId) =>
+        DocxSessionOps.RejectRevision(h, revisionId);
+
     [JSExport]
     public static string ApplyFormat(int h, string anchor, string spanJson, string opJson) =>
         DocxSessionOps.ApplyFormat(h, anchor, ParseSpan(spanJson), DocxSessionJson.ParseFormatOp(opJson));

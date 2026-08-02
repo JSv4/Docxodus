@@ -92,7 +92,7 @@ markdown projection and search tools return:
 | `docxodus_list` | Promote/demote/renumber list membership |
 | `docxodus_comment` | Native Word review comments (real `w:comment` markup): add on a span, update body, remove, list |
 | `docxodus_annotate` | Anchor-addressed highlight/label annotations (a custom-XML overlay for external tools, distinct from comments) |
-| `docxodus_track_changes` | List tracked changes; accept/reject them all |
+| `docxodus_track_changes` | List tracked changes; accept/reject one by id, or all |
 | `docxodus_mutations` | Apply or dry-run-preview a batch of the above as one call |
 | `docxodus_table` | Create tables; edit rows/columns/cell content |
 
@@ -106,9 +106,11 @@ them):
 - **No comment reply-threading or resolve state.** `docxodus_comment` authors real
   `w:comment` markup, but replies and Word's resolve flag (`commentsExtended.xml`) are not
   yet authorable; existing threading metadata is preserved on update and pruned on remove.
-- **No selective tracked-change resolution.** `docxodus_track_changes` can list revisions
-  filtered by author/type for display, but `accept_all`/`reject_all` apply to the whole
-  document — there is no "accept only this author's inserts" primitive.
+- **Exotic revision families aren't individually resolvable.** `docxodus_track_changes`
+  lists and selectively resolves inserts/deletes/moves/format changes by `revisionId`
+  (issue #318), but `w:cellIns`/`w:cellDel`/`w:cellMerge`, content-control ins/del
+  ranges, and `w:numPr` numbering-ins markers are not enumerated — `accept_all`/
+  `reject_all` still resolve those.
 - **New lists inserted via markdown don't get real numbering** unless promoted afterward
   with `docxodus_list`'s `apply_format` action (which does write real `w:numPr`).
 - **`docxodus_mutations`'s `preview` mode is apply-then-undo**, not a true no-op dry run;

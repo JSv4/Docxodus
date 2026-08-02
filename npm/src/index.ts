@@ -81,7 +81,9 @@ export type {
   NumberFormat,
   PageNumberField,
   PageNumberingOp,
+  RevisionListEntry,
   SectionInfo,
+  SessionRevisionType,
 } from "./types.js";
 export type { FillOptions, BulkEditResult } from "./types.js";
 export { PlaceholderKinds, ContextBoundary } from "./types.js";

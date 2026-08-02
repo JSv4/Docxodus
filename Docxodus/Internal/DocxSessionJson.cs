@@ -702,6 +702,29 @@ internal static class DocxSessionJson
         return sb.ToString();
     }
 
+    /// <summary>Serialize <see cref="DocxSession.ListRevisions"/> output:
+    /// <c>[{"id","type","author","date"?,"text","anchorId"?}]</c> (date/anchorId
+    /// omitted when null).</summary>
+    public static string SerializeRevisionList(IReadOnlyList<RevisionListEntry> revisions)
+    {
+        var sb = new StringBuilder(64 + revisions.Count * 128);
+        sb.Append('[');
+        for (int i = 0; i < revisions.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var r = revisions[i];
+            sb.Append("{\"id\":").Append(JsonString(r.Id))
+              .Append(",\"type\":").Append(JsonString(r.Type))
+              .Append(",\"author\":").Append(JsonString(r.Author));
+            if (r.Date is not null) sb.Append(",\"date\":").Append(JsonString(r.Date));
+            sb.Append(",\"text\":").Append(JsonString(r.Text));
+            if (r.AnchorId is not null) sb.Append(",\"anchorId\":").Append(JsonString(r.AnchorId));
+            sb.Append('}');
+        }
+        sb.Append(']');
+        return sb.ToString();
+    }
+
     /// <summary>
     /// Parse an ISO-8601 comment date from the wire; null/empty → null (the deterministic
     /// no-date default). An unparseable string throws <see cref="System.FormatException"/> at
