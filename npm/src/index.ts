@@ -76,11 +76,14 @@ export type {
   EditResult,
   FindOptions,
   FormatOp,
+  LineSpacingRule,
   ListMembership,
   MarkdownPatch,
   NumberFormat,
   PageNumberField,
   PageNumberingOp,
+  ParagraphBorderEdge,
+  ParagraphFormatOp,
   SectionInfo,
 } from "./types.js";
 export type { FillOptions, BulkEditResult } from "./types.js";

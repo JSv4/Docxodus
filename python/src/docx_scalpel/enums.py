@@ -72,6 +72,19 @@ class ParagraphAlignment(str, Enum):
     JUSTIFY = "justify"
 
 
+class LineSpacingRule(str, Enum):
+    """How ``ParagraphFormatOp.line_spacing`` is interpreted (``w:spacing/@w:lineRule``).
+
+    Under ``AUTO`` the value is in 240ths of a line (240 = single, 360 = 1.5x,
+    480 = double); under ``EXACT``/``AT_LEAST`` it is a height in twips
+    (20 twips = 1pt — e.g. 480 = exactly 24pt).
+    """
+
+    AUTO = "auto"
+    EXACT = "exact"
+    AT_LEAST = "atLeast"
+
+
 class EditErrorCode(str, Enum):
     """All ``EditResult.error.code`` values the .NET surface can emit.
 
@@ -94,6 +107,7 @@ class EditErrorCode(str, Enum):
     UNKNOWN_STYLE = "unknown_style"
     INVALID_LIST_LEVEL = "invalid_list_level"
     INVALID_PAGE_NUMBERING = "invalid_page_numbering"
+    INVALID_PARAGRAPH_FORMAT = "invalid_paragraph_format"
     MALFORMED_XML = "malformed_xml"
     DISALLOWED_NAMESPACE = "disallowed_namespace"
     INCOMPATIBLE_ELEMENT_TYPE = "incompatible_element_type"

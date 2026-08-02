@@ -1174,10 +1174,16 @@ class DocxSession:
         self, anchor_id: str, op: ParagraphFormatOp
     ) -> EditResult:
         """Apply paragraph-level formatting to the paragraph at ``anchor_id``: alignment
-        (``w:jc``), left-indent delta in twips (``w:ind/@w:left``, clamped at 0), page-break-
-        before (``w:pageBreakBefore``), and top/bottom paragraph borders (``w:pBdr``).
+        (``w:jc``), left-indent delta in twips (``w:ind/@w:left``, clamped at 0), first-line/
+        hanging indent (``w:ind/@w:firstLine``/``@w:hanging`` — one either/or slot; setting one
+        removes the other), before/after spacing (``w:spacing/@w:before``/``@w:after``), line
+        spacing (``w:spacing/@w:line`` + ``@w:lineRule``), page-break-before
+        (``w:pageBreakBefore``), and top/bottom paragraph borders (``w:pBdr``).
 
-        Every field on ``op`` is tri-state: ``None`` leaves that property unchanged. Setting
+        Every field on ``op`` is tri-state: ``None`` leaves that property unchanged. All
+        indent/spacing values are absolute twips (1440 = 1 inch; 20 = 1pt) except
+        ``line_spacing`` under the default ``AUTO`` rule, which is in 240ths of a line
+        (240 = single, 360 = 1.5x, 480 = double). Setting
         ``op.top_border``/``op.bottom_border`` adds or replaces that border edge;
         ``op.clear_borders=True`` removes the whole ``w:pBdr`` before either is applied in the
         same call. An (often empty) paragraph with only a bottom border is what an S-1-style

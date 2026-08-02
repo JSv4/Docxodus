@@ -311,7 +311,10 @@ public static partial class DocxSessionBridge
     /// <summary>
     /// Bridge for <see cref="DocxSession.SetParagraphFormat"/>. <paramref name="opJson"/> is
     /// { alignment?: "left"|"center"|"right"|"justify", indentDelta?: int (twips),
-    /// pageBreakBefore?: bool }; omitted fields are left unchanged.
+    /// firstLineIndent?/hangingIndent?: int (twips, mutually exclusive),
+    /// spacingBefore?/spacingAfter?: int (twips), lineSpacing?: int,
+    /// lineSpacingRule?: "auto"|"exact"|"atLeast", pageBreakBefore?: bool };
+    /// omitted fields are left unchanged.
     /// </summary>
     [JSExport]
     public static string SetParagraphFormat(int h, string anchor, string opJson) =>
