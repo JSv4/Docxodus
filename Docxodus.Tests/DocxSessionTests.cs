@@ -2079,6 +2079,84 @@ public class DocxSessionTests
         Assert.Contains(r.Modified, a => a.Kind == "p");
     }
 
+    [Fact]
+    public void DS055b_RemoveListMembership_OverridesStyleInheritedNumbering()
+    {
+        using var s = new DocxSession(BuildStyleListSingleLevel());
+        var firstLi = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("li:"));
+
+        var r = s.RemoveListMembership(firstLi);
+
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains(r.Modified, a => a.Kind == "p");
+        using var ms = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        var firstP = doc.MainDocumentPart!.GetXDocument().Root!.Descendants(w + "p").First();
+        Assert.Equal("0", (string?)firstP.Element(w + "pPr")?.Element(w + "numPr")?
+            .Element(w + "numId")?.Attribute(w + "val"));
+    }
+
+    [Fact]
+    public void DS055c_RemoveListMembership_AcceptsNumberedHeadingAnchor()
+    {
+        using var s = new DocxSession(BuildNumberedHeadingDoc("Numbered heading"));
+        var heading = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("h:"));
+
+        var r = s.RemoveListMembership(heading);
+
+        Assert.True(r.Success, r.Error?.Message);
+        Assert.Contains(r.Modified, a => a.Kind == "h");
+        using var ms = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        var firstP = doc.MainDocumentPart!.GetXDocument().Root!.Descendants(w + "p").First();
+        Assert.Null(firstP.Element(w + "pPr")?.Element(w + "numPr"));
+    }
+
+    [Fact]
+    public void DS055d_RemoveListMembership_DirectNumberingStillOverridesNumberedStyle()
+    {
+        var source = BuildStyleListSingleLevel();
+        using var editable = new MemoryStream();
+        editable.Write(source);
+        editable.Position = 0;
+        using (var doc = WordprocessingDocument.Open(editable, true))
+        {
+            var first = doc.MainDocumentPart!.Document.Body!.Elements<Paragraph>().First();
+            first.ParagraphProperties!.NumberingProperties = new NumberingProperties(
+                new NumberingLevelReference { Val = 0 },
+                new NumberingId { Val = 1 });
+        }
+
+        using var s = new DocxSession(editable.ToArray());
+        var firstLi = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("li:"));
+        var result = s.RemoveListMembership(firstLi);
+
+        Assert.True(result.Success, result.Error?.Message);
+        using var saved = new MemoryStream(s.Save());
+        using var verify = WordprocessingDocument.Open(saved, false);
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        var firstP = verify.MainDocumentPart!.GetXDocument().Root!.Descendants(w + "p").First();
+        Assert.Equal("0", (string?)firstP.Element(w + "pPr")?.Element(w + "numPr")?
+            .Element(w + "numId")?.Attribute(w + "val"));
+    }
+
+    [Fact]
+    public void DS056_MarkdownHeading_ExplicitlySuppressesStyleNumbering()
+    {
+        var parsed = Docxodus.Internal.MarkdownPayloadParser.Parse("## Unnumbered heading");
+        Assert.True(parsed.Success, parsed.Error?.Message);
+
+        var paragraph = DocxSession.BuildParagraphFromParsedBlock(Assert.Single(parsed.Blocks));
+
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        var numPr = paragraph.Element(w + "pPr")?.Element(w + "numPr");
+        Assert.NotNull(numPr);
+        Assert.Equal("0", (string?)numPr!.Element(w + "numId")?.Attribute(w + "val"));
+        Assert.Equal("0", (string?)numPr.Element(w + "ilvl")?.Attribute(w + "val"));
+    }
+
     // ─── Phase 6: cell content + tracked-change mode ─────────────────────
 
     [Fact]

@@ -575,8 +575,12 @@ public static class WmlToMarkdownConverter
 
     internal static bool IsListItem(XElement p)
     {
-        // Inline w:numPr wins.
-        if (p.Element(W.pPr)?.Element(W.numPr) != null) return true;
+        // Inline w:numPr wins. numId=0 is Word's explicit "remove numbering" sentinel;
+        // a numPr containing only ilvl still falls through to the style chain.
+        var directNumPr = p.Element(W.pPr)?.Element(W.numPr);
+        var directNumId = (int?)directNumPr?.Element(W.numId)?.Attribute(W.val);
+        if (directNumId is not null) return directNumId != 0;
+        if (directNumPr is not null && directNumPr.Element(W.ilvl) is null) return true;
         // Otherwise the paragraph is a list item if its pStyle chain contributes numPr.
         // Resolved via the styles part reachable from the in-memory OpenXmlPart annotation
         // that BuildAnchorIndex stashes on each scope root.

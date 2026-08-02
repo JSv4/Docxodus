@@ -812,6 +812,28 @@ public class DocxSessionCommentAuthoringTests
     }
 
     [Fact]
+    public void DS401b_SetCommentResolved_PropagatesThroughReplySubtree()
+    {
+        using var session = new DocxSession(BuildSingleParagraphDoc("Resolve this thread"));
+        var host = FirstBodyParagraph(session);
+        var made = session.AddComment(host, null, "Alice", "Root comment.");
+        Assert.True(made.Success, made.Error?.Message);
+        var rootAnchor = made.Created.First(a => a.Kind == "cmt").Id;
+        var reply = session.AddCommentReply(rootAnchor, "Bob", "Reply comment.");
+        Assert.True(reply.Success, reply.Error?.Message);
+
+        var resolved = session.SetCommentResolved(rootAnchor, true);
+
+        Assert.True(resolved.Success, resolved.Error?.Message);
+        Assert.Equal(2, resolved.Modified.Count);
+        Assert.All(session.ListComments(), comment => Assert.True(comment.Resolved));
+
+        var reopened = session.SetCommentResolved(rootAnchor, false);
+        Assert.True(reopened.Success, reopened.Error?.Message);
+        Assert.All(session.ListComments(), comment => Assert.False(comment.Resolved));
+    }
+
+    [Fact]
     public void DS402_ExistingThread_ListsParentAndResolveState_WithoutLosingParentage()
     {
         using var session = new DocxSession(BuildDocWithReferenceOnlyReply());

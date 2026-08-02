@@ -215,7 +215,7 @@ internal static class ToolCatalog
               "properties": {
                 "sessionId": { "type": "string" },
                 "action": { "type": "string", "enum": ["apply_format", "apply_format_range", "set_level", "set_start", "clear_start", "remove", "get_membership"] },
-                "anchorId": { "type": "string", "description": "Target paragraph for every action except apply_format_range." },
+                "anchorId": { "type": "string", "description": "Target paragraph for every action except apply_format_range. remove accepts paragraph, heading, or list-item anchors and overrides style-inherited numbering when necessary." },
                 "startValue": { "type": "integer", "description": "set_start: the number the item restarts at (>= 0), e.g. 5 to make this item render as '5.'" },
                 "firstAnchorId": { "type": "string", "description": "apply_format_range: first paragraph of the contiguous sibling run (inclusive)." },
                 "lastAnchorId": { "type": "string", "description": "apply_format_range: last paragraph of the run (inclusive; either document order)." },
@@ -321,13 +321,13 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_table",
-            "Create tables, edit their rows/columns/cell content, and style them after insert (column widths, borders, shading, repeat-header row).",
+            "Create tables, edit their rows/columns/cell content, and style them after insert (column widths, borders, shading, and row layout).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "set_column_widths", "set_borders", "set_shading", "set_repeat_header_row"] },
+                "action": { "type": "string", "enum": ["insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "set_column_widths", "set_borders", "set_shading", "set_repeat_header_row", "set_row_options"] },
                 "anchorId": { "type": "string", "description": "insert: reference block (paired with position)." },
                 "position": { "type": "string", "enum": ["before", "after"], "description": "insert: relative to anchorId. insert_row/insert_column: relative to cellAnchorId." },
                 "rows": { "type": "integer" }, "columns": { "type": "integer" },
@@ -344,7 +344,10 @@ internal static class ToolCatalog
                 "borderColor": { "type": "string", "description": "set_borders: hex RRGGBB (no '#') or auto (default)." },
                 "fill": { "type": "string", "description": "set_shading: hex RRGGBB (leading '#' tolerated) or auto; omit/empty to remove the shading." },
                 "shadingScope": { "type": "string", "enum": ["cell", "row"], "description": "set_shading: just the anchor's cell (default) or every cell of its row — header-row banding." },
-                "repeat": { "type": "boolean", "description": "set_repeat_header_row: true (default) marks the anchor's row as a repeating header row (w:tblHeader; Word honors it on a run of rows starting at row 1), false unmarks." }
+                "repeat": { "type": "boolean", "description": "set_repeat_header_row/set_row_options: true marks the anchor's row as a repeating header row (w:tblHeader; Word honors it on a run of rows starting at row 1), false unmarks." },
+                "allowBreakAcrossPages": { "type": "boolean", "description": "set_row_options: true permits a row to split across pages; false writes w:cantSplit." },
+                "heightTwips": { "type": "integer", "minimum": 0, "description": "set_row_options: explicit row height in twips (20 twips = 1pt); zero removes an existing height." },
+                "heightRule": { "type": "string", "enum": ["auto", "atLeast", "exact"], "description": "set_row_options: how Word interprets a positive heightTwips value (default atLeast)." }
               },
               "required": ["sessionId", "action"]
             }

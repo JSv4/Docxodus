@@ -319,6 +319,15 @@ internal static class DocxSessionJson
         string.Equals(scope, "row", System.StringComparison.OrdinalIgnoreCase)
             ? TableShadingScope.Row : TableShadingScope.Cell;
 
+    /// <summary>Parse the OOXML row-height rule token used by the bridge.</summary>
+    public static TableRowHeightRule ParseTableRowHeightRule(string? rule) =>
+        rule?.ToLowerInvariant() switch
+        {
+            "auto" => TableRowHeightRule.Auto,
+            "exact" => TableRowHeightRule.Exact,
+            _ => TableRowHeightRule.AtLeast,
+        };
+
     /// <summary>
     /// Parse a list-format kind token (case-insensitive camelCase of the <see cref="ListFormat"/>
     /// member: "bullet", "decimal", "lowerLetter", "upperRoman", "decimalParenthesis", …; "none"
