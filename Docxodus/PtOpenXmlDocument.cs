@@ -691,30 +691,37 @@ namespace Docxodus
 
         public DocxodusDocument GetModifiedDocument()
         {
-            ((IDisposable)DocPackage)?.Dispose();
-            DocPackage = null;
+            FinalizePackage();
             return new DocxodusDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
         }
 
         public WmlDocument GetModifiedWmlDocument()
         {
-            ((IDisposable)DocPackage)?.Dispose();
-            DocPackage = null;
+            FinalizePackage();
             return new WmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
         }
 
         public SmlDocument GetModifiedSmlDocument()
         {
-            ((IDisposable)DocPackage)?.Dispose();
-            DocPackage = null;
+            FinalizePackage();
             return new SmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
         }
 
         public PmlDocument GetModifiedPmlDocument()
         {
+            FinalizePackage();
+            return new PmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
+        }
+
+        // Disposes the live package and normalizes the raw zip's Unix permission bits (issue #302)
+        // before any GetModified*Document() copies DocMemoryStream's bytes into the returned
+        // wrapper. Safe to mutate DocMemoryStream in place here: DocPackage is already gone, so
+        // nothing else in this object still depends on the stream's physical zip layout.
+        private void FinalizePackage()
+        {
             ((IDisposable)DocPackage)?.Dispose();
             DocPackage = null;
-            return new PmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
+            ZipUnixPermissionFixer.FixInPlace(DocMemoryStream);
         }
 
         public void Close()
