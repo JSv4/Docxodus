@@ -65,6 +65,7 @@ internal static class Dispatcher
             TrackedChanges = tracked,
             RevisionAuthor = OptStr(args, "revisionAuthor"),
             UndoDepth = IntOpt(args, "undoDepth", 50),
+            PersistAnchorIds = BoolOpt(args, "persistAnchorIds", false),
         };
 
         var session = store.Open(bytes, location, settings);
@@ -81,7 +82,12 @@ internal static class Dispatcher
             : session.Location
               ?? throw new McpToolException("session was not opened from a location; pass \"path\" explicitly");
 
-        var bytes = DocxSessionOps.Save(session.Handle);
+        // Tri-state: absent → the session's open-time PersistAnchorIds; explicit true/false
+        // overrides it for this save only (true = anchor-stable checkpoint, false = clean
+        // deliverable from a session that was opened anchor-stable).
+        var bytes = OptBool(args, "persistAnchorIds") is { } persist
+            ? DocxSessionOps.Save(session.Handle, persist)
+            : DocxSessionOps.Save(session.Handle);
         store.Documents.Write(destination, bytes);
         return $"{{\"path\":{JsonRpcIo.JsonString(destination)},\"bytesWritten\":{bytes.Length}}}";
     }
@@ -626,8 +632,11 @@ internal static class Dispatcher
             ? v.GetInt32() : fallback;
 
     private static bool BoolOpt(JsonElement args, string name, bool fallback) =>
+        OptBool(args, name) ?? fallback;
+
+    private static bool? OptBool(JsonElement args, string name) =>
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)
-            ? v.GetBoolean() : fallback;
+            ? v.GetBoolean() : null;
 
     private static Position ParsePos(JsonElement args) =>
         DocxSessionJson.ParsePos(OptStr(args, "position") ?? "after");
