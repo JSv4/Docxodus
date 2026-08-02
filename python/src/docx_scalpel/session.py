@@ -1131,6 +1131,46 @@ class DocxSession:
             )
         )
 
+    def add_comment_reply(
+        self,
+        parent_comment_anchor_id: str,
+        author: str,
+        markdown: str,
+        initials: str | None = None,
+        date: str | None = None,
+    ) -> EditResult:
+        """Add a native Word reply that shares the parent comment's document anchor.
+
+        The reply is linked through ``w15:paraIdParent``; flat parents are upgraded with
+        find-or-created ``commentsExtended.xml`` and ``commentsIds.xml`` metadata. The new
+        comment definition and paragraph anchors are returned in ``EditResult.created``.
+        """
+        args: dict[str, Any] = {
+            "parentAnchorId": parent_comment_anchor_id,
+            "author": author,
+            "markdown": markdown,
+        }
+        if initials is not None:
+            args["initials"] = initials
+        if date is not None:
+            args["date"] = date
+        return EditResult._from_wire(self._call("add_comment_reply", args))
+
+    def set_comment_resolved(
+        self, comment_anchor_id: str, resolved: bool = True
+    ) -> EditResult:
+        """Resolve a native comment, or reopen it with ``resolved=False``.
+
+        A flat comment is upgraded with Word's paraId-keyed extension metadata. The
+        operation, including first-time part creation, is undoable.
+        """
+        return EditResult._from_wire(
+            self._call(
+                "set_comment_resolved",
+                {"anchorId": comment_anchor_id, "resolved": resolved},
+            )
+        )
+
     def remove_comment(self, comment_anchor_id: str) -> EditResult:
         """Remove a comment: the definition, its body marker triple everywhere in the
         package, and any ``commentsExtended``/``commentsIds`` threading entries keyed

@@ -18,6 +18,12 @@ namespace Docxodus.Internal;
 /// </summary>
 internal static class CommentOps
 {
+    internal static readonly XNamespace W15 =
+        "http://schemas.microsoft.com/office/word/2012/wordml";
+
+    internal static readonly XNamespace W16Cid =
+        "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+
     /// <summary>The paragraph style id a comment body paragraph wears.</summary>
     internal const string CommentTextStyleId = "CommentText";
 
@@ -82,6 +88,65 @@ internal static class CommentOps
         if (main.EndnotesPart is not null) yield return main.EndnotesPart;
     }
 
+    /// <summary>
+    /// True when <paramref name="commentId"/> has at least one live body-side
+    /// <c>w:commentReference</c>. A reply can mirror a point comment (reference only) or a ranged
+    /// comment, but it cannot faithfully attach to an orphaned definition with no reference at all.
+    /// </summary>
+    internal static bool HasCommentReference(MainDocumentPart main, string commentId) =>
+        ReferenceHostParts(main)
+            .Select(p => p.GetXDocument().Root)
+            .Where(r => r is not null)
+            .SelectMany(r => r!.Descendants(W.commentReference))
+            .Any(r => (string?)r.Attribute(W.id) == commentId);
+
+    /// <summary>
+    /// Add the body-side reference for a reply immediately after its parent's reference. Word's
+    /// native threaded shape keeps the range markers on the thread root and gives replies only an
+    /// adjacent <c>w:commentReference</c>; <c>w15:paraIdParent</c> supplies the relationship and
+    /// makes every descendant share that root range. This also makes replying to an existing reply
+    /// work when (as Word writes it) the immediate parent has no range markers of its own.
+    /// </summary>
+    internal static IReadOnlyList<XElement> InsertReplyReference(
+        MainDocumentPart main, string parentId, int replyId)
+    {
+        var roots = ReferenceHostParts(main)
+            .Select(p => p.GetXDocument().Root)
+            .Where(r => r is not null)
+            .Select(r => r!)
+            .ToList();
+
+        // Materialize before inserting: a new reference must not become input to this same pass.
+        var referenceRuns = roots.SelectMany(r => r.Descendants(W.commentReference))
+            .Where(e => (string?)e.Attribute(W.id) == parentId)
+            .Select(e => e.AncestorsAndSelf(W.r).FirstOrDefault())
+            .Where(r => r is not null)
+            .Select(r => r!)
+            .Distinct()
+            .ToList();
+
+        if (referenceRuns.Count == 0)
+            throw new InvalidOperationException($"parent comment id {parentId} has no live commentReference");
+
+        // The document-side paragraphs are the blocks whose content changes. Return them so the
+        // public mutation envelope can report/patch the same scope callers would re-render.
+        var hostParagraphs = referenceRuns
+            .Select(r => r.Ancestors(W.p).FirstOrDefault())
+            .Where(p => p is not null)
+            .Select(p => p!)
+            .Distinct()
+            .ToList();
+
+        foreach (var parentRun in referenceRuns)
+        {
+            var replyRun = BuildReferenceRun(replyId);
+            UnidHelper.AssignToSelfAndDescendants(replyRun);
+            parentRun.AddAfterSelf(replyRun);
+        }
+
+        return hostParagraphs;
+    }
+
     /// <summary>The body-side reference run: <c>w:r[rStyle=CommentReference]/w:commentReference</c>.</summary>
     internal static XElement BuildReferenceRun(int id) =>
         new XElement(W.r,
@@ -127,6 +192,180 @@ internal static class CommentOps
     }
 
     /// <summary>
+    /// Find-or-create Word's two paraId-keyed comment metadata parts and ensure
+    /// <paramref name="comment"/> has entries in both. New ids are deterministic: max existing
+    /// eight-hex value + 1 (with a collision-free first-free fallback only at UInt32 overflow).
+    /// Existing <c>w15:done</c>/<c>w15:paraIdParent</c> values survive unless the caller explicitly
+    /// supplies a replacement. Returns the comment's last-paragraph <c>w14:paraId</c>.
+    /// </summary>
+    internal static string EnsureThreadingMetadata(
+        MainDocumentPart main, XElement comment, string? parentParaId = null, bool? resolved = null)
+    {
+        var commentsPart = main.WordprocessingCommentsPart
+            ?? throw new InvalidOperationException("cannot create comment metadata without comments.xml");
+        var commentsRoot = commentsPart.GetXDocument().Root
+            ?? throw new InvalidOperationException("comments.xml has no root element");
+
+        var lastPara = comment.Elements(W.p).LastOrDefault();
+        if (lastPara is null)
+        {
+            // Word-authored definitions end in a paragraph because commentsExtended keys on that
+            // paragraph. Be total over a malformed/table-only input by adding the smallest legal
+            // carrier rather than producing an extension entry that cannot resolve.
+            lastPara = new XElement(W.p);
+            ApplyCommentBodyStyle(new[] { lastPara });
+            comment.Add(lastPara);
+            UnidHelper.AssignToSelfAndDescendants(lastPara);
+        }
+
+        // A w14 attribute is an ignorable extension to older consumers. Preserve any existing
+        // compatibility tokens while making that contract explicit before adding/using paraId.
+        if (commentsRoot.GetNamespaceOfPrefix("w14") is null)
+            commentsRoot.Add(new XAttribute(XNamespace.Xmlns + "w14", W14.w14));
+        EnsureIgnorablePrefix(commentsRoot, "w14", W14.w14);
+
+        var paraId = (string?)lastPara.Attribute(W14.paraId);
+        if (string.IsNullOrEmpty(paraId))
+        {
+            paraId = NextParaId(main);
+            lastPara.SetAttributeValue(W14.paraId, paraId);
+        }
+
+        var exPart = main.WordprocessingCommentsExPart;
+        if (exPart is null)
+        {
+            exPart = main.AddNewPart<WordprocessingCommentsExPart>();
+            exPart.PutXDocument(new XDocument(
+                new XElement(W15 + "commentsEx",
+                    new XAttribute(XNamespace.Xmlns + "w15", W15))));
+        }
+        var exRoot = exPart.GetXDocument().Root
+            ?? throw new InvalidOperationException("commentsExtended.xml has no root element");
+        var commentEx = exRoot.Elements(W15 + "commentEx")
+            .FirstOrDefault(e => (string?)e.Attribute(W15 + "paraId") == paraId);
+        if (commentEx is null)
+        {
+            commentEx = new XElement(W15 + "commentEx",
+                new XAttribute(W15 + "paraId", paraId),
+                new XAttribute(W15 + "done", "0"));
+            exRoot.Add(commentEx);
+        }
+        if (parentParaId is not null)
+            commentEx.SetAttributeValue(W15 + "paraIdParent", parentParaId);
+        if (resolved.HasValue)
+            commentEx.SetAttributeValue(W15 + "done", resolved.Value ? "1" : "0");
+
+        var idsPart = main.WordprocessingCommentsIdsPart;
+        if (idsPart is null)
+        {
+            idsPart = main.AddNewPart<WordprocessingCommentsIdsPart>();
+            idsPart.PutXDocument(new XDocument(
+                new XElement(W16Cid + "commentsIds",
+                    new XAttribute(XNamespace.Xmlns + "w16cid", W16Cid))));
+        }
+        var idsRoot = idsPart.GetXDocument().Root
+            ?? throw new InvalidOperationException("commentsIds.xml has no root element");
+        if (!idsRoot.Elements(W16Cid + "commentId")
+                .Any(e => (string?)e.Attribute(W16Cid + "paraId") == paraId))
+        {
+            idsRoot.Add(new XElement(W16Cid + "commentId",
+                new XAttribute(W16Cid + "paraId", paraId),
+                new XAttribute(W16Cid + "durableId", NextDurableId(idsRoot))));
+        }
+
+        commentsPart.PutXDocument();
+        exPart.PutXDocument();
+        idsPart.PutXDocument();
+        return paraId;
+    }
+
+    private static void EnsureIgnorablePrefix(XElement root, string prefix, XNamespace ns)
+    {
+        if (root.GetNamespaceOfPrefix("mc") != MC.mc)
+            root.SetAttributeValue(XNamespace.Xmlns + "mc", MC.mc.NamespaceName);
+        if (root.GetNamespaceOfPrefix(prefix) != ns)
+            root.SetAttributeValue(XNamespace.Xmlns + prefix, ns.NamespaceName);
+
+        var tokens = ((string?)root.Attribute(MC.Ignorable) ?? string.Empty)
+            .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+            .ToList();
+        if (!tokens.Contains(prefix, StringComparer.Ordinal))
+            tokens.Add(prefix);
+        root.SetAttributeValue(MC.Ignorable, string.Join(" ", tokens));
+    }
+
+    /// <summary>Interpret the OOXML on/off lexical forms accepted by <c>w15:done</c>.</summary>
+    internal static bool ParseDone(string? value) =>
+        value is "1" or "true" or "on";
+
+    private static string NextParaId(MainDocumentPart main)
+    {
+        var values = new List<string>();
+        foreach (var part in ReferenceHostParts(main).Append<OpenXmlPart?>(main.WordprocessingCommentsPart))
+        {
+            var root = part?.GetXDocument().Root;
+            if (root is null) continue;
+            values.AddRange(root.DescendantsAndSelf().Attributes(W14.paraId).Select(a => (string)a));
+        }
+
+        var exRoot = main.WordprocessingCommentsExPart?.GetXDocument().Root;
+        if (exRoot is not null)
+        {
+            values.AddRange(exRoot.Elements(W15 + "commentEx")
+                .SelectMany(e => new[]
+                {
+                    (string?)e.Attribute(W15 + "paraId"),
+                    (string?)e.Attribute(W15 + "paraIdParent"),
+                })
+                .Where(v => !string.IsNullOrEmpty(v))
+                .Select(v => v!));
+        }
+        var idsRoot = main.WordprocessingCommentsIdsPart?.GetXDocument().Root;
+        if (idsRoot is not null)
+            values.AddRange(idsRoot.Elements(W16Cid + "commentId")
+                .Select(e => (string?)e.Attribute(W16Cid + "paraId"))
+                .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!));
+
+        return NextEightHex(values);
+    }
+
+    private static string NextDurableId(XElement idsRoot) =>
+        NextEightHex(idsRoot.Elements(W16Cid + "commentId")
+            .Select(e => (string?)e.Attribute(W16Cid + "durableId"))
+            .Where(v => !string.IsNullOrEmpty(v)).Select(v => v!));
+
+    private static string NextEightHex(IEnumerable<string> values)
+    {
+        var used = new HashSet<uint>();
+        uint max = 0;
+        foreach (var value in values)
+        {
+            if (value.Length != 8
+                || !uint.TryParse(value, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var parsed))
+                continue;
+            used.Add(parsed);
+            if (parsed > max) max = parsed;
+        }
+
+        uint next;
+        if (max < uint.MaxValue)
+        {
+            next = max + 1;
+            if (next != 0 && !used.Contains(next))
+                return next.ToString("X8", CultureInfo.InvariantCulture);
+        }
+
+        next = 1;
+        while (used.Contains(next))
+        {
+            if (next == uint.MaxValue)
+                throw new InvalidOperationException("all eight-hex comment metadata ids are allocated");
+            next++;
+        }
+        return next.ToString("X8", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
     /// Prune Word's comment-threading metadata for removed comment definitions:
     /// <c>commentsExtended.xml</c> (<c>w15:commentEx</c>) and <c>commentsIds.xml</c>
     /// (<c>w16cid:commentId</c>) entries key on a definition paragraph's <c>w14:paraId</c>, so a
@@ -142,13 +381,10 @@ internal static class CommentOps
         var main = doc.MainDocumentPart;
         if (main is null) return;
 
-        XNamespace w15 = "http://schemas.microsoft.com/office/word/2012/wordml";
-        XNamespace w16cid = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
-
         PruneEntries(main.WordprocessingCommentsExPart,
-            w15 + "commentEx", w15 + "paraId", w15 + "paraIdParent", removedParaIds);
+            W15 + "commentEx", W15 + "paraId", W15 + "paraIdParent", removedParaIds);
         PruneEntries(main.WordprocessingCommentsIdsPart,
-            w16cid + "commentId", w16cid + "paraId", parentAttr: null, removedParaIds);
+            W16Cid + "commentId", W16Cid + "paraId", parentAttr: null, removedParaIds);
     }
 
     private static void PruneEntries(

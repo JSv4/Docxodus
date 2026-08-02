@@ -12,14 +12,17 @@ using Xunit;
 namespace Docxodus.Tests;
 
 /// <summary>
-/// Native Word comment <em>authoring</em> on <see cref="DocxSession"/> (issue #300):
+/// Native Word comment <em>authoring and threads</em> on <see cref="DocxSession"/>
+/// (issues #300 and #317):
 /// <see cref="DocxSession.AddComment"/> creates the <c>WordprocessingCommentsPart</c> (plus the
 /// <c>CommentText</c>/<c>CommentReference</c> styles) when absent, writes the
 /// <c>w:commentRangeStart</c>/<c>w:commentRangeEnd</c> pair around a character span, appends the
 /// run-level <c>w:commentReference</c>, and adds the <c>w:comment</c> definition. Editing a comment
 /// body goes through <see cref="DocxSession.UpdateComment"/> (or <see cref="DocxSession.ReplaceText"/>
 /// on a <c>p:cmt</c> paragraph); removal through <see cref="DocxSession.RemoveComment"/> /
-/// <see cref="DocxSession.DeleteBlock"/>. Test IDs use the DS34x/DS35x/DS36x range (DS346+).
+/// <see cref="DocxSession.DeleteBlock"/>. Replies use Word's reference-only child shape plus
+/// <c>commentsExtended.xml</c>; resolve/reopen state is carried by <c>w15:done</c>. Test IDs use
+/// DS34x/DS35x/DS36x (DS346+) for base comments and DS400–DS404 for threading/state.
 /// </summary>
 public class DocxSessionCommentAuthoringTests
 {
@@ -40,6 +43,28 @@ public class DocxSessionCommentAuthoringTests
     }
 
     private static XElement BodyXml(byte[] docxBytes) => PartXml(docxBytes, m => m);
+
+    private static string[] IgnorableTokens(XElement root, XNamespace mc) =>
+        ((string?)root.Attribute(mc + "Ignorable") ?? string.Empty)
+            .Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+
+    private static bool HasPart(byte[] docxBytes, Func<MainDocumentPart, OpenXmlPart?> pick)
+    {
+        using var ms = new MemoryStream(docxBytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        return pick(doc.MainDocumentPart!) is not null;
+    }
+
+    private static string PartRelationshipId(
+        byte[] docxBytes, Func<MainDocumentPart, OpenXmlPart?> pick)
+    {
+        using var ms = new MemoryStream(docxBytes);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var main = doc.MainDocumentPart!;
+        var part = pick(main);
+        Assert.NotNull(part);
+        return main.GetIdOfPart(part!);
+    }
 
     /// <summary>One body paragraph with the given text in a single run.</summary>
     private static byte[] BuildSingleParagraphDoc(string text)
@@ -407,6 +432,25 @@ public class DocxSessionCommentAuthoringTests
             Assert.Contains("\"author\":\"Alice\"", listJson);
             Assert.Contains("\"date\":\"2026-08-01T00:00:00Z\"", listJson);
             Assert.Contains("\"text\":\"Wire test.\"", listJson);
+            Assert.DoesNotContain("\"resolved\"", listJson); // flat: additive fields omitted
+
+            using var addDoc = System.Text.Json.JsonDocument.Parse(addJson);
+            var parentAnchor = addDoc.RootElement.GetProperty("created").EnumerateArray()
+                .First(a => a.GetProperty("kind").GetString() == "cmt")
+                .GetProperty("id").GetString()!;
+            var replyJson = Docxodus.Internal.DocxSessionOps.AddCommentReply(
+                handle, parentAnchor, "Bob", "B", null, "Wire reply.");
+            Assert.Contains("\"success\":true", replyJson);
+            using var replyDoc = System.Text.Json.JsonDocument.Parse(replyJson);
+            var replyAnchor = replyDoc.RootElement.GetProperty("created").EnumerateArray()
+                .First(a => a.GetProperty("kind").GetString() == "cmt")
+                .GetProperty("id").GetString()!;
+
+            Assert.Contains("\"success\":true",
+                Docxodus.Internal.DocxSessionOps.SetCommentResolved(handle, replyAnchor, true));
+            var threadedListJson = Docxodus.Internal.DocxSessionOps.ListComments(handle);
+            Assert.Contains($"\"parentAnchorId\":\"{parentAnchor}\"", threadedListJson);
+            Assert.Contains("\"resolved\":true", threadedListJson);
 
             // Bad date string throws at the transport layer, never a silent drop.
             Assert.ThrowsAny<FormatException>(() =>
@@ -470,7 +514,10 @@ public class DocxSessionCommentAuthoringTests
             using (var w = new StreamWriter(s))
                 w.Write("""
                     <w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-                                xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">
+                                xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"
+                                xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"
+                                xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+                                mc:Ignorable="w15">
                       <w:comment w:id="1" w:author="Alice" w:initials="A">
                         <w:p w14:paraId="11111111"><w:r><w:t>Root comment.</w:t></w:r></w:p>
                       </w:comment>
@@ -499,6 +546,27 @@ public class DocxSessionCommentAuthoringTests
                       <w16cid:commentId w16cid:paraId="22222222" w16cid:durableId="2BBB2222"/>
                     </w16cid:commentsIds>
                     """);
+        }
+        return ms.ToArray();
+    }
+
+    /// <summary>The canonical Word thread shape: only the root owns range markers; its reply
+    /// contributes an adjacent reference and is linked by <c>w15:paraIdParent</c>.</summary>
+    private static byte[] BuildDocWithReferenceOnlyReply()
+    {
+        using var ms = new MemoryStream();
+        var source = BuildDocWithThreadedComments();
+        ms.Write(source, 0, source.Length);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, true))
+        {
+            var root = doc.MainDocumentPart!.GetXDocument().Root!;
+            root.Descendants()
+                .Where(e => e.Name is var name
+                    && (name == W + "commentRangeStart" || name == W + "commentRangeEnd")
+                    && (string?)e.Attribute(W + "id") == "2")
+                .Remove();
+            doc.MainDocumentPart.PutXDocument();
         }
         return ms.ToArray();
     }
@@ -604,6 +672,225 @@ public class DocxSessionCommentAuthoringTests
         var entry = Assert.Single(ex.Elements(w15 + "commentEx"));
         Assert.Equal("22222222", (string?)entry.Attribute(w15 + "paraId"));
         Assert.Null(entry.Attribute(w15 + "paraIdParent"));
+    }
+
+    // ─── Reply threading + resolve/reopen (issue #317) ─────────────────
+
+    [Fact]
+    public void DS400_AddCommentReply_AuthorsNativeThread_AndSharesParentRange()
+    {
+        // The five-value constructor/deconstructor are an existing CLR contract. Thread fields
+        // are init properties so extending the entry remains binary-compatible.
+        var legacyEntry = new CommentListEntry("cmt:cmt:1", "A", null, null, "body");
+        var (legacyAnchor, legacyAuthor, legacyInitials, legacyDate, legacyText) = legacyEntry;
+        Assert.Equal("cmt:cmt:1", legacyAnchor);
+        Assert.Equal("A", legacyAuthor);
+        Assert.Null(legacyInitials);
+        Assert.Null(legacyDate);
+        Assert.Equal("body", legacyText);
+
+        using var session = new DocxSession(BuildSingleParagraphDoc("Hello brave new world"));
+        var host = FirstBodyParagraph(session);
+        var parentResult = session.AddComment(host, new CharSpan(6, 5), "Alice", "Root comment.");
+        Assert.True(parentResult.Success, parentResult.Error?.Message);
+        var parentAnchor = parentResult.Created.First(a => a.Kind == "cmt").Id;
+
+        // Flat comments remain distinguishable until a threading/resolve operation upgrades them.
+        var flat = Assert.Single(session.ListComments());
+        Assert.Null(flat.ParentAnchorId);
+        Assert.Null(flat.Resolved);
+
+        var replyResult = session.AddCommentReply(parentAnchor, "Bob", "Reply body.", initials: "B",
+            date: new DateTime(2026, 8, 2, 12, 0, 0, DateTimeKind.Utc));
+        Assert.True(replyResult.Success, replyResult.Error?.Message);
+        Assert.Contains(replyResult.Modified, a => a.Id == parentAnchor);
+        Assert.Contains(replyResult.Modified, a => a.Id == host);
+        Assert.Equal(host, replyResult.Patch?.ScopeAnchorId);
+        var replyAnchor = replyResult.Created.First(a => a.Kind == "cmt").Id;
+
+        var entries = session.ListComments();
+        Assert.Equal(2, entries.Count);
+        Assert.Equal(parentAnchor, entries[0].DefAnchorId);
+        Assert.Null(entries[0].ParentAnchorId);
+        Assert.False(entries[0].Resolved);
+        Assert.Equal(replyAnchor, entries[1].DefAnchorId);
+        Assert.Equal(parentAnchor, entries[1].ParentAnchorId);
+        Assert.False(entries[1].Resolved);
+        Assert.Equal("Bob", entries[1].Author);
+        Assert.Equal("B", entries[1].Initials);
+        Assert.Equal("2026-08-02T12:00:00Z", entries[1].Date);
+
+        var saved = session.Save();
+        XNamespace w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+        XNamespace w15 = "http://schemas.microsoft.com/office/word/2012/wordml";
+        XNamespace w16cid = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+        XNamespace mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+
+        var comments = PartXml(saved, m => m.WordprocessingCommentsPart);
+        Assert.Equal(mc, comments.GetNamespaceOfPrefix("mc"));
+        Assert.Contains("w14", IgnorableTokens(comments, mc));
+        var defs = comments.Elements(W + "comment").ToList();
+        Assert.Equal(2, defs.Count);
+        var parentId = (string)defs[0].Attribute(W + "id")!;
+        var replyId = (string)defs[1].Attribute(W + "id")!;
+        var parentParaId = (string)defs[0].Elements(W + "p").Last().Attribute(w14 + "paraId")!;
+        var replyParaId = (string)defs[1].Elements(W + "p").Last().Attribute(w14 + "paraId")!;
+        Assert.Equal("00000001", parentParaId);
+        Assert.Equal("00000002", replyParaId);
+
+        var ex = PartXml(saved, m => m.WordprocessingCommentsExPart);
+        var exEntries = ex.Elements(w15 + "commentEx").ToList();
+        Assert.Equal(2, exEntries.Count);
+        Assert.Equal("0", (string?)exEntries[0].Attribute(w15 + "done"));
+        Assert.Equal(parentParaId, (string?)exEntries[1].Attribute(w15 + "paraIdParent"));
+
+        var ids = PartXml(saved, m => m.WordprocessingCommentsIdsPart);
+        Assert.Equal(new[] { "00000001", "00000002" }, ids.Elements(w16cid + "commentId")
+            .Select(e => (string)e.Attribute(w16cid + "durableId")!).ToArray());
+
+        // Word's native thread shape keeps the range on the root and gives the reply only an
+        // adjacent reference; commentsExtended parentage makes it share the root's exact range.
+        var body = BodyXml(saved);
+        var para = body.Descendants(W + "p").Single(p => p.Descendants(W + "commentReference").Any());
+        Assert.Equal("brave", TextBetweenRangeMarkers(para, parentId));
+        Assert.Equal(new[] { parentId }, para.Descendants(W + "commentRangeStart")
+            .Select(e => (string)e.Attribute(W + "id")!).ToArray());
+        Assert.Equal(new[] { parentId }, para.Descendants(W + "commentRangeEnd")
+            .Select(e => (string)e.Attribute(W + "id")!).ToArray());
+        Assert.Equal(new[] { parentId, replyId }, para.Descendants(W + "commentReference")
+            .Select(e => (string)e.Attribute(W + "id")!).ToArray());
+
+        using var ms = new MemoryStream(saved);
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(
+                DocumentFormat.OpenXml.FileFormatVersions.Office2019)
+            .Validate(doc).Select(e => $"{e.Part?.Uri}: {e.Description}").ToList();
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void DS401_SetCommentResolved_FlatCommentCreatesParts_UndoRedoReconcilesThem()
+    {
+        using var session = new DocxSession(BuildSingleParagraphDoc("Resolve this"));
+        var host = FirstBodyParagraph(session);
+        var made = session.AddComment(host, null, "Alice", "Please resolve.");
+        Assert.True(made.Success, made.Error?.Message);
+        var anchor = made.Created.First(a => a.Kind == "cmt").Id;
+
+        Assert.Null(Assert.Single(session.ListComments()).Resolved);
+        Assert.False(HasPart(session.Save(), m => m.WordprocessingCommentsExPart));
+        Assert.False(HasPart(session.Save(), m => m.WordprocessingCommentsIdsPart));
+
+        var resolved = session.SetCommentResolved(anchor, true);
+        Assert.True(resolved.Success, resolved.Error?.Message);
+        Assert.True(Assert.Single(session.ListComments()).Resolved);
+        var resolvedBytes = session.Save();
+        Assert.True(HasPart(resolvedBytes, m => m.WordprocessingCommentsExPart));
+        Assert.True(HasPart(resolvedBytes, m => m.WordprocessingCommentsIdsPart));
+        var exRelationshipId = PartRelationshipId(resolvedBytes, m => m.WordprocessingCommentsExPart);
+        var idsRelationshipId = PartRelationshipId(resolvedBytes, m => m.WordprocessingCommentsIdsPart);
+
+        // Undo restores both content AND package topology: no empty/orphan extension parts remain.
+        Assert.True(session.Undo());
+        Assert.Null(Assert.Single(session.ListComments()).Resolved);
+        Assert.False(HasPart(session.Save(), m => m.WordprocessingCommentsExPart));
+        Assert.False(HasPart(session.Save(), m => m.WordprocessingCommentsIdsPart));
+
+        Assert.True(session.Redo());
+        Assert.True(Assert.Single(session.ListComments()).Resolved);
+        var redoneBytes = session.Save();
+        Assert.True(HasPart(redoneBytes, m => m.WordprocessingCommentsExPart));
+        Assert.True(HasPart(redoneBytes, m => m.WordprocessingCommentsIdsPart));
+        Assert.Equal(exRelationshipId,
+            PartRelationshipId(redoneBytes, m => m.WordprocessingCommentsExPart));
+        Assert.Equal(idsRelationshipId,
+            PartRelationshipId(redoneBytes, m => m.WordprocessingCommentsIdsPart));
+
+        var reopened = session.SetCommentResolved(anchor, false);
+        Assert.True(reopened.Success, reopened.Error?.Message);
+        Assert.False(Assert.Single(session.ListComments()).Resolved);
+    }
+
+    [Fact]
+    public void DS402_ExistingThread_ListsParentAndResolveState_WithoutLosingParentage()
+    {
+        using var session = new DocxSession(BuildDocWithReferenceOnlyReply());
+        var host = FirstBodyParagraph(session);
+        var entries = session.ListComments();
+        Assert.Equal(2, entries.Count);
+        Assert.Null(entries[0].ParentAnchorId);
+        Assert.False(entries[0].Resolved);
+        Assert.Equal(entries[0].DefAnchorId, entries[1].ParentAnchorId);
+        Assert.False(entries[1].Resolved);
+
+        Assert.True(session.SetCommentResolved(entries[1].DefAnchorId, true).Success);
+        var resolvedReply = session.ListComments()[1];
+        Assert.True(resolvedReply.Resolved);
+        Assert.Equal(entries[0].DefAnchorId, resolvedReply.ParentAnchorId);
+
+        Assert.True(session.SetCommentResolved(entries[1].DefAnchorId, false).Success);
+        var reopenedReply = session.ListComments()[1];
+        Assert.False(reopenedReply.Resolved);
+        Assert.Equal(entries[0].DefAnchorId, reopenedReply.ParentAnchorId);
+
+        // Regress the canonical nested case: the immediate parent has only a reference, while
+        // the thread root owns the range. A child-of-reply stays on that range and links to the
+        // immediate parent rather than being downgraded to an unrelated point comment.
+        var nested = session.AddCommentReply(entries[1].DefAnchorId, "Carol", "Nested reply.");
+        Assert.True(nested.Success, nested.Error?.Message);
+        Assert.Contains(nested.Modified, a => a.Id == entries[1].DefAnchorId);
+        Assert.Contains(nested.Modified, a => a.Id == host);
+        Assert.Equal(host, nested.Patch?.ScopeAnchorId);
+        var nestedAnchor = nested.Created.First(a => a.Kind == "cmt").Id;
+        var nestedEntry = session.ListComments().Single(e => e.DefAnchorId == nestedAnchor);
+        Assert.Equal(entries[1].DefAnchorId, nestedEntry.ParentAnchorId);
+
+        var saved = session.Save();
+        XNamespace mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+        var commentsRoot = PartXml(saved, m => m.WordprocessingCommentsPart);
+        Assert.Equal(new[] { "w15", "w14" }, IgnorableTokens(commentsRoot, mc));
+        var comments = commentsRoot.Elements(W + "comment").ToList();
+        var ids = comments.Select(c => (string)c.Attribute(W + "id")!).ToArray();
+        var body = BodyXml(saved);
+        Assert.Equal(new[] { ids[0] }, body.Descendants(W + "commentRangeStart")
+            .Select(e => (string)e.Attribute(W + "id")!).ToArray());
+        Assert.Equal(new[] { ids[0] }, body.Descendants(W + "commentRangeEnd")
+            .Select(e => (string)e.Attribute(W + "id")!).ToArray());
+        Assert.Equal(ids, body.Descendants(W + "commentReference")
+            .Select(e => (string)e.Attribute(W + "id")!).ToArray());
+    }
+
+    [Fact]
+    public void DS403_ReplyMetadataIds_AreDeterministicMaxPlusOne()
+    {
+        using var session = new DocxSession(BuildDocWithThreadedComments());
+        var parent = session.ListComments()[0].DefAnchorId;
+        Assert.True(session.AddCommentReply(parent, "Carol", "Another reply.").Success);
+
+        XNamespace w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+        XNamespace w16cid = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+        var saved = session.Save();
+        var comments = PartXml(saved, m => m.WordprocessingCommentsPart);
+        Assert.Equal("22222223", (string?)comments.Elements(W + "comment").Last()
+            .Elements(W + "p").Last().Attribute(w14 + "paraId"));
+        var ids = PartXml(saved, m => m.WordprocessingCommentsIdsPart);
+        Assert.Equal("2BBB2223", (string?)ids.Elements(w16cid + "commentId").Last()
+            .Attribute(w16cid + "durableId"));
+    }
+
+    [Fact]
+    public void DS404_ReplyAndResolve_RequireCommentAnchors()
+    {
+        using var session = new DocxSession(BuildSingleParagraphDoc("Wrong kind"));
+        var host = FirstBodyParagraph(session);
+
+        var reply = session.AddCommentReply(host, "A", "Nope.");
+        Assert.False(reply.Success);
+        Assert.Equal(EditErrorCode.AnchorWrongKind, reply.Error!.Code);
+
+        var resolve = session.SetCommentResolved(host, true);
+        Assert.False(resolve.Success);
+        Assert.Equal(EditErrorCode.AnchorWrongKind, resolve.Error!.Code);
     }
 
     [Fact]

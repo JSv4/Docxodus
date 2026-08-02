@@ -224,20 +224,21 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_comment",
-            "Create and manage native Word review comments (real w:comment markup — visible in Word/Google Docs/LibreOffice's Reviewing pane): comment on a character span of a body paragraph, update a comment's body, remove one, or list them. Comments are addressed by their cmt anchor (from add's created list or the projection's # Comments section). For the semantic highlight/label overlay see docxodus_annotate. Reply threading / resolve state is not yet supported (v2).",
+            "Create and manage native Word review comments (real w:comment markup — visible in Word/Google Docs/LibreOffice's Reviewing pane): comment on a character span, reply in the same native thread, resolve/reopen, update, remove, or list. Comments are addressed by their cmt anchor (from add/reply's created list or the projection's # Comments section). list reports parentAnchorId/resolved when Word extension metadata exists. For the semantic highlight/label overlay see docxodus_annotate.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["add", "update", "remove", "list"] },
+                "action": { "type": "string", "enum": ["add", "reply", "resolve", "update", "remove", "list"] },
                 "anchorId": { "type": "string", "description": "add: the body paragraph to comment on." },
                 "span": { "type": "object", "properties": { "start": { "type": "integer" }, "length": { "type": "integer" } }, "description": "add: character range within the paragraph. Omit to comment on the whole block." },
-                "author": { "type": "string", "description": "add: comment author (required)." },
-                "initials": { "type": "string", "description": "add: optional author initials." },
-                "date": { "type": "string", "description": "add: optional ISO-8601 timestamp; w:date is written only when provided (omitting keeps output deterministic)." },
-                "markdown": { "type": "string", "description": "add/update: the comment body (same markdown subset as other payloads)." },
-                "commentAnchorId": { "type": "string", "description": "update/remove: the comment definition anchor (kind cmt)." }
+                "author": { "type": "string", "description": "add/reply: comment author (required)." },
+                "initials": { "type": "string", "description": "add/reply: optional author initials." },
+                "date": { "type": "string", "description": "add/reply: optional ISO-8601 timestamp; w:date is written only when provided (omitting keeps output deterministic)." },
+                "markdown": { "type": "string", "description": "add/reply/update: the comment body (same markdown subset as other payloads)." },
+                "commentAnchorId": { "type": "string", "description": "reply: parent comment; resolve/update/remove: target comment definition anchor (kind cmt)." },
+                "resolved": { "type": "boolean", "description": "resolve: true marks done (default); false reopens while preserving thread parentage." }
               },
               "required": ["sessionId", "action"]
             }

@@ -424,11 +424,42 @@ export class DocxSession {
     ) as EditResult;
   }
 
+  /**
+   * Add a native Word reply to `parentCommentAnchorId`. It adds an adjacent reference and
+   * inherits the thread root's range through `w15:paraIdParent`; the required
+   * `commentsExtended.xml` and `commentsIds.xml` parts are created when the parent was flat.
+   */
+  addCommentReply(
+    parentCommentAnchorId: string,
+    author: string,
+    markdown: string,
+    opts?: { initials?: string; date?: string },
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.AddCommentReply(
+        this.handle,
+        parentCommentAnchorId,
+        author,
+        opts?.initials ?? "",
+        opts?.date ?? "",
+        markdown,
+      ),
+    ) as EditResult;
+  }
+
   /** Replace a comment's body text, addressed by its definition anchor (kind `cmt`); the
    * comment's author/initials/date are preserved, as is the last paragraph's `w14:paraId`
    * (Word's reply-threading key). */
   updateComment(commentAnchorId: string, markdown: string): EditResult {
     return JSON.parse(this.wasm.UpdateComment(this.handle, commentAnchorId, markdown)) as EditResult;
+  }
+
+  /** Resolve or reopen one comment (`false` reopens it). Flat comments are upgraded with the
+   * paraId-keyed metadata Word uses, and the operation is undoable. */
+  setCommentResolved(commentAnchorId: string, resolved: boolean): EditResult {
+    return JSON.parse(
+      this.wasm.SetCommentResolved(this.handle, commentAnchorId, resolved),
+    ) as EditResult;
   }
 
   /** Remove a comment: the definition, its body marker triple everywhere in the package, and

@@ -643,8 +643,10 @@ class CommentListEntry:
     ``anchor_id`` addresses the definition (kind ``cmt``) for ``update_comment``/
     ``remove_comment``; ``date`` is the raw ``w:date`` attribute string (``None`` when
     absent); ``text`` is the flattened body (paragraphs joined by a space, the
-    ``w:annotationRef`` mark excluded). The numeric ``w:id`` is deliberately not
-    surfaced — comments are addressed by anchor everywhere in this API.
+    ``w:annotationRef`` mark excluded). ``parent_anchor_id`` and ``resolved`` are
+    populated only when the comment has a ``commentsExtended.xml`` entry; ``None``
+    distinguishes a legacy/flat comment from an explicitly reopened one. The numeric
+    ``w:id`` is deliberately not surfaced — comments are addressed by anchor everywhere.
     """
 
     anchor_id: str
@@ -652,6 +654,8 @@ class CommentListEntry:
     initials: str | None = None
     date: str | None = None
     text: str = ""
+    parent_anchor_id: str | None = None
+    resolved: bool | None = None
 
     @classmethod
     def _from_wire(cls, d: Mapping[str, Any]) -> "CommentListEntry":
@@ -661,6 +665,8 @@ class CommentListEntry:
             initials=d.get("initials"),
             date=d.get("date"),
             text=d.get("text", ""),
+            parent_anchor_id=d.get("parentAnchorId"),
+            resolved=d.get("resolved"),
         )
 
 

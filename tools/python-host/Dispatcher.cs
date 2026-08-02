@@ -92,8 +92,14 @@ internal static class Dispatcher
         "add_comment" => DocxSessionOps.AddComment(
             Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"),
             Str(args, "author"), OptStr(args, "initials"), OptStr(args, "date"), Str(args, "markdown")),
+        "add_comment_reply" => DocxSessionOps.AddCommentReply(
+            Handle(args), Str(args, "parentAnchorId"), Str(args, "author"),
+            OptStr(args, "initials"), OptStr(args, "date"), Str(args, "markdown")),
         "update_comment" => DocxSessionOps.UpdateComment(
             Handle(args), Str(args, "anchorId"), Str(args, "markdown")),
+        "set_comment_resolved" => DocxSessionOps.SetCommentResolved(
+            Handle(args), Str(args, "anchorId"),
+            OptBool(args, "resolved") ?? throw new FormatException("args missing boolean \"resolved\"")),
         "remove_comment" => DocxSessionOps.RemoveComment(
             Handle(args), Str(args, "anchorId")),
         "list_comments" => DocxSessionOps.ListComments(Handle(args)),

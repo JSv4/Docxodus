@@ -385,8 +385,13 @@ internal static class Dispatcher
             session.Handle, Str(args, "anchorId"), ParseSpan(args, "span"),
             Str(args, "author"), OptStr(args, "initials"), OptStr(args, "date"),
             OptStr(args, "markdown") ?? ""),
+        "reply" => DocxSessionOps.AddCommentReply(
+            session.Handle, Str(args, "commentAnchorId"), Str(args, "author"),
+            OptStr(args, "initials"), OptStr(args, "date"), OptStr(args, "markdown") ?? ""),
         "update" => DocxSessionOps.UpdateComment(
             session.Handle, Str(args, "commentAnchorId"), Str(args, "markdown")),
+        "resolve" => DocxSessionOps.SetCommentResolved(
+            session.Handle, Str(args, "commentAnchorId"), BoolOpt(args, "resolved", true)),
         "remove" => DocxSessionOps.RemoveComment(session.Handle, Str(args, "commentAnchorId")),
         "list" => $"{{\"comments\":{DocxSessionOps.ListComments(session.Handle)}}}",
         _ => throw new McpToolException($"unknown docxodus_comment action: {action}"),

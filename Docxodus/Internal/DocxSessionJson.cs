@@ -767,7 +767,12 @@ internal static class DocxSessionJson
               .Append(",\"author\":").Append(JsonString(c.Author));
             if (c.Initials is not null) sb.Append(",\"initials\":").Append(JsonString(c.Initials));
             if (c.Date is not null) sb.Append(",\"date\":").Append(JsonString(c.Date));
-            sb.Append(",\"text\":").Append(JsonString(c.Text)).Append('}');
+            sb.Append(",\"text\":").Append(JsonString(c.Text));
+            if (c.ParentAnchorId is not null)
+                sb.Append(",\"parentAnchorId\":").Append(JsonString(c.ParentAnchorId));
+            if (c.Resolved.HasValue)
+                sb.Append(",\"resolved\":").Append(c.Resolved.Value ? "true" : "false");
+            sb.Append('}');
         }
         sb.Append(']');
         return sb.ToString();

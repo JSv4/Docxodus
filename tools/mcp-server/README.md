@@ -90,7 +90,7 @@ markdown projection and search tools return:
 | `docxodus_format` | Character and paragraph formatting, list level |
 | `docxodus_create` | New paragraphs, headings, tables, horizontal rules, footnotes/endnotes, page-number fields |
 | `docxodus_list` | Promote/demote/renumber list membership; restart numbering (Word's *Set Numbering Value…*) |
-| `docxodus_comment` | Native Word review comments (real `w:comment` markup): add on a span, update body, remove, list |
+| `docxodus_comment` | Native Word review comments (real `w:comment` markup): add on a span, reply in-thread, resolve/reopen, update, remove, list |
 | `docxodus_annotate` | Anchor-addressed highlight/label annotations (a custom-XML overlay for external tools, distinct from comments) |
 | `docxodus_track_changes` | List tracked changes; accept/reject one by id, or all |
 | `docxodus_mutations` | Apply or dry-run-preview a batch of the above as one call |
@@ -103,9 +103,6 @@ exposed, because the underlying Docxodus engine doesn't have them (rather than f
 these are called out so agents/tooling built against this server know to route around
 them):
 
-- **No comment reply-threading or resolve state.** `docxodus_comment` authors real
-  `w:comment` markup, but replies and Word's resolve flag (`commentsExtended.xml`) are not
-  yet authorable; existing threading metadata is preserved on update and pruned on remove.
 - **Exotic revision families aren't individually resolvable.** `docxodus_track_changes`
   lists and selectively resolves inserts/deletes/moves/format changes by `revisionId`
   (issue #318), but `w:cellIns`/`w:cellDel`/`w:cellMerge`, content-control ins/del

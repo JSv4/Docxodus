@@ -1,9 +1,8 @@
-"""Native Word comment authoring through the Python wrapper (issue #300).
+"""Native Word comment authoring through the Python wrapper (issues #300/#317).
 
-Exercises ``DocxSession.add_comment`` / ``update_comment`` / ``remove_comment`` /
-``list_comments`` end-to-end over the stdio host: creation, the created-anchor
-contract, listing, body update with attribute preservation, removal, save/reopen
-survival, and the typed error envelope.
+Exercises the flat-comment, native reply-threading, resolve/reopen, update, removal,
+and listing APIs end-to-end over the stdio host, including save/reopen survival and
+typed errors.
 """
 
 from __future__ import annotations
@@ -83,6 +82,45 @@ def test_update_comment_replaces_body_and_preserves_author(session: DocxSession)
     assert entry.text == "Revised body."
     assert entry.author == "Alice"
     assert entry.initials == "AL"
+
+
+def test_reply_resolve_reopen_and_save_round_trip(session: DocxSession) -> None:
+    host = _first_body_paragraph(session)
+    parent_result = session.add_comment(host, CharSpan(0, 4), "Alice", "Parent.")
+    assert parent_result.success, parent_result.error
+    parent_anchor = next(a.id for a in parent_result.created if a.kind == "cmt")
+
+    reply_result = session.add_comment_reply(
+        parent_anchor,
+        "Bob",
+        "Reply.",
+        initials="BO",
+        date="2026-08-02T00:00:00Z",
+    )
+    assert reply_result.success, reply_result.error
+    reply_anchor = next(a.id for a in reply_result.created if a.kind == "cmt")
+
+    entries = {entry.anchor_id: entry for entry in session.list_comments()}
+    assert entries[parent_anchor].parent_anchor_id is None
+    assert entries[parent_anchor].resolved is False
+    assert entries[reply_anchor].parent_anchor_id == parent_anchor
+    assert entries[reply_anchor].resolved is False
+
+    resolved = session.set_comment_resolved(reply_anchor)
+    assert resolved.success, resolved.error
+    assert {e.anchor_id: e for e in session.list_comments()}[reply_anchor].resolved is True
+
+    reopened = session.set_comment_resolved(reply_anchor, resolved=False)
+    assert reopened.success, reopened.error
+
+    saved = open_session(session.save())
+    try:
+        reopened_entries = {entry.author: entry for entry in saved.list_comments()}
+        assert reopened_entries["Bob"].parent_anchor_id == reopened_entries["Alice"].anchor_id
+        assert reopened_entries["Bob"].resolved is False
+        assert reopened_entries["Bob"].initials == "BO"
+    finally:
+        saved.close()
 
 
 def test_remove_comment_and_save_reopen_round_trip(session: DocxSession) -> None:
