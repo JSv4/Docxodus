@@ -1082,6 +1082,11 @@ public enum EditErrorCode
     UnknownStyle,
     InvalidListLevel,
 
+    /// <summary>A list start value OOXML cannot express: <c>w:startOverride/@w:val</c> is a
+    /// non-negative decimal, so <see cref="DocxSession.SetListStartOverride"/> rejects a
+    /// negative value.</summary>
+    InvalidListStartValue,
+
     /// <summary>A page-numbering value that OOXML cannot express: a start page below zero, or
     /// <see cref="NumberFormat.Bullet"/> as a page-number format (neither <c>w:pgNumType/@w:fmt</c>
     /// nor the field <c>\*</c> switch has a bullet notion).</summary>
@@ -7079,6 +7084,169 @@ public sealed class DocxSession : IDisposable
             if (preOp.ok) RestoreSnapshot(preOp.snapshot);
             return EditResult.Fail(EditErrorCode.InternalError, ex.Message, firstAnchorId);
         }
+    }
+
+    /// <summary>
+    /// Restart (or seed) the anchored list item's numbering at <paramref name="value"/> — Word's
+    /// <em>Set Numbering Value… → Set value to</em> (issue #314). Writes a
+    /// <c>w:lvlOverride[@w:ilvl]/w:startOverride[@w:val]</c> on a DEDICATED <c>w:num</c> instance:
+    /// the item's current num is cloned (never mutated — it may be shared, and the numbering part
+    /// is not snapshotted for undo), and the anchored paragraph plus every FOLLOWING paragraph of
+    /// the same numbering instance in the part is repointed at the clone. An anchored item
+    /// mid-sequence therefore splits the sequence exactly like Word: earlier items keep their
+    /// numbers, the anchored item shows <paramref name="value"/>, and the tail continues from it.
+    /// Style-derived members get a direct <c>w:numPr</c> materialized (ilvl preserved), the same
+    /// way <see cref="SetListLevel"/> does. Undo restores every repointed paragraph.
+    /// </summary>
+    public EditResult SetListStartOverride(string anchorId, int value)
+    {
+        if (value < 0)
+            return EditResult.Fail(EditErrorCode.InvalidListStartValue,
+                $"list start value cannot be negative (got {value})", anchorId);
+        return ApplyListStartOverride(anchorId, value);
+    }
+
+    /// <summary>
+    /// Remove the numbering restart from the anchored item's list sequence — the inverse of
+    /// <see cref="SetListStartOverride"/>. EVERY paragraph of the same numbering instance in the
+    /// part (before and after the anchor — they move together, so relative continuation is
+    /// preserved) is repointed at a clone of the instance WITHOUT the
+    /// <c>w:startOverride</c> at the item's level; the sequence reverts to the abstract
+    /// definition's own <c>w:start</c>. A sequence with no override at the item's level is a
+    /// successful no-op that consumes no undo history.
+    /// </summary>
+    public EditResult ClearListStartOverride(string anchorId) =>
+        ApplyListStartOverride(anchorId, null);
+
+    /// <summary>Shared engine for <see cref="SetListStartOverride"/> (split the sequence at the
+    /// anchor onto a clone carrying the override) and <see cref="ClearListStartOverride"/>
+    /// (move the whole sequence onto a clone without it).</summary>
+    private EditResult ApplyListStartOverride(string anchorId, int? value)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
+        if (target.Anchor.Kind != "li")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "SetListStartOverride requires a list-item anchor", anchorId);
+        var element = target.Resolve(_doc!);
+        if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+
+        var (numId, ilvl) = EffectiveNumberingOf(element);
+        // numId 0 is OOXML for "numbering removed" — not an instance a start override can target.
+        if (numId is null or 0)
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "no numPr on this paragraph or its style", anchorId);
+
+        // Clearing a sequence that has no override at this level is a no-op; return BEFORE
+        // TakeSnapshot so it cannot evict real edits from the bounded undo ring.
+        if (value is null && Internal.NumberingFactory.GetStartOverride(_doc!, numId.Value, ilvl) is null)
+            return new EditResult { Success = true, Modified = new[] { target.Anchor } };
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var newNumId = Internal.NumberingFactory.CloneNumWithStartOverride(_doc!, numId.Value, ilvl, value);
+            if (newNumId is null)
+            {
+                _ = _history.PopForUndo();
+                return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                    $"numbering instance {numId} is not defined in the numbering part", anchorId);
+            }
+
+            // Repoint the sequence: for a set, the anchored paragraph and everything after it
+            // (the split Word performs); for a clear, every member (the whole sequence moves).
+            var partRoot = element.AncestorsAndSelf().Last();
+            var repointedUnids = new List<string?>();
+            bool reached = false;
+            foreach (var p in partRoot.Descendants(W.p))
+            {
+                if (p == element) reached = true;
+                if (value is not null && !reached) continue;
+                var (pNumId, pIlvl) = EffectiveNumberingOf(p);
+                if (pNumId != numId) continue;
+                RepointListInstance(p, pIlvl, newNumId.Value);
+                repointedUnids.Add((string?)p.Attribute(PtOpenXml.Unid));
+            }
+
+            // Flush the body mutation to the part stream immediately — same WASM typed-DOM /
+            // XDocument divergence rationale as SetListLevel.
+            (ResolvePart(target.PartUri) ?? _doc!.MainDocumentPart!).PutXDocument();
+            ClearListNumberingAnnotations();
+            InvalidateProjectionCache();
+            _ = AnchorIndex();
+            var modified = new List<Anchor>();
+            foreach (var unid in repointedUnids)
+            {
+                if (unid is not null && AnchorForUnid(unid, target.PartUri) is { } updated)
+                    modified.Add(updated);
+            }
+            return new EditResult
+            {
+                Success = true,
+                Modified = modified,
+                Patch = PatchFor(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            var preOp = _history.PopForUndo();
+            if (preOp.ok) RestoreSnapshot(preOp.snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
+
+    /// <summary>
+    /// The effective <c>(numId, ilvl)</c> of a paragraph: a direct <c>w:numPr</c> wins per
+    /// attribute (its <c>w:numId</c>/<c>w:ilvl</c> each fall back to the pStyle chain via
+    /// <see cref="ResolveStyleNumbering"/> when the child is absent). <c>(null, 0)</c> when
+    /// neither contributes a numId.
+    /// </summary>
+    private (int? numId, int ilvl) EffectiveNumberingOf(XElement paragraph)
+    {
+        var numPr = paragraph.Element(W.pPr)?.Element(W.numPr);
+        var directNumId = (int?)numPr?.Element(W.numId)?.Attribute(W.val);
+        var directIlvl = (int?)numPr?.Element(W.ilvl)?.Attribute(W.val);
+        if (directNumId is not null) return (directNumId, directIlvl ?? 0);
+        var (styleNumId, styleIlvl) = ResolveStyleNumbering(paragraph);
+        return (styleNumId, directIlvl ?? styleIlvl);
+    }
+
+    /// <summary>
+    /// Strip the <see cref="ListItemRetriever"/> annotations (<c>ListItemInfo</c> /
+    /// <c>LevelNumbers</c> / <c>ContinuationInfo</c>) a previous projection stamped on the live
+    /// paragraphs. The retriever re-initializes only paragraphs WITHOUT a <c>ListItemInfo</c>
+    /// annotation, so a numbering mutation after a projection would otherwise keep serving the
+    /// stale counter vectors — the visible numbers would not restart until save/reopen.
+    /// </summary>
+    private void ClearListNumberingAnnotations()
+    {
+        foreach (var part in EnumerateProjectedParts())
+        {
+            var root = part.GetXDocument().Root;
+            if (root is not null) ListItemRetriever.ClearAnnotations(root);
+        }
+    }
+
+    /// <summary>Point <paramref name="paragraph"/>'s numbering at <paramref name="newNumId"/>,
+    /// keeping its effective <paramref name="ilvl"/> — editing the direct <c>w:numPr</c> in place
+    /// when one carries a <c>w:numId</c>, else materializing one (the style-derived case).</summary>
+    private void RepointListInstance(XElement paragraph, int ilvl, int newNumId)
+    {
+        var pPr = paragraph.Element(W.pPr);
+        var numPr = pPr?.Element(W.numPr);
+        if (numPr?.Element(W.numId) is { } numIdEl)
+        {
+            numIdEl.SetAttributeValue(W.val, newNumId);
+            return;
+        }
+        if (pPr is null) { pPr = new XElement(W.pPr); paragraph.AddFirst(pPr); }
+        pPr.Element(W.numPr)?.Remove();
+        SetPPrChildInOrder(pPr, new XElement(W.numPr,
+            new XElement(W.ilvl, new XAttribute(W.val, ilvl)),
+            new XElement(W.numId, new XAttribute(W.val, newNumId))));
     }
 
     // ─── Tier E: annotations ────────────────────────────────────────────

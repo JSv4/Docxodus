@@ -344,6 +344,12 @@ internal static class DocxSessionOps
     public static string ApplyListFormatRange(int handle, string firstAnchorId, string lastAnchorId, ListFormat kind) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).ApplyListFormatRange(firstAnchorId, lastAnchorId, kind));
 
+    public static string SetListStartOverride(int handle, string anchorId, int value) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetListStartOverride(anchorId, value));
+
+    public static string ClearListStartOverride(int handle, string anchorId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).ClearListStartOverride(anchorId));
+
     // ─── Tier D: tables ─────────────────────────────────────────────────
 
     public static string ReplaceCellContent(int handle, string cellAnchorId, string markdown) =>

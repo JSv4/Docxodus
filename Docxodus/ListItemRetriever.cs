@@ -336,6 +336,29 @@ namespace Docxodus
             }
         }
         
+        /// <summary>
+        /// Remove every annotation this retriever stamps on the paragraphs under
+        /// <paramref name="root"/> (ListItemInfo, LevelNumbers, ContinuationInfo, and the
+        /// private ParagraphInfo/ReverseAxis), so the next RetrieveListItem call re-initializes
+        /// and recounts. A live-session numbering mutation (e.g. DocxSession.SetListStartOverride
+        /// repointing w:numPr at a different w:num) must call this: initialization is
+        /// once-per-paragraph, so the retriever would otherwise keep serving the counter vectors
+        /// computed before the mutation. The per-numId caches on the numbering part's XDocument
+        /// root stay — existing w:num definitions are never mutated by session ops (additive-only),
+        /// so those entries remain valid.
+        /// </summary>
+        public static void ClearAnnotations(XElement root)
+        {
+            foreach (var p in root.DescendantsAndSelf().Where(e => e.Name == W.p))
+            {
+                p.RemoveAnnotations<ListItemInfo>();
+                p.RemoveAnnotations<LevelNumbers>();
+                p.RemoveAnnotations<ContinuationInfo>();
+                p.RemoveAnnotations<ParagraphInfo>();
+                p.RemoveAnnotations<ReverseAxis>();
+            }
+        }
+
         public static void SetParagraphLevel(XElement paragraph, int ilvl)
         {
             var pi = paragraph.Annotation<ParagraphInfo>();

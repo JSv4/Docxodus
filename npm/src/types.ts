@@ -1136,6 +1136,8 @@ export interface DocxodusWasmExports {
     RemoveListMembership: (handle: number, anchor: string) => string;
     ApplyListFormat: (handle: number, anchor: string, kind: string) => string;
     ApplyListFormatRange: (handle: number, firstAnchor: string, lastAnchor: string, kind: string) => string;
+    SetListStartOverride: (handle: number, anchor: string, value: number) => string;
+    ClearListStartOverride: (handle: number, anchor: string) => string;
     ReplaceCellContent: (handle: number, anchor: string, md: string) => string;
     RawGetXml: (handle: number, anchor: string) => string;
     RawInsertXml: (handle: number, anchor: string, pos: string, xml: string) => string;
@@ -1221,6 +1223,7 @@ export type EditErrorCode =
   | "invalid_position"
   | "unknown_style"
   | "invalid_list_level"
+  | "invalid_list_start_value"
   | "invalid_page_numbering"
   | "invalid_paragraph_format"
   | "invalid_table_styling"

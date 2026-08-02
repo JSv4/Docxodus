@@ -89,7 +89,7 @@ markdown projection and search tools return:
 | `docxodus_edit` | Insert/replace/delete text and blocks, split/merge paragraphs, undo/redo |
 | `docxodus_format` | Character and paragraph formatting, list level |
 | `docxodus_create` | New paragraphs, headings, tables, horizontal rules, footnotes/endnotes, page-number fields |
-| `docxodus_list` | Promote/demote/renumber list membership |
+| `docxodus_list` | Promote/demote/renumber list membership; restart numbering (Word's *Set Numbering Value…*) |
 | `docxodus_comment` | Native Word review comments (real `w:comment` markup): add on a span, update body, remove, list |
 | `docxodus_annotate` | Anchor-addressed highlight/label annotations (a custom-XML overlay for external tools, distinct from comments) |
 | `docxodus_track_changes` | List tracked changes; accept/reject one by id, or all |

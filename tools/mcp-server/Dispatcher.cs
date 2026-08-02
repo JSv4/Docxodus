@@ -361,6 +361,9 @@ internal static class Dispatcher
             session.Handle, Str(args, "firstAnchorId"), Str(args, "lastAnchorId"),
             DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
         "set_level" => DocxSessionOps.SetListLevel(session.Handle, Str(args, "anchorId"), Int(args, "levelDelta")),
+        "set_start" => DocxSessionOps.SetListStartOverride(
+            session.Handle, Str(args, "anchorId"), Int(args, "startValue")),
+        "clear_start" => DocxSessionOps.ClearListStartOverride(session.Handle, Str(args, "anchorId")),
         "remove" => DocxSessionOps.RemoveListMembership(session.Handle, Str(args, "anchorId")),
         "get_membership" => DocxSessionOps.GetListMembership(session.Handle, Str(args, "anchorId")),
         _ => throw new McpToolException($"unknown docxodus_list action: {action}"),

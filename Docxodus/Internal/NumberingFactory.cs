@@ -207,6 +207,80 @@ internal static class NumberingFactory
     }
 
     /// <summary>
+    /// Read the <c>w:startOverride</c> value at <paramref name="ilvl"/> on the <c>w:num</c>
+    /// behind <paramref name="numId"/>, or null when the num, the <c>w:lvlOverride</c>, or the
+    /// <c>w:startOverride</c> is absent.
+    /// </summary>
+    public static int? GetStartOverride(WordprocessingDocument doc, int numId, int ilvl)
+    {
+        var root = doc.MainDocumentPart?.NumberingDefinitionsPart?.GetXDocument().Root;
+        var num = root?.Elements(W + "num")
+            .FirstOrDefault(n => (string?)n.Attribute(W + "numId") == numId.ToString());
+        var ovr = num?.Elements(W + "lvlOverride")
+            .FirstOrDefault(o => (string?)o.Attribute(W + "ilvl") == ilvl.ToString());
+        return int.TryParse((string?)ovr?.Element(W + "startOverride")?.Attribute(W + "val"), out var v)
+            ? v : (int?)null;
+    }
+
+    /// <summary>
+    /// Clone the <c>w:num</c> behind <paramref name="numId"/> into a NEW <c>w:num</c> (fresh
+    /// numId, same abstractNumId, existing lvlOverrides copied verbatim) whose
+    /// <c>w:lvlOverride[@w:ilvl]/w:startOverride</c> at <paramref name="ilvl"/> is set to
+    /// <paramref name="value"/> — or removed, when <paramref name="value"/> is null. Returns the
+    /// new numId, or null when <paramref name="numId"/> resolves to no <c>w:num</c>.
+    /// </summary>
+    /// <remarks>
+    /// Additive-only ON PURPOSE: the source num is never mutated, because the numbering part is
+    /// not snapshotted (see the class remarks) — the caller repoints the affected paragraphs'
+    /// <c>w:numPr</c> at the clone, which IS snapshotted, so undo restores the paragraphs and
+    /// merely strands the clone unreferenced (harmless, like an undone <see cref="EnsureNumbering"/>).
+    /// </remarks>
+    public static int? CloneNumWithStartOverride(WordprocessingDocument doc, int numId, int ilvl, int? value)
+    {
+        var part = doc.MainDocumentPart?.NumberingDefinitionsPart;
+        var root = part?.GetXDocument().Root;
+        var num = root?.Elements(W + "num")
+            .FirstOrDefault(n => (string?)n.Attribute(W + "numId") == numId.ToString());
+        if (part is null || root is null || num is null) return null;
+
+        static int OvrIlvl(XElement o) =>
+            int.TryParse((string?)o.Attribute(W + "ilvl"), out var v) ? v : -1;
+
+        int newNumId = NextId(root, "num", "numId");
+        var clone = new XElement(num);
+        clone.SetAttributeValue(W + "numId", newNumId);
+
+        var ovr = clone.Elements(W + "lvlOverride").FirstOrDefault(o => OvrIlvl(o) == ilvl);
+        if (value is { } v)
+        {
+            var startOverride = new XElement(W + "startOverride", new XAttribute(W + "val", v));
+            if (ovr is not null)
+            {
+                // CT_NumLvl sequence: startOverride, then lvl — replace at the front.
+                ovr.Element(W + "startOverride")?.Remove();
+                ovr.AddFirst(startOverride);
+            }
+            else
+            {
+                ovr = new XElement(W + "lvlOverride", new XAttribute(W + "ilvl", ilvl), startOverride);
+                // Keep lvlOverrides in ascending ilvl order (Word's shape); they are the last
+                // children of CT_Num, so a plain Add appends correctly when none follows.
+                var next = clone.Elements(W + "lvlOverride").FirstOrDefault(o => OvrIlvl(o) > ilvl);
+                if (next is not null) next.AddBeforeSelf(ovr); else clone.Add(ovr);
+            }
+        }
+        else if (ovr is not null)
+        {
+            ovr.Element(W + "startOverride")?.Remove();
+            if (!ovr.Elements().Any()) ovr.Remove();
+        }
+
+        root.Add(clone); // nums come after abstractNums; appending keeps the group intact
+        part.PutXDocument();
+        return newNumId;
+    }
+
+    /// <summary>
     /// Ensure the abstractNum behind <paramref name="numId"/> defines a <c>w:lvl</c> for every
     /// level up to <paramref name="targetIlvl"/>. Many real-world documents (notably python-docx's
     /// default "List Bullet"/"List Number") define ONLY level 0, so nesting — bumping <c>w:ilvl</c>
