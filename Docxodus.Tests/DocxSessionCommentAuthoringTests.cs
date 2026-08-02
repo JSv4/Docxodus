@@ -389,6 +389,37 @@ public class DocxSessionCommentAuthoringTests
     }
 
     [Fact]
+    public void DS363_OpsWireRoundTrip()
+    {
+        var handle = Docxodus.Internal.DocxSessionOps.OpenSession(
+            DocxSessionTests.BuildDS001_SimpleTwoParagraphs(), null);
+        try
+        {
+            using var probe = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+            var anchor = FirstBodyParagraph(probe);
+
+            var addJson = Docxodus.Internal.DocxSessionOps.AddComment(
+                handle, anchor, null, "Alice", null, "2026-08-01T00:00:00Z", "Wire test.");
+            Assert.Contains("\"success\":true", addJson);
+            Assert.Contains("cmt:cmt:", addJson);
+
+            var listJson = Docxodus.Internal.DocxSessionOps.ListComments(handle);
+            Assert.Contains("\"author\":\"Alice\"", listJson);
+            Assert.Contains("\"date\":\"2026-08-01T00:00:00Z\"", listJson);
+            Assert.Contains("\"text\":\"Wire test.\"", listJson);
+
+            // Bad date string throws at the transport layer, never a silent drop.
+            Assert.ThrowsAny<FormatException>(() =>
+                Docxodus.Internal.DocxSessionOps.AddComment(
+                    handle, anchor, null, "Alice", null, "not-a-date", "x"));
+        }
+        finally
+        {
+            Docxodus.Internal.DocxSessionOps.CloseSession(handle);
+        }
+    }
+
+    [Fact]
     public void DS364_AuthoredComment_IsEditableThroughReplaceTextOnItsParagraph()
     {
         using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());

@@ -294,6 +294,22 @@ internal static class DocxSessionOps
     public static string InsertEndnote(int handle, string anchorId, int characterOffset, string markdown) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).InsertEndnote(anchorId, characterOffset, markdown));
 
+    // ─── Comments (issue #300) ──────────────────────────────────────────
+
+    public static string AddComment(int handle, string anchorId, CharSpan? span, string author,
+        string? initials, string? dateIso, string markdown) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddComment(
+            anchorId, span, author, markdown, initials, DocxSessionJson.ParseCommentDate(dateIso)));
+
+    public static string UpdateComment(int handle, string commentAnchorId, string markdown) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).UpdateComment(commentAnchorId, markdown));
+
+    public static string RemoveComment(int handle, string commentAnchorId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveComment(commentAnchorId));
+
+    public static string ListComments(int handle) =>
+        DocxSessionJson.SerializeCommentList(SessionRegistry.Get(handle).ListComments());
+
     // ─── Tier C: formatting ─────────────────────────────────────────────
 
     public static string ApplyFormat(int handle, string anchorId, CharSpan? span, FormatOp op) =>

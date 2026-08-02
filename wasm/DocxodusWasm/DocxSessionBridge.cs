@@ -259,6 +259,38 @@ public static partial class DocxSessionBridge
     public static string InsertEndnote(int h, string anchor, int characterOffset, string markdown) =>
         DocxSessionOps.InsertEndnote(h, anchor, characterOffset, markdown);
 
+    /// <summary>
+    /// Add a native Word comment on body paragraph <paramref name="anchor"/> (issue #300).
+    /// <paramref name="spanJson"/> is <c>""</c> for the whole block or
+    /// <c>{"start":int,"length":int}</c>; <paramref name="initials"/>/<paramref name="date"/>
+    /// are <c>""</c> when absent (date is ISO-8601 and written only when provided). Returns the
+    /// created definition anchor (kind <c>cmt</c>) plus its <c>p</c>/scope-<c>cmt</c> paragraph
+    /// anchors in <c>created</c>.
+    /// </summary>
+    [JSExport]
+    public static string AddComment(int h, string anchor, string spanJson, string author,
+        string initials, string date, string markdown) =>
+        DocxSessionOps.AddComment(h, anchor, ParseSpan(spanJson), author,
+            string.IsNullOrEmpty(initials) ? null : initials,
+            string.IsNullOrEmpty(date) ? null : date,
+            markdown);
+
+    /// <summary>Replace a comment's body text, addressed by its definition anchor (kind
+    /// <c>cmt</c>); identity attributes (author/initials/date) are preserved.</summary>
+    [JSExport]
+    public static string UpdateComment(int h, string commentAnchor, string markdown) =>
+        DocxSessionOps.UpdateComment(h, commentAnchor, markdown);
+
+    /// <summary>Remove a comment: definition + body marker triple + threading entries.</summary>
+    [JSExport]
+    public static string RemoveComment(int h, string commentAnchor) =>
+        DocxSessionOps.RemoveComment(h, commentAnchor);
+
+    /// <summary>The document's comments in part order:
+    /// <c>[{"anchorId","author","initials"?,"date"?,"text"}]</c>.</summary>
+    [JSExport]
+    public static string ListComments(int h) => DocxSessionOps.ListComments(h);
+
     [JSExport]
     public static string ApplyFormat(int h, string anchor, string spanJson, string opJson) =>
         DocxSessionOps.ApplyFormat(h, anchor, ParseSpan(spanJson), DocxSessionJson.ParseFormatOp(opJson));
