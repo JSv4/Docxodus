@@ -232,8 +232,10 @@ code/strike, links, hard breaks).
 
 `apply_format`/`apply_format_by_substring` (`FormatOp`: bold/italic/underline/strike/code/color/
 vertAlign/fontSizePts/fontFamily), `set_paragraph_style`, `set_paragraph_format`
-(`ParagraphFormatOp`: alignment/indentDelta/pageBreakBefore/borders), `set_list_level`,
-`remove_list_membership`, `apply_list_format`.
+(`ParagraphFormatOp`: alignment/indentDelta/pageBreakBefore/topBorder/bottomBorder/clearBorders —
+`topBorder`/`bottomBorder` add or replace a `w:pBdr` edge, `clearBorders` removes the whole
+`w:pBdr` before either is applied in the same call), `set_list_level`, `remove_list_membership`,
+`apply_list_format`.
 
 ### `docxodus_create` — new structural content
 

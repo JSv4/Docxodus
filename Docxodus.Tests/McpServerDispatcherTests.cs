@@ -241,6 +241,39 @@ public class McpServerDispatcherTests : IDisposable
         Assert.True(membership.GetProperty("isAutoNumbered").GetBoolean());
     }
 
+    [Fact]
+    public void MCP042_Format_SetParagraphFormat_AddsAndClearsBorder()
+    {
+        // Issue #301: the schema used to only expose clearBorders, so an agent could remove a
+        // paragraph border but never add one to an EXISTING paragraph. topBorder/bottomBorder
+        // are visible in the rendered HTML (a border-* style on the wrapping div), so that's
+        // the black-box signal this test checks — the same one every other MCP04x format test
+        // relies on `success` for, just with an observable side effect for a border specifically.
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var applied = Parse(Dispatcher.Call(_store, "docxodus_format", J(
+            $$"""
+            {"sessionId":{{sessionArg}},"action":"set_paragraph_format","anchorId":"{{anchor}}","paragraphFormat":{"bottomBorder":{"style":"single","size":12,"color":"auto"} } }
+            """)));
+        Assert.True(applied.GetProperty("success").GetBoolean());
+
+        var htmlWithBorder = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"html"}""")))
+            .GetProperty("html").GetString()!;
+        Assert.Contains("border-bottom", htmlWithBorder);
+
+        var cleared = Parse(Dispatcher.Call(_store, "docxodus_format", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_paragraph_format","anchorId":"{{anchor}}","paragraphFormat":{"clearBorders":true} }""")));
+        Assert.True(cleared.GetProperty("success").GetBoolean());
+
+        var htmlAfterClear = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"html"}""")))
+            .GetProperty("html").GetString()!;
+        Assert.DoesNotContain("border-bottom", htmlAfterClear);
+    }
+
     // ─── Create / Table ─────────────────────────────────────────────────
 
     [Fact]
