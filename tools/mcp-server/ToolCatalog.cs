@@ -64,7 +64,7 @@ internal static class ToolCatalog
               "properties": {
                 "sessionId": { "type": "string" },
                 "format": { "type": "string", "enum": ["markdown", "html", "text", "blocks", "info"], "description": "markdown/text: anchor-addressed markdown projection (text strips the markdown syntax). html: fully rendered HTML. blocks: structural metadata for every addressable block. info: section/page-setup facts plus a document edit summary." },
-                "anchorId": { "type": "string", "description": "Optional. Scope markdown/html output to one block and its descendants instead of the whole document." }
+                "anchorId": { "type": "string", "description": "Optional. Scope markdown/html/text output to one block and its descendants instead of the whole document. Anchors in body, header (hdr*), footer (ftr*), note, and comment scopes are accepted." }
               },
               "required": ["sessionId", "format"]
             }
@@ -81,6 +81,7 @@ internal static class ToolCatalog
                 "query": { "type": "string", "description": "The needle: literal text, regex pattern, block kind, annotation id, or bookmark name depending on mode." },
                 "caseSensitive": { "type": "boolean", "description": "Default false (case-insensitive)." },
                 "contextChars": { "type": "integer", "description": "Characters of context captured on each side of a text/regex match. Default 80." },
+                "scope": { "type": "string", "enum": ["body", "headers", "footers", "header_footer", "all"], "description": "text/regex only: package stories to search. Default body preserves existing behavior; headers/footers cover every hdr*/ftr* part, header_footer combines them, and all includes body, running stories, notes, and comments." },
                 "maxResults": { "type": "integer", "description": "Cap the number of matches returned. Default unlimited." }
               },
               "required": ["sessionId", "mode", "query"]
@@ -178,18 +179,19 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_create",
-            "Insert new structural content: paragraphs, headings, tables, horizontal rules, footnotes/endnotes, page-number fields.",
+            "Insert new structural content: paragraphs, headings, tables, horizontal rules, footnotes/endnotes, running headers/footers, page-number fields.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["insert_paragraph", "insert_heading", "insert_table", "insert_horizontal_rule", "insert_footnote", "insert_endnote", "insert_page_number_field"] },
+                "action": { "type": "string", "enum": ["insert_paragraph", "insert_heading", "insert_table", "insert_horizontal_rule", "insert_footnote", "insert_endnote", "insert_page_number_field", "set_header_text", "set_footer_text", "ensure_header_footer_visible"] },
                 "anchorId": { "type": "string", "description": "Reference block for insert_paragraph/insert_heading/insert_table/insert_horizontal_rule (paired with position), or the citing paragraph for insert_footnote/insert_endnote, or the target paragraph for insert_page_number_field." },
+                "bodyAnchorId": { "type": "string", "description": "set_header_text/set_footer_text/ensure_header_footer_visible: a body block identifying the section whose running story or visibility flags should change." },
                 "position": { "type": "string", "enum": ["before", "after"] },
                 "text": { "type": "string", "description": "insert_heading: heading text (plain, not markdown)." },
                 "level": { "type": "integer", "minimum": 1, "maximum": 6, "description": "insert_heading: 1-6." },
-                "markdown": { "type": "string", "description": "insert_paragraph / insert_footnote / insert_endnote payload." },
+                "markdown": { "type": "string", "description": "insert_paragraph / insert_footnote / insert_endnote / set_header_text / set_footer_text payload." },
                 "rows": { "type": "integer" }, "columns": { "type": "integer" },
                 "cellContents": { "type": "array", "items": { "type": "string" }, "description": "insert_table: row-major markdown per cell." },
                 "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
@@ -197,6 +199,7 @@ internal static class ToolCatalog
                 "borderless": { "type": "boolean" },
                 "ruleStyle": { "type": "string", "enum": ["single", "double", "thick"], "description": "insert_horizontal_rule." },
                 "characterOffset": { "type": "integer", "description": "insert_footnote/insert_endnote: character offset within the citing paragraph." },
+                "kind": { "type": "string", "enum": ["default", "first", "even"], "description": "set_header_text/set_footer_text/ensure_header_footer_visible: running-story kind. first/even authoring also enables the corresponding Word visibility setting; ensure_header_footer_visible enables it for an already-referenced story." },
                 "field": { "type": "string", "enum": ["current_page", "total_pages"], "description": "insert_page_number_field." },
                 "numberFormat": { "type": "string", "enum": ["decimal", "upperLetter", "lowerLetter", "upperRoman", "lowerRoman"], "description": "insert_page_number_field: optional explicit \\* switch format." }
               },
