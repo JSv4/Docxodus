@@ -31,6 +31,7 @@ from .enums import (
     ContextBoundary,
     DiffFormat,
     HeaderFooterKind,
+    ListFormat,
     PageNumberField,
     PlaceholderKinds,
     Position,
@@ -1234,6 +1235,38 @@ class DocxSession:
     def remove_list_membership(self, anchor_id: str) -> EditResult:
         return EditResult._from_wire(
             self._call("remove_list_membership", {"anchorId": anchor_id})
+        )
+
+    def apply_list_format(
+        self, anchor_id: str, list_format: ListFormat
+    ) -> EditResult:
+        """Make the paragraph a bullet/numbered list item (synthesizing a reusable numbering
+        definition if needed), or strip list membership with ``ListFormat.NONE``. Unlike
+        :meth:`set_list_level` / :meth:`remove_list_membership` this PROMOTES a plain
+        paragraph."""
+        return EditResult._from_wire(
+            self._call(
+                "apply_list_format",
+                {"anchorId": anchor_id, "listFormat": list_format.value},
+            )
+        )
+
+    def apply_list_format_range(
+        self, first_anchor_id: str, last_anchor_id: str, list_format: ListFormat
+    ) -> EditResult:
+        """:meth:`apply_list_format` across the contiguous sibling run from
+        ``first_anchor_id`` to ``last_anchor_id`` INCLUSIVE (either document order). Every
+        member shares ONE ``w:num`` instance so the numbering sequence stays intact, and the
+        whole range is a single undo step."""
+        return EditResult._from_wire(
+            self._call(
+                "apply_list_format_range",
+                {
+                    "firstAnchorId": first_anchor_id,
+                    "lastAnchorId": last_anchor_id,
+                    "listFormat": list_format.value,
+                },
+            )
         )
 
     # -- Tier D: tables ---------------------------------------------------

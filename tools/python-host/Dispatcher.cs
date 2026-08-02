@@ -114,6 +114,11 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId"), Int(args, "levelDelta")),
         "remove_list_membership" => DocxSessionOps.RemoveListMembership(
             Handle(args), Str(args, "anchorId")),
+        "apply_list_format" => DocxSessionOps.ApplyListFormat(
+            Handle(args), Str(args, "anchorId"), DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
+        "apply_list_format_range" => DocxSessionOps.ApplyListFormatRange(
+            Handle(args), Str(args, "firstAnchorId"), Str(args, "lastAnchorId"),
+            DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
 
         "replace_cell_content" => DocxSessionOps.ReplaceCellContent(
             Handle(args), Str(args, "cellAnchorId"), Str(args, "markdown")),

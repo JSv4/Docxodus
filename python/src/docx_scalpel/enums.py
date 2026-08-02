@@ -15,6 +15,7 @@ __all__ = [
     "HeaderFooterKind",
     "PageNumberField",
     "ParagraphAlignment",
+    "ListFormat",
     "EditErrorCode",
     "PlaceholderKind",
     "PlaceholderKinds",
@@ -83,6 +84,29 @@ class LineSpacingRule(str, Enum):
     AUTO = "auto"
     EXACT = "exact"
     AT_LEAST = "atLeast"
+
+
+class ListFormat(str, Enum):
+    """List format for ``apply_list_format`` / ``apply_list_format_range``.
+
+    The plain numbered formats render ``1.`` / ``a.`` / ``i.`` level text; the
+    ``*_PARENTHESIS`` variants render ``(1)`` / ``(a)`` / ``(i)`` — same ``w:numFmt``,
+    different ``w:lvlText`` (the legal-drafting presets). ``NONE`` strips inline list
+    membership.
+    """
+
+    NONE = "none"
+    BULLET = "bullet"
+    DECIMAL = "decimal"
+    LOWER_LETTER = "lowerLetter"
+    UPPER_LETTER = "upperLetter"
+    LOWER_ROMAN = "lowerRoman"
+    UPPER_ROMAN = "upperRoman"
+    DECIMAL_PARENTHESIS = "decimalParenthesis"
+    LOWER_LETTER_PARENTHESIS = "lowerLetterParenthesis"
+    UPPER_LETTER_PARENTHESIS = "upperLetterParenthesis"
+    LOWER_ROMAN_PARENTHESIS = "lowerRomanParenthesis"
+    UPPER_ROMAN_PARENTHESIS = "upperRomanParenthesis"
 
 
 class EditErrorCode(str, Enum):

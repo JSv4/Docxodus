@@ -357,6 +357,9 @@ internal static class Dispatcher
     {
         "apply_format" => DocxSessionOps.ApplyListFormat(
             session.Handle, Str(args, "anchorId"), DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
+        "apply_format_range" => DocxSessionOps.ApplyListFormatRange(
+            session.Handle, Str(args, "firstAnchorId"), Str(args, "lastAnchorId"),
+            DocxSessionJson.ParseListFormat(OptStr(args, "listFormat"))),
         "set_level" => DocxSessionOps.SetListLevel(session.Handle, Str(args, "anchorId"), Int(args, "levelDelta")),
         "remove" => DocxSessionOps.RemoveListMembership(session.Handle, Str(args, "anchorId")),
         "get_membership" => DocxSessionOps.GetListMembership(session.Handle, Str(args, "anchorId")),

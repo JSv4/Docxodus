@@ -171,7 +171,7 @@ internal static class ToolCatalog
                   }
                 },
                 "levelDelta": { "type": "integer", "description": "set_list_level: +1 indents one level, -1 outdents one level." },
-                "listFormat": { "type": "string", "enum": ["bullet", "decimal", "none"], "description": "apply_list_format: converts the paragraph into (or out of) a real, auto-numbered Word list." }
+                "listFormat": { "type": "string", "enum": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"], "description": "apply_list_format: converts the paragraph into (or out of) a real, auto-numbered Word list. *Parenthesis variants render '(1)'/'(a)'/'(i)'." }
               },
               "required": ["sessionId", "action", "anchorId"]
             }
@@ -205,18 +205,20 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_list",
-            "Manage list membership: promote a paragraph to a real auto-numbered Word list, renumber/indent, or drop membership.",
+            "Manage list membership: promote a paragraph (or a whole contiguous run of paragraphs) to a real auto-numbered Word list, renumber/indent, or drop membership. apply_format_range keeps every member in ONE shared w:num instance so the sequence numbers stay intact — use it instead of per-item apply_format when converting an existing list.",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["apply_format", "set_level", "remove", "get_membership"] },
-                "anchorId": { "type": "string" },
-                "listFormat": { "type": "string", "enum": ["bullet", "decimal"], "description": "apply_format: creates real w:numPr numbering on the paragraph." },
+                "action": { "type": "string", "enum": ["apply_format", "apply_format_range", "set_level", "remove", "get_membership"] },
+                "anchorId": { "type": "string", "description": "Target paragraph for every action except apply_format_range." },
+                "firstAnchorId": { "type": "string", "description": "apply_format_range: first paragraph of the contiguous sibling run (inclusive)." },
+                "lastAnchorId": { "type": "string", "description": "apply_format_range: last paragraph of the run (inclusive; either document order)." },
+                "listFormat": { "type": "string", "enum": ["bullet", "decimal", "lowerLetter", "upperLetter", "lowerRoman", "upperRoman", "decimalParenthesis", "lowerLetterParenthesis", "upperLetterParenthesis", "lowerRomanParenthesis", "upperRomanParenthesis", "none"], "description": "apply_format / apply_format_range: creates real w:numPr numbering. Plain numbered formats render '1.'/'a.'/'i.'; *Parenthesis variants render '(1)'/'(a)'/'(i)' (legal-drafting presets). 'none' strips membership." },
                 "levelDelta": { "type": "integer", "description": "set_level: +1 indents, -1 outdents." }
               },
-              "required": ["sessionId", "action", "anchorId"]
+              "required": ["sessionId", "action"]
             }
             """),
         new ToolDefinition(

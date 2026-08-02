@@ -8,19 +8,37 @@ using DocumentFormat.OpenXml.Packaging;
 namespace Docxodus.Internal;
 
 /// <summary>
-/// Synthesizes reusable bullet / decimal numbering definitions so a plain paragraph can be
-/// promoted to a real list item. <see cref="DocxSession.ApplyListFormat"/> uses this when no
-/// suitable numbering exists. Definitions are tagged with a fixed marker <c>w:nsid</c> per
-/// format and resolved find-or-create, so the op is idempotent across calls, save/reopen, and
-/// undo (the numbering part is not snapshotted; the paragraph's <c>w:numPr</c> is).
+/// Synthesizes reusable numbering definitions (bullet, decimal, letter, roman — plain or
+/// parenthesized) so a plain paragraph can be promoted to a real list item.
+/// <see cref="DocxSession.ApplyListFormat"/> / <see cref="DocxSession.ApplyListFormatRange"/>
+/// use this when no suitable numbering exists. Definitions are tagged with a fixed marker
+/// <c>w:nsid</c> per format and resolved find-or-create, so the op is idempotent across calls,
+/// save/reopen, and undo (the numbering part is not snapshotted; the paragraph's <c>w:numPr</c>
+/// is).
 /// </summary>
 internal static class NumberingFactory
 {
     private static readonly XNamespace W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
-    // Stable per-format markers (8-hex nsid values) used to find-or-create our own definition.
-    private const string BulletNsid = "0D0CB001";
-    private const string DecimalNsid = "0D0CD001";
+    /// <summary>
+    /// Stable per-format marker (8-hex <c>w:nsid</c> value) used to find-or-create our own
+    /// definition. Saved documents already carry these — a value, once shipped, is frozen.
+    /// </summary>
+    private static string NsidFor(ListFormat fmt) => fmt switch
+    {
+        ListFormat.Bullet => "0D0CB001",
+        ListFormat.Decimal => "0D0CD001",
+        ListFormat.DecimalParenthesis => "0D0CD002",
+        ListFormat.LowerLetter => "0D0CA001",
+        ListFormat.LowerLetterParenthesis => "0D0CA002",
+        ListFormat.UpperLetter => "0D0CA101",
+        ListFormat.UpperLetterParenthesis => "0D0CA102",
+        ListFormat.LowerRoman => "0D0CC001",
+        ListFormat.LowerRomanParenthesis => "0D0CC002",
+        ListFormat.UpperRoman => "0D0CC101",
+        ListFormat.UpperRomanParenthesis => "0D0CC102",
+        _ => throw new ArgumentOutOfRangeException(nameof(fmt), fmt, "no numbering definition for this format"),
+    };
 
     // Standard Word bullet cycle (•, o, ▪) for synthesized nested levels — same glyph/font set
     // BuildAbstractNum emits for our own multi-level lists, so source and synthesized lists nest
@@ -29,10 +47,10 @@ internal static class NumberingFactory
     private static readonly string[] SynthBulletFonts = { "Symbol", "Courier New", "Wingdings" };
 
     /// <summary>
-    /// Ensure a bullet or decimal numbering definition exists and return a numId pointing at it.
-    /// Only NumberFormat.Bullet and NumberFormat.Decimal are supported here.
+    /// Ensure a numbering definition for <paramref name="fmt"/> exists and return a numId
+    /// pointing at it. <see cref="ListFormat.None"/> is not a numbering definition and throws.
     /// </summary>
-    public static int EnsureNumbering(WordprocessingDocument doc, NumberFormat fmt)
+    public static int EnsureNumbering(WordprocessingDocument doc, ListFormat fmt)
     {
         var main = doc.MainDocumentPart ?? throw new InvalidOperationException("no MainDocumentPart");
         var part = main.NumberingDefinitionsPart;
@@ -44,8 +62,7 @@ internal static class NumberingFactory
         }
 
         var root = part.GetXDocument().Root!;
-        bool bullet = fmt == NumberFormat.Bullet;
-        string nsid = bullet ? BulletNsid : DecimalNsid;
+        string nsid = NsidFor(fmt);
 
         // Find our previously-synthesized abstractNum (by marker nsid), or build one.
         var abstractNum = root.Elements(W + "abstractNum")
@@ -53,7 +70,7 @@ internal static class NumberingFactory
         if (abstractNum is null)
         {
             int absId = NextId(root, "abstractNum", "abstractNumId");
-            abstractNum = BuildAbstractNum(bullet, absId, nsid);
+            abstractNum = BuildAbstractNum(fmt, absId, nsid);
             // CT_Numbering order: numPicBullet*, abstractNum*, num* — keep abstractNums grouped.
             var lastAbstract = root.Elements(W + "abstractNum").LastOrDefault();
             if (lastAbstract is not null) lastAbstract.AddAfterSelf(abstractNum);
@@ -96,9 +113,17 @@ internal static class NumberingFactory
         return max + 1;
     }
 
-    /// <summary>Build a spec-valid 9-level bullet or decimal abstractNum.</summary>
-    private static XElement BuildAbstractNum(bool bullet, int absId, string nsid)
+    /// <summary>The level text for a numbered level: <c>(%N)</c> when parenthesized, else <c>%N.</c></summary>
+    private static string NumberedLvlText(bool paren, int lvl) =>
+        paren ? $"(%{lvl + 1})" : $"%{lvl + 1}.";
+
+    /// <summary>Build a spec-valid 9-level abstractNum for <paramref name="fmt"/>.</summary>
+    private static XElement BuildAbstractNum(ListFormat fmt, int absId, string nsid)
     {
+        var (baseFormat, paren) = NumberFormats.FromListFormat(fmt);
+        bool bullet = baseFormat == NumberFormat.Bullet;
+        string numFmtToken = NumberFormats.ToOoxml(baseFormat);
+
         var an = new XElement(W + "abstractNum",
             new XAttribute(W + "abstractNumId", absId),
             new XElement(W + "nsid", new XAttribute(W + "val", nsid)),
@@ -137,8 +162,8 @@ internal static class NumberingFactory
                 lvl_ = new XElement(W + "lvl",
                     new XAttribute(W + "ilvl", lvl),
                     new XElement(W + "start", new XAttribute(W + "val", 1)),
-                    new XElement(W + "numFmt", new XAttribute(W + "val", "decimal")),
-                    new XElement(W + "lvlText", new XAttribute(W + "val", $"%{lvl + 1}.")),
+                    new XElement(W + "numFmt", new XAttribute(W + "val", numFmtToken)),
+                    new XElement(W + "lvlText", new XAttribute(W + "val", NumberedLvlText(paren, lvl))),
                     new XElement(W + "lvlJc", new XAttribute(W + "val", "left")),
                     pPr);
             }
@@ -148,15 +173,17 @@ internal static class NumberingFactory
         return an;
     }
 
-    /// <summary>Build one spec-valid <c>w:lvl</c> (bullet or decimal) at level <paramref name="lvl"/>.</summary>
-    private static XElement BuildLevel(bool bullet, int lvl, string glyph, string font)
+    /// <summary>Build one spec-valid <c>w:lvl</c> at level <paramref name="lvl"/>. A
+    /// <paramref name="numFmtToken"/> of <c>bullet</c> uses the glyph/font pair; any other token
+    /// gets a numbered level text (parenthesized when <paramref name="paren"/>).</summary>
+    private static XElement BuildLevel(string numFmtToken, bool paren, int lvl, string glyph, string font)
     {
         var pPr = new XElement(W + "pPr",
             new XElement(W + "ind",
                 new XAttribute(W + "left", 720 * (lvl + 1)),
                 new XAttribute(W + "hanging", 360)));
 
-        if (bullet)
+        if (numFmtToken == "bullet")
             return new XElement(W + "lvl",
                 new XAttribute(W + "ilvl", lvl),
                 new XElement(W + "start", new XAttribute(W + "val", 1)),
@@ -173,8 +200,8 @@ internal static class NumberingFactory
         return new XElement(W + "lvl",
             new XAttribute(W + "ilvl", lvl),
             new XElement(W + "start", new XAttribute(W + "val", 1)),
-            new XElement(W + "numFmt", new XAttribute(W + "val", "decimal")),
-            new XElement(W + "lvlText", new XAttribute(W + "val", $"%{lvl + 1}.")),
+            new XElement(W + "numFmt", new XAttribute(W + "val", numFmtToken)),
+            new XElement(W + "lvlText", new XAttribute(W + "val", NumberedLvlText(paren, lvl))),
             new XElement(W + "lvlJc", new XAttribute(W + "val", "left")),
             pPr);
     }
@@ -209,17 +236,22 @@ internal static class NumberingFactory
         bool Defines(int l) => abstractNum.Elements(W + "lvl").Any(e => LvlOf(e) == l);
         if (Defines(targetIlvl)) return false;
 
-        // Detect bullet vs numbered from the deepest already-defined level (default: bullet).
+        // Synthesize missing levels in the numbering's own format, read off the deepest
+        // already-defined level (default: bullet). Parenthesized level text carries down too,
+        // so nesting a "(a)" list yields "(a)" sub-levels rather than reverting to "a.".
         var deepest = abstractNum.Elements(W + "lvl")
             .Where(e => LvlOf(e) >= 0).OrderByDescending(LvlOf).FirstOrDefault();
-        bool bullet = deepest is null
-            || (string?)deepest.Element(W + "numFmt")?.Attribute(W + "val") == "bullet";
+        string numFmtToken = deepest is null
+            ? "bullet"
+            : (string?)deepest.Element(W + "numFmt")?.Attribute(W + "val") ?? "bullet";
+        bool paren = numFmtToken != "bullet"
+            && ((string?)deepest?.Element(W + "lvlText")?.Attribute(W + "val"))?.StartsWith("(", StringComparison.Ordinal) == true;
 
         bool mutated = false;
         for (int l = 0; l <= targetIlvl; l++)
         {
             if (Defines(l)) continue;
-            var lvlEl = BuildLevel(bullet, l, SynthBulletGlyphs[l % 3], SynthBulletFonts[l % 3]);
+            var lvlEl = BuildLevel(numFmtToken, paren, l, SynthBulletGlyphs[l % 3], SynthBulletFonts[l % 3]);
             // w:lvl children must be in ilvl order; insert after the nearest lower level, or before
             // the nearest higher one, else append (lvl is the last child in CT_AbstractNum).
             var prevLvl = abstractNum.Elements(W + "lvl")

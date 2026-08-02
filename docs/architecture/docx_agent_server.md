@@ -274,7 +274,13 @@ server composes one from the paragraph op and the markdown subset's ATX-heading 
 
 `apply_format` (promotes/demotes a paragraph to a real, auto-numbered `w:numPr` list via
 `ApplyListFormat` — this is the one that actually creates Word-native numbering, unlike a bare
-markdown `"- item"` payload, see Known gaps), `set_level`, `remove`, `get_membership`.
+markdown `"- item"` payload, see Known gaps), `apply_format_range` (the same conversion across a
+contiguous sibling run via `ApplyListFormatRange(firstAnchorId, lastAnchorId, format)` — one call
+instead of one per item, and the members are *guaranteed* to share one `w:num` instance so the
+sequence stays intact), `set_level`, `remove`, `get_membership`. `listFormat` accepts the full
+`ListFormat` vocabulary: `bullet`, `decimal`, `lowerLetter`, `upperLetter`, `lowerRoman`,
+`upperRoman`, plus the `*Parenthesis` variants of the numbered formats (`decimalParenthesis` →
+`(1)`, `lowerRomanParenthesis` → `(i)` — the legal-drafting presets) and `none` (issue #313).
 
 ### `docxodus_comment` — native Word review comments (issue #300)
 

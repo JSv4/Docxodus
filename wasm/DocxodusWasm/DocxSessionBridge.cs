@@ -349,11 +349,24 @@ public static partial class DocxSessionBridge
     /// <summary>
     /// Bridge for <see cref="DocxSession.ApplyListFormat"/>. Promotes a plain paragraph to a
     /// bullet/numbered list item (synthesizing a numbering definition if needed) or removes
-    /// list membership. <paramref name="kind"/> is "bullet" | "decimal" | "none".
+    /// list membership. <paramref name="kind"/> is "bullet" | "decimal" | "lowerLetter" |
+    /// "upperLetter" | "lowerRoman" | "upperRoman" | a "*Parenthesis" variant of the numbered
+    /// formats (e.g. "decimalParenthesis" → "(1)") | "none".
     /// </summary>
     [JSExport]
     public static string ApplyListFormat(int h, string anchor, string kind) =>
         DocxSessionOps.ApplyListFormat(h, anchor, DocxSessionJson.ParseListFormat(kind));
+
+    /// <summary>
+    /// Bridge for <see cref="DocxSession.ApplyListFormatRange"/>. Applies one list format across
+    /// the contiguous sibling run from <paramref name="firstAnchor"/> to
+    /// <paramref name="lastAnchor"/> inclusive — every member shares ONE <c>w:num</c> instance so
+    /// the numbering sequence stays intact. Same <paramref name="kind"/> tokens as
+    /// <see cref="ApplyListFormat"/>.
+    /// </summary>
+    [JSExport]
+    public static string ApplyListFormatRange(int h, string firstAnchor, string lastAnchor, string kind) =>
+        DocxSessionOps.ApplyListFormatRange(h, firstAnchor, lastAnchor, DocxSessionJson.ParseListFormat(kind));
 
     [JSExport]
     public static string ReplaceCellContent(int h, string anchor, string md) =>
