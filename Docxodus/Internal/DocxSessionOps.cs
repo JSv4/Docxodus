@@ -397,4 +397,20 @@ internal static class DocxSessionOps
     public static bool Undo(int handle) => SessionRegistry.Get(handle).Undo();
 
     public static bool Redo(int handle) => SessionRegistry.Get(handle).Redo();
+
+    // ─── Session configuration (issue #304) ─────────────────────────────
+
+    public static void SetTrackedChanges(int handle, TrackedChangeMode mode) =>
+        SessionRegistry.Get(handle).SetTrackedChanges(mode);
+
+    public static void SetRevisionAuthor(int handle, string? author) =>
+        SessionRegistry.Get(handle).SetRevisionAuthor(author);
+
+    public static string GetTrackedChanges(int handle)
+    {
+        var s = SessionRegistry.Get(handle);
+        return "{\"trackedChanges\":" + DocxSessionJson.JsonString(DocxSessionJson.TrackedChangeModeName(s.TrackedChanges))
+            + ",\"revisionAuthor\":" + (s.RevisionAuthor is null ? "null" : DocxSessionJson.JsonString(s.RevisionAuthor))
+            + "}";
+    }
 }

@@ -174,6 +174,9 @@ internal static class Dispatcher
         "undo" => DocxSessionOps.Undo(Handle(args)) ? "true" : "false",
         "redo" => DocxSessionOps.Redo(Handle(args)) ? "true" : "false",
 
+        "set_tracked_changes" => SetTrackedChanges(args),
+        "set_revision_author" => SetRevisionAuthor(args),
+
         _ => throw new UnknownOpException(op),
     };
 
@@ -207,6 +210,22 @@ internal static class Dispatcher
     private static string CloseSession(JsonElement args)
     {
         DocxSessionOps.CloseSession(Handle(args));
+        return "null";
+    }
+
+    private static string SetTrackedChanges(JsonElement args)
+    {
+        DocxSessionOps.SetTrackedChanges(Handle(args),
+            DocxSessionJson.ParseTrackedChangeMode(Str(args, "mode")));
+        return "null";
+    }
+
+    private static string SetRevisionAuthor(JsonElement args)
+    {
+        string? author = args.TryGetProperty("author", out var a) && a.ValueKind == JsonValueKind.String
+            ? a.GetString()
+            : null;
+        DocxSessionOps.SetRevisionAuthor(Handle(args), author);
         return "null";
     }
 

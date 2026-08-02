@@ -37,7 +37,7 @@ import type {
   TemplatePlaceholder,
   TextMatch,
 } from "./types.js";
-import { ContextBoundary, DiffFormat, PlaceholderKinds, ProjectionDepth } from "./types.js";
+import { ContextBoundary, DiffFormat, PlaceholderKinds, ProjectionDepth, TrackedChangeMode } from "./types.js";
 
 /**
  * Stateful in-memory DOCX editing session keyed by markdown-projection anchor ids.
@@ -963,6 +963,19 @@ export class DocxSession {
   }
 
   // ─── Lifecycle ───────────────────────────────────────────────────────
+
+  /**
+   * Switch how subsequent mutations are recorded (issue #304). Session configuration,
+   * not a document mutation: not undoable, and already-applied markup is never touched.
+   */
+  setTrackedChanges(mode: TrackedChangeMode): void {
+    this.wasm.SetTrackedChanges(this.handle, mode);
+  }
+
+  /** Author stamped on subsequent tracked-change markup; `null` restores the "docxodus" default. */
+  setRevisionAuthor(author: string | null): void {
+    this.wasm.SetRevisionAuthor(this.handle, author ?? "");
+  }
 
   undo(): boolean {
     return this.wasm.Undo(this.handle);

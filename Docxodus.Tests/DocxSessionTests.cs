@@ -5427,4 +5427,146 @@ public class DocxSessionTests
         Assert.True(s2.Undo());
         Assert.DoesNotContain("UNDO PROBE 2", s2.Project().Markdown);
     }
+
+    // ─── Issue #304: mid-session tracked-changes mode switching ──────────
+
+    [Fact]
+    public void DS329_SetTrackedChanges_SwitchToTrackedMidSession()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        Assert.Equal(TrackedChangeMode.Accept, s.TrackedChanges);
+        Assert.Null(s.RevisionAuthor);
+
+        var anchor = s.Project().AnchorIndex.Keys.First();
+        var direct = s.ReplaceText(anchor, "Direct edit.");
+        Assert.True(direct.Success, direct.Error?.Message);
+
+        s.SetTrackedChanges(TrackedChangeMode.RenderInline);
+        Assert.Equal(TrackedChangeMode.RenderInline, s.TrackedChanges);
+
+        var tracked = s.ReplaceText(anchor, "Tracked edit.");
+        Assert.True(tracked.Success, tracked.Error?.Message);
+
+        var docXml = SaveDocXml(s);
+        Assert.Contains("w:ins", docXml);
+        Assert.Contains("w:del", docXml);
+        Assert.Contains("docxodus", docXml); // default author
+    }
+
+    [Fact]
+    public void DS330_SetRevisionAuthor_FlowsToMarkupAndResets()
+    {
+        var settings = new DocxSessionSettings { TrackedChanges = TrackedChangeMode.RenderInline };
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs(), settings);
+        var anchors = s.Project().AnchorIndex.Keys.Take(2).ToList();
+
+        s.SetRevisionAuthor("Reviewer A");
+        Assert.Equal("Reviewer A", s.RevisionAuthor);
+        var r1 = s.ReplaceText(anchors[0], "First tracked.");
+        Assert.True(r1.Success, r1.Error?.Message);
+
+        s.SetRevisionAuthor(null);
+        Assert.Null(s.RevisionAuthor);
+        var r2 = s.ReplaceText(anchors[1], "Second tracked.");
+        Assert.True(r2.Success, r2.Error?.Message);
+
+        var docXml = SaveDocXml(s);
+        Assert.Contains("Reviewer A", docXml);
+        Assert.Contains("docxodus", docXml); // post-reset default
+    }
+
+    [Fact]
+    public void DS331_SwitchBackToAccept_HistoryUntouched()
+    {
+        var settings = new DocxSessionSettings
+        {
+            TrackedChanges = TrackedChangeMode.RenderInline,
+            RevisionAuthor = "tracked-phase",
+        };
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs(), settings);
+        var anchors = s.Project().AnchorIndex.Keys.Take(2).ToList();
+
+        var tracked = s.ReplaceText(anchors[0], "Tracked edit.");
+        Assert.True(tracked.Success, tracked.Error?.Message);
+        int insCountAfterTracked = System.Text.RegularExpressions.Regex
+            .Matches(SaveDocXml(s), "<w:ins ").Count;
+        Assert.True(insCountAfterTracked > 0);
+
+        s.SetTrackedChanges(TrackedChangeMode.Accept);
+        var direct = s.ReplaceText(anchors[1], "Direct edit.");
+        Assert.True(direct.Success, direct.Error?.Message);
+
+        var docXml = SaveDocXml(s);
+        // The tracked-phase markup is still there, untouched…
+        Assert.Equal(insCountAfterTracked,
+            System.Text.RegularExpressions.Regex.Matches(docXml, "<w:ins ").Count);
+        // …and the direct edit landed without new tracking.
+        Assert.Contains("Direct edit.", docXml);
+    }
+
+    [Fact]
+    public void DS332_ModeSurvivesUndo()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        s.SetTrackedChanges(TrackedChangeMode.RenderInline);
+        var r = s.ReplaceText(anchor, "Tracked edit.");
+        Assert.True(r.Success, r.Error?.Message);
+
+        Assert.True(s.Undo()); // restores document content only
+        Assert.Equal(TrackedChangeMode.RenderInline, s.TrackedChanges); // mode is session config
+
+        var r2 = s.ReplaceText(anchor, "Tracked again.");
+        Assert.True(r2.Success, r2.Error?.Message);
+        Assert.Contains("w:ins", SaveDocXml(s));
+    }
+
+    [Fact]
+    public void DS333_DeleteBlock_HonorsSwitchedMode()
+    {
+        using var s = new DocxSession(BuildDS001_SimpleTwoParagraphs());
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        s.SetTrackedChanges(TrackedChangeMode.RenderInline);
+        var r = s.DeleteBlock(anchor);
+        Assert.True(r.Success, r.Error?.Message);
+        // Tracked semantics: anchor stays live (Modified, not Removed) — mirrors DS062.
+        Assert.Empty(r.Removed);
+        Assert.Contains(r.Modified, a => a.Id == anchor);
+    }
+
+    [Fact]
+    public void DS334_Ops_SetTrackedChanges_RoundTrip()
+    {
+        int handle = Docxodus.Internal.DocxSessionOps.OpenSession(BuildDS001_SimpleTwoParagraphs(), null);
+        try
+        {
+            var initial = System.Text.Json.JsonDocument.Parse(
+                Docxodus.Internal.DocxSessionOps.GetTrackedChanges(handle)).RootElement;
+            Assert.Equal("accept", initial.GetProperty("trackedChanges").GetString());
+            Assert.Equal(System.Text.Json.JsonValueKind.Null,
+                initial.GetProperty("revisionAuthor").ValueKind);
+
+            Docxodus.Internal.DocxSessionOps.SetTrackedChanges(handle, TrackedChangeMode.RenderInline);
+            Docxodus.Internal.DocxSessionOps.SetRevisionAuthor(handle, "ops-agent");
+
+            var after = System.Text.Json.JsonDocument.Parse(
+                Docxodus.Internal.DocxSessionOps.GetTrackedChanges(handle)).RootElement;
+            Assert.Equal("render_inline", after.GetProperty("trackedChanges").GetString());
+            Assert.Equal("ops-agent", after.GetProperty("revisionAuthor").GetString());
+        }
+        finally
+        {
+            Docxodus.Internal.DocxSessionOps.CloseSession(handle);
+        }
+    }
+
+    private static string SaveDocXml(DocxSession s)
+    {
+        var bytes = s.Save();
+        using var ms = new MemoryStream(bytes);
+        using var verify = WordprocessingDocument.Open(ms, isEditable: false);
+        return verify.MainDocumentPart!.GetXDocument().Root!.ToString();
+    }
 }

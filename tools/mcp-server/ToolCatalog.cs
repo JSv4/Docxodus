@@ -30,7 +30,7 @@ internal static class ToolCatalog
                 "trackedChanges": { "type": "string", "enum": ["accept", "render_inline", "strip_deletions"], "description": "How mutating ops record their own edits. 'accept' (default) applies them directly; 'render_inline' wraps them as w:ins/w:del tracked changes; 'strip_deletions' drops deleted content outright." },
                 "revisionAuthor": { "type": "string", "description": "Author name stamped on tracked-change markup when trackedChanges is render_inline." },
                 "undoDepth": { "type": "integer", "description": "Bounded undo-ring depth. Default 50." },
-                "persistAnchorIds": { "type": "boolean", "description": "Default false. When true, docxodus_save keeps the anchor-id bookkeeping in the written file, so a session opened over it later resolves the anchor ids this session hands out. Costs file size (hundreds of KB on a large document) — turn it on only when a workflow needs a close+reopen (e.g. to switch trackedChanges mode) without losing its anchors. docxodus_save can also override this per call." }
+                "persistAnchorIds": { "type": "boolean", "description": "Default false. When true, docxodus_save keeps the anchor-id bookkeeping in the written file, so a session opened over it later resolves the anchor ids this session hands out. Costs file size (hundreds of KB on a large document) — turn it on only when a workflow needs a close+reopen without losing its anchors (no longer needed just to switch trackedChanges mode — docxodus_track_changes set_mode does that in place). docxodus_save can also override this per call." }
               },
               "required": ["path"]
             }
@@ -266,15 +266,17 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_track_changes",
-            "List, accept, or reject tracked changes (w:ins/w:del/w:moveFrom/w:moveTo/w:rPrChange) already present in the document.",
+            "List, accept, or reject tracked changes (w:ins/w:del/w:moveFrom/w:moveTo/w:rPrChange) already present in the document — or switch how the session records its OWN subsequent edits (set_mode).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["list", "accept_all", "reject_all"], "description": "Only whole-document accept/reject is supported; there is no selective per-author or per-type accept/reject — see the capability-gap note in docs/architecture/docx_agent_server.md. 'list' accepts author/changeType as client-side display filters." },
+                "action": { "type": "string", "enum": ["list", "accept_all", "reject_all", "set_mode"], "description": "Only whole-document accept/reject is supported; there is no selective per-author or per-type accept/reject — see the capability-gap note in docs/architecture/docx_agent_server.md. 'list' accepts author/changeType as client-side display filters. 'set_mode' switches the session's own recording mode mid-workflow (issue #304)." },
                 "author": { "type": "string", "description": "list: only return revisions by this author." },
-                "changeType": { "type": "string", "enum": ["insert", "delete", "move", "format"], "description": "list: only return revisions of this type." }
+                "changeType": { "type": "string", "enum": ["insert", "delete", "move", "format"], "description": "list: only return revisions of this type." },
+                "mode": { "type": "string", "enum": ["accept", "render_inline", "strip_deletions"], "description": "set_mode: how SUBSEQUENT mutations are recorded (same values as docxodus_open's trackedChanges). Never touches already-applied edits — accept does not resolve existing revisions (use accept_all), render_inline does not retroactively track prior direct edits. Not undoable." },
+                "revisionAuthor": { "type": "string", "description": "set_mode: author stamped on subsequent tracked-change markup. Absent = leave the current author unchanged; empty string = reset to the 'docxodus' default." }
               },
               "required": ["sessionId", "action"]
             }

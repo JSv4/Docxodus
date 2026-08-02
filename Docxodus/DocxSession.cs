@@ -1083,10 +1083,18 @@ public sealed class DocxSession : IDisposable
     private int _revisionCounter = 1000;
     private RawDocxOps? _raw;
 
+    // Mutable session configuration (issue #304): seeded from _settings at construction,
+    // switchable mid-session via SetTrackedChanges/SetRevisionAuthor. Session config, not
+    // document state — never captured in undo snapshots.
+    private TrackedChangeMode _trackedChanges;
+    private string? _revisionAuthor;
+
     public DocxSession(byte[] docxBytes, DocxSessionSettings? settings = null)
     {
         ArgumentNullException.ThrowIfNull(docxBytes);
         _settings = settings ?? new DocxSessionSettings();
+        _trackedChanges = _settings.TrackedChanges;
+        _revisionAuthor = _settings.RevisionAuthor;
         _history = new Internal.UndoRing<DocumentSnapshot>(_settings.UndoDepth);
         _stream = new MemoryStream();
         _stream.Write(docxBytes, 0, docxBytes.Length);
@@ -1098,6 +1106,36 @@ public sealed class DocxSession : IDisposable
     }
 
     public Exception? LastInternalError { get; private set; }
+
+    /// <summary>How subsequent mutations are recorded — switchable mid-session (issue #304).</summary>
+    public TrackedChangeMode TrackedChanges => _trackedChanges;
+
+    /// <summary>Author stamped on tracked-change markup; null means the "docxodus" default.</summary>
+    public string? RevisionAuthor => _revisionAuthor;
+
+    /// <summary>
+    /// Switch how subsequent mutations are recorded. Session configuration, not a document
+    /// mutation: takes no undo snapshot (Undo/Redo never change the mode) and never touches
+    /// already-applied markup — switching to <see cref="TrackedChangeMode.Accept"/> does not
+    /// accept existing revisions, and switching to <see cref="TrackedChangeMode.RenderInline"/>
+    /// does not retroactively wrap prior direct edits.
+    /// </summary>
+    public void SetTrackedChanges(TrackedChangeMode mode)
+    {
+        if (_disposed) return;
+        _trackedChanges = mode;
+    }
+
+    /// <summary>
+    /// Change the author stamped on subsequent tracked-change markup (null restores the
+    /// "docxodus" default). Session configuration — same non-undoable semantics as
+    /// <see cref="SetTrackedChanges"/>. Enables multi-author edits in one session.
+    /// </summary>
+    public void SetRevisionAuthor(string? author)
+    {
+        if (_disposed) return;
+        _revisionAuthor = author;
+    }
 
     public MarkdownProjection Project()
     {
@@ -3364,7 +3402,7 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            if (_settings.TrackedChanges == TrackedChangeMode.RenderInline)
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
             {
                 ApplyReplaceTextTracked(element, parsed.Blocks);
             }
@@ -3420,7 +3458,7 @@ public sealed class DocxSession : IDisposable
             // body-level paragraph kinds. fn/en/cmt are structural definitions in
             // their own parts; "tracking" a definition deletion has no Word semantics,
             // so for those we always perform the structural delete.
-            if (_settings.TrackedChanges == TrackedChangeMode.RenderInline
+            if (_trackedChanges == TrackedChangeMode.RenderInline
                 && target.Anchor.Kind is "p" or "h" or "li")
             {
                 WrapRunsInDel(element);
@@ -3618,7 +3656,7 @@ public sealed class DocxSession : IDisposable
         try
         {
             var index = AnchorIndex();
-            bool trackedChanges = _settings.TrackedChanges == TrackedChangeMode.RenderInline;
+            bool trackedChanges = _trackedChanges == TrackedChangeMode.RenderInline;
 
             if (trackedChanges)
             {
@@ -6877,7 +6915,7 @@ public sealed class DocxSession : IDisposable
 
     private void ApplyReplaceTextTracked(XElement paragraph, IReadOnlyList<Internal.ParsedBlock> blocks)
     {
-        var author = _settings.RevisionAuthor ?? "docxodus";
+        var author = _revisionAuthor ?? "docxodus";
         var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
 
         // Note references (footnote/endnote) are zero-width, semantically-significant
@@ -6935,7 +6973,7 @@ public sealed class DocxSession : IDisposable
 
     private void WrapRunsInDel(XElement element)
     {
-        var author = _settings.RevisionAuthor ?? "docxodus";
+        var author = _revisionAuthor ?? "docxodus";
         var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
         foreach (var run in element.Elements(W.r).ToList())
         {
@@ -6979,7 +7017,7 @@ public sealed class DocxSession : IDisposable
         }
         if (rPr.Element(W.del) is null)
         {
-            var author = _settings.RevisionAuthor ?? "docxodus";
+            var author = _revisionAuthor ?? "docxodus";
             var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
             rPr.Add(new XElement(W.del,
                 new XAttribute(W.id, NextRevisionId()),
@@ -6996,7 +7034,7 @@ public sealed class DocxSession : IDisposable
     /// </summary>
     private void MarkTableAsTrackedDeleted(XElement table)
     {
-        var author = _settings.RevisionAuthor ?? "docxodus";
+        var author = _revisionAuthor ?? "docxodus";
         var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
 
         foreach (var row in table.Elements(W.tr))

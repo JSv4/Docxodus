@@ -78,6 +78,22 @@ internal static class DocxSessionJson
         };
     }
 
+    /// <summary>Lenient wire-name → enum: unknown/absent falls back to Accept, mirroring
+    /// ParseSettings' historical behavior. Strict callers (MCP set_mode) do their own switch.</summary>
+    public static TrackedChangeMode ParseTrackedChangeMode(string? mode) => mode switch
+    {
+        "render_inline" => TrackedChangeMode.RenderInline,
+        "strip_deletions" => TrackedChangeMode.StripDeletions,
+        _ => TrackedChangeMode.Accept,
+    };
+
+    public static string TrackedChangeModeName(TrackedChangeMode mode) => mode switch
+    {
+        TrackedChangeMode.RenderInline => "render_inline",
+        TrackedChangeMode.StripDeletions => "strip_deletions",
+        _ => "accept",
+    };
+
     public static DocxSessionSettings ParseSettings(string settingsJson)
     {
         if (string.IsNullOrEmpty(settingsJson)) return new DocxSessionSettings();
@@ -85,13 +101,7 @@ internal static class DocxSessionJson
         var root = doc.RootElement;
         int undoDepth = TryGetInt(root, "undoDepth", 50);
         bool validateRawOps = TryGetBool(root, "validateRawOps", false);
-        var trackedStr = TryGetString(root, "trackedChanges", "accept");
-        var tracked = trackedStr switch
-        {
-            "render_inline" => TrackedChangeMode.RenderInline,
-            "strip_deletions" => TrackedChangeMode.StripDeletions,
-            _ => TrackedChangeMode.Accept,
-        };
+        var tracked = ParseTrackedChangeMode(TryGetString(root, "trackedChanges", "accept"));
         var revisionAuthor = TryGetString(root, "revisionAuthor", null);
         bool persistAnchorIds = TryGetBool(root, "persistAnchorIds", false);
         bool smartQuotes = TryGetBool(root, "smartQuotes", false);

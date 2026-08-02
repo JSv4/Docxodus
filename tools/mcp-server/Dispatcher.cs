@@ -461,6 +461,22 @@ internal static class Dispatcher
                 store.Rebind(session, rejected.DocumentByteArray);
                 return "{\"success\":true}";
             }
+            case "set_mode":
+            {
+                var modeStr = Str(args, "mode");
+                var mode = modeStr switch
+                {
+                    "accept" => TrackedChangeMode.Accept,
+                    "render_inline" => TrackedChangeMode.RenderInline,
+                    "strip_deletions" => TrackedChangeMode.StripDeletions,
+                    _ => throw new McpToolException($"unknown trackedChanges mode: {modeStr}"),
+                };
+                DocxSessionOps.SetTrackedChanges(session.Handle, mode);
+                if (OptStr(args, "revisionAuthor") is { } author)
+                    DocxSessionOps.SetRevisionAuthor(session.Handle, author.Length == 0 ? null : author);
+                var state = DocxSessionOps.GetTrackedChanges(session.Handle);
+                return "{\"success\":true," + state.Substring(1);
+            }
             default:
                 throw new McpToolException($"unknown docxodus_track_changes action: {action}");
         }
