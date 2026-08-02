@@ -1184,6 +1184,8 @@ export interface DocxodusWasmExports {
     ) => string;
     Undo: (handle: number) => boolean;
     Redo: (handle: number) => boolean;
+    SetTrackedChanges: (handle: number, mode: number) => void;
+    SetRevisionAuthor: (handle: number, author: string) => void;
     Save: (handle: number) => Uint8Array;
     /** Save KEEPING the projector's `PtOpenXml:Unid` bookkeeping. Exists for the in-browser
      *  editor's remount, which re-renders these bytes and needs the anchors to survive the hop.

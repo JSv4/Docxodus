@@ -652,6 +652,18 @@ public static partial class DocxSessionBridge
     [JSExport]
     public static bool Redo(int h) => DocxSessionOps.Redo(h);
 
+    /// <summary>Switch how subsequent mutations are recorded (issue #304). mode is the
+    /// numeric TrackedChangeMode (0=Accept, 1=RenderInline, 2=StripDeletions).</summary>
+    [JSExport]
+    public static void SetTrackedChanges(int h, int mode) =>
+        DocxSessionOps.SetTrackedChanges(h, (TrackedChangeMode)mode);
+
+    /// <summary>Change the author stamped on subsequent tracked-change markup.
+    /// Empty string resets to the "docxodus" default (the AddComment null convention).</summary>
+    [JSExport]
+    public static void SetRevisionAuthor(int h, string author) =>
+        DocxSessionOps.SetRevisionAuthor(h, string.IsNullOrEmpty(author) ? null : author);
+
     [JSExport]
     public static byte[] Save(int h) => DocxSessionOps.Save(h);
 

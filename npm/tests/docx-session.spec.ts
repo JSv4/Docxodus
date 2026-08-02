@@ -370,4 +370,46 @@ test.describe('DocxSession (WASM bridge)', () => {
     expect(result.firstTextHasNewline).toBe(true);
     expect(result.firstSliceHasFragments).toBe(true);
   });
+
+  test('setTrackedChanges mid-session — subsequent edits record as revisions (#304)', async ({ page }) => {
+    const bytes = readTestFile('HC001-5DayTourPlanTemplate.docx');
+
+    const result = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const bridge = (window as any).Docxodus.DocxSessionBridge;
+      const handle = bridge.OpenSession(bin, '');
+      try {
+        const proj = JSON.parse(bridge.Project(handle));
+        const anchorId = (Object.entries(proj.anchorIndex) as [string, any][])
+          .filter(([, t]) => t.scope === 'body' && ['p', 'h', 'li'].includes(t.kind))
+          .map(([id]) => id)[0];
+
+        const direct = JSON.parse(bridge.ReplaceText(handle, anchorId, 'Direct edit.'));
+
+        bridge.SetTrackedChanges(handle, 1); // TrackedChangeMode.RenderInline
+        bridge.SetRevisionAuthor(handle, 'js-reviewer');
+        const tracked = JSON.parse(bridge.ReplaceText(handle, anchorId, 'Tracked edit.'));
+
+        const saved = bridge.Save(handle);
+        // Reopen with a projection that renders revisions inline: {+ins+} / {-del-}.
+        const h2 = bridge.OpenSession(saved, JSON.stringify({ projectionSettings: { trackedChanges: 1 } }));
+        const md = JSON.parse(bridge.Project(h2)).markdown;
+        bridge.CloseSession(h2);
+
+        return {
+          directSuccess: direct.success,
+          trackedSuccess: tracked.success,
+          hasInlineIns: md.includes('{+'),
+          hasInlineDel: md.includes('{-'),
+        };
+      } finally {
+        bridge.CloseSession(handle);
+      }
+    }, Array.from(bytes));
+
+    expect(result.directSuccess).toBe(true);
+    expect(result.trackedSuccess).toBe(true);
+    expect(result.hasInlineIns).toBe(true);
+    expect(result.hasInlineDel).toBe(true);
+  });
 });
