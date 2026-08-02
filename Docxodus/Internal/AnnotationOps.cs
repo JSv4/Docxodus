@@ -298,7 +298,7 @@ internal static class AnnotationOps
     /// handles multi-<c>w:t</c> runs and runs nested inside hyperlinks/sdts —
     /// boundaries always land on a run-element boundary after the splits run.
     /// </summary>
-    private static (XElement startRun, XElement endRun) SplitRunsForSpan(
+    internal static (XElement startRun, XElement endRun) SplitRunsForSpan(
         XElement block, int start, int length)
     {
         // Split at the END boundary first — if start == end - 0 length would be illegal,

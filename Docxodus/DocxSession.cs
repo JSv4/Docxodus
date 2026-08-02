@@ -968,6 +968,11 @@ public enum EditErrorCode
     AnnotationNotFound,
     EmptyAnnotationSpan,
 
+    /// <summary>A zero-length span passed to <see cref="DocxSession.AddComment"/>, or a
+    /// whole-block comment requested on a paragraph with no text — a comment range must
+    /// cover at least one character.</summary>
+    EmptyCommentSpan,
+
     InternalError,
 }
 
@@ -5388,6 +5393,153 @@ public sealed class DocxSession : IDisposable
 
     private static string NoteReferenceStyleId(bool isFootnote) =>
         isFootnote ? "FootnoteReference" : "EndnoteReference";
+
+    // ─── Comments (issue #300) ───────────────────────────────────────────
+    //
+    // Native Word comment authoring, following the part-creation pattern the note ops above
+    // established: find-or-create the WordprocessingCommentsPart + the CommentText/
+    // CommentReference styles, bracket a character span with w:commentRangeStart/End, append
+    // the run-level w:commentReference, and add the w:comment definition. Mechanics live in
+    // Internal.CommentOps; part create/delete is undo/redo-reconciled by ReconcileCommentsPart.
+    //
+    // Editing a comment body needs no bespoke path beyond UpdateComment: comment paragraphs
+    // project as kind p, scope cmt, so ReplaceText already accepts them; DeleteBlock already
+    // removes a cmt definition together with its body-side marker triple.
+
+    /// <summary>
+    /// Add a <b>native Word comment</b> (a <c>w:comment</c> the Reviewing pane shows — not the
+    /// <see cref="AddAnnotation"/> overlay) on the paragraph named by <paramref name="anchorId"/>.
+    /// <paramref name="span"/> selects the commented character range; <c>null</c> comments the
+    /// whole block. Creates the <c>WordprocessingCommentsPart</c> and the <c>CommentText</c>/
+    /// <c>CommentReference</c> styles when absent. The comment body comes from
+    /// <paramref name="markdownPayload"/> (same subset as <see cref="InsertFootnote"/>).
+    /// <paramref name="date"/> is written only when provided, keeping output deterministic by
+    /// default; an Unspecified-kind value is treated as UTC. Returns the created definition
+    /// anchor (kind <c>cmt</c>) and its paragraph anchors (kind <c>p</c>, scope <c>cmt</c>) in
+    /// <see cref="EditResult.Created"/> so a caller can immediately
+    /// <see cref="UpdateComment"/>/<see cref="RemoveComment"/> it.
+    /// </summary>
+    /// <remarks>
+    /// Body paragraphs only (kind <c>p</c>/<c>h</c>/<c>li</c>, scope <c>body</c>) — Word has no
+    /// comments-on-comments, and v1 does not target header/footer/note stories. Spans are
+    /// single-block; the numeric <c>w:id</c> is never surfaced (comments are addressed by anchor).
+    /// </remarks>
+    public EditResult AddComment(
+        string anchorId, CharSpan? span, string author, string markdownPayload,
+        string? initials = null, DateTime? date = null)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var target = FindAnchor(anchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {anchorId}", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"AddComment requires a paragraph/heading/list-item anchor; got kind={target.Anchor.Kind}", anchorId);
+        if (target.Anchor.Scope != "body")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"AddComment requires a body paragraph anchor; got scope '{target.Anchor.Scope}'", anchorId);
+
+        var element = target.Resolve(_doc!);
+        if (element is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", anchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no main document part", anchorId);
+
+        var totalText = ParagraphText(element);
+        int spanStart, spanLength;
+        if (span.HasValue)
+        {
+            spanStart = span.Value.Start;
+            spanLength = span.Value.Length;
+            if (spanLength <= 0)
+                return EditResult.Fail(EditErrorCode.EmptyCommentSpan, "span length must be > 0", anchorId);
+            if (spanStart < 0 || spanStart + spanLength > totalText.Length)
+                return EditResult.Fail(EditErrorCode.OffsetOutOfRange,
+                    $"span [{spanStart},{spanStart + spanLength}) outside block of length {totalText.Length}", anchorId);
+        }
+        else
+        {
+            spanStart = 0;
+            spanLength = totalText.Length;
+            if (spanLength == 0)
+                return EditResult.Fail(EditErrorCode.EmptyCommentSpan, "block has no text to comment", anchorId);
+        }
+
+        // Parse the comment body BEFORE snapshotting so a malformed payload is a clean no-op
+        // (no part created, no undo entry pushed).
+        var paras = new List<XElement>();
+        if (!string.IsNullOrEmpty(markdownPayload))
+        {
+            var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
+            if (!parsed.Success)
+                return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, anchorId);
+            foreach (var block in parsed.Blocks)
+                paras.Add(BuildParagraphFromParsedBlock(block));
+        }
+        if (paras.Count == 0) paras.Add(new XElement(W.p));
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var part = Internal.CommentOps.EnsureCommentsPart(main);
+            Internal.StyleFactory.EnsureCommentStyles(_doc!);
+            var id = Internal.CommentOps.NextCommentId(main);
+            var idStr = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            // Body plumbing: bracket the span, then the reference run directly after the
+            // rangeEnd — the shape Word writes. Splits route through the same offset
+            // mechanism every other span op uses (AnnotationOps.SplitRunsForSpan).
+            var (startRun, endRun) = Internal.AnnotationOps.SplitRunsForSpan(element, spanStart, spanLength);
+            var rangeStart = new XElement(W.commentRangeStart, new XAttribute(W.id, idStr));
+            var rangeEnd = new XElement(W.commentRangeEnd, new XAttribute(W.id, idStr));
+            startRun.AddBeforeSelf(rangeStart);
+            endRun.AddAfterSelf(rangeEnd);
+            var refRun = Internal.CommentOps.BuildReferenceRun(id);
+            UnidHelper.AssignToSelfAndDescendants(refRun);
+            rangeEnd.AddAfterSelf(refRun);
+
+            // Definition.
+            Internal.CommentOps.ApplyCommentBodyStyle(paras);
+            var comment = new XElement(W.comment,
+                new XAttribute(W.id, idStr),
+                new XAttribute(W.author, author));
+            if (!string.IsNullOrEmpty(initials))
+                comment.SetAttributeValue(W.initials, initials);
+            if (date.HasValue)
+                comment.SetAttributeValue(W.date, Internal.CommentOps.FormatDate(date.Value));
+            foreach (var p in paras) comment.Add(p);
+            var root = part.GetXDocument().Root!;
+            root.Add(comment);
+            UnidHelper.AssignToSelfAndDescendants(comment);
+            part.PutXDocument();
+
+            InvalidateProjectionCache();
+
+            var created = new List<Anchor>();
+            var commentsPartUri = part.Uri.ToString();
+            if (AnchorForUnid((string?)comment.Attribute(PtOpenXml.Unid), commentsPartUri) is { } defAnchor)
+                created.Add(defAnchor);
+            foreach (var p in comment.Elements(W.p))
+                if (AnchorForUnid((string?)p.Attribute(PtOpenXml.Unid), commentsPartUri) is { } pa)
+                    created.Add(pa);
+
+            return new EditResult
+            {
+                Success = true,
+                Created = created,
+                Modified = new[] { target.Anchor },
+                Patch = PatchFor(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RestoreSnapshot(_history.PopForUndo().snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, anchorId);
+        }
+    }
 
     /// <summary>
     /// Insert <paramref name="newChild"/> into <paramref name="paragraph"/> at
