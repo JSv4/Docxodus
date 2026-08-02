@@ -395,6 +395,19 @@ internal static class DocxSessionOps
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).MoveAnnotation(
             annotationId, newAnchorId, newSpan));
 
+    // ─── Tracked revisions (issue #318) ─────────────────────────────────
+
+    /// <summary>Markup-native revision listing — stable ids, true authors/dates, no
+    /// accept/reject re-diff. See <see cref="DocxSession.ListRevisions"/>.</summary>
+    public static string ListRevisions(int handle) =>
+        DocxSessionJson.SerializeRevisionList(SessionRegistry.Get(handle).ListRevisions());
+
+    public static string AcceptRevision(int handle, string revisionId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AcceptRevision(revisionId));
+
+    public static string RejectRevision(int handle, string revisionId) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).RejectRevision(revisionId));
+
     // ─── Undo / Redo ────────────────────────────────────────────────────
 
     public static bool Undo(int handle) => SessionRegistry.Get(handle).Undo();

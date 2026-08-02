@@ -98,6 +98,10 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId")),
         "list_comments" => DocxSessionOps.ListComments(Handle(args)),
 
+        "list_revisions" => DocxSessionOps.ListRevisions(Handle(args)),
+        "accept_revision" => DocxSessionOps.AcceptRevision(Handle(args), Str(args, "revisionId")),
+        "reject_revision" => DocxSessionOps.RejectRevision(Handle(args), Str(args, "revisionId")),
+
         "apply_format" => DocxSessionOps.ApplyFormat(
             Handle(args), Str(args, "anchorId"), ParseOptionalSpan(args, "span"), ParseFormatOp(args, "op")),
         "apply_format_by_substring" => DocxSessionOps.ApplyFormatBySubstring(

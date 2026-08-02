@@ -1002,6 +1002,23 @@ public sealed record NoteListEntry(string Id, string DefAnchorId, int Ordinal);
 public sealed record CommentListEntry(
     string DefAnchorId, string Author, string? Initials, string? Date, string Text);
 
+/// <summary>
+/// One tracked revision, read directly off the live document's markup in document
+/// order — see <see cref="DocxSession.ListRevisions"/>. <see cref="Id"/> is stable
+/// while the underlying markup exists (derived from the markup's own <c>w:id</c>
+/// attributes, so resolving OTHER revisions never renames it) and is what
+/// <see cref="DocxSession.AcceptRevision"/>/<see cref="DocxSession.RejectRevision"/>
+/// address. <see cref="Type"/> is <c>"insert"</c>, <c>"delete"</c>, <c>"move"</c>
+/// (a linked move pair — both sides resolve together), or <c>"format"</c>.
+/// <see cref="Author"/>/<see cref="Date"/> are the true <c>w:author</c>/<c>w:date</c>
+/// from the markup (date null when absent). <see cref="Text"/> is the revision's
+/// visible text (the deleted text for deletions, <c>¶</c> for a revised paragraph
+/// mark, the affected text for format changes). <see cref="AnchorId"/> is the
+/// containing block's anchor (null when the block isn't projection-addressable).
+/// </summary>
+public sealed record RevisionListEntry(
+    string Id, string Type, string Author, string? Date, string Text, string? AnchorId);
+
 /// <summary>Summary returned by <see cref="DocxSession.CompactRuns"/>.</summary>
 public sealed record CompactResult
 {
@@ -1061,6 +1078,12 @@ public enum EditErrorCode
     /// whole-block comment requested on a paragraph with no text — a comment range must
     /// cover at least one character.</summary>
     EmptyCommentSpan,
+
+    /// <summary>The revision id passed to <see cref="DocxSession.AcceptRevision"/>/
+    /// <see cref="DocxSession.RejectRevision"/> matches no revision in the current
+    /// markup — never listed, already resolved, or removed by resolving an enclosing
+    /// revision. Re-<see cref="DocxSession.ListRevisions"/> for the current set.</summary>
+    RevisionNotFound,
 
     InternalError,
 }
@@ -1532,6 +1555,144 @@ public sealed class DocxSession : IDisposable
                 Internal.CommentOps.FlattenBodyText(c)));
         }
         return result;
+    }
+
+    // ─── Tracked revisions: markup-native listing + selective resolution (issue #318) ───
+
+    /// <summary>
+    /// Enumerate the document's tracked revisions directly off the live markup, in
+    /// document order across every story RevisionProcessor walks (body, headers,
+    /// footers, footnotes, endnotes). Contiguous markup of the same kind and author
+    /// groups into one entry per user-visible change (an inserted paragraph is ONE
+    /// revision: its runs plus its mark); a named move pair is one <c>"move"</c> entry
+    /// covering both sides. Ids derive from the markup's <c>w:id</c> attributes, so
+    /// they are stable across calls and across resolution of other revisions —
+    /// unlike the re-diff listing, authors/dates are the markup's own. Not
+    /// enumerated in v1 (still resolved by whole-document accept/reject):
+    /// <c>cellIns</c>/<c>cellDel</c>/<c>cellMerge</c>, content-control ins/del
+    /// ranges, and <c>numPr</c> numbering-ins markers.
+    /// </summary>
+    public IReadOnlyList<RevisionListEntry> ListRevisions()
+    {
+        ThrowIfDisposed();
+        _ = AnchorIndex(); // guarantees Unids so entries can carry block anchors
+
+        var parts = RevisionStoryParts();
+        var groups = Internal.RevisionOps.Enumerate(parts.Select(p => p.Root).ToList());
+        var result = new List<RevisionListEntry>(groups.Count);
+        foreach (var g in groups)
+        {
+            var partUri = parts[g.PartIndex].Part.Uri.ToString();
+            string? anchorId = null;
+            if (g.Units.Count > 0)
+            {
+                var first = g.Units[0];
+                for (var a = first.Paragraph ?? first.MarkedRow ?? first.Element; a is not null; a = a.Parent)
+                {
+                    var unid = (string?)a.Attribute(PtOpenXml.Unid);
+                    if (unid is null) continue;
+                    if (AnchorForUnid(unid, partUri) is { } anch) anchorId = anch.Id;
+                    break;
+                }
+            }
+            result.Add(new RevisionListEntry(
+                g.Id, g.Type, g.Author, g.Date, Internal.RevisionOps.GroupText(g), anchorId));
+        }
+        return result;
+    }
+
+    /// <summary>Accept ONE revision by the id <see cref="ListRevisions"/> reported —
+    /// insertions keep their content (markup unwrapped), deletions are carried out,
+    /// a move materializes at its destination, a format change keeps the new
+    /// properties. An undoable session mutation; every other revision's markup (and
+    /// id) is left untouched.</summary>
+    public EditResult AcceptRevision(string revisionId) => ResolveRevision(revisionId, accept: true);
+
+    /// <summary>Reject ONE revision by id — the inverse of <see cref="AcceptRevision"/>:
+    /// insertions are removed, deleted content is restored (<c>w:delText</c> back to
+    /// <c>w:t</c>), a move stays at its source, a format change restores the stored
+    /// old properties.</summary>
+    public EditResult RejectRevision(string revisionId) => ResolveRevision(revisionId, accept: false);
+
+    private EditResult ResolveRevision(string revisionId, bool accept)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+        if (string.IsNullOrEmpty(revisionId))
+            return EditResult.Fail(EditErrorCode.RevisionNotFound, "revision id is empty");
+
+        _ = AnchorIndex();
+        var parts = RevisionStoryParts();
+        var groups = Internal.RevisionOps.Enumerate(parts.Select(p => p.Root).ToList());
+        var group = groups.FirstOrDefault(x => x.Id == revisionId);
+        if (group is null)
+            return EditResult.Fail(EditErrorCode.RevisionNotFound, $"revision not found: {revisionId}");
+
+        var partUri = parts[group.PartIndex].Part.Uri.ToString();
+
+        // Capture the block anchors the resolution touches BEFORE applying — elements
+        // detach during Apply and can no longer be resolved to a part afterwards.
+        var modified = new List<Anchor>();
+        var seenModified = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var u in group.Units)
+        {
+            for (var a = u.Paragraph ?? u.MarkedRow ?? u.Element; a is not null; a = a.Parent)
+            {
+                var unid = (string?)a.Attribute(PtOpenXml.Unid);
+                if (unid is null) continue;
+                if (AnchorForUnid(unid, partUri) is { } anch && seenModified.Add(anch.Id))
+                    modified.Add(anch);
+                break;
+            }
+        }
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var removedElements = Internal.RevisionOps.Apply(group, accept);
+
+            var removed = new List<Anchor>();
+            var seenRemoved = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var el in removedElements)
+            {
+                foreach (var d in el.DescendantsAndSelf())
+                {
+                    var unid = (string?)d.Attribute(PtOpenXml.Unid);
+                    if (unid is null) continue;
+                    if (AnchorForUnid(unid, partUri) is { } anch && seenRemoved.Add(anch.Id))
+                        removed.Add(anch);
+                }
+            }
+
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = modified.Where(m => !seenRemoved.Contains(m.Id)).ToList(),
+                Removed = removed,
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message);
+        }
+    }
+
+    /// <summary>The story parts revision markup lives in, in the fixed order the
+    /// revision enumeration indexes them (main, headers, footers, footnotes, endnotes
+    /// — the same set RevisionProcessor's whole-document accept/reject walks).</summary>
+    private List<(OpenXmlPart Part, XElement Root)> RevisionStoryParts()
+    {
+        var list = new List<(OpenXmlPart, XElement)>();
+        foreach (var part in EnumerateProjectedPartsForScopes(
+            ProjectionScopes.Body | ProjectionScopes.Headers | ProjectionScopes.Footers
+            | ProjectionScopes.Footnotes | ProjectionScopes.Endnotes))
+        {
+            var root = part.GetXDocument().Root;
+            if (root is not null) list.Add((part, root));
+        }
+        return list;
     }
 
     internal AnchorTarget? FindAnchor(string? anchorId)

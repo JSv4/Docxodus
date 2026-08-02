@@ -664,6 +664,40 @@ class CommentListEntry:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class RevisionListEntry:
+    """One tracked revision read directly off the live markup — see
+    ``Session.list_revisions``.
+
+    ``id`` is stable while the underlying markup exists (derived from the markup's
+    own ``w:id`` attributes — resolving OTHER revisions never renames it) and is what
+    ``accept_revision``/``reject_revision`` address. ``type`` is ``"insert"``,
+    ``"delete"``, ``"move"`` (a linked move pair — both sides resolve together), or
+    ``"format"``. ``author``/``date`` are the markup's true ``w:author``/``w:date``
+    (``date`` ``None`` when absent). ``text`` is the revision's visible text (deleted
+    text for deletions, ``¶`` for a revised paragraph mark, the affected text for
+    format changes). ``anchor_id`` is the containing block's anchor when addressable.
+    """
+
+    id: str
+    type: str
+    author: str
+    date: str | None = None
+    text: str = ""
+    anchor_id: str | None = None
+
+    @classmethod
+    def _from_wire(cls, d: Mapping[str, Any]) -> "RevisionListEntry":
+        return cls(
+            id=d["id"],
+            type=d.get("type", ""),
+            author=d.get("author", "unknown"),
+            date=d.get("date"),
+            text=d.get("text", ""),
+            anchor_id=d.get("anchorId"),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Projection
 # ---------------------------------------------------------------------------

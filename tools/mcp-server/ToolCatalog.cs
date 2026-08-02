@@ -274,16 +274,17 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_track_changes",
-            "List, accept, or reject tracked changes (w:ins/w:del/w:moveFrom/w:moveTo/w:rPrChange) already present in the document — or switch how the session records its OWN subsequent edits (set_mode).",
+            "List, selectively accept/reject (by revisionId), or bulk-resolve tracked changes (w:ins/w:del/w:moveFrom/w:moveTo/w:*PrChange) already present in the document — or switch how the session records its OWN subsequent edits (set_mode).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["list", "accept_all", "reject_all", "set_mode"], "description": "Only whole-document accept/reject is supported; there is no selective per-author or per-type accept/reject — see the capability-gap note in docs/architecture/docx_agent_server.md. 'list' accepts author/changeType as client-side display filters. 'set_mode' switches the session's own recording mode mid-workflow (issue #304)." },
+                "action": { "type": "string", "enum": ["list", "accept", "reject", "accept_all", "reject_all", "set_mode"], "description": "'list' reads revisions directly off the live markup — each entry carries a stable id, the markup's true author/date, its text, and the containing block's anchorId. 'accept'/'reject' resolve ONE revision by revisionId (undoable via docxodus_undo; other revisions keep their ids). 'accept_all'/'reject_all' resolve the whole document (not undoable — the session is rebound to the transformed bytes). 'set_mode' switches the session's own recording mode mid-workflow (issue #304)." },
+                "revisionId": { "type": "string", "description": "accept/reject: the id from 'list' (e.g. 'rev101'). Unknown or already-resolved ids fail with revision_not_found — re-list for the current set." },
                 "author": { "type": "string", "description": "list: only return revisions by this author." },
-                "changeType": { "type": "string", "enum": ["insert", "delete", "move", "format"], "description": "list: only return revisions of this type." },
-                "mode": { "type": "string", "enum": ["accept", "render_inline", "strip_deletions"], "description": "set_mode: how SUBSEQUENT mutations are recorded (same values as docxodus_open's trackedChanges). Never touches already-applied edits — accept does not resolve existing revisions (use accept_all), render_inline does not retroactively track prior direct edits. Not undoable." },
+                "changeType": { "type": "string", "enum": ["insert", "delete", "move", "format"], "description": "list: only return revisions of this type. A 'move' entry is a linked pair — accepting/rejecting it resolves both sides." },
+                "mode": { "type": "string", "enum": ["accept", "render_inline", "strip_deletions"], "description": "set_mode: how SUBSEQUENT mutations are recorded (same values as docxodus_open's trackedChanges). Never touches already-applied edits — accept does not resolve existing revisions (use accept/accept_all), render_inline does not retroactively track prior direct edits. Not undoable." },
                 "revisionAuthor": { "type": "string", "description": "set_mode: author stamped on subsequent tracked-change markup. Absent = leave the current author unchanged; empty string = reset to the 'docxodus' default." }
               },
               "required": ["sessionId", "action"]

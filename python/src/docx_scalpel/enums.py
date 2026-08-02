@@ -142,6 +142,7 @@ class EditErrorCode(str, Enum):
     ANNOTATION_NOT_FOUND = "annotation_not_found"
     EMPTY_ANNOTATION_SPAN = "empty_annotation_span"
     EMPTY_COMMENT_SPAN = "empty_comment_span"
+    REVISION_NOT_FOUND = "revision_not_found"
     INTERNAL_ERROR = "internal_error"
 
     @classmethod

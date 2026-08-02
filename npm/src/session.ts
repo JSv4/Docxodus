@@ -33,6 +33,7 @@ import type {
   GrepOptions,
   ListMembership,
   ReplaceOptions,
+  RevisionListEntry,
   SectionInfo,
   TemplatePlaceholder,
   TextMatch,
@@ -388,6 +389,30 @@ export class DocxSession {
   /** The document's native Word comments in comments-part order. */
   listComments(): CommentListEntry[] {
     return JSON.parse(this.wasm.ListComments(this.handle)) as CommentListEntry[];
+  }
+
+  // ─── Tracked revisions (issue #318) ──────────────────────────────────
+
+  /** Markup-native tracked-revision listing, in document order across body, headers,
+   * footers, footnotes, and endnotes. Ids are stable while the underlying markup
+   * exists and address {@link acceptRevision}/{@link rejectRevision}; authors/dates
+   * are the markup's own (no accept/reject re-diff). */
+  listRevisions(): RevisionListEntry[] {
+    return JSON.parse(this.wasm.ListRevisions(this.handle)) as RevisionListEntry[];
+  }
+
+  /** Accept ONE revision by the id {@link listRevisions} reported — insertions keep
+   * their content, deletions are carried out, a move materializes at its destination,
+   * a format change keeps the new properties. Undoable. */
+  acceptRevision(revisionId: string): EditResult {
+    return JSON.parse(this.wasm.AcceptRevision(this.handle, revisionId)) as EditResult;
+  }
+
+  /** Reject ONE revision by id — the inverse of {@link acceptRevision}: insertions are
+   * removed, deleted content is restored, a move stays at its source, a format change
+   * restores the stored old properties. Undoable. */
+  rejectRevision(revisionId: string): EditResult {
+    return JSON.parse(this.wasm.RejectRevision(this.handle, revisionId)) as EditResult;
   }
 
   // ─── Tier C: formatting ──────────────────────────────────────────────

@@ -849,6 +849,27 @@ Semantics:
   stdio host + docx-scalpel (`set_tracked_changes`/`set_revision_author`), MCP
   (`docxodus_track_changes` action `set_mode`).
 
+## Per-revision accept/reject (issue #318)
+
+Tracked-change resolution used to be all-or-nothing (`RevisionProcessor` over the whole
+document); the single most common review action — accept one revision, reject another —
+required emulation. Three session ops close that gap:
+
+| Method | Description |
+|--------|-------------|
+| `ListRevisions()` | Read-only: `RevisionListEntry(Id, Type, Author, Date?, Text, AnchorId?)` in document order across body, headers, footers, footnotes, endnotes. Read directly off the live markup — no accept-all/reject-all re-diff — so `Author`/`Date` are the markup's true `w:author`/`w:date` and the call is cheap on large documents. Physically contiguous markup of the same kind+author groups into ONE entry per user-visible change: an inserted paragraph is one revision (runs + mark, `Text` ends in `¶`), a row-deleted table row absorbs its cell markup, a named move pair is one `"move"` entry covering both sides. `Id` (`"rev"` + the group's smallest `w:id`) is stable across calls and across resolution of *other* revisions. `Type` is `"insert"`/`"delete"`/`"move"`/`"format"`. |
+| `AcceptRevision(id)` | Resolve ONE revision, keeping the change: unwrap `w:ins`/`w:moveTo`, carry out `w:del`/`w:moveFrom` (paragraph-mark deletions coalesce into the following paragraph, row deletions drop the row — the last row drops the table), drop the `*PrChange` element keeping current properties. An ordinary undoable mutation returning the `EditResult` envelope (`Modified` = touched blocks, `Removed` = blocks the resolution deleted). |
+| `RejectRevision(id)` | The inverse: remove insertions, restore deletions (`w:delText` → `w:t`, marks stripped), keep a move at its source, restore a format change's stored old properties (preserving the children the `CT_*Base` inner schema excludes — mark revisions on a paragraph-mark `rPr`, header/footer references on `sectPr`, `rPr`/`sectPr` on `pPr`). |
+
+Mechanics live in `Docxodus/Internal/RevisionOps.cs`; the per-element semantics mirror
+`RevisionProcessor`'s transforms, applied to one group in place. An unknown, already-resolved,
+or since-removed id fails with `RevisionNotFound` — re-list for the current set. v1 does not
+enumerate `w:cellIns`/`w:cellDel`/`w:cellMerge`, content-control ins/del ranges, or
+`w:numPr` numbering-ins markers; whole-document accept/reject still handles those. Wired
+through every surface: WASM/npm (`listRevisions`/`acceptRevision`/`rejectRevision`), stdio
+host + docx-scalpel (`list_revisions`/`accept_revision`/`reject_revision`), MCP
+(`docxodus_track_changes` actions `list`/`accept`/`reject` with `revisionId`).
+
 ## ApplyFormat — substring and TextMatch overloads
 
 Three entry points for character-formatting (bold/italic/underline/strike/code/color/runStyle):
@@ -1246,6 +1267,7 @@ Errors are grouped by what the agent should do in response, not by where in the 
 | The agent should… | When it sees these codes |
 |---|---|
 | Re-project and re-derive the anchor from current text | `AnchorNotFound` |
+| Re-list revisions (`ListRevisions`) and reissue with a current id | `RevisionNotFound` |
 | Re-read the anchor's kind via `GetAnchorInfo`, reissue with the right op or coordinates | `AnchorWrongKind`, `AnchorsNotAdjacent`, `InvalidPosition`, `OffsetOutOfRange`, `EmptyCommentSpan` |
 | Fix the markdown payload (the message names what's wrong) | `MalformedMarkdown`, `UnsupportedMarkdownSyntax`, `AnchorTokenInPayload` |
 | Call the v1 op the message names, or fall back to `Raw.InsertXml` | `TableInsertNotSupported`, `FootnoteRefNotSupported`, `CommentMarkerNotSupported`, `ImageInsertNotSupported` |

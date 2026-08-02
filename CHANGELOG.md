@@ -31,6 +31,34 @@ All notable changes to this project will be documented in this file.
   with a `ListFormat` enum), and `docxodus_list`, which gains an `apply_format_range` action
   (`firstAnchorId`/`lastAnchorId`) and the widened `listFormat` token set. Coverage:
   DS340–DS347.
+- **Selective per-revision accept/reject + markup-native revision listing (issue #318).**
+  Tracked-change resolution was all-or-nothing: `RevisionProcessor` over the whole document,
+  so "accept the city correction, reject the sentence deletion" — the single most common
+  review action — required accept-everything-then-re-apply emulation. `DocxSession` gains
+  three ops. `ListRevisions()` enumerates `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`,
+  paragraph-mark and table-row markers, and the `*PrChange` format-change family directly
+  off the live markup (body, headers, footers, footnotes, endnotes — no accept-all/reject-all
+  re-diff, so it is cheap on large documents and reports the markup's TRUE `w:author`/`w:date`
+  instead of engine defaults), grouping contiguous same-kind/same-author markup into one
+  `RevisionListEntry(Id, Type, Author, Date?, Text, AnchorId?)` per user-visible change — an
+  inserted paragraph is one revision (runs + mark), a deleted table row absorbs its cell
+  markup, a named move pair is one `move` entry covering both sides. `Id` derives from the
+  markup's own `w:id` attributes, so it is stable across calls and across resolution of other
+  revisions. `AcceptRevision(id)`/`RejectRevision(id)` resolve exactly one group in place as
+  ordinary undoable session mutations (no whole-document `RevisionProcessor` round-trip, no
+  session rebind; `EditResult.Modified`/`Removed` name the touched blocks), mirroring
+  `RevisionProcessor`'s per-element semantics: unwrap vs. remove, `w:delText` → `w:t`
+  restore, paragraph-mark coalescing into the following paragraph, row/table removal, and
+  `CT_*Base`-aware stored-property restore for format changes. New
+  `EditErrorCode.RevisionNotFound`. Mechanics in `Docxodus/Internal/RevisionOps.cs`; not
+  enumerated in v1 (whole-document accept/reject still covers them):
+  `cellIns`/`cellDel`/`cellMerge`, content-control ins/del ranges, `numPr` numbering-ins.
+  Rippled through every surface: WASM/npm (`listRevisions`/`acceptRevision`/`rejectRevision`
+  + `RevisionListEntry` type), stdio host + docx-scalpel
+  (`list_revisions`/`accept_revision`/`reject_revision`), and `docxodus-mcp`, where
+  `docxodus_track_changes` gains `accept`/`reject` actions taking `revisionId` and its `list`
+  action switches to the markup-native listing (stable ids, real attribution, ~3s → ~ms on a
+  49-page document). Coverage: `DocxSessionRevisionTests` (DS370–DS389).
 - **First-line/hanging indent and paragraph spacing on `SetParagraphFormat` (issue #312).**
   `ParagraphFormatOp` could express alignment, a left-indent delta, page-break-before, and
   paragraph borders — but not the other two workhorses of paragraph layout, so the intent
