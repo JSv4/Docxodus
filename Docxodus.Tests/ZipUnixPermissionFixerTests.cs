@@ -8,6 +8,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using Xunit;
@@ -28,11 +30,33 @@ namespace Docxodus.Tests;
 /// fix — it never touches the actually-broken code path. A genuine Word-authored file has
 /// <c>ExternalAttributes == 0</c> on every entry (Word doesn't set them), which is the baseline that
 /// reproduces the bug; these tests load <c>TestFiles/Blank-wml.docx</c> for exactly that reason.</para>
+///
+/// <para>DS350/DS351 cover a defense-in-depth extension: <see cref="WmlComparer"/>'s own
+/// open/dispose/save pipeline (independent of both <see cref="DocxSession"/> and
+/// <see cref="OpenXmlMemoryStreamDocument"/>) doesn't reproduce the bug on the currently-targeted
+/// SDK, so those two don't need the zero-attribute Word-authored baseline to prove anything — they
+/// just pin that the output always comes out non-zero, guarding against a future SDK regression.</para>
 /// </summary>
 public class ZipUnixPermissionFixerTests
 {
     private static byte[] LoadWordAuthoredFixture() =>
         File.ReadAllBytes(Path.Combine("../../../../TestFiles/", "Blank-wml.docx"));
+
+    private static byte[] BuildSimpleDoc(string text)
+    {
+        using var ms = new MemoryStream();
+        using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+        {
+            var main = wDoc.AddMainDocumentPart();
+            main.Document = new Document(new Body(new Paragraph(new Run(new Text(text)))));
+            main.AddNewPart<StyleDefinitionsPart>().Styles = new Styles(
+                new Style(new StyleName { Val = "Normal" })
+                { Type = StyleValues.Paragraph, StyleId = "Normal", Default = true });
+            main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+            main.Document.Save();
+        }
+        return ms.ToArray();
+    }
 
     /// <summary>Every zip entry in <paramref name="docxBytes"/> must carry non-zero Unix permission bits.</summary>
     private static void AssertAllEntriesHaveUnixPermissions(byte[] docxBytes)
@@ -114,5 +138,43 @@ public class ZipUnixPermissionFixerTests
         var built = DocumentBuilder.BuildDocument(sources);
 
         AssertAllEntriesHaveUnixPermissions(built.DocumentByteArray);
+    }
+
+    [Fact]
+    public void DS350_WmlComparerCompareOutput_HasNonZeroUnixPermissions()
+    {
+        // WmlComparer.Compare (the default/blessed comparison engine, per CLAUDE.md) manages its own
+        // open/dispose/ToArray() pipeline independent of both DocxSession and
+        // OpenXmlMemoryStreamDocument. Its dispose-based pattern happens not to reproduce #302 on the
+        // currently-targeted SDK, but had no code-level defense the way the other two save paths now
+        // do — this closes that gap and guards against a future SDK behavior change regressing it
+        // silently.
+        var source1 = new WmlDocument("source1.docx", BuildSimpleDoc("Original paragraph text."));
+        var source2 = new WmlDocument("source2.docx", BuildSimpleDoc("Modified paragraph text."));
+
+        var compared = WmlComparer.Compare(source1, source2, new WmlComparerSettings());
+
+        AssertAllEntriesHaveUnixPermissions(compared.DocumentByteArray);
+    }
+
+    [Fact]
+    public void DS351_WmlComparerConsolidateOutput_HasNonZeroUnixPermissions()
+    {
+        // Same coverage gap as DS350, for WmlComparer.Consolidate's separate output path.
+        var original = new WmlDocument("original.docx", BuildSimpleDoc("Original paragraph text."));
+        var revised = new WmlDocument("revised.docx", BuildSimpleDoc("Revised paragraph text."));
+        var revisedList = new List<WmlRevisedDocumentInfo>
+        {
+            new WmlRevisedDocumentInfo
+            {
+                RevisedDocument = revised,
+                Color = ColorParser.FromName("red"),
+                Revisor = "Reviewer One",
+            },
+        };
+
+        var consolidated = WmlComparer.Consolidate(original, revisedList, new WmlComparerSettings());
+
+        AssertAllEntriesHaveUnixPermissions(consolidated.DocumentByteArray);
     }
 }
