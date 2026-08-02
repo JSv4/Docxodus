@@ -14,6 +14,7 @@ __all__ = [
     "Position",
     "HeaderFooterKind",
     "PageNumberField",
+    "ParagraphAlignment",
     "EditErrorCode",
     "PlaceholderKind",
     "PlaceholderKinds",
@@ -59,6 +60,16 @@ class PageNumberField(str, Enum):
 
     CURRENT_PAGE = "currentPage"
     TOTAL_PAGES = "totalPages"
+
+
+class ParagraphAlignment(str, Enum):
+    """Paragraph alignment for ``ParagraphFormatOp.alignment`` (maps to ``w:jc``;
+    ``JUSTIFY`` writes ``w:val="both"``)."""
+
+    LEFT = "left"
+    CENTER = "center"
+    RIGHT = "right"
+    JUSTIFY = "justify"
 
 
 class EditErrorCode(str, Enum):

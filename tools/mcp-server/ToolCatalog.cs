@@ -139,7 +139,27 @@ internal static class ToolCatalog
                     "alignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
                     "indentDelta": { "type": "integer", "description": "Twips to add to the current left indent (negative to outdent)." },
                     "pageBreakBefore": { "type": "boolean" },
-                    "clearBorders": { "type": "boolean" }
+                    "topBorder": {
+                      "type": "object",
+                      "description": "Adds/replaces the paragraph's top border (w:pBdr/w:top).",
+                      "properties": {
+                        "style": { "type": "string", "description": "Border line style, e.g. single/double/thick/dotted/dashed. Default \"single\"." },
+                        "size": { "type": "integer", "description": "Border weight in eighths of a point. Default 6 (≈0.75pt); a heavy rule ≈ 18-24." },
+                        "color": { "type": "string", "description": "Hex RGB without '#', or \"auto\". Default \"auto\"." },
+                        "space": { "type": "integer", "description": "Padding between border and text, in points. Default 1." }
+                      }
+                    },
+                    "bottomBorder": {
+                      "type": "object",
+                      "description": "Adds/replaces the paragraph's bottom border (w:pBdr/w:bottom). This is what an S-1-style horizontal rule is: an (often empty) paragraph with a bottom border.",
+                      "properties": {
+                        "style": { "type": "string", "description": "Border line style, e.g. single/double/thick/dotted/dashed. Default \"single\"." },
+                        "size": { "type": "integer", "description": "Border weight in eighths of a point. Default 6 (≈0.75pt); a heavy rule ≈ 18-24." },
+                        "color": { "type": "string", "description": "Hex RGB without '#', or \"auto\". Default \"auto\"." },
+                        "space": { "type": "integer", "description": "Padding between border and text, in points. Default 1." }
+                      }
+                    },
+                    "clearBorders": { "type": "boolean", "description": "Remove the entire w:pBdr (all paragraph borders) before applying topBorder/bottomBorder in this same call." }
                   }
                 },
                 "levelDelta": { "type": "integer", "description": "set_list_level: +1 indents one level, -1 outdents one level." },

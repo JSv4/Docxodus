@@ -29,6 +29,7 @@ from .enums import (
     EditErrorCode,
     EmptyParagraphMode,
     HeaderFooterKind,
+    ParagraphAlignment,
     PlaceholderKind,
     PlaceholderKinds,
     ProjectionScopes,
@@ -41,6 +42,8 @@ __all__ = [
     "Anchor",
     "CharSpan",
     "FormatOp",
+    "ParagraphBorderEdge",
+    "ParagraphFormatOp",
     "EditError",
     "EditResult",
     "MarkdownPatch",
@@ -347,6 +350,57 @@ class FormatOp:
         if self.code is not None: out["code"] = self.code
         if self.color is not None: out["color"] = self.color
         if self.run_style is not None: out["runStyle"] = self.run_style
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class ParagraphBorderEdge:
+    """One edge of a paragraph border (a ``w:pBdr`` child — ``w:top``/``w:bottom``) for
+    :attr:`ParagraphFormatOp.top_border`/:attr:`ParagraphFormatOp.bottom_border`.
+
+    When an edge is set, fields left ``None`` fall back to the host's defaults (style
+    "single", size 6 eighths-of-a-point ≈0.75pt, color "auto", space 1pt).
+    """
+
+    style: str | None = None
+    size: int | None = None
+    color: str | None = None
+    space: int | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.style is not None: out["style"] = self.style
+        if self.size is not None: out["size"] = self.size
+        if self.color is not None: out["color"] = self.color
+        if self.space is not None: out["space"] = self.space
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class ParagraphFormatOp:
+    """Paragraph-level formatting changes for ``DocxSession.set_paragraph_format``.
+
+    Each field is tri-state: ``None`` leaves that property unchanged. ``clear_borders=True``
+    removes the entire ``w:pBdr`` (all paragraph borders) before applying any
+    ``top_border``/``bottom_border`` set in this same op — this is how an S-1-style horizontal
+    rule paragraph gets (or loses) its bottom border.
+    """
+
+    alignment: ParagraphAlignment | None = None
+    indent_delta: int | None = None
+    page_break_before: bool | None = None
+    top_border: ParagraphBorderEdge | None = None
+    bottom_border: ParagraphBorderEdge | None = None
+    clear_borders: bool | None = None
+
+    def to_wire(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.alignment is not None: out["alignment"] = self.alignment.value
+        if self.indent_delta is not None: out["indentDelta"] = self.indent_delta
+        if self.page_break_before is not None: out["pageBreakBefore"] = self.page_break_before
+        if self.top_border is not None: out["topBorder"] = self.top_border.to_wire()
+        if self.bottom_border is not None: out["bottomBorder"] = self.bottom_border.to_wire()
+        if self.clear_borders is not None: out["clearBorders"] = self.clear_borders
         return out
 
 

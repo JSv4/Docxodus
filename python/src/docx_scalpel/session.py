@@ -65,6 +65,7 @@ from .types import (
     ListMembership,
     MarkdownProjection,
     NumberFormat,
+    ParagraphFormatOp,
     ReplaceOptions,
     SectionInfo,
     TemplatePlaceholder,
@@ -1075,6 +1076,26 @@ class DocxSession:
             self._call(
                 "set_paragraph_style",
                 {"anchorId": anchor_id, "styleId": style_id},
+            )
+        )
+
+    def set_paragraph_format(
+        self, anchor_id: str, op: ParagraphFormatOp
+    ) -> EditResult:
+        """Apply paragraph-level formatting to the paragraph at ``anchor_id``: alignment
+        (``w:jc``), left-indent delta in twips (``w:ind/@w:left``, clamped at 0), page-break-
+        before (``w:pageBreakBefore``), and top/bottom paragraph borders (``w:pBdr``).
+
+        Every field on ``op`` is tri-state: ``None`` leaves that property unchanged. Setting
+        ``op.top_border``/``op.bottom_border`` adds or replaces that border edge;
+        ``op.clear_borders=True`` removes the whole ``w:pBdr`` before either is applied in the
+        same call. An (often empty) paragraph with only a bottom border is what an S-1-style
+        horizontal rule is.
+        """
+        return EditResult._from_wire(
+            self._call(
+                "set_paragraph_format",
+                {"anchorId": anchor_id, "op": op.to_wire()},
             )
         )
 

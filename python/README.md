@@ -118,7 +118,7 @@ The `DocxSession` class exposes every op in `Docxodus.Internal.DocxSessionOps` a
 | **Discovery** | `grep`, `grep_cross_block`, `find_placeholders`, `find_by_text`, `find_all_by_text`, `find_by_regex`, `find_by_kind`, `find_by_annotation`, `find_by_label`, `find_by_bookmark`, `list_annotations`, `exists`, `get_anchor_info`, `get_anchor_infos`, `get_edit_summary`, `remaining_placeholders`, `get_diff` |
 | **A: text mutations** | `replace_text`, `replace_text_range`, `replace_text_at_span`, `replace_inner`, `replace_match`, `delete_block`, `delete_range`, `delete_section` |
 | **B: structural** | `insert_paragraph`, `split_paragraph`, `merge_paragraphs` |
-| **C: formatting** | `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_list_level`, `remove_list_membership` |
+| **C: formatting** | `apply_format`, `apply_format_by_substring`, `set_paragraph_style`, `set_paragraph_format`, `set_list_level`, `remove_list_membership` |
 | **D: tables** | `replace_cell_content` |
 | **Raw XML** | `session.raw.get_xml`, `session.raw.insert_xml`, `session.raw.replace_xml` |
 

@@ -95,6 +95,8 @@ internal static class Dispatcher
             Handle(args), Str(args, "anchorId"), Str(args, "substring"), ParseFormatOp(args, "op")),
         "set_paragraph_style" => DocxSessionOps.SetParagraphStyle(
             Handle(args), Str(args, "anchorId"), Str(args, "styleId")),
+        "set_paragraph_format" => DocxSessionOps.SetParagraphFormat(
+            Handle(args), Str(args, "anchorId"), ParseParagraphFormatOp(args, "op")),
         "set_list_level" => DocxSessionOps.SetListLevel(
             Handle(args), Str(args, "anchorId"), Int(args, "levelDelta")),
         "remove_list_membership" => DocxSessionOps.RemoveListMembership(
@@ -395,6 +397,13 @@ internal static class Dispatcher
         if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var op) || op.ValueKind != JsonValueKind.Object)
             return new FormatOp();
         return DocxSessionJson.ParseFormatOp(op.GetRawText());
+    }
+
+    private static ParagraphFormatOp ParseParagraphFormatOp(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var op) || op.ValueKind != JsonValueKind.Object)
+            return new ParagraphFormatOp();
+        return DocxSessionJson.ParseParagraphFormatOp(op.GetRawText());
     }
 
     private static string[] ParseAnchorIdArray(JsonElement args)

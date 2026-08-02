@@ -168,8 +168,8 @@ internal static class DocxSessionJson
 
     /// <summary>
     /// Parse a ParagraphFormatOp wire object: { alignment?: "left"|"center"|"right"|"justify",
-    /// indentDelta?: int (twips), pageBreakBefore?: bool }. Missing fields leave that property
-    /// unchanged.
+    /// indentDelta?: int (twips), pageBreakBefore?: bool, topBorder?/bottomBorder?: BorderEdge,
+    /// clearBorders?: bool }. Missing fields leave that property unchanged.
     /// </summary>
     public static ParagraphFormatOp ParseParagraphFormatOp(string json)
     {
