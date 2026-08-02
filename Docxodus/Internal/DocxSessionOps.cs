@@ -25,6 +25,14 @@ internal static class DocxSessionOps
 
     public static byte[] Save(int handle) => SessionRegistry.Get(handle).Save();
 
+    /// <summary>Save with an explicit per-call override of the session's open-time
+    /// <see cref="DocxSessionSettings.PersistAnchorIds"/> — see <see cref="DocxSession.Save(bool)"/>.
+    /// <c>true</c> keeps the projector's Unid bookkeeping in the written bytes (a later open over
+    /// them resolves the same anchor ids); <c>false</c> strips it even from a session opened with
+    /// <c>PersistAnchorIds = true</c> (a clean deliverable save from an anchor-stable session).</summary>
+    public static byte[] Save(int handle, bool persistAnchorIds) =>
+        SessionRegistry.Get(handle).Save(persistAnchorIds);
+
     /// <summary>
     /// Save KEEPING the projector's Unid bookkeeping — see <see cref="DocxSession.Save(bool)"/>.
     /// Exists for the in-browser editor's remount, which re-renders these bytes and needs the

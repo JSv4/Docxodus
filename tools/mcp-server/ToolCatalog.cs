@@ -29,7 +29,8 @@ internal static class ToolCatalog
                 "path": { "type": "string", "description": "Location of the .docx within this server's configured document scope. Relative locations resolve under the scope root; an absolute path is accepted only if it falls inside that root. A location outside it is rejected — the scope is set by whoever launched the server and cannot be widened from here." },
                 "trackedChanges": { "type": "string", "enum": ["accept", "render_inline", "strip_deletions"], "description": "How mutating ops record their own edits. 'accept' (default) applies them directly; 'render_inline' wraps them as w:ins/w:del tracked changes; 'strip_deletions' drops deleted content outright." },
                 "revisionAuthor": { "type": "string", "description": "Author name stamped on tracked-change markup when trackedChanges is render_inline." },
-                "undoDepth": { "type": "integer", "description": "Bounded undo-ring depth. Default 50." }
+                "undoDepth": { "type": "integer", "description": "Bounded undo-ring depth. Default 50." },
+                "persistAnchorIds": { "type": "boolean", "description": "Default false. When true, docxodus_save keeps the anchor-id bookkeeping in the written file, so a session opened over it later resolves the anchor ids this session hands out. Costs file size (hundreds of KB on a large document) — turn it on only when a workflow needs a close+reopen (e.g. to switch trackedChanges mode) without losing its anchors. docxodus_save can also override this per call." }
               },
               "required": ["path"]
             }
@@ -42,7 +43,8 @@ internal static class ToolCatalog
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "path": { "type": "string", "description": "Destination within the server's document scope, resolved the same way docxodus_open resolves its path. Defaults to the location the session was opened from (overwrite in place)." }
+                "path": { "type": "string", "description": "Destination within the server's document scope, resolved the same way docxodus_open resolves its path. Defaults to the location the session was opened from (overwrite in place)." },
+                "persistAnchorIds": { "type": "boolean", "description": "Override the session's open-time persistAnchorIds for this save only. true: keep the anchor-id bookkeeping in the written file so reopening it resolves the same anchor ids (an anchor-stable checkpoint, at a file-size cost). false: strip it (a clean deliverable from a session opened with persistAnchorIds true). Absent: use the session's setting." }
               },
               "required": ["sessionId"]
             }

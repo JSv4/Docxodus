@@ -212,7 +212,11 @@ internal static class Dispatcher
 
     private static string Save(JsonElement args)
     {
-        var bytes = DocxSessionOps.Save(Handle(args));
+        // Tri-state: absent → the session's open-time persistAnchorIds setting; explicit
+        // true/false overrides it for this save only (mirrors docxodus-mcp's docxodus_save).
+        var bytes = OptBool(args, "persistAnchorIds") is { } persist
+            ? DocxSessionOps.Save(Handle(args), persist)
+            : DocxSessionOps.Save(Handle(args));
         return "{\"docxB64\":" + DocxSessionJson.JsonString(Convert.ToBase64String(bytes)) + "}";
     }
 
@@ -380,6 +384,13 @@ internal static class Dispatcher
     {
         if (args.ValueKind != JsonValueKind.Object) return null;
         return args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+    }
+
+    private static bool? OptBool(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object) return null;
+        return args.TryGetProperty(name, out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False)
+            ? v.GetBoolean() : null;
     }
 
     private static PageNumberingOp ParsePageNumberingOp(JsonElement args, string name)

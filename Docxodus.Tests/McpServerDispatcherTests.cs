@@ -48,13 +48,50 @@ public class McpServerDispatcherTests : IDisposable
 
     private static JsonElement Parse(string json) => J(json);
 
-    private string OpenSession(string? trackedChanges = null)
+    private string OpenSession(string? trackedChanges = null, bool? persistAnchorIds = null, string? path = null)
     {
-        var argsJson = trackedChanges is null
-            ? $$"""{"path":{{JsonSerializer.Serialize(_tempPath)}}}"""
-            : $$"""{"path":{{JsonSerializer.Serialize(_tempPath)}},"trackedChanges":{{JsonSerializer.Serialize(trackedChanges)}}}""";
+        var argsJson = $$"""{"path":{{JsonSerializer.Serialize(path ?? _tempPath)}}""";
+        if (trackedChanges is not null)
+            argsJson += $$""","trackedChanges":{{JsonSerializer.Serialize(trackedChanges)}}""";
+        if (persistAnchorIds is not null)
+            argsJson += $$""","persistAnchorIds":{{(persistAnchorIds.Value ? "true" : "false")}}""";
+        argsJson += "}";
         var result = Dispatcher.Call(_store, "docxodus_open", J(argsJson));
         return Parse(result).GetProperty("sessionId").GetString()!;
+    }
+
+    /// <summary>Insert a paragraph after the document's first block and return the created
+    /// paragraph's anchor id — a fresh (randomly-assigned) Unid, which is exactly the kind of
+    /// anchor that cannot survive a save→reopen unless the save persists anchor bookkeeping.</summary>
+    private string InsertParagraph(string sessionId, string markdown)
+    {
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        var result = Parse(Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{JsonSerializer.Serialize(sessionId)}},"action":"insert_paragraph","anchorId":"{{anchor}}","position":"after","markdown":{{JsonSerializer.Serialize(markdown)}}}""")));
+        Assert.True(result.GetProperty("success").GetBoolean());
+        return result.GetProperty("created")[0].GetProperty("id").GetString()!;
+    }
+
+    private void Save(string sessionId, string path, bool? persistAnchorIds = null)
+    {
+        var argsJson = $$"""{"sessionId":{{JsonSerializer.Serialize(sessionId)}},"path":{{JsonSerializer.Serialize(path)}}""";
+        if (persistAnchorIds is not null)
+            argsJson += $$""","persistAnchorIds":{{(persistAnchorIds.Value ? "true" : "false")}}""";
+        argsJson += "}";
+        Dispatcher.Call(_store, "docxodus_save", J(argsJson));
+    }
+
+    private static JsonElement ReplaceText(SessionStore store, string sessionId, string anchor, string markdown) =>
+        Parse(Dispatcher.Call(store, "docxodus_edit", J(
+            $$"""{"sessionId":{{JsonSerializer.Serialize(sessionId)}},"action":"replace_text","anchorId":"{{anchor}}","markdown":{{JsonSerializer.Serialize(markdown)}}}""")));
+
+    /// <summary>The saved file's main document part XML — where persisted <c>PtOpenXml:Unid</c>
+    /// anchor bookkeeping shows up as <c>Unid="…"</c> attributes.</summary>
+    private static string SavedDocumentXml(string path)
+    {
+        using var ms = new MemoryStream(File.ReadAllBytes(path));
+        using var doc = DocumentFormat.OpenXml.Packaging.WordprocessingDocument.Open(ms, false);
+        return doc.MainDocumentPart!.RootElement!.OuterXml;
     }
 
     private static string FirstBodyAnchorId(string sessionId, SessionStore store)
@@ -119,6 +156,58 @@ public class McpServerDispatcherTests : IDisposable
             Assert.Equal(2 + 32, id.Length);            // "s_" + 16 random bytes as hex
             Assert.Matches("^s_[0-9a-f]{32}$", id);
         }
+    }
+
+    [Fact]
+    public void MCP004_Open_PersistAnchorIds_KeepsCreatedAnchorAcrossSaveReopen()
+    {
+        var sessionId = OpenSession(persistAnchorIds: true);
+        var createdAnchor = InsertParagraph(sessionId, "persist me");
+
+        var savedPath = Path.Combine(_root, "persisted.docx");
+        Save(sessionId, savedPath);
+
+        var reopened = OpenSession(path: savedPath);
+        var replace = ReplaceText(_store, reopened, createdAnchor, "still addressable");
+        Assert.True(replace.GetProperty("success").GetBoolean());
+    }
+
+    [Fact]
+    public void MCP005_Save_PersistAnchorIdsOverride_KeepsAnchorFromDefaultSession()
+    {
+        var sessionId = OpenSession();                     // default: anchor ids NOT persisted
+        var createdAnchor = InsertParagraph(sessionId, "checkpoint me");
+
+        var savedPath = Path.Combine(_root, "checkpoint.docx");
+        Save(sessionId, savedPath, persistAnchorIds: true);
+
+        var reopened = OpenSession(path: savedPath);
+        var replace = ReplaceText(_store, reopened, createdAnchor, "still addressable");
+        Assert.True(replace.GetProperty("success").GetBoolean());
+    }
+
+    [Fact]
+    public void MCP006_Open_PersistAnchorIds_GovernsPlainSave()
+    {
+        var sessionId = OpenSession(persistAnchorIds: true);
+        InsertParagraph(sessionId, "bookkeeping should survive");
+
+        var savedPath = Path.Combine(_root, "with-unids.docx");
+        Save(sessionId, savedPath);
+
+        Assert.Contains("Unid=", SavedDocumentXml(savedPath));
+    }
+
+    [Fact]
+    public void MCP007_Save_PersistAnchorIdsFalse_StripsOnPersistTrueSession()
+    {
+        var sessionId = OpenSession(persistAnchorIds: true);
+        InsertParagraph(sessionId, "clean deliverable");
+
+        var savedPath = Path.Combine(_root, "clean.docx");
+        Save(sessionId, savedPath, persistAnchorIds: false);
+
+        Assert.DoesNotContain("Unid=", SavedDocumentXml(savedPath));
     }
 
     // ─── Content ────────────────────────────────────────────────────────

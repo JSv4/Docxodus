@@ -402,9 +402,20 @@ class DocxSession:
 
     # -- core IO ----------------------------------------------------------
 
-    def save(self) -> bytes:
-        """Serialize the (mutated) document back to DOCX bytes. Does not close the session."""
-        result = self._call("save", {})
+    def save(self, persist_anchor_ids: bool | None = None) -> bytes:
+        """Serialize the (mutated) document back to DOCX bytes. Does not close the session.
+
+        ``persist_anchor_ids`` overrides the session's open-time
+        :attr:`DocxSessionSettings.persist_anchor_ids` for this save only:
+        ``True`` keeps the anchor-id bookkeeping in the bytes so a session opened
+        over them later resolves the same anchor ids (an anchor-stable checkpoint,
+        at a file-size cost); ``False`` strips it (a clean deliverable from a
+        session opened anchor-stable); ``None`` (default) uses the session's setting.
+        """
+        args: dict[str, Any] = {}
+        if persist_anchor_ids is not None:
+            args["persistAnchorIds"] = persist_anchor_ids
+        result = self._call("save", args)
         return base64.b64decode(result["docxB64"])
 
     def to_html(self, options: HtmlOptions | None = None) -> str:

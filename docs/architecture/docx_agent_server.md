@@ -108,6 +108,26 @@ across mutations per the anchor-lifecycle contract in `docs/architecture/docx_mu
 assume an anchor you haven't seen invalidated is still resolvable forever, but do trust that
 list).
 
+### Anchor stability across save→reopen
+
+Within one session anchors are stable, but a plain `docxodus_save` deliberately strips the
+`PtOpenXml:Unid` bookkeeping they are derived from (clean OOXML out by default — persisting it
+bloats a file by hundreds of KB; see `docs/architecture/docx_mutation_api.md`). After a
+save→`docxodus_close`→`docxodus_open` round-trip, anchors for content that was inserted or
+edited in the previous session therefore 404 with `anchor_not_found` (unchanged content gets
+the same deterministic ids back; changed content does not).
+
+When a workflow knows it will need a close+reopen — the concrete case is switching
+`trackedChanges` mode mid-workflow, which is also an open-time-only setting — opt in:
+
+- `docxodus_open(persistAnchorIds: true)` makes every save of that session keep the
+  bookkeeping, so a session reopened over the saved file resolves the same anchor ids.
+- `docxodus_save(persistAnchorIds: true|false)` overrides the open-time choice for one save:
+  `true` makes a single anchor-stable checkpoint from a default session; `false` produces a
+  clean deliverable from a session that was opened anchor-stable.
+
+Both default to the stripping behavior; nothing changes for callers that pass neither.
+
 ## Document storage
 
 Everything this server reads or writes goes through one small interface, `IDocumentStore`:
@@ -197,8 +217,8 @@ Three lifecycle tools, eleven grouped-intent tools. Every grouped tool takes `se
 
 | Tool | Arguments | Result |
 |---|---|---|
-| `docxodus_open` | `path` (a location within the configured scope — see Document storage), `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?` | `{ sessionId, path }` — `path` is the **resolved** location |
-| `docxodus_save` | `sessionId`, `path?` (resolved the same way; defaults to the location the session was opened from) | `{ path, bytesWritten }` |
+| `docxodus_open` | `path` (a location within the configured scope — see Document storage), `trackedChanges?` (`accept`\|`render_inline`\|`strip_deletions`), `revisionAuthor?`, `undoDepth?`, `persistAnchorIds?` (default false — see Anchor stability below) | `{ sessionId, path }` — `path` is the **resolved** location |
+| `docxodus_save` | `sessionId`, `path?` (resolved the same way; defaults to the location the session was opened from), `persistAnchorIds?` (per-call override of the session's open-time setting; absent = use it) | `{ path, bytesWritten }` |
 | `docxodus_close` | `sessionId` | `{ closed: true }` |
 
 ### `docxodus_get_content` — read
