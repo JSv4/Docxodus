@@ -475,6 +475,41 @@ public class McpServerDispatcherTests : IDisposable
         Assert.True(rowAdded.GetProperty("success").GetBoolean(), rowAddedJson);
     }
 
+    [Fact]
+    public void MCP061_Table_StylingActions()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var inserted = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"insert","anchorId":"{{anchor}}","position":"after","rows":2,"columns":2}""")));
+        Assert.True(inserted.GetProperty("success").GetBoolean());
+        var cellAnchor = inserted.GetProperty("created")[0].GetProperty("id").GetString()!;
+
+        var widths = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_column_widths","cellAnchorId":"{{cellAnchor}}","widths":[6000,3000]}""")));
+        Assert.True(widths.GetProperty("success").GetBoolean());
+
+        var borders = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_borders","cellAnchorId":"{{cellAnchor}}","borderScope":"outside","borderStyle":"double","borderSize":12,"borderColor":"FF0000"}""")));
+        Assert.True(borders.GetProperty("success").GetBoolean());
+
+        var shading = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_shading","cellAnchorId":"{{cellAnchor}}","fill":"D9D9D9","shadingScope":"row"}""")));
+        Assert.True(shading.GetProperty("success").GetBoolean());
+
+        var header = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_repeat_header_row","cellAnchorId":"{{cellAnchor}}"}""")));
+        Assert.True(header.GetProperty("success").GetBoolean());
+
+        // A width list that doesn't match the column count surfaces the typed error.
+        var bad = Parse(Dispatcher.Call(_store, "docxodus_table", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"set_column_widths","cellAnchorId":"{{cellAnchor}}","widths":[6000]}""")));
+        Assert.False(bad.GetProperty("success").GetBoolean());
+        Assert.Equal("invalid_table_styling", bad.GetProperty("error").GetProperty("code").GetString());
+    }
+
     // ─── Annotate (annotation overlay) ─────────────────────────────────
 
     [Fact]

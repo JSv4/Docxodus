@@ -264,6 +264,37 @@ public sealed record TableInsertOptions
     public IReadOnlyList<int>? ColumnWidths { get; init; }
 }
 
+/// <summary>Which table edges a <see cref="DocxSession.SetTableBorders"/> call targets:
+/// <see cref="Outside"/> = top/left/bottom/right, <see cref="Inside"/> = the inner grid lines
+/// (<c>w:insideH</c>/<c>w:insideV</c>), <see cref="All"/> = both.</summary>
+public enum TableBorderScope { All, Outside, Inside }
+
+/// <summary>Shading granularity for <see cref="DocxSession.SetCellShading"/>: the one cell the
+/// anchor sits in, or every cell of its row (header-row banding).</summary>
+public enum TableShadingScope { Cell, Row }
+
+/// <summary>Border specification for <see cref="DocxSession.SetTableBorders"/>. Written as
+/// explicit <c>w:tblBorders</c> edges, so it overrides any style-inherited borders; edges
+/// outside <see cref="Scope"/> are left untouched.</summary>
+public sealed record TableBorderSpec
+{
+    /// <summary>Which edges to write. Default <see cref="TableBorderScope.All"/>.</summary>
+    public TableBorderScope Scope { get; init; } = TableBorderScope.All;
+
+    /// <summary>Border line style (<c>w:val</c>): single, double, thick, dotted, dashed, … —
+    /// or "none" to remove the targeted edges (written as explicit none, like
+    /// <see cref="TableInsertOptions.Borderless"/>). Default "single".</summary>
+    public string? Style { get; init; }
+
+    /// <summary>Border weight in eighths of a point (<c>w:sz</c>). Default 4 (= 0.5pt), the same
+    /// thin rule <see cref="DocxSession.InsertTable"/> writes.</summary>
+    public int? Size { get; init; }
+
+    /// <summary>Border color as a hex RRGGBB triplet without '#', or "auto" (<c>w:color</c>).
+    /// Default "auto".</summary>
+    public string? Color { get; init; }
+}
+
 /// <summary>
 /// List membership for <see cref="DocxSession.ApplyListFormat"/> /
 /// <see cref="DocxSession.ApplyListFormatRange"/>. The non-<see cref="None"/> members decompose
@@ -1066,6 +1097,11 @@ public enum EditErrorCode
     /// other), a negative indent/spacing value (the attributes are unsigned), or a
     /// <c>LineSpacingRule</c> without the <c>LineSpacing</c> it qualifies.</summary>
     InvalidParagraphFormat,
+
+    /// <summary>A table-styling value the op cannot express: a column-width list whose length
+    /// doesn't match the table's column count (or a non-positive width), a shading fill that is
+    /// neither a hex RRGGBB triplet nor "auto", or a negative border size.</summary>
+    InvalidTableStyling,
 
     MalformedXml,
     DisallowedNamespace,
@@ -6469,6 +6505,300 @@ public sealed class DocxSession : IDisposable
             if (AnchorForElement(para) is { } a) result.Add(a);
         }
         return result;
+    }
+
+    // ─── Table styling (issue #315 Stage A), addressed by a cell-paragraph anchor ─────────
+    //
+    // Localized w:tblPr / w:trPr / w:tcPr writes over the same rectangular-grid v1 model the
+    // row/column CRUD assumes. Cell merge (w:gridSpan/w:vMerge) is Stage B and needs its own
+    // design pass first.
+
+    // CT_TblPr / CT_TcPr / CT_TrPr / CT_TblBorders child schema order (local names), matching
+    // WordprocessingMLUtil's ordering tables.
+    private static readonly string[] TblPrChildOrder =
+    {
+        "tblStyle", "tblpPr", "tblOverlap", "bidiVisual", "tblStyleRowBandSize",
+        "tblStyleColBandSize", "tblW", "jc", "tblCellSpacing", "tblInd", "tblBorders",
+        "shd", "tblLayout", "tblCellMar", "tblLook", "tblCaption", "tblDescription",
+    };
+
+    private static readonly string[] TcPrChildOrder =
+    {
+        "cnfStyle", "tcW", "gridSpan", "hMerge", "vMerge", "tcBorders", "shd", "noWrap",
+        "tcMar", "textDirection", "tcFitText", "vAlign", "hideMark", "headers",
+    };
+
+    private static readonly string[] TrPrChildOrder =
+    {
+        "cnfStyle", "divId", "gridBefore", "gridAfter", "wBefore", "wAfter", "cantSplit",
+        "trHeight", "tblHeader", "tblCellSpacing", "jc", "hidden",
+    };
+
+    private static readonly string[] TblBordersEdgeOrder =
+    {
+        "top", "left", "start", "bottom", "right", "end", "insideH", "insideV",
+    };
+
+    /// <summary>Insert (replacing any existing) a child at its correct schema position per
+    /// <paramref name="order"/> — the generalized <see cref="SetPPrChildInOrder"/>.</summary>
+    private static void SetChildInOrder(XElement parent, XElement child, string[] order)
+    {
+        parent.Elements(child.Name).Remove();
+        int idx = Array.IndexOf(order, child.Name.LocalName);
+        XElement? after = null;
+        foreach (var e in parent.Elements())
+        {
+            int ei = Array.IndexOf(order, e.Name.LocalName);
+            if (ei >= 0 && ei < idx) after = e;
+            else if (ei >= idx) break;
+        }
+        if (after is null) parent.AddFirst(child);
+        else after.AddAfterSelf(child);
+    }
+
+    /// <summary>w:tblPr must be the table's first child.</summary>
+    private static XElement GetOrCreateTblPr(XElement tbl)
+    {
+        var tblPr = tbl.Element(W.tblPr);
+        if (tblPr is null) { tblPr = new XElement(W.tblPr); tbl.AddFirst(tblPr); }
+        return tblPr;
+    }
+
+    /// <summary>w:tcPr must be the cell's first child.</summary>
+    private static XElement GetOrCreateTcPr(XElement tc)
+    {
+        var tcPr = tc.Element(W.tcPr);
+        if (tcPr is null) { tcPr = new XElement(W.tcPr); tc.AddFirst(tcPr); }
+        return tcPr;
+    }
+
+    /// <summary>The shared "styling applied" result: the target anchor in Modified + a patch.</summary>
+    private EditResult TableStyleResult(AnchorTarget target)
+    {
+        InvalidateProjectionCache();
+        var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
+        return new EditResult
+        {
+            Success = true,
+            Modified = new[] { updated },
+            Patch = PatchFor(target),
+        };
+    }
+
+    /// <summary>
+    /// Retune the column widths of the table containing <paramref name="cellAnchorId"/> —
+    /// the post-insert counterpart of <see cref="TableInsertOptions.ColumnWidths"/>. Rewrites
+    /// <c>w:tblGrid</c> and every row's <c>w:tcW</c>, sizes the table to the widths' sum
+    /// (dxa) and pins <c>w:tblLayout</c> fixed, exactly as inserting with explicit widths
+    /// would. One positive twip value per column is required.
+    /// </summary>
+    public EditResult SetColumnWidths(string cellAnchorId, IReadOnlyList<int> widthsTwips)
+    {
+        if (ResolveCell(cellAnchorId, out _, out _, out _, out var tbl, out _, out var target) is { } err)
+            return err;
+
+        var grid = tbl!.Element(W.tblGrid);
+        int colCount = grid is not null
+            ? grid.Elements(W.gridCol).Count()
+            : tbl.Elements(W.tr).First().Elements(W.tc).Count();
+        if (widthsTwips is null || widthsTwips.Count != colCount || widthsTwips.Any(w => w <= 0))
+            return EditResult.Fail(EditErrorCode.InvalidTableStyling,
+                $"widths must list one positive twip value per column ({colCount}); got {widthsTwips?.Count ?? 0}",
+                cellAnchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            if (grid is null)
+            {
+                grid = new XElement(W.tblGrid);
+                var pr = tbl.Element(W.tblPr);
+                if (pr is not null) pr.AddAfterSelf(grid);
+                else tbl.AddFirst(grid);
+            }
+            grid.RemoveNodes();
+            foreach (var w in widthsTwips)
+                grid.Add(new XElement(W.gridCol, new XAttribute(W._w, w)));
+
+            foreach (var tr in tbl.Elements(W.tr))
+            {
+                var cells = tr.Elements(W.tc).ToList();
+                for (int c = 0; c < cells.Count && c < colCount; c++)
+                    SetChildInOrder(GetOrCreateTcPr(cells[c]),
+                        new XElement(W.tcW, new XAttribute(W._w, widthsTwips[c]), new XAttribute(W.type, "dxa")),
+                        TcPrChildOrder);
+            }
+
+            var tblPr = GetOrCreateTblPr(tbl);
+            SetChildInOrder(tblPr,
+                new XElement(W.tblW, new XAttribute(W._w, widthsTwips.Sum()), new XAttribute(W.type, "dxa")),
+                TblPrChildOrder);
+            SetChildInOrder(tblPr,
+                new XElement(W.tblLayout, new XAttribute(W.type, "fixed")),
+                TblPrChildOrder);
+
+            return TableStyleResult(target!);
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
+        }
+    }
+
+    /// <summary>
+    /// Set the table-level borders (<c>w:tblPr/w:tblBorders</c>) of the table containing
+    /// <paramref name="cellAnchorId"/>. Only the edges named by <see cref="TableBorderSpec.Scope"/>
+    /// are written (as explicit edges, so style-inherited borders are overridden); the rest are
+    /// left untouched. Style "none" removes the targeted edges the way
+    /// <see cref="TableInsertOptions.Borderless"/> does. Cell-level <c>w:tcBorders</c>, where a
+    /// document has them, still win over these — v1 does not touch per-cell borders.
+    /// </summary>
+    public EditResult SetTableBorders(string cellAnchorId, TableBorderSpec? spec = null)
+    {
+        if (ResolveCell(cellAnchorId, out _, out _, out _, out var tbl, out _, out var target) is { } err)
+            return err;
+
+        var s = spec ?? new TableBorderSpec();
+        if (s.Size is < 0)
+            return EditResult.Fail(EditErrorCode.InvalidTableStyling,
+                "border size (eighths of a point) must be >= 0", cellAnchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var tblPr = GetOrCreateTblPr(tbl!);
+            var borders = tblPr.Element(W.tblBorders);
+            if (borders is null)
+            {
+                borders = new XElement(W.tblBorders);
+                SetChildInOrder(tblPr, borders, TblPrChildOrder);
+            }
+
+            var edges = s.Scope switch
+            {
+                TableBorderScope.Outside => new[] { W.top, W.left, W.bottom, W.right },
+                TableBorderScope.Inside => new[] { W.insideH, W.insideV },
+                _ => new[] { W.top, W.left, W.bottom, W.right, W.insideH, W.insideV },
+            };
+
+            bool none = string.Equals(s.Style, "none", StringComparison.OrdinalIgnoreCase);
+            foreach (var edgeName in edges)
+            {
+                var edge = none
+                    ? new XElement(edgeName, new XAttribute(W.val, "none"), new XAttribute(W.sz, 0),
+                        new XAttribute(W.space, 0), new XAttribute(W.color, "auto"))
+                    : new XElement(edgeName,
+                        new XAttribute(W.val, string.IsNullOrEmpty(s.Style) ? "single" : s.Style),
+                        new XAttribute(W.sz, s.Size ?? 4),
+                        new XAttribute(W.space, 0),
+                        new XAttribute(W.color, string.IsNullOrEmpty(s.Color) ? "auto" : s.Color));
+                SetChildInOrder(borders, edge, TblBordersEdgeOrder);
+            }
+
+            return TableStyleResult(target!);
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
+        }
+    }
+
+    /// <summary>
+    /// Shade the cell containing <paramref name="cellAnchorId"/> — or, with
+    /// <see cref="TableShadingScope.Row"/>, every cell of its row (header-row banding).
+    /// <paramref name="fillColor"/> is a hex RRGGBB triplet (a leading '#' is tolerated) or
+    /// "auto"; null/empty removes the shading. Writes <c>w:tcPr/w:shd</c> with
+    /// <c>w:val="clear"</c>, Word's plain-fill idiom.
+    /// </summary>
+    public EditResult SetCellShading(string cellAnchorId, string? fillColor,
+        TableShadingScope scope = TableShadingScope.Cell)
+    {
+        if (ResolveCell(cellAnchorId, out _, out var tc, out var tr, out _, out _, out var target) is { } err)
+            return err;
+
+        bool clear = string.IsNullOrEmpty(fillColor);
+        string fill = "auto";
+        if (!clear)
+        {
+            fill = fillColor!.TrimStart('#');
+            if (!string.Equals(fill, "auto", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!System.Text.RegularExpressions.Regex.IsMatch(fill, "^[0-9A-Fa-f]{6}$"))
+                    return EditResult.Fail(EditErrorCode.InvalidTableStyling,
+                        $"fill must be a hex RRGGBB triplet or \"auto\"; got '{fillColor}'", cellAnchorId);
+                fill = fill.ToUpperInvariant();
+            }
+            else fill = "auto";
+        }
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var cells = scope == TableShadingScope.Row ? tr!.Elements(W.tc).ToList() : new List<XElement> { tc! };
+            foreach (var cell in cells)
+            {
+                if (clear)
+                {
+                    cell.Element(W.tcPr)?.Elements(W.shd).Remove();
+                    continue;
+                }
+                SetChildInOrder(GetOrCreateTcPr(cell),
+                    new XElement(W.shd, new XAttribute(W.val, "clear"), new XAttribute(W.color, "auto"),
+                        new XAttribute(W.fill, fill)),
+                    TcPrChildOrder);
+            }
+
+            return TableStyleResult(target!);
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
+        }
+    }
+
+    /// <summary>
+    /// Mark (or unmark) the row containing <paramref name="cellAnchorId"/> as a repeating
+    /// header row (<c>w:trPr/w:tblHeader</c>), so a multi-page table re-shows it on every page.
+    /// Word only honors the flag on a run of rows starting at the table's first row — setting
+    /// it elsewhere is legal but ignored by renderers.
+    /// </summary>
+    public EditResult SetRepeatHeaderRow(string cellAnchorId, bool repeat)
+    {
+        if (ResolveCell(cellAnchorId, out _, out _, out var tr, out _, out _, out var target) is { } err)
+            return err;
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            var trPr = tr!.Element(W.trPr);
+            if (repeat)
+            {
+                if (trPr is null) { trPr = new XElement(W.trPr); tr.AddFirst(trPr); }
+                SetChildInOrder(trPr, new XElement(W.tblHeader), TrPrChildOrder);
+            }
+            else if (trPr is not null)
+            {
+                trPr.Elements(W.tblHeader).Remove();
+                // An emptied trPr is dropped entirely. Only element children matter: CT_TrPr has
+                // no schema attributes, and the in-memory tree may carry pt bookkeeping attributes
+                // (Unid) that Save() strips anyway.
+                if (!trPr.HasElements) trPr.Remove();
+            }
+
+            return TableStyleResult(target!);
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            _ = _history.PopForUndo();
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, cellAnchorId);
+        }
     }
 
     public EditResult SetListLevel(string anchorId, int levelDelta)

@@ -33,6 +33,29 @@ All notable changes to this project will be documented in this file.
   `docxodus_list`, which gains `set_start` (with `startValue`) and `clear_start` actions.
   Coverage: DS350–DS356, including a ListItemRetriever-rendered check that the visible
   numbers actually restart and a save/reopen round-trip.
+- **Post-insert table styling — column widths, borders, shading, repeat-header row (issue #315
+  Stage A).** Once a table existed its shape and content were editable but its presentation was
+  frozen at insert time: `columnWidths` lived only on `InsertTable`, borders only as the boolean
+  `borderless`, and shading / repeat-header had no op at all — "shade the header row, border the
+  table, repeat the header, widen column 1" all dead-ended. `DocxSession` gains four ops, all
+  addressed by the same cell-paragraph anchor the row/column CRUD takes and all localized
+  `w:tblPr`/`w:trPr`/`w:tcPr` writes with no model implications (the DocxDiff side already
+  digests these shells): `SetColumnWidths(cellAnchor, widthsTwips)` rewrites `w:tblGrid` +
+  every row's `w:tcW`, sizes the table to the sum (dxa) and pins `w:tblLayout` fixed — exactly
+  what inserting with explicit widths produces; `SetTableBorders(cellAnchor, TableBorderSpec?)`
+  writes `w:tblBorders` for only the spec's scope (`All`/`Outside`/`Inside`; style/size/color,
+  `"none"` writes explicit none edges à la `borderless`), leaving untargeted edges untouched;
+  `SetCellShading(cellAnchor, fill, TableShadingScope Cell|Row)` writes `w:tcPr/w:shd`
+  (`val="clear"`, Word's plain-fill idiom) on the one cell or the whole row (header-row
+  banding), null fill clearing it; `SetRepeatHeaderRow(cellAnchor, bool)` toggles
+  `w:trPr/w:tblHeader` (an emptied `trPr` is dropped). New `EditErrorCode.InvalidTableStyling`
+  rejects a width list not matching the column count (or non-positive widths), a fill that is
+  neither hex RRGGBB nor `auto`, and a negative border size. Rippled through WASM/npm
+  (`setColumnWidths`/`setTableBorders`/`setCellShading`/`setRepeatHeaderRow`, `TableBorderSpec`
+  + scope types) and `docxodus_table` (`set_column_widths`/`set_borders`/`set_shading`/
+  `set_repeat_header_row`) — the stdio host/docx-scalpel never carried the table CRUD surface
+  and stays as-is. Cell merge/unmerge (`w:gridSpan`/`w:vMerge`) is Stage B: it breaks the
+  rectangular-grid v1 assumption and gets its own design note first. Coverage: DT208–DT216.
 - **Letter/roman/parenthesized list formats + whole-range list conversion (issue #313).** The
   list write surface could only produce `bullet` and `decimal`, and only one paragraph per
   call — converting a 3-item list took 3 calls with no guarantee the items landed in the same

@@ -317,13 +317,13 @@ internal static class ToolCatalog
             """),
         new ToolDefinition(
             "docxodus_table",
-            "Create tables and edit their rows/columns/cell content.",
+            "Create tables, edit their rows/columns/cell content, and style them after insert (column widths, borders, shading, repeat-header row).",
             """
             {
               "type": "object",
               "properties": {
                 "sessionId": { "type": "string" },
-                "action": { "type": "string", "enum": ["insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content"] },
+                "action": { "type": "string", "enum": ["insert", "insert_row", "insert_column", "delete_row", "delete_column", "replace_cell_content", "set_column_widths", "set_borders", "set_shading", "set_repeat_header_row"] },
                 "anchorId": { "type": "string", "description": "insert: reference block (paired with position)." },
                 "position": { "type": "string", "enum": ["before", "after"], "description": "insert: relative to anchorId. insert_row/insert_column: relative to cellAnchorId." },
                 "rows": { "type": "integer" }, "columns": { "type": "integer" },
@@ -331,8 +331,16 @@ internal static class ToolCatalog
                 "cellAlignment": { "type": "string", "enum": ["left", "center", "right", "justify"] },
                 "columnWidths": { "type": "array", "items": { "type": "integer" } },
                 "borderless": { "type": "boolean" },
-                "cellAnchorId": { "type": "string", "description": "insert_row/insert_column/delete_row/delete_column: a 'p' (paragraph-inside-the-cell) anchor in the target row/column, e.g. from docxodus_table's own insert result or docxodus_search. replace_cell_content: the cell's own 'tc' anchor instead (e.g. from docxodus_search with mode kind, query 'tc') — these two anchor kinds are not interchangeable." },
-                "markdown": { "type": "string", "description": "replace_cell_content payload." }
+                "cellAnchorId": { "type": "string", "description": "insert_row/insert_column/delete_row/delete_column/set_*: a 'p' (paragraph-inside-the-cell) anchor in the target cell/row/table, e.g. from docxodus_table's own insert result or docxodus_search. replace_cell_content: the cell's own 'tc' anchor instead (e.g. from docxodus_search with mode kind, query 'tc') — these two anchor kinds are not interchangeable." },
+                "markdown": { "type": "string", "description": "replace_cell_content payload." },
+                "widths": { "type": "array", "items": { "type": "integer" }, "description": "set_column_widths: one positive twip width per column, left→right (1440 = 1 inch). Rewrites w:tblGrid + every cell width and pins the table to fixed layout." },
+                "borderScope": { "type": "string", "enum": ["all", "outside", "inside"], "description": "set_borders: which edges to write (default all). Untargeted edges are left unchanged." },
+                "borderStyle": { "type": "string", "description": "set_borders: OOXML border style — single (default), double, thick, dotted, dashed, …, or none to remove the targeted edges." },
+                "borderSize": { "type": "integer", "description": "set_borders: weight in eighths of a point (default 4 = 0.5pt)." },
+                "borderColor": { "type": "string", "description": "set_borders: hex RRGGBB (no '#') or auto (default)." },
+                "fill": { "type": "string", "description": "set_shading: hex RRGGBB (leading '#' tolerated) or auto; omit/empty to remove the shading." },
+                "shadingScope": { "type": "string", "enum": ["cell", "row"], "description": "set_shading: just the anchor's cell (default) or every cell of its row — header-row banding." },
+                "repeat": { "type": "boolean", "description": "set_repeat_header_row: true (default) marks the anchor's row as a repeating header row (w:tblHeader; Word honors it on a run of rows starting at row 1), false unmarks." }
               },
               "required": ["sessionId", "action"]
             }

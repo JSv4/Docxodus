@@ -371,6 +371,30 @@ internal static class DocxSessionOps
     public static string DeleteTableColumn(int handle, string cellAnchorId) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).DeleteTableColumn(cellAnchorId));
 
+    // ─── Table styling (issue #315 Stage A) ─────────────────────────────
+
+    /// <summary><paramref name="widthsJson"/> is a JSON array of per-column twip widths
+    /// (one positive value per column, left→right).</summary>
+    public static string SetColumnWidths(int handle, string cellAnchorId, string widthsJson) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetColumnWidths(
+            cellAnchorId, DocxSessionJson.ParseIntArray(widthsJson)));
+
+    /// <summary><paramref name="specJson"/> is a TableBorderSpec object
+    /// ({ scope?: "all"|"outside"|"inside", style?, size?, color? }); "" uses the defaults.</summary>
+    public static string SetTableBorders(int handle, string cellAnchorId, string specJson) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetTableBorders(
+            cellAnchorId, DocxSessionJson.ParseTableBorderSpec(specJson)));
+
+    /// <summary><paramref name="fill"/> is a hex RRGGBB triplet or "auto"; "" clears the shading.
+    /// <paramref name="scope"/> is "cell" | "row".</summary>
+    public static string SetCellShading(int handle, string cellAnchorId, string fill, string scope) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetCellShading(
+            cellAnchorId, string.IsNullOrEmpty(fill) ? null : fill,
+            DocxSessionJson.ParseTableShadingScope(scope)));
+
+    public static string SetRepeatHeaderRow(int handle, string cellAnchorId, bool repeat) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetRepeatHeaderRow(cellAnchorId, repeat));
+
     // ─── Raw escape hatch ───────────────────────────────────────────────
 
     public static string RawGetXml(int handle, string anchorId) =>

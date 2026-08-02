@@ -28,7 +28,9 @@ import type {
   PageNumberingOp,
   ParagraphBorderEdge,
   ParagraphFormatOp,
+  TableBorderSpec,
   TableInsertOptions,
+  TableShadingScope,
   ListFormat,
   GrepOptions,
   ListMembership,
@@ -218,6 +220,55 @@ export class DocxSession {
 
   deleteTableColumn(cellAnchorId: string): EditResult {
     return JSON.parse(this.wasm.DeleteTableColumn(this.handle, cellAnchorId)) as EditResult;
+  }
+
+  /**
+   * Table styling, addressed by a cell-paragraph anchor — the post-insert counterpart of
+   * {@link insertTable}'s options (issue #315 Stage A). `setColumnWidths` retunes `w:tblGrid` +
+   * every row's cell width (one positive twip value per column) and pins the table to fixed
+   * layout, exactly as inserting with explicit `columnWidths` would.
+   */
+  setColumnWidths(cellAnchorId: string, widthsTwips: number[]): EditResult {
+    return JSON.parse(
+      this.wasm.SetColumnWidths(this.handle, cellAnchorId, JSON.stringify(widthsTwips)),
+    ) as EditResult;
+  }
+
+  /**
+   * Set the table-level borders (`w:tblPr/w:tblBorders`) of the table containing the anchor.
+   * Only the edges named by `spec.scope` are written; the rest are left untouched. Style
+   * `"none"` removes the targeted edges. Omitting `spec` writes a thin single border all round.
+   */
+  setTableBorders(cellAnchorId: string, spec?: TableBorderSpec): EditResult {
+    return JSON.parse(
+      this.wasm.SetTableBorders(this.handle, cellAnchorId, spec ? JSON.stringify(spec) : ""),
+    ) as EditResult;
+  }
+
+  /**
+   * Shade the cell containing the anchor — or, with scope `"row"`, every cell of its row
+   * (header-row banding). `fill` is a hex RRGGBB triplet (leading '#' tolerated) or `"auto"`;
+   * `null` removes the shading.
+   */
+  setCellShading(
+    cellAnchorId: string,
+    fill: string | null,
+    scope: TableShadingScope = "cell",
+  ): EditResult {
+    return JSON.parse(
+      this.wasm.SetCellShading(this.handle, cellAnchorId, fill ?? "", scope),
+    ) as EditResult;
+  }
+
+  /**
+   * Mark (or unmark) the row containing the anchor as a repeating header row
+   * (`w:trPr/w:tblHeader`), so a multi-page table re-shows it on every page. Word only honors
+   * the flag on a run of rows starting at the table's first row.
+   */
+  setRepeatHeaderRow(cellAnchorId: string, repeat: boolean): EditResult {
+    return JSON.parse(
+      this.wasm.SetRepeatHeaderRow(this.handle, cellAnchorId, repeat),
+    ) as EditResult;
   }
 
   // ─── Headers / footers / page numbers ────────────────────────────────
