@@ -5694,6 +5694,55 @@ public class DocxSessionTests
         Assert.Null(empty.LineSpacingRule);
     }
 
+    [Fact]
+    public void DS340_SetParagraphFormat_ExplicitSpacing_ClearsDirectAutospacingFlag()
+    {
+        // w:beforeAutospacing/w:afterAutospacing make Word IGNORE the explicit w:before/w:after
+        // value, so SetParagraphFormat(SpacingBefore: …) on a paragraph carrying a direct flag
+        // would write a value Word never renders — a silent no-op from the caller's view.
+        // Writing an explicit value must clear the matching flag (Word's Paragraph dialog does
+        // the same when a typed value replaces "Auto") — and ONLY the matching flag: setting
+        // before must leave a direct afterAutospacing alone.
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        {
+            using (var wDoc = WordprocessingDocument.Create(ms, WordprocessingDocumentType.Document))
+            {
+                var main = wDoc.AddMainDocumentPart();
+                main.Document = new Document(new Body());
+                main.AddNewPart<StyleDefinitionsPart>().Styles = BuildHeadingStyles();
+                main.AddNewPart<DocumentSettingsPart>().Settings = new Settings();
+                main.Document.Body!.Append(new Paragraph(
+                    new ParagraphProperties(new SpacingBetweenLines
+                    {
+                        Before = "100",
+                        BeforeAutoSpacing = true,
+                        After = "100",
+                        AfterAutoSpacing = true,
+                    }),
+                    new Run(new Text("Autospaced paragraph."))));
+                main.Document.Save();
+            }
+            bytes = ms.ToArray();
+        }
+
+        using var s = new DocxSession(bytes);
+        var anchor = s.Project().AnchorIndex.Keys.First();
+
+        var r = s.SetParagraphFormat(anchor, new ParagraphFormatOp { SpacingBefore = 240 });
+        Assert.True(r.Success, r.Error?.Message);
+        var xml = s.Raw.GetXml(anchor);
+        Assert.Contains("w:before=\"240\"", xml);
+        Assert.DoesNotContain("beforeAutospacing", xml);
+        Assert.Contains("afterAutospacing", xml); // untouched — only the matching flag clears
+
+        var r2 = s.SetParagraphFormat(anchor, new ParagraphFormatOp { SpacingAfter = 120 });
+        Assert.True(r2.Success, r2.Error?.Message);
+        var xml2 = s.Raw.GetXml(anchor);
+        Assert.Contains("w:after=\"120\"", xml2);
+        Assert.DoesNotContain("afterAutospacing", xml2);
+    }
+
     private static string SaveDocXml(DocxSession s)
     {
         var bytes = s.Save();
