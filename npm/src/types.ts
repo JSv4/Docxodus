@@ -1122,7 +1122,16 @@ export interface DocxodusWasmExports {
       date: string,
       markdown: string,
     ) => string;
+    AddCommentReply: (
+      handle: number,
+      parentCommentAnchor: string,
+      author: string,
+      initials: string,
+      date: string,
+      markdown: string,
+    ) => string;
     UpdateComment: (handle: number, commentAnchor: string, markdown: string) => string;
+    SetCommentResolved: (handle: number, commentAnchor: string, resolved: boolean) => string;
     RemoveComment: (handle: number, commentAnchor: string) => string;
     ListComments: (handle: number) => string;
     ListRevisions: (handle: number) => string;
@@ -1273,8 +1282,11 @@ export interface EditResult {
 /**
  * One native Word comment, in comments-part order — see {@link DocxSession.listComments}.
  * `anchorId` addresses the definition (kind `cmt`) for updateComment/removeComment;
- * `date` is the raw `w:date` attribute string; `text` is the flattened body. The numeric
- * `w:id` is deliberately not surfaced — comments are addressed by anchor everywhere.
+ * `date` is the raw `w:date` attribute string; `text` is the flattened body.
+ * `parentAnchorId` and `resolved` are present when the comment has a
+ * `commentsExtended.xml` entry; their absence distinguishes a legacy/flat comment from an
+ * explicitly reopened one. The numeric `w:id` is deliberately not surfaced — comments are
+ * addressed by anchor everywhere.
  */
 export interface CommentListEntry {
   anchorId: string;
@@ -1282,6 +1294,8 @@ export interface CommentListEntry {
   initials?: string;
   date?: string;
   text: string;
+  parentAnchorId?: string;
+  resolved?: boolean;
 }
 
 /** Revision kind in a markup-native revision listing. A `move` entry is a linked

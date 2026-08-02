@@ -73,7 +73,7 @@ This is symmetric by design: anything the projector can emit, the parser can acc
 - If you can see it in the projection output, you can write it in a payload.
 - If you need a table → `InsertTable(anchor, Position, rows, cols, TableInsertOptions?)` (borderless, row-major `CellContents`, `CellAlignment`, per-column `ColumnWidths`), then edit cells with `ReplaceCellContent` or address each cell-paragraph anchor; reshape with `InsertTableRow`/`InsertTableColumn`/`DeleteTableRow`/`DeleteTableColumn` (by a cell-paragraph anchor; v1 assumes a rectangular grid, no `w:gridSpan`). Style it after insert (issue #315 Stage A, same cell-paragraph addressing): `SetColumnWidths(cellAnchor, widthsTwips)` retunes `w:tblGrid` + every `w:tcW` and pins fixed layout; `SetTableBorders(cellAnchor, TableBorderSpec?)` writes `w:tblPr/w:tblBorders` for the spec's scope (`All`/`Outside`/`Inside`) only, style `"none"` removing those edges; `SetCellShading(cellAnchor, fill, TableShadingScope)` writes `w:tcPr/w:shd` (`val="clear"`) on the cell or its whole row (header-row banding; null fill clears); `SetRepeatHeaderRow(cellAnchor, bool)` toggles `w:trPr/w:tblHeader` (Word honors it on a run of rows starting at row 1). Bad widths/fill/size → `InvalidTableStyling`. Cell merge (`w:gridSpan`/`w:vMerge`) is Stage B — design first, not yet implemented.
 - If you need a footnote or endnote → `InsertFootnote(anchor, offset, markdown)` / `InsertEndnote(...)`; a `[^label]` reference in a *payload* stays rejected, because a label can't name a note the payload doesn't define.
-- If you need a comment → `AddComment(anchor, span?, author, markdown, initials?, date?)`; a `{#cmt:...}` token in a *payload* stays rejected, because inline comment tokens are projection output only (see the Comments section).
+- If you need a comment → `AddComment(anchor, span?, author, markdown, initials?, date?)`; reply with `AddCommentReply(parentCmtAnchor, author, markdown, initials?, date?)`, and resolve/reopen with `SetCommentResolved(cmtAnchor, resolved)`. A `{#cmt:...}` token in a *payload* stays rejected, because inline comment tokens are projection output only (see the Comments section).
 - If you need an image → still a v2 op, currently rejected with a clear error.
 - For everything OOXML can do that markdown can't (complex tables, math, content controls, drawings) → `session.Raw.*`.
 
@@ -109,7 +109,9 @@ Each mutation reports which anchors it created, removed, or modified. This table
 | `InsertPageNumberField(p, field?)` | — | — | `p` (the paragraph the field is appended to) | `p` |
 | `InsertFootnote(p, offset, md)` / `InsertEndnote(...)` | the note definition (`fn`/`en`) + its paragraphs (scope `fn`/`en`) | — | `p` (the citing paragraph) | whole document |
 | `AddComment(p, span?, author, md, …)` | the comment definition (`cmt`) + its paragraphs (kind `p`, scope `cmt`) | — | `p` (the commented paragraph) | `p` |
+| `AddCommentReply(cmt, author, md, …)` | the reply definition (`cmt`) + its paragraphs (kind `p`, scope `cmt`) | — | the parent `cmt` plus every document-side `p` hosting its reference | the first referenced host `p` (normally the sole host) |
 | `UpdateComment(cmt, md)` | the new body paragraph anchors (scope `cmt`) | the old body paragraph anchors | `cmt` | `cmt` |
+| `SetCommentResolved(cmt, resolved)` | — | — | `cmt` | `cmt` |
 | `RemoveComment(cmt)` | — | `cmt` + descendant paragraph anchors (the `DeleteBlock(cmt)` shape) | — | nearest stable ancestor |
 | `Raw.InsertXml(a, pos, xml)` | every block in the new XML | — | — | enclosing parent |
 | `Raw.ReplaceXml(a, xml)` | unids present in the new XML but not the old (typical for caller-authored XML) | unids present in the old element but not the new (when `a` itself is gone) | unids present in both (typical for the `GetXml → mutate → ReplaceXml` round trip, which preserves Unids) | enclosing parent |
@@ -719,7 +721,7 @@ rendering notes, appeared as a stray empty footnote with no citation.
   note anchors — they resolve against a projection that omits the part. Family behavior, identical
   to `SetHeaderText` with `Headers` excluded.
 
-## Comments (issue #300)
+## Comments (issues #300 and #317)
 
 Native Word comment authoring — real `w:comment` markup the Reviewing pane shows, not the
 Tier E annotation overlay (which stays: it solves a different problem, semantic tagging for
@@ -728,20 +730,23 @@ and the `CommentText`/`CommentReference` styles are find-or-created on first use
 create/delete is undo/redo-reconciled by `ReconcileCommentsPart` (the `ReconcileNoteParts`
 twin — `DocumentSnapshot` carries the part's relationship id). Mechanics live in
 `Internal/CommentOps.cs` (the `AnnotationOps` split). Exposed in .NET, WASM/npm
-(`addComment`/`updateComment`/`removeComment`/`listComments`), stdio/`docx-scalpel`
-(`add_comment`/`update_comment`/`remove_comment`/`list_comments`), and the MCP server's
-`docxodus_comment` tool.
+(`addComment`/`addCommentReply`/`setCommentResolved`/`updateComment`/`removeComment`/
+`listComments`), stdio/`docx-scalpel` (`add_comment`/`add_comment_reply`/
+`set_comment_resolved`/`update_comment`/`remove_comment`/`list_comments`), and the MCP
+server's `docxodus_comment` tool.
 
 ### Methods
 
 | Method | Description |
 |--------|-------------|
 | `AddComment(anchorId, span?, author, markdown, initials?, date?)` | Comment on a character span of a body paragraph (`null` span = whole block; the same `SplitRunsForSpan` mechanism annotations use brackets the range with `w:commentRangeStart`/`End`, then the `CommentReference`-styled `w:commentReference` run lands directly after the rangeEnd). The definition gets Word's shape: `CommentText` paragraphs, a leading `w:annotationRef` mark run, `w:id` allocated max+1 over definitions *and* dangling markers. `w:date` is written only when provided — deterministic by default; an Unspecified-kind `DateTime` is treated as UTC. |
+| `AddCommentReply(parentCmtAnchorId, author, markdown, initials?, date?)` | Add a Word-native reply. It gets its own definition, `w:id`, and adjacent `w:commentReference`; range start/end markers stay on the thread root exactly as Word writes them. The reply's `w15:commentEx/@w15:paraIdParent` points to the immediate parent's final-paragraph `w14:paraId`, so child-of-reply chains inherit the root range even though intermediate replies are reference-only. Both new entries begin reopened (`w15:done="0"`). |
 | `UpdateComment(cmtAnchorId, markdown)` | Replace the body paragraphs; `w:id`/`w:author`/`w:initials`/`w:date` are untouched, and the old last paragraph's `w14:paraId` is re-stamped on the new last paragraph so Word's `commentsExtended` reply/resolve metadata stays attached across a body edit. |
+| `SetCommentResolved(cmtAnchorId, resolved)` | Set Word's per-comment `w15:done` state (`true` resolves, `false` reopens). Calling it on a legacy flat comment upgrades that comment with the extension metadata without changing its body anchor or definition identity. |
 | `RemoveComment(cmtAnchorId)` | Kind-guarded delegate to `DeleteBlock`'s `cmt` teardown: definition + marker triple (wrapper run included) everywhere in the package, plus threading pruning (below). |
-| `ListComments()` | Read-only: `CommentListEntry(DefAnchorId, Author, Initials?, Date?, Text)` in comments-part order. `Date` is the raw `w:date` string; `Text` is the flattened body (`annotationRef` runs excluded). The numeric `w:id` is never surfaced — comments are addressed by anchor. |
+| `ListComments()` | Read-only: `CommentListEntry(DefAnchorId, Author, Initials?, Date?, Text)` in comments-part order, with additive init-only `ParentAnchorId?` and `Resolved?` properties (the existing five-argument CLR constructor/deconstructor remains intact). `ParentAnchorId` maps `paraIdParent` back to the parent's stable `cmt` anchor. Both additive fields are absent/null when no `commentEx` entry exists, distinguishing a legacy flat comment from an explicitly reopened one. `Date` is the raw `w:date` string; `Text` is the flattened body (`annotationRef` runs excluded). The numeric `w:id` is never surfaced — comments are addressed by anchor. |
 
-`Created` from `AddComment` = the definition anchor (kind `cmt`) + its paragraph anchors
+`Created` from `AddComment` or `AddCommentReply` = the definition anchor (kind `cmt`) + its paragraph anchors
 (kind `p`, scope `cmt`) — which are ordinary editable blocks, so `ReplaceText` on a comment
 paragraph and `DeleteBlock` on the definition also work (pinned by `DS364`/`DS329`-style
 tests). Body paragraphs only: Word has no comments-on-comments, so a `cmt`-scope host fails
@@ -749,12 +754,19 @@ with `AnchorWrongKind`; a zero-length span fails with the new `EmptyCommentSpan`
 
 ### Threading metadata (`commentsExtended` / `commentsIds`)
 
-v1 does not *author* threading (replies/resolve are the natural v2), but it must not corrupt
-documents that have it: removing a comment prunes the `w15:commentEx`/`w16cid:commentId`
-entries keyed by the removed definition's `w14:paraId` values and drops `w15:paraIdParent`
-attributes that pointed at them (a surviving reply becomes top-level instead of dangling).
-The pruning lives in `DeleteBlock`'s `cmt` branch — single owner, so the generic path gets it
-too — and both threading parts are in the content-only snapshot scope, so it is undoable.
+Replies and resolve/reopen find or create the Word extension parts and stamp each participating
+definition's final paragraph with `w14:paraId`. New para/durable ids are deterministic uppercase
+eight-digit hex: max+1 across the ids already present in the package, with collision-free fallback
+at the numeric ceiling. Existing entries, parentage, and done flags are preserved. A reply links
+through `w15:paraIdParent`; `ListComments` resolves that para id back to the parent's `cmt` anchor.
+
+These are relationship-bearing parts, not merely content blobs: `DocumentSnapshot` records their
+relationship ids and XML, and restore reconciles part creation/deletion as well as content. Thus an
+undo of the first reply/resolve removes parts that did not exist before, while redo recreates them
+with their original relationship ids. Removing a comment still prunes its
+`w15:commentEx`/`w16cid:commentId` entries and drops `w15:paraIdParent` attributes that pointed at
+it (a surviving reply becomes top-level instead of dangling). That teardown remains in
+`DeleteBlock`'s `cmt` branch so the generic delete path gets it too.
 
 ### `{#cmt:...}` payload tokens stay rejected
 
@@ -765,8 +777,6 @@ write path, exactly as `InsertFootnote` is for `[^label]`.
 
 ### Not yet
 
-- **Replies and resolve state** (`commentsExtended` authoring, `w15:paraIdParent` threading) —
-  the v2 candidate the issue names.
 - **Cross-block spans.** A comment range is single-block in v1; Word can span paragraphs.
 - **Comments anchored in header/footer/note stories.** Word allows them; v1 is body-only,
   matching `InsertFootnote`'s host rule.

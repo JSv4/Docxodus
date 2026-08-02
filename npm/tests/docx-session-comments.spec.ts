@@ -15,7 +15,7 @@ async function waitForDocxodus(page: Page) {
   await page.waitForFunction(() => (window as any).DocxodusReady === true, { timeout: 30000 });
 }
 
-// Issue #300 — native Word comment authoring through the WASM bridge.
+// Issues #300/#317 — native Word comment authoring and threading through the WASM bridge.
 test.describe('DocxSession comment authoring (WASM bridge)', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/test-harness.html');
@@ -127,6 +127,69 @@ test.describe('DocxSession comment authoring (WASM bridge)', () => {
     expect(result.removeSuccess).toBe(true);
     expect(result.removedListEmpty).toBe(true);
     expect(result.commentsSectionGone).toBe(true);
+  });
+
+  test('AddCommentReply and SetCommentResolved preserve native thread state', async ({ page }) => {
+    const bytes = readTestFile('HC001-5DayTourPlanTemplate.docx');
+
+    const result = await page.evaluate(async (bytesArray: number[]) => {
+      const bin = new Uint8Array(bytesArray);
+      const bridge = (window as any).Docxodus.DocxSessionBridge;
+      const handle = bridge.OpenSession(bin, '');
+      try {
+        const proj = JSON.parse(bridge.Project(handle));
+        const bodyAnchor = Object.keys(proj.anchorIndex).find((k) => k.startsWith('p:body:'))!;
+        const made = JSON.parse(bridge.AddComment(handle, bodyAnchor, '', 'Alice', '', '', 'Parent.'));
+        const parentAnchor = (made.created ?? []).find((a: any) => a.kind === 'cmt')!.id;
+
+        const replied = JSON.parse(
+          bridge.AddCommentReply(handle, parentAnchor, 'Bob', 'BO', '', 'Reply.'),
+        );
+        const replyAnchor = (replied.created ?? []).find((a: any) => a.kind === 'cmt')!.id;
+        const beforeResolve = JSON.parse(bridge.ListComments(handle));
+
+        const resolved = JSON.parse(bridge.SetCommentResolved(handle, replyAnchor, true));
+        const afterResolve = JSON.parse(bridge.ListComments(handle));
+        const reopened = JSON.parse(bridge.SetCommentResolved(handle, replyAnchor, false));
+        const saved = bridge.Save(handle);
+
+        const handle2 = bridge.OpenSession(saved, '');
+        let afterReopen: any[] = [];
+        try {
+          afterReopen = JSON.parse(bridge.ListComments(handle2));
+        } finally {
+          bridge.CloseSession(handle2);
+        }
+
+        const find = (entries: any[], anchorId: string) =>
+          entries.find((entry: any) => entry.anchorId === anchorId);
+        const reopenedParent = afterReopen.find((entry: any) => entry.author === 'Alice');
+        const reopenedReply = afterReopen.find((entry: any) => entry.author === 'Bob');
+        return {
+          replySuccess: replied.success,
+          parentResolved: find(beforeResolve, parentAnchor)?.resolved,
+          replyParentMatches: find(beforeResolve, replyAnchor)?.parentAnchorId === parentAnchor,
+          replyInitiallyResolved: find(beforeResolve, replyAnchor)?.resolved,
+          resolveSuccess: resolved.success,
+          replyResolved: find(afterResolve, replyAnchor)?.resolved,
+          reopenSuccess: reopened.success,
+          reopenedParentMatches: reopenedReply?.parentAnchorId === reopenedParent?.anchorId,
+          reopenedResolved: reopenedReply?.resolved,
+        };
+      } finally {
+        bridge.CloseSession(handle);
+      }
+    }, Array.from(bytes));
+
+    expect(result.replySuccess).toBe(true);
+    expect(result.parentResolved).toBe(false);
+    expect(result.replyParentMatches).toBe(true);
+    expect(result.replyInitiallyResolved).toBe(false);
+    expect(result.resolveSuccess).toBe(true);
+    expect(result.replyResolved).toBe(true);
+    expect(result.reopenSuccess).toBe(true);
+    expect(result.reopenedParentMatches).toBe(true);
+    expect(result.reopenedResolved).toBe(false);
   });
 
   test('AddComment error envelope: typed codes for empty span and wrong-kind anchors', async ({ page }) => {

@@ -301,11 +301,27 @@ public static partial class DocxSessionBridge
             string.IsNullOrEmpty(date) ? null : date,
             markdown);
 
+    /// <summary>Add a native reply with an adjacent reference; <c>w15:paraIdParent</c> links it
+    /// to the immediate parent so it inherits the thread root's range.</summary>
+    [JSExport]
+    public static string AddCommentReply(int h, string parentCommentAnchor, string author,
+        string initials, string date, string markdown) =>
+        DocxSessionOps.AddCommentReply(h, parentCommentAnchor, author,
+            string.IsNullOrEmpty(initials) ? null : initials,
+            string.IsNullOrEmpty(date) ? null : date,
+            markdown);
+
     /// <summary>Replace a comment's body text, addressed by its definition anchor (kind
     /// <c>cmt</c>); identity attributes (author/initials/date) are preserved.</summary>
     [JSExport]
     public static string UpdateComment(int h, string commentAnchor, string markdown) =>
         DocxSessionOps.UpdateComment(h, commentAnchor, markdown);
+
+    /// <summary>Set <c>w15:done</c> for one comment (<c>false</c> reopens it), creating the
+    /// paraId-keyed metadata parts when the comment was previously flat.</summary>
+    [JSExport]
+    public static string SetCommentResolved(int h, string commentAnchor, bool resolved) =>
+        DocxSessionOps.SetCommentResolved(h, commentAnchor, resolved);
 
     /// <summary>Remove a comment: definition + body marker triple + threading entries.</summary>
     [JSExport]
@@ -313,7 +329,7 @@ public static partial class DocxSessionBridge
         DocxSessionOps.RemoveComment(h, commentAnchor);
 
     /// <summary>The document's comments in part order:
-    /// <c>[{"anchorId","author","initials"?,"date"?,"text"}]</c>.</summary>
+    /// <c>[{"anchorId","author","initials"?,"date"?,"text","parentAnchorId"?,"resolved"?}]</c>.</summary>
     [JSExport]
     public static string ListComments(int h) => DocxSessionOps.ListComments(h);
 

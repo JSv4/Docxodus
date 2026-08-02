@@ -282,17 +282,24 @@ sequence stays intact), `set_level`, `remove`, `get_membership`. `listFormat` ac
 `upperRoman`, plus the `*Parenthesis` variants of the numbered formats (`decimalParenthesis` →
 `(1)`, `lowerRomanParenthesis` → `(i)` — the legal-drafting presets) and `none` (issue #313).
 
-### `docxodus_comment` — native Word review comments (issue #300)
+### `docxodus_comment` — native Word review comments (issues #300 and #317)
 
-`add`/`update`/`remove`/`list` over `DocxSession`'s comment API
-(`AddComment`/`UpdateComment`/`RemoveComment`/`ListComments`) — real `w:comment` markup with
-`w:commentRangeStart`/`End` + `w:commentReference` body plumbing, visible in Word/Google
-Docs/LibreOffice's Reviewing pane. `add` targets a body paragraph (`anchorId` + optional
-`span`; required `author`, optional `initials`/`date` — `w:date` is written only when
-provided, keeping output deterministic); `update`/`remove` address the comment by its
-definition anchor (`commentAnchorId`, kind `cmt`, from `add`'s `created` list or the
-projection's `# Comments` section). Removing a comment also prunes any
-`commentsExtended`/`commentsIds` threading entries it owned. Documented at
+`add`/`reply`/`resolve`/`update`/`remove`/`list` over `DocxSession`'s comment API — real
+`w:comment` markup with `w:commentRangeStart`/`End` + `w:commentReference` body plumbing,
+visible in Word/Google Docs/LibreOffice's Reviewing pane. `add` targets a body paragraph
+(`anchorId` + optional `span`; required `author`, optional `initials`/`date` — `w:date` is
+written only when provided, keeping output deterministic). `reply` takes the parent
+definition's `commentAnchorId`, gives the reply its own definition/id plus an adjacent reference,
+and links it with Word's `w15:paraIdParent` metadata; only the thread root owns range markers,
+so nested replies inherit that range through reference-only parents. `resolve` addresses
+one comment by `commentAnchorId`; `resolved` defaults true and false reopens it without losing
+parentage. Flat comments are upgraded with find-or-created `commentsExtended.xml` and
+`commentsIds.xml` parts when first replied to or resolved.
+
+`list` returns part-order entries with additive `parentAnchorId` and `resolved` fields when a
+Word extension entry exists; an absent field means legacy/flat metadata rather than reopened.
+`update`/`remove` use the same definition anchor. Removing a comment also prunes the extension
+entries it owned and clears child links that would otherwise dangle. Documented at
 `docs/architecture/docx_mutation_api.md` (Comments section).
 
 ### `docxodus_annotate` — annotation overlay
@@ -380,12 +387,6 @@ Capabilities a full-featured document-editing agent surface might have, that Doc
 doesn't yet support — called out explicitly rather than faked, per this server's design goal of
 never claiming a capability it doesn't have:
 
-- **No comment reply-threading or resolve state.** `docxodus_comment` authors real
-  `w:comment` markup (issue #300 closed the native-comment gap), but replies and Word's
-  resolve flag live in `commentsExtended.xml` (`w15:paraIdParent`/`w15:done`), which v1 does
-  not author — `remove` is still the only way to make a comment go away. Existing threading
-  metadata in Word-authored documents is preserved on `update` and pruned (never dangled) on
-  `remove`.
 - **Exotic revision families aren't individually resolvable.** Issue #318 closed the
   selective-resolution gap for the common families — `docxodus_track_changes` `accept`/`reject`
   resolve one insert/delete/move/format revision by `revisionId` — but

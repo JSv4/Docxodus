@@ -309,8 +309,16 @@ internal static class DocxSessionOps
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddComment(
             anchorId, span, author, markdown, initials, DocxSessionJson.ParseCommentDate(dateIso)));
 
+    public static string AddCommentReply(int handle, string parentCommentAnchorId, string author,
+        string? initials, string? dateIso, string markdown) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).AddCommentReply(
+            parentCommentAnchorId, author, markdown, initials, DocxSessionJson.ParseCommentDate(dateIso)));
+
     public static string UpdateComment(int handle, string commentAnchorId, string markdown) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).UpdateComment(commentAnchorId, markdown));
+
+    public static string SetCommentResolved(int handle, string commentAnchorId, bool resolved) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetCommentResolved(commentAnchorId, resolved));
 
     public static string RemoveComment(int handle, string commentAnchorId) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).RemoveComment(commentAnchorId));

@@ -624,6 +624,57 @@ public class McpServerDispatcherTests : IDisposable
             """)));
     }
 
+    [Fact]
+    public void MCP073_Comment_ReplyResolveAndReopen_AreNative()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"thread target"}"""));
+
+        var added = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"add","anchorId":"{{anchor}}","author":"Alice","markdown":"Parent."}""")));
+        Assert.True(added.GetProperty("success").GetBoolean());
+        var parentAnchor = added.GetProperty("created").EnumerateArray()
+            .First(a => a.GetProperty("kind").GetString() == "cmt")
+            .GetProperty("id").GetString()!;
+
+        var replied = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"reply","commentAnchorId":"{{parentAnchor}}","author":"Bob","initials":"BO","markdown":"Reply."}""")));
+        Assert.True(replied.GetProperty("success").GetBoolean());
+        var replyAnchor = replied.GetProperty("created").EnumerateArray()
+            .First(a => a.GetProperty("kind").GetString() == "cmt")
+            .GetProperty("id").GetString()!;
+
+        // Omitting resolved uses the tool's documented resolve=true default.
+        var resolved = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"resolve","commentAnchorId":"{{replyAnchor}}"}""")));
+        Assert.True(resolved.GetProperty("success").GetBoolean());
+
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        var entries = listed.GetProperty("comments").EnumerateArray().ToList();
+        var parent = Assert.Single(entries, e => e.GetProperty("anchorId").GetString() == parentAnchor);
+        var reply = Assert.Single(entries, e => e.GetProperty("anchorId").GetString() == replyAnchor);
+        Assert.False(parent.TryGetProperty("parentAnchorId", out _));
+        Assert.False(parent.GetProperty("resolved").GetBoolean());
+        Assert.Equal(parentAnchor, reply.GetProperty("parentAnchorId").GetString());
+        Assert.True(reply.GetProperty("resolved").GetBoolean());
+
+        var reopened = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"resolve","commentAnchorId":"{{replyAnchor}}","resolved":false}""")));
+        Assert.True(reopened.GetProperty("success").GetBoolean());
+
+        var listedAfterReopen = Parse(Dispatcher.Call(_store, "docxodus_comment", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        var reopenedReply = Assert.Single(
+            listedAfterReopen.GetProperty("comments").EnumerateArray(),
+            e => e.GetProperty("anchorId").GetString() == replyAnchor);
+        Assert.Equal(parentAnchor, reopenedReply.GetProperty("parentAnchorId").GetString());
+        Assert.False(reopenedReply.GetProperty("resolved").GetBoolean());
+    }
+
     // ─── Track changes ──────────────────────────────────────────────────
 
     [Fact]

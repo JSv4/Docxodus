@@ -1027,11 +1027,22 @@ public sealed record NoteListEntry(string Id, string DefAnchorId, int Ordinal);
 /// <see cref="DocxSession.UpdateComment"/>/<see cref="DocxSession.RemoveComment"/>;
 /// <see cref="Date"/> is the raw <c>w:date</c> attribute string (null when absent);
 /// <see cref="Text"/> is the flattened body (paragraphs joined by a space, the
-/// <c>w:annotationRef</c> mark excluded). The numeric <c>w:id</c> is deliberately not
-/// surfaced — comments are addressed by anchor everywhere in this API.
+/// <c>w:annotationRef</c> mark excluded). <see cref="ParentAnchorId"/> resolves
+/// <c>w15:paraIdParent</c> back to the parent definition anchor; <see cref="Resolved"/>
+/// reflects <c>w15:done</c>. Both are null when this comment has no
+/// <c>commentsExtended</c> entry. The numeric <c>w:id</c> is deliberately not surfaced —
+/// comments are addressed by anchor everywhere in this API.
 /// </summary>
 public sealed record CommentListEntry(
-    string DefAnchorId, string Author, string? Initials, string? Date, string Text);
+    string DefAnchorId, string Author, string? Initials, string? Date, string Text)
+{
+    /// <summary>The parent definition's stable <c>cmt</c> anchor for a reply; null for a
+    /// top-level or legacy comment.</summary>
+    public string? ParentAnchorId { get; init; }
+
+    /// <summary>Word's <c>w15:done</c> state; null when no extension entry exists.</summary>
+    public bool? Resolved { get; init; }
+}
 
 /// <summary>
 /// One tracked revision, read directly off the live document's markup in document
@@ -1581,19 +1592,54 @@ public sealed class DocxSession : IDisposable
         _ = AnchorIndex(); // guarantees Unids on the comments part
 
         var result = new List<CommentListEntry>();
-        var root = _doc!.MainDocumentPart?.WordprocessingCommentsPart?.GetXDocument().Root;
+        var main = _doc!.MainDocumentPart;
+        var root = main?.WordprocessingCommentsPart?.GetXDocument().Root;
         if (root is null) return result;
 
-        foreach (var c in root.Elements(W.comment))
+        var comments = root.Elements(W.comment).ToList();
+        var anchorByParaId = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var c in comments)
+        {
+            var unid = (string?)c.Attribute(PtOpenXml.Unid);
+            var paraId = (string?)c.Elements(W.p).LastOrDefault()?.Attribute(W14.paraId);
+            if (unid is not null && paraId is not null)
+                anchorByParaId[paraId] = $"cmt:cmt:{unid}";
+        }
+
+        var commentExByParaId = main?.WordprocessingCommentsExPart?.GetXDocument().Root?
+            .Elements(Internal.CommentOps.W15 + "commentEx")
+            .Where(e => (string?)e.Attribute(Internal.CommentOps.W15 + "paraId") is not null)
+            .GroupBy(e => (string)e.Attribute(Internal.CommentOps.W15 + "paraId")!, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal)
+            ?? new Dictionary<string, XElement>(StringComparer.Ordinal);
+
+        foreach (var c in comments)
         {
             var unid = (string?)c.Attribute(PtOpenXml.Unid);
             if (unid is null) continue;
+
+            string? parentAnchorId = null;
+            bool? resolved = null;
+            var paraId = (string?)c.Elements(W.p).LastOrDefault()?.Attribute(W14.paraId);
+            if (paraId is not null && commentExByParaId.TryGetValue(paraId, out var commentEx))
+            {
+                resolved = Internal.CommentOps.ParseDone(
+                    (string?)commentEx.Attribute(Internal.CommentOps.W15 + "done"));
+                var parentParaId = (string?)commentEx.Attribute(Internal.CommentOps.W15 + "paraIdParent");
+                if (parentParaId is not null)
+                    anchorByParaId.TryGetValue(parentParaId, out parentAnchorId);
+            }
+
             result.Add(new CommentListEntry(
                 $"cmt:cmt:{unid}",
                 (string?)c.Attribute(W.author) ?? "unknown",
                 (string?)c.Attribute(W.initials),
                 (string?)c.Attribute(W.date),
-                Internal.CommentOps.FlattenBodyText(c)));
+                Internal.CommentOps.FlattenBodyText(c))
+            {
+                ParentAnchorId = parentAnchorId,
+                Resolved = resolved,
+            });
         }
         return result;
     }
@@ -3640,9 +3686,9 @@ public sealed class DocxSession : IDisposable
         if (main.FootnotesPart is not null) yield return main.FootnotesPart;
         if (main.EndnotesPart is not null) yield return main.EndnotesPart;
         if (main.WordprocessingCommentsPart is not null) yield return main.WordprocessingCommentsPart;
-        // Comment-threading metadata parts: content-only snapshot scope (no session op
-        // creates or deletes them) so the pruning DeleteBlock/RemoveComment perform on
-        // commentsExtended/commentsIds entries is undoable.
+        // Comment-threading metadata parts: content is snapshot-scoped so reply/resolve writes
+        // and DeleteBlock/RemoveComment pruning are undoable; create/delete reconciliation is
+        // driven by DocumentSnapshot.CommentThreadingParts below.
         if (main.WordprocessingCommentsExPart is not null) yield return main.WordprocessingCommentsExPart;
         if (main.WordprocessingCommentsIdsPart is not null) yield return main.WordprocessingCommentsIdsPart;
         var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
@@ -6013,6 +6059,178 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>
+    /// Add a native Word <b>reply</b> to the comment addressed by
+    /// <paramref name="parentCommentAnchorId"/>. The reply receives its own
+    /// <c>w:comment</c> definition and marker id, adds an adjacent reference at the parent's
+    /// native thread anchor, and links to it through <c>w15:paraIdParent</c> in a find-or-created
+    /// <c>commentsExtended.xml</c>. A matching <c>commentsIds.xml</c> entry is also created for
+    /// both sides when absent. Metadata ids are allocated deterministically.
+    /// </summary>
+    /// <remarks>
+    /// The parent may itself be a reply. An orphaned definition with no live
+    /// <c>w:commentReference</c> cannot be replied to because it has no document position to
+    /// share. Returns the new definition and comment-body paragraph anchors in
+    /// <see cref="EditResult.Created"/>.
+    /// </remarks>
+    public EditResult AddCommentReply(
+        string parentCommentAnchorId, string author, string markdownPayload,
+        string? initials = null, DateTime? date = null)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var parentTarget = FindAnchor(parentCommentAnchorId);
+        if (parentTarget is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound,
+                $"anchor not found: {parentCommentAnchorId}", parentCommentAnchorId);
+        if (parentTarget.Anchor.Kind != "cmt")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"AddCommentReply requires a comment definition anchor (kind cmt); got kind={parentTarget.Anchor.Kind}",
+                parentCommentAnchorId);
+
+        var parentComment = parentTarget.Resolve(_doc!);
+        if (parentComment is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", parentCommentAnchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main?.WordprocessingCommentsPart is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no comments part", parentCommentAnchorId);
+        var parentId = (string?)parentComment.Attribute(W.id);
+        if (string.IsNullOrEmpty(parentId))
+            return EditResult.Fail(EditErrorCode.InternalError,
+                "parent comment definition has no w:id", parentCommentAnchorId);
+        if (!Internal.CommentOps.HasCommentReference(main, parentId))
+            return EditResult.Fail(EditErrorCode.AnchorNotFound,
+                "parent comment definition has no live document reference", parentCommentAnchorId);
+
+        // Parse before snapshotting so malformed markdown is a clean no-op.
+        var paras = new List<XElement>();
+        if (!string.IsNullOrEmpty(markdownPayload))
+        {
+            var parsed = Internal.MarkdownPayloadParser.Parse(markdownPayload);
+            if (!parsed.Success)
+                return EditResult.Fail(parsed.Error!.Code, parsed.Error.Message, parentCommentAnchorId);
+            foreach (var block in parsed.Blocks)
+                paras.Add(BuildParagraphFromParsedBlock(block));
+        }
+        if (paras.Count == 0) paras.Add(new XElement(W.p));
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            Internal.StyleFactory.EnsureCommentStyles(_doc!);
+            var id = Internal.CommentOps.NextCommentId(main);
+            var idStr = id.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+            // Word keeps range markers on the thread root; each reply adds only an adjacent
+            // reference and inherits that range through commentsExtended parentage.
+            var hostBlocks = Internal.CommentOps.InsertReplyReference(main, parentId, id);
+
+            Internal.CommentOps.ApplyCommentBodyStyle(paras);
+            var reply = new XElement(W.comment,
+                new XAttribute(W.id, idStr),
+                new XAttribute(W.author, author));
+            if (!string.IsNullOrEmpty(initials))
+                reply.SetAttributeValue(W.initials, initials);
+            if (date.HasValue)
+                reply.SetAttributeValue(W.date, Internal.CommentOps.FormatDate(date.Value));
+            foreach (var p in paras) reply.Add(p);
+            main.WordprocessingCommentsPart.GetXDocument().Root!.Add(reply);
+            UnidHelper.AssignToSelfAndDescendants(reply);
+
+            // Upgrade a flat parent only as far as needed: one extension/id entry for it and one
+            // for the reply. Existing thread/resolve metadata is preserved.
+            var parentParaId = Internal.CommentOps.EnsureThreadingMetadata(main, parentComment);
+            Internal.CommentOps.EnsureThreadingMetadata(main, reply,
+                parentParaId: parentParaId, resolved: false);
+
+            InvalidateProjectionCache();
+
+            var created = new List<Anchor>();
+            var commentsPartUri = main.WordprocessingCommentsPart.Uri.ToString();
+            if (AnchorForUnid((string?)reply.Attribute(PtOpenXml.Unid), commentsPartUri) is { } defAnchor)
+                created.Add(defAnchor);
+            foreach (var p in reply.Elements(W.p))
+                if (AnchorForUnid((string?)p.Attribute(PtOpenXml.Unid), commentsPartUri) is { } pa)
+                    created.Add(pa);
+
+            // The parent gains/participates in extension metadata, while every document-side
+            // reference host gains a new run. Report both semantic mutations; patch the first
+            // host because that is the rendered document block callers need to refresh.
+            var modified = new List<Anchor> { parentTarget.Anchor };
+            var seenModified = new HashSet<string>(StringComparer.Ordinal)
+            {
+                parentTarget.Anchor.Id,
+            };
+            string? patchHostAnchorId = null;
+            foreach (var hostBlock in hostBlocks)
+            {
+                if (AnchorForElement(hostBlock) is not { } anchor) continue;
+                patchHostAnchorId ??= anchor.Id;
+                if (seenModified.Add(anchor.Id)) modified.Add(anchor);
+            }
+            var patchTarget = patchHostAnchorId is null ? null : FindAnchor(patchHostAnchorId);
+
+            return new EditResult
+            {
+                Success = true,
+                Created = created,
+                Modified = modified,
+                Patch = patchTarget is null ? null : PatchFor(patchTarget),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RestoreSnapshot(_history.PopForUndo().snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, parentCommentAnchorId);
+        }
+    }
+
+    /// <summary>
+    /// Mark a comment resolved or reopened by setting <c>w15:done</c>. A flat comment is upgraded
+    /// in place: its last paragraph receives a deterministic <c>w14:paraId</c>, and
+    /// <c>commentsExtended.xml</c>/<c>commentsIds.xml</c> are find-or-created. Existing reply
+    /// parentage is preserved. The mutation is fully undoable, including first-time part creation.
+    /// </summary>
+    public EditResult SetCommentResolved(string commentAnchorId, bool resolved)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var target = FindAnchor(commentAnchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {commentAnchorId}", commentAnchorId);
+        if (target.Anchor.Kind != "cmt")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"SetCommentResolved requires a comment definition anchor (kind cmt); got kind={target.Anchor.Kind}",
+                commentAnchorId);
+
+        var comment = target.Resolve(_doc!);
+        if (comment is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, "element resolved null", commentAnchorId);
+        var main = _doc!.MainDocumentPart;
+        if (main?.WordprocessingCommentsPart is null)
+            return EditResult.Fail(EditErrorCode.InternalError, "no comments part", commentAnchorId);
+
+        _history.RecordPreOp(TakeSnapshot());
+        try
+        {
+            Internal.CommentOps.EnsureThreadingMetadata(main, comment, resolved: resolved);
+            InvalidateProjectionCache();
+            return new EditResult
+            {
+                Success = true,
+                Modified = new[] { target.Anchor },
+                Patch = PatchFor(target),
+            };
+        }
+        catch (Exception ex)
+        {
+            LastInternalError = ex;
+            RestoreSnapshot(_history.PopForUndo().snapshot);
+            return EditResult.Fail(EditErrorCode.InternalError, ex.Message, commentAnchorId);
+        }
+    }
+
+    /// <summary>
     /// Replace a comment's <b>body text</b> with <paramref name="markdownPayload"/>, addressed by
     /// its definition anchor (kind <c>cmt</c>, from <see cref="EditResult.Created"/> or the
     /// projection's <c># Comments</c> tokens). The comment's identity attributes
@@ -7499,11 +7717,14 @@ public sealed class DocxSession : IDisposable
     /// InsertFootnote/InsertEndnote create on a document that had no notes.</param>
     /// <param name="CommentParts">The same, for the comments part (0 or 1 entries), which
     /// AddComment creates on a document that had no comments.</param>
+    /// <param name="CommentThreadingParts">The same, for commentsExtended/commentsIds, which
+    /// AddCommentReply/SetCommentResolved create when upgrading a flat comment.</param>
     internal sealed record DocumentSnapshot(
         System.Collections.Generic.IReadOnlyList<(string PartUri, XDocument Xml)> Parts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsHeader, string PartUri)> HeaderFooterParts,
         System.Collections.Generic.IReadOnlyList<(string RelId, bool IsFootnote, string PartUri)> NoteParts,
-        System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> CommentParts);
+        System.Collections.Generic.IReadOnlyList<(string RelId, string PartUri)> CommentParts,
+        System.Collections.Generic.IReadOnlyList<(string RelId, bool IsCommentsEx, string PartUri)> CommentThreadingParts);
 
     internal DocumentSnapshot TakeSnapshot()
     {
@@ -7514,6 +7735,7 @@ public sealed class DocxSession : IDisposable
         var hfParts = new System.Collections.Generic.List<(string, bool, string)>();
         var noteParts = new System.Collections.Generic.List<(string, bool, string)>();
         var commentParts = new System.Collections.Generic.List<(string, string)>();
+        var commentThreadingParts = new System.Collections.Generic.List<(string, bool, string)>();
         var main = _doc!.MainDocumentPart;
         if (main is not null)
         {
@@ -7525,8 +7747,14 @@ public sealed class DocxSession : IDisposable
                 noteParts.Add((main.GetIdOfPart(main.EndnotesPart), false, main.EndnotesPart.Uri.ToString()));
             if (main.WordprocessingCommentsPart is not null)
                 commentParts.Add((main.GetIdOfPart(main.WordprocessingCommentsPart), main.WordprocessingCommentsPart.Uri.ToString()));
+            if (main.WordprocessingCommentsExPart is not null)
+                commentThreadingParts.Add((main.GetIdOfPart(main.WordprocessingCommentsExPart), true,
+                    main.WordprocessingCommentsExPart.Uri.ToString()));
+            if (main.WordprocessingCommentsIdsPart is not null)
+                commentThreadingParts.Add((main.GetIdOfPart(main.WordprocessingCommentsIdsPart), false,
+                    main.WordprocessingCommentsIdsPart.Uri.ToString()));
         }
-        return new DocumentSnapshot(parts, hfParts, noteParts, commentParts);
+        return new DocumentSnapshot(parts, hfParts, noteParts, commentParts, commentThreadingParts);
     }
 
     internal void RestoreSnapshot(DocumentSnapshot snapshot)
@@ -7558,6 +7786,9 @@ public sealed class DocxSession : IDisposable
             ReconcileNoteParts(main, snapshot, byUri);
             // And for the comments part, which AddComment creates on a document that had no comments.
             ReconcileCommentsPart(main, snapshot, byUri);
+            // Reply/resolve can introduce commentsExtended/commentsIds; reconcile their topology
+            // after restoring the base comments part.
+            ReconcileCommentThreadingParts(main, snapshot, byUri);
         }
 
         // The annotations CustomXmlPart is reconciled the same way (its own factory) — see
@@ -7691,6 +7922,41 @@ public sealed class DocxSession : IDisposable
             if (live.ContainsKey(kv.Key)) continue;
             if (!byUri.TryGetValue(kv.Value, out var xml)) continue;
             var np = main.AddNewPart<WordprocessingCommentsPart>(kv.Key);
+            np.PutXDocument(new XDocument(xml));
+        }
+    }
+
+    /// <summary>
+    /// Create/delete reconciliation for <c>commentsExtended.xml</c> and
+    /// <c>commentsIds.xml</c>. These used to be content-only snapshot parts because no session op
+    /// authored them; AddCommentReply/SetCommentResolved can now create either/both, so undo must
+    /// remove those parts and redo must restore their original relationship ids and XML.
+    /// </summary>
+    private static void ReconcileCommentThreadingParts(
+        MainDocumentPart main, DocumentSnapshot snapshot,
+        System.Collections.Generic.Dictionary<string, XDocument> byUri)
+    {
+        var snapByRel = new System.Collections.Generic.Dictionary<string, (bool IsCommentsEx, string PartUri)>(StringComparer.Ordinal);
+        foreach (var (relId, isCommentsEx, partUri) in snapshot.CommentThreadingParts)
+            snapByRel[relId] = (isCommentsEx, partUri);
+
+        var live = new System.Collections.Generic.Dictionary<string, OpenXmlPart>(StringComparer.Ordinal);
+        if (main.WordprocessingCommentsExPart is not null)
+            live[main.GetIdOfPart(main.WordprocessingCommentsExPart)] = main.WordprocessingCommentsExPart;
+        if (main.WordprocessingCommentsIdsPart is not null)
+            live[main.GetIdOfPart(main.WordprocessingCommentsIdsPart)] = main.WordprocessingCommentsIdsPart;
+
+        foreach (var kv in live)
+            if (!snapByRel.ContainsKey(kv.Key))
+                main.DeletePart(kv.Value);
+
+        foreach (var kv in snapByRel)
+        {
+            if (live.ContainsKey(kv.Key)) continue;
+            if (!byUri.TryGetValue(kv.Value.PartUri, out var xml)) continue;
+            OpenXmlPart np = kv.Value.IsCommentsEx
+                ? main.AddNewPart<WordprocessingCommentsExPart>(kv.Key)
+                : main.AddNewPart<WordprocessingCommentsIdsPart>(kv.Key);
             np.PutXDocument(new XDocument(xml));
         }
     }
