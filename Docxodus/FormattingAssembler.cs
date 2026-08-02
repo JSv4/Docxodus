@@ -532,6 +532,17 @@ namespace Docxodus
                             dateAtt = paraInsElement.Attribute(W.date);
                         }
 
+                        // An inserted pilcrow on the PREVIOUS paragraph can mean this paragraph
+                        // is a newly split-off list item: pressing Enter inside an existing
+                        // paragraph with track changes on leaves the ins-marked mark on the
+                        // first half, while the second half (this paragraph) keeps the original,
+                        // unmarked pilcrow — its number position is the new one. But when the
+                        // previous paragraph is itself a wholly inserted paragraph (its own
+                        // pilcrow AND all its content inserted — the shape WmlComparer/DocxDiff
+                        // emit for a brand-new or moved-in paragraph), the insertion is fully
+                        // self-contained there; rejecting it leaves this paragraph exactly where
+                        // it was, so its number must NOT be styled as an insertion (nor
+                        // attributed to that revision's author).
                         var paragraphBefore = element
                             .SiblingsBeforeSelfReverseDocumentOrder()
                             .FirstOrDefault();
@@ -542,7 +553,7 @@ namespace Docxodus
                                 .Elements(W.rPr)
                                 .Elements(W.ins)
                                 .FirstOrDefault();
-                            if (paraInsElement2 != null)
+                            if (paraInsElement2 != null && !IsWhollyInsertedParagraph(paragraphBefore))
                             {
                                 isInserted = true;
                                 authorAtt = paraInsElement2.Attribute(W.author);
@@ -682,6 +693,36 @@ namespace Docxodus
                     element.Nodes().Select(n => NormalizeListItemsTransform(fai, wDoc, n, settings)));
             }
             return node;
+        }
+
+        /// <summary>
+        /// True when every content-bearing child of the paragraph is revision-inserted
+        /// (<c>w:ins</c> or <c>w:moveTo</c>) — the shape WmlComparer/DocxDiff emit for a
+        /// brand-new or moved-in paragraph. Range markers, bookmarks and other non-content
+        /// chrome are ignored; a paragraph with no content at all counts as wholly inserted.
+        /// A plain (or deleted) run means the paragraph carried pre-existing content, so the
+        /// inserted pilcrow on it SPLIT an existing paragraph rather than inserting a new one.
+        /// </summary>
+        private static bool IsWhollyInsertedParagraph(XElement paragraph)
+        {
+            return paragraph
+                .Elements()
+                // Only real WordprocessingML children matter — by the time
+                // NormalizeListItems runs, annotation has appended pt14:pPr/pt14:rPr
+                // helper elements to every paragraph.
+                .Where(e => e.Name.Namespace == W.w)
+                .Where(e =>
+                    e.Name != W.pPr &&
+                    e.Name != W.bookmarkStart &&
+                    e.Name != W.bookmarkEnd &&
+                    e.Name != W.commentRangeStart &&
+                    e.Name != W.commentRangeEnd &&
+                    e.Name != W.proofErr &&
+                    e.Name != W.moveToRangeStart &&
+                    e.Name != W.moveToRangeEnd &&
+                    e.Name != W.moveFromRangeStart &&
+                    e.Name != W.moveFromRangeEnd)
+                .All(e => e.Name == W.ins || e.Name == W.moveTo);
         }
 
         private static object TransformToDeleted(XNode node)
