@@ -1024,6 +1024,22 @@ namespace Docxodus
                 {
                     var listItemInfo = paragraph.Annotation<ListItemInfo>();
                     var ilvl = GetParagraphLevel(paragraph);
+
+                    // Word ties numbering to the paragraph mark. A paragraph whose pilcrow is
+                    // marked deleted (w:pPr/w:rPr/w:del, or w:moveFrom for a moved-away
+                    // paragraph) merges into its successor when the revision is accepted, so
+                    // Word renumbers the list as if the deletion were already accepted: the
+                    // deleted paragraph still DISPLAYS the value the counter holds at its
+                    // position, but does not advance any numbering state — the next live
+                    // paragraph shows the same value (the duplicate numbers Word renders in
+                    // All Markup view). Compute this paragraph's numbers normally, then
+                    // restore every piece of forward-carried state afterwards.
+                    var paraMarkDeleted = ParagraphMarkIsDeleted(paragraph);
+                    var savedPrevious = paraMarkDeleted ? previous : null;
+                    var savedStartOverrideAlreadyUsed = paraMarkDeleted ? startOverrideAlreadyUsed.ToList() : null;
+                    var savedListItemInfoInEffect = paraMarkDeleted ? listItemInfoInEffectForStartOverride[ilvl] : null;
+                    var savedContinuationByLevel = paraMarkDeleted ? (bool[])continuationByLevel.Clone() : null;
+
                     listItemInfoInEffectForStartOverride[ilvl] = listItemInfo;
                     ListItemInfo listItemInfoInEffect = null;
                     if (ilvl > 0)
@@ -1176,9 +1192,37 @@ namespace Docxodus
                     continuationByLevel[ilvl] = isContinuation;
                     paragraph.AddAnnotation(new ContinuationInfo { IsContinuation = isContinuation });
 
-                    previous = levelNumbers;
+                    if (paraMarkDeleted)
+                    {
+                        // The deleted paragraph keeps its annotations (it still renders a
+                        // number) but contributes nothing to what follows.
+                        previous = savedPrevious;
+                        startOverrideAlreadyUsed.Clear();
+                        startOverrideAlreadyUsed.AddRange(savedStartOverrideAlreadyUsed);
+                        listItemInfoInEffectForStartOverride[ilvl] = savedListItemInfoInEffect;
+                        Array.Copy(savedContinuationByLevel, continuationByLevel, continuationByLevel.Length);
+                    }
+                    else
+                    {
+                        previous = levelNumbers;
+                    }
                 }
             }
+        }
+
+        /// <summary>
+        /// True when the paragraph's mark (pilcrow) carries a tracked deletion —
+        /// <c>w:pPr/w:rPr/w:del</c> as both WmlComparer and DocxDiff emit for a fully
+        /// deleted paragraph, or <c>w:pPr/w:rPr/w:moveFrom</c> as Word emits for the
+        /// source paragraph of a move. Accepting the revision merges the paragraph into
+        /// its successor, so such a paragraph must not advance list numbering.
+        /// </summary>
+        private static bool ParagraphMarkIsDeleted(XElement paragraph)
+        {
+            return paragraph
+                .Elements(W.pPr)
+                .Elements(W.rPr)
+                .Any(rPr => rPr.Element(W.del) != null || rPr.Element(W.moveFrom) != null);
         }
 
         private static IEnumerable<XElement> PreviousParagraphsForLvlRestart(XElement paragraph, int ilvl)

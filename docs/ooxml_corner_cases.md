@@ -6,6 +6,7 @@ This document tracks edge cases and quirks in Open XML document processing where
 
 1. [Numbering and Lists](#numbering-and-lists)
    - [Legal Numbering with Multi-Level Format Strings](#legal-numbering-with-multi-level-format-strings)
+   - [List Numbering under Tracked Changes](#list-numbering-under-tracked-changes-deleted-paragraphs-dont-consume-numbers)
 2. [Footnotes](#footnotes)
    - [Footnote Count Discrepancy in Legal Templates](#footnote-count-discrepancy-in-legal-templates)
 3. [Contributing](#contributing)
@@ -157,6 +158,90 @@ When a continuation pattern is detected, the converter uses level 0's properties
 
 - [ECMA-376 Part 1, Section 17.9.10 - lvlText](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)
 - [ECMA-376 Part 1, Section 17.9.9 - isLgl](https://www.ecma-international.org/publications-and-standards/standards/ecma-376/)
+
+### List Numbering under Tracked Changes (deleted paragraphs don't consume numbers)
+
+**Status:** Fixed (August 2026)
+**Discovered:** 2026-08-02 (the README's NVCA voting-agreement marquee redline)
+**Test:** `Docxodus.Tests/TrackedChangesNumberingTests.cs` (TCN001–TCN005)
+
+#### The Problem
+
+In a tracked-changes document, which paragraphs consume list numbers? A literal reading of
+the numbering spec says nothing about revisions — every `w:p` with a resolvable `w:numPr`
+is a list item. Rendering a comparer-produced redline that way numbers deleted, moved-away
+and inserted paragraphs in one continuous sequence, so every number after a deletion
+disagrees with the final document.
+
+#### Minimal XML Reproducer
+
+A numbered list `Alpha, Bravo, Charlie` where `Bravo` is fully deleted (content in
+`w:del`, pilcrow marked deleted — the shape both `WmlComparer` and `DocxDiff` emit):
+
+```xml
+<w:p><!-- Alpha: plain list item --></w:p>
+<w:p>
+  <w:pPr>
+    <w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>
+    <w:rPr><w:del w:id="1" w:author="Reviewer" w:date="..."/></w:rPr>
+  </w:pPr>
+  <w:del w:id="2" w:author="Reviewer" w:date="...">
+    <w:r><w:delText>Bravo</w:delText></w:r>
+  </w:del>
+</w:p>
+<w:p><!-- Charlie: plain list item --></w:p>
+```
+
+#### Renderer Comparison
+
+| Renderer | Alpha | Bravo (deleted) | Charlie |
+|----------|-------|-----------------|---------|
+| Microsoft Word (All Markup) | `1.` | `2.` (struck) | `2.` |
+| LibreOffice Writer (Show Changes) | `1.` | `2.` (struck) | `2.` |
+| Docxodus before fix | `1.` | `2.` (struck) | `3.` |
+| Docxodus after fix | `1.` | `2.` (struck) | `2.` |
+
+#### Analysis
+
+Word ties numbering to the **paragraph mark**. A pilcrow marked deleted
+(`w:pPr/w:rPr/w:del`, or `w:moveFrom` on a move source) merges its paragraph into the
+successor when the revision is accepted, so the paragraph does not survive as a numbered
+item — and Word renumbers the *display* as if every change were already accepted. The
+deleted paragraph still shows the value the counter holds at its position, without
+advancing it; the next live paragraph shows the same value. That is the famous
+"duplicate numbers next to a struck paragraph" Word renders in All Markup view, and it
+is why a lawyer reading a Word redline sees final-document numbering. Inserted pilcrows
+(`w:ins`/`w:moveTo`) count normally — they are part of the final document.
+
+A second trap lives in the *styling* of the number glyph. When the paragraph **before**
+a list item carries an inserted pilcrow, that can mean two very different things:
+
+- **A split**: the ins-marked mark was inserted into *pre-existing* content (Enter
+  pressed mid-paragraph with track changes on). The FOLLOWING paragraph occupies the
+  newly created list position — its number is the "new" one.
+- **A wholly inserted paragraph** (comparer output for a new or moved-in paragraph):
+  own ins pilcrow AND all content inserted. The insertion is self-contained; rejecting
+  it leaves the following paragraph untouched, so its number must NOT be styled as an
+  insertion (or attributed to the revision's author).
+
+`FormattingAssembler`'s marker-styling heuristic treated both alike, painting the
+unchanged paragraph after every comparer-inserted paragraph as if its number were newly
+inserted.
+
+#### Relevant Code
+
+- `ListItemRetriever.InitializeListItemRetrieverForStory` — the counting loop;
+  `ParagraphMarkIsDeleted` paragraphs get their `LevelNumbers` annotation (they still
+  render a struck number) but restore all forward-carried state (`previous`,
+  start-override consumption, continuation tracking).
+- `FormattingAssembler.NormalizeListItemsTransform` — the previous-paragraph-ins
+  heuristic now requires the predecessor to carry pre-existing content
+  (`IsWhollyInsertedParagraph`).
+
+The behavior is unconditional (no setting): the default HTML render path accepts
+revisions before numbering runs, so only tracked-changes renders (and live
+tracked-changes editing sessions) can observe it, and as-if-accepted is Word's reading
+of the format.
 
 ---
 

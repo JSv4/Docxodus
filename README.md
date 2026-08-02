@@ -53,7 +53,10 @@ One frame, four kinds of change, all detected automatically: a **struck definiti
 **inserted definition** (green), **word-level substitutions** inside an otherwise untouched sentence
 (`Series A` replacing a blank; `means` replacing `shall mean and include`), and a **move** — the
 interpretation clause struck at the bottom in purple and re-inserted at the top, linked as one
-operation rather than reported as an unrelated delete and insert.
+operation rather than reported as an unrelated delete and insert. Note the list numbering: it
+renumbers as if every change were already accepted — the struck `(g)` is followed by the live
+`(g)`, exactly the duplicate-number display Word uses in All Markup view — so the letters a reader
+cites are the final document's.
 
 - **Round-trip contract:** `accept(compare(left, right)) ≡ right` and `reject(...) ≡ left`, verified
   at the block-text level.
