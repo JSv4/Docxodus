@@ -127,6 +127,59 @@ internal static class CommentOps
     }
 
     /// <summary>
+    /// Prune Word's comment-threading metadata for removed comment definitions:
+    /// <c>commentsExtended.xml</c> (<c>w15:commentEx</c>) and <c>commentsIds.xml</c>
+    /// (<c>w16cid:commentId</c>) entries key on a definition paragraph's <c>w14:paraId</c>, so a
+    /// removed definition's entries must go too — and a surviving reply whose
+    /// <c>w15:paraIdParent</c> pointed at a removed comment becomes top-level (the attribute is
+    /// dropped) instead of dangling. The parts are never created here; a document without
+    /// threading metadata is untouched.
+    /// </summary>
+    internal static void PruneThreadingMetadata(
+        WordprocessingDocument doc, IReadOnlyCollection<string> removedParaIds)
+    {
+        if (removedParaIds.Count == 0) return;
+        var main = doc.MainDocumentPart;
+        if (main is null) return;
+
+        XNamespace w15 = "http://schemas.microsoft.com/office/word/2012/wordml";
+        XNamespace w16cid = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+
+        PruneEntries(main.WordprocessingCommentsExPart,
+            w15 + "commentEx", w15 + "paraId", w15 + "paraIdParent", removedParaIds);
+        PruneEntries(main.WordprocessingCommentsIdsPart,
+            w16cid + "commentId", w16cid + "paraId", parentAttr: null, removedParaIds);
+    }
+
+    private static void PruneEntries(
+        OpenXmlPart? part, XName entryName, XName paraIdAttr, XName? parentAttr,
+        IReadOnlyCollection<string> removedParaIds)
+    {
+        var root = part?.GetXDocument().Root;
+        if (root is null) return;
+
+        bool changed = false;
+        foreach (var entry in root.Descendants(entryName).ToList())
+        {
+            var paraId = (string?)entry.Attribute(paraIdAttr);
+            if (paraId is not null && removedParaIds.Contains(paraId))
+            {
+                entry.Remove();
+                changed = true;
+                continue;
+            }
+            if (parentAttr is not null
+                && (string?)entry.Attribute(parentAttr) is { } parent
+                && removedParaIds.Contains(parent))
+            {
+                entry.Attribute(parentAttr)!.Remove();
+                changed = true;
+            }
+        }
+        if (changed) part!.PutXDocument();
+    }
+
+    /// <summary>
     /// Flatten a <c>w:comment</c> body to plain text: per-paragraph <c>w:t</c> concatenation,
     /// paragraphs joined by a single space, runs carrying the <c>w:annotationRef</c> mark
     /// excluded — the same rule the HTML renderer and the markdown projection apply.

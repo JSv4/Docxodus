@@ -1365,6 +1365,33 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>
+    /// Remove a native Word comment, addressed by its definition anchor (kind <c>cmt</c>):
+    /// the <c>w:comment</c> definition, its body-side marker triple
+    /// (<c>w:commentRangeStart</c>/<c>w:commentRangeEnd</c>/<c>w:commentReference</c>, wrapper
+    /// run included) everywhere in the package, and any <c>commentsExtended</c>/
+    /// <c>commentsIds</c> threading entries keyed by its paragraphs' <c>w14:paraId</c> — a
+    /// surviving reply whose parent was removed becomes top-level. Delegates to the same
+    /// teardown <see cref="DeleteBlock"/> performs for a <c>cmt</c> anchor; this wrapper adds
+    /// only the comment-specific kind guard. The comments part itself is kept even when the
+    /// last comment is removed (part deletion happens only via <see cref="Undo"/> of the
+    /// create).
+    /// </summary>
+    public EditResult RemoveComment(string commentAnchorId)
+    {
+        if (_disposed) return EditResult.Fail(EditErrorCode.SessionDisposed, "session disposed");
+
+        var target = FindAnchor(commentAnchorId);
+        if (target is null)
+            return EditResult.Fail(EditErrorCode.AnchorNotFound, $"anchor not found: {commentAnchorId}", commentAnchorId);
+        if (target.Anchor.Kind != "cmt")
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                $"RemoveComment requires a comment definition anchor (kind cmt); got kind={target.Anchor.Kind}",
+                commentAnchorId);
+
+        return DeleteBlock(commentAnchorId);
+    }
+
+    /// <summary>
     /// The document's native Word comments in comments-part order — see
     /// <see cref="CommentListEntry"/>. Read-only; returns an empty list when the document
     /// has no comments part.
@@ -3296,6 +3323,11 @@ public sealed class DocxSession : IDisposable
         if (main.FootnotesPart is not null) yield return main.FootnotesPart;
         if (main.EndnotesPart is not null) yield return main.EndnotesPart;
         if (main.WordprocessingCommentsPart is not null) yield return main.WordprocessingCommentsPart;
+        // Comment-threading metadata parts: content-only snapshot scope (no session op
+        // creates or deletes them) so the pruning DeleteBlock/RemoveComment perform on
+        // commentsExtended/commentsIds entries is undoable.
+        if (main.WordprocessingCommentsExPart is not null) yield return main.WordprocessingCommentsExPart;
+        if (main.WordprocessingCommentsIdsPart is not null) yield return main.WordprocessingCommentsIdsPart;
         var annotationsPart = Internal.AnnotationsCustomXml.Find(_doc);
         if (annotationsPart is not null) yield return annotationsPart;
     }
@@ -3410,6 +3442,20 @@ public sealed class DocxSession : IDisposable
                 var elementId = (string?)element.Attribute(W.id);
                 if (!string.IsNullOrEmpty(elementId))
                     RemoveCrossReferences(target.Anchor.Kind, elementId);
+
+                // For comments, also prune Word's threading metadata (commentsExtended /
+                // commentsIds entries keyed by the definition paragraphs' w14:paraId) so a
+                // removed comment leaves no dangling reply/resolve state. Lives here — not in
+                // RemoveComment — so the generic DeleteBlock path gets it too.
+                if (target.Anchor.Kind == "cmt")
+                {
+                    var paraIds = element.Elements(W.p)
+                        .Select(p => (string?)p.Attribute(W14.paraId))
+                        .Where(pid => !string.IsNullOrEmpty(pid))
+                        .Select(pid => pid!)
+                        .ToList();
+                    Internal.CommentOps.PruneThreadingMetadata(_doc!, paraIds);
+                }
             }
 
             // Collect descendant anchors before removal so the caller knows what's gone.

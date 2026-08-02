@@ -458,8 +458,121 @@ public class DocxSessionCommentAuthoringTests
                       <w15:commentEx w15:paraId="22222222" w15:paraIdParent="11111111" w15:done="0"/>
                     </w15:commentsEx>
                     """);
+
+            var idsPart = main.AddNewPart<WordprocessingCommentsIdsPart>();
+            using (var s = idsPart.GetStream(FileMode.Create))
+            using (var w = new StreamWriter(s))
+                w.Write("""
+                    <w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid">
+                      <w16cid:commentId w16cid:paraId="11111111" w16cid:durableId="1AAA1111"/>
+                      <w16cid:commentId w16cid:paraId="22222222" w16cid:durableId="2BBB2222"/>
+                    </w16cid:commentsIds>
+                    """);
         }
         return ms.ToArray();
+    }
+
+    // ─── RemoveComment + threading pruning ──────────────────────────────
+
+    [Fact]
+    public void DS359_RemoveComment_StripsTripleAndDefinition_LeavesSiblingIntact()
+    {
+        using var session = new DocxSession(BuildDocWithThreadedComments());
+        var cmtAnchor = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Kind == "cmt" && (t.TextPreview ?? "").Contains("Root")).Anchor.Id;
+
+        var result = session.RemoveComment(cmtAnchor);
+        Assert.True(result.Success, result.Error?.Message);
+        Assert.Contains(result.Removed, a => a.Kind == "cmt");
+        Assert.Contains(result.Removed, a => a.Kind == "p" && a.Scope == "cmt");
+
+        var saved = session.Save();
+
+        // Definition gone, sibling comment untouched.
+        var comments = PartXml(saved, m => m.WordprocessingCommentsPart);
+        var surviving = Assert.Single(comments.Elements(W + "comment"));
+        Assert.Contains("Reply comment.", surviving.Descendants(W + "t").Select(t => (string)t));
+
+        // The body triple for the removed comment is gone; the sibling's survives.
+        var body = BodyXml(saved);
+        var survivingId = (string?)surviving.Attribute(W + "id");
+        Assert.Single(body.Descendants(W + "commentReference"));
+        Assert.Equal(survivingId, (string?)body.Descendants(W + "commentReference").Single().Attribute(W + "id"));
+        Assert.Single(body.Descendants(W + "commentRangeStart"));
+        Assert.Single(body.Descendants(W + "commentRangeEnd"));
+
+        // No empty wrapper run left behind (a w:r whose only child is w:rPr).
+        Assert.DoesNotContain(body.Descendants(W + "r"),
+            r => r.Elements().Any() && r.Elements().All(e => e.Name == W + "rPr"));
+
+        // Body text is untouched.
+        var para = body.Descendants(W + "p").First();
+        Assert.Equal("Alpha text with target and more.",
+            string.Concat(para.Descendants(W + "t").Select(t => (string)t)));
+    }
+
+    [Fact]
+    public void DS360_RemoveComment_PrunesThreadingMetadata_AndUndoRestoresIt()
+    {
+        using var session = new DocxSession(BuildDocWithThreadedComments());
+        XNamespace w15 = "http://schemas.microsoft.com/office/word/2012/wordml";
+        XNamespace w16cid = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+        var cmtAnchor = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Kind == "cmt" && (t.TextPreview ?? "").Contains("Root")).Anchor.Id;
+
+        Assert.True(session.RemoveComment(cmtAnchor).Success);
+
+        var saved = session.Save();
+        var ex = PartXml(saved, m => m.WordprocessingCommentsExPart);
+        var entry = Assert.Single(ex.Elements(w15 + "commentEx"));
+        Assert.Equal("22222222", (string?)entry.Attribute(w15 + "paraId"));
+        // The reply no longer points at a removed parent — it became top-level, not dangling.
+        Assert.Null(entry.Attribute(w15 + "paraIdParent"));
+
+        var ids = PartXml(saved, m => m.WordprocessingCommentsIdsPart);
+        var idEntry = Assert.Single(ids.Elements(w16cid + "commentId"));
+        Assert.Equal("22222222", (string?)idEntry.Attribute(w16cid + "paraId"));
+
+        // The pruning is undoable: the threading parts are snapshot-scoped.
+        Assert.True(session.Undo());
+        var exRestored = PartXml(session.Save(), m => m.WordprocessingCommentsExPart);
+        Assert.Equal(2, exRestored.Elements(w15 + "commentEx").Count());
+        Assert.Contains(exRestored.Elements(w15 + "commentEx"),
+            e => (string?)e.Attribute(w15 + "paraIdParent") == "11111111");
+    }
+
+    [Fact]
+    public void DS361_RemoveComment_RequiresACommentAnchor()
+    {
+        using var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());
+        var anchor = FirstBodyParagraph(session);
+
+        var wrongKind = session.RemoveComment(anchor);
+        Assert.False(wrongKind.Success);
+        Assert.Equal(EditErrorCode.AnchorWrongKind, wrongKind.Error!.Code);
+        Assert.Contains("RemoveComment", wrongKind.Error.Message);
+
+        var missing = session.RemoveComment("cmt:cmt:ffffffff");
+        Assert.False(missing.Success);
+        Assert.Equal(EditErrorCode.AnchorNotFound, missing.Error!.Code);
+    }
+
+    [Fact]
+    public void DS362_DeleteBlock_OnACommentAnchor_AlsoPrunesThreadingMetadata()
+    {
+        // Single-owner proof: the pruning lives in DeleteBlock's cmt teardown, so the generic
+        // path gets it too — not just the typed RemoveComment wrapper.
+        using var session = new DocxSession(BuildDocWithThreadedComments());
+        XNamespace w15 = "http://schemas.microsoft.com/office/word/2012/wordml";
+        var cmtAnchor = session.Project().AnchorIndex.Values
+            .First(t => t.Anchor.Kind == "cmt" && (t.TextPreview ?? "").Contains("Root")).Anchor.Id;
+
+        Assert.True(session.DeleteBlock(cmtAnchor).Success);
+
+        var ex = PartXml(session.Save(), m => m.WordprocessingCommentsExPart);
+        var entry = Assert.Single(ex.Elements(w15 + "commentEx"));
+        Assert.Equal("22222222", (string?)entry.Attribute(w15 + "paraId"));
+        Assert.Null(entry.Attribute(w15 + "paraIdParent"));
     }
 
     [Fact]
