@@ -67,6 +67,7 @@ export type {
   AnchorTargetRef,
   BlockMetadata,
   CharSpan,
+  CommentListEntry,
   DocumentAnnotation,
   DocxSessionProjection,
   DocxSessionSettings,

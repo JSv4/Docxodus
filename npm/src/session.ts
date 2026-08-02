@@ -9,6 +9,7 @@ import type {
   BlockMetadata,
   BulkEditResult,
   CharSpan,
+  CommentListEntry,
   CrossBlockMatch,
   DiffEntry,
   DocumentAnnotation,
@@ -331,6 +332,62 @@ export class DocxSession {
     return JSON.parse(
       this.wasm.InsertEndnote(this.handle, anchorId, characterOffset, markdown),
     ) as EditResult;
+  }
+
+  // ─── Comments (issue #300) ───────────────────────────────────────────
+
+  /**
+   * Add a **native Word comment** (real `w:comment` markup, visible in Word/Google
+   * Docs/LibreOffice's Reviewing pane — not the {@link addAnnotation} overlay) on the body
+   * paragraph `anchorId`. `span` selects the commented character range; `null` comments the
+   * whole block. On a document with no comments yet this also creates the comments part and
+   * the `CommentText`/`CommentReference` styles. `opts.date` (ISO-8601) is written only when
+   * provided, keeping output deterministic by default.
+   *
+   * Returns the created definition anchor (kind `cmt`) and its paragraph anchors (kind `p`,
+   * scope `cmt`) in `EditResult.created`, so the comment can immediately be edited with
+   * {@link updateComment} or removed with {@link removeComment}.
+   *
+   * Body paragraphs only (Word has no comments-on-comments); a non-body anchor fails with
+   * `anchor_wrong_kind`, a zero-length span with `empty_comment_span`.
+   */
+  addComment(
+    anchorId: string,
+    span: CharSpan | null,
+    author: string,
+    markdown: string,
+    opts?: { initials?: string; date?: string },
+  ): EditResult {
+    const spanJson = span ? JSON.stringify(span) : "";
+    return JSON.parse(
+      this.wasm.AddComment(
+        this.handle,
+        anchorId,
+        spanJson,
+        author,
+        opts?.initials ?? "",
+        opts?.date ?? "",
+        markdown,
+      ),
+    ) as EditResult;
+  }
+
+  /** Replace a comment's body text, addressed by its definition anchor (kind `cmt`); the
+   * comment's author/initials/date are preserved, as is the last paragraph's `w14:paraId`
+   * (Word's reply-threading key). */
+  updateComment(commentAnchorId: string, markdown: string): EditResult {
+    return JSON.parse(this.wasm.UpdateComment(this.handle, commentAnchorId, markdown)) as EditResult;
+  }
+
+  /** Remove a comment: the definition, its body marker triple everywhere in the package, and
+   * any `commentsExtended`/`commentsIds` threading entries keyed by it. */
+  removeComment(commentAnchorId: string): EditResult {
+    return JSON.parse(this.wasm.RemoveComment(this.handle, commentAnchorId)) as EditResult;
+  }
+
+  /** The document's native Word comments in comments-part order. */
+  listComments(): CommentListEntry[] {
+    return JSON.parse(this.wasm.ListComments(this.handle)) as CommentListEntry[];
   }
 
   // ─── Tier C: formatting ──────────────────────────────────────────────
@@ -944,5 +1001,5 @@ export function openDocxSession(
   return new DocxSession(handle, bridge);
 }
 
-export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
+export type { AnchorInfo, AnchorRef, AnchorTargetRef, BlockSlice, CharSpan, CommentListEntry, CrossBlockMatch, DocumentAnnotation, DocxSessionProjection, DocxSessionSettings, EditError, EditErrorCode, EditResult, FindOptions, FormatOp, GrepOptions, MarkdownPatch, PlaceholderKind, ReplaceOptions, RunFormatting, RunFragment, TemplatePlaceholder, TextMatch } from "./types.js";
 export { ContextBoundary, PlaceholderKinds } from "./types.js";

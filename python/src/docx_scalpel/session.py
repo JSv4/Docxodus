@@ -46,6 +46,7 @@ from .types import (
     BlockMetadata,
     BulkEditResult,
     CharSpan,
+    CommentListEntry,
     CrossBlockMatch,
     DocumentAnnotation,
     DocxDiffConflict,
@@ -1049,6 +1050,70 @@ class DocxSession:
                 },
             )
         )
+
+    # -- Comments (issue #300) --------------------------------------------
+
+    def add_comment(
+        self,
+        anchor_id: str,
+        span: CharSpan | None,
+        author: str,
+        markdown: str,
+        initials: str | None = None,
+        date: str | None = None,
+    ) -> EditResult:
+        """Add a **native Word comment** (real ``w:comment`` markup, visible in Word's
+        Reviewing pane — not the :meth:`add_annotation` overlay) on the body paragraph
+        ``anchor_id``. ``span`` selects the commented character range; ``None`` comments
+        the whole block. On a document with no comments yet this also creates the
+        comments part and the ``CommentText``/``CommentReference`` styles. ``date``
+        (ISO-8601) is written only when provided, keeping output deterministic by
+        default.
+
+        The created definition anchor (kind ``cmt``) and its paragraph anchors (kind
+        ``p``, scope ``cmt``) come back in ``EditResult.created``, so the comment can
+        immediately be edited with :meth:`update_comment` or removed with
+        :meth:`remove_comment`.
+
+        Body paragraphs only (Word has no comments-on-comments); a non-body anchor
+        fails with ``ANCHOR_WRONG_KIND``, a zero-length span with ``EMPTY_COMMENT_SPAN``.
+        """
+        args: dict[str, Any] = {
+            "anchorId": anchor_id,
+            "author": author,
+            "markdown": markdown,
+        }
+        if span is not None:
+            args["span"] = {"start": span.start, "length": span.length}
+        if initials is not None:
+            args["initials"] = initials
+        if date is not None:
+            args["date"] = date
+        return EditResult._from_wire(self._call("add_comment", args))
+
+    def update_comment(self, comment_anchor_id: str, markdown: str) -> EditResult:
+        """Replace a comment's body text, addressed by its definition anchor (kind
+        ``cmt``); the comment's author/initials/date are preserved, as is the last
+        paragraph's ``w14:paraId`` (Word's reply-threading key)."""
+        return EditResult._from_wire(
+            self._call(
+                "update_comment",
+                {"anchorId": comment_anchor_id, "markdown": markdown},
+            )
+        )
+
+    def remove_comment(self, comment_anchor_id: str) -> EditResult:
+        """Remove a comment: the definition, its body marker triple everywhere in the
+        package, and any ``commentsExtended``/``commentsIds`` threading entries keyed
+        by it."""
+        return EditResult._from_wire(
+            self._call("remove_comment", {"anchorId": comment_anchor_id})
+        )
+
+    def list_comments(self) -> tuple[CommentListEntry, ...]:
+        """The document's native Word comments in comments-part order."""
+        result = self._call("list_comments", {})
+        return tuple(CommentListEntry._from_wire(c) for c in result)
 
     # -- Tier C: formatting -----------------------------------------------
 
