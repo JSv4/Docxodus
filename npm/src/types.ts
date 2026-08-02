@@ -1214,6 +1214,7 @@ export type EditErrorCode =
   | "unknown_style"
   | "invalid_list_level"
   | "invalid_page_numbering"
+  | "invalid_paragraph_format"
   | "malformed_xml"
   | "disallowed_namespace"
   | "incompatible_element_type"
@@ -1312,12 +1313,39 @@ export interface ParagraphBorderEdge {
 /** List membership for `DocxSession.applyListFormat`. */
 export type ListFormat = "none" | "bullet" | "decimal";
 
+/** How `ParagraphFormatOp.lineSpacing` is interpreted (`w:spacing/@w:lineRule`): under `"auto"`
+ * the value is in 240ths of a line (240 = single, 360 = 1.5×, 480 = double); under
+ * `"exact"`/`"atLeast"` it is a height in twips (20 twips = 1pt). */
+export type LineSpacingRule = "auto" | "exact" | "atLeast";
+
 /** Paragraph-level formatting for `DocxSession.setParagraphFormat`. Omit a field to leave it unchanged. */
 export interface ParagraphFormatOp {
   /** Paragraph alignment. */
   alignment?: "left" | "center" | "right" | "justify";
   /** Adjust the left indent by this many twips (1440 = 1 inch); clamped at 0. */
   indentDelta?: number;
+  /** First-line indent in twips (`w:ind/@w:firstLine`; 1440 = 1 inch). Absolute, not a delta;
+   * 0 writes an explicit "none". Mutually exclusive with `hangingIndent` (Word's `w:ind` holds
+   * one or the other) — setting this removes any hanging indent, and an op carrying both is
+   * rejected with `invalid_paragraph_format`. Negatives are invalid. */
+  firstLineIndent?: number;
+  /** Hanging indent in twips (`w:ind/@w:hanging`; 1440 = 1 inch) — every line EXCEPT the first
+   * starts this far right of the paragraph's left edge. Mutually exclusive with
+   * `firstLineIndent`; setting this removes any first-line indent. Negatives are invalid. */
+  hangingIndent?: number;
+  /** Space above the paragraph in twips (`w:spacing/@w:before`; 20 twips = 1pt, so 240 = 12pt).
+   * Absolute; negatives are invalid. */
+  spacingBefore?: number;
+  /** Space below the paragraph in twips (`w:spacing/@w:after`; 20 twips = 1pt). Absolute;
+   * negatives are invalid. */
+  spacingAfter?: number;
+  /** Line spacing (`w:spacing/@w:line`). Units depend on `lineSpacingRule`: 240ths of a line
+   * under `"auto"` (the default when the rule is omitted), twips under `"exact"`/`"atLeast"`.
+   * Negatives are invalid. */
+  lineSpacing?: number;
+  /** How `lineSpacing` is interpreted. Only meaningful alongside `lineSpacing` — set without
+   * it, the op is rejected with `invalid_paragraph_format`. */
+  lineSpacingRule?: LineSpacingRule;
   /** Page-break-before: true to add, false to remove. */
   pageBreakBefore?: boolean;
   /** Top paragraph border (`w:pBdr/w:top`). Omit to leave unchanged. */

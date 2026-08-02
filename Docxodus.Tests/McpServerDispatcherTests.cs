@@ -364,6 +364,36 @@ public class McpServerDispatcherTests : IDisposable
         Assert.DoesNotContain("border-bottom", htmlAfterClear);
     }
 
+    [Fact]
+    public void MCP043_Format_SetParagraphFormat_FirstLineIndentAndSpacing()
+    {
+        // Issue #312: firstLineIndent/hangingIndent + spacing were inexpressible — the nearest
+        // reachable op was indentDelta (whole-left-edge shift), a visibly different result.
+        // firstLine renders as a text-indent style on the wrapping div, the observable signal.
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        var applied = Parse(Dispatcher.Call(_store, "docxodus_format", J(
+            $$"""
+            {"sessionId":{{sessionArg}},"action":"set_paragraph_format","anchorId":"{{anchor}}","paragraphFormat":{"firstLineIndent":720,"spacingBefore":240,"spacingAfter":120,"lineSpacing":360} }
+            """)));
+        Assert.True(applied.GetProperty("success").GetBoolean());
+
+        var html = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"html"}""")))
+            .GetProperty("html").GetString()!;
+        Assert.Contains("text-indent: 0.50in", html);
+
+        // Both firstLine and hanging in one op is unrepresentable in w:ind — typed error.
+        var both = Parse(Dispatcher.Call(_store, "docxodus_format", J(
+            $$"""
+            {"sessionId":{{sessionArg}},"action":"set_paragraph_format","anchorId":"{{anchor}}","paragraphFormat":{"firstLineIndent":720,"hangingIndent":360} }
+            """)));
+        Assert.False(both.GetProperty("success").GetBoolean());
+        Assert.Equal("invalid_paragraph_format", both.GetProperty("error").GetProperty("code").GetString());
+    }
+
     // ─── Create / Table ─────────────────────────────────────────────────
 
     [Fact]

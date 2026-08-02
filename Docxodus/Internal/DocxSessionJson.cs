@@ -178,8 +178,11 @@ internal static class DocxSessionJson
 
     /// <summary>
     /// Parse a ParagraphFormatOp wire object: { alignment?: "left"|"center"|"right"|"justify",
-    /// indentDelta?: int (twips), pageBreakBefore?: bool, topBorder?/bottomBorder?: BorderEdge,
-    /// clearBorders?: bool }. Missing fields leave that property unchanged.
+    /// indentDelta?: int (twips), firstLineIndent?/hangingIndent?: int (twips, mutually exclusive),
+    /// spacingBefore?/spacingAfter?: int (twips), lineSpacing?: int (240ths of a line under "auto",
+    /// twips under "exact"/"atLeast"), lineSpacingRule?: "auto"|"exact"|"atLeast",
+    /// pageBreakBefore?: bool, topBorder?/bottomBorder?: BorderEdge, clearBorders?: bool }.
+    /// Missing fields leave that property unchanged.
     /// </summary>
     public static ParagraphFormatOp ParseParagraphFormatOp(string json)
     {
@@ -194,13 +197,23 @@ internal static class DocxSessionJson
             "justify" or "both" => ParagraphAlignment.Justify,
             _ => null,
         };
-        int? indentDelta = root.TryGetProperty("indentDelta", out var d) && d.ValueKind == JsonValueKind.Number
-            ? d.GetInt32()
-            : null;
+        LineSpacingRule? lineRule = TryGetString(root, "lineSpacingRule", null)?.ToLowerInvariant() switch
+        {
+            "auto" => LineSpacingRule.Auto,
+            "exact" or "exactly" => LineSpacingRule.Exact,
+            "atleast" => LineSpacingRule.AtLeast,
+            _ => null,
+        };
         return new ParagraphFormatOp
         {
             Alignment = align,
-            IndentDelta = indentDelta,
+            IndentDelta = TryGetIntNullable(root, "indentDelta"),
+            FirstLineIndent = TryGetIntNullable(root, "firstLineIndent"),
+            HangingIndent = TryGetIntNullable(root, "hangingIndent"),
+            SpacingBefore = TryGetIntNullable(root, "spacingBefore"),
+            SpacingAfter = TryGetIntNullable(root, "spacingAfter"),
+            LineSpacing = TryGetIntNullable(root, "lineSpacing"),
+            LineSpacingRule = lineRule,
             PageBreakBefore = TryGetBoolNullable(root, "pageBreakBefore"),
             TopBorder = ParseBorderEdge(root, "topBorder"),
             BottomBorder = ParseBorderEdge(root, "bottomBorder"),
@@ -295,6 +308,9 @@ internal static class DocxSessionJson
 
     public static bool? TryGetBoolNullable(JsonElement root, string name) =>
         root.TryGetProperty(name, out var v) && (v.ValueKind == JsonValueKind.True || v.ValueKind == JsonValueKind.False) ? v.GetBoolean() : (bool?)null;
+
+    public static int? TryGetIntNullable(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : (int?)null;
 
     public static string? TryGetString(JsonElement root, string name, string? fallback) =>
         root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : fallback;

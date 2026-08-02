@@ -119,6 +119,14 @@ public sealed record ParagraphBorderEdge
 public enum ParagraphAlignment { Left, Center, Right, Justify }
 
 /// <summary>
+/// How <see cref="ParagraphFormatOp.LineSpacing"/> is interpreted — maps to
+/// <c>w:spacing/@w:lineRule</c>. Under <see cref="Auto"/> the value is in 240ths of a line
+/// (240 = single, 360 = 1.5×, 480 = double); under <see cref="Exact"/>/<see cref="AtLeast"/>
+/// it is a height in twips (20ths of a point — e.g. 480 = exactly 24pt).
+/// </summary>
+public enum LineSpacingRule { Auto, Exact, AtLeast }
+
+/// <summary>
 /// Which header/footer story a <see cref="DocxSession.SetHeaderText"/> /
 /// <see cref="DocxSession.SetFooterText"/> call targets. Maps to the
 /// <c>w:headerReference</c>/<c>w:footerReference</c> <c>w:type</c> attribute:
@@ -182,6 +190,47 @@ public sealed record ParagraphFormatOp
     public ParagraphAlignment? Alignment { get; init; }
     public int? IndentDelta { get; init; }
     public bool? PageBreakBefore { get; init; }
+
+    /// <summary>
+    /// First-line indent in twips (<c>w:ind/@w:firstLine</c>; 1440 = 1 inch) — how far the
+    /// paragraph's first line starts right of its left edge. Absolute, not a delta; 0 writes an
+    /// explicit "no first-line indent" (overriding a style-inherited one). Word treats
+    /// <c>w:firstLine</c>/<c>w:hanging</c> as one either/or slot, so setting this removes any
+    /// <c>@w:hanging</c>, and an op setting both this and <see cref="HangingIndent"/> is rejected
+    /// (<see cref="EditErrorCode.InvalidParagraphFormat"/>). Negative values are invalid
+    /// (the attribute is unsigned in OOXML).
+    /// </summary>
+    public int? FirstLineIndent { get; init; }
+
+    /// <summary>
+    /// Hanging indent in twips (<c>w:ind/@w:hanging</c>; 1440 = 1 inch) — how far every line
+    /// EXCEPT the first starts right of the paragraph's left edge. Mutually exclusive with
+    /// <see cref="FirstLineIndent"/>; setting this removes any <c>@w:firstLine</c>. Absolute;
+    /// 0 clears the hang explicitly; negatives are invalid.
+    /// </summary>
+    public int? HangingIndent { get; init; }
+
+    /// <summary>Space above the paragraph in twips (<c>w:spacing/@w:before</c>; 20 twips = 1pt,
+    /// so 240 = 12pt). Absolute; 0 writes an explicit zero; negatives are invalid.</summary>
+    public int? SpacingBefore { get; init; }
+
+    /// <summary>Space below the paragraph in twips (<c>w:spacing/@w:after</c>; 20 twips = 1pt).
+    /// Absolute; 0 writes an explicit zero; negatives are invalid.</summary>
+    public int? SpacingAfter { get; init; }
+
+    /// <summary>
+    /// Line spacing (<c>w:spacing/@w:line</c>). Units depend on <see cref="LineSpacingRule"/>:
+    /// 240ths of a line under <see cref="Docxodus.LineSpacingRule.Auto"/> (240 = single,
+    /// 360 = 1.5×, 480 = double), twips under <c>Exact</c>/<c>AtLeast</c>. Writes
+    /// <c>@w:lineRule</c> alongside (defaulting to <c>auto</c> when
+    /// <see cref="LineSpacingRule"/> is null); negatives are invalid.
+    /// </summary>
+    public int? LineSpacing { get; init; }
+
+    /// <summary>How <see cref="LineSpacing"/> is interpreted (<c>w:spacing/@w:lineRule</c>).
+    /// Only meaningful alongside <see cref="LineSpacing"/> — set without it, the op is rejected
+    /// (<see cref="EditErrorCode.InvalidParagraphFormat"/>).</summary>
+    public LineSpacingRule? LineSpacingRule { get; init; }
 
     /// <summary>Top paragraph border (<c>w:pBdr/w:top</c>). null = leave unchanged.</summary>
     public ParagraphBorderEdge? TopBorder { get; init; }
@@ -967,6 +1016,12 @@ public enum EditErrorCode
     /// <see cref="NumberFormat.Bullet"/> as a page-number format (neither <c>w:pgNumType/@w:fmt</c>
     /// nor the field <c>\*</c> switch has a bullet notion).</summary>
     InvalidPageNumbering,
+
+    /// <summary>A <see cref="ParagraphFormatOp"/> that OOXML cannot express: both
+    /// <c>FirstLineIndent</c> and <c>HangingIndent</c> in one op (<c>w:ind</c> holds one or the
+    /// other), a negative indent/spacing value (the attributes are unsigned), or a
+    /// <c>LineSpacingRule</c> without the <c>LineSpacing</c> it qualifies.</summary>
+    InvalidParagraphFormat,
 
     MalformedXml,
     DisallowedNamespace,
@@ -4503,6 +4558,19 @@ public sealed class DocxSession : IDisposable
         "textboxTightWrap", "outlineLvl", "divId", "cnfStyle", "rPr", "sectPr", "pPrChange",
     };
 
+    /// <summary>Return the existing w:pPr child of <paramref name="name"/> (attributes intact),
+    /// or slot a new empty one in at its correct CT_PPr position.</summary>
+    private static XElement GetOrCreatePPrChild(XElement pPr, XName name)
+    {
+        var child = pPr.Element(name);
+        if (child is null)
+        {
+            child = new XElement(name);
+            SetPPrChildInOrder(pPr, child);
+        }
+        return child;
+    }
+
     /// <summary>Insert (replacing any existing) a w:pPr child at its correct CT_PPr position.</summary>
     private static void SetPPrChildInOrder(XElement pPr, XElement child)
     {
@@ -4559,8 +4627,9 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>
-    /// Set paragraph-level formatting (alignment, indent delta, page-break-before) on the
-    /// paragraph the anchor names. Only the non-null fields of <paramref name="op"/> change.
+    /// Set paragraph-level formatting (alignment, indent delta, first-line/hanging indent,
+    /// before/after/line spacing, page-break-before, borders) on the paragraph the anchor
+    /// names. Only the non-null fields of <paramref name="op"/> change.
     /// </summary>
     public EditResult SetParagraphFormat(string anchorId, ParagraphFormatOp op)
     {
@@ -4573,6 +4642,17 @@ public sealed class DocxSession : IDisposable
 
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
+
+        if (op.FirstLineIndent is not null && op.HangingIndent is not null)
+            return EditResult.Fail(EditErrorCode.InvalidParagraphFormat,
+                "firstLineIndent and hangingIndent are mutually exclusive (w:ind holds one or the other)", anchorId);
+        if (op.FirstLineIndent is < 0 || op.HangingIndent is < 0 ||
+            op.SpacingBefore is < 0 || op.SpacingAfter is < 0 || op.LineSpacing is < 0)
+            return EditResult.Fail(EditErrorCode.InvalidParagraphFormat,
+                "indent/spacing values are unsigned twips and must be >= 0", anchorId);
+        if (op.LineSpacingRule is not null && op.LineSpacing is null)
+            return EditResult.Fail(EditErrorCode.InvalidParagraphFormat,
+                "lineSpacingRule requires lineSpacing (w:lineRule qualifies w:line)", anchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
@@ -4615,6 +4695,38 @@ public sealed class DocxSession : IDisposable
                     SetPPrChildInOrder(pPr, ind);
                 }
                 ind.SetAttributeValue(W.left, next);
+            }
+
+            // firstLine/hanging share one w:ind slot in Word: writing either evicts the other
+            // (validation above already rejected an op carrying both).
+            if (op.FirstLineIndent is { } firstLine)
+            {
+                var ind = GetOrCreatePPrChild(pPr, W.ind);
+                ind.SetAttributeValue(W.firstLine, firstLine);
+                ind.SetAttributeValue(W.hanging, null);
+            }
+            if (op.HangingIndent is { } hanging)
+            {
+                var ind = GetOrCreatePPrChild(pPr, W.ind);
+                ind.SetAttributeValue(W.hanging, hanging);
+                ind.SetAttributeValue(W.firstLine, null);
+            }
+
+            if (op.SpacingBefore is not null || op.SpacingAfter is not null || op.LineSpacing is not null)
+            {
+                var spacing = GetOrCreatePPrChild(pPr, W.spacing);
+                if (op.SpacingBefore is { } before) spacing.SetAttributeValue(W.before, before);
+                if (op.SpacingAfter is { } after) spacing.SetAttributeValue(W.after, after);
+                if (op.LineSpacing is { } line)
+                {
+                    spacing.SetAttributeValue(W.line, line);
+                    spacing.SetAttributeValue(W.lineRule, (op.LineSpacingRule ?? LineSpacingRule.Auto) switch
+                    {
+                        LineSpacingRule.Exact => "exact",
+                        LineSpacingRule.AtLeast => "atLeast",
+                        _ => "auto",
+                    });
+                }
             }
 
             if (op.ClearBorders is true || op.TopBorder is not null || op.BottomBorder is not null)
