@@ -8,6 +8,29 @@ All notable changes to this project will be documented in this file.
 - **README, package metadata and architecture docs rewritten around what the library actually does.** The repo described itself as an "Office XML Redline Engine" — accurate about one of five capabilities, and containing none of the words anyone searches for. Comparison is now one of four peer sections (render / project / edit / compare), each opening with a **real screenshot** captured from the [NVCA model financing documents](https://nvca.org/model-legal-documents/): a redlined voting agreement showing deletion, insertion, token-level substitution and a paired move in one frame; the model charter rendered to HTML with justification, legal numbering and back-referenced footnotes intact; the markdown projection beside the same document's rendered DOM, with one anchor highlighted in both panes to show they share an addressing system. The redline image is genuine engine output end to end — a round of realistic counsel edits applied through `DocxSession`, compared with `DocxDiff.Compare`, rendered with `RenderTrackedChanges`. Also: a "where it runs" table covering the NuGet / npm / PyPI / CLI surfaces (three CLI tools ship, not two), quick starts trimmed to ≤6 lines each so they can't silently rot, and the OpenXmlPowerTools lineage kept but moved out of the lede. Screenshots also land in `ir_diff_engine.md`, `markdown_projection.md`, `docx_converter.md` and the npm package README (which had no mention of the editor, the session API or the projection). Package metadata is aligned for search across all three registries — `Docxodus.csproj` `Description`/`PackageTags`, `npm/package.json` `description`/`keywords`, `pyproject.toml` `keywords`. New `docs/repo-positioning.md` records the GitHub description and topic list a maintainer still has to apply by hand, the keyword→surface map behind them, and how to regenerate the screenshots.
 
 ### Added
+- **Post-insert table styling — column widths, borders, shading, repeat-header row (issue #315
+  Stage A).** Once a table existed its shape and content were editable but its presentation was
+  frozen at insert time: `columnWidths` lived only on `InsertTable`, borders only as the boolean
+  `borderless`, and shading / repeat-header had no op at all — "shade the header row, border the
+  table, repeat the header, widen column 1" all dead-ended. `DocxSession` gains four ops, all
+  addressed by the same cell-paragraph anchor the row/column CRUD takes and all localized
+  `w:tblPr`/`w:trPr`/`w:tcPr` writes with no model implications (the DocxDiff side already
+  digests these shells): `SetColumnWidths(cellAnchor, widthsTwips)` rewrites `w:tblGrid` +
+  every row's `w:tcW`, sizes the table to the sum (dxa) and pins `w:tblLayout` fixed — exactly
+  what inserting with explicit widths produces; `SetTableBorders(cellAnchor, TableBorderSpec?)`
+  writes `w:tblBorders` for only the spec's scope (`All`/`Outside`/`Inside`; style/size/color,
+  `"none"` writes explicit none edges à la `borderless`), leaving untargeted edges untouched;
+  `SetCellShading(cellAnchor, fill, TableShadingScope Cell|Row)` writes `w:tcPr/w:shd`
+  (`val="clear"`, Word's plain-fill idiom) on the one cell or the whole row (header-row
+  banding), null fill clearing it; `SetRepeatHeaderRow(cellAnchor, bool)` toggles
+  `w:trPr/w:tblHeader` (an emptied `trPr` is dropped). New `EditErrorCode.InvalidTableStyling`
+  rejects a width list not matching the column count (or non-positive widths), a fill that is
+  neither hex RRGGBB nor `auto`, and a negative border size. Rippled through WASM/npm
+  (`setColumnWidths`/`setTableBorders`/`setCellShading`/`setRepeatHeaderRow`, `TableBorderSpec`
+  + scope types) and `docxodus_table` (`set_column_widths`/`set_borders`/`set_shading`/
+  `set_repeat_header_row`) — the stdio host/docx-scalpel never carried the table CRUD surface
+  and stays as-is. Cell merge/unmerge (`w:gridSpan`/`w:vMerge`) is Stage B: it breaks the
+  rectangular-grid v1 assumption and gets its own design note first. Coverage: DT208–DT216.
 - **Letter/roman/parenthesized list formats + whole-range list conversion (issue #313).** The
   list write surface could only produce `bullet` and `decimal`, and only one paragraph per
   call — converting a 3-item list took 3 calls with no guarantee the items landed in the same

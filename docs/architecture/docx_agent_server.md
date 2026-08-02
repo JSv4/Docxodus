@@ -355,7 +355,13 @@ why this is "apply-then-undo" rather than a true no-op dry run.
 
 ### `docxodus_table` — tables
 
-`insert`, `insert_row`, `insert_column`, `delete_row`, `delete_column`, `replace_cell_content`.
+`insert`, `insert_row`, `insert_column`, `delete_row`, `delete_column`, `replace_cell_content`,
+plus the post-insert styling actions (issue #315 Stage A): `set_column_widths` (`widths`, one
+positive twip value per column), `set_borders` (`borderScope` `all`/`outside`/`inside`,
+`borderStyle` — `none` removes the targeted edges — `borderSize`, `borderColor`), `set_shading`
+(`fill` hex/`auto`, omit to clear; `shadingScope` `cell`/`row` — row is header-row banding), and
+`set_repeat_header_row` (`repeat`, default true). All four take the same `"p"`-kind
+cell-paragraph `cellAnchorId` the row/column ops take.
 
 **Anchor-kind trap worth calling out explicitly** (discovered writing the test suite for this
 tool, `MCP060`): `ReplaceCellContent` requires the cell's own `"tc"`-kind anchor

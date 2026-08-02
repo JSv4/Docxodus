@@ -278,6 +278,47 @@ internal static class DocxSessionJson
         };
     }
 
+    /// <summary>Parse a JSON array of integers (e.g. column widths in twips). Non-number entries
+    /// become 0 so the session-side validation rejects them; empty/absent json → empty list.</summary>
+    public static List<int> ParseIntArray(string json)
+    {
+        var result = new List<int>();
+        if (string.IsNullOrEmpty(json)) return result;
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.ValueKind == JsonValueKind.Array)
+            foreach (var item in doc.RootElement.EnumerateArray())
+                result.Add(item.ValueKind == JsonValueKind.Number ? item.GetInt32() : 0);
+        return result;
+    }
+
+    /// <summary>Parse a <see cref="TableBorderSpec"/> ({ scope?, style?, size?, color? });
+    /// empty json → all defaults (thin single border on every edge).</summary>
+    public static TableBorderSpec ParseTableBorderSpec(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return new TableBorderSpec();
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var scope = TryGetString(root, "scope", null)?.ToLowerInvariant() switch
+        {
+            "outside" => TableBorderScope.Outside,
+            "inside" => TableBorderScope.Inside,
+            _ => TableBorderScope.All,
+        };
+        TryGetIntNullable(root, "size", out var size);
+        return new TableBorderSpec
+        {
+            Scope = scope,
+            Style = TryGetString(root, "style", null),
+            Size = size,
+            Color = TryGetString(root, "color", null),
+        };
+    }
+
+    /// <summary>"row" → <see cref="TableShadingScope.Row"/>; anything else → Cell.</summary>
+    public static TableShadingScope ParseTableShadingScope(string? scope) =>
+        string.Equals(scope, "row", System.StringComparison.OrdinalIgnoreCase)
+            ? TableShadingScope.Row : TableShadingScope.Cell;
+
     /// <summary>
     /// Parse a list-format kind token (case-insensitive camelCase of the <see cref="ListFormat"/>
     /// member: "bullet", "decimal", "lowerLetter", "upperRoman", "decimalParenthesis", …; "none"
