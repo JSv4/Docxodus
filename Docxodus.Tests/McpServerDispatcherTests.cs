@@ -606,4 +606,26 @@ public class McpServerDispatcherTests : IDisposable
         Assert.Throws<McpToolException>(() => Dispatcher.Call(_store, "docxodus_edit", J(
             $$"""{"sessionId":{{sessionArg}},"action":"not_a_real_action"}""")));
     }
+
+    // ─── Wire framing ─────────────────────────────────────────────────
+
+    [Fact]
+    public void MCP132_ToolsListResult_IsSingleLineNdjson()
+    {
+        // ToolCatalog's InputSchemaJson entries are pretty-printed C# raw-string literals (real
+        // embedded newlines) for source readability. If Program spliced one in verbatim rather
+        // than re-serializing it, the tools/list response — normally one JSON-RPC message per
+        // line per the MCP stdio transport — would spill across multiple physical lines and break
+        // any strict NDJSON reader (e.g. a client using readline-based framing).
+        var result = Program.BuildToolsListResult();
+
+        Assert.DoesNotContain('\n', result);
+        Assert.DoesNotContain('\r', result);
+
+        using var doc = JsonDocument.Parse(result); // still valid, semantically unchanged JSON
+        var tools = doc.RootElement.GetProperty("tools");
+        Assert.True(tools.GetArrayLength() >= 13);
+        foreach (var tool in tools.EnumerateArray())
+            Assert.Equal(JsonValueKind.Object, tool.GetProperty("inputSchema").ValueKind);
+    }
 }

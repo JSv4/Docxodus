@@ -137,7 +137,7 @@ internal static class Program
         }
     }
 
-    private static string BuildToolsListResult()
+    internal static string BuildToolsListResult()
     {
         var sb = new StringBuilder(4096);
         sb.Append("{\"tools\":[");
@@ -147,7 +147,7 @@ internal static class Program
             var t = ToolCatalog.Tools[i];
             sb.Append("{\"name\":").Append(JsonRpcIo.JsonString(t.Name))
               .Append(",\"description\":").Append(JsonRpcIo.JsonString(t.Description))
-              .Append(",\"inputSchema\":").Append(t.InputSchemaJson)
+              .Append(",\"inputSchema\":").Append(JsonSerializer.Serialize(JsonDocument.Parse(t.InputSchemaJson).RootElement))
               .Append('}');
         }
         sb.Append("]}");
