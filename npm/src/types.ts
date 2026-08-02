@@ -1099,6 +1099,10 @@ export interface DocxodusWasmExports {
     InsertTableColumn: (handle: number, cellAnchor: string, pos: string) => string;
     DeleteTableRow: (handle: number, cellAnchor: string) => string;
     DeleteTableColumn: (handle: number, cellAnchor: string) => string;
+    SetColumnWidths: (handle: number, cellAnchor: string, widthsJson: string) => string;
+    SetTableBorders: (handle: number, cellAnchor: string, specJson: string) => string;
+    SetCellShading: (handle: number, cellAnchor: string, fill: string, scope: string) => string;
+    SetRepeatHeaderRow: (handle: number, cellAnchor: string, repeat: boolean) => string;
     SetHeaderText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     SetFooterText: (handle: number, anchor: string, kind: string, markdown: string) => string;
     InsertPageNumberField: (handle: number, anchor: string, field: string, format: string) => string;
@@ -1219,6 +1223,7 @@ export type EditErrorCode =
   | "invalid_list_level"
   | "invalid_page_numbering"
   | "invalid_paragraph_format"
+  | "invalid_table_styling"
   | "malformed_xml"
   | "disallowed_namespace"
   | "incompatible_element_type"
@@ -1441,6 +1446,28 @@ export interface TableInsertOptions {
    *  whose length != the column count is rejected. Drives unequal layouts like the S-1's
    *  wide-left / narrow-right filing-header row. */
   columnWidths?: number[];
+}
+
+/** Which table edges `DocxSession.setTableBorders` targets: `"outside"` = top/left/bottom/right,
+ * `"inside"` = the inner grid lines (`w:insideH`/`w:insideV`), `"all"` = both. */
+export type TableBorderScope = "all" | "outside" | "inside";
+
+/** Shading granularity for `DocxSession.setCellShading`: the one cell the anchor sits in, or
+ * every cell of its row (header-row banding). */
+export type TableShadingScope = "cell" | "row";
+
+/** Border specification for `DocxSession.setTableBorders`. Written as explicit `w:tblBorders`
+ * edges (overriding style-inherited borders); edges outside `scope` are left untouched. */
+export interface TableBorderSpec {
+  /** Which edges to write. Default `"all"`. */
+  scope?: TableBorderScope;
+  /** Border line style (`w:val`): `"single"`, `"double"`, `"thick"`, `"dotted"`, `"dashed"`, … —
+   * or `"none"` to remove the targeted edges. Default `"single"`. */
+  style?: string;
+  /** Border weight in eighths of a point (`w:sz`). Default 4 (= 0.5pt). */
+  size?: number;
+  /** Border color as a hex RRGGBB triplet without '#', or `"auto"`. Default `"auto"`. */
+  color?: string;
 }
 
 export interface DocxSessionSettings {

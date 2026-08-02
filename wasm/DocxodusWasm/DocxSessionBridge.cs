@@ -192,6 +192,32 @@ public static partial class DocxSessionBridge
     public static string DeleteTableColumn(int h, string cellAnchor) =>
         DocxSessionOps.DeleteTableColumn(h, cellAnchor);
 
+    /// <summary>Retune the column widths of the table containing <paramref name="cellAnchor"/>.
+    /// <paramref name="widthsJson"/> is a JSON array of per-column twip widths (one positive
+    /// value per column, left→right).</summary>
+    [JSExport]
+    public static string SetColumnWidths(int h, string cellAnchor, string widthsJson) =>
+        DocxSessionOps.SetColumnWidths(h, cellAnchor, widthsJson);
+
+    /// <summary>Set the table-level borders of the table containing <paramref name="cellAnchor"/>.
+    /// <paramref name="specJson"/> is a TableBorderSpec object
+    /// ({ scope?: "all"|"outside"|"inside", style?, size?, color? }); "" = thin single all round.</summary>
+    [JSExport]
+    public static string SetTableBorders(int h, string cellAnchor, string specJson) =>
+        DocxSessionOps.SetTableBorders(h, cellAnchor, specJson);
+
+    /// <summary>Shade the cell containing <paramref name="cellAnchor"/> (scope "cell") or its whole
+    /// row (scope "row"). <paramref name="fill"/> is a hex RRGGBB triplet or "auto"; "" clears.</summary>
+    [JSExport]
+    public static string SetCellShading(int h, string cellAnchor, string fill, string scope) =>
+        DocxSessionOps.SetCellShading(h, cellAnchor, fill, scope);
+
+    /// <summary>Mark/unmark the row containing <paramref name="cellAnchor"/> as a repeating
+    /// header row (w:trPr/w:tblHeader).</summary>
+    [JSExport]
+    public static string SetRepeatHeaderRow(int h, string cellAnchor, bool repeat) =>
+        DocxSessionOps.SetRepeatHeaderRow(h, cellAnchor, repeat);
+
     /// <summary>
     /// Set the section's running header story (<paramref name="anchor"/> = any body block in the
     /// section) to <paramref name="markdown"/>. <paramref name="kind"/> is "default" | "first" |

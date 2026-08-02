@@ -626,8 +626,39 @@ internal static class Dispatcher
         "delete_column" => DocxSessionOps.DeleteTableColumn(session.Handle, Str(args, "cellAnchorId")),
         "replace_cell_content" => DocxSessionOps.ReplaceCellContent(
             session.Handle, Str(args, "cellAnchorId"), Str(args, "markdown")),
+        "set_column_widths" => DocxSessionOps.SetColumnWidths(
+            session.Handle, Str(args, "cellAnchorId"), RawArray(args, "widths")),
+        "set_borders" => DocxSessionOps.SetTableBorders(
+            session.Handle, Str(args, "cellAnchorId"), BuildTableBorderSpecJson(args)),
+        "set_shading" => DocxSessionOps.SetCellShading(
+            session.Handle, Str(args, "cellAnchorId"), OptStr(args, "fill") ?? "",
+            OptStr(args, "shadingScope") ?? "cell"),
+        "set_repeat_header_row" => DocxSessionOps.SetRepeatHeaderRow(
+            session.Handle, Str(args, "cellAnchorId"), BoolOpt(args, "repeat", true)),
         _ => throw new McpToolException($"unknown docxodus_table action: {action}"),
     };
+
+    /// <summary>The raw JSON text of a required array argument (passed through to the Ops-layer
+    /// parser so the wire shape lives in one place).</summary>
+    private static string RawArray(JsonElement args, string name)
+    {
+        if (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(name, out var v) || v.ValueKind != JsonValueKind.Array)
+            throw new McpToolException($"missing required array argument \"{name}\"");
+        return v.GetRawText();
+    }
+
+    private static string BuildTableBorderSpecJson(JsonElement args)
+    {
+        var spec = new Dictionary<string, object?>
+        {
+            ["scope"] = OptStr(args, "borderScope"),
+            ["style"] = OptStr(args, "borderStyle"),
+            ["color"] = OptStr(args, "borderColor"),
+        };
+        if (args.ValueKind == JsonValueKind.Object && args.TryGetProperty("borderSize", out var sz) && sz.ValueKind == JsonValueKind.Number)
+            spec["size"] = sz.GetInt32();
+        return JsonSerializer.Serialize(spec);
+    }
 
     // ─── Arg helpers ────────────────────────────────────────────────────
 
