@@ -439,12 +439,17 @@ internal static class Dispatcher
         {
             case "list":
             {
-                var bytes = DocxSessionOps.Save(session.Handle);
-                var accepted = RevisionProcessor.AcceptRevisions(new WmlDocument("session.docx", bytes));
-                var rejected = RevisionProcessor.RejectRevisions(new WmlDocument("session.docx", bytes));
-                var revisionsJson = DocxDiffOps.GetRevisionsJson(rejected.DocumentByteArray, accepted.DocumentByteArray, null);
+                // Markup-native listing (issue #318): read w:ins/w:del/move/format markup
+                // straight off the live session — stable per-revision ids, the markup's
+                // true authors/dates, and none of the ~seconds-long accept-all/reject-all
+                // re-diff the old listing paid on large documents.
+                var revisionsJson = "{\"revisions\":" + DocxSessionOps.ListRevisions(session.Handle) + "}";
                 return FilterRevisions(revisionsJson, OptStr(args, "author"), OptStr(args, "changeType"));
             }
+            case "accept":
+                return DocxSessionOps.AcceptRevision(session.Handle, Str(args, "revisionId"));
+            case "reject":
+                return DocxSessionOps.RejectRevision(session.Handle, Str(args, "revisionId"));
             case "accept_all":
             {
                 // SaveWithAnchorIds (not Save) so the transformed bytes still carry the

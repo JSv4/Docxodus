@@ -1121,6 +1121,9 @@ export interface DocxodusWasmExports {
     UpdateComment: (handle: number, commentAnchor: string, markdown: string) => string;
     RemoveComment: (handle: number, commentAnchor: string) => string;
     ListComments: (handle: number) => string;
+    ListRevisions: (handle: number) => string;
+    AcceptRevision: (handle: number, revisionId: string) => string;
+    RejectRevision: (handle: number, revisionId: string) => string;
     ApplyFormat: (handle: number, anchor: string, spanJson: string, opJson: string) => string;
     ApplyFormatBySubstring: (handle: number, anchor: string, substring: string, opJson: string) => string;
     SetParagraphStyle: (handle: number, anchor: string, styleId: string) => string;
@@ -1225,6 +1228,7 @@ export type EditErrorCode =
   | "annotation_not_found"
   | "empty_annotation_span"
   | "empty_comment_span"
+  | "revision_not_found"
   | "internal_error";
 
 export interface AnchorRef {
@@ -1269,6 +1273,28 @@ export interface CommentListEntry {
   initials?: string;
   date?: string;
   text: string;
+}
+
+/** Revision kind in a markup-native revision listing. A `move` entry is a linked
+ * move pair — both sides resolve together. */
+export type SessionRevisionType = "insert" | "delete" | "move" | "format";
+
+/**
+ * One tracked revision read directly off the live markup, in document order — see
+ * {@link DocxSession.listRevisions}. `id` is stable while the underlying markup exists
+ * (derived from the markup's own `w:id` attributes — resolving OTHER revisions never
+ * renames it) and is what acceptRevision/rejectRevision address. `author`/`date` are
+ * the markup's true `w:author`/`w:date`. `text` is the revision's visible text (deleted
+ * text for deletions, `¶` for a revised paragraph mark, the affected text for format
+ * changes). `anchorId` is the containing block's anchor when addressable.
+ */
+export interface RevisionListEntry {
+  id: string;
+  type: SessionRevisionType;
+  author: string;
+  date?: string;
+  text: string;
+  anchorId?: string;
 }
 
 export interface CharSpan {

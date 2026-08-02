@@ -69,6 +69,7 @@ from .types import (
     NumberFormat,
     ParagraphFormatOp,
     ReplaceOptions,
+    RevisionListEntry,
     SectionInfo,
     TemplatePlaceholder,
     TextMatch,
@@ -1141,6 +1142,32 @@ class DocxSession:
         """The document's native Word comments in comments-part order."""
         result = self._call("list_comments", {})
         return tuple(CommentListEntry._from_wire(c) for c in result)
+
+    # -- Tracked revisions (issue #318) -----------------------------------
+
+    def list_revisions(self) -> tuple[RevisionListEntry, ...]:
+        """Markup-native tracked-revision listing, in document order across body,
+        headers, footers, footnotes, and endnotes. Ids are stable while the underlying
+        markup exists and address ``accept_revision``/``reject_revision``;
+        authors/dates are the markup's own (no accept/reject re-diff)."""
+        result = self._call("list_revisions", {})
+        return tuple(RevisionListEntry._from_wire(r) for r in result)
+
+    def accept_revision(self, revision_id: str) -> EditResult:
+        """Accept ONE revision by the id ``list_revisions`` reported — insertions keep
+        their content, deletions are carried out, a move materializes at its
+        destination, a format change keeps the new properties. Undoable."""
+        return EditResult._from_wire(
+            self._call("accept_revision", {"revisionId": revision_id})
+        )
+
+    def reject_revision(self, revision_id: str) -> EditResult:
+        """Reject ONE revision by id — the inverse of ``accept_revision``: insertions
+        are removed, deleted content is restored, a move stays at its source, a format
+        change restores the stored old properties. Undoable."""
+        return EditResult._from_wire(
+            self._call("reject_revision", {"revisionId": revision_id})
+        )
 
     # -- Tier C: formatting -----------------------------------------------
 

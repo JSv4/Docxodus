@@ -313,16 +313,28 @@ action existed, flipping the mode meant `docxodus_save` → `docxodus_close` →
 (and, without `persistAnchorIds`, losing every anchor id at that boundary); that dance is no
 longer needed for mode switching.
 
-`list` computes the revision set by materializing both sides of the session's *current* state —
-`RevisionProcessor.RejectRevisions` (the "left"/original side) and `.AcceptRevisions` (the
-"right"/revised side) of a Unid-preserving save (`DocxSessionOps.SaveWithAnchorIds`), then
-running them through `DocxDiffOps.GetRevisionsJson` (the same revision-list shape `DocxDiff`
-produces when comparing two documents — reused here because a document's *own* embedded
-`w:ins`/`w:del` markup is exactly an implicit diff between those two materialized sides).
-`author`/`changeType` are display-only filters applied after the fact. `accept_all`/`reject_all`
-transform the whole document via the same two `RevisionProcessor` calls and swap the session's
-underlying handle in place (`SessionStore.Rebind`) — see Known gaps for why there's no
-per-author/per-type accept/reject.
+`list` (issue #318) reads the revision set directly off the live session's markup —
+`DocxSession.ListRevisions` enumerates `w:ins`/`w:del`/`w:moveFrom`/`w:moveTo`, paragraph-mark
+and table-row markers, and the `*PrChange` format-change family across body, headers, footers,
+footnotes, and endnotes, grouping physically contiguous same-kind/same-author markup into one
+entry per user-visible change. Each entry carries a stable `id` (derived from the markup's own
+`w:id` attributes, so resolving other revisions never renames it), `type`
+(`insert`/`delete`/`move`/`format` — a `move` is a linked pair covering both sides), the
+markup's true `author`/`date`, its visible `text`, and the containing block's `anchorId`.
+This replaced the original listing, which re-diffed `RevisionProcessor.RejectRevisions` vs
+`.AcceptRevisions` output through `DocxDiffOps.GetRevisionsJson` — that shape had no stable
+identity to address, substituted engine-default authors/dates for the markup's real ones, and
+cost ~3s on a 49-page document. `author`/`changeType` are display-only filters applied after
+the fact.
+
+`accept`/`reject` resolve ONE revision by `revisionId` as an ordinary undoable session
+mutation (`DocxSession.AcceptRevision`/`RejectRevision` — no whole-document
+`RevisionProcessor` round-trip, no session rebind, anchors stay live), returning the standard
+EditResult envelope with the affected blocks in `modified`/`removed`. An unknown or
+already-resolved id fails with `revision_not_found`. `accept_all`/`reject_all` remain for
+whole-document resolution: they transform via `RevisionProcessor` and swap the session's
+underlying handle in place (`SessionStore.Rebind`), which also covers the exotic families the
+per-revision listing does not enumerate (see Known gaps).
 
 ### `docxodus_mutations` — batch apply or dry-run preview
 
@@ -362,10 +374,12 @@ never claiming a capability it doesn't have:
   not author — `remove` is still the only way to make a comment go away. Existing threading
   metadata in Word-authored documents is preserved on `update` and pruned (never dangled) on
   `remove`.
-- **No selective tracked-change resolution.** `docxodus_track_changes`'s `list` action can filter
-  the *display* by author/changeType, but `accept_all`/`reject_all` are exactly that — whole
-  document. Docxodus's `RevisionProcessor` has no "accept only this author's inserts" primitive
-  to wrap; adding one would be new engine work, not a server-layer gap.
+- **Exotic revision families aren't individually resolvable.** Issue #318 closed the
+  selective-resolution gap for the common families — `docxodus_track_changes` `accept`/`reject`
+  resolve one insert/delete/move/format revision by `revisionId` — but
+  `w:cellIns`/`w:cellDel`/`w:cellMerge`, content-control ins/del ranges, and `w:numPr`
+  numbering-ins markers are not enumerated by `list` and have no per-revision resolution;
+  `accept_all`/`reject_all` (whole-document `RevisionProcessor`) still handle them.
 - **New lists inserted via a bare markdown payload don't get real Word numbering.** A `"- item"`
   block parses to a `kind: "li"` anchor with no `w:numPr` (documented in
   `docx_mutation_api.md`). This server's `docxodus_list`/`docxodus_create` route around it by

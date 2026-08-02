@@ -931,4 +931,77 @@ public class McpServerDispatcherTests : IDisposable
         var r3 = SetMode(sessionId, "accept", "");
         Assert.Equal(JsonValueKind.Null, r3.GetProperty("revisionAuthor").ValueKind);
     }
+
+    // ─── docxodus_track_changes selective accept/reject (issue #318) ────
+
+    [Fact]
+    public void MCP136_TrackChanges_SelectiveAcceptAndRejectByRevisionId()
+    {
+        var sessionId = OpenSession();
+        var sessionArg = JsonSerializer.Serialize(sessionId);
+        var anchor = FirstBodyAnchorId(sessionId, _store);
+
+        // Seed real text directly (the blank fixture's paragraph is empty — a tracked
+        // edit on it would produce only an insertion), THEN record a tracked rewrite.
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"original text"}"""));
+        SetMode(sessionId, "render_inline", "Reviewer A");
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"selective edit"}"""));
+
+        // Markup-native listing: stable ids + the markup's own author.
+        var listed = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        var revisions = listed.GetProperty("revisions").EnumerateArray().ToList();
+        Assert.Equal(2, revisions.Count);
+        var deleteRev = Assert.Single(revisions, r => r.GetProperty("type").GetString() == "delete");
+        var insertRev = Assert.Single(revisions, r => r.GetProperty("type").GetString() == "insert");
+        Assert.Equal("selective edit", insertRev.GetProperty("text").GetString());
+        Assert.Equal("Reviewer A", insertRev.GetProperty("author").GetString());
+        Assert.StartsWith("rev", insertRev.GetProperty("id").GetString());
+
+        // Accept the insertion; the deletion keeps its id and resolves independently.
+        var accepted = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"accept","revisionId":{{insertRev.GetProperty("id").GetRawText()}}}""")));
+        Assert.True(accepted.GetProperty("success").GetBoolean());
+
+        var accepted2 = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"accept","revisionId":{{deleteRev.GetProperty("id").GetRawText()}}}""")));
+        Assert.True(accepted2.GetProperty("success").GetBoolean());
+
+        var after = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"list"}""")));
+        Assert.Equal(0, after.GetProperty("revisions").GetArrayLength());
+
+        var md = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString()!;
+        Assert.Contains("selective edit", md);
+        Assert.DoesNotContain("original text", md);
+
+        // Now record another tracked rewrite and REJECT both halves — the insertion's
+        // text goes away and the deletion's text is restored.
+        Dispatcher.Call(_store, "docxodus_edit", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"replace_text","anchorId":"{{anchor}}","markdown":"should not stick"}"""));
+        foreach (var rev in Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+                $$"""{"sessionId":{{sessionArg}},"action":"list"}""")))
+            .GetProperty("revisions").EnumerateArray())
+        {
+            var rejected = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+                $$"""{"sessionId":{{sessionArg}},"action":"reject","revisionId":{{rev.GetProperty("id").GetRawText()}}}""")));
+            Assert.True(rejected.GetProperty("success").GetBoolean());
+        }
+        var mdAfterReject = Parse(Dispatcher.Call(_store, "docxodus_get_content", J(
+            $$"""{"sessionId":{{sessionArg}},"format":"markdown"}""")))
+            .GetProperty("markdown").GetString()!;
+        Assert.Contains("selective edit", mdAfterReject);
+        Assert.DoesNotContain("should not stick", mdAfterReject);
+
+        // An unknown id surfaces the typed error envelope, not a success.
+        var missing = Parse(Dispatcher.Call(_store, "docxodus_track_changes", J(
+            $$"""{"sessionId":{{sessionArg}},"action":"accept","revisionId":"rev999999"}""")));
+        Assert.False(missing.GetProperty("success").GetBoolean());
+        Assert.Equal("revision_not_found",
+            missing.GetProperty("error").GetProperty("code").GetString());
+    }
 }
