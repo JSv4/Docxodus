@@ -37,6 +37,7 @@ from .enums import (
     ProjectionDepth,
     ProjectionScopes,
     RegexOptions,
+    TrackedChangeMode,
     WhitespaceMode,
 )
 from .types import (
@@ -427,6 +428,20 @@ class DocxSession:
         if not isinstance(html, str):
             raise TypeError(f"session_to_html: expected str, got {type(html).__name__}")
         return html
+
+    def set_tracked_changes(self, mode: TrackedChangeMode) -> None:
+        """Switch how subsequent mutations are recorded (issue #304).
+
+        Session configuration, not a document mutation: not undoable, and
+        already-applied markup is never touched — switching to ``ACCEPT`` does
+        not resolve existing revisions, and switching to ``RENDER_INLINE`` does
+        not retroactively track prior direct edits.
+        """
+        self._call("set_tracked_changes", {"mode": mode.value})
+
+    def set_revision_author(self, author: str | None) -> None:
+        """Author stamped on subsequent tracked-change markup; ``None`` restores the ``"docxodus"`` default."""
+        self._call("set_revision_author", {"author": author})
 
     def undo(self) -> bool:
         """Undo one snapshot. Returns ``True`` if the undo ring had something to pop."""
