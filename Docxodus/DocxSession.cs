@@ -8552,7 +8552,7 @@ public sealed class DocxSession : IDisposable
         {
             var author = _revisionAuthor ?? "docxodus";
             var date = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
-            rPr.Add(new XElement(W.del,
+            WordprocessingMLUtil.InsertRPrChildInOrder(rPr, new XElement(W.del,
                 new XAttribute(W.id, NextRevisionId()),
                 new XAttribute(W.author, author),
                 new XAttribute(W.date, date)));
@@ -8643,7 +8643,8 @@ public sealed class DocxSession : IDisposable
                 // element when one is "missing" would leave that w:val="0" in place and the
                 // toggle would silently do nothing. Normalize: drop the w:val so the bare
                 // element (<w:b/>) means on; add one only when truly absent.
-                if (existing is null) rPr.Add(new XElement(name));
+                if (existing is null)
+                    WordprocessingMLUtil.InsertRPrChildInOrder(rPr, new XElement(name));
                 else existing.Attribute(W.val)?.Remove();
             }
             else existing?.Remove();
@@ -8656,14 +8657,16 @@ public sealed class DocxSession : IDisposable
         if (op.Underline is true)
         {
             rPr.Element(W.u)?.Remove();
-            rPr.Add(new XElement(W.u, new XAttribute(W.val, "single")));
+            WordprocessingMLUtil.InsertRPrChildInOrder(
+                rPr, new XElement(W.u, new XAttribute(W.val, "single")));
         }
         else if (op.Underline is false) rPr.Element(W.u)?.Remove();
 
         if (op.Code is true)
         {
             rPr.Element(W.rStyle)?.Remove();
-            rPr.Add(new XElement(W.rStyle, new XAttribute(W.val, "Code")));
+            WordprocessingMLUtil.InsertRPrChildInOrder(
+                rPr, new XElement(W.rStyle, new XAttribute(W.val, "Code")));
         }
         else if (op.Code is false) rPr.Element(W.rStyle)?.Remove();
 
@@ -8671,14 +8674,16 @@ public sealed class DocxSession : IDisposable
         {
             rPr.Element(W.color)?.Remove();
             if (op.Color.Length > 0)
-                rPr.Add(new XElement(W.color, new XAttribute(W.val, op.Color)));
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.color, new XAttribute(W.val, op.Color)));
         }
 
         if (op.RunStyle is not null)
         {
             rPr.Element(W.rStyle)?.Remove();
             if (op.RunStyle.Length > 0)
-                rPr.Add(new XElement(W.rStyle, new XAttribute(W.val, op.RunStyle)));
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.rStyle, new XAttribute(W.val, op.RunStyle)));
         }
 
         if (op.VertAlign is not null)
@@ -8695,7 +8700,8 @@ public sealed class DocxSession : IDisposable
             {
                 if (v is not ("superscript" or "subscript"))
                     throw new ArgumentException($"invalid vertAlign: {op.VertAlign}");
-                rPr.Add(new XElement(W.vertAlign, new XAttribute(W.val, v)));
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.vertAlign, new XAttribute(W.val, v)));
             }
         }
 
@@ -8709,16 +8715,16 @@ public sealed class DocxSession : IDisposable
             {
                 var halfPts = ((int)System.Math.Round(pts * 2, System.MidpointRounding.AwayFromZero))
                     .ToString(System.Globalization.CultureInfo.InvariantCulture);
-                rPr.Add(new XElement(W.sz, new XAttribute(W.val, halfPts)));
-                rPr.Add(new XElement(W.szCs, new XAttribute(W.val, halfPts)));
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.sz, new XAttribute(W.val, halfPts)));
+                WordprocessingMLUtil.InsertRPrChildInOrder(
+                    rPr, new XElement(W.szCs, new XAttribute(W.val, halfPts)));
             }
         }
 
         if (op.FontFamily is not null)
         {
-            // w:rFonts is the first EG_RPrBase child after an optional w:rStyle, so it must be
-            // placed there (a bare rPr.Add would append after w:sz/w:vertAlign → out of schema
-            // order). "" clears the explicit font so the run inherits the style/default.
+            // "" clears the explicit font so the run inherits the style/default.
             rPr.Element(W.rFonts)?.Remove();
             if (op.FontFamily.Length > 0)
             {
@@ -8726,9 +8732,7 @@ public sealed class DocxSession : IDisposable
                     new XAttribute(W.ascii, op.FontFamily),
                     new XAttribute(W.hAnsi, op.FontFamily),
                     new XAttribute(W.cs, op.FontFamily));
-                var rStyle = rPr.Element(W.rStyle);
-                if (rStyle is not null) rStyle.AddAfterSelf(rFonts);
-                else rPr.AddFirst(rFonts);
+                WordprocessingMLUtil.InsertRPrChildInOrder(rPr, rFonts);
             }
         }
     }
@@ -8749,8 +8753,8 @@ public sealed class DocxSession : IDisposable
         var oldProperties = SnapshotRunPropertiesForRevision(originalRPr);
 
         // rPrChange is the final CT_RPr child. Detach it while ApplyFormatToRun edits
-        // properties (several setters append) and re-append it below. Taking only the
-        // first also prevents malformed duplicate markers from becoming nested/stacked.
+        // properties, then reinsert it once below. Taking only the first also prevents
+        // malformed duplicate markers from becoming nested/stacked.
         var existingChanges = originalRPr?.Elements(W.rPrChange).ToList()
             ?? new List<XElement>();
         foreach (var change in existingChanges) change.Remove();
@@ -8796,19 +8800,13 @@ public sealed class DocxSession : IDisposable
             return;
         }
 
-        // ApplyFormatToRun historically appends several properties. Once rPrChange makes
-        // schema validity externally observable, normalize the changed outer rPr to the
-        // canonical CT_RPr order before placing the revision marker last.
-        var orderedRPr = (XElement)WordprocessingMLUtil.WmlOrderElementsPerStandard(currentRPr);
-        currentRPr.ReplaceNodes(orderedRPr.Nodes());
-
         if (existingChange is not null)
         {
-            currentRPr.Add(existingChange);
+            WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr, existingChange);
             return;
         }
 
-        currentRPr.Add(new XElement(W.rPrChange,
+        WordprocessingMLUtil.InsertRPrChildInOrder(currentRPr, new XElement(W.rPrChange,
             new XAttribute(W.id, NextRevisionId()),
             new XAttribute(W.author, revisionAuthor),
             new XAttribute(W.date, revisionDate),
