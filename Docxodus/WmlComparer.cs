@@ -2270,7 +2270,7 @@ namespace Docxodus
                 cloned.SetAttributeValue(W.abstractNumId, targetId);
                 abstractNumIdMap[fromAbstractNumId.Value] = targetId;
 
-                AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
+                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root, cloned);
             }
 
             // Copy num elements that don't exist in destination
@@ -2307,7 +2307,7 @@ namespace Docxodus
                     var abstractNumIdElement = cloned.Element(W.abstractNumId);
                     if (abstractNumIdElement != null)
                         abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
-                    AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
+                    WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root, cloned);
                     numIdMap[fromNumId.Value] = maxNumId;
                 }
                 else
@@ -2320,7 +2320,7 @@ namespace Docxodus
                         if (abstractNumIdElement != null)
                             abstractNumIdElement.SetAttributeValue(W.val, mappedAbstractNumId);
                     }
-                    AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, cloned);
+                    WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root, cloned);
                 }
             }
 
@@ -2415,7 +2415,7 @@ namespace Docxodus
                     : ++maxAbstractNumId;
                 var clonedAbstract = new XElement(fromAbstract);
                 clonedAbstract.SetAttributeValue(W.abstractNumId, targetId);
-                AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, clonedAbstract);
+                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root, clonedAbstract);
                 cache[fromAbstractId] = targetId;
                 return targetId;
             }
@@ -2494,33 +2494,10 @@ namespace Docxodus
                 var abstractNumIdElement = clonedNum.Element(W.abstractNumId);
                 if (abstractNumIdElement != null)
                     abstractNumIdElement.SetAttributeValue(W.val, targetAbstractId);
-                AddNumberingChildInSchemaOrder(toNumberingXDoc.Root, clonedNum);
+                WordprocessingMLUtil.InsertNumberingChildInOrder(toNumberingXDoc.Root, clonedNum);
             }
 
             return numIdMap;
-        }
-
-        /// <summary>
-        /// Insert a child into <c>w:numbering</c> respecting the schema order
-        /// <c>w:numPicBullet* w:abstractNum* w:num* w:numIdMacAtCleanup?</c>: place it BEFORE the first existing
-        /// child of a higher rank (so a copied <c>w:num</c> lands before a trailing <c>w:numIdMacAtCleanup</c>
-        /// rather than after it — appending blindly produced a Sch_UnexpectedElementContentExpectingComplex).
-        /// </summary>
-        private static void AddNumberingChildInSchemaOrder(XElement numbering, XElement child)
-        {
-            static int Rank(XElement e) => e.Name.LocalName switch
-            {
-                "numPicBullet" => 0,
-                "abstractNum" => 1,
-                "num" => 2,
-                _ => 3,             // numIdMacAtCleanup (and any trailing element) sorts last
-            };
-            int rank = Rank(child);
-            var firstLater = numbering.Elements().FirstOrDefault(e => Rank(e) > rank);
-            if (firstLater != null)
-                firstLater.AddBeforeSelf(child);
-            else
-                numbering.Add(child);
         }
 
         /// <summary>
