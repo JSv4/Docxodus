@@ -403,6 +403,17 @@ internal static class DocxSessionOps
     public static string SetRepeatHeaderRow(int handle, string cellAnchorId, bool repeat) =>
         DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetRepeatHeaderRow(cellAnchorId, repeat));
 
+    public static string SetTableRowOptions(int handle, string cellAnchorId, bool? repeatHeader,
+        bool? allowBreakAcrossPages, int? heightTwips, string? heightRule) =>
+        DocxSessionJson.Serialize(SessionRegistry.Get(handle).SetTableRowOptions(cellAnchorId,
+            new TableRowOptions
+            {
+                RepeatHeader = repeatHeader,
+                AllowBreakAcrossPages = allowBreakAcrossPages,
+                HeightTwips = heightTwips,
+                HeightRule = DocxSessionJson.ParseTableRowHeightRule(heightRule),
+            }));
+
     // ─── Raw escape hatch ───────────────────────────────────────────────
 
     public static string RawGetXml(int handle, string anchorId) =>

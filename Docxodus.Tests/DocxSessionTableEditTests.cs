@@ -268,6 +268,49 @@ public class DocxSessionTableEditTests
     }
 
     [Fact]
+    public void DT214b_SetTableRowOptions_WritesHeightAndPageSplitPolicy()
+    {
+        var (session, cells) = NewTable(2, 2);
+        var on = session.SetTableRowOptions(cells[0], new TableRowOptions
+        {
+            RepeatHeader = true,
+            AllowBreakAcrossPages = false,
+            HeightTwips = 480,
+            HeightRule = TableRowHeightRule.AtLeast,
+        });
+        Assert.True(on.Success, on.Error?.Message);
+
+        var trPr = SingleTable(session).Elements(W + "tr").First().Element(W + "trPr")!;
+        Assert.NotNull(trPr.Element(W + "cantSplit"));
+        Assert.NotNull(trPr.Element(W + "tblHeader"));
+        Assert.Equal("480", (string)trPr.Element(W + "trHeight")!.Attribute(W + "val"));
+        Assert.Equal("atLeast", (string)trPr.Element(W + "trHeight")!.Attribute(W + "hRule"));
+        AssertSchemaValid(session.Save());
+
+        var off = session.SetTableRowOptions(cells[0], new TableRowOptions
+        {
+            AllowBreakAcrossPages = true,
+            HeightTwips = 0,
+        });
+        Assert.True(off.Success, off.Error?.Message);
+        trPr = SingleTable(session).Elements(W + "tr").First().Element(W + "trPr")!;
+        Assert.Null(trPr.Element(W + "cantSplit"));
+        Assert.Null(trPr.Element(W + "trHeight"));
+        Assert.NotNull(trPr.Element(W + "tblHeader"));
+        AssertSchemaValid(session.Save());
+    }
+
+    [Fact]
+    public void DT214c_SetTableRowOptions_NegativeHeightIsRejected()
+    {
+        var (session, cells) = NewTable(1, 1);
+        var result = session.SetTableRowOptions(cells[0],
+            new TableRowOptions { HeightTwips = -1 });
+        Assert.False(result.Success);
+        Assert.Equal(EditErrorCode.InvalidTableStyling, result.Error!.Code);
+    }
+
+    [Fact]
     public void DT215_TableStyling_NonCellAnchor_IsRejected()
     {
         var session = new DocxSession(DocxSessionTests.BuildDS001_SimpleTwoParagraphs());

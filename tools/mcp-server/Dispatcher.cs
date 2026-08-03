@@ -666,6 +666,10 @@ internal static class Dispatcher
             OptStr(args, "shadingScope") ?? "cell"),
         "set_repeat_header_row" => DocxSessionOps.SetRepeatHeaderRow(
             session.Handle, Str(args, "cellAnchorId"), BoolOpt(args, "repeat", true)),
+        "set_row_options" => DocxSessionOps.SetTableRowOptions(
+            session.Handle, Str(args, "cellAnchorId"), OptBool(args, "repeat"),
+            OptBool(args, "allowBreakAcrossPages"), OptInt(args, "heightTwips"),
+            OptStr(args, "heightRule")),
         _ => throw new McpToolException($"unknown docxodus_table action: {action}"),
     };
 
@@ -716,6 +720,10 @@ internal static class Dispatcher
     private static int IntOpt(JsonElement args, string name, int fallback) =>
         args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
             ? v.GetInt32() : fallback;
+
+    private static int? OptInt(JsonElement args, string name) =>
+        args.ValueKind == JsonValueKind.Object && args.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number
+            ? v.GetInt32() : null;
 
     private static bool BoolOpt(JsonElement args, string name, bool fallback) =>
         OptBool(args, name) ?? fallback;

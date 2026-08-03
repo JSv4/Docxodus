@@ -273,6 +273,21 @@ public enum TableBorderScope { All, Outside, Inside }
 /// anchor sits in, or every cell of its row (header-row banding).</summary>
 public enum TableShadingScope { Cell, Row }
 
+/// <summary>Height rule for <see cref="TableRowOptions.HeightTwips"/>. Values map to
+/// <c>w:trHeight/@w:hRule</c>.</summary>
+public enum TableRowHeightRule { Auto, AtLeast, Exact }
+
+/// <summary>Row-level table properties written by <see cref="DocxSession.SetTableRowOptions"/>.
+/// Null values leave the corresponding property untouched. A zero <see cref="HeightTwips"/>
+/// removes any explicit row height.</summary>
+public sealed record TableRowOptions
+{
+    public bool? RepeatHeader { get; init; }
+    public bool? AllowBreakAcrossPages { get; init; }
+    public int? HeightTwips { get; init; }
+    public TableRowHeightRule HeightRule { get; init; } = TableRowHeightRule.AtLeast;
+}
+
 /// <summary>Border specification for <see cref="DocxSession.SetTableBorders"/>. Written as
 /// explicit <c>w:tblBorders</c> edges, so it overrides any style-inherited borders; edges
 /// outside <see cref="Scope"/> are left untouched.</summary>
@@ -6219,10 +6234,11 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>
-    /// Mark a comment resolved or reopened by setting <c>w15:done</c>. A flat comment is upgraded
-    /// in place: its last paragraph receives a deterministic <c>w14:paraId</c>, and
-    /// <c>commentsExtended.xml</c>/<c>commentsIds.xml</c> are find-or-created. Existing reply
-    /// parentage is preserved. The mutation is fully undoable, including first-time part creation.
+    /// Mark a comment and its reply subtree resolved or reopened by setting <c>w15:done</c>. A flat
+    /// comment is upgraded in place: its last paragraph receives a deterministic
+    /// <c>w14:paraId</c>, and <c>commentsExtended.xml</c>/<c>commentsIds.xml</c> are
+    /// find-or-created. Existing reply parentage is preserved. The mutation is fully undoable,
+    /// including first-time part creation.
     /// </summary>
     public EditResult SetCommentResolved(string commentAnchorId, bool resolved)
     {
@@ -6246,12 +6262,48 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            Internal.CommentOps.EnsureThreadingMetadata(main, comment, resolved: resolved);
+            var rootParaId = Internal.CommentOps.EnsureThreadingMetadata(main, comment, resolved: resolved);
+
+            // Word treats resolution as a thread/subtree state. Walk paraIdParent edges so
+            // resolving a root also marks every reply, while resolving a nested reply affects
+            // only that reply and its descendants.
+            var exPart = main.WordprocessingCommentsExPart!;
+            var exEntries = exPart.GetXDocument().Root!
+                .Elements(Internal.CommentOps.W15 + "commentEx").ToList();
+            var affectedParaIds = new HashSet<string>(StringComparer.Ordinal) { rootParaId };
+            bool expanded;
+            do
+            {
+                expanded = false;
+                foreach (var entry in exEntries)
+                {
+                    var paraId = (string?)entry.Attribute(Internal.CommentOps.W15 + "paraId");
+                    var parentParaId = (string?)entry.Attribute(Internal.CommentOps.W15 + "paraIdParent");
+                    if (paraId is not null && parentParaId is not null
+                        && affectedParaIds.Contains(parentParaId) && affectedParaIds.Add(paraId))
+                        expanded = true;
+                }
+            } while (expanded);
+
+            foreach (var entry in exEntries.Where(e =>
+                         affectedParaIds.Contains((string?)e.Attribute(Internal.CommentOps.W15 + "paraId") ?? "")))
+                entry.SetAttributeValue(Internal.CommentOps.W15 + "done", resolved ? "1" : "0");
+            exPart.PutXDocument();
+
             InvalidateProjectionCache();
+            var modified = new List<Anchor>();
+            foreach (var affectedComment in main.WordprocessingCommentsPart.GetXDocument().Root!
+                         .Elements(W.comment))
+            {
+                var paraId = (string?)affectedComment.Elements(W.p).LastOrDefault()?.Attribute(W14.paraId);
+                var unid = (string?)affectedComment.Attribute(PtOpenXml.Unid);
+                if (paraId is not null && unid is not null && affectedParaIds.Contains(paraId))
+                    modified.Add(new Anchor($"cmt:cmt:{unid}", "cmt", "cmt", unid));
+            }
             return new EditResult
             {
                 Success = true,
-                Modified = new[] { target.Anchor },
+                Modified = modified.Count == 0 ? new[] { target.Anchor } : modified,
                 Patch = PatchFor(target),
             };
         }
@@ -7020,27 +7072,77 @@ public sealed class DocxSession : IDisposable
     /// it elsewhere is legal but ignored by renderers.
     /// </summary>
     public EditResult SetRepeatHeaderRow(string cellAnchorId, bool repeat)
+        => SetTableRowOptions(cellAnchorId, new TableRowOptions { RepeatHeader = repeat });
+
+    /// <summary>
+    /// Set row-level layout properties for the row containing <paramref name="cellAnchorId"/>:
+    /// repeat-header (<c>w:tblHeader</c>), page-split policy (<c>w:cantSplit</c>), and explicit
+    /// height (<c>w:trHeight</c>). Null properties are left unchanged; height zero clears it.
+    /// </summary>
+    public EditResult SetTableRowOptions(string cellAnchorId, TableRowOptions? options = null)
     {
         if (ResolveCell(cellAnchorId, out _, out _, out var tr, out _, out _, out var target) is { } err)
             return err;
+
+        var opts = options ?? new TableRowOptions();
+        if (opts.HeightTwips is < 0)
+            return EditResult.Fail(EditErrorCode.InvalidTableStyling,
+                "row height in twips must be >= 0", cellAnchorId);
 
         _history.RecordPreOp(TakeSnapshot());
         try
         {
             var trPr = tr!.Element(W.trPr);
-            if (repeat)
+
+            if (opts.RepeatHeader is { } repeat)
             {
-                if (trPr is null) { trPr = new XElement(W.trPr); tr.AddFirst(trPr); }
-                SetChildInOrder(trPr, new XElement(W.tblHeader), TrPrChildOrder);
+                if (repeat)
+                {
+                    if (trPr is null) { trPr = new XElement(W.trPr); tr.AddFirst(trPr); }
+                    SetChildInOrder(trPr, new XElement(W.tblHeader), TrPrChildOrder);
+                }
+                else
+                {
+                    trPr?.Elements(W.tblHeader).Remove();
+                }
             }
-            else if (trPr is not null)
+
+            if (opts.AllowBreakAcrossPages is { } allowBreak)
             {
-                trPr.Elements(W.tblHeader).Remove();
-                // An emptied trPr is dropped entirely. Only element children matter: CT_TrPr has
-                // no schema attributes, and the in-memory tree may carry pt bookkeeping attributes
-                // (Unid) that Save() strips anyway.
-                if (!trPr.HasElements) trPr.Remove();
+                if (allowBreak)
+                    trPr?.Elements(W.cantSplit).Remove();
+                else
+                {
+                    if (trPr is null) { trPr = new XElement(W.trPr); tr.AddFirst(trPr); }
+                    SetChildInOrder(trPr, new XElement(W.cantSplit), TrPrChildOrder);
+                }
             }
+
+            if (opts.HeightTwips is { } height)
+            {
+                if (height == 0)
+                    trPr?.Elements(W.trHeight).Remove();
+                else
+                {
+                    if (trPr is null) { trPr = new XElement(W.trPr); tr.AddFirst(trPr); }
+                    var rule = opts.HeightRule switch
+                    {
+                        TableRowHeightRule.Auto => "auto",
+                        TableRowHeightRule.Exact => "exact",
+                        _ => "atLeast",
+                    };
+                    SetChildInOrder(trPr,
+                        new XElement(W.trHeight,
+                            new XAttribute(W.val, height),
+                            new XAttribute(W.hRule, rule)),
+                        TrPrChildOrder);
+                }
+            }
+
+            // An emptied trPr is dropped entirely. Only element children matter: CT_TrPr has
+            // no schema attributes, and the in-memory tree may carry pt bookkeeping attributes
+            // (Unid) that Save() strips anyway.
+            if (trPr is not null && !trPr.HasElements) trPr.Remove();
 
             return TableStyleResult(target!);
         }
@@ -7160,15 +7262,30 @@ public sealed class DocxSession : IDisposable
         var target = FindAnchor(anchorId);
         if (target is null)
             return EditResult.Fail(EditErrorCode.AnchorNotFound, "anchor not found", anchorId);
-        if (target.Anchor.Kind != "li")
-            return EditResult.Fail(EditErrorCode.AnchorWrongKind, "RemoveListMembership requires list-item anchor", anchorId);
+        if (target.Anchor.Kind is not ("p" or "h" or "li"))
+            return EditResult.Fail(EditErrorCode.AnchorWrongKind,
+                "RemoveListMembership requires a paragraph, heading, or list-item anchor", anchorId);
         var element = target.Resolve(_doc!);
         if (element is null) return EditResult.Fail(EditErrorCode.AnchorNotFound, "element null", anchorId);
 
+        var pPr = element.Element(W.pPr);
+        var directNumPr = pPr?.Element(W.numPr);
+        // Removing a direct numPr can expose numbering inherited from the paragraph style.
+        // Materialize Word's numId=0 sentinel in that case so the explicit removal wins over
+        // the style chain. This also lets callers create an unnumbered heading in documents
+        // whose Heading styles carry legal-outline numbering.
+        bool needsStyleOverride = ResolveStyleNumbering(element).numId is not null;
+
         _history.RecordPreOp(TakeSnapshot());
-        element.Element(W.pPr)?.Element(W.numPr)?.Remove();
+        directNumPr?.Remove();
+        if (needsStyleOverride)
+        {
+            if (pPr is null) { pPr = new XElement(W.pPr); element.AddFirst(pPr); }
+            SetPPrChildInOrder(pPr, new XElement(W.numPr,
+                new XElement(W.ilvl, new XAttribute(W.val, 0)),
+                new XElement(W.numId, new XAttribute(W.val, 0))));
+        }
         InvalidateProjectionCache();
-        var fresh = AnchorIndex();
         var updated = AnchorForUnid(target.Unid, target.PartUri) ?? target.Anchor;
         return new EditResult
         {
@@ -8613,6 +8730,12 @@ public sealed class DocxSession : IDisposable
                 {
                     int level = (int)block.Kind - (int)Internal.ParserBlockKind.Heading1 + 1;
                     pPr.Add(new XElement(W.pStyle, new XAttribute(W.val, $"Heading{level}")));
+                    // A document may attach legal-outline numbering to its Heading style.
+                    // Markdown headings are explicit unnumbered blocks; numId=0 prevents the
+                    // inherited prefix from unexpectedly changing the inserted text.
+                    pPr.Add(new XElement(W.numPr,
+                        new XElement(W.ilvl, new XAttribute(W.val, 0)),
+                        new XElement(W.numId, new XAttribute(W.val, 0))));
                     break;
                 }
             case Internal.ParserBlockKind.Quote:
@@ -8661,7 +8784,8 @@ public sealed class DocxSession : IDisposable
                 || styleId.Equals("Title", StringComparison.OrdinalIgnoreCase)
                 || styleId.Equals("Subtitle", StringComparison.OrdinalIgnoreCase)))
             return "h";
-        if (pPr?.Element(W.numPr) is not null) return "li";
+        var directNumId = (int?)pPr?.Element(W.numPr)?.Element(W.numId)?.Attribute(W.val);
+        if (directNumId is not null && directNumId != 0) return "li";
         return "p";
     }
 
