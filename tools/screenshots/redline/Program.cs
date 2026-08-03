@@ -20,10 +20,23 @@ internal static class Program
     private const string Series = "“Series [___] Preferred Stock” means";
     private const string Shares = "“Shares” shall mean and include";
 
-    private static readonly string[] ExpectedDefinitionMarkers =
+    private static readonly (string Marker, string Revision)[] ExpectedDefinitionMarkers =
     {
-        "(a)", "(b)", "(c)", "(d)", "(e)", "(f)", "(g)", "(g)", "(h)",
-        "(i)", "(j)", "(k)", "(l)", "(m)", "(n)", "(o)", "(p)",
+        ("(a)", "inserted"),
+        ("(a)", "deleted"), ("(b)", "inserted"),
+        ("(b)", "deleted"), ("(c)", "inserted"),
+        ("(c)", "deleted"), ("(d)", "inserted"),
+        ("(d)", "deleted"), ("(e)", "inserted"),
+        ("(e)", "deleted"), ("(f)", "inserted"),
+        ("(f)", "deleted"),
+        ("(g)", "unchanged"), ("(h)", "unchanged"),
+        ("(i)", "unchanged"), ("(j)", "unchanged"),
+        ("(k)", "inserted"),
+        ("(k)", "deleted"), ("(l)", "inserted"),
+        ("(l)", "deleted"), ("(m)", "inserted"),
+        ("(m)", "deleted"), ("(n)", "inserted"),
+        ("(n)", "deleted"), ("(o)", "inserted"),
+        ("(o)", "deleted"),
     };
 
     private static int Main(string[] args)
@@ -66,7 +79,8 @@ internal static class Program
         Console.WriteLine($"modified: {modifiedPath}");
         Console.WriteLine($"redline:  {redlinePath}");
         Console.WriteLine($"html:     {htmlPath}");
-        Console.WriteLine($"markers:  {string.Join(", ", ExpectedDefinitionMarkers)}");
+        Console.WriteLine(
+            $"markers:  {string.Join(", ", ExpectedDefinitionMarkers.Select(m => $"{m.Marker}:{m.Revision}"))}");
         return 0;
     }
 
@@ -173,8 +187,14 @@ internal static class Program
             .Where(element => !element
                 .Descendants(xhtml + "span")
                 .Any(descendant => (string?)descendant.Attribute("data-list-marker") == "true"))
-            .Select(element => element.Value)
-            .Where(value => markerPattern.IsMatch(value))
+            .Where(element => markerPattern.IsMatch(element.Value))
+            .Select(element => (
+                Marker: element.Value,
+                Revision: element.Ancestors(xhtml + "del").Any()
+                    ? "deleted"
+                    : element.Ancestors(xhtml + "ins").Any()
+                        ? "inserted"
+                        : "unchanged"))
             .Take(ExpectedDefinitionMarkers.Length)
             .ToArray();
 
@@ -182,8 +202,8 @@ internal static class Program
         {
             throw new InvalidOperationException(
                 "Tracked-change list numbering regressed. " +
-                $"Expected [{string.Join(", ", ExpectedDefinitionMarkers)}], " +
-                $"got [{string.Join(", ", actual)}].");
+                $"Expected [{string.Join(", ", ExpectedDefinitionMarkers.Select(m => $"{m.Marker}:{m.Revision}"))}], " +
+                $"got [{string.Join(", ", actual.Select(m => $"{m.Marker}:{m.Revision}"))}].");
         }
     }
 

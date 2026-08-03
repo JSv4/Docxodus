@@ -165,7 +165,7 @@ When a continuation pattern is detected, the converter uses level 0's properties
 
 **Status:** Fixed (August 2026)
 **Discovered:** 2026-08-02 (the README's NVCA voting-agreement marquee redline)
-**Test:** `Docxodus.Tests/TrackedChangesNumberingTests.cs` (TCN001–TCN005)
+**Test:** `Docxodus.Tests/TrackedChangesNumberingTests.cs` (TCN001–TCN006)
 
 #### The Problem
 
@@ -230,6 +230,14 @@ a list item carries an inserted pilcrow, that can mean two very different things
 unchanged paragraph after every comparer-inserted paragraph as if its number were newly
 inserted.
 
+A comparison has one additional fact that an arbitrary tracked-changes document does not:
+the resolved marker on both the original and revised paragraph. `DocxDiff` now preserves a
+changed original marker in native `w:numPr/w:numberingChange[@w:original]` metadata. The HTML
+tracked-changes renderer consumes it as a deleted old marker followed by an inserted current
+marker, so a cascade such as `(a)` → `(b)` is visible instead of silently displaying only the
+final `(b)`. For a wholly deleted or moved-from list paragraph, the same metadata keeps the
+source-side marker visible rather than showing a counter value recomputed in the merged redline.
+
 #### Relevant Code
 
 - `ListItemRetriever.InitializeListItemRetrieverForStory` — the counting loop;
@@ -238,7 +246,9 @@ inserted.
   start-override consumption, continuation tracking).
 - `FormattingAssembler.NormalizeListItemsTransform` — the previous-paragraph-ins
   heuristic now requires the predecessor to carry pre-existing content
-  (`IsWhollyInsertedParagraph`).
+  (`IsWhollyInsertedParagraph`), and renders `w:numberingChange` as an old/new marker pair.
+- `IrMarkupRenderer.StampResolvedNumberingChange` — compares the IR reader's already-resolved
+  left/right markers and emits `w:numberingChange` when they differ.
 
 The behavior is unconditional (no setting): the default HTML render path accepts
 revisions before numbering runs, so only tracked-changes renders (and live

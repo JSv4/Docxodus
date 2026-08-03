@@ -21,13 +21,14 @@ node tools/screenshots/redline/capture.mjs \
   /tmp/docxodus-redline-screenshot/redline.html docs/images/redline.png
 ```
 
-The generator fails unless the rendered definition markers are exactly:
+The generator fails unless the rendered definition markers and their revision states are exactly:
 
 ```text
-(a), (b), (c), (d), (e), (f), (g), (g), (h), (i), (j), (k), (l), (m), (n), (o), (p)
+(a)+, (a)-/(b)+, (b)-/(c)+, (c)-/(d)+, (d)-/(e)+, (e)-/(f)+,
+(f)-, (g), (h), (i), (j), (k)+, (k)-/(l)+, (l)-/(m)+,
+(m)-/(n)+, (n)-/(o)+, (o)-
 ```
 
-The struck/live `(g)` duplicate proves that the deleted paragraph does not consume a final-document
-number. The inserted `(k)` and following `(l)`–`(o)` prove that inserted paragraphs do consume a
-number and cascade the remaining live items. The final struck `(p)` is the source of the clause moved
-to live `(a)`.
+`+` means inserted and `-` means deleted. The paired markers prove the cascade itself is visible:
+moving the former `(o)` definition to new `(a)` shifts `(a)`–`(e)` to `(b)`–`(f)`, deleting former
+`(f)` restores `(g)` onward, and inserting new `(k)` shifts former `(k)`–`(n)` to `(l)`–`(o)`.

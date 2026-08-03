@@ -33,8 +33,10 @@ try {
     .locator('h1, h2, h3, h4, h5, h6')
     .filter({ hasText: 'Voting Provisions Regarding the Board' })
     .first();
-  await section.evaluate(element => element.scrollIntoView({ block: 'start' }));
-  await page.evaluate(() => window.scrollBy(0, -8));
+  await section.evaluate(element => {
+    element.style.paddingTop = '8px';
+    element.scrollIntoView({ block: 'start' });
+  });
   await page.screenshot({ path: outputPath });
   await context.close();
 } finally {

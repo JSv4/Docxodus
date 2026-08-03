@@ -18,14 +18,15 @@ Four families of change appear in one frame, all recovered structurally:
 
 | In the screenshot | Markup emitted |
 |---|---|
-| `(g)` "Qualified Key Holder" struck in red | `w:del` |
+| `(f)` "Qualified Key Holder" struck in red | `w:del` |
 | The "Sanctions Authority" definition underlined in green | `w:ins` |
+| Cascaded labels such as struck `(a)` followed by inserted `(b)` | `w:numPr/w:numberingChange` rendered as a deleted/inserted marker pair |
 | `Series A` for a blank, `means` for `shall mean and include` | `w:ins`/`w:del` at token granularity inside an otherwise Equal block |
 | The interpretation clause struck at the bottom in purple, re-inserted at the top | `w:moveFrom`/`w:moveTo`, paired by `w:name` and surfaced as one `MoveGroupId` |
 
-Note the list renumbering `(k)`/`(l)`/`(o)`: the letters move because the surrounding items changed,
-and the diff attributes that to the structural edit rather than reporting every subsequent
-definition as rewritten.
+Note the paired list labels: the old letter is struck and the new letter is inserted wherever a
+structural edit shifts the automatic counter. The paragraph text remains unchanged; only its
+resolved numbering marker is redlined.
 
 It is a sibling to `WmlComparer` in the comparison family. The differences that motivate it:
 

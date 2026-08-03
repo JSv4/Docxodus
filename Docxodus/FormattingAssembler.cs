@@ -434,6 +434,7 @@ namespace Docxodus
                             new XElement(W.t,
                                 new XAttribute(XNamespace.Xml + "space", "preserve"),
                                 li));
+                        XElement previousListItemRun = null;
 
                         AdjustFontAttributes(wDoc, listItemRun, null, listItemRunProps, settings);
 
@@ -611,6 +612,51 @@ namespace Docxodus
                                 isDeleted = true;
                         }
 
+                        // w:numberingChange carries the label Word displayed before an automatic-list
+                        // cascade (for example, an inserted item changing this paragraph from "(a)" to
+                        // "(b)"). The final label alone is not an adequate redline: it makes every shifted
+                        // paragraph look unchanged. Render the original marker as deleted and the current
+                        // marker as inserted. A wholly deleted/moved-from paragraph has no live marker of its
+                        // own, so use the recorded original in place of the counter value recomputed against
+                        // the merged redline document.
+                        var numberingChange = element
+                            .Elements(W.pPr)
+                            .Elements(W.numPr)
+                            .Elements(W.numberingChange)
+                            .FirstOrDefault();
+                        var originalMarker = (string)numberingChange?.Attribute(W.original);
+                        bool hasVisibleNumberingChange =
+                            !string.IsNullOrEmpty(originalMarker) &&
+                            !string.Equals(originalMarker, li, StringComparison.Ordinal);
+
+                        if (isDeleted && !string.IsNullOrEmpty(originalMarker))
+                        {
+                            listItemRun = CloneListItemRunWithMarker(listItemRun, originalMarker);
+                        }
+                        else if (!isInserted && hasVisibleNumberingChange)
+                        {
+                            var highestId = wDoc
+                                .MainDocumentPart
+                                .GetXDocument()
+                                .Descendants()
+                                .Attributes(W.id)
+                                .Select(id => int.TryParse((string)id, out var parsed) ? parsed : 0)
+                                .DefaultIfEmpty(0)
+                                .Max();
+
+                            var originalRun = CloneListItemRunWithMarker(listItemRun, originalMarker);
+                            previousListItemRun = new XElement(W.del,
+                                new XAttribute(W.id, highestId + 1),
+                                numberingChange.Attribute(W.author),
+                                numberingChange.Attribute(W.date),
+                                (XElement)TransformToDeleted(originalRun));
+                            listItemRun = new XElement(W.ins,
+                                new XAttribute(W.id, highestId + 2),
+                                numberingChange.Attribute(W.author),
+                                numberingChange.Attribute(W.date),
+                                listItemRun);
+                        }
+
                         if (isDeleted)
                         {
                             // convert listItemRun and tabRun to their deleted equivalents
@@ -680,6 +726,7 @@ namespace Docxodus
                             new XAttribute(PtOpenXml.AbstractNumId, abstractNumId),
                             listItemHtmlAttributes,
                             newParaProps,
+                            previousListItemRun,
                             listItemRun,
                             tabRun,
                             element.Elements().Where(e => e.Name != W.pPr).Select(n => NormalizeListItemsTransform(fai, wDoc, n, settings)));
@@ -723,6 +770,15 @@ namespace Docxodus
                     e.Name != W.moveFromRangeStart &&
                     e.Name != W.moveFromRangeEnd)
                 .All(e => e.Name == W.ins || e.Name == W.moveTo);
+        }
+
+        private static XElement CloneListItemRunWithMarker(XElement listItemRun, string marker)
+        {
+            var clone = new XElement(listItemRun);
+            var text = clone.Descendants(W.t).FirstOrDefault();
+            if (text != null)
+                text.Value = marker;
+            return clone;
         }
 
         private static object TransformToDeleted(XNode node)
