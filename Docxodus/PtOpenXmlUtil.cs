@@ -1415,7 +1415,23 @@ listSeparator
             { W.eastAsianLayout, 440 },
             { W.specVanish, 450 },
             { W.oMath, 460 },
+            { W.rPrChange, 470 },
         };
+
+        /// <summary>
+        /// Insert <paramref name="child"/> into <paramref name="rPr"/> at its CT_RPr schema
+        /// slot, without reordering existing or extension children.
+        /// </summary>
+        internal static void InsertRPrChildInOrder(XElement rPr, XElement child)
+        {
+            var rank = Order_rPr[child.Name];
+            var firstLater = rPr.Elements().FirstOrDefault(e =>
+                Order_rPr.TryGetValue(e.Name, out var laterRank) && laterRank > rank);
+            if (firstLater == null)
+                rPr.Add(child);
+            else
+                firstLater.AddBeforeSelf(child);
+        }
 
         private static Dictionary<XName, int> Order_tblPr = new Dictionary<XName, int>
         {
