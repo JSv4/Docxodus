@@ -10,9 +10,11 @@ The IR diff engine is a structure-aware DOCX comparison engine built on Docxodus
 
 ![A redlined venture financing agreement](../images/redline.png)
 
-The [NVCA model voting agreement](https://nvca.org/model-legal-documents/) against a copy edited
-through `DocxSession`, compared with `DocxDiff.Compare` and rendered by `WmlToHtmlConverter` with
-`RenderTrackedChanges: true`. Four families of change in one frame, all recovered structurally:
+The [NVCA model voting agreement](https://nvca.org/model-legal-documents/) against a reproducibly
+edited copy, compared with `DocxDiff.Compare` and rendered by `WmlToHtmlConverter` with
+`RenderTrackedChanges: true`. The [screenshot fixture](../../tools/screenshots/redline/README.md)
+uses `DocxSession` for surgical text edits and Open XML block edits for the move/delete/insert.
+Four families of change appear in one frame, all recovered structurally:
 
 | In the screenshot | Markup emitted |
 |---|---|

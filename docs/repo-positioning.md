@@ -134,11 +134,13 @@ The images in `docs/images/` are real converter and diff output, captured headle
 1. Fetch a real source document (the NVCA model charter and voting agreement are public).
 2. Render it with `WmlToHtmlConverter` — flow mode for `render.png`/`footnotes.png`, and with
    `StampAnchors` for the projection figure.
-3. For `redline.png`: apply a round of realistic edits through `DocxSession` (fill a blank, tighten
-   wording, insert a definition, move a clause, delete a clause), then `DocxDiff.Compare` the
-   original against the edited copy and render the result with `RenderTrackedChanges: true`.
-4. Screenshot the resulting HTML with Playwright at `deviceScaleFactor: 2`, then downscale to ~0.7
-   for file size.
+3. For `redline.png`, use the deterministic
+   [`tools/screenshots/redline`](../tools/screenshots/redline/README.md) fixture. It applies the
+   realistic edit round (fill a blank, tighten wording, insert a definition, move a clause, delete
+   a clause), runs `DocxDiff.Compare`, renders with `RenderTrackedChanges: true`, and refuses to
+   capture unless the expected cascaded marker sequence is present.
+4. The capture script uses the historical 1324×741 CSS viewport at `deviceScaleFactor: 1.4`,
+   producing the checked-in 1854×1037 PNG directly.
 
 The editor screenshots come from `npm/examples/editor.html` — see
 [`editor_ui_surface.md`](architecture/editor_ui_surface.md).
