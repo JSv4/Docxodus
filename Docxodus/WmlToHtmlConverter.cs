@@ -5212,10 +5212,11 @@ namespace Docxodus
             // Analyze initial runs to see whether we have a tab, in which case we will render
             // a span with a defined width and ignore the tab rather than rendering the text
             // preceding the tab and the tab as a span with a computed width.
-            var firstTabRun = paragraph
-                .Elements(W.r)
+            var paragraphContent = paragraph.Elements().Where(element => element.Name != W.pPr).ToList();
+            var firstTabRun = paragraphContent
+                .Where(element => element.Name == W.r)
                 .FirstOrDefault(run => run.Elements(W.tab).Any());
-            // EVERY run before the tab, not just the width-annotated ones. PtOpenXml:TabWidth is
+            // EVERY paragraph child before the tab, not just width-annotated runs. PtOpenXml:TabWidth is
             // applied by CalculateSpanWidthForTabs, which walks the MAIN document part only, so
             // filtering on it here dropped header/footer content outright: such a run is absent from
             // this list AND from elementsSucceedingTab (which starts after the tab), so it rendered
@@ -5224,7 +5225,7 @@ namespace Docxodus
             // sums widths over the annotated children only, and an unannotated run simply
             // contributes zero width while keeping its text.
             var elementsPrecedingTab = firstTabRun != null
-                ? paragraph.Elements(W.r).TakeWhile(e => e != firstTabRun).ToList()
+                ? paragraphContent.TakeWhile(e => e != firstTabRun).ToList()
                 : Enumerable.Empty<XElement>().ToList();
 
             // TODO: Revisit
