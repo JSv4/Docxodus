@@ -713,15 +713,16 @@ namespace Docxodus
             return new PmlDocument((Document == null) ? null : Document.FileName, DocMemoryStream);
         }
 
-        // Disposes the live package and normalizes the raw zip's Unix permission bits (issue #302)
-        // before any GetModified*Document() copies DocMemoryStream's bytes into the returned
-        // wrapper. Safe to mutate DocMemoryStream in place here: DocPackage is already gone, so
-        // nothing else in this object still depends on the stream's physical zip layout.
+        // Disposes the live package and applies the shared output ZIP policy (compression from
+        // issue #331 and Unix permissions from issue #302) before any GetModified*Document()
+        // copies DocMemoryStream's bytes into the returned wrapper. Safe to mutate the stream in
+        // place here: DocPackage is already gone, so nothing else in this object still depends on
+        // its physical ZIP layout.
         private void FinalizePackage()
         {
             ((IDisposable)DocPackage)?.Dispose();
             DocPackage = null;
-            ZipUnixPermissionFixer.FixInPlace(DocMemoryStream);
+            ZipPackageOutputNormalizer.NormalizeInPlace(DocMemoryStream);
         }
 
         public void Close()

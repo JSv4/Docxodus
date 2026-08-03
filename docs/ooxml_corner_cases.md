@@ -9,7 +9,9 @@ This document tracks edge cases and quirks in Open XML document processing where
    - [List Numbering under Tracked Changes](#list-numbering-under-tracked-changes-deleted-paragraphs-dont-consume-numbers)
 2. [Footnotes](#footnotes)
    - [Footnote Count Discrepancy in Legal Templates](#footnote-count-discrepancy-in-legal-templates)
-3. [Contributing](#contributing)
+3. [Package Output](#package-output)
+   - [Misleading Deflate Hints Cause Compression Loss](#misleading-deflate-hints-cause-compression-loss)
+4. [Contributing](#contributing)
 
 ---
 
@@ -995,6 +997,72 @@ lands in the section that carries the reference rather than merely the trailing 
 `w:evenAndOddHeaders`) and `PHF003` (first stories follow `w:titlePg`, pinned so the two rules
 cannot drift apart); `npm/tests/editor-headerfooter.spec.ts` — the end-to-end assertion over the
 saved package.
+
+---
+
+## Package Output
+
+### Misleading Deflate Hints Cause Compression Loss
+
+**Status:** Fixed (August 2026)<br>
+**Issue:** #331<br>
+**Test:** `Docxodus.Tests/PackageCompressionTests.cs` (PKG331–PKG334)
+
+#### The problem
+
+Word-authored OPC packages commonly set bits 1–2 of each ZIP entry's general-purpose flag to the
+"superfast" deflate hint, even when the existing compressed bytes have a high compression ratio.
+That hint is not evidence of how efficiently the current bytes were actually compressed.
+
+.NET 10's `ZipArchive` update-mode constructor maps those bits back to a compression policy for a
+future rewrite: normal → `Optimal`, maximum → `SmallestSize`, and both fast/superfast → `Fastest`.
+`System.IO.Packaging` preserves unchanged entries efficiently, but an XML part opened for writing
+inherits the source entry's policy. A normal Open XML save can therefore keep every unchanged
+binary part intact while recompressing changed XML with `Fastest`.
+
+On `HC031-Complicated-Document.docx`, a representative 25-part fixture, the pre-fix session save
+showed the characteristic disproportion:
+
+| Scope | Before save | Pre-fix output | Uncompressed change |
+|---|---:|---:|---:|
+| `word/document.xml` compressed bytes | 19,290 | 24,219 | +742 |
+| Whole package bytes | 42,336 | 51,491 | about +800 total |
+
+The package grew by 9 KB even though the actual XML grew by less than 1 KB. Recompressing the exact
+same output payloads with an explicit policy produced 37,101 bytes at `Optimal` and 36,724 bytes at
+`SmallestSize`, isolating compression selection as the cause.
+
+#### Output policy
+
+`ZipPackageOutputNormalizer` runs only after the owning `Package`/`OpenXmlPackage` has finished
+writing an output. Byte-exact clone and no-op comparison paths return the cloned package directly,
+so they neither change ZIP representation nor pay the finalization cost. For modified output, the
+normalizer builds a fresh archive in one streaming pass and:
+
+1. copies every entry payload without parsing or reserializing it, preserving content types,
+   relationship parts, signature parts, macros, and all other OPC semantics;
+2. preserves entries as stored when their completed source representation got no benefit from
+   compression (the normal case for JPEG/PNG and similar media);
+3. uses `CompressionLevel.Optimal` for frequently written package markup, balancing size and save
+   latency, and `SmallestSize` for compressible binary assets such as embedded fonts;
+4. preserves entry names, order, timestamps, comments, and existing external attributes; and
+5. assigns sane Unix permissions to zero-attribute entries, subsuming the issue #302 output pass
+   so the archive is rewritten only once.
+
+This is deliberately an output-boundary policy, not a byte-header patch or reflection workaround.
+Changing ZIP flags on a live package would put its archive bookkeeping out of sync, while setting
+`OpenXmlPackage.CompressionOption` controls only newly created parts and cannot repair existing
+parts rewritten in update mode.
+
+#### Performance tradeoff
+
+Finalization performs one sequential inflate/copy/deflate pass and holds the source and destination
+archives in memory. That costs more CPU than returning the update-mode ZIP directly, but the
+latency-sensitive XML path uses `Optimal`, stored media avoids compression work, and the pass
+replaces the previous separate Unix-metadata rewrite. The cost is bounded to final output
+production; editing, projection, undo, and intermediate operations are unchanged. This policy
+favors storage and transfer efficiency for batch-produced documents without paying maximum
+compression cost on every XML save.
 
 ---
 

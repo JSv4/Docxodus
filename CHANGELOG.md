@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **DOCX/OPC outputs no longer lose ZIP compression when Word-authored entries carry misleading
+  `superfast` deflate hints (#331).** .NET 10 maps those source hint bits to
+  `CompressionLevel.Fastest` when update-mode entries are rewritten, so a 25-part fixture grew
+  42,336 → 51,491 bytes even though its uncompressed XML grew by less than 1 KB. The shared final
+  output boundary now copies package payloads into a fresh archive with an explicit policy:
+  `Optimal` for package markup, `SmallestSize` for compressible binary assets, and `NoCompression`
+  for entries already stored because deflate provided no benefit. Entry payloads and OPC structure
+  remain byte-identical; names, order, timestamps, comments, and external attributes are
+  preserved. The pass also owns the Unix permission normalization from #302, avoiding two archive
+  rewrites. Byte-exact clone/no-op comparison paths bypass finalization, so they retain their
+  existing exact-package contract without paying the recompression cost. Coverage PKG331–PKG334
+  reports per-part compressed/uncompressed deltas, pins a material size reduction (42,336 → 37,101
+  bytes on the regression fixture), preserves stored media, verifies every uncompressed part byte,
+  and covers both `DocxSession.Save()` and the shared `OpenXmlMemoryStreamDocument` output path. The
+  policy and CPU/storage tradeoff are documented in `docs/ooxml_corner_cases.md`.
 - **README, package metadata and architecture docs rewritten around what the library actually does.** The repo described itself as an "Office XML Redline Engine" — accurate about one of five capabilities, and containing none of the words anyone searches for. Comparison is now one of four peer sections (render / project / edit / compare), each opening with a **real screenshot** captured from the [NVCA model financing documents](https://nvca.org/model-legal-documents/): a redlined voting agreement showing deletion, insertion, token-level substitution and a paired move in one frame; the model charter rendered to HTML with justification, legal numbering and back-referenced footnotes intact; the markdown projection beside the same document's rendered DOM, with one anchor highlighted in both panes to show they share an addressing system. The redline image is genuine engine output end to end — a round of realistic counsel edits applied through `DocxSession`, compared with `DocxDiff.Compare`, rendered with `RenderTrackedChanges`. Also: a "where it runs" table covering the NuGet / npm / PyPI / CLI surfaces (three CLI tools ship, not two), quick starts trimmed to ≤6 lines each so they can't silently rot, and the OpenXmlPowerTools lineage kept but moved out of the lede. Screenshots also land in `ir_diff_engine.md`, `markdown_projection.md`, `docx_converter.md` and the npm package README (which had no mention of the editor, the session API or the projection). Package metadata is aligned for search across all three registries — `Docxodus.csproj` `Description`/`PackageTags`, `npm/package.json` `description`/`keywords`, `pyproject.toml` `keywords`. New `docs/repo-positioning.md` records the GitHub description and topic list a maintainer still has to apply by hand, the keyword→surface map behind them, and how to regenerate the screenshots.
 
 ### Added
