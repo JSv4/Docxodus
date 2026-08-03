@@ -40,6 +40,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="SkiaSharp" Version="4.151.0" />
     <InternalsVisibleTo Include="Docxodus.Tests" />
   </ItemGroup>
 </Project>
