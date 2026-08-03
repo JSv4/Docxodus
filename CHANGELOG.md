@@ -8,6 +8,19 @@ All notable changes to this project will be documented in this file.
 - **README, package metadata and architecture docs rewritten around what the library actually does.** The repo described itself as an "Office XML Redline Engine" — accurate about one of five capabilities, and containing none of the words anyone searches for. Comparison is now one of four peer sections (render / project / edit / compare), each opening with a **real screenshot** captured from the [NVCA model financing documents](https://nvca.org/model-legal-documents/): a redlined voting agreement showing deletion, insertion, token-level substitution and a paired move in one frame; the model charter rendered to HTML with justification, legal numbering and back-referenced footnotes intact; the markdown projection beside the same document's rendered DOM, with one anchor highlighted in both panes to show they share an addressing system. The redline image is genuine engine output end to end — a round of realistic counsel edits applied through `DocxSession`, compared with `DocxDiff.Compare`, rendered with `RenderTrackedChanges`. Also: a "where it runs" table covering the NuGet / npm / PyPI / CLI surfaces (three CLI tools ship, not two), quick starts trimmed to ≤6 lines each so they can't silently rot, and the OpenXmlPowerTools lineage kept but moved out of the lede. Screenshots also land in `ir_diff_engine.md`, `markdown_projection.md`, `docx_converter.md` and the npm package README (which had no mention of the editor, the session API or the projection). Package metadata is aligned for search across all three registries — `Docxodus.csproj` `Description`/`PackageTags`, `npm/package.json` `description`/`keywords`, `pyproject.toml` `keywords`. New `docs/repo-positioning.md` records the GitHub description and topic list a maintainer still has to apply by hand, the keyword→surface map behind them, and how to regenerate the screenshots.
 
 ### Added
+- **Tracked surgical text replacements (issue #330).** `ReplaceTextRange`,
+  `ReplaceTextAtSpan`, `ReplaceMatch`, and `ReplaceInner` now honor
+  `TrackedChangeMode.RenderInline` instead of silently mutating run text directly. A
+  selection is split at its exact boundaries: untouched prefix/suffix text remains in
+  ordinary runs, removed slices retain each source run's formatting under native
+  `w:del/w:r/w:delText`, and the replacement inherits the first affected `w:rPr` under
+  `w:ins/w:r/w:t`. Envelopes carry the session author, one operation timestamp, and fresh
+  revision ids; adjacent selected runs coalesce into the Word-authored multi-run deletion
+  shape. Hyperlink and run-level SDT content stays inside its container, while bookmarks,
+  comment/permission/proofing markers, and note-reference runs stay live outside the
+  revisions. Reverse-offset repeated matches, selective and whole-document accept/reject,
+  undo/redo, and direct mode are preserved. Coverage: DS400–DS407, including Office 2019
+  schema validation of single-run, multi-format, hyperlink/SDT, and semantic-marker output.
 - **List numbering restart — Word's "Set Numbering Value…" (issue #314).** Nothing on any
   surface could write a `w:lvlOverride`/`w:startOverride`, so "restart at 1", "continue
   from the previous list", and "start this exhibit list at 5" were unaddressable — exactly

@@ -1143,6 +1143,12 @@ The replacement text inherits the formatting of the FIRST run the match spanned.
 
 If you need different per-fragment behavior (e.g., the replacement should be bold even when the first fragment was plain), use `Grep` + bespoke `Raw.GetXml` mutation today, or wait for a future inline-markdown-aware overload.
 
+### Tracked-change behavior
+
+With `TrackedChanges = RenderInline`, all three entry points retain the same surgical boundaries but record them as native Word revisions. Text before and after the span remains in ordinary runs; the selected slices become formatting-preserving `w:r/w:delText` children under `w:del`; and the replacement becomes one `w:r/w:t` under `w:ins`, carrying the first affected run's `w:rPr`. The envelopes use the session revision author, operation timestamp, and fresh revision ids.
+
+Revision wrappers stay inside a match's hyperlink, run-level SDT, `smartTag`, or `fldSimple` container. A match that crosses formatting boundaries keeps one deleted run per source format. Zero-width bookmark/comment/permission/proofing markers and footnote/endnote reference runs remain outside the revision envelopes, so accepting or rejecting the edit cannot silently destroy their relationships. `AcceptRevision`/`RejectRevision`, whole-document accept/reject, and undo/redo therefore resolve surgical edits the same way as full-block tracked replacements. `TrackedChanges = Accept` retains the original direct run-mutation behavior.
+
 ### Ordering and atomicity
 
 Multiple matches in the same paragraph are applied in **reverse document order** so each earlier-offset match's span stays valid after later edits land — the same trick the projector uses for tracked-change accept passes. The whole call records **one** snapshot; `Undo()` rolls every replacement back together.
