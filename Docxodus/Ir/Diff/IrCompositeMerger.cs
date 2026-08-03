@@ -50,6 +50,16 @@ internal static class IrCompositeMerger
         // (never a silent drop).
         settings = settings with { CrossParagraphTokenDiff = false };
 
+        // v1 ceiling (character granularity): Consolidate is WORD level regardless of the caller's
+        // ChangeGranularity. The refinement is a post-pass over rendered markup that lifts characters shared
+        // by an adjacent del/ins pair into a plain run; in a multi-author composite the two wrappers can
+        // belong to DIFFERENT reviewers, and lifting a character out would drop one reviewer's claim to it.
+        // Forcing it off here also keeps the composite's two surfaces in step — IrCompositeMarkupRenderer has
+        // no refinement pass, while its revision renderer delegates to IrRevisionRenderer, which does — so a
+        // pass-through would narrow the revisions of a document whose markup stayed whole. Pinned by
+        // DocxDiffChangeGranularityTests.Consolidate_is_word_level_v1_ceiling.
+        settings = settings with { ChangeGranularity = IrChangeGranularity.Word };
+
         // 1. Raw pairwise scripts, NOT yet lowered — so PlanMoves can inspect every reviewer's move groups
         //    against the shared base anchor space before any move is collapsed to del/ins.
         var rawScripts = reviewers

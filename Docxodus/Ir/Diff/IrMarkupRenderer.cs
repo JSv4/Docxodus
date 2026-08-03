@@ -418,6 +418,16 @@ internal static class IrMarkupRenderer
                 // NormalizeComments do for their own id spaces.
                 NormalizeDrawingIds(main);
 
+                // Character-level change granularity (Word Compare's "Show changes at" radio). Narrows a
+                // del/ins pair over one word to the characters that differ, lifting the shared prefix/suffix
+                // into plain runs. Runs after the body-markup normalization passes (bookmark/field/drawing-id
+                // reconciliation) so it sees whatever they produced — including move markup already simplified
+                // to del/ins — and cannot perturb their id/context work; the style/numbering/settings backfills
+                // that follow do not touch run content. Round-trip-neutral by construction, and it refines only
+                // a pair whose two wrappers share an author and date — see IrCharacterGranularity.
+                if (settings.ChangeGranularity == IrChangeGranularity.Character)
+                    RefineToCharacterGranularity(main);
+
                 // Style-definition provenance (decoded from Word's compare output): the result
                 // keeps the LEFT document's styles part — docDefaults/theme/latentStyles byte-identical
                 // to the left — while each style whose RAW definition formatting differs between the
@@ -3890,6 +3900,31 @@ internal static class IrMarkupRenderer
     /// </remarks>
     internal static void NormalizeDrawingIds(MainDocumentPart main)
     {
+        foreach (var part in StoryParts(main))
+        {
+            var root = part.GetXDocument().Root;
+            if (root is not null && NormalizeDrawingIdsInRoot(root))
+                part.PutXDocument();
+        }
+    }
+
+    /// <summary>
+    /// Apply <see cref="IrCharacterGranularity.RefineInRoot"/> to every rendered story part — body,
+    /// headers/footers and notes — so the granularity choice reaches every scope the renderer writes.
+    /// </summary>
+    internal static void RefineToCharacterGranularity(MainDocumentPart main)
+    {
+        foreach (var part in StoryParts(main))
+        {
+            var root = part.GetXDocument().Root;
+            if (root is not null && IrCharacterGranularity.RefineInRoot(root))
+                part.PutXDocument();
+        }
+    }
+
+    /// <summary>Every part a rendered story can live in — the part-iterating post-passes' shared set.</summary>
+    private static IEnumerable<OpenXmlPart> StoryParts(MainDocumentPart main)
+    {
         var parts = new List<OpenXmlPart> { main };
         parts.AddRange(main.HeaderParts);
         parts.AddRange(main.FooterParts);
@@ -3897,13 +3932,7 @@ internal static class IrMarkupRenderer
             parts.Add(main.FootnotesPart);
         if (main.EndnotesPart is not null)
             parts.Add(main.EndnotesPart);
-
-        foreach (var part in parts.Distinct())
-        {
-            var root = part.GetXDocument().Root;
-            if (root is not null && NormalizeDrawingIdsInRoot(root))
-                part.PutXDocument();
-        }
+        return parts.Distinct();
     }
 
     /// <summary>The VML elements sharing one shape-id space.</summary>

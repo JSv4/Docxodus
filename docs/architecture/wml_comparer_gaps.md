@@ -138,6 +138,7 @@ Word's Compare dialog exposes a checkbox per comparison category. Mapped onto `W
 | Textboxes | — | ~ compared; `DocxDiffSettings.CompareTextboxes` is the toggle (granularity: off ⇒ wholesale box del/ins instead of an inner diff) |
 | Fields | — | ❌ on `WmlComparer` (field codes never compared); `DocxDiff` compares them by default and `DocxDiffSettings.CompareFields` is the toggle |
 | Comments | — | ❌ |
+| Show changes at (Character/Word level) | — | ❌ on `WmlComparer` (word level only); `DocxDiffSettings.ChangeGranularity` is the selector, `Word` by default like Word's own |
 | Output target (Original/Revised/New) | — | ❌ only "New document" |
 
 ### `CompareWhitespace`

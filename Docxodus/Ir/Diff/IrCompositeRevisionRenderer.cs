@@ -57,7 +57,12 @@ internal static class IrCompositeRevisionRenderer
         // EmitTrailingSectionRevision OFF: the per-op mini-scripts must NOT each append the document-level
         // trailing-sectPr revision (a section-changing reviewer with N ops would emit it N times). It is
         // emitted ONCE below from script.TrailingSectPr, attributed to the section winner.
-        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true, EmitTrailingSectionRevision = false };
+        // ChangeGranularity Word: the composite is word level (IrCompositeMerger's v1 ceiling — see the
+        // reasoning there). Forced HERE too, not merely in the merger: the merger's forcing applies to the
+        // per-reviewer diffs it runs, while this renderer is handed the CALLER's settings directly, so without
+        // this the composite's revisions would narrow while its markup — which has no refinement pass — stayed
+        // whole, and Consolidate's two surfaces would disagree.
+        settings = settings with { TrackBlockFormatChanges = false, TrackParagraphFormatChanges = true, TrackTableFormatChanges = true, TrackSectionFormatChanges = true, EmitTrailingSectionRevision = false, ChangeGranularity = IrChangeGranularity.Word };
 
         // Move-source pre-pass over the WHOLE composite script. Single-source ops are each rendered in
         // their own one-op mini-script (so IrRevisionRenderer honours per-op granularity/author), but a

@@ -524,6 +524,33 @@ public enum DocxDiffRevisionGranularity
 }
 
 /// <summary>
+/// How narrowly a single change is marked — Word Compare's "Show changes at" radio pair
+/// (<see cref="DocxDiffSettings.ChangeGranularity"/>).
+/// </summary>
+/// <remarks>
+/// Orthogonal to <see cref="DocxDiffRevisionGranularity"/>: that one chooses how COARSELY the edit script
+/// projects to revisions (how many revisions), this one how NARROWLY each change is marked (how much text
+/// each covers). Both are render-time — the tokenizer, aligner and edit script are word-grained under
+/// either value, and <see cref="DocxDiff.GetEditScriptJson"/> is unaffected.
+/// </remarks>
+public enum DocxDiffChangeGranularity
+{
+    /// <summary>
+    /// Word level — the default, and Word's own default. A changed word is marked whole: <c>colour</c> →
+    /// <c>color</c> renders as one deleted <c>colour</c> beside one inserted <c>color</c>.
+    /// </summary>
+    Word,
+
+    /// <summary>
+    /// Character level. A changed word's shared leading and trailing characters are lifted out of the
+    /// revision wrappers into plain runs, so only the differing middle is marked: <c>colour</c> →
+    /// <c>color</c> renders as retained <c>colo</c>, deleted <c>u</c>, retained <c>r</c>. Applies to both
+    /// <see cref="DocxDiff.Compare"/>'s markup and <see cref="DocxDiff.GetRevisions"/>'s text.
+    /// </summary>
+    Character,
+}
+
+/// <summary>
 /// How <see cref="DocxDiff"/> compares run formatting. A purely diff-time policy: it changes which format
 /// facts a comparison treats as significant, never the documents themselves.
 /// </summary>
@@ -690,6 +717,24 @@ public sealed class DocxDiffSettings
     /// <see cref="DocxDiff.GetEditScriptJson"/>.
     /// </summary>
     public DocxDiffRevisionGranularity RevisionGranularity { get; set; } = DocxDiffRevisionGranularity.Fine;
+
+    /// <summary>
+    /// Word Compare's "Show changes at" radio pair: how narrowly one change is marked. Default
+    /// <see cref="DocxDiffChangeGranularity.Word"/> — Word's own default, and byte-identical to the engine's
+    /// pre-setting output. <see cref="DocxDiffChangeGranularity.Character"/> narrows a del/ins pair over one
+    /// word to the characters that differ, lifting the shared prefix/suffix into plain runs, in both
+    /// <see cref="DocxDiff.Compare"/>'s markup and <see cref="DocxDiff.GetRevisions"/>'s revision text.
+    /// <para>The round-trip contract is unaffected: a character present in BOTH the deleted and the inserted
+    /// text was going to survive accept AND reject either way, so lifting it out of the wrappers changes
+    /// neither result — <c>accept ≡ right</c> and <c>reject ≡ left</c> hold in both modes.</para>
+    /// <para>This is a refinement of rendered output only. Alignment stays word-grained (character-level
+    /// alignment would change block similarity, move detection and the content-hash correspondence), so
+    /// <see cref="DocxDiff.GetEditScriptJson"/> — the engine's truth — is identical under both values.
+    /// Refinement is skipped for a pair that is not a single run per side with equal <c>w:rPr</c>: when the
+    /// word's formatting changed too, its shared characters are not unchanged, and lifting them into one
+    /// plain run would have to pick a side. Such a pair stays word-level.</para>
+    /// </summary>
+    public DocxDiffChangeGranularity ChangeGranularity { get; set; } = DocxDiffChangeGranularity.Word;
 
     /// <summary>
     /// How run formatting is compared. Default <see cref="DocxDiffFormatComparison.ModeledOnly"/> — see that
@@ -907,6 +952,9 @@ public sealed class DocxDiffSettings
             RevisionGranularity = RevisionGranularity == DocxDiffRevisionGranularity.WmlComparerCompatible
                 ? Docxodus.Ir.Diff.RevisionGranularity.WmlComparerCompatible
                 : Docxodus.Ir.Diff.RevisionGranularity.Fine,
+            ChangeGranularity = ChangeGranularity == DocxDiffChangeGranularity.Character
+                ? IrChangeGranularity.Character
+                : IrChangeGranularity.Word,
             FormatComparison = FormatComparison == DocxDiffFormatComparison.Full
                 ? IrFormatComparison.Full
                 : IrFormatComparison.ModeledOnly,

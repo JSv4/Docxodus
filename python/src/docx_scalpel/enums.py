@@ -25,6 +25,7 @@ __all__ = [
     "DiffFormat",
     "WhitespaceMode",
     "DocxDiffRevisionType",
+    "DocxDiffChangeGranularity",
     "DocxDiffRevisionGranularity",
     "DocxDiffFormatComparison",
     "TrackedChangeMode",
@@ -242,6 +243,19 @@ class DocxDiffRevisionGranularity(IntEnum):
 
     FINE = 0
     WML_COMPARER_COMPATIBLE = 1
+
+
+class DocxDiffChangeGranularity(IntEnum):
+    """Word Compare's "Show changes at" radio pair: how narrowly ONE change is marked.
+
+    ``WORD`` (the default, and Word's own) marks a changed word whole;
+    ``CHARACTER`` narrows it to the differing characters. Orthogonal to
+    :class:`DocxDiffRevisionGranularity`, which chooses how coarsely the edit
+    script projects to revisions. Integer-coded to match the .NET enum positions.
+    """
+
+    WORD = 0
+    CHARACTER = 1
 
 
 class DocxDiffFormatComparison(IntEnum):

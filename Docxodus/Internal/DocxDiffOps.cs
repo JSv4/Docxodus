@@ -135,6 +135,10 @@ internal static class DocxDiffOps
             settings.RevisionGranularity = gran.GetInt32() == 1
                 ? DocxDiffRevisionGranularity.WmlComparerCompatible
                 : DocxDiffRevisionGranularity.Fine;
+        if (root.TryGetProperty("changeGranularity", out var chg) && chg.ValueKind == JsonValueKind.Number)
+            settings.ChangeGranularity = chg.GetInt32() == 1
+                ? DocxDiffChangeGranularity.Character
+                : DocxDiffChangeGranularity.Word;
         if (root.TryGetProperty("formatComparison", out var fmt) && fmt.ValueKind == JsonValueKind.Number)
             settings.FormatComparison = fmt.GetInt32() == 1
                 ? DocxDiffFormatComparison.Full

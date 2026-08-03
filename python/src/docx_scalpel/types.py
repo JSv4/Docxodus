@@ -24,6 +24,7 @@ from .enums import (
     ConflictResolution,
     ContextBoundary,
     DocxDiffFormatComparison,
+    DocxDiffChangeGranularity,
     DocxDiffRevisionGranularity,
     DocxDiffRevisionType,
     EditErrorCode,
@@ -1019,6 +1020,12 @@ class DocxDiffSettings:
     move_similarity_threshold: float = 0.8
     move_minimum_word_count: int = 3
     revision_granularity: DocxDiffRevisionGranularity = DocxDiffRevisionGranularity.FINE
+    #: Word Compare's "Show changes at" radio pair (default WORD, Word's own default and
+    #: byte-identical to omitting it). CHARACTER narrows a del/ins pair over one word to the
+    #: characters that differ, in both the markup and the revision text. Rendering only: alignment
+    #: stays word-grained, so the edit script is identical either way and the round trip is
+    #: unaffected. A pair whose run formatting also changed stays word-level.
+    change_granularity: DocxDiffChangeGranularity = DocxDiffChangeGranularity.WORD
     format_comparison: DocxDiffFormatComparison = DocxDiffFormatComparison.MODELED_ONLY
     #: Compare header/footer stories (default True — Word Compare's own default).
     #: Changed stories get native tracked-changes markup inside their parts; FINE
@@ -1074,6 +1081,8 @@ class DocxDiffSettings:
             wire["moveMinimumWordCount"] = self.move_minimum_word_count
         if self.revision_granularity != DocxDiffRevisionGranularity.FINE:
             wire["revisionGranularity"] = int(self.revision_granularity)
+        if self.change_granularity != DocxDiffChangeGranularity.WORD:
+            wire["changeGranularity"] = int(self.change_granularity)
         if self.format_comparison != DocxDiffFormatComparison.MODELED_ONLY:
             wire["formatComparison"] = int(self.format_comparison)
         if not self.compare_headers_footers:

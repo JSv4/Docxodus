@@ -139,6 +139,13 @@ internal static class IrRevisionRenderer
             revisions.RemoveAll(r => r.FormatChange is { } fc && fc.Scope != IrFormatChangeScope.Run);
         }
 
+        // Character-level change granularity (Word Compare's "Show changes at" radio). The revision-list twin
+        // of the markup post-pass, applied last so it narrows whatever projection the granularity above chose
+        // — the two surfaces must report the same grain. WmlComparerCompatible already trims to a WORD
+        // boundary via TrimCommonWordAffixes; this narrows the remainder to the differing characters.
+        if (settings.ChangeGranularity == IrChangeGranularity.Character)
+            IrCharacterGranularity.RefineRevisions(revisions);
+
         return IrNodeList.From(revisions);
     }
 

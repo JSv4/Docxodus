@@ -78,6 +78,30 @@ internal enum RevisionGranularity
 }
 
 /// <summary>
+/// RENDER-TIME granularity of a change, mirroring Word Compare's "Show changes at" radio pair. A pure
+/// refinement of already-produced word-level output: tokenization, alignment and the edit script stay
+/// word-grained under both values (see <see cref="IrCharacterGranularity"/> for why character-level
+/// ALIGNMENT is not on the table), so this changes only what the rendered markup and revision list mark.
+/// Orthogonal to <see cref="RevisionGranularity"/>, which chooses how COARSELY the edit script projects
+/// to revisions; this chooses how NARROWLY a single change is marked.
+/// </summary>
+internal enum IrChangeGranularity
+{
+    /// <summary>
+    /// Word level (the DEFAULT, and Word's own default): a changed word is marked whole — <c>colour</c> →
+    /// <c>color</c> renders as one deleted <c>colour</c> beside one inserted <c>color</c>.
+    /// </summary>
+    Word,
+
+    /// <summary>
+    /// Character level: a changed word's shared leading/trailing characters are lifted out of the revision
+    /// wrappers into plain runs, so only the differing middle is marked — <c>colour</c> → <c>color</c>
+    /// renders as retained <c>colo</c>, deleted <c>u</c>, retained <c>r</c>.
+    /// </summary>
+    Character,
+}
+
+/// <summary>
 /// Diff-time settings for the IR diff engine (Phase 2). These govern how IR paragraphs are
 /// tokenized and compared; they are <b>not</b> document facts. Per the IR spec (§1 non-goals,
 /// "Not the diff's tokenization"), word splitting, case folding, and separator policy are
@@ -123,6 +147,16 @@ internal sealed record IrDiffSettings
     /// script, the aligner, or the token diff — only the rendered revision list.
     /// </summary>
     public RevisionGranularity RevisionGranularity { get; init; } = RevisionGranularity.Fine;
+
+    /// <summary>
+    /// RENDER-TIME setting (Word Compare "Show changes at"). How NARROWLY one change is marked — see
+    /// <see cref="IrChangeGranularity"/>. Default <see cref="IrChangeGranularity.Word"/> (Word's own default),
+    /// under which the markup renderer and revision renderer are byte-identical to their pre-setting output.
+    /// <see cref="IrChangeGranularity.Character"/> applies <see cref="IrCharacterGranularity"/>'s
+    /// round-trip-preserving refinement to both surfaces; the edit script (the engine's truth) is untouched
+    /// either way.
+    /// </summary>
+    public IrChangeGranularity ChangeGranularity { get; init; } = IrChangeGranularity.Word;
 
     /// <summary>
     /// RENDER-TIME setting (M2.4 Task 2). When false, <see cref="IrRevisionRenderer"/> renders

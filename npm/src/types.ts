@@ -455,6 +455,18 @@ export enum DocxDiffRevisionGranularity {
 }
 
 /**
+ * Word Compare's "Show changes at" radio pair: how narrowly ONE change is marked (how much text it
+ * covers) — orthogonal to `DocxDiffRevisionGranularity`, which chooses how coarsely the edit script
+ * projects to revisions (how many). Integer values match the .NET `DocxDiffChangeGranularity` positions.
+ */
+export enum DocxDiffChangeGranularity {
+  /** A changed word is marked whole: `colour` -> `color` deletes `colour`, inserts `color`. The default. */
+  Word = 0,
+  /** Only the differing characters are marked: retained `colo`, deleted `u`, retained `r`. */
+  Character = 1,
+}
+
+/**
  * How DocxDiff compares run formatting. Integer values match the .NET
  * `DocxDiffFormatComparison` enum positions.
  */
@@ -527,6 +539,16 @@ export interface DocxDiffSettings {
   moveMinimumWordCount?: number;
   /** Revision projection grain (default Fine). */
   revisionGranularity?: DocxDiffRevisionGranularity;
+  /**
+   * Word Compare's "Show changes at" radio pair (default `Word`, Word's own default and byte-identical
+   * to omitting it). `Character` narrows a del/ins pair over one word to the characters that differ,
+   * lifting the shared prefix/suffix into plain runs, in both `docxDiffCompare`'s markup and
+   * `docxDiffGetRevisions`'s text. Rendering only: alignment stays word-grained, so the edit script is
+   * identical either way, and the round trip is unaffected (a character in BOTH the deleted and the
+   * inserted text survives accept and reject regardless of which wrapper holds it). A pair whose run
+   * formatting also changed stays word-level — its shared characters are not unchanged.
+   */
+  changeGranularity?: DocxDiffChangeGranularity;
   /** Run-format comparison policy (default ModeledOnly). */
   formatComparison?: DocxDiffFormatComparison;
   /**
