@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [9.0.0] - 2026-08-03
+
 ### Changed
 - **DOCX/OPC outputs no longer lose ZIP compression when Word-authored entries carry misleading
   `superfast` deflate hints (#331).** .NET 10 maps those source hint bits to
