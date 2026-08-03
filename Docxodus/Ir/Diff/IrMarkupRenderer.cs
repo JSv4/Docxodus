@@ -1206,7 +1206,10 @@ internal static class IrMarkupRenderer
             case IrEditOpKind.EqualBlock:
                 // Content-equal: emit the RIGHT block verbatim (accepted-state continuity). In a composite render
                 // an EqualBlock is base-sourced — the composite renderer points RightSource at the base for it.
+                var equalStart = sink.Count;
                 EmitVerbatim(op.RightAnchor, state.RightSource, state, sink, fromRight: true);
+                if (sink.Count == equalStart + 1 && sink[equalStart].Name == W.p)
+                    StampResolvedNumberingChange(sink[equalStart], op.LeftAnchor, op.RightAnchor, state);
                 break;
 
             case IrEditOpKind.FormatOnlyBlock:
@@ -3914,6 +3917,13 @@ internal static class IrMarkupRenderer
             return;
         }
         var para = StripUnids(new XElement(src));
+        if (ResolveBlock(op.LeftAnchor, state.Left) is IrParagraph movedParagraph &&
+            movedParagraph.List is not null &&
+            !string.IsNullOrEmpty(movedParagraph.ResolvedListMarker))
+        {
+            StampOriginalNumberingMarker(
+                para, movedParagraph.List, movedParagraph.ResolvedListMarker, state);
+        }
         MarkWholeParagraphAs(para, RevKind.MoveFrom, state);
         BracketParagraphWithMoveRange(para, isFrom: true, state.MoveName(gid), state);
         sink.Add(para);
@@ -4122,7 +4132,16 @@ internal static class IrMarkupRenderer
             }
             return;
         }
-        EmitOneWholeBlock(new XElement(src), state, sink, kind, fromRight);
+        var clone = new XElement(src);
+        if (IsDeleteGrade(kind) &&
+            ResolveBlock(anchor, doc) is IrParagraph deletedParagraph &&
+            deletedParagraph.List is not null &&
+            !string.IsNullOrEmpty(deletedParagraph.ResolvedListMarker))
+        {
+            StampOriginalNumberingMarker(
+                clone, deletedParagraph.List, deletedParagraph.ResolvedListMarker, state);
+        }
+        EmitOneWholeBlock(clone, state, sink, kind, fromRight);
     }
 
     /// <summary>The single-block tail of <see cref="EmitWholeBlock"/>: strip engine bookkeeping, register
@@ -4466,6 +4485,7 @@ internal static class IrMarkupRenderer
             newPara.Add(stamped);
         }
         ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
+        StampResolvedNumberingChange(newPara, op.LeftAnchor, op.RightAnchor, state);
 
         int cursor = 0;
         foreach (var child in rightPara.Elements().Where(e => e.Name != W.pPr))
@@ -4678,9 +4698,91 @@ internal static class IrMarkupRenderer
             newPara.Add(stamped);
         }
         ApplyBlockFormatChanges(newPara, leftPara, rightPara, state);
+        StampResolvedNumberingChange(newPara, op.LeftAnchor, op.RightAnchor, state);
 
         newPara.Add(BuildTokenOpContent(tokenDiff, leftTokens, rightTokens, leftRuns, rightRuns, state));
         sink.Add(newPara);
+    }
+
+    /// <summary>
+    /// Preserve an aligned paragraph's old automatic-list marker when its resolved label changed because an
+    /// insertion, deletion or move elsewhere in the list shifted the counter. The reader has already resolved
+    /// both labels against their own packages; carrying the LEFT label in native <c>w:numberingChange</c>
+    /// metadata lets tracked-change renderers expose the otherwise invisible cascade while the current
+    /// <c>w:numPr</c> continues to produce the RIGHT label.
+    /// </summary>
+    private static void StampResolvedNumberingChange(
+        XElement paragraph,
+        string? leftAnchor,
+        string? rightAnchor,
+        RenderState state)
+    {
+        if (ResolveBlock(leftAnchor, state.Left) is not IrParagraph left ||
+            ResolveBlock(rightAnchor, state.RightSource) is not IrParagraph right ||
+            left.List is null || right.List is null ||
+            string.IsNullOrEmpty(left.ResolvedListMarker) ||
+            string.IsNullOrEmpty(right.ResolvedListMarker) ||
+            string.Equals(left.ResolvedListMarker, right.ResolvedListMarker, StringComparison.Ordinal))
+            return;
+
+        StampOriginalNumberingMarker(paragraph, right.List, left.ResolvedListMarker, state);
+    }
+
+    /// <summary>
+    /// Add the standard previous-number marker to a paragraph. Style-inherited lists need an explicit
+    /// <c>w:numPr</c> materialized first: a bare <c>w:numberingChange</c> would shadow the style's numbering
+    /// without providing a numId, causing the paragraph to stop being a list item during conversion.
+    /// </summary>
+    private static void StampOriginalNumberingMarker(
+        XElement paragraph,
+        IrListInfo list,
+        string originalMarker,
+        RenderState state)
+    {
+        var pPr = paragraph.Element(W.pPr);
+        if (pPr is null)
+        {
+            pPr = new XElement(W.pPr);
+            paragraph.AddFirst(pPr);
+        }
+
+        var numPr = pPr.Element(W.numPr);
+        if (numPr is null)
+        {
+            numPr = new XElement(W.numPr,
+                new XElement(W.ilvl, new XAttribute(W.val, list.Ilvl)),
+                new XElement(W.numId, new XAttribute(W.val, list.NumId)));
+            InsertPPrChildInSchemaOrder(pPr, numPr);
+        }
+
+        numPr.Elements(W.numberingChange).Remove();
+        var numberingChange = new XElement(W.numberingChange,
+            state.RevisionAttributes(),
+            new XAttribute(W.original, originalMarker));
+        var insertedNumbering = numPr.Element(W.ins);
+        if (insertedNumbering is null)
+            numPr.Add(numberingChange);
+        else
+            insertedNumbering.AddBeforeSelf(numberingChange);
+    }
+
+    private static void InsertPPrChildInSchemaOrder(XElement pPr, XElement child)
+    {
+        int childIndex = Array.IndexOf(StylePPrChildOrder, child.Name.LocalName);
+        XElement? predecessor = null;
+        foreach (var existing in pPr.Elements())
+        {
+            int existingIndex = Array.IndexOf(StylePPrChildOrder, existing.Name.LocalName);
+            if (existingIndex >= 0 && existingIndex < childIndex)
+                predecessor = existing;
+            else if (existingIndex >= childIndex)
+                break;
+        }
+
+        if (predecessor is null)
+            pPr.AddFirst(child);
+        else
+            predecessor.AddAfterSelf(child);
     }
 
     /// <summary>
@@ -6936,6 +7038,11 @@ internal static class IrMarkupRenderer
                 {
                     oldPPr = StripUnids(new XElement(W.pPr, pPr.Attributes(),
                         pPr.Elements().Where(e => e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange)));
+                    // The live numPr may carry the comparison's numberingChange. The archived pPr is the
+                    // pre-rebind property payload, not another revision container; copying that marker here
+                    // would duplicate its w:id between the live and archived numPr and violate OOXML's
+                    // document-wide revision-id uniqueness constraint.
+                    oldPPr.Descendants(W.numberingChange).Remove();
                 }
 
                 numIdEl.SetAttributeValue(W.val, mapped);

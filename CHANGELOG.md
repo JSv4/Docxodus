@@ -281,6 +281,18 @@ All notable changes to this project will be documented in this file.
   process serves exactly one scope. Session ids became 16 random bytes rather than a counter, since
   the id is the capability. Coverage: `MCP120`–`MCP131` plus `MCP003`.
 
+### Fixed
+- **`DocxDiff` now makes automatic list-number cascades visible in redlines.** The IR reader already
+  resolved each aligned paragraph's marker on both sides, but the markup renderer discarded that
+  difference; HTML therefore showed only plain black final labels after an inserted, deleted, or
+  moved list item. Changed markers are now preserved as native
+  `w:numPr/w:numberingChange[@w:original]` metadata (with effective numbering materialized for
+  style-inherited lists), and the tracked-changes renderer emits a struck old marker followed by an
+  inserted new marker. Deleted and moved-from items retain their source-side label instead of a
+  counter value recomputed in the merged redline. Coverage: `TrackedChangesNumberingTests`
+  TCN005–TCN006 and the deterministic NVCA screenshot fixture, which asserts both marker values and
+  revision states before capture.
+
 ### Changed
 - **`DocxSession` mutation ops no longer rebuild the full markdown projection per edit.** Anchor resolution (`FindAnchor` and the post-apply re-resolution inside every mutation op) now goes through a cached index-only build — same walk, same keys, same Unid assignment as the full projection, minus markdown emission and per-entry `TextPreview`/`AutoNumberPrefix` numbering resolution. `ProjectScope` caches the projection it builds (it runs post-invalidation, so it IS the post-op state). The deterministic Unid pass prunes to subtrees that actually contain an unassigned element (it recursed the whole tree computing content signatures even when fully assigned — 36 ms of every 74 ms rebuild on a 15k-element document), and the per-scope part flush is skipped when nothing was assigned, with `Save(persistAnchorIds: true)` now flushing projected parts itself so neither save path depends on rebuild side effects. Net (NVCA, native, editor profile): per-op index rebuild 74 ms → 2 ms; `ReplaceText` ~130 → ~40 ms, `InsertFootnote` ~190 → ~40 ms, `InsertTable` ~245 → ~28 ms, `SetPageNumbering` ~90 → ~8 ms.
 - **`ListItemRetriever.InitListItemInfo` is idempotent.** Re-initializing a partially annotated live document — any session that gained a paragraph since its first initialization — used to hit `SetParagraphLevel`'s double-set guard and throw `"should never set ilvl more than once"`; every caller but the projector's catch-all swallowed it, and the editor's Enter-split silently dropped its DOM update when the follow-up block render errored on list-bearing documents. Already-annotated paragraphs are now skipped (first-added annotations win on read, preserving exactly the values earlier passes computed).

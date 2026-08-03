@@ -11,6 +11,7 @@ using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Validation;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Docxodus;
 using Xunit;
@@ -243,14 +244,58 @@ namespace OxPt
                 NumberedParaXml("Charlie"));
 
             var redline = DocxDiff.Compare(left, right, new DocxDiffSettings { AuthorForRevisions = "Reviewer" });
+
             var html = ConvertWithTrackedChanges(redline);
             var markers = ExtractMarkers(html);
 
-            // The deleted "Bravo" still shows a struck number but the rendered redline's
-            // numbering matches the final document: Charlie is "2.", not "3.".
-            Assert.Equal(new[] { "1.", "2.", "2." }, markers.Select(m => m.Number));
+            // The deleted item keeps its original marker. Charlie's automatic renumbering is itself
+            // visible: old "3." deleted, new "2." inserted. Showing only the final "2." would make
+            // the list-number cascade disappear from the redline.
+            Assert.Equal(new[] { "1.", "2.", "3.", "2." }, markers.Select(m => m.Number));
             Assert.True(markers[1].InsideDel);
-            Assert.False(markers[2].InsideDel);
+            Assert.True(markers[2].InsideDel);
+            Assert.True(markers[3].InsideIns);
+        }
+
+        [Fact]
+        public void TCN006_DocxDiffRedline_TracksInsertedItemCascade()
+        {
+            var left = CreateNumberedListDocument(
+                NumberedParaXml("Alpha"),
+                NumberedParaXml("Bravo"),
+                NumberedParaXml("Charlie"));
+            var right = CreateNumberedListDocument(
+                NumberedParaXml("Inserted"),
+                NumberedParaXml("Alpha"),
+                NumberedParaXml("Bravo"),
+                NumberedParaXml("Charlie"));
+
+            var redline = DocxDiff.Compare(left, right, new DocxDiffSettings { AuthorForRevisions = "Reviewer" });
+
+            using (var stream = new MemoryStream(redline.DocumentByteArray, writable: false))
+            using (var document = WordprocessingDocument.Open(stream, false))
+            {
+                var originals = document.MainDocumentPart!.GetXDocument()
+                    .Descendants(W.numberingChange)
+                    .Select(change => (string?)change.Attribute(W.original))
+                    .ToArray();
+                Assert.Equal(new[] { "1.", "2.", "3." }, originals);
+                Assert.Empty(new OpenXmlValidator(FileFormatVersions.Office2019).Validate(document));
+            }
+
+            var html = ConvertWithTrackedChanges(redline);
+            var markers = ExtractMarkers(html);
+
+            Assert.Equal(
+                new[] { "1.", "1.", "2.", "2.", "3.", "3.", "4." },
+                markers.Select(m => m.Number));
+            Assert.True(markers[0].InsideIns, "the new first item is inserted");
+            Assert.True(markers[1].InsideDel);
+            Assert.True(markers[2].InsideIns);
+            Assert.True(markers[3].InsideDel);
+            Assert.True(markers[4].InsideIns);
+            Assert.True(markers[5].InsideDel);
+            Assert.True(markers[6].InsideIns);
         }
     }
 }
