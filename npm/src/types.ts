@@ -531,6 +531,16 @@ export interface DocxDiffSettings {
    * left code. A canonicalized HYPERLINK field's target is content, not field state, and stays compared.
    */
   compareFields?: boolean;
+  /**
+   * Word Compare's "Tables" option (default true). Governs whether a table's CONTENT and STRUCTURE — rows,
+   * cells, per-cell text — are compared. When false a changed table rides through verbatim from the RIGHT
+   * document with no revision, so `accept ≡ right` still holds while `reject` keeps the right table; the
+   * edit script loses its nested `rowOps`. A whole table ADDED or REMOVED is an ordinary block-level
+   * change and is still reported, as is anything outside a table. Table-shell property changes (column
+   * widths, cell/row/table properties) go quiet too, including a shell-only change — such a table still
+   * compares as a changed table, and its markers come from inside the comparison this suppresses.
+   */
+  compareTables?: boolean;
   /** Report relocations as native move pairs (default true). */
   detectMoves?: boolean;
   /** Jaccard similarity threshold for a fuzzy move 0.0-1.0 (default 0.8). */

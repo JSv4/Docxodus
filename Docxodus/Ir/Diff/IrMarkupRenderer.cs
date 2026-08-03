@@ -462,7 +462,8 @@ internal static class IrMarkupRenderer
                 var numIdMap = WmlComparer.CopyMissingNumberingFromOneDocToAnother(
                     wDocRight, wDoc, CollectAlignedNumIdPairs(script, state),
                     CollectRightNumberingUsage(wDocRight.MainDocumentPart, rightImportedStyles));
-                RebindRightNumberingReferences(main, numIdMap, state);
+                RebindRightNumberingReferences(main, numIdMap, state,
+                    CollectUncomparedOnlyNumIds(script, state));
                 RebindRightImportedStyleNumberingReferences(
                     main.StyleDefinitionsPart, rightImportedStyles, numIdMap);
                 // Word-parity repair: a body numPr referencing a numId with NO definition (tool-made
@@ -7260,7 +7261,8 @@ internal static class IrMarkupRenderer
     /// remain left-sourced.  Covers the main document, headers, footers, footnotes, and endnotes.
     /// </summary>
     private static void RebindRightNumberingReferences(
-        MainDocumentPart main, Dictionary<int, int> numIdMap, RenderState state)
+        MainDocumentPart main, Dictionary<int, int> numIdMap, RenderState state,
+        HashSet<int>? untrackedNumIds = null)
     {
         if (numIdMap.Count == 0)
             return;
@@ -7289,8 +7291,11 @@ internal static class IrMarkupRenderer
                 // An inserted/move-to paragraph disappears on reject.  Every other live paragraph needs a
                 // standard pPr history unless another formatting pass already supplied one; in that case its
                 // archived pPr is the left payload and must retain the original numId.
+                // An UNCOMPARED block's list instances are remapped as plumbing only — no history (see
+                // CollectUncomparedOnlyNumIds), so the block carries no revision markup at all.
                 XElement? oldPPr = null;
                 if (state.Settings.TrackParagraphFormatChanges &&
+                    untrackedNumIds?.Contains(id) != true &&
                     !IsInsertedParagraph(paragraph) &&
                     pPr!.Element(W.pPrChange) is null)
                 {
@@ -7319,6 +7324,57 @@ internal static class IrMarkupRenderer
     /// abstractNum, matching Word's compare output (see
     /// <see cref="WmlComparer.CopyMissingNumberingFromOneDocToAnother"/>).
     /// </summary>
+    /// <summary>
+    /// The right-document numIds used ONLY inside UNCOMPARED blocks (a table under
+    /// <see cref="IrDiffSettings.CompareTables"/> false). Such a block rides through verbatim and reports no
+    /// revision, so the numbering-part remap its list instances need is pure plumbing, not a user edit —
+    /// <see cref="RebindRightNumberingReferences"/> performs the remap but skips its <c>w:pPrChange</c> history
+    /// for these ids, so an uncompared block carries no revision markup at all and <c>Compare</c> agrees with
+    /// <c>GetRevisions</c> (which reports nothing for it). A numId also used OUTSIDE an uncompared block is
+    /// excluded: there the remap does describe a real aligned-paragraph change and must stay tracked.
+    /// </summary>
+    private static HashSet<int> CollectUncomparedOnlyNumIds(IrEditScript script, RenderState state)
+    {
+        var insideUncompared = new HashSet<int>();
+        var elsewhere = new HashSet<int>();
+
+        void Collect(IrBlock? block, HashSet<int> sink)
+        {
+            switch (block)
+            {
+                case IrParagraph p when (p.List?.NumId ?? p.Format.NumId) is int id:
+                    sink.Add(id);
+                    break;
+                case IrTable t:
+                    foreach (var row in t.Rows)
+                        foreach (var cell in row.Cells)
+                            foreach (var b in cell.Blocks)
+                                Collect(b, sink);
+                    break;
+                case IrSdtBlock sdt:
+                    foreach (var b in sdt.Blocks)
+                        Collect(b, sink);
+                    break;
+            }
+        }
+
+        var uncomparedRightAnchors = new HashSet<string>();
+        foreach (var op in script.Operations)
+            if (op.Uncompared && op.RightAnchor is { } anchor)
+                uncomparedRightAnchors.Add(anchor);
+        if (uncomparedRightAnchors.Count == 0)
+            return insideUncompared;
+
+        foreach (var anchor in uncomparedRightAnchors)
+            Collect(ResolveBlock(anchor, state.RightSource), insideUncompared);
+        foreach (var block in state.RightSource.Body.Blocks)
+            if (block.Anchor.ToString() is { } a && !uncomparedRightAnchors.Contains(a))
+                Collect(block, elsewhere);
+
+        insideUncompared.ExceptWith(elsewhere);
+        return insideUncompared;
+    }
+
     private static IReadOnlyCollection<(int FromNumId, int ToNumId)> CollectAlignedNumIdPairs(
         IrEditScript script, RenderState state)
     {
@@ -7336,7 +7392,9 @@ internal static class IrMarkupRenderer
             else if (left is IrTable leftTable && right is IrTable rightTable)
             {
                 // Only content-aligned table pairs reach this path (equal/format-only, or an
-                // equal row resolved below), so the grids correspond positionally.
+                // equal row resolved below), so the grids correspond positionally. An UNCOMPARED
+                // pair — unequal by construction — is filtered out by the caller, which is what
+                // keeps this zip's precondition true.
                 foreach (var (leftRow, rightRow) in leftTable.Rows.Zip(rightTable.Rows))
                     AddRowPair(leftRow, rightRow);
             }
@@ -7420,7 +7478,13 @@ internal static class IrMarkupRenderer
                 {
                     case IrEditOpKind.EqualBlock:
                     case IrEditOpKind.FormatOnlyBlock:
-                        AddAnchorPair(op.LeftAnchor, op.RightAnchor);
+                        // An Uncompared pair is NOT content-equal (a table under CompareTables=false), so its
+                        // rows/blocks do not correspond positionally — AddBlockPair's zip would harvest false
+                        // list-identity evidence and rebind the right table's numbering to the wrong instance.
+                        // Contribute nothing: every list inside it then gets a fresh import, which is the
+                        // correct answer for a self-contained verbatim carry-through.
+                        if (!op.Uncompared)
+                            AddAnchorPair(op.LeftAnchor, op.RightAnchor);
                         break;
                     case IrEditOpKind.ModifyBlock:
                         // A modified table's rows may have shifted — pair through the row diff,

@@ -142,6 +142,14 @@ internal enum IrEditOpKind
 /// <item><see cref="BodyFullRewriteGroupId"/>: set only on the matching InsertBlock/DeleteBlock pair
 /// emitted from one BODY-level 1×1 full-lexical-rewrite gap. It is renderer-only provenance; nested
 /// scopes and every other operation leave it null.</item>
+/// <item><see cref="Uncompared"/>: set on an <see cref="IrEditOpKind.EqualBlock"/> whose two sides are NOT
+/// content-equal — the pair was deliberately not compared (currently only a table pair under
+/// <see cref="IrDiffSettings.CompareTables"/> false). Renderers emit it exactly like an EqualBlock (the right
+/// block verbatim), but consumers that infer a CORRESPONDENCE between the two sides must skip it: an unequal
+/// pair's grids/blocks do not line up positionally, so treating it as equal would harvest false evidence (see
+/// <c>IrMarkupRenderer.CollectAlignedNumIdPairs</c>, whose row zip requires content-aligned tables). Kept as a
+/// flag rather than a distinct op kind so every renderer switch keeps working unchanged and only the two sites
+/// that reason about correspondence need to know.</item>
 /// <item><see cref="RequiresWholeParagraphReplace"/>: set only on a paired paragraph operation whose
 /// non-tokenizable structural carrier differs (an inline <c>w:sdt</c>/<c>w:smartTag</c> envelope or a
 /// non-hyperlink field code/state carrier). Its token diff remains available for apply/diagnostics, but renderers
@@ -161,7 +169,8 @@ internal sealed record IrEditOp(
     IrNodeList<IrTokenDiff>? SegmentDiffs = null,
     int? BodyFullRewriteGroupId = null,
     bool RequiresWholeParagraphReplace = false,
-    IrNodeList<IrCrossParagraphCell>? CrossParagraphCells = null);
+    IrNodeList<IrCrossParagraphCell>? CrossParagraphCells = null,
+    bool Uncompared = false);
 
 /// <summary>
 /// One output-paragraph "cell" of a <see cref="IrEditOpKind.CrossParagraphRunBlock"/> — the factoring of

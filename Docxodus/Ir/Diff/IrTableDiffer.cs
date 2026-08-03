@@ -636,6 +636,10 @@ internal static class IrTableDiffer
         return true;
     }
 
+    /// <summary>The shell-excluding row body hash, for callers outside the differ (the CompareTables gate needs
+    /// to know whether two tables differ only in their shells).</summary>
+    internal static IrHash RowBodyHashOf(IrRow row) => RowBodyHash(row);
+
     private static IrHash RowBodyHash(IrRow row)
     {
         var builder = new IrContentHashBuilder();

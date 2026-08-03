@@ -400,6 +400,35 @@ internal sealed record IrDiffSettings
     public bool CompareFields { get; init; } = true;
 
     /// <summary>
+    /// DIFF-TIME setting (Word Compare "Tables", default-on like Word's own box). Gates the nested row/cell
+    /// diff of a Modified TABLE pair — <see cref="IrTableDiffer"/>'s row alignment, cell alignment and the
+    /// per-cell block/token recursion, i.e. a table's CONTENT and STRUCTURE.
+    /// <para>When false, a Modified table pair whose CONTENT differs is emitted as an
+    /// <see cref="IrEditOpKind.EqualBlock"/> flagged <see cref="IrEditOp.Uncompared"/> instead of a
+    /// <see cref="IrEditOpKind.ModifyBlock"/> carrying an <see cref="IrTableDiff"/> — the same verbatim emit the
+    /// Unchanged path uses, so the output is always a well-formed table, never partially marked. The flag matters:
+    /// the pair is NOT equal, so consumers that infer a positional CORRESPONDENCE from a pairing must skip it
+    /// (see <see cref="IrEditOp.Uncompared"/>).</para>
+    /// <para><b>Which side survives depends on the scope</b>, exactly as for <see cref="CompareFields"/>. A BODY
+    /// table renders from the RIGHT, so <c>accept ≡ right</c> still holds exactly and <c>reject</c> keeps the
+    /// right table. A table inside a HEADER/FOOTER story or a NOTE definition is in a part that is only rebuilt
+    /// when its story produced ops; with none produced the part is carried over verbatim from the LEFT, so there
+    /// <c>reject ≡ left</c> holds and <c>accept</c> keeps the left table. Either way an uncompared difference is
+    /// not reversible.</para>
+    /// <para>Scope boundary: this gates the in-place <c>Modified</c> alignment only. A whole table INSERTED,
+    /// DELETED or MOVED is an ordinary block-level op rather than a table comparison, so it is still reported
+    /// AND still fully reversible with this off — as is any change outside a table.</para>
+    /// <para>A pair whose content is EQUAL and differs only in its shell (<c>w:tblPr</c>/<c>w:tblGrid</c>/
+    /// <c>w:trPr</c>/<c>w:tcPr</c>) is NOT suppressed: it routes to <see cref="IrEditOpKind.FormatOnlyBlock"/>
+    /// instead, so the native shell property-revision markers still render and stay reversible. Those are
+    /// FORMATTING changes, governed by <see cref="TrackTableFormatChanges"/>; keeping the two axes orthogonal is
+    /// why the gate tests content equality rather than suppressing every table difference. (Such a pair reaches
+    /// the gate at all because a cell's <see cref="IrCell.ShellDigest"/> feeds its table's <c>ContentHash</c>, so
+    /// the aligner classifies it Modified rather than FormatOnly.)</para>
+    /// </summary>
+    public bool CompareTables { get; init; } = true;
+
+    /// <summary>
     /// RENDER-TIME setting (Word-parity input-revision preservation). When true, the markup renderer
     /// carries the RIGHT input's pre-existing tracked-revision markup through into the output for
     /// content-EQUAL blocks (verbatim from the ORIGINAL right element rather than the accepted working

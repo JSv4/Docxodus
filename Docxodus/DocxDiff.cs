@@ -883,6 +883,29 @@ public sealed class DocxDiffSettings
     public bool CompareFields { get; set; } = true;
 
     /// <summary>
+    /// Word Compare's "Tables" comparison option (default true, matching Word's own box). Governs whether a
+    /// table's CONTENT and STRUCTURE are compared: row insertions/deletions/moves, cell alignment, and the
+    /// per-cell text diff. When true, an edit inside a table surfaces as a token diff in that cell rather than
+    /// a whole-table blob, and <see cref="DocxDiff.GetEditScriptJson"/> carries the nested row/cell ops.
+    /// <para>When false, a table whose content differs is emitted verbatim with no revision — the same emit an
+    /// unchanged table takes, so the output is always a well-formed table, never partially marked. WHICH side
+    /// survives depends on the scope, exactly as for <see cref="CompareFields"/>: a BODY table renders from the
+    /// RIGHT, so <c>accept ≡ right</c> still holds exactly and <c>reject</c> keeps the right table; a table
+    /// inside a HEADER/FOOTER story or a NOTE definition sits in a part that is only rebuilt when its story
+    /// produced ops, so with none produced that part is carried over from the LEFT and it is <c>reject ≡ left</c>
+    /// that holds exactly while <c>accept</c> keeps the left table. Either way an uncompared difference is not
+    /// reversible.</para>
+    /// <para>Scope boundary: this gates the in-place comparison of a paired table only. A whole table ADDED,
+    /// REMOVED or MOVED is an ordinary block-level operation, so it is still reported AND still fully reversible
+    /// with this off — as is any change outside a table.</para>
+    /// <para>A table whose content is EQUAL and differs only in its SHELL (column widths, cell/row/table
+    /// properties) is deliberately NOT suppressed — it still renders native shell property-revision markers and
+    /// stays reversible. Those are formatting changes, governed by <see cref="TrackBlockFormatChanges"/>; this
+    /// setting governs whether table CONTENT is compared, and the two axes stay orthogonal.</para>
+    /// </summary>
+    public bool CompareTables { get; set; } = true;
+
+    /// <summary>
     /// Track paragraph-and-above property changes (block-format-change family) as native Word markup —
     /// <c>w:pPrChange</c>/<c>w:tcPrChange</c>/<c>w:trPrChange</c>/<c>w:tblPrChange</c>/<c>w:tblGridChange</c>/
     /// <c>w:tblPrExChange</c>/<c>w:sectPrChange</c>. Default <c>true</c>. Set <c>false</c> to restore the
@@ -961,6 +984,7 @@ public sealed class DocxDiffSettings
             CompareHeadersFooters = CompareHeadersFooters,
             CompareTextboxes = CompareTextboxes,
             CompareFields = CompareFields,
+            CompareTables = CompareTables,
             PreserveInputRevisions = PreserveInputRevisions,
             NormalizeRevisionAuthors = NormalizeRevisionAuthors,
             TrackBlockFormatChanges = TrackBlockFormatChanges,

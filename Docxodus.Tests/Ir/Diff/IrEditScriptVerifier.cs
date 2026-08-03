@@ -75,7 +75,12 @@ internal static class IrEditScriptVerifier
                     // Unchanged text: the reconstructed right block is the left block's content.
                     var leftBlock = ResolveLeft(left, op.LeftAnchor!);
                     var rightBlock = ResolveRight(right, op.RightAnchor!);
-                    reconstructed.Add((rightBlock, TokensOrNull(leftBlock, settings), leftBlock));
+                    // An UNCOMPARED pair (a table under CompareTables=false) is deliberately NOT equal — the op
+                    // emits the RIGHT block verbatim, so the right block is its source of truth, exactly as for
+                    // Insert / non-paragraph Modify. The hash check below stays non-vacuous for every genuinely
+                    // equal pair, which is where it catches a mislabeled EqualBlock.
+                    var sourceBlock = op.Uncompared ? rightBlock : leftBlock;
+                    reconstructed.Add((rightBlock, TokensOrNull(sourceBlock, settings), sourceBlock));
                     break;
                 }
 
@@ -432,7 +437,10 @@ internal static class IrEditScriptVerifier
             {
                 case IrEditOpKind.EqualBlock:
                 case IrEditOpKind.FormatOnlyBlock:
-                    result.Add(BlockText(leftByAnchor[op.LeftAnchor!], settings));
+                    // Uncompared: the right block rides through verbatim, so the produced text is the RIGHT's.
+                    result.Add(op.Uncompared
+                        ? BlockText(rightByAnchor[op.RightAnchor!], settings)
+                        : BlockText(leftByAnchor[op.LeftAnchor!], settings));
                     producedRightAnchors.Add(op.RightAnchor!);
                     break;
                 case IrEditOpKind.ModifyBlock:

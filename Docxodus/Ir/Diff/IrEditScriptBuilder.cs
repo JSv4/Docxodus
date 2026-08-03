@@ -1439,9 +1439,31 @@ internal static class IrEditScriptBuilder
         IrBlock leftBlock, IrBlock rightBlock, IrDiffSettings settings, bool storyFinalPair = false)
     {
         if (leftBlock is IrTable lt && rightBlock is IrTable rt)
+        {
+            // Word Compare's "Tables" box off: the table's content/structure is not compared.
+            if (!settings.CompareTables)
+            {
+                // A pair whose CONTENT is equal and whose only difference is the shell (column widths, cell/row/
+                // table properties) stays on the FormatOnly path: those are FORMATTING changes, governed by
+                // TrackTableFormatChanges, and this box is about comparing table content. Routing them here also
+                // keeps them fully reversible (native tblGridChange/tcPrChange markers) instead of silently
+                // one-sided, and a content-equal pair's grids DO correspond positionally, so it is safe evidence.
+                if (TableContentEqual(lt, rt))
+                    return new IrEditOp(IrEditOpKind.FormatOnlyBlock,
+                        leftBlock.Anchor.ToString(), rightBlock.Anchor.ToString(), null, null, null);
+
+                // Otherwise emit the verbatim-right EqualBlock emit an UNCHANGED table takes — so the output is
+                // always a well-formed table, never partially marked — flagged Uncompared because the two sides
+                // are NOT equal and no consumer may infer a positional correspondence from the pairing.
+                return new IrEditOp(IrEditOpKind.EqualBlock,
+                    leftBlock.Anchor.ToString(), rightBlock.Anchor.ToString(), null, null, null,
+                    Uncompared: true);
+            }
+
             return new IrEditOp(IrEditOpKind.ModifyBlock,
                 leftBlock.Anchor.ToString(), rightBlock.Anchor.ToString(),
                 null, null, null, IrTableDiffer.Diff(lt, rt, settings));
+        }
 
         if (leftBlock is IrParagraph lp && rightBlock is IrParagraph rp)
             return MakeParagraphModifyOp(lp, rp, settings, storyFinalPair);
@@ -1449,6 +1471,23 @@ internal static class IrEditScriptBuilder
         return new IrEditOp(IrEditOpKind.ModifyBlock,
             leftBlock.Anchor.ToString(), rightBlock.Anchor.ToString(),
             TokenDiffFor(leftBlock, rightBlock, settings), null, null);
+    }
+
+    /// <summary>
+    /// True when two tables carry the same CONTENT — same row count, and each row's body hash equal — so their
+    /// only possible difference is shell properties (<c>w:tblPr</c>/<c>w:tblGrid</c>/<c>w:trPr</c>/<c>w:tcPr</c>).
+    /// Mirrors <see cref="IrTableDiffer"/>'s row body hash, which deliberately excludes the shell, and is why a
+    /// shell-only pair classifies Modified rather than FormatOnly in the first place (a cell's ShellDigest feeds
+    /// its table's ContentHash).
+    /// </summary>
+    private static bool TableContentEqual(IrTable left, IrTable right)
+    {
+        if (left.Rows.Count != right.Rows.Count)
+            return false;
+        for (int i = 0; i < left.Rows.Count; i++)
+            if (IrTableDiffer.RowBodyHashOf(left.Rows[i]) != IrTableDiffer.RowBodyHashOf(right.Rows[i]))
+                return false;
+        return true;
     }
 
     /// <summary>

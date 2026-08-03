@@ -1015,6 +1015,13 @@ class DocxDiffSettings:
     #: verbatim from the LEFT, so reject is exact and accept keeps the left code. A canonicalized
     #: HYPERLINK field's target is content, not field state, and stays compared.
     compare_fields: bool = True
+    #: Word Compare's "Tables" option (default True). Governs whether a table's CONTENT and STRUCTURE
+    #: (rows, cells, per-cell text) are compared. False carries a changed table through verbatim from the
+    #: RIGHT document with no revision, so accept is still exact while reject keeps the right table, and
+    #: the edit script loses its nested rowOps. A whole table added/removed is an ordinary block-level
+    #: change and is still reported, as is anything outside a table; table-shell property changes go
+    #: quiet too, including a shell-only change.
+    compare_tables: bool = True
     word_separators: str | None = None
     detect_moves: bool = True
     move_similarity_threshold: float = 0.8
@@ -1071,6 +1078,8 @@ class DocxDiffSettings:
             wire["compareTextboxes"] = False
         if not self.compare_fields:
             wire["compareFields"] = False
+        if not self.compare_tables:
+            wire["compareTables"] = False
         if self.word_separators is not None:
             wire["wordSeparators"] = self.word_separators
         if not self.detect_moves:
