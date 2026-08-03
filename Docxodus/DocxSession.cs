@@ -3823,7 +3823,7 @@ public sealed class DocxSession : IDisposable
             _doc!.Save();
             _stream!.Flush();
             _stream.Position = 0;
-            return ZipUnixPermissionFixer.Fix(_stream.ToArray());
+            return ZipPackageOutputNormalizer.Normalize(_stream.ToArray());
         }
 
         // Strip the internal PtOpenXml:Unid attributes before serializing — they're
@@ -3850,7 +3850,7 @@ public sealed class DocxSession : IDisposable
             _doc!.Save();
             _stream!.Flush();
             _stream.Position = 0;
-            return ZipUnixPermissionFixer.Fix(_stream.ToArray());
+            return ZipPackageOutputNormalizer.Normalize(_stream.ToArray());
         }
         finally
         {

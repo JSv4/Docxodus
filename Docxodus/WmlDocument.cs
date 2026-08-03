@@ -83,6 +83,11 @@ namespace Docxodus
         public WmlDocument(WmlDocument other, params XElement[] replacementParts)
             : base(other)
         {
+            // With no replacement parts this overload is the language-selected copy constructor.
+            // Keep that path byte-exact and avoid opening/repacking a package that has no edits.
+            if (replacementParts.Length == 0)
+                return;
+
             using (OpenXmlMemoryStreamDocument streamDoc = new OpenXmlMemoryStreamDocument(this))
             {
                 using (Package package = streamDoc.GetPackage())
