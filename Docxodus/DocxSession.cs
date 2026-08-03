@@ -1208,8 +1208,9 @@ public sealed class DocxSessionSettings
     public bool PersistAnchorIds { get; init; } = false;
 
     /// <summary>
-    /// When <c>true</c>, <c>ReplaceText</c>/<c>ReplaceTextRange</c>/<c>ReplaceMatch</c>
-    /// payloads (and replacements passed to <c>InsertParagraph</c> / <c>ReplaceCellContent</c>)
+    /// When <c>true</c>, <c>ReplaceText</c>/<c>ReplaceTextRange</c>/<c>ReplaceMatch</c>/
+    /// <c>ReplaceTextAtSpan</c>/<c>ReplaceInner</c> payloads (and replacements passed to
+    /// <c>InsertParagraph</c> / <c>ReplaceCellContent</c>)
     /// have ASCII <c>"</c> and <c>'</c> converted to typographic curly quotes
     /// (U+201C/U+201D and U+2018/U+2019) based on context — open quote at the start
     /// of a string, after whitespace, or after an open-bracket; close quote elsewhere.
@@ -2494,6 +2495,12 @@ public sealed class DocxSession : IDisposable
     /// paragraph don't invalidate each other's offsets. The whole call records a single undo
     /// snapshot — <see cref="Undo"/> rolls back every replacement together.
     /// </para>
+    /// <para>
+    /// In <see cref="TrackedChangeMode.RenderInline"/>, the untouched prefix/suffix runs stay
+    /// ordinary text, the selected slices are copied (with their original run properties) to
+    /// <c>w:del/w:r/w:delText</c>, and one first-run-formatted replacement is emitted as
+    /// <c>w:ins/w:r/w:t</c>. Inline containers and zero-width semantic markers remain in place.
+    /// </para>
     /// </remarks>
     public IReadOnlyList<EditResult> ReplaceTextRange(
         string anchorId,
@@ -2533,10 +2540,22 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
+            var tracked = _trackedChanges == TrackedChangeMode.RenderInline;
+            var revisionAuthor = _revisionAuthor ?? "docxodus";
+            var revisionDate = tracked
+                ? DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
+                : null;
+
             // Reverse offset order so earlier-offset matches' SpanInElement stays valid
             // after later-offset edits land — see DS112/DS115.
             foreach (var match in matches.OrderByDescending(m => m.Span.Start))
-                ApplyFragmentReplacement(element, match, replace);
+            {
+                if (tracked)
+                    ApplyFragmentReplacementTracked(
+                        element, match, replace, revisionAuthor, revisionDate!);
+                else
+                    ApplyFragmentReplacement(element, match, replace);
+            }
 
             InvalidateProjectionCache();
             var success = new EditResult
@@ -2595,7 +2614,7 @@ public sealed class DocxSession : IDisposable
     }
 
     /// <summary>
-    /// Surgical replacement of an exact byte range within one block's flat text.
+    /// Surgical replacement of an exact character range within one block's flat text.
     /// The natural pair to <see cref="Grep"/>: pass the <see cref="TextMatch.EnclosingAnchor"/>'s
     /// id plus the <see cref="TextMatch.Span"/> coordinates to replace one specific match
     /// even when several identical needles share the same paragraph (the template-filling
@@ -2652,7 +2671,19 @@ public sealed class DocxSession : IDisposable
         _history.RecordPreOp(TakeSnapshot());
         try
         {
-            ApplyFragmentReplacement(element, synthetic, replace);
+            if (_trackedChanges == TrackedChangeMode.RenderInline)
+            {
+                ApplyFragmentReplacementTracked(
+                    element,
+                    synthetic,
+                    replace,
+                    _revisionAuthor ?? "docxodus",
+                    DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+            }
+            else
+            {
+                ApplyFragmentReplacement(element, synthetic, replace);
+            }
             InvalidateProjectionCache();
             return new EditResult
             {
@@ -3429,6 +3460,185 @@ public sealed class DocxSession : IDisposable
                 newText));
         }
     }
+
+    /// <summary>
+    /// Tracked-change counterpart to <see cref="ApplyFragmentReplacement"/>. Each selected
+    /// run slice becomes a formatting-preserving <c>w:r/w:delText</c> inside one or more
+    /// <c>w:del</c> envelopes, while the replacement is a single <c>w:r/w:t</c> inside
+    /// <c>w:ins</c> and inherits the first affected run's <c>w:rPr</c>. Runs are split at
+    /// the selection boundaries so untouched prefixes/suffixes remain ordinary text.
+    /// Zero-width siblings (bookmarks, comment ranges, note-reference runs, proofing markers)
+    /// are never moved into revision envelopes; when one separates selected runs it simply
+    /// splits the deletion into adjacent Word-style envelopes around that marker.
+    /// </summary>
+    private void ApplyFragmentReplacementTracked(
+        XElement blockElement,
+        TextMatch match,
+        string replace,
+        string author,
+        string date)
+    {
+        if (match.Fragments.Count == 0) return;
+
+        var runsByUnid = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        foreach (var run in InlineRuns(blockElement))
+        {
+            var unid = (string?)run.Attribute(PtOpenXml.Unid);
+            if (unid is not null) runsByUnid[unid] = run;
+        }
+
+        var deletedRuns = new List<XElement>(match.Fragments.Count);
+        XElement? insertedRun = null;
+
+        for (int i = 0; i < match.Fragments.Count; i++)
+        {
+            var fragment = match.Fragments[i];
+            if (!runsByUnid.TryGetValue(fragment.Unid, out var run))
+                throw new InvalidOperationException(
+                    $"tracked replacement run no longer exists: {fragment.Unid}");
+
+            var concat = RunText(run);
+            var start = fragment.SpanInElement.Start;
+            var len = fragment.SpanInElement.Length;
+            if (start < 0 || len <= 0 || start + len > concat.Length)
+                throw new InvalidOperationException(
+                    $"tracked replacement slice {start}+{len} is outside run text length {concat.Length}");
+
+            var before = concat[..start];
+            var removed = concat.Substring(start, len);
+            var after = concat[(start + len)..];
+
+            // Snapshot the original formatting before changing/reusing the live run.
+            var deletedRun = CloneRunWithRevisionText(run, W.delText, removed);
+            if (i == 0 && replace.Length > 0)
+                insertedRun = CloneRunWithRevisionText(run, W.t, replace);
+
+            var replacementNodes = new List<XElement>(4);
+            if (before.Length > 0)
+            {
+                SetRunText(run, before);
+                replacementNodes.Add(run);
+            }
+            else if (after.Length == 0 && HasNonTextRunContent(run))
+            {
+                // A text-bearing marker run is unusual but legal (notably note/comment
+                // references). Keep its zero-width payload exactly once when all w:t text
+                // was selected instead of dropping it with the old text.
+                SetRunText(run, null);
+                replacementNodes.Add(run);
+            }
+
+            replacementNodes.Add(deletedRun);
+
+            if (after.Length > 0)
+            {
+                if (before.Length == 0)
+                {
+                    SetRunText(run, after);
+                    replacementNodes.Add(run);
+                }
+                else
+                {
+                    replacementNodes.Add(CloneRunWithRevisionText(run, W.t, after));
+                }
+            }
+
+            run.ReplaceWith(replacementNodes);
+            deletedRuns.Add(deletedRun);
+        }
+
+        // Coalesce adjacent deleted slices under the same inline parent. This is the
+        // shape Word emits for a replacement spanning differently formatted runs:
+        // one w:del containing each original rPr-bearing run, followed by one w:ins.
+        // A semantic marker or container boundary naturally starts another envelope.
+        var deletionEnvelopes = new List<XElement>();
+        XElement? currentEnvelope = null;
+        foreach (var deletedRun in deletedRuns)
+        {
+            if (currentEnvelope is not null
+                && ReferenceEquals(currentEnvelope.Parent, deletedRun.Parent)
+                && ReferenceEquals(deletedRun.PreviousNode, currentEnvelope))
+            {
+                deletedRun.Remove();
+                currentEnvelope.Add(deletedRun);
+                continue;
+            }
+
+            currentEnvelope = CreateRevisionEnvelope(W.del, author, date);
+            deletedRun.AddBeforeSelf(currentEnvelope);
+            deletedRun.Remove();
+            currentEnvelope.Add(deletedRun);
+            deletionEnvelopes.Add(currentEnvelope);
+        }
+
+        if (insertedRun is null || deletionEnvelopes.Count == 0) return;
+
+        // Keep a replacement wholly inside its original hyperlink/SDT/smartTag/fldSimple.
+        // When every deletion envelope has that same parent, put the insertion after the
+        // final deletion (the canonical Word replacement order). A cross-container match
+        // inserts beside the first slice so it retains the first run's inline semantics.
+        var firstEnvelope = deletionEnvelopes[0];
+        var insertionAnchor = deletionEnvelopes.All(e => ReferenceEquals(e.Parent, firstEnvelope.Parent))
+            ? deletionEnvelopes[^1]
+            : firstEnvelope;
+        var insertionEnvelope = CreateRevisionEnvelope(W.ins, author, date);
+        insertionEnvelope.Add(insertedRun);
+        insertionAnchor.AddAfterSelf(insertionEnvelope);
+    }
+
+    private XElement CreateRevisionEnvelope(XName name, string author, string date) =>
+        new(name,
+            new XAttribute(W.id, NextRevisionId()),
+            new XAttribute(W.author, author),
+            new XAttribute(W.date, date));
+
+    /// <summary>Create a text-only run that retains the source run's formatting/rsid
+    /// attributes but gets its own internal Unid. <paramref name="textName"/> is
+    /// <c>w:t</c> for ordinary/inserted text and <c>w:delText</c> for deletions.</summary>
+    private static XElement CloneRunWithRevisionText(XElement source, XName textName, string text)
+    {
+        var clone = new XElement(W.r,
+            source.Attributes()
+                .Where(a => a.Name != PtOpenXml.Unid)
+                .Select(a => new XAttribute(a)),
+            source.Element(W.rPr) is { } rPr ? new XElement(rPr) : null,
+            new XElement(textName,
+                new XAttribute(XNamespace.Xml + "space", "preserve"),
+                text));
+        UnidHelper.AssignToSelfAndDescendants(clone);
+        return clone;
+    }
+
+    /// <summary>Replace a run's direct w:t sequence with one text node while retaining
+    /// rPr and every non-text child in place. Null removes text without adding an empty
+    /// node (used to preserve a zero-width marker run).</summary>
+    private static void SetRunText(XElement run, string? text)
+    {
+        var textNodes = run.Elements(W.t).ToList();
+        if (textNodes.Count > 0)
+        {
+            if (text is null)
+            {
+                foreach (var t in textNodes) t.Remove();
+                return;
+            }
+
+            var replacement = new XElement(W.t,
+                new XAttribute(XNamespace.Xml + "space", "preserve"),
+                text);
+            textNodes[0].ReplaceWith(replacement);
+            foreach (var t in textNodes.Skip(1)) t.Remove();
+            return;
+        }
+
+        if (text is not null)
+            run.Add(new XElement(W.t,
+                new XAttribute(XNamespace.Xml + "space", "preserve"),
+                text));
+    }
+
+    private static bool HasNonTextRunContent(XElement run) =>
+        run.Elements().Any(e => e.Name != W.rPr && e.Name != W.t);
 
     /// <summary>
     /// When <see cref="DocxSessionSettings.SmartQuotes"/> is on, replace ASCII <c>"</c>
