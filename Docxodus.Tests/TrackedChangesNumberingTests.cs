@@ -272,7 +272,7 @@ namespace OxPt
 
             var redline = DocxDiff.Compare(left, right, new DocxDiffSettings { AuthorForRevisions = "Reviewer" });
 
-            using (var stream = ExpandableStream(redline.DocumentByteArray))
+            using (var stream = new MemoryStream(redline.DocumentByteArray, writable: false))
             using (var document = WordprocessingDocument.Open(stream, false))
             {
                 var originals = document.MainDocumentPart!.GetXDocument()

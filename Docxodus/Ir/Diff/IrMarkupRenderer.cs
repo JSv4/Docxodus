@@ -7038,6 +7038,11 @@ internal static class IrMarkupRenderer
                 {
                     oldPPr = StripUnids(new XElement(W.pPr, pPr.Attributes(),
                         pPr.Elements().Where(e => e.Name != W.rPr && e.Name != W.sectPr && e.Name != W.pPrChange)));
+                    // The live numPr may carry the comparison's numberingChange. The archived pPr is the
+                    // pre-rebind property payload, not another revision container; copying that marker here
+                    // would duplicate its w:id between the live and archived numPr and violate OOXML's
+                    // document-wide revision-id uniqueness constraint.
+                    oldPPr.Descendants(W.numberingChange).Remove();
                 }
 
                 numIdEl.SetAttributeValue(W.val, mapped);
