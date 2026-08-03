@@ -6847,9 +6847,6 @@ internal static class IrMarkupRenderer
             .Select(a => int.TryParse((string?)a.Attribute(W.abstractNumId), out var id) ? id : -1)
             .DefaultIfEmpty(-1)
             .Max() + 1;
-        // Schema order inside w:numbering: numPicBullet*, abstractNum*, num* — new abstracts go
-        // before the first existing w:num; the num mappings append at the end.
-        var firstNum = root.Elements(W.num).FirstOrDefault();
         foreach (var id in dangling)
         {
             var abstractNum = new XElement(W.abstractNum,
@@ -6865,11 +6862,8 @@ internal static class IrMarkupRenderer
                         new XElement(W.ind,
                             new XAttribute(W.left, 720 * (i + 1)),
                             new XAttribute(W.hanging, 720))))));
-            if (firstNum is null)
-                root.Add(abstractNum);
-            else
-                firstNum.AddBeforeSelf(abstractNum);
-            root.Add(new XElement(W.num,
+            WordprocessingMLUtil.InsertNumberingChildInOrder(root, abstractNum);
+            WordprocessingMLUtil.InsertNumberingChildInOrder(root, new XElement(W.num,
                 new XAttribute(W.numId, id),
                 new XElement(W.abstractNumId, new XAttribute(W.val, nextAbstract))));
             nextAbstract++;

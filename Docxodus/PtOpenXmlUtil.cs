@@ -1272,6 +1272,29 @@ decimalSymbol
 listSeparator
 #endif
 
+        private static Dictionary<XName, int> Order_numbering = new Dictionary<XName, int>
+        {
+            { W.numPicBullet, 10 },
+            { W.abstractNum, 20 },
+            { W.num, 30 },
+            { W.numIdMacAtCleanup, 40 },
+        };
+
+        /// <summary>
+        /// Insert <paramref name="child"/> into <paramref name="numbering"/> at its CT_Numbering
+        /// schema slot, without reordering existing or extension children.
+        /// </summary>
+        internal static void InsertNumberingChildInOrder(XElement numbering, XElement child)
+        {
+            var rank = Order_numbering[child.Name];
+            var firstLater = numbering.Elements().FirstOrDefault(e =>
+                Order_numbering.TryGetValue(e.Name, out var laterRank) && laterRank > rank);
+            if (firstLater == null)
+                numbering.Add(child);
+            else
+                firstLater.AddBeforeSelf(child);
+        }
+
         /// <summary>
         /// The CT_SectPr child sequence (ECMA-376 §17.6.18). The header/footer references are an
         /// unbounded leading group (EG_HdrFtrReferences), then the CT_SectPrBase properties in this

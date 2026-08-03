@@ -137,6 +137,23 @@ public class DocxSessionTests
         return ms.ToArray();
     }
 
+    private static byte[] BuildDocumentWithNumberingCleanup()
+    {
+        using var ms = new MemoryStream();
+        var source = BuildDS001_SimpleTwoParagraphs();
+        ms.Write(source);
+        ms.Position = 0;
+        using (var doc = WordprocessingDocument.Open(ms, true))
+        {
+            var numbering = BuildBulletNumbering();
+            numbering.Append(new NumberingIdMacAtCleanup { Val = 1 });
+            var part = doc.MainDocumentPart!.AddNewPart<NumberingDefinitionsPart>();
+            part.Numbering = numbering;
+            numbering.Save();
+        }
+        return ms.ToArray();
+    }
+
     /// <summary>
     /// Single-item list where the paragraph carries only a <c>pStyle</c> pointing
     /// at a custom style that contributes the <c>numPr</c>. Used to verify
@@ -1867,6 +1884,29 @@ public class DocxSessionTests
         Assert.Equal(ListFormat.UpperRomanParenthesis, Docxodus.Internal.DocxSessionJson.ParseListFormat("upperRomanParenthesis"));
         Assert.Equal(ListFormat.UpperLetter, Docxodus.Internal.DocxSessionJson.ParseListFormat("UPPERLETTER")); // case-insensitive
         Assert.Equal(ListFormat.None, Docxodus.Internal.DocxSessionJson.ParseListFormat("wingding")); // lenient fallback
+    }
+
+    [Fact]
+    public void DS348_ApplyListFormat_KeepsNumberingCleanupLast()
+    {
+        using var s = new DocxSession(BuildDocumentWithNumberingCleanup());
+        var p = s.Project().AnchorIndex.Keys.First(k => k.StartsWith("p:"));
+
+        var result = s.ApplyListFormat(p, ListFormat.Decimal);
+        Assert.True(result.Success, result.Error?.Message);
+
+        using var ms = new MemoryStream(s.Save());
+        using var doc = WordprocessingDocument.Open(ms, false);
+        var numberingPart = doc.MainDocumentPart!.NumberingDefinitionsPart!;
+        var root = numberingPart.GetXDocument().Root!;
+        XNamespace w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        Assert.Equal(w + "numIdMacAtCleanup", root.Elements().Last().Name);
+        Assert.Equal(2, root.Elements(w + "num").Count());
+
+        var errors = new DocumentFormat.OpenXml.Validation.OpenXmlValidator(FileFormatVersions.Office2019)
+            .Validate(numberingPart)
+            .ToList();
+        Assert.Empty(errors);
     }
 
     // ─── SetListStartOverride / ClearListStartOverride (issue #314) ─────────
